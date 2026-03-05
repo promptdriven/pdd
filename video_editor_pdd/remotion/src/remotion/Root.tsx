@@ -38,7 +38,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ColdOpenSection"
         component={ColdOpenSection}
-        durationInFrames={467}
+        durationInFrames={469}
         fps={30}
         width={1920}
         height={1080}

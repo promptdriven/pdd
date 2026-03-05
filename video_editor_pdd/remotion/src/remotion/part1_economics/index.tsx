@@ -8,23 +8,23 @@ import { Part1EconomicsStatCalloutUplevel } from "../part1_economics_stat_callou
 
 export const Part1EconomicsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 15.552;
+  const offsetSeconds = 15.616;
   const durationSeconds = 382.176;
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part1_economics/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part1_economics.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Sequence from={Math.round(255.68 * fps)} durationInFrames={Math.ceil(10.0 * fps)}>
+      <Sequence from={Math.round(255.68 * fps)} durationInFrames={Math.ceil(10 * fps)}>
         <Part1EconomicsSplitPerceptionVsReality />
       </Sequence>
-      <Sequence from={Math.round(115.58 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(115.58 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part1EconomicsStatCalloutGitclear />
       </Sequence>
-      <Sequence from={Math.round(68.64 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(68.64 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part1EconomicsStatCalloutGithub />
       </Sequence>
-      <Sequence from={Math.round(83.82 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(83.82 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part1EconomicsStatCalloutUplevel />
       </Sequence>
     </Sequence>

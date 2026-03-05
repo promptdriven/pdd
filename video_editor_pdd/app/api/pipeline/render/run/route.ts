@@ -114,9 +114,19 @@ async function rebuildBundle(onLog: (msg: string) => void): Promise<void> {
     });
   });
 
+  const remotionDir = path.join(process.cwd(), "remotion");
+  const buildDir = path.join(remotionDir, "build");
+  const webpackCacheDir = path.join(
+    remotionDir, "node_modules", ".cache", "webpack"
+  );
+
+  // Clear stale bundle and webpack cache to force fresh compilation
+  onLog("Clearing stale bundle and webpack cache...");
+  await fs.rm(buildDir, { recursive: true, force: true });
+  await fs.rm(webpackCacheDir, { recursive: true, force: true });
+
   // Rebuild Remotion bundle so the renderer uses fresh compositions
   onLog("Rebuilding Remotion bundle...");
-  const remotionDir = path.join(process.cwd(), "remotion");
   execSync("npx remotion bundle src/index.ts --out build", {
     cwd: remotionDir,
     stdio: "pipe",

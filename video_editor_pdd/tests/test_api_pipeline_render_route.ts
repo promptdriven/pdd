@@ -57,11 +57,21 @@ jest.mock("@/lib/project", () => ({
 const mockMkdir = jest.fn();
 const mockAccess = jest.fn();
 const mockStat = jest.fn();
+const mockRm = jest.fn();
 
 jest.mock("fs/promises", () => ({
   mkdir: (...args: unknown[]) => mockMkdir(...args),
   access: (...args: unknown[]) => mockAccess(...args),
   stat: (...args: unknown[]) => mockStat(...args),
+  rm: (...args: unknown[]) => mockRm(...args),
+}));
+
+const mockSpawn = jest.fn();
+const mockExecSync = jest.fn();
+
+jest.mock("child_process", () => ({
+  spawn: (...args: unknown[]) => mockSpawn(...args),
+  execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
 jest.mock("crypto", () => ({
@@ -206,6 +216,17 @@ beforeEach(() => {
   mockMkdir.mockReset();
   mockAccess.mockReset();
   mockStat.mockReset();
+  mockRm.mockReset();
+  mockSpawn.mockReset();
+  mockExecSync.mockReset();
+
+  mockRm.mockResolvedValue(undefined);
+  mockSpawn.mockReturnValue({
+    stdout: { on: jest.fn((event: string, cb: Function) => { if (event === 'data') cb(Buffer.from('ok')); }) },
+    stderr: { on: jest.fn() },
+    on: jest.fn((event: string, cb: Function) => { if (event === 'close') cb(0); }),
+  });
+  mockExecSync.mockReturnValue(Buffer.from(''));
 
   mockRunPipelineStage.mockResolvedValue("test-job-render-001");
   mockRenderSection.mockResolvedValue(undefined);
@@ -811,5 +832,55 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
 
   it("creates directories with recursive flag", () => {
     expect(sourceCode).toMatch(/mkdir.*recursive/s);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. rebuildBundle — cache clearing
+// ---------------------------------------------------------------------------
+
+describe("rebuildBundle — cache clearing", () => {
+  it("removes remotion/build/ before running npx remotion bundle", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const pathMod = require("path");
+    const rmCalls = mockRm.mock.calls;
+    const buildRm = rmCalls.find((c: any[]) =>
+      String(c[0]).includes(pathMod.join("remotion", "build"))
+    );
+    expect(buildRm).toBeDefined();
+    expect(buildRm![1]).toEqual({ recursive: true, force: true });
+  });
+
+  it("removes webpack cache dir before running npx remotion bundle", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const pathMod = require("path");
+    const rmCalls = mockRm.mock.calls;
+    const cacheRm = rmCalls.find((c: any[]) =>
+      String(c[0]).includes(pathMod.join("node_modules", ".cache", "webpack"))
+    );
+    expect(cacheRm).toBeDefined();
+    expect(cacheRm![1]).toEqual({ recursive: true, force: true });
+  });
+
+  it("clears cache BEFORE calling execSync for bundle", async () => {
+    const callOrder: string[] = [];
+    mockRm.mockImplementation(async (p: string) => {
+      if (String(p).includes("build")) callOrder.push("rm-build");
+      if (String(p).includes("webpack")) callOrder.push("rm-cache");
+    });
+    mockExecSync.mockImplementation(() => {
+      callOrder.push("bundle");
+      return Buffer.from('');
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(callOrder.indexOf("rm-build")).toBeLessThan(callOrder.indexOf("bundle"));
+    expect(callOrder.indexOf("rm-cache")).toBeLessThan(callOrder.indexOf("bundle"));
   });
 });

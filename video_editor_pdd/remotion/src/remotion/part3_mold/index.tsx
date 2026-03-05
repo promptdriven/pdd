@@ -9,26 +9,26 @@ import { Part3MoldTitleCard } from "../part3_mold_title_card";
 
 export const Part3MoldSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 593.52;
+  const offsetSeconds = 593.584;
   const durationSeconds = 280.728;
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part3_mold/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part3_mold.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Sequence from={Math.round(21.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(21 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part3MoldSplitPromptVsCode />
       </Sequence>
-      <Sequence from={Math.round(25.72 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(25.72 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part3MoldStatCalloutCoderabbit />
       </Sequence>
-      <Sequence from={Math.round(40.82 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(40.82 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part3MoldStatCalloutDora />
       </Sequence>
-      <Sequence from={Math.round(207.3 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(207.3 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part3MoldStatCalloutNlContext />
       </Sequence>
-      <Sequence from={Math.round(0.0 * fps)} durationInFrames={Math.ceil(5.0 * fps)}>
+      <Sequence from={Math.round(0 * fps)} durationInFrames={Math.ceil(5 * fps)}>
         <Part3MoldTitleCard />
       </Sequence>
     </Sequence>

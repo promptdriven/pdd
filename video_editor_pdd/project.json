@@ -20,13 +20,13 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 15.552,
+      "durationSeconds": 15.68,
       "offsetSeconds": 0,
       "compositions": [
         {
           "id": "cold_open_title_card",
-          "startSeconds": 0.0,
-          "durationSeconds": 5.0
+          "startSeconds": 0,
+          "durationSeconds": 5
         }
       ]
     },
@@ -38,29 +38,29 @@
       "remotionDir": "S01-Economics",
       "compositionId": "Part1Economics",
       "durationSeconds": 382.176,
-      "offsetSeconds": 15.552,
+      "offsetSeconds": 15.68,
       "compositions": [
         {
           "id": "part1_economics_split_perception_vs_reality",
-          "triggerKeyword": "slower",
           "startSeconds": 255.68,
-          "durationSeconds": 10.0
+          "durationSeconds": 10,
+          "triggerKeyword": "slower"
         },
         {
           "id": "part1_economics_stat_callout_gitclear",
-          "triggerKeyword": "churn",
           "startSeconds": 115.58,
-          "durationSeconds": 5.0
+          "durationSeconds": 5,
+          "triggerKeyword": "churn"
         },
         {
           "id": "part1_economics_stat_callout_github",
           "startSeconds": 68.64,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part1_economics_stat_callout_uplevel",
           "startSeconds": 83.82,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         }
       ]
     },
@@ -72,11 +72,11 @@
       "remotionDir": "S02-ParadigmShift",
       "compositionId": "Part2ParadigmShift",
       "durationSeconds": 195.792,
-      "offsetSeconds": 397.728,
+      "offsetSeconds": 397.856,
       "compositions": [
         {
           "id": "part2_paradigm_shift_main",
-          "startSeconds": 0.0,
+          "startSeconds": 0,
           "durationSeconds": 195.79
         }
       ]
@@ -89,32 +89,32 @@
       "remotionDir": "S03-MoldThreeParts",
       "compositionId": "Part3MoldThreeParts",
       "durationSeconds": 280.728,
-      "offsetSeconds": 593.52,
+      "offsetSeconds": 593.648,
       "compositions": [
         {
           "id": "part3_mold_split_prompt_vs_code",
-          "startSeconds": 21.0,
-          "durationSeconds": 5.0
+          "startSeconds": 21,
+          "durationSeconds": 5
         },
         {
           "id": "part3_mold_stat_callout_coderabbit",
           "startSeconds": 25.72,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part3_mold_stat_callout_dora",
           "startSeconds": 40.82,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part3_mold_stat_callout_nl_context",
           "startSeconds": 207.3,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part3_mold_title_card",
-          "startSeconds": 0.0,
-          "durationSeconds": 5.0
+          "startSeconds": 0,
+          "durationSeconds": 5
         }
       ]
     },
@@ -126,22 +126,22 @@
       "remotionDir": "S04-PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoff",
       "durationSeconds": 96.912,
-      "offsetSeconds": 874.248,
+      "offsetSeconds": 874.376,
       "compositions": [
         {
           "id": "part4_precision_split_prompt_detail_vs_tests",
           "startSeconds": 25.38,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part4_precision_stat_callout_prompt_compression",
           "startSeconds": 26.32,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part4_precision_title_card",
-          "startSeconds": 0.0,
-          "durationSeconds": 5.0
+          "startSeconds": 0,
+          "durationSeconds": 5
         }
       ]
     },
@@ -153,28 +153,28 @@
       "remotionDir": "S05-CompoundReturns",
       "compositionId": "Part5CompoundReturns",
       "durationSeconds": 98.424,
-      "offsetSeconds": 971.1600000000001,
+      "offsetSeconds": 971.288,
       "compositions": [
         {
           "id": "part5_compound_split_patching_vs_pdd",
           "startSeconds": 85.86,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part5_compound_stat_callout_cisq",
-          "triggerKeyword": "trillion",
           "startSeconds": 32.7,
-          "durationSeconds": 5.0
+          "durationSeconds": 5,
+          "triggerKeyword": "trillion"
         },
         {
           "id": "part5_compound_stat_callout_maintenance",
           "startSeconds": 18.08,
-          "durationSeconds": 5.0
+          "durationSeconds": 5
         },
         {
           "id": "part5_compound_title_card",
-          "startSeconds": 0.0,
-          "durationSeconds": 5.0
+          "startSeconds": 0,
+          "durationSeconds": 5
         }
       ]
     },
@@ -186,23 +186,23 @@
       "remotionDir": "S06-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 21.072,
-      "offsetSeconds": 1069.584,
+      "offsetSeconds": 1069.712,
       "compositions": [
         {
           "id": "closing_split_darning_vs_molding",
-          "triggerKeyword": "mold",
           "startSeconds": 18.5,
-          "durationSeconds": 5.0
+          "durationSeconds": 5,
+          "triggerKeyword": "mold"
         },
         {
           "id": "closing_stat_callout_roi",
-          "startSeconds": 0.0,
-          "durationSeconds": 5.0
+          "startSeconds": 0,
+          "durationSeconds": 5
         },
         {
           "id": "closing_title_card",
-          "startSeconds": 0.0,
-          "durationSeconds": 5.0
+          "startSeconds": 0,
+          "durationSeconds": 5
         }
       ]
     }
