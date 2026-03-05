@@ -792,3 +792,82 @@ class TestFilterAlreadySynced:
             quiet=True,
         )
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for _parse_llm_response deduplication
+# ---------------------------------------------------------------------------
+
+class TestParseLlmResponseDedup:
+    """Tests that _parse_llm_response deduplicates modules in the LLM output."""
+
+    def test_exact_duplicates_removed(self):
+        """LLM returns the same module name twice — dedup removes the second."""
+        response = 'MODULES_TO_SYNC: ["recruiting_config", "recruiting_config", "recruiting_chat"]\nDEPS_VALID: true'
+        modules, deps_valid, _ = _parse_llm_response(response)
+        assert modules == ["recruiting_config", "recruiting_chat"]
+
+    def test_no_duplicates_unchanged(self):
+        """When all modules are unique, list is returned as-is."""
+        response = 'MODULES_TO_SYNC: ["mod_a", "mod_b", "mod_c"]\nDEPS_VALID: true'
+        modules, deps_valid, _ = _parse_llm_response(response)
+        assert modules == ["mod_a", "mod_b", "mod_c"]
+
+    def test_preserves_order(self):
+        """Dedup preserves first-occurrence order."""
+        response = 'MODULES_TO_SYNC: ["c", "a", "b", "a", "c"]\nDEPS_VALID: true'
+        modules, _, _ = _parse_llm_response(response)
+        assert modules == ["c", "a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# Tests for post-suffix-stripping deduplication
+# ---------------------------------------------------------------------------
+
+class TestPostStrippingDedup:
+    """Tests that modules are deduplicated after language suffix removal.
+
+    The LLM may return both "recruiting_config_Python" and "recruiting_config"
+    which are different strings but both map to "recruiting_config" after
+    suffix stripping.
+    """
+
+    def test_suffix_stripping_creates_duplicates(self):
+        """Two different LLM entries that converge to the same basename after stripping."""
+        from pdd.sync_order import extract_module_from_include
+
+        # Simulate the stripping + dedup logic from run_agentic_sync lines 718-722
+        raw_modules = ["recruiting_config_Python", "recruiting_config", "recruiting_chat_Python"]
+        stripped = []
+        for m in raw_modules:
+            s = extract_module_from_include(m + ".prompt")
+            stripped.append(s if s else m)
+        result = list(dict.fromkeys(stripped))
+
+        assert result == ["recruiting_config", "recruiting_chat"]
+
+    def test_no_convergence_no_dedup(self):
+        """Different modules stay separate after stripping."""
+        from pdd.sync_order import extract_module_from_include
+
+        raw_modules = ["recruiting_config_Python", "recruiting_config_yaml_YAML", "recruiting_chat_Python"]
+        stripped = []
+        for m in raw_modules:
+            s = extract_module_from_include(m + ".prompt")
+            stripped.append(s if s else m)
+        result = list(dict.fromkeys(stripped))
+
+        assert result == ["recruiting_config", "recruiting_config_yaml", "recruiting_chat"]
+
+    def test_preserves_order_after_stripping(self):
+        """First occurrence wins when duplicates appear after stripping."""
+        from pdd.sync_order import extract_module_from_include
+
+        raw_modules = ["recruiting_chat_Python", "recruiting_config", "recruiting_config_Python"]
+        stripped = []
+        for m in raw_modules:
+            s = extract_module_from_include(m + ".prompt")
+            stripped.append(s if s else m)
+        result = list(dict.fromkeys(stripped))
+
+        assert result == ["recruiting_chat", "recruiting_config"]
