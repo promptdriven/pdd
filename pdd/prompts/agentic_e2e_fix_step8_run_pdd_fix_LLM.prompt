@@ -1,3 +1,13 @@
+<pdd-reason>LLM prompt template for running pdd fix on dev units identified during E2E failure analysis.</pdd-reason>
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run pdd fix sequentially on dev units identified during e2e failure analysis.
 
 % Context
@@ -54,24 +64,42 @@ You are working on step 8 of 9 in an agentic e2e fix workflow. You need to run `
 
 % Your Task
 
-1. **Run pdd fix for each failing dev unit**
-   - For each dev unit from Step 5 (DEV_UNITS_IDENTIFIED):
-   - Execute pdd fix in manual mode:
+1. **Discover file paths for each dev unit**
+   - For each dev unit from Step 5 (DEV_UNITS_IDENTIFIED), locate its files dynamically (do NOT hardcode directories):
      ```bash
-     pdd fix --manual --loop {protect_tests_flag} prompts/{{dev_unit}}_python.prompt pdd/{{dev_unit}}.py tests/test_{{dev_unit}}.py
+     # Find prompt file
+     PROMPT_PATH=$(find . -path ./.git -prune -o \( -name "{{dev_unit}}_*.prompt" -path "*/prompts/*" -print \) | head -1)
+     # Find code file (exclude tests, prompts, examples)
+     CODE_PATH=$(find . -path ./.git -prune -o \( -name "{{dev_unit}}.*" -not -path "*/tests/*" -not -name "test_*.*" -not -path "*/prompts/*" -not -path "*/examples/*" -not -path "*_example.*" -not -path "*_program.*" -print \) | head -1)
+     # Find test file
+     TEST_PATH=$(find . -path ./.git -prune -o \( -name "test_{{dev_unit}}.*" -print \) | head -1)
+     # Find verification program (example or program file)
+     VERIFY_PROG=$(find . -path ./.git -prune -o \( -name "{{dev_unit}}_example.*" -o -name "{{dev_unit}}_program.*" -print \) | head -1)
      ```
-   - Wait for completion before starting next
+   - If PROMPT_PATH or CODE_PATH or TEST_PATH is empty, skip this dev unit and log a warning
+
+2. **Run pdd fix for each failing dev unit**
+   - Execute pdd fix in manual mode, using discovered paths:
+   - If a verification program was found (`VERIFY_PROG` is not empty), run with `--loop` and `--verification-program`:
+     ```bash
+     pdd fix --manual --loop --verification-program "$VERIFY_PROG" {protect_tests_flag} "$PROMPT_PATH" "$CODE_PATH" "$TEST_PATH"
+     ```
+   - If NO verification program was found, run without `--loop` (graceful fallback):
+     ```bash
+     pdd fix --manual {protect_tests_flag} "$PROMPT_PATH" "$CODE_PATH" "$TEST_PATH"
+     ```
+   - Wait for completion before starting next dev unit
    - Capture output from each run
 
-2. **Track results**
+3. **Track results**
    - Note which dev units were successfully fixed
    - Note which dev units still have failing tests
    - Capture any error messages
 
-3. **Run unit tests to verify fixes**
-   - After all pdd fix runs complete
-   - Run: `pytest tests/test_{{dev_unit}}.py -v` for each
-   - Report pass/fail status
+4. **Run unit tests to verify fixes**
+   - For each dev unit, retrieve its specific `TEST_PATH` (recorded during discovery or by re-running discovery for that dev unit)
+   - Run the project's test runner with `"$TEST_PATH"` for that dev unit
+   - Report pass/fail status per dev unit
 
 % Output
 
