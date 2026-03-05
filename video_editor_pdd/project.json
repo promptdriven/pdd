@@ -37,7 +37,7 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Economics",
       "compositionId": "Part1Economics",
-      "durationSeconds": 382.176,
+      "durationSeconds": 382.250667,
       "offsetSeconds": 15.68,
       "compositions": [
         {
@@ -72,7 +72,7 @@
       "remotionDir": "S02-ParadigmShift",
       "compositionId": "Part2ParadigmShift",
       "durationSeconds": 195.792,
-      "offsetSeconds": 397.856,
+      "offsetSeconds": 397.930667,
       "compositions": [
         {
           "id": "part2_paradigm_shift_main",
@@ -89,7 +89,7 @@
       "remotionDir": "S03-MoldThreeParts",
       "compositionId": "Part3MoldThreeParts",
       "durationSeconds": 280.728,
-      "offsetSeconds": 593.648,
+      "offsetSeconds": 593.722667,
       "compositions": [
         {
           "id": "part3_mold_split_prompt_vs_code",
@@ -126,7 +126,7 @@
       "remotionDir": "S04-PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoff",
       "durationSeconds": 96.912,
-      "offsetSeconds": 874.376,
+      "offsetSeconds": 874.4506670000001,
       "compositions": [
         {
           "id": "part4_precision_split_prompt_detail_vs_tests",
@@ -153,7 +153,7 @@
       "remotionDir": "S05-CompoundReturns",
       "compositionId": "Part5CompoundReturns",
       "durationSeconds": 98.424,
-      "offsetSeconds": 971.288,
+      "offsetSeconds": 971.3626670000001,
       "compositions": [
         {
           "id": "part5_compound_split_patching_vs_pdd",
@@ -186,7 +186,7 @@
       "remotionDir": "S06-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 21.072,
-      "offsetSeconds": 1069.712,
+      "offsetSeconds": 1069.786667,
       "compositions": [
         {
           "id": "closing_split_darning_vs_molding",

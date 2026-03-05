@@ -390,18 +390,31 @@ def _merge_root_tsx(
     ids_to_remove |= {cid.replace('_', '-') for cid in all_comp_ids}
 
     for remove_id in ids_to_remove:
-            # Match <Composition ... id="remove_id" ... /> (possibly multiline)
-            pattern = re.compile(
-                r'\s*<Composition\s[^>]*id=["\']' + re.escape(remove_id) + r'["\'][^>]*/>\s*',
-                re.DOTALL
-            )
-            # Also handle multi-line Composition blocks
-            pattern_multiline = re.compile(
-                r'\s*<Composition\s*\n(?:\s+\S+.*\n)*?\s+id=["\']' + re.escape(remove_id) + r'["\'].*?\n(?:\s+\S+.*\n)*?\s*/>\s*',
-                re.DOTALL
-            )
-            content = pattern_multiline.sub('\n', content)
-            content = pattern.sub('\n', content)
+            # Remove <Composition ... id="remove_id" ... /> blocks (single or multi-line)
+            # Uses atomic-style matching via line-by-line approach to avoid catastrophic backtracking.
+            escaped_id = re.escape(remove_id)
+            id_pattern = re.compile(r'id=["\']' + escaped_id + r'["\']')
+            content_lines = content.split('\n')
+            filtered: List[str] = []
+            i = 0
+            while i < len(content_lines):
+                line = content_lines[i]
+                # Detect start of a <Composition block
+                if '<Composition' in line:
+                    # Collect the full block (until we find />)
+                    block_lines = [line]
+                    j = i
+                    while '/>' not in content_lines[j] and j < len(content_lines) - 1:
+                        j += 1
+                        block_lines.append(content_lines[j])
+                    block_text = '\n'.join(block_lines)
+                    if id_pattern.search(block_text):
+                        # Skip this entire Composition block
+                        i = j + 1
+                        continue
+                filtered.append(content_lines[i])
+                i += 1
+            content = '\n'.join(filtered)
 
     # Find the fragment or return block to insert our compositions
     # Look for </> or a closing fragment tag

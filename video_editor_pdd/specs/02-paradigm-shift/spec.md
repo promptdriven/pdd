@@ -2,55 +2,67 @@
 
 ## Overview
 - Composition ID: `Part2ParadigmShift`
-- Duration: TBD (matches narration audio, ~4 minutes)
+- Duration: ~195.79s (3:15, matches narration audio)
 - Remotion dir: `S02-ParadigmShift`
 - Mood: expansive wonder → concrete illustration → conviction
 
 ## Visual Design
-- Primary: industrial/manufacturing visual metaphors transitioned to chip design
-- Color palette: dark navy (#0F172A), steel gray (#64748B), molten orange (#F97316), circuit green (#22C55E), blueprint blue (#3B82F6)
-- Text overlay: rolling word-by-word narration subtitle at bottom third
+- Background: Veo-generated cinematic footage of manufacturing and chip design
+- Color palette: dark navy (#0F172A), vibrant blue (#3B82F6), molten orange (#F97316), circuit green (#22C55E), steel gray (#64748B)
+- Text overlay: word-by-word narration subtitle at bottom third (12-word rolling window)
 - Typography: sans-serif, 36px subtitles with semi-transparent black backdrop
 
 ## Audio
 - Narration: `part2_paradigm_shift/narration.wav`
 - Word timestamps: `part2_paradigm_shift/word_timestamps.json`
+- Segments: `part2_paradigm_shift_001` through `part2_paradigm_shift_019`
 - Silence gap: 0.3s default
 
-## Narrative Arc & Shot Map
+## Visual Assets
+- `01_injection_molding.md` — injection molding process animation (10s)
+- `02_value_migration.md` — value migrating from object to specification (10s)
+- `03_chip_design.md` — 1980s hand-drawn gates to HDL transition (10s)
+- `04_prompt_is_mold.md` — prompt-to-code generation flow visualization (10s)
 
-### Act A — The Pattern (0:00–0:30)
-- "There's a pattern here that shows up across industries."
-- "Not just cheaper materials — a deeper shift in how things are made."
-- Visuals: montage of industry transformations, abstract pattern graphic
+## Narrative Arc & Shot Breakdown
 
-### Act B — Injection Molding Metaphor (0:30–1:30)
-- "Before injection molding, you crafted individual objects. After? You designed molds."
-- "Make the mold once, produce unlimited identical parts."
-- "When there's a defect? You don't patch individual parts. You fix the mold."
-- Visuals: injection molding process animation, mold-to-part workflow
+### Act A — Pattern Across Industries (0:00–0:45)
+- Narration: Not cheaper materials — a shift in how things are made. The same pattern across textiles, plastics, semiconductors. The value didn't stay in the thing itself.
+- Veo source: `part2_paradigm_shift_veo_01` (injection molding)
+- Camera: macro view of molten material flowing into a precision mold
+- Overlay: none (subtitles only)
+- Transition: fade-in from black (30 frames)
 
-### Act C — Where Value Lives (1:30–2:15)
-- "This is the real shift. Not 'cheaper material.' A migration of where value lives."
-- Crafting: value in the object → Molding: value in the specification
-- "The plastic part? Disposable. Regenerate it at will."
-- Visuals: value migration diagram, object vs specification comparison
+### Act B — Injection Molding Metaphor (0:45–1:30)
+- Narration: Design the mold once, produce unlimited identical parts. Find a defect? Fix the mold — not every individual part. The cost is in the specification, not the production.
+- Veo source: `part2_paradigm_shift_veo_01` (continued — mold producing parts)
+- Camera: pull back to reveal production line of identical parts emerging
+- Overlay: none (subtitles only)
 
-### Act D — Chip Design History (2:15–3:30)
-- 1980s: hand-drawn gates → couldn't keep up at tens of thousands of transistors
-- 1985: Verilog HDL — describe what, synthesis generates how
-- Non-deterministic: run twice, get different gates
-- Synopsys verification: SAT/SMT solvers prove functional equivalence
-- Visuals: schematic to HDL transition, gate-level animations, verification flow
+### Act C — Value Migration (1:30–2:00)
+- Narration: Value migrates from the object to the specification. The plastic part is disposable. The mold is everything.
+- Veo source: `part2_paradigm_shift_veo_02` (value migration diagram)
+- Camera: abstract visualization — value flowing from physical object upward to blueprint
+- Transition: crossfade from Act B (20 frames)
 
-### Act E — The Connection (3:30–4:00)
-- "This is that same transition. For software."
-- "The prompt is your mold. The code is just plastic."
-- "The code is different every generation. But the tests lock the behavior."
-- Visuals: prompt → code generation flow, test verification overlay
+### Act D — Chip Design History (2:00–2:45)
+- Narration: 1980s — engineers hand-drew gate layouts. 1985 — Verilog HDL: describe behavior, not wires. Synopsys added verification with SAT and SMT solvers. Same revolution: specification replaced manual construction.
+- Veo source: `part2_paradigm_shift_veo_03` (chip design transition)
+- Camera: morphing from hand-drawn schematic to HDL text to automated layout
+- Transition: crossfade from Act C (20 frames)
+
+### Act E — The Connection (2:45–3:15)
+- Narration: "The prompt is your mold. Code is plastic. Tests lock the behavior. We've seen this before — we just didn't recognize it."
+- Veo source: `part2_paradigm_shift_veo_04` (prompt-to-code flow)
+- Camera: prompt text transforms into flowing code, test barriers appear on edges
+- Transition: crossfade from Act D, fade-out to black at end (30 frames)
 
 ## Composition Structure
-- Full-screen Veo background videos (multiple, transitioned by act)
+- Background layer: Veo videos crossfade across acts
+  - `veo/part2_paradigm_shift_veo_01.mp4` (Acts A-B)
+  - `veo/part2_paradigm_shift_veo_02.mp4` (Act C)
+  - `veo/part2_paradigm_shift_veo_03.mp4` (Act D)
+  - `veo/part2_paradigm_shift_veo_04.mp4` (Act E)
 - Animated subtitle track synced to word timestamps
-- Fade-in/fade-out transitions (30 frames each)
-- Diagram overlays synced to narration
+- Fade-in from black: 30 frames at start
+- Fade-out to black: 30 frames at end
