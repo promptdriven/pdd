@@ -355,7 +355,11 @@ describe("POST response shape", () => {
 
 describe("POST — success flow", () => {
   beforeEach(() => {
-    mockRunPipelineStage.mockResolvedValue("test-job-compositions-42");
+    // Simulate real runPipelineStage which sends { type: "job", jobId } before resolving
+    mockRunPipelineStage.mockImplementation((_stage: string, _params: unknown, send: (data: object) => void) => {
+      send({ type: "job", jobId: "test-job-compositions-42" });
+      return Promise.resolve("test-job-compositions-42");
+    });
   });
 
   it("calls runPipelineStage with 'compositions' stage", async () => {
@@ -435,6 +439,26 @@ describe("POST — success flow", () => {
     ) as any;
     expect(completeEvent).toBeDefined();
     expect(completeEvent.jobId).toBe("test-job-compositions-42");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. POST — sectionId forwarding
+// ---------------------------------------------------------------------------
+
+describe("POST — sectionId forwarding", () => {
+  it("passes sectionId to runPipelineStage params when provided in body", async () => {
+    await POST(
+      makeRequest("http://localhost/api/pipeline/compositions/run", {
+        components: ["title_card"],
+        sectionId: "part3_mold",
+      }) as any
+    );
+    await flushPromises();
+
+    expect(mockRunPipelineStage).toHaveBeenCalledTimes(1);
+    const params = mockRunPipelineStage.mock.calls[0][1];
+    expect(params.sectionId).toBe("part3_mold");
   });
 });
 
@@ -810,6 +834,184 @@ describe("compositions executor factory — component generation", () => {
     expect(mockRunClaudeFix).not.toHaveBeenCalled();
     // spawn is still called for the wrapper python script (always runs)
     expect(mockSpawn).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7b. Executor factory — section-scoped component generation
+// ---------------------------------------------------------------------------
+
+describe("compositions executor factory — section-scoped generation", () => {
+  /** Helper: set up mockSpawn to auto-close with given exit code. */
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  it("generates section-scoped output file when sectionId is provided", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: ["title_card"], wrappers: [], sectionId: "part3_mold" },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // runClaudeFix should be called with the section-scoped output dir or component name
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("part3_mold_title_card");
+  });
+
+  it("scopes spec lookup to section specDir when sectionId is provided", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue("# Part 3 Title Card Spec");
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    config.sections[1].specDir = "specs/main";
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: ["title_card"], wrappers: [], sectionId: "main" },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // findSpecForComponent should search in the section's specDir first
+    const readCalls = mockReadFileSync.mock.calls.map((c: any) => c[0]);
+    const specRead = readCalls.find((p: string) => typeof p === "string" && p.includes("specs/main"));
+    expect(specRead).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7c. Executor factory — sectionComponents (full-run scoping)
+// ---------------------------------------------------------------------------
+
+describe("compositions executor factory — sectionComponents full-run scoping", () => {
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  it("generates section-scoped files for each entry in sectionComponents", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    config.sections[1].specDir = "specs/main";
+    config.sections[2].specDir = "specs/outro";
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // Should call runClaudeFix twice — once per section
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
+
+    const prompt1 = mockRunClaudeFix.mock.calls[0][0] as string;
+    const prompt2 = mockRunClaudeFix.mock.calls[1][0] as string;
+
+    // Each prompt should reference the section-scoped name
+    expect(prompt1).toContain("intro_title_card");
+    expect(prompt2).toContain("main_title_card");
+  });
+
+  it("uses each section's specDir for spec lookup", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue("# Spec content");
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    config.sections[1].specDir = "specs/main";
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    // Should have looked up specs in both section dirs
+    const readCalls = mockReadFileSync.mock.calls.map((c: any) => c[0]);
+    const introSpec = readCalls.find(
+      (p: string) => typeof p === "string" && p.includes("specs/intro")
+    );
+    const mainSpec = readCalls.find(
+      (p: string) => typeof p === "string" && p.includes("specs/main")
+    );
+    expect(introSpec).toBeDefined();
+    expect(mainSpec).toBeDefined();
+  });
+
+  it("emits per-component status events for sectionComponents", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    setupMockSpawn(0);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+    await executor(jest.fn());
+
+    const generatingEvents = mockSend.mock.calls
+      .filter((c: any[]) => c[0]?.type === "component" && c[0]?.status === "generating")
+      .map((c: any[]) => c[0].name);
+    const doneEvents = mockSend.mock.calls
+      .filter((c: any[]) => c[0]?.type === "component" && c[0]?.status === "done")
+      .map((c: any[]) => c[0].name);
+
+    expect(generatingEvents).toContain("title_card");
+    expect(doneEvents).toContain("title_card");
+    // Two generating + two done events (one per section)
+    expect(generatingEvents.length).toBe(2);
+    expect(doneEvents.length).toBe(2);
   });
 });
 
@@ -1397,6 +1599,78 @@ describe("GET_CompositionList — component status detection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 15b. GET_CompositionList — section-scoped component detection
+// ---------------------------------------------------------------------------
+
+describe("GET_CompositionList — section-scoped components", () => {
+  it("returns 'done' when section-scoped .tsx file exists ({sectionId}_{name}.tsx)", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // Only the section-scoped file exists, NOT the flat file
+      if (typeof p === "string" && p.endsWith("intro_title_card.tsx")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string, opts?: any) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          {
+            name: "title_card.md",
+            isDirectory: () => false,
+            isFile: () => true,
+          },
+        ];
+      }
+      return [];
+    });
+    // Stub readFileSync for Veo-prompt check (first line doesn't contain [veo:])
+    mockReadFileSync.mockReturnValue("# Title Card Spec\nSome content");
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const comp = introSection.components.find(
+      (c: any) => c.name === "title_card"
+    );
+    expect(comp).toBeDefined();
+    expect(comp.status).toBe("done");
+  });
+
+  it("prefers section-scoped file over flat file", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // Both section-scoped and flat files exist
+      if (typeof p === "string" && p.endsWith("intro_title_card.tsx")) return true;
+      if (typeof p === "string" && p.endsWith("title_card.tsx")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string, opts?: any) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          {
+            name: "title_card.md",
+            isDirectory: () => false,
+            isFile: () => true,
+          },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Title Card Spec\nSome content");
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const comp = introSection.components.find(
+      (c: any) => c.name === "title_card"
+    );
+    expect(comp).toBeDefined();
+    expect(comp.status).toBe("done");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 16. GET_CompositionList — wrapper naming convention
 // ---------------------------------------------------------------------------
 
@@ -1429,6 +1703,63 @@ describe("GET_CompositionList — wrapper naming", () => {
     for (const section of data.sections) {
       const uniqueNames = new Set(section.wrappers.map((w: any) => w.name));
       expect(uniqueNames.size).toBe(section.wrappers.length);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16b. GET_CompositionList — wrapper status checks actual file locations
+// ---------------------------------------------------------------------------
+
+describe("GET_CompositionList — wrapper status detection", () => {
+  it("returns 'done' when {sectionId}/index.tsx exists", async () => {
+    const pathMod = require("path");
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // {sectionId}/index.tsx exists
+      if (typeof p === "string" && p.endsWith(pathMod.join("intro", "index.tsx"))) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const doneWrappers = introSection.wrappers.filter((w: any) => w.status === "done");
+    expect(doneWrappers.length).toBeGreaterThan(0);
+  });
+
+  it("returns 'done' when {compositionId}.tsx exists", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // {compositionId}.tsx exists (e.g., IntroComposition.tsx)
+      if (typeof p === "string" && p.endsWith("IntroComposition.tsx")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const doneWrappers = introSection.wrappers.filter((w: any) => w.status === "done");
+    expect(doneWrappers.length).toBeGreaterThan(0);
+  });
+
+  it("returns 'missing' when neither wrapper file exists", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    for (const w of introSection.wrappers) {
+      expect(w.status).toBe("missing");
     }
   });
 });

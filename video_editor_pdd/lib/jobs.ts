@@ -10,7 +10,15 @@ export type ExecutorFactory = (
   send: SseSend
 ) => (onLog: (msg: string) => void) => Promise<void>;
 
-const EXECUTORS = new Map<PipelineStage, ExecutorFactory>();
+// Persist on globalThis so registrations survive Next.js dev-mode HMR.
+const _g = globalThis as typeof globalThis & {
+  __pipelineExecutors?: Map<PipelineStage, ExecutorFactory>;
+  __jobSendMap?: Map<string, SseSend>;
+};
+if (!_g.__pipelineExecutors) _g.__pipelineExecutors = new Map();
+if (!_g.__jobSendMap) _g.__jobSendMap = new Map();
+
+const EXECUTORS: Map<PipelineStage, ExecutorFactory> = _g.__pipelineExecutors;
 
 export function registerExecutor(stage: PipelineStage, factory: ExecutorFactory): void {
   EXECUTORS.set(stage, factory);
@@ -269,7 +277,7 @@ export async function retryJob(jobId: string): Promise<string> {
   return newJobId;
 }
 
-const JOB_SEND_MAP = new Map<string, SseSend>();
+const JOB_SEND_MAP: Map<string, SseSend> = _g.__jobSendMap!;
 
 export function setJobSend(jobId: string, send: SseSend): void {
   JOB_SEND_MAP.set(jobId, send);
@@ -344,6 +352,12 @@ export async function runPipelineStage(
       }
 
       const jobId = createJob(current, params);
+
+      // Notify the client immediately so SseLogPanel can connect
+      // while the executor is still running.
+      if (forceRun) {
+        send({ type: "job", jobId });
+      }
 
       // Store send handler for runJob's onLog
       JOB_SEND_MAP.set(jobId, send);

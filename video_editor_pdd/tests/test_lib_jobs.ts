@@ -111,8 +111,11 @@ function createMockSend(): { send: SseSend; calls: object[] } {
 
 beforeEach(() => {
   testDb = createTestDb();
-  // Clear executor registry between tests
+  // Clear executor registry between tests (both module-level and globalThis)
   jest.resetModules();
+  delete (globalThis as any).__pipelineExecutors;
+  delete (globalThis as any).__jobSendMap;
+  delete (globalThis as any).__pipelineDb;
 });
 
 afterEach(() => {
@@ -834,6 +837,26 @@ describe("runPipelineStage", () => {
     expect(job).toBeDefined();
     expect(job!.stage).toBe("tts-script");
     expect(job!.status).toBe("done");
+  });
+
+  it("sends { type: 'job', jobId } before the executor runs", async () => {
+    const { send, calls } = createMockSend();
+    let jobEventBeforeExec = false;
+
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        const jobEvents = calls.filter((c: any) => c.type === "job");
+        jobEventBeforeExec = jobEvents.length > 0;
+        onLog("running");
+      };
+    });
+
+    const jobId = await runPipelineStage("setup", {}, send);
+    expect(jobEventBeforeExec).toBe(true);
+
+    const jobEvents = calls.filter((c: any) => c.type === "job");
+    expect(jobEvents.length).toBe(1);
+    expect((jobEvents[0] as any).jobId).toBe(jobId);
   });
 
   it("still throws when the explicitly requested stage has no executor", async () => {

@@ -112,13 +112,24 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     return list;
   }, [sections]);
 
-  const allComponentNames = useMemo(
-    () => sections.flatMap((s) => s.components.map((c) => c.name)),
-    [sections]
-  );
   const allWrapperNames = useMemo(
     () => sections.flatMap((s) => (s.wrappers ?? []).map((w) => w.name)),
     [sections]
+  );
+
+  const missingSectionComponents = useMemo(
+    () => sections
+      .map(s => ({
+        sectionId: s.id,
+        components: s.components.filter(c => c.status === 'missing').map(c => c.name),
+      }))
+      .filter(entry => entry.components.length > 0),
+    [sections]
+  );
+
+  const missingComponentCount = useMemo(
+    () => missingSectionComponents.reduce((sum, e) => sum + e.components.length, 0),
+    [missingSectionComponents]
   );
 
   const loadCollapsed = () => {
@@ -172,6 +183,15 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     refreshData();
   }, [refreshData]);
 
+  // Periodically refresh component statuses while a job is active
+  useEffect(() => {
+    if (!activeJobId) return;
+    const interval = setInterval(() => {
+      refreshData();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeJobId, refreshData]);
+
   const toggleSection = (id: string) => {
     setCollapsed((prev) => {
       const next = { ...prev, [id]: !prev[id] };
@@ -209,13 +229,13 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     }
   };
 
-  const openPreview = async (componentName: string) => {
+  const openPreview = async (componentName: string, sectionId?: string) => {
     setPreviewName(componentName);
     setPreviewUrl(null);
     try {
-      const res = await fetch(
-        `/api/pipeline/compositions/preview?component=${encodeURIComponent(componentName)}`
-      );
+      const qs = new URLSearchParams({ component: componentName });
+      if (sectionId) qs.set('section', sectionId);
+      const res = await fetch(`/api/pipeline/compositions/preview?${qs}`);
       if (!res.ok) throw new Error(`Preview unavailable (${res.status})`);
       let url: string | null = null;
       if (res.headers.get('content-type')?.includes('application/json')) {
@@ -269,13 +289,33 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             <h3 className="text-sm font-semibold text-slate-200">
               Components ({totalComponents})
             </h3>
-            <button
-              className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-              onClick={() => runJob('/api/pipeline/compositions/run', { components: allComponentNames, wrappers: allWrapperNames }, 'generate-all')}
-              disabled={actionBusy['generate-all']}
-            >
-              {actionBusy['generate-all'] ? 'Generating...' : 'Generate All Compositions'}
-            </button>
+            <div className="flex items-center gap-2">
+              {missingComponentCount > 0 && (
+                <button
+                  className="rounded bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                  onClick={() => runJob('/api/pipeline/compositions/run', {
+                    sectionComponents: missingSectionComponents,
+                    wrappers: allWrapperNames,
+                  }, 'generate-missing')}
+                  disabled={actionBusy['generate-missing'] || actionBusy['generate-all']}
+                >
+                  {actionBusy['generate-missing'] ? 'Generating...' : `Generate Missing (${missingComponentCount})`}
+                </button>
+              )}
+              <button
+                className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                onClick={() => runJob('/api/pipeline/compositions/run', {
+                  sectionComponents: sections.map(s => ({
+                    sectionId: s.id,
+                    components: s.components.map(c => c.name),
+                  })),
+                  wrappers: allWrapperNames,
+                }, 'generate-all')}
+                disabled={actionBusy['generate-all'] || actionBusy['generate-missing']}
+              >
+                {actionBusy['generate-all'] ? 'Generating...' : 'Generate All'}
+              </button>
+            </div>
           </div>
 
           {loading && <p className="text-sm text-slate-500">Loading components…</p>}
@@ -315,7 +355,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                             <div className="flex items-center gap-2">
                               <button
                                 className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                                onClick={(e) => { e.stopPropagation(); openPreview(component.name); }}
+                                onClick={(e) => { e.stopPropagation(); openPreview(component.name, section.id); }}
                               >
                                 Preview
                               </button>
@@ -325,7 +365,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                                   e.stopPropagation();
                                   runJob(
                                     '/api/pipeline/compositions/run',
-                                    { components: [component.name] },
+                                    { components: [component.name], sectionId: section.id },
                                     `regen-${component.name}`
                                   );
                                 }}
@@ -373,7 +413,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                     <StatusBadge status={wrapper.status} error={wrapper.error} />
                     <button
                       className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                      onClick={() => openPreview(wrapper.name)}
+                      onClick={() => openPreview(wrapper.name, sectionId)}
                     >
                       Preview
                     </button>

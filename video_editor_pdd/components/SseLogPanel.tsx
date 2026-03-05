@@ -175,7 +175,7 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
       <div
         ref={logRef}
         className="overflow-y-auto max-h-64 font-mono text-xs bg-black/20 p-2 rounded"
-        style={{ contain: 'strict' }}
+        style={{ contain: 'content' }}
       >
         {logs.length === 0 ? (
           <div className="text-slate-400">Waiting for logs…</div>

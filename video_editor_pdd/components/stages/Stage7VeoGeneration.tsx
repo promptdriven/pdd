@@ -57,6 +57,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
   const [logs, setLogs] = useState<ClipLog[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [brokenRefs, setBrokenRefs] = useState<Set<string>>(new Set());
+  const [regeneratingRefId, setRegeneratingRefId] = useState<string | null>(null);
 
   const fetchClips = async () => {
     try {
@@ -156,12 +157,21 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
   };
 
   const handleRegenerateReference = async (refId: string) => {
-    await fetch('/api/pipeline/veo/references/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ referenceId: refId }),
-    });
-    fetchClips();
+    setRegeneratingRefId(refId);
+    try {
+      const res = await fetch('/api/pipeline/veo/references/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ referenceId: refId }),
+      });
+      if (!res.ok) return;
+      const extractedJobId = await extractJobIdFromSse(res);
+      if (extractedJobId) setJobId(extractedJobId);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRegeneratingRefId(null);
+    }
   };
 
   if (loading) {
@@ -219,9 +229,10 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
                   </div>
                   <button
                     onClick={() => handleRegenerateReference(ref.id)}
-                    className="text-xs text-blue-600 hover:text-blue-800"
+                    disabled={regeneratingRefId === ref.id}
+                    className="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50"
                   >
-                    ↺ Regenerate
+                    {regeneratingRefId === ref.id ? '⏳ Generating…' : '↺ Regenerate'}
                   </button>
                 </div>
               ))}
@@ -337,7 +348,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
 
         {/* SSE Log Panel */}
         <div>
-          <SseLogPanel jobId={jobId} />
+          <SseLogPanel jobId={jobId} onDone={() => { setJobId(null); fetchClips(); }} />
         </div>
 
         {/* Per-clip logs */}

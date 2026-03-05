@@ -543,68 +543,64 @@ describe("getSectionDuration — ffprobe", () => {
 // 6. renderStill — Remotion renderStill integration
 // ---------------------------------------------------------------------------
 
-describe("renderStill — Remotion renderStill", () => {
+describe("renderStill — subprocess", () => {
   beforeEach(() => {
     setupFsMocks();
   });
 
-  it("calls selectComposition with compositionId", async () => {
-    setupSelectComposition("IntroComposition");
-    mockRenderStill.mockResolvedValue(undefined);
+  it("spawns a child process to render the still", async () => {
+    setupSpawn([], 0);
 
     await renderStill("IntroComposition", 90, "/stills/frame.png");
 
-    expect(mockSelectComposition).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "IntroComposition" })
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "node",
+      expect.any(Array),
+      expect.objectContaining({ stdio: ["ignore", "ignore", "pipe"] })
     );
   });
 
-  it("calls remotion renderStill with composition and frame", async () => {
-    const comp = setupSelectComposition("IntroComposition");
-    mockRenderStill.mockResolvedValue(undefined);
+  it("writes a temporary .cjs script containing compositionId and frame", async () => {
+    setupSpawn([], 0);
 
     await renderStill("IntroComposition", 90, "/stills/frame.png");
 
-    expect(mockRenderStill).toHaveBeenCalledWith(
-      expect.objectContaining({
-        composition: comp,
-        frame: 90,
-      })
+    const writeCall = (fs.promises.writeFile as jest.Mock).mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("remotion-still")
     );
+    expect(writeCall).toBeDefined();
+    const scriptContent = writeCall[1] as string;
+    expect(scriptContent).toContain("IntroComposition");
+    expect(scriptContent).toContain("90");
+    expect(scriptContent).toContain("/stills/frame.png");
+    expect(scriptContent).toContain("selectComposition");
+    expect(scriptContent).toContain("renderStill");
   });
 
-  it("passes output path to renderStill", async () => {
-    setupSelectComposition();
-    mockRenderStill.mockResolvedValue(undefined);
+  it("rejects when child process exits with non-zero code", async () => {
+    setupSpawn([], 1, "Composition not found");
 
-    await renderStill("TestComp", 0, "/output/stills/frame.png");
-
-    expect(mockRenderStill).toHaveBeenCalledWith(
-      expect.objectContaining({ output: "/output/stills/frame.png" })
-    );
-  });
-
-  it("passes serveUrl to selectComposition and renderStill", async () => {
-    setupSelectComposition();
-    mockRenderStill.mockResolvedValue(undefined);
-
-    await renderStill("TestComp", 0, "/stills/frame.png");
-
-    const selectCall = mockSelectComposition.mock.calls[0][0];
-    const stillCall = mockRenderStill.mock.calls[0][0];
-    expect(selectCall.serveUrl).toBeDefined();
-    expect(stillCall.serveUrl).toBe(selectCall.serveUrl);
+    await expect(
+      renderStill("BadComp", 0, "/stills/frame.png")
+    ).rejects.toThrow(/exited with code 1/);
   });
 
   it("ensures output directory exists before rendering still", async () => {
-    setupSelectComposition();
-    mockRenderStill.mockResolvedValue(undefined);
+    setupSpawn([], 0);
 
     await renderStill("TestComp", 0, "/output/stills/frame.png");
 
     expect(fs.promises.mkdir).toHaveBeenCalledWith("/output/stills", {
       recursive: true,
     });
+  });
+
+  it("cleans up temporary script after completion", async () => {
+    setupSpawn([], 0);
+
+    await renderStill("TestComp", 0, "/stills/frame.png");
+
+    expect(fs.promises.unlink).toHaveBeenCalled();
   });
 });
 
