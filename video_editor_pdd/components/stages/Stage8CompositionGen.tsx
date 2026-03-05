@@ -289,19 +289,33 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             <h3 className="text-sm font-semibold text-slate-200">
               Components ({totalComponents})
             </h3>
-            <button
-              className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-              onClick={() => runJob('/api/pipeline/compositions/run', {
-                sectionComponents: sections.map(s => ({
-                  sectionId: s.id,
-                  components: s.components.map(c => c.name),
-                })),
-                wrappers: allWrapperNames,
-              }, 'generate-all')}
-              disabled={actionBusy['generate-all']}
-            >
-              {actionBusy['generate-all'] ? 'Generating...' : 'Generate All Compositions'}
-            </button>
+            <div className="flex items-center gap-2">
+              {missingComponentCount > 0 && (
+                <button
+                  className="rounded bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
+                  onClick={() => runJob('/api/pipeline/compositions/run', {
+                    sectionComponents: missingSectionComponents,
+                    wrappers: allWrapperNames,
+                  }, 'generate-missing')}
+                  disabled={actionBusy['generate-missing'] || actionBusy['generate-all']}
+                >
+                  {actionBusy['generate-missing'] ? 'Generating...' : `Generate Missing (${missingComponentCount})`}
+                </button>
+              )}
+              <button
+                className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                onClick={() => runJob('/api/pipeline/compositions/run', {
+                  sectionComponents: sections.map(s => ({
+                    sectionId: s.id,
+                    components: s.components.map(c => c.name),
+                  })),
+                  wrappers: allWrapperNames,
+                }, 'generate-all')}
+                disabled={actionBusy['generate-all'] || actionBusy['generate-missing']}
+              >
+                {actionBusy['generate-all'] ? 'Generating...' : 'Generate All'}
+              </button>
+            </div>
           </div>
 
           {loading && <p className="text-sm text-slate-500">Loading components…</p>}

@@ -52,7 +52,7 @@ function isVeoPromptSpec(filePath: string): boolean {
  * - Files with [veo:] on the first line (Veo generation prompts)
  * - The main spec.md UNLESS it's the only Remotion spec (fallback component)
  */
-function listSpecComponents(specDir: string): string[] {
+function listSpecComponents(specDir: string, sectionId?: string): string[] {
   const absDir = path.isAbsolute(specDir) ? specDir : path.join(process.cwd(), specDir);
   if (!fs.existsSync(absDir)) return [];
 
@@ -90,8 +90,8 @@ function listSpecComponents(specDir: string): string[] {
   // use a fallback component name so Claude generates at least one visual
   // Remotion component for this section.
   if (names.size === 0 && hasMainSpec) {
-    const sectionId = path.basename(absDir);
-    names.add(`${sectionId}_main`);
+    const fallbackId = sectionId ?? path.basename(absDir);
+    names.add(`${fallbackId}_main`);
   }
 
   return Array.from(names);
@@ -108,13 +108,29 @@ function buildComponent(name: string, sectionId?: string): CompositionComponent 
   };
 }
 
+function buildWrapper(name: string, section: { id: string; compositionId: string }): CompositionComponent {
+  // Wrappers can exist as:
+  // 1. {sectionId}/index.tsx  (Python-generated section wrapper)
+  // 2. {compositionId}.tsx    (Claude-generated section composition)
+  // 3. {name}.tsx             (flat file matching wrapper name directly)
+  const indexExists = fs.existsSync(path.join(REMOTION_DIR, section.id, "index.tsx"));
+  const compositionExists = fs.existsSync(path.join(REMOTION_DIR, `${section.compositionId}.tsx`));
+  const flatExists = fs.existsSync(path.join(REMOTION_DIR, `${name}.tsx`));
+  return {
+    name,
+    status: indexExists || compositionExists || flatExists ? "done" : "missing",
+    error: null,
+  };
+}
+
 export async function GET(): Promise<NextResponse> {
   try {
     const config = loadProject();
 
     const sections: CompositionSection[] = config.sections.map((section) => {
       const componentNames = listSpecComponents(
-        path.join("specs", section.specDir)
+        path.join("specs", section.specDir),
+        section.id
       );
 
       const wrapperNames = Array.from(
@@ -125,7 +141,7 @@ export async function GET(): Promise<NextResponse> {
         id: section.id,
         label: section.label,
         components: componentNames.map((n) => buildComponent(n, section.id)),
-        wrappers: wrapperNames.map(buildComponent),
+        wrappers: wrapperNames.map((n) => buildWrapper(n, section)),
       };
     });
 

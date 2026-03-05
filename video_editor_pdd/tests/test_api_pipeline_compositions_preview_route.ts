@@ -69,21 +69,21 @@ const DEFAULT_PROJECT = {
       id: "cold_open",
       label: "Cold Open",
       compositionId: "ColdOpenSection",
-      compositions: ["title_card"],
+      compositions: ["cold_open_title_card"],
       specDir: "cold_open",
     },
     {
       id: "part1_economics",
       label: "Part 1",
       compositionId: "Part1Economics",
-      compositions: [],
+      compositions: ["part1_economics_stat_callout_gitclear", "part1_economics_stat_callout_github"],
       specDir: "part1_economics",
     },
     {
       id: "part3_mold",
       label: "Part 3: The Mold",
       compositionId: "Part3MoldThreeParts",
-      compositions: ["title_card"],
+      compositions: ["part3_mold_title_card", "part3_mold_stat_callout_coderabbit"],
       specDir: "03-mold-has-three-parts",
     },
   ],
@@ -118,23 +118,38 @@ describe("GET — missing component param", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET — render still", () => {
-  it("calls renderStill with resolved compositionId", async () => {
+  it("calls renderStill with hyphenated composition ID (underscores invalid in Remotion)", async () => {
     const res = await GET(
-      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card")
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")
     );
     expect(res.status).toBe(200);
     expect(mockRenderStill).toHaveBeenCalledTimes(1);
-    expect(mockRenderStill.mock.calls[0][0]).toBe("ColdOpenSection");
+    // Remotion IDs cannot contain underscores — must be hyphenated
+    expect(mockRenderStill.mock.calls[0][0]).toBe("cold-open-title-card");
     expect(mockRenderStill.mock.calls[0][1]).toBe(30); // frame = FPS
   });
 
   it("returns JSON with url field", async () => {
     const res = await GET(
-      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card")
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")
     );
     const body = await res.json();
     expect(body.url).toContain("component=title_card");
     expect(body.url).toContain("raw=1");
+  });
+
+  it("renders different compositions for different components in the same section", async () => {
+    await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=stat_callout_gitclear&section=part1_economics")
+    );
+    expect(mockRenderStill.mock.calls[0][0]).toBe("part1-economics-stat-callout-gitclear");
+
+    mockRenderStill.mockClear();
+
+    await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=stat_callout_github&section=part1_economics")
+    );
+    expect(mockRenderStill.mock.calls[0][0]).toBe("part1-economics-stat-callout-github");
   });
 
   it("resolves fallback _main component to section compositionId", async () => {
@@ -157,18 +172,18 @@ describe("GET — render still", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET — section disambiguation", () => {
-  it("resolves title_card to ColdOpenSection without section param", async () => {
+  it("resolves title_card to cold-open-title-card without section param (first match)", async () => {
     await GET(
       makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card")
     );
-    expect(mockRenderStill.mock.calls[0][0]).toBe("ColdOpenSection");
+    expect(mockRenderStill.mock.calls[0][0]).toBe("cold-open-title-card");
   });
 
-  it("resolves title_card to Part3MoldThreeParts when section=part3_mold", async () => {
+  it("resolves title_card to part3-mold-title-card when section=part3_mold", async () => {
     await GET(
       makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=part3_mold")
     );
-    expect(mockRenderStill.mock.calls[0][0]).toBe("Part3MoldThreeParts");
+    expect(mockRenderStill.mock.calls[0][0]).toBe("part3-mold-title-card");
   });
 
   it("includes section param in returned url", async () => {

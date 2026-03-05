@@ -318,18 +318,21 @@ registerExecutor("compositions", (params, send: SseSend) => {
         const sec = cfg.sections.find((s: { id: string }) => s.id === entry.sectionId);
         const specDir = sec ? path.join("specs", sec.specDir) : undefined;
         for (const name of entry.components) {
+          // Don't double-prefix if the name already starts with the sectionId
+          const alreadyScoped = name.startsWith(`${entry.sectionId}_`);
           workItems.push({
             name,
-            outputName: `${entry.sectionId}_${name}`,
+            outputName: alreadyScoped ? name : `${entry.sectionId}_${name}`,
             specDir,
           });
         }
       }
     } else {
       for (const name of components) {
+        const alreadyScoped = sectionId && name.startsWith(`${sectionId}_`);
         workItems.push({
           name,
-          outputName: sectionId ? `${sectionId}_${name}` : name,
+          outputName: alreadyScoped ? name : (sectionId ? `${sectionId}_${name}` : name),
           specDir: sectionSpecDir,
         });
       }

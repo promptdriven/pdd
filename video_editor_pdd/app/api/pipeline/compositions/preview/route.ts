@@ -12,6 +12,10 @@ const FPS = 30;
 /**
  * Resolve a component name to a Remotion compositionId by scanning project.json sections.
  *
+ * Individual components are registered in Root.tsx under their section-scoped name
+ * (e.g., "cold_open_title_card"), so we return that name directly. Wrappers and
+ * fallback _main components resolve to the section's compositionId.
+ *
  * When sectionId is provided, only that section is checked — this disambiguates
  * components like "title_card" that appear in multiple sections.
  */
@@ -28,13 +32,21 @@ function resolveCompositionId(
 
   for (const section of sections) {
     const comps: string[] = section.compositions ?? [];
-    // Check both flat name and section-scoped name ({sectionId}_{name})
-    if (comps.includes(componentName) || comps.includes(`${section.id}_${componentName}`)) {
-      return section.compositionId;
+    // Check if the section-scoped name is in compositions — return its
+    // hyphenated form as the Remotion composition ID (underscores are invalid).
+    const scopedName = `${section.id}_${componentName}`;
+    if (comps.includes(scopedName)) {
+      return scopedName.replace(/_/g, "-");
     }
+    // Check if the component name is already section-scoped in the list
+    if (comps.includes(componentName)) {
+      return componentName.replace(/_/g, "-");
+    }
+    // Fallback _main components → section wrapper
     if (componentName === `${section.id}_main`) {
       return section.compositionId;
     }
+    // Wrapper names → section wrapper
     if (
       componentName === `${section.compositionId}Wrapper` ||
       componentName === `${section.id}Wrapper`

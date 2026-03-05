@@ -1708,6 +1708,63 @@ describe("GET_CompositionList — wrapper naming", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 16b. GET_CompositionList — wrapper status checks actual file locations
+// ---------------------------------------------------------------------------
+
+describe("GET_CompositionList — wrapper status detection", () => {
+  it("returns 'done' when {sectionId}/index.tsx exists", async () => {
+    const pathMod = require("path");
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // {sectionId}/index.tsx exists
+      if (typeof p === "string" && p.endsWith(pathMod.join("intro", "index.tsx"))) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const doneWrappers = introSection.wrappers.filter((w: any) => w.status === "done");
+    expect(doneWrappers.length).toBeGreaterThan(0);
+  });
+
+  it("returns 'done' when {compositionId}.tsx exists", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // {compositionId}.tsx exists (e.g., IntroComposition.tsx)
+      if (typeof p === "string" && p.endsWith("IntroComposition.tsx")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const doneWrappers = introSection.wrappers.filter((w: any) => w.status === "done");
+    expect(doneWrappers.length).toBeGreaterThan(0);
+  });
+
+  it("returns 'missing' when neither wrapper file exists", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    for (const w of introSection.wrappers) {
+      expect(w.status).toBe("missing");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 17. GET_CompositionList — error handling
 // ---------------------------------------------------------------------------
 
