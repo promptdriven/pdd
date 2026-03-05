@@ -20,8 +20,11 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 15.288,
-      "offsetSeconds": 0
+      "durationSeconds": 15.36,
+      "offsetSeconds": 0,
+      "compositions": [
+        "cold_open_title_card"
+      ]
     },
     {
       "id": "part1_economics",
@@ -31,7 +34,13 @@
       "remotionDir": "S01-Economics",
       "compositionId": "Part1Economics",
       "durationSeconds": 382.176,
-      "offsetSeconds": 15.288
+      "offsetSeconds": 15.36,
+      "compositions": [
+        "part1_economics_split_perception_vs_reality",
+        "part1_economics_stat_callout_gitclear",
+        "part1_economics_stat_callout_github",
+        "part1_economics_stat_callout_uplevel"
+      ]
     },
     {
       "id": "part2_paradigm_shift",
@@ -40,8 +49,11 @@
       "specDir": "02-paradigm-shift",
       "remotionDir": "S02-ParadigmShift",
       "compositionId": "Part2ParadigmShift",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 195.792,
+      "offsetSeconds": 397.536,
+      "compositions": [
+        "part2_paradigm_shift_main"
+      ]
     },
     {
       "id": "part3_mold",
@@ -50,8 +62,15 @@
       "specDir": "03-mold-has-three-parts",
       "remotionDir": "S03-MoldThreeParts",
       "compositionId": "Part3MoldThreeParts",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 280.728,
+      "offsetSeconds": 593.328,
+      "compositions": [
+        "part3_mold_split_prompt_vs_code",
+        "part3_mold_stat_callout_coderabbit",
+        "part3_mold_stat_callout_dora",
+        "part3_mold_stat_callout_nl_context",
+        "part3_mold_title_card"
+      ]
     },
     {
       "id": "part4_precision",
@@ -60,8 +79,13 @@
       "specDir": "04-precision-brings-cost",
       "remotionDir": "S04-PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoff",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 96.912,
+      "offsetSeconds": 874.056,
+      "compositions": [
+        "part4_precision_split_prompt_detail_vs_tests",
+        "part4_precision_stat_callout_prompt_compression",
+        "part4_precision_title_card"
+      ]
     },
     {
       "id": "part5_compound",
@@ -70,8 +94,14 @@
       "specDir": "05-compound",
       "remotionDir": "S05-CompoundReturns",
       "compositionId": "Part5CompoundReturns",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 98.424,
+      "offsetSeconds": 970.9680000000001,
+      "compositions": [
+        "part5_compound_split_patching_vs_pdd",
+        "part5_compound_stat_callout_cisq",
+        "part5_compound_stat_callout_maintenance",
+        "part5_compound_title_card"
+      ]
     },
     {
       "id": "closing",
@@ -80,8 +110,13 @@
       "specDir": "06-closing",
       "remotionDir": "S06-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 21.072,
+      "offsetSeconds": 1069.392,
+      "compositions": [
+        "closing_split_darning_vs_molding",
+        "closing_stat_callout_roi",
+        "closing_title_card"
+      ]
     }
   ],
   "audioSync": {

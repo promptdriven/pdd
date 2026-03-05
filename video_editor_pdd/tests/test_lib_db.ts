@@ -388,8 +388,9 @@ describe("getDb", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pdd-getdb-test-"));
     dbPath = path.join(tmpDir, "test-pipeline.db");
     process.env.DB_PATH = dbPath;
-    // Reset module to clear singleton
+    // Reset module to clear singleton (both module-level and globalThis)
     jest.resetModules();
+    delete (globalThis as any).__pipelineDb;
   });
 
   afterEach(() => {
@@ -520,8 +521,13 @@ describe("lib/db.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+function\s+recoverCrashedJobs/);
   });
 
-  it("uses module-level let db: Database | null = null for singleton", () => {
-    expect(sourceCode).toMatch(/let\s+db:\s*Database\s*\|\s*null\s*=\s*null/);
+  it("uses module-level let db: Database | null for singleton", () => {
+    expect(sourceCode).toMatch(/let\s+db:\s*Database\s*\|\s*null\s*=/);
+  });
+
+  it("persists singleton on globalThis for HMR resilience", () => {
+    expect(sourceCode).toMatch(/globalThis/);
+    expect(sourceCode).toMatch(/__pipelineDb/);
   });
 
   it("uses CREATE TABLE IF NOT EXISTS for idempotent migrations", () => {

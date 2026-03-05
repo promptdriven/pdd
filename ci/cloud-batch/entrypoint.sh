@@ -107,13 +107,14 @@ START_TIME=$(date +%s)
 
 # ── Trap handler: ensure result file on forced termination ────────────────
 trap_handler() {
+    local rc=$?
     local end_time=$(date +%s)
     local duration=$((end_time - START_TIME))
     if [ ! -f "${RESULT_JSON}" ]; then
-        write_result "timeout" "${duration}" "unknown" "killed_by_signal"
+        write_result "error" "${duration}" "unknown" "exit_code_${rc}"
     fi
 }
-trap trap_handler TERM INT
+trap trap_handler EXIT
 
 run_test() {
     local suite="$1" detail="$2"

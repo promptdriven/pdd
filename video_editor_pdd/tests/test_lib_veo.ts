@@ -15,7 +15,7 @@
  *   8. server-only guard (throws if window is defined)
  *   9. Uses ffprobe and ffmpeg for frame extraction
  *  10. Ensures output directories exist before writing
- *  11. GCS URI to HTTPS conversion for video download
+ *  11. Authenticated video download via genai.files.download
  *  12. Descriptive errors on all failure paths
  */
 
@@ -29,6 +29,7 @@ import path from "path";
 const mockGenerateImages = jest.fn();
 const mockGenerateVideos = jest.fn();
 const mockGetVideosOperation = jest.fn();
+const mockFilesDownload = jest.fn();
 
 jest.mock("@google/genai", () => ({
   GoogleGenAI: jest.fn().mockImplementation(() => ({
@@ -38,6 +39,9 @@ jest.mock("@google/genai", () => ({
     },
     operations: {
       getVideosOperation: mockGetVideosOperation,
+    },
+    files: {
+      download: mockFilesDownload,
     },
   })),
 }));
@@ -63,7 +67,6 @@ import {
 // ---------------------------------------------------------------------------
 
 const ORIGINAL_API_KEY = process.env.GOOGLE_API_KEY;
-const ORIGINAL_FETCH = global.fetch;
 
 function setupEnvVars() {
   process.env.GOOGLE_API_KEY = "test-api-key-123";
@@ -88,11 +91,11 @@ function makeImagenResponse(base64 = "dGVzdC1pbWFnZQ==") {
 
 function makeVeoOperation({
   done = false,
-  videoUri = "gs://bucket/video.mp4",
+  hasVideo = true,
   error,
 }: {
   done?: boolean;
-  videoUri?: string | null;
+  hasVideo?: boolean;
   error?: object;
 } = {}) {
   return {
@@ -101,7 +104,7 @@ function makeVeoOperation({
     response: done
       ? {
           generatedVideos: [
-            { video: videoUri ? { uri: videoUri } : {} },
+            { video: hasVideo ? { uri: "gs://bucket/video.mp4" } : undefined },
           ],
         }
       : undefined,
@@ -118,11 +121,12 @@ beforeEach(() => {
   mockGenerateImages.mockReset();
   mockGenerateVideos.mockReset();
   mockGetVideosOperation.mockReset();
+  mockFilesDownload.mockReset();
+  mockFilesDownload.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
-  global.fetch = ORIGINAL_FETCH;
   if (ORIGINAL_API_KEY !== undefined) {
     process.env.GOOGLE_API_KEY = ORIGINAL_API_KEY;
   } else {
@@ -139,14 +143,14 @@ describe("generateReferenceImage -- GenAI SDK call", () => {
     setupFsMocks();
   });
 
-  it("calls generateImages with imagen-3.0-generate-002 model", async () => {
+  it("calls generateImages with imagen-4.0-generate-001 model", async () => {
     mockGenerateImages.mockResolvedValue(makeImagenResponse());
 
     await generateReferenceImage("test prompt", "/tmp/out.png");
 
     expect(mockGenerateImages).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "imagen-3.0-generate-002",
+        model: "imagen-4.0-generate-001",
       })
     );
   });
@@ -474,71 +478,47 @@ describe("generateVeoClip -- polling & download", () => {
   });
 
   it("polls getVideosOperation and downloads video on success", async () => {
-    const videoContent = new ArrayBuffer(16);
-    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
-    mockGetVideosOperation.mockResolvedValue(
-      makeVeoOperation({ done: true, videoUri: "gs://bucket/vid.mp4" })
-    );
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(videoContent),
-    } as any);
-
-    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
-
-    // Should have polled via getVideosOperation
-    expect(mockGetVideosOperation).toHaveBeenCalled();
-    // Should have downloaded via fetch with converted HTTPS URL
-    expect(global.fetch).toHaveBeenCalledWith(
-      "https://storage.googleapis.com/bucket/vid.mp4"
-    );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      "/tmp/out.mp4",
-      expect.any(Buffer)
-    );
-  });
-
-  it("converts GCS URI (gs://) to HTTPS storage URL", async () => {
-    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
-    mockGetVideosOperation.mockResolvedValue(
-      makeVeoOperation({ done: true, videoUri: "gs://my-bucket/path/to/video.mp4" })
-    );
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
-    } as any);
-
-    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      "https://storage.googleapis.com/my-bucket/path/to/video.mp4"
-    );
-  });
-
-  it("passes through HTTPS URIs directly", async () => {
-    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
-    mockGetVideosOperation.mockResolvedValue(
-      makeVeoOperation({ done: true, videoUri: "https://example.com/video.mp4" })
-    );
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
-    } as any);
-
-    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
-
-    expect(global.fetch).toHaveBeenCalledWith(
-      "https://example.com/video.mp4"
-    );
-  });
-
-  it("creates output directory before writing video", async () => {
     mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
     mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
-    } as any);
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(mockGetVideosOperation).toHaveBeenCalled();
+    expect(mockFilesDownload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: expect.objectContaining({ uri: "gs://bucket/video.mp4" }),
+        downloadPath: "/tmp/out.mp4",
+      })
+    );
+  });
+
+  it("uses genai.files.download with the video object", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(mockFilesDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the video object from generatedVideos to files.download", async () => {
+    const videoObj = { uri: "gs://bucket/vid.mp4", name: "test-video" };
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue({
+      done: true,
+      response: { generatedVideos: [{ video: videoObj }] },
+    });
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(mockFilesDownload).toHaveBeenCalledWith(
+      expect.objectContaining({ file: videoObj })
+    );
+  });
+
+  it("creates output directory before downloading video", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
 
     await generateVeoClip("test", null, "16:9", "/output/clips/video.mp4");
 
@@ -547,20 +527,14 @@ describe("generateVeoClip -- polling & download", () => {
     });
   });
 
-  it("writes downloaded video content to output file", async () => {
-    const videoBytes = new Uint8Array([0x00, 0x00, 0x00, 0x1c]).buffer;
+  it("passes downloadPath matching outputPath to files.download", async () => {
     mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
     mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(videoBytes),
-    } as any);
 
-    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+    await generateVeoClip("test", null, "16:9", "/my/custom/path.mp4");
 
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      "/tmp/out.mp4",
-      Buffer.from(videoBytes)
+    expect(mockFilesDownload).toHaveBeenCalledWith(
+      expect.objectContaining({ downloadPath: "/my/custom/path.mp4" })
     );
   });
 });
@@ -603,32 +577,25 @@ describe("generateVeoClip -- error handling", () => {
     ).rejects.toThrow("Veo operation failed");
   });
 
-  it("throws when no video URI in completed response", async () => {
-    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
-    mockGetVideosOperation.mockResolvedValue({
-      done: true,
-      response: { generatedVideos: [{ video: {} }] },
-    });
-
-    await expect(
-      generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("no video URI");
-  });
-
-  it("throws when video download returns non-OK response", async () => {
+  it("throws when no video in completed response", async () => {
     mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
     mockGetVideosOperation.mockResolvedValue(
-      makeVeoOperation({ done: true })
+      makeVeoOperation({ done: true, hasVideo: false })
     );
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: false,
-      status: 403,
-      statusText: "Forbidden",
-    } as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("Failed to download");
+    ).rejects.toThrow("no video");
+  });
+
+  it("throws when files.download fails", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+    mockFilesDownload.mockRejectedValue(new Error("download failed"));
+
+    await expect(
+      generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
+    ).rejects.toThrow("Failed to generate Veo clip");
   });
 
   it("wraps all errors with descriptive prefix", async () => {
@@ -688,14 +655,11 @@ describe("generateVeoClip -- error handling", () => {
         ],
       },
     });
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
-    } as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
     ).resolves.toBeUndefined();
+    expect(mockFilesDownload).toHaveBeenCalled();
   });
 
   it("passes when video status is undefined (only checked if truthy)", async () => {
@@ -708,14 +672,11 @@ describe("generateVeoClip -- error handling", () => {
         ],
       },
     });
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
-    } as any);
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
     ).resolves.toBeUndefined();
+    expect(mockFilesDownload).toHaveBeenCalled();
   });
 });
 
@@ -898,8 +859,8 @@ describe("lib/veo.ts source structure", () => {
     );
   });
 
-  it("uses imagen-3.0-generate-002 model in endpoint", () => {
-    expect(sourceCode).toMatch(/imagen-3\.0-generate-002/);
+  it("uses imagen-4.0-generate-001 model in endpoint", () => {
+    expect(sourceCode).toMatch(/imagen-4\.0-generate-001/);
   });
 
   it("uses veo-3.1-generate-preview model in endpoint", () => {
@@ -968,9 +929,9 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/base64/);
   });
 
-  it("handles GCS URI (gs://) to HTTPS conversion", () => {
-    expect(sourceCode).toMatch(/gs:\/\//);
-    expect(sourceCode).toMatch(/storage\.googleapis\.com/);
+  it("uses genai.files.download for authenticated video download", () => {
+    expect(sourceCode).toMatch(/files\.download/);
+    expect(sourceCode).toMatch(/downloadPath/);
   });
 
   it("uses writeFileSync to save output files", () => {

@@ -9,9 +9,16 @@ import { runClaudeFix } from "@/lib/claude";
 import { loadProject, saveProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
 
+type SectionComponentEntry = {
+  sectionId: string;
+  components: string[];
+};
+
 type RunBody = {
   components?: string[];
   wrappers?: string[];
+  sectionId?: string;
+  sectionComponents?: SectionComponentEntry[];
 };
 
 const REMOTION_SCOPE_DIR = path.join(process.cwd(), "remotion/src/remotion");
@@ -23,8 +30,23 @@ const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
 // ---------------------------------------------------------------------------
 // Utility: find spec file content for a component (best effort)
 // ---------------------------------------------------------------------------
-function findSpecForComponent(componentName: string): string {
+function findSpecForComponent(componentName: string, sectionSpecDir?: string): string {
   if (!fs.existsSync(SPECS_DIR)) return "";
+
+  // When a section specDir is provided, search there first for an exact match
+  if (sectionSpecDir) {
+    const absDir = path.isAbsolute(sectionSpecDir)
+      ? sectionSpecDir
+      : path.join(process.cwd(), sectionSpecDir);
+    if (fs.existsSync(absDir)) {
+      for (const ext of [".md", ".txt", ".tsx"]) {
+        const candidate = path.join(absDir, `${componentName}${ext}`);
+        if (fs.existsSync(candidate)) {
+          try { return fs.readFileSync(candidate, "utf-8"); } catch { /* fall through */ }
+        }
+      }
+    }
+  }
 
   // Handle fallback names like "animation_section_main" — map to specs/{sectionId}/spec.md
   if (componentName.endsWith("_main")) {
@@ -209,6 +231,16 @@ registerExecutor("compositions", (params, send: SseSend) => {
   return async (onLog) => {
     const components = (params.components as string[]) ?? [];
     const wrappers = (params.wrappers as string[]) ?? [];
+    const sectionId = params.sectionId as string | undefined;
+
+    // Resolve section specDir for scoped spec lookup
+    const sectionSpecDir = sectionId
+      ? (() => {
+          const cfg = loadProject();
+          const sec = cfg.sections.find((s: { id: string }) => s.id === sectionId);
+          return sec ? path.join("specs", sec.specDir) : undefined;
+        })()
+      : undefined;
 
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
       .progress;
@@ -272,31 +304,63 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
     const veoAssets = listVeoAssets();
 
-    const total = components.length + wrappers.length || 1;
+    // Build a unified work list of { name, outputName, specDir } items.
+    // When sectionComponents is provided (full run), each section's components
+    // are generated with section-scoped filenames to avoid collisions.
+    const sectionComponents = params.sectionComponents as SectionComponentEntry[] | undefined;
+
+    type WorkItem = { name: string; outputName: string; specDir?: string };
+    const workItems: WorkItem[] = [];
+
+    if (sectionComponents && sectionComponents.length > 0) {
+      const cfg = loadProject();
+      for (const entry of sectionComponents) {
+        const sec = cfg.sections.find((s: { id: string }) => s.id === entry.sectionId);
+        const specDir = sec ? path.join("specs", sec.specDir) : undefined;
+        for (const name of entry.components) {
+          // Don't double-prefix if the name already starts with the sectionId
+          const alreadyScoped = name.startsWith(`${entry.sectionId}_`);
+          workItems.push({
+            name,
+            outputName: alreadyScoped ? name : `${entry.sectionId}_${name}`,
+            specDir,
+          });
+        }
+      }
+    } else {
+      for (const name of components) {
+        const alreadyScoped = sectionId && name.startsWith(`${sectionId}_`);
+        workItems.push({
+          name,
+          outputName: alreadyScoped ? name : (sectionId ? `${sectionId}_${name}` : name),
+          specDir: sectionSpecDir,
+        });
+      }
+    }
+
+    const total = workItems.length + wrappers.length || 1;
     let completed = 0;
 
     // Generate components via Claude Code (or deterministic fallback for _main)
-    for (const name of components) {
-      send({ type: "component", name, status: "generating" });
-      onLog(`[compositions] Generating component: ${name}`);
+    for (const item of workItems) {
+      send({ type: "component", name: item.name, status: "generating" });
+      onLog(`[compositions] Generating component: ${item.outputName}`);
 
       try {
-        if (name.endsWith("_main")) {
-          // Use deterministic template for fallback components to avoid
-          // non-deterministic Claude output that may render all-black.
-          const spec = findSpecForComponent(name);
-          generateFallbackComponent(name, spec, veoAssets, onLog);
+        if (item.name.endsWith("_main")) {
+          const spec = findSpecForComponent(item.name, item.specDir);
+          generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
         } else {
-          const spec = findSpecForComponent(name);
-          const prompt = buildComponentPrompt(name, spec, veoAssets);
+          const spec = findSpecForComponent(item.name, item.specDir);
+          const prompt = buildComponentPrompt(item.outputName, spec, veoAssets);
           await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
         }
 
-        send({ type: "component", name, status: "done" });
+        send({ type: "component", name: item.name, status: "done" });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
-        send({ type: "component", name, status: "error" });
-        onLog(`[compositions] Error generating ${name}: ${msg}`);
+        send({ type: "component", name: item.name, status: "error" });
+        onLog(`[compositions] Error generating ${item.name}: ${msg}`);
         throw err;
       } finally {
         completed++;
@@ -328,9 +392,12 @@ registerExecutor("compositions", (params, send: SseSend) => {
               if (firstLine.includes("[veo:")) continue;
             } catch { /* ignore read errors */ }
           }
-          // Check if a corresponding .tsx was generated by Claude
-          const tsxPath = path.join(REMOTION_SCOPE_DIR, `${base}.tsx`);
-          if (fs.existsSync(tsxPath)) {
+          // Check for section-scoped file first ({sectionId}_{base}.tsx), then flat ({base}.tsx)
+          const scopedTsx = path.join(REMOTION_SCOPE_DIR, `${section.id}_${base}.tsx`);
+          const flatTsx = path.join(REMOTION_SCOPE_DIR, `${base}.tsx`);
+          if (fs.existsSync(scopedTsx)) {
+            discoveredComponents.push(`${section.id}_${base}`);
+          } else if (fs.existsSync(flatTsx)) {
             discoveredComponents.push(base);
           }
         }
@@ -421,7 +488,6 @@ export async function POST(request: NextRequest): Promise<Response> {
   (async () => {
     try {
       const jobId = await runPipelineStage("compositions", body, send);
-      send({ type: "job", jobId });
       send({ type: "complete", jobId });
       done();
     } catch (err) {

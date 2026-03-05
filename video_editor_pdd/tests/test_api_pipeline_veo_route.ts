@@ -62,6 +62,15 @@ jest.mock("@/lib/veo", () => ({
     mockGenerateReferenceImage(...args),
 }));
 
+// Mock clip-events
+const mockEmitClipEvent = jest.fn();
+const mockOnClipEvent = jest.fn();
+
+jest.mock("@/lib/clip-events", () => ({
+  emitClipEvent: (...args: unknown[]) => mockEmitClipEvent(...args),
+  onClipEvent: (...args: unknown[]) => mockOnClipEvent(...args),
+}));
+
 // Mock fs
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
@@ -224,6 +233,8 @@ beforeEach(() => {
   mockMkdirSync.mockReset();
   mockStatSync.mockReset();
   mockReaddirSync.mockReset();
+  mockEmitClipEvent.mockReset();
+  mockOnClipEvent.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-veo-001");
   mockLoadProject.mockReturnValue(mockProjectConfig());
@@ -1024,20 +1035,31 @@ describe("POST_references — validation and response", () => {
     expect(response.status).toBe(400);
   });
 
-  it("returns jobId on valid request", async () => {
+  it("returns SSE stream on valid request", async () => {
+    mockCreateSseStream.mockReturnValue({
+      stream: new ReadableStream(),
+      send: jest.fn(),
+      done: jest.fn(),
+      error: jest.fn(),
+    });
+
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
     );
 
     const response = await POST_references(request as any);
-    const data = await response.json();
-
-    expect(data).toHaveProperty("jobId");
-    expect(data.jobId).toMatch(/^ref-host-portrait-\d+$/);
+    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
   });
 
   it("returns 200 status on valid request", async () => {
+    mockCreateSseStream.mockReturnValue({
+      stream: new ReadableStream(),
+      send: jest.fn(),
+      done: jest.fn(),
+      error: jest.fn(),
+    });
+
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
@@ -1045,43 +1067,6 @@ describe("POST_references — validation and response", () => {
 
     const response = await POST_references(request as any);
     expect(response.status).toBe(200);
-  });
-
-  it("jobId includes the referenceId", async () => {
-    const request = makeRequest(
-      "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "custom-ref" }
-    );
-
-    const response = await POST_references(request as any);
-    const data = await response.json();
-
-    expect(data.jobId).toContain("custom-ref");
-  });
-
-  it("jobId includes a timestamp", async () => {
-    const request = makeRequest(
-      "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host-portrait" }
-    );
-
-    const response = await POST_references(request as any);
-    const data = await response.json();
-
-    // jobId format: ref-{referenceId}-{timestamp}
-    const parts = data.jobId.split("-");
-    const timestamp = parseInt(parts[parts.length - 1], 10);
-    expect(timestamp).toBeGreaterThan(0);
-  });
-
-  it("returns JSON content type", async () => {
-    const request = makeRequest(
-      "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host-portrait" }
-    );
-
-    const response = await POST_references(request as any);
-    expect(response.headers.get("Content-Type")).toContain("application/json");
   });
 });
 
@@ -1091,6 +1076,13 @@ describe("POST_references — validation and response", () => {
 
 describe("POST_references — no authentication required", () => {
   it("does not require authorization headers", async () => {
+    mockCreateSseStream.mockReturnValue({
+      stream: new ReadableStream(),
+      send: jest.fn(),
+      done: jest.fn(),
+      error: jest.fn(),
+    });
+
     const request = new Request(
       "http://localhost/api/pipeline/veo/references/run",
       {
@@ -1338,51 +1330,105 @@ describe("resolveVeoPrompt — prompt resolution", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST_references — response format", () => {
-  it("returns 200 with jobId for valid referenceId", async () => {
+  it("returns SSE stream with text/event-stream content type", async () => {
+    mockCreateSseStream.mockReturnValue({
+      stream: new ReadableStream(),
+      send: jest.fn(),
+      done: jest.fn(),
+      error: jest.fn(),
+    });
+
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "host-portrait" }
     );
 
     const response = await POST_references(request as any);
-    expect(response.status).toBe(200);
-
-    const data = await response.json();
-    expect(data).toHaveProperty("jobId");
+    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(response.headers.get("Cache-Control")).toBe("no-cache");
+    expect(response.headers.get("Connection")).toBe("keep-alive");
   });
 
-  it("jobId follows ref-{referenceId}-{timestamp} format", async () => {
+  it("sends started event with jobId via SSE", async () => {
+    const mockSend = jest.fn();
+    mockCreateSseStream.mockReturnValue({
+      stream: new ReadableStream(),
+      send: mockSend,
+      done: jest.fn(),
+      error: jest.fn(),
+    });
+    mockLoadProject.mockReturnValue({
+      veo: { references: [{ id: "my-ref", label: "Alex" }] },
+    });
+    mockGenerateReferenceImage.mockResolvedValue(undefined);
+
     const request = makeRequest(
       "http://localhost/api/pipeline/veo/references/run",
       { referenceId: "my-ref" }
     );
 
-    const response = await POST_references(request as any);
-    const data = await response.json();
+    await POST_references(request as any);
+    // Allow the async IIFE to run
+    await new Promise((r) => setTimeout(r, 50));
 
-    expect(data.jobId).toMatch(/^ref-my-ref-\d+$/);
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "started", jobId: expect.stringContaining("ref-my-ref-") })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST_references — source structure for references/run/route.ts
+// ---------------------------------------------------------------------------
+
+describe("references/run/route.ts source structure", () => {
+  let refSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    refSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "veo",
+        "references",
+        "run",
+        "route.ts"
+      ),
+      "utf-8"
+    );
   });
 
-  it("each call generates a unique jobId (different timestamp)", async () => {
-    const request1 = makeRequest(
-      "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host" }
-    );
-    const request2 = makeRequest(
-      "http://localhost/api/pipeline/veo/references/run",
-      { referenceId: "host" }
-    );
+  it("does not import from @/lib/jobs (runs inline, no DAG)", () => {
+    expect(refSourceCode).not.toMatch(/@\/lib\/jobs/);
+  });
 
-    const response1 = await POST_references(request1 as any);
-    const data1 = await response1.json();
+  it("imports createSseStream from @/lib/sse", () => {
+    expect(refSourceCode).toMatch(/@\/lib\/sse/);
+    expect(refSourceCode).toMatch(/createSseStream/);
+  });
 
-    // Small delay to ensure different timestamp
-    await new Promise((r) => setTimeout(r, 5));
+  it("imports generateReferenceImage from @/lib/veo", () => {
+    expect(refSourceCode).toMatch(/@\/lib\/veo/);
+    expect(refSourceCode).toMatch(/generateReferenceImage/);
+  });
 
-    const response2 = await POST_references(request2 as any);
-    const data2 = await response2.json();
+  it("imports loadProject from @/lib/project", () => {
+    expect(refSourceCode).toMatch(/@\/lib\/project/);
+    expect(refSourceCode).toMatch(/loadProject/);
+  });
 
-    expect(data1.jobId).not.toBe(data2.jobId);
+  it("does not use registerExecutor (runs inline)", () => {
+    expect(refSourceCode).not.toMatch(/registerExecutor/);
+  });
+
+  it("returns SSE stream (not JSON)", () => {
+    expect(refSourceCode).toMatch(/new\s+Response\s*\(\s*stream/);
+    expect(refSourceCode).toMatch(/text\/event-stream/);
   });
 });
 
@@ -1533,5 +1579,85 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
 
   it("uses loadProject to get sections config", () => {
     expect(sourceCode).toMatch(/loadProject\(\)/);
+  });
+
+  it("imports emitClipEvent from @/lib/clip-events", () => {
+    expect(sourceCode).toMatch(/@\/lib\/clip-events/);
+    expect(sourceCode).toMatch(/emitClipEvent/);
+  });
+
+  it("calls emitClipEvent for generating, done, and error statuses", () => {
+    const emitCalls = (sourceCode.match(/emitClipEvent\s*\(/g) || []).length;
+    expect(emitCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("passes a message string in every emitClipEvent call", () => {
+    const emitCalls = sourceCode.match(/emitClipEvent\s*\(\s*\{[^}]*\}\s*\)/g) || [];
+    expect(emitCalls.length).toBeGreaterThanOrEqual(3);
+    for (const call of emitCalls) {
+      expect(call).toMatch(/message\s*:/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// veo/stream/route.ts — source structure for clip event forwarding
+// ---------------------------------------------------------------------------
+
+describe("app/api/pipeline/veo/stream/route.ts source structure", () => {
+  let streamSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    streamSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "veo",
+        "stream",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("exports async function GET", () => {
+    expect(streamSourceCode).toMatch(/export\s+async\s+function\s+GET/);
+  });
+
+  it("imports onClipEvent from @/lib/clip-events", () => {
+    expect(streamSourceCode).toMatch(/@\/lib\/clip-events/);
+    expect(streamSourceCode).toMatch(/onClipEvent/);
+  });
+
+  it("subscribes to clip events (not just heartbeats)", () => {
+    expect(streamSourceCode).toMatch(/onClipEvent\s*\(/);
+  });
+
+  it("forwards clip events as SSE data lines", () => {
+    expect(streamSourceCode).toMatch(/type.*clip/);
+    expect(streamSourceCode).toMatch(/data:/);
+  });
+
+  it("sends heartbeat for connection keep-alive", () => {
+    expect(streamSourceCode).toMatch(/heartbeat/);
+  });
+
+  it("has a 5-minute auto-close timeout", () => {
+    expect(streamSourceCode).toMatch(/5\s*\*\s*60\s*\*\s*1000/);
+  });
+
+  it("uses runtime = 'nodejs'", () => {
+    expect(streamSourceCode).toMatch(/runtime\s*=\s*["']nodejs["']/);
+  });
+
+  it("returns SSE response headers", () => {
+    expect(streamSourceCode).toMatch(/text\/event-stream/);
+    expect(streamSourceCode).toMatch(/no-cache/);
+    expect(streamSourceCode).toMatch(/keep-alive/);
   });
 });
