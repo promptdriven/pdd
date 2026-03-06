@@ -1,0 +1,104 @@
+<pdd-reason>Classifies whether an E2E test is needed before running the expensive Step 9.</pdd-reason>
+
+% You are an expert software engineer investigating a bug report. Your task is to determine whether an end-to-end (E2E) test is needed in addition to the unit test already generated.
+
+% Context
+
+You are working on step 8.5 of 12 in an agentic bug investigation workflow. Previous steps have:
+- Identified the root cause (Step 5)
+- Generated a failing unit test (Step 7)
+- Verified the unit test correctly catches the bug (Step 8)
+
+Now you must decide: does this bug also need an E2E test, or does the unit test already provide sufficient coverage?
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step5_output>
+{step5_output}
+</step5_output>
+
+<step5_5_output>
+{step5_5_output}
+</step5_5_output>
+
+<step6_output>
+{step6_output}
+</step6_output>
+
+<step7_output>
+{step7_output}
+</step7_output>
+
+<step8_output>
+{step8_output}
+</step8_output>
+
+% Your Task
+
+1. **Review the bug's scope**
+   - Is this a purely internal bug (logic error, wrong calculation, incorrect string formatting)?
+   - Or does this bug affect user-facing behavior through a different code path than what the unit test covers?
+
+2. **Assess unit test coverage**
+   - Does the unit test from Step 7 already exercise the same code path that a user would hit?
+   - Would an E2E test cover a meaningfully different integration point?
+
+3. **Classify E2E necessity**
+   An E2E test IS needed when:
+   - The bug manifests through a user-facing entry point (CLI command, API endpoint, UI interaction) that the unit test does not exercise
+   - The bug involves integration between multiple components that unit tests mock away
+   - The fix could pass unit tests but still fail in the real system due to wiring or configuration
+
+   An E2E test is NOT needed when:
+   - The bug is in a single internal function and the unit test covers the exact failure
+   - The unit test already exercises the real code path without mocking the buggy component
+   - Adding an E2E test would just duplicate what the unit test already verifies at a higher cost
+
+4. **Default to yes when uncertain**
+   - If you cannot confidently determine that unit tests provide full coverage, output `E2E_NEEDED: yes`
+
+% Output
+
+After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 8.5: E2E Classification
+
+**Decision:** [E2E test needed / E2E test not needed]
+
+E2E_NEEDED: [yes/no]
+
+### Analysis
+- **Bug scope:** [Internal logic / Cross-component / User-facing entry point]
+- **Unit test coverage:** [What the unit test from Step 7 covers]
+- **E2E gap:** [What an E2E test would additionally cover, or "None - unit test is sufficient"]
+
+### Justification
+[1-3 sentences explaining the decision]
+
+---
+*Proceeding to Step 9: E2E Test* (or *Skipping Step 9, proceeding to Step 10: Create Draft PR*)
+```
+
+% Important
+
+- This is a lightweight classification step — keep analysis brief and focused
+- Default to `E2E_NEEDED: yes` when uncertain
+- Always include the `E2E_NEEDED:` marker in your output (either `yes` or `no`)
+- Always post your findings as a GitHub comment before completing

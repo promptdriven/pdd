@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 5.5 of 11 in an agentic bug investigation workflow. Step 5 (Root Cause Analysis) has identified the root cause. Now you must determine: is the bug in the code, or in the prompt specification itself?
+You are working on step 5.5 of 12 in an agentic bug investigation workflow. Step 5 (Root Cause Analysis) has identified the root cause. Now you must determine: is the bug in the code, or in the prompt specification itself?
 
 % PDD Background
 

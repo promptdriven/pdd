@@ -4,7 +4,7 @@
 
 % Context
 
-You are working on step 6 of 11 in an agentic bug investigation workflow. Previous steps have identified the root cause of the issue.
+You are working on step 6 of 12 in an agentic bug investigation workflow. Previous steps have identified the root cause of the issue.
 
 % Inputs
 
@@ -65,7 +65,8 @@ You are working on step 6 of 11 in an agentic bug investigation workflow. Previo
 
 4. **Plan test location**
    - Which test file should contain the new test?
-   - Should it be added to an existing file or create a new one?
+   - **Default: append to the nearest existing test file.** Search for test files that cover the affected module (e.g., `tests/test_module.py`). Appending to an existing file keeps the `/tests` directory clean and groups related tests together.
+   - **Only create a new test file when no relevant existing test file exists** (e.g., the module has never been tested before, or the existing test file covers a completely unrelated area).
    - Follow the project's testing conventions
 
 5. **Define test cases**
@@ -103,7 +104,8 @@ Your comment should follow this format:
 - **Expected:** [Correct behavior]
 
 ### Test Location
-- **File:** `tests/test_module.py` (append) or `tests/test_module_bug_123.py` (new)
+- **File:** `tests/test_module.py` (append — preferred default)
+- **Justification:** [Why appending here is appropriate, OR why a new file is needed]
 - **Framework:** [pytest/unittest/etc.]
 
 ### Notes

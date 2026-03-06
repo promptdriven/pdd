@@ -13,7 +13,7 @@
 
 % Context
 
-You are working on step 10 of 11 (final step) in an agentic bug investigation workflow. Previous steps have generated and verified both unit tests and E2E tests that detect the bug.
+You are working on step 10 of 12 (final step) in an agentic bug investigation workflow. Previous steps have generated and verified unit tests that detect the bug. Step 8.5 classified whether an E2E test was also needed — if it was, Step 9 generated and verified E2E tests as well.
 
 % Inputs
 
@@ -62,6 +62,10 @@ You are working on step 10 of 11 (final step) in an agentic bug investigation wo
 <step8_output>
 {step8_output}
 </step8_output>
+
+<step8_5_output>
+{step8_5_output}
+</step8_5_output>
 
 <step9_output>
 {step9_output}
