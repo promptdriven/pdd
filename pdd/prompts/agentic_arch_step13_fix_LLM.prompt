@@ -67,12 +67,60 @@ Fix architecture completeness issues:
    - Orphan modules: Connect to dependency graph or verify standalone is OK
    - Missing references: Add referenced module or remove reference
 
-4. **Missing Context Document Includes:**
-   - If prompts/_context/ files exist but prompts don't include them, add <include> tags
-   - Place in "Shared Context" section after role paragraph, before Requirements
-   - ALL prompts: `<include>prompts/_context/data_dictionary.yaml</include>`
-   - API prompts: also `<include>prompts/_context/api_contracts.yaml</include>`
-   - Entry point prompts: also `<include>prompts/_context/integration_points.yaml</include>`
+4. **Missing Context Document Includes (most common fix):**
+   - If prompts/_context/ files exist but prompts don't include them, add a "Shared Context"
+     section to EACH affected prompt file
+   - **How to fix each prompt:** Insert the following block AFTER the first paragraph (role
+     description) and BEFORE the "Requirements" section:
+
+     ```
+     Shared Context (canonical data model — use ONLY these fields and types)
+
+     &lt;context_data_dictionary&gt;
+     &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+     &lt;/context_data_dictionary&gt;
+
+     CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+     ```
+
+   - For API/router prompts, ALSO add before CONSTRAINTS:
+     ```
+     &lt;context_api_contracts&gt;
+     &lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+     &lt;/context_api_contracts&gt;
+     ```
+
+   - For entry point/main prompts, ALSO add before CONSTRAINTS:
+     ```
+     &lt;context_integration_points&gt;
+     &lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+     &lt;/context_integration_points&gt;
+     ```
+
+   - **Find all affected prompts:**
+     ```bash
+     find prompts -name "*.prompt" -exec grep -L "data_dictionary.yaml" {} +
+     ```
+   - Fix EVERY file listed by that command — do not stop partway through
+
+5. **Enum Value Drift in data_dictionary.yaml:**
+   - If the validation error mentions enum value mismatches vs the PRD, read the original PRD
+     from the GitHub issue and compare every enum in data_dictionary.yaml
+   - Restore ANY missing values, fix ANY renamed values (e.g., "urgent" → "critical")
+   - After fixing data_dictionary.yaml, update the core_enums prompt to match
+
+6. **Inline Duplication of Context YAML Content (prompt compactness):**
+   - If the validation error mentions inline duplication, remove hardcoded entity field tables,
+     enum value lists, and Pydantic schema definitions from prompt files
+   - The &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt; already provides this data
+   - Replace inline tables with brief references, e.g.:
+     - BEFORE: Full `| Field | Type | Constraints |` table with 15 rows
+     - AFTER: `This module operates on the User entity (see data dictionary). Key fields used: id, email, password_hash, deleted_at.`
+   - Similarly for enums:
+     - BEFORE: `Define AuthProvider with values: LOCAL, GOOGLE, APPLE, GITHUB`
+     - AFTER: `Uses AuthProvider enum from data dictionary.`
+   - Keep the `Shared Context` section with &lt;include&gt; tags — that's the single source of truth
+   - Keep `## Dependency API Reference` sections (function signatures) — those are NOT in the YAMLs
 
 ---
 
@@ -167,11 +215,11 @@ Fix dependency graph issues in architecture.json:
    - Or remove the module from architecture.json if not needed
 
 5. **Wrong Include Paths:**
-   If `<include>` paths in prompt files don't match .pddrc `example_output_path`:
+   If &lt;include&gt; paths in prompt files don't match .pddrc `example_output_path`:
    - Read `.pddrc` to find the correct `example_output_path` for each context
-   - In each affected prompt file, replace the wrong path prefix in `<include>` tags
+   - In each affected prompt file, replace the wrong path prefix in &lt;include&gt; tags
    - Only fix the prefix, keep the filename unchanged
-   - Example: if `example_output_path` is `context/` and prompt has `<include>src/models_example.py</include>`, change to `<include>context/models_example.py</include>`
+   - Example: if `example_output_path` is `context/` and prompt has `&lt;include&gt;src/models_example.py&lt;/include&gt;`, change to `&lt;include&gt;context/models_example.py&lt;/include&gt;`
    - Skip URLs (`http://`, `https://`), template variables (`${{...}}`), and `pdd/` internal paths
 
 % ============================================================================

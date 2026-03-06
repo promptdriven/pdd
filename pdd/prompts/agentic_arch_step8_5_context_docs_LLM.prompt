@@ -39,6 +39,11 @@ Your job is to distill this information into structured YAML files that every mo
 {step2b_output}
 </step2b_output>
 
+% Original PRD (for enum cross-check)
+<issue_content>
+{issue_content}
+</issue_content>
+
 % Step 4: Data Model Design
 <step4_output>
 {step4_output}
@@ -223,6 +228,11 @@ shared_utilities:
 3. **Use Step 4 data model as source of truth for entities:**
    - Entity names, field names, field types must come from Step 4
    - If Step 4 and architecture.json disagree, use Step 4 for data fields
+   - **CRITICAL — Enum value cross-check against PRD:** After writing enum values from Step 4,
+     go back to the original PRD (issue_content) and verify that EVERY enum value listed in the
+     PRD appears in your data_dictionary.yaml. If Step 4 dropped, renamed, or simplified any
+     enum values, restore the PRD's original values. The PRD is the ultimate source of truth
+     for enum values — not Step 4.
 
 4. **Validate generated YAML:**
    After writing each file, validate it:
@@ -247,7 +257,13 @@ shared_utilities:
 1. Create directory: `mkdir -p prompts/_context`
 2. Write all three YAML files
 3. Validate each file with `yaml.safe_load()`
-4. Report: `FILES_CREATED: prompts/_context/data_dictionary.yaml, prompts/_context/api_contracts.yaml, prompts/_context/integration_points.yaml`
+4. **Enum cross-check (MANDATORY):** After writing data_dictionary.yaml, run this verification:
+   - For EVERY enum in your data_dictionary.yaml, count the values
+   - Search the original PRD (issue_content above) for the same enum concept
+   - If the PRD lists MORE values than your YAML has, you DROPPED values — fix immediately
+   - If any value name differs from the PRD (e.g., you wrote "urgent" but PRD says "critical"), fix it
+   - Output the cross-check results before reporting files created
+5. Report: `FILES_CREATED: prompts/_context/data_dictionary.yaml, prompts/_context/api_contracts.yaml, prompts/_context/integration_points.yaml`
 
 % Important
 
@@ -256,3 +272,7 @@ shared_utilities:
 - Getting a field name wrong here means EVERY module will use the wrong name
 - Double-check every field name against Step 4 output before writing
 - The YAML must be valid — invalid YAML will break `pdd sync` for every module
+- **Enum fidelity:** The PRD (issue_content) is the ultimate authority for enum values. If Step 4
+  simplified or changed enum values, restore the PRD's original values. Common mistakes: replacing
+  "critical" with "urgent", dropping "in_review" from statuses, omitting role values like
+  "manager"/"viewer". Count the PRD's values and verify your YAML has the same count.

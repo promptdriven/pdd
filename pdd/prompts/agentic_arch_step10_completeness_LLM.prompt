@@ -262,24 +262,80 @@ cat architecture.json | jq -r '.[] | "\(.filename) | \(.interface.type)"'
 - Enum string values differ between language implementations
 - Field count mismatch between cross-language type definitions (off by more than 1 field)
 
-**11. Context Document Include Check**
+**11. Context Document Include Check (HIGH PRIORITY — this is a common failure)**
 
 If `prompts/_context/` directory exists with context files:
 
 ```bash
 # Check if context documents exist
-ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml 2>/dev/null
+ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml prompts/_context/integration_points.yaml 2>/dev/null
 ```
 
-- Every prompt MUST have `<include>prompts/_context/data_dictionary.yaml</include>`
-- API prompts (modules with `interface.type == "api"`) MUST have `<include>prompts/_context/api_contracts.yaml</include>`
-- Entry point / wiring prompts MUST have `<include>prompts/_context/integration_points.yaml</include>`
+If data_dictionary.yaml exists, check EVERY prompt file:
+```bash
+# Find prompts MISSING data_dictionary include — every prompt must have it
+find prompts -name "*.prompt" -exec grep -L "data_dictionary.yaml" {} +
+```
+
+If api_contracts.yaml exists, check API/router prompts:
+```bash
+# Find API prompts MISSING api_contracts include
+for f in $(cat architecture.json | jq -r '.[] | select(.interface.type == "api" or (.filename | test("router|route"))) | .filename'); do
+  if ! grep -q "api_contracts.yaml" "prompts/$f" 2>/dev/null; then
+    echo "MISSING api_contracts include: $f"
+  fi
+done
+```
+
+If integration_points.yaml exists, check entry point prompts:
+```bash
+# Find main/entry prompts MISSING integration_points include
+for f in $(cat architecture.json | jq -r '.[] | select(.filename | test("main|app_entry|server")) | .filename'); do
+  if ! grep -q "integration_points.yaml" "prompts/$f" 2>/dev/null; then
+    echo "MISSING integration_points include: $f"
+  fi
+done
+```
+
+- Every prompt MUST have `&lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;`
+- API prompts (modules with `interface.type == "api"` or router/route in filename) MUST have `&lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;`
+- Entry point / wiring prompts MUST have `&lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;`
 
 **Flag as ERROR if:**
-- Context docs exist but prompts don't include them
+- Context docs exist but ANY prompt is missing them (this is the most common validation failure — check thoroughly)
 
 **Flag as WARNING (not error) if:**
 - Context docs don't exist (older projects or Step 8.5 was skipped)
+
+**11b. Context Document Duplication Check (prompt compactness)**
+
+If `prompts/_context/data_dictionary.yaml` exists AND prompts include it via &lt;include&gt; tags,
+check that prompts do NOT also hardcode the same content inline. Inline duplication wastes
+tokens and causes synchronization drift when the YAML is updated but the prompt is not.
+
+Detect duplication patterns:
+```bash
+# Find prompts with inline entity field tables (markdown tables with Field/Type/Constraints headers)
+grep -rl "| Field | Type | Constraints |" prompts/*.prompt 2>/dev/null
+grep -rl "| Field | Type |" prompts/*.prompt 2>/dev/null
+
+# Find prompts with inline enum value lists that duplicate data_dictionary.yaml
+# (Look for patterns like "values: LOCAL, GOOGLE, APPLE" or full enum member listings)
+grep -rn "PENDING.*PROCESSING.*COMPLETED\|LOCAL.*GOOGLE.*APPLE\|FREE.*PRO.*CREATOR" prompts/*.prompt 2>/dev/null
+```
+
+For each prompt found with inline duplication:
+- Count the duplicated lines (entity tables, enum lists, Pydantic schema fields)
+- If duplicated content exceeds 10 lines, flag as ERROR
+
+**Flag as ERROR if:**
+- A prompt has &lt;include&gt; for data_dictionary.yaml AND also contains inline entity field
+  tables (> 10 lines of `| Field | Type |` tables) — these should be removed
+- A prompt hardcodes all enum values for an enum that exists in the data dictionary
+
+**Flag as WARNING if:**
+- A prompt has a brief entity reference (< 5 lines) alongside the &lt;include&gt; — this is
+  acceptable as a "key fields used" summary
 
 % Output
 

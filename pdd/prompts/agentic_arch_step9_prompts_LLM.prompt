@@ -47,31 +47,53 @@ modules from previous issues that are not listed here.
 % Shared Context Document Includes (CRITICAL — every generated prompt MUST have these)
 
 Step 8.5 generated shared context documents in `prompts/_context/`. Every prompt
-you generate MUST include relevant context documents using <include> tags. These
+you generate MUST include relevant context documents using &lt;include&gt; tags. These
 ensure pdd sync injects the canonical data model into code generation.
 
-ALL prompts MUST include:
-  <context_data_dictionary>
-  <include>prompts/_context/data_dictionary.yaml</include>
-  </context_data_dictionary>
-
-API endpoint prompts MUST ALSO include:
-  <context_api_contracts>
-  <include>prompts/_context/api_contracts.yaml</include>
-  </context_api_contracts>
-
-Entry point / wiring prompts MUST ALSO include:
-  <context_integration_points>
-  <include>prompts/_context/integration_points.yaml</include>
-  </context_integration_points>
-
-Place includes in a "Shared Context" section AFTER the role paragraph, BEFORE Requirements.
-Add a CONSTRAINTS block: "Use ONLY fields/types from the data dictionary. Do NOT assume
-automatic case conversion."
-
 Before adding includes, verify context files exist:
-  ls prompts/_context/data_dictionary.yaml
-If missing, do NOT add <include> tags for nonexistent files.
+```bash
+ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml prompts/_context/integration_points.yaml 2>/dev/null
+```
+If a file does NOT exist, do NOT add &lt;include&gt; tags for it.
+
+For files that DO exist, EVERY prompt MUST contain a "Shared Context" section placed
+AFTER the role paragraph and BEFORE the Requirements section. The section MUST use
+this EXACT format (copy-paste, do not paraphrase):
+
+```
+Shared Context (canonical data model — use ONLY these fields and types)
+
+&lt;context_data_dictionary&gt;
+&lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+&lt;/context_data_dictionary&gt;
+```
+
+API endpoint prompts (modules with interface.type == "api" or router/route in filename)
+MUST ALSO include:
+```
+&lt;context_api_contracts&gt;
+&lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+&lt;/context_api_contracts&gt;
+```
+
+Entry point / main / wiring prompts MUST ALSO include:
+```
+&lt;context_integration_points&gt;
+&lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+&lt;/context_integration_points&gt;
+```
+
+After the includes, add this constraint line:
+```
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+```
+
+**VERIFICATION (MANDATORY):** After generating ALL prompt files, run:
+```bash
+find prompts -name "*.prompt" -print0 | xargs -0 grep -L "data_dictionary.yaml"
+```
+If ANY prompt files are listed (missing the include), you MUST go back and add the
+Shared Context section to each one. This check is non-negotiable.
 
 % Cross-File Consistency Rules (CRITICAL)
 
@@ -139,31 +161,21 @@ After building all prompts, verify:
 - No prompt invents a new function name or signature not in the table
 - If two prompts import the same symbol, they use identical import statements
 
-% Data Model Schema Injection (CRITICAL for correctness)
+% Data Model Reference Strategy (CRITICAL — avoid duplication)
 
-When generating each prompt, you MUST inject the actual data model schemas from Step 4 output to prevent field hallucination:
+When `prompts/_context/data_dictionary.yaml` exists, the data model is injected via
+&lt;include&gt; tags at pdd sync time. This means prompts MUST NOT duplicate that content inline.
 
-**1. For each module that has a data model module in its `dependencies`:**
-   - Extract the COMPLETE data model from Step 4 output (entity names, field names, field types, constraints, relationships)
-   - Inject the exact schema into the prompt as a `## Data Model Reference` section:
-     ```
-     ## Data Model Reference
+**DO NOT** add inline entity field tables (e.g., `## Data Model Reference` with
+`| Field | Type | Constraints |` tables) to prompts. The data dictionary &lt;include&gt;
+already provides this. Inline duplication causes synchronization drift when the YAML is
+updated but the hardcoded table in the prompt is not.
 
-     ### User Entity
-     | Field | Type | Constraints |
-     |-------|------|-------------|
-     | id | UUID | primary key, auto-generated |
-     | username | string | unique, 3-50 chars |
-     | email | string | unique, valid email |
-     | password_hash | string | bcrypt, not exposed in API |
-     | created_at | datetime | auto-set on creation |
-
-     **IMPORTANT: Use ONLY these fields. Do NOT assume additional fields exist.**
-     ```
-   - The prompt MUST include the instruction: "Use ONLY these fields. Do NOT assume additional fields exist."
-
-**2. For each module that calls functions from another module:**
-   - Inject the exact function signatures from the Interface Contract Table as a `## Dependency API Reference` section:
+**What prompts SHOULD contain instead:**
+1. The `Shared Context` section with &lt;include&gt; tags (see above) — this is the single
+   source of truth for entity fields, enum values, and API contracts
+2. A `## Dependency API Reference` section with function signatures from the Interface
+   Contract Table — these are NOT in the YAML files and MUST be in the prompt:
      ```
      ## Dependency API Reference
 
@@ -173,20 +185,24 @@ When generating each prompt, you MUST inject the actual data model schemas from 
 
      **IMPORTANT: Call with EXACTLY these arguments. Do NOT pass additional parameters.**
      ```
-   - The prompt MUST include the instruction: "Call with EXACTLY these arguments. Do NOT pass additional parameters."
+3. Implementation-specific instructions (flow logic, error handling, business rules)
+4. Which SPECIFIC entities/fields from the data dictionary this module uses — as a brief
+   reference list (not a full field table), e.g.:
+     ```
+     This module operates on the `User` entity (see data dictionary for full schema).
+     Key fields used: id, email, password_hash, deleted_at, email_verified.
+     ```
 
-**3. For Firestore/MongoDB/database modules:**
-   - Inject exact collection schemas with field types and valid query operators
-   - Include the canonical collection names from the Step 2 naming registry
-   - Specify which fields are indexed and queryable
+**When context YAMLs do NOT exist** (Step 8.5 was skipped or failed):
+Only in this case, fall back to injecting inline entity field tables from Step 4 output.
+Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
 
-**4. Schema source priority:**
-   - Step 4 data model output is the authoritative source for entity definitions
+**Schema source priority:**
+   - `prompts/_context/data_dictionary.yaml` is authoritative when it exists
    - architecture.json `interface` fields are authoritative for function signatures
    - Step 2 naming registry is authoritative for collection/table names
-   - If there is a conflict, flag it and use Step 4 as ground truth for data fields
 
-**5. Cross-language field name mapping (for multi-language projects):**
+% Cross-Language Field Name Mapping (for multi-language projects)
    - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
      - Include a "Field Name Mapping" table showing the exact field names in each language:
        ```
@@ -200,7 +216,7 @@ When generating each prompt, you MUST inject the actual data model schemas from 
      - The prompt MUST include: "When serializing/deserializing, use the EXACT field names from the API Wire Format column. Do NOT let language-specific conventions override the wire format."
    - For enum types shared across languages: ensure enum string values are IDENTICAL in both language prompts (e.g., `"pending"`, not `"PENDING"` in one and `"pending"` in another)
 
-**6. Auth-aware prompt generation:**
+% Auth-Aware Prompt Generation
    - If a module is tagged "auth" in architecture.json:
      - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
      - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures
@@ -244,15 +260,33 @@ When generating a prompt for a base data model module, scan architecture.json fo
    ```
    [Role paragraph - module's responsibility]
 
+   Shared Context (canonical data model — use ONLY these fields and types)
+
+   &lt;context_data_dictionary&gt;
+   &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+   &lt;/context_data_dictionary&gt;
+
+   [If API module, also include:]
+   &lt;context_api_contracts&gt;
+   &lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+   &lt;/context_api_contracts&gt;
+
+   [If entry point module, also include:]
+   &lt;context_integration_points&gt;
+   &lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+   &lt;/context_integration_points&gt;
+
+   CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
    Requirements
    1. [Functional requirement]
    2. [Interface requirement]
    ...
 
    Dependencies
-   <dependency_name>
-     <include>examples/BASENAME_example.EXT</include>
-   </dependency_name>
+   &lt;dependency_name&gt;
+     &lt;include&gt;examples/BASENAME_example.EXT&lt;/include&gt;
+   &lt;/dependency_name&gt;
 
    Testing Strategy (for modules with external dependencies)
    - External services used: [list from architecture.json interface]
@@ -342,7 +376,7 @@ For each module:
 1. Determine the correct directory from `.pddrc` (flat `prompts/` or subdirectory like `prompts/backend/`)
 2. Create file at the correct path (e.g., `prompts/{filename}` or `prompts/backend/{filename}`)
 3. Include rich context from reason, description, interface fields
-4. Add <include> tags for dependencies
+4. Add &lt;include&gt; tags for dependencies
 
 Remember:
 - Check `.pddrc` for the correct prompt directory before creating files
