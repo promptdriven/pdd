@@ -646,6 +646,8 @@ def run_agentic_architecture_orchestrator(
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   → {escape(brief)}")
+            if step_success:
+                console.print(f"  → Step {step_num} complete.")
 
         # --- Step 1b: Complexity Assessment (after Step 1) ---
         if step_num == 1 and step_success and start_step <= 1.5:
@@ -1068,6 +1070,8 @@ def run_agentic_architecture_orchestrator(
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   → {escape(brief)}")
+            if step_success:
+                console.print(f"  → Step {step_num} complete.")
 
         # --- Step 7b: Architecture Self-Review (after Step 7) ---
         if step_num == 7 and step_success and start_step <= 7.5 and state.get("last_completed_step", 0) < 7.5:

@@ -114,6 +114,13 @@ Parse step output to detect stop conditions. Return early with error:
 - Changed files accumulated from steps 12, 14, 9, 15 and stored as `files_to_stage`
 - Each step receives outputs from all prior steps via template formatting
 
+% Console Output
+After each successful step, print a step completion marker:
+```
+  → Step {step_num} complete.
+```
+This marker is required for the executor's credential waterfall to detect successful runs. Must be printed after every successful step.
+
 % State Persistence
 - Use `load_workflow_state()` at start to check for cached state
 - Call `validate_cached_state()` after load to find actual last successful step

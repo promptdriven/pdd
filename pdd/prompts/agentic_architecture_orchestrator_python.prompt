@@ -67,6 +67,7 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 12. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
 13. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
 14. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
+15. **Step Completion Marker**: After each successful step, print `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
 
 % Dependencies
 <agentic_common>

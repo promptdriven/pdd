@@ -776,6 +776,8 @@ def run_agentic_change_orchestrator(
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   -> {escape(brief)}")
+            if step_success:
+                console.print(f"  \u2192 Step {step_num} complete.")
 
     if "files_to_stage" not in context:
         s9_out = context.get("step9_output", "")

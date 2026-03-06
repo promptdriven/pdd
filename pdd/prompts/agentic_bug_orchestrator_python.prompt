@@ -123,6 +123,8 @@ Before Step 5.5, create an isolated git worktree for prompt fixes, test generati
 % Console Output
 Provide real-time feedback: header with issue number/title, step progress markers (`[Step N/11]`), brief step results, hard stop messages, and final summary with cost/files/worktree. Use `quiet` to suppress all output except errors, `verbose` for full agentic task output.
 
+After each successful step, print a step completion marker: `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
+
 % State Persistence (GitHub + Local)
 
 Use shared functions from agentic_common for state persistence. GitHub is primary storage, local file is cache.

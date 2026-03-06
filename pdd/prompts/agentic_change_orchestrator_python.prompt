@@ -265,12 +265,18 @@ The orchestrator must provide real-time feedback to the user via rich console ou
    ```
    Examples: "No duplicates found", "3 dev units identified", "Changes applied"
 
-5. **Hard stop message** (if workflow terminates early):
+5. **Step completion marker** (after each successful step):
+   ```
+     → Step {step_num} complete.
+   ```
+   This marker is required for the executor's credential waterfall to detect successful runs. Must be printed after every successful step.
+
+6. **Hard stop message** (if workflow terminates early):
    ```
    Investigation stopped at Step N: {reason}
    ```
 
-6. **Final summary** (at end):
+7. **Final summary** (at end):
    ```
    Change workflow complete
       Total cost: ${total_cost:.4f}
