@@ -1,0 +1,24 @@
+{
+  "clips": [
+    {
+      "id": "part3_mold_veo_01",
+      "prompt": "A cinematic 4K visualization of translucent green glass walls rising from a dark navy floor. Abstract architectural mold forming in a dark void. Walls emerge sequentially, creating intricate lattice-like constraints. Bright green glowing edges on translucent panels. Small luminous particles cascade along surfaces. Slow orbital camera movement. Mathematical precision, clean modern aesthetic. Dark studio lighting, cool blue-green ambient light. 16:9 aspect ratio, shallow depth of field, film grain. No text overlays."
+    },
+    {
+      "id": "part3_mold_veo_02",
+      "prompt": "A cinematic 4K visualization of a large mechanical ratchet gear mechanism on a dark surface. Metallic gear with green luminous accents clicking forward one tooth at a time. A pawl mechanism prevents backward rotation. Green energy pulses along gear teeth as each one locks into place. Dramatic side-lighting from left, long shadows cast to the right. Camera slowly pushes in from medium shot to close-up of the pawl engaging. Mechanical precision, industrial beauty. Dark studio, brushed metal surface. 16:9 aspect ratio, film grain, shallow depth of field. No text overlays."
+    },
+    {
+      "id": "part3_mold_veo_04",
+      "prompt": "A cinematic 4K visualization of a glowing golden text block at center radiating outward into multiple translucent blue code panels, like light through a prism. Golden energy particles flow along radiating paths from the central source to 5-7 fanned-out panels. Warm gold center, cool blue outputs. Abstract dark navy void background. Camera slowly pulls back to reveal the full fan of implementations. Mathematical elegance, clean modern aesthetic. Dramatic lighting, shallow depth of field, film grain. 16:9 aspect ratio. No text overlays."
+    },
+    {
+      "id": "part3_mold_veo_05",
+      "prompt": "A cinematic 4K visualization of a luminous purple ring structure in a dark void. Glowing particles flow continuously around the ring in a cyclic feedback loop. Small orbiting spheres circle the ring at varying distances. The ring pulses with soft purple light, growing slightly brighter with each cycle. Camera slowly orbits counter-clockwise around the structure. Abstract, mathematical beauty. Deep navy background with purple ambient light. Shallow depth of field, film grain, 16:9 aspect ratio. No text overlays."
+    },
+    {
+      "id": "part3_mold_veo_06",
+      "prompt": "A cinematic 4K visualization of three colored energy streams converging at center. A green stream from the left, a gold stream from upper-right, and a purple stream from lower-right flow toward a central merge point. At convergence, a brilliant white-gold flash creates a crystalline mold structure that reflects all three colors. Particle burst at the merge point. Camera pushes in toward the merge. Abstract dark navy void background. Dramatic, climactic lighting. Shallow depth of field, film grain, 16:9 aspect ratio. No text overlays."
+    }
+  ]
+}
