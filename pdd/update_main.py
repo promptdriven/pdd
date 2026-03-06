@@ -560,7 +560,8 @@ def _check_include_deps_changed(fingerprint) -> Tuple[bool, str]:
             return True, f"include dependency deleted: {dep_path_str}"
         current_hash = calculate_sha256(dep_path)
         if current_hash is None:
-            continue
+            # Treat unreadable dependencies as changed so they can be re-synced.
+            return True, f"include dependency unreadable: {dep_path_str}"
         if current_hash != stored_hash:
             return True, f"include dependency changed: {dep_path_str}"
     return False, "include deps unchanged"
