@@ -74,11 +74,7 @@
       "durationSeconds": 195.792,
       "offsetSeconds": 397.930667,
       "compositions": [
-        {
-          "id": "part2_paradigm_shift_main",
-          "startSeconds": 0,
-          "durationSeconds": 195.79
-        }
+        "part2_paradigm_shift_main"
       ]
     },
     {

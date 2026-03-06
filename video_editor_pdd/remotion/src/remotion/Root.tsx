@@ -9,7 +9,6 @@ import { Part4PrecisionSection } from "./part4_precision";
 import { Part5CompoundSection } from "./part5_compound";
 import { ClosingSection } from "./closing";
 import { ColdOpenTitleCard } from "./cold_open_title_card";
-import { ColdOpen01TitleCard } from "./ColdOpen01TitleCard";
 import { Part1EconomicsSplitPerceptionVsReality } from "./part1_economics_split_perception_vs_reality";
 import { Part1EconomicsStatCalloutGitclear } from "./part1_economics_stat_callout_gitclear";
 import { Part1EconomicsStatCalloutGithub } from "./part1_economics_stat_callout_github";
@@ -20,7 +19,7 @@ import { Part3MoldStatCalloutCoderabbit } from "./part3_mold_stat_callout_codera
 import { Part3MoldStatCalloutDora } from "./part3_mold_stat_callout_dora";
 import { Part3MoldStatCalloutNlContext } from "./part3_mold_stat_callout_nl_context";
 import { Part3MoldTitleCard } from "./part3_mold_title_card";
-import { Part4Precision05SplitPromptDetailVsTests } from "./Part4Precision05SplitPromptDetailVsTests";
+import { Part4PrecisionSplitPromptDetailVsTests } from "./part4_precision_split_prompt_detail_vs_tests";
 import { Part4PrecisionStatCalloutPromptCompression } from "./part4_precision_stat_callout_prompt_compression";
 import { Part4PrecisionTitleCard } from "./part4_precision_title_card";
 import { Part5CompoundSplitPatchingVsPdd } from "./part5_compound_split_patching_vs_pdd";
@@ -30,25 +29,6 @@ import { Part5CompoundTitleCard } from "./part5_compound_title_card";
 import { ClosingSplitDarningVsMolding } from "./closing_split_darning_vs_molding";
 import { ClosingStatCalloutRoi } from "./closing_stat_callout_roi";
 import { ClosingTitleCard } from "./closing_title_card";
-import { ColdOpen08ClosingQuestionCard } from "./ColdOpen08ClosingQuestionCard";
-import { Part1Economics04StatCalloutGithub } from "./Part1Economics04StatCalloutGithub";
-import { Part1Economics06StatCalloutUplevel } from "./Part1Economics06StatCalloutUplevel";
-import { Part1Economics07StatCalloutGitclear } from "./Part1Economics07StatCalloutGitclear";
-import { Part1Economics09ContextDegradationChart } from "./Part1Economics09ContextDegradationChart";
-import { Part1Economics10SplitPerceptionReality } from "./Part1Economics10SplitPerceptionReality";
-import { Part1Economics12RegenerationInfographic } from "./Part1Economics12RegenerationInfographic";
-import { Part1Economics13CrossoverZoom } from "./Part1Economics13CrossoverZoom";
-import { Part2ParadigmShift07HdlTimeline } from "./Part2ParadigmShift07HdlTimeline";
-import { Part2ParadigmShift08SplitManualVsSpecification } from "./Part2ParadigmShift08SplitManualVsSpecification";
-import { Part2ParadigmShift10PromptMoldVisualization } from "./Part2ParadigmShift10PromptMoldVisualization";
-import { Part3Mold04StatCalloutDora } from "./Part3Mold04StatCalloutDora";
-import { Part3Mold12ThreePillarsDiagram } from "./Part3Mold12ThreePillarsDiagram";
-import { Part3Mold13SubtitleTrack } from "./Part3Mold13SubtitleTrack";
-import { Part4Precision01TitleCard } from "./Part4Precision01TitleCard";
-import { Part4Precision07SpectrumSlider } from "./Part4Precision07SpectrumSlider";
-import { Part5Compound05StatCalloutCisq } from "./Part5Compound05StatCalloutCisq";
-import { Part5Compound10QuoteCard } from "./Part5Compound10QuoteCard";
-import { Closing07CtaCard } from "./Closing07CtaCard";
 
 const PREVIEW_DURATION = 150; // 5s at 30fps
 
@@ -66,7 +46,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1Economics"
         component={Part1EconomicsSection}
-        durationInFrames={11466}
+        durationInFrames={11468}
         fps={30}
         width={1920}
         height={1080}
@@ -107,14 +87,6 @@ export const RemotionRoot: React.FC = () => {
         id="ClosingSection"
         component={ClosingSection}
         durationInFrames={633}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="cold-open-01-title-card"
-        component={ColdOpen01TitleCard}
-        durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1920}
         height={1080}
@@ -208,9 +180,9 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="part4-precision-05-split-prompt-detail-vs-tests"
-        component={Part4Precision05SplitPromptDetailVsTests}
-        durationInFrames={360}
+        id="part4-precision-split-prompt-detail-vs-tests"
+        component={Part4PrecisionSplitPromptDetailVsTests}
+        durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1920}
         height={1080}
@@ -283,158 +255,6 @@ export const RemotionRoot: React.FC = () => {
         id="closing-title-card"
         component={ClosingTitleCard}
         durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="cold-open-08-closing-question-card"
-        component={ColdOpen08ClosingQuestionCard}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-04-stat-callout-github"
-        component={Part1Economics04StatCalloutGithub}
-        durationInFrames={240}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-06-stat-callout-uplevel"
-        component={Part1Economics06StatCalloutUplevel}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-07-stat-callout-gitclear"
-        component={Part1Economics07StatCalloutGitclear}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-09-context-degradation-chart"
-        component={Part1Economics09ContextDegradationChart}
-        durationInFrames={900}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-10-split-perception-reality"
-        component={Part1Economics10SplitPerceptionReality}
-        durationInFrames={360}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-12-regeneration-infographic"
-        component={Part1Economics12RegenerationInfographic}
-        durationInFrames={750}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics-13-crossover-zoom"
-        component={Part1Economics13CrossoverZoom}
-        durationInFrames={210}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part2-paradigm-shift-07-hdl-timeline"
-        component={Part2ParadigmShift07HdlTimeline}
-        durationInFrames={750}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part2-paradigm-shift-08-split-manual-vs-specification"
-        component={Part2ParadigmShift08SplitManualVsSpecification}
-        durationInFrames={360}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part2-paradigm-shift-10-prompt-mold-visualization"
-        component={Part2ParadigmShift10PromptMoldVisualization}
-        durationInFrames={600}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-04-stat-callout-dora"
-        component={Part3Mold04StatCalloutDora}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-12-three-pillars-diagram"
-        component={Part3Mold12ThreePillarsDiagram}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-13-subtitle-track"
-        component={Part3Mold13SubtitleTrack}
-        durationInFrames={8422}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part4-precision-01-title-card"
-        component={Part4Precision01TitleCard}
-        durationInFrames={150}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part4-precision-07-spectrum-slider"
-        component={Part4Precision07SpectrumSlider}
-        durationInFrames={750}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part5-compound-05-stat-callout-cisq"
-        component={Part5Compound05StatCalloutCisq}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part5-compound-10-quote-card"
-        component={Part5Compound10QuoteCard}
-        durationInFrames={240}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="closing-07-cta-card"
-        component={Closing07CtaCard}
-        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
