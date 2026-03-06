@@ -67,6 +67,13 @@ Fix architecture completeness issues:
    - Orphan modules: Connect to dependency graph or verify standalone is OK
    - Missing references: Add referenced module or remove reference
 
+4. **Missing Context Document Includes:**
+   - If prompts/_context/ files exist but prompts don't include them, add <include> tags
+   - Place in "Shared Context" section after role paragraph, before Requirements
+   - ALL prompts: `<include>prompts/_context/data_dictionary.yaml</include>`
+   - API prompts: also `<include>prompts/_context/api_contracts.yaml</include>`
+   - Entry point prompts: also `<include>prompts/_context/integration_points.yaml</include>`
+
 ---
 
 **If failed_validation_step is "sync" (Step 11):**
@@ -599,6 +606,29 @@ FILES_DELETED: prompts/api/old_module_TypeScript.prompt, prompts/nested/path.pro
 {sibling_architectures}
 
 When fixing errors, do NOT add modules that already exist in sibling projects. Use `external:` prefix for cross-project dependencies.
+
+% CRITICAL — Sibling Context Alignment When Fixing
+
+If the validation error involves cross-sub-issue data model inconsistency (Check 12),
+you MUST fix YOUR files to match the sibling's definitions:
+
+1. **Read sibling context documents from disk:**
+   ```bash
+   find . -path "*/prompts/_context/data_dictionary.yaml" 2>/dev/null
+   find . -path "*/prompts/_context/api_contracts.yaml" 2>/dev/null
+   ```
+   Read each file found. The sibling's definitions are canonical.
+
+2. **Fix your data_dictionary.yaml:** Update entity field names, types, enum values, and
+   serialization conventions to match the sibling's data dictionary exactly.
+
+3. **Fix your api_contracts.yaml:** Update endpoint request/response schemas to match the
+   sibling's api_contracts.yaml exactly.
+
+4. **Fix affected prompt files:** After updating context documents, scan all prompt files
+   for references to the changed entities/endpoints and update them to use the corrected names.
+
+5. **Do NOT modify sibling files** — only fix files within YOUR sub-issue's directory.
 
 % Important
 

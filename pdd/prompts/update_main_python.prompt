@@ -34,7 +34,8 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 - `find_and_resolve_all_pairs(repo_root, quiet, extensions, output_dir) -> List[Tuple]`: Walks repo (using `git ls-files` or `os.walk` fallback), filters code files through multi-layer exclusion, resolves prompt pairs.
 - `get_git_changed_files(repo_root, base_branch) -> Set[str]`: Combines merge-base diff, uncommitted changes, and untracked files into a set of absolute paths.
 - `derive_basename_and_language(code_file_path, repo_root) -> (basename, language)`: Uses relative path from repo_root (without extension) as basename to avoid fingerprint collisions for same-named files in different directories.
-- `is_code_changed(code_file_path, repo_root, git_changed_files, prompt_file_path=None) -> (bool, reason)`: Prefers `infer_module_identity` from prompt_file_path for fingerprint lookup; falls back to `derive_basename_and_language`. Check fingerprint code_hash first; fall back to git changed set if no fingerprint.
+- `_check_include_deps_changed(fingerprint) -> (bool, reason)`: Check if any stored include dependencies have changed on disk by comparing current SHA256 hashes against `fingerprint.include_deps`.
+- `is_code_changed(code_file_path, repo_root, git_changed_files, prompt_file_path=None) -> (bool, reason)`: Prefers `infer_module_identity` from prompt_file_path for fingerprint lookup; falls back to `derive_basename_and_language`. Check fingerprint code_hash first; if code hash matches, check include dependency hashes; fall back to git changed set if no fingerprint.
 - `update_file_pair(prompt_file, code_file, ctx, repo, simple) -> Dict`: Wrapper for single pair update. Tries agentic first, then legacy (untracked/empty -> update_prompt with generation sentinel, else -> git_update). Returns dict with prompt_file, status, cost, model, error.
 - `_find_prd_file(project_root) -> Optional[Path]`: Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md.
 
@@ -51,7 +52,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
   - Only process files where `get_language()` returns non-None.
   - Filter by extensions if provided.
 - After resolving pairs, call `ensure_pddrc_for_scan` from `pddrc_initializer` to auto-create `.pddrc` if needed.
-- **Change detection**: Use `get_git_changed_files` + `is_code_changed` to filter pairs. Also include pairs with empty (0-byte) prompt files regardless of code changes.
+- **Change detection**: Use `get_git_changed_files` + `is_code_changed` to filter pairs. Also include pairs with empty (0-byte) prompt files regardless of code changes. Include dependency hashes from fingerprints are checked so that changes to shared include files (preambles, examples) trigger updates.
 - Progress bar: Rich Progress with spinner, bar, percentage, time remaining, and running total cost.
 - **Post-update fingerprinting**: After successful update, `save_fingerprint` for the pair via `infer_module_identity`.
 - **Post-update architecture sync**: Use `find_architecture_for_project` to locate architecture files. For each successfully updated prompt, call `update_architecture_from_prompt` if architecture file exists.

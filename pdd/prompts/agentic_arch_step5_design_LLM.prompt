@@ -65,6 +65,11 @@ CRITICAL — Cross-Project Rules:
 3. Mark cross-project dependencies with prefix `[external:<dir>/]` in the dependency graph
 4. If this sub-project needs a shared module that doesn't exist yet, create it and note it should be shared
 5. Read sibling architecture.json files before designing to understand existing interfaces
+6. **If sibling Shared Context Documents are shown above** (data_dictionary.yaml, api_contracts.yaml):
+   - Use the EXACT entity names, field names, and types from sibling data dictionaries
+   - Design modules that consume sibling API endpoints to match the EXACT request/response schemas
+   - When defining interfaces for shared types, use the canonical definitions from sibling context
+   - Do NOT invent new field names for entities already defined in a sibling data dictionary
 
 % Your Task
 
@@ -120,6 +125,19 @@ CRITICAL — Cross-Project Rules:
    - Follow standard naming conventions for the tech stack
    - Include appropriate file extensions
 
+8. **Identify integration points (entryPoints) for each module:**
+   - Which existing entry point file must be updated to wire this module in (e.g., main.py, app/layout.tsx, routes/index.ts, middleware.ts)
+   - What registration/import code is needed (route registration, layout inclusion, config addition)
+   - Whether index pages or redirects are needed for nested routes
+   - Populate the `entryPoints` array in architecture.json for each module that exports a callable (API route, page, Cloud Function, middleware)
+   - Flag any module that has NO entry point — it may be an orphan that will never execute at runtime
+
+9. **Guard and cross-cutting concern awareness (from Step 2 analysis):**
+   - Check the Cross-Cutting Concerns table from Step 2 output
+   - For each new page/route module: if the route will be intercepted by an auth guard, either create a module to update the guard bypass list or document how the module integrates with the guard
+   - If a module uses shared context (e.g., AuthContext, ThemeContext): add the context provider module as a dependency and note any required modifications
+   - If existing middleware or layout files need updating for the new module, add an entryPoint entry specifying the required change
+
 % Output
 
 If clarification is needed on a fundamental design choice, output "Clarification Needed" and explain what decision requires user input.
@@ -153,6 +171,18 @@ Your comment should follow this format:
 #### [module_name]
 - Type: [api/module/page/component/config]
 - Key functions/endpoints: [list]
+
+### Integration Points (Entry Point Wiring)
+| Module | Entry Point File | Action | Detail |
+|--------|-----------------|--------|--------|
+| [module_name] | [e.g., app/layout.tsx] | [add_to_layout] | [Add navigation link and route] |
+| [module_name] | [e.g., middleware.ts] | [add_middleware] | [Add route to public paths list] |
+
+### Guard/Cross-Cutting Concern Impacts
+| Module | Concern | Required Action |
+|--------|---------|-----------------|
+| [module_name] | [Auth guard] | [Add to bypass list in middleware.ts] |
+| [module_name] | [AuthContext] | [Consume via useAuth() hook, add as dependency] |
 
 ---
 *Proceeding to Step 6: Research Dependencies*

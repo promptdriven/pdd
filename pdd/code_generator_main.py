@@ -173,6 +173,122 @@ def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
     return payload, changed
 
 
+def _verify_architecture_conformance(
+    generated_code: str,
+    prompt_name: str,
+    arch_path: Optional[str],
+    language: Optional[str],
+    verbose: bool,
+) -> None:
+    """Check generated code exports against architecture.json interface declarations.
+
+    Raises ``click.UsageError`` on hard mismatch (missing declared symbols or
+    naming convention violations).  Silently returns when no architecture entry
+    exists or when the interface section is absent.
+    """
+    if not arch_path:
+        arch_path = "architecture.json"
+    arch_file = pathlib.Path(arch_path)
+    if not arch_file.exists():
+        return
+
+    try:
+        arch_data = json.loads(arch_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
+    # Find the matching architecture entry
+    entry: Optional[Dict[str, Any]] = None
+    basename = pathlib.Path(prompt_name).stem  # e.g. "models_Python"
+    for item in arch_data if isinstance(arch_data, list) else []:
+        item_filename = item.get("filename", "")
+        if item_filename == prompt_name or pathlib.Path(item_filename).stem == basename:
+            entry = item
+            break
+
+    if entry is None:
+        return
+
+    interface = entry.get("interface")
+    if not isinstance(interface, dict):
+        return
+
+    # Collect declared symbols from the interface
+    declared_symbols: List[str] = []
+    iface_type = interface.get("type", "")
+
+    if iface_type == "module":
+        module_spec = interface.get("module", {})
+        for func in module_spec.get("functions", []):
+            name = func.get("name")
+            if name:
+                declared_symbols.append(name)
+    elif iface_type == "api":
+        api_spec = interface.get("api", {})
+        for ep in api_spec.get("endpoints", []):
+            # For API modules we don't check symbol names by default
+            pass
+    elif iface_type == "page":
+        # Pages typically export a default — skip symbol checking
+        return
+    elif iface_type == "component":
+        comp_spec = interface.get("component", {})
+        for prop in comp_spec.get("props", []):
+            pass  # Props aren't exported symbols
+        return
+
+    if not declared_symbols:
+        return
+
+    # Extract actual exports from generated code
+    actual_symbols: List[str] = []
+    detected_lang = (language or "").lower()
+
+    if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
+        try:
+            tree = ast.parse(generated_code)
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    actual_symbols.append(node.name)
+                elif isinstance(node, ast.ClassDef):
+                    actual_symbols.append(node.name)
+                elif isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            actual_symbols.append(target.id)
+        except SyntaxError:
+            return  # Can't parse — skip conformance
+    elif detected_lang in ("typescript", "javascript", "ts", "js") or any(
+        prompt_name.endswith(sfx) for sfx in ("_TypeScript.prompt", "_TypeScriptReact.prompt", "_JavaScript.prompt", "_JavaScriptReact.prompt")
+    ):
+        export_pattern = re.compile(
+            r"export\s+(?:default\s+)?(?:function|const|class|let|var|type|interface|enum)\s+(\w+)"
+        )
+        actual_symbols = export_pattern.findall(generated_code)
+    else:
+        return  # Unsupported language
+
+    # Compare declared vs actual
+    missing = [s for s in declared_symbols if s not in actual_symbols]
+    if missing:
+        raise click.UsageError(
+            f"Architecture conformance error for {prompt_name}: "
+            f"declared symbols missing from generated code: {', '.join(missing)}. "
+            f"Expected: {declared_symbols}. Found: {actual_symbols}."
+        )
+
+    # Check naming convention: if architecture specifies snake_case but code has camelCase
+    if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
+        camel_pattern = re.compile(r"^[a-z]+[A-Z]")
+        camel_exports = [s for s in actual_symbols if camel_pattern.match(s) and not s.startswith("_")]
+        if camel_exports:
+            raise click.UsageError(
+                f"Architecture conformance error for {prompt_name}: "
+                f"Python code uses camelCase names ({', '.join(camel_exports[:5])}) "
+                f"but Python convention requires snake_case."
+            )
+
+
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
     """Gets the content of the file as it was at the specified git_ref."""
     abs_file_path = pathlib.Path(file_path).resolve()
@@ -338,6 +454,7 @@ def code_generator_main(
     env_vars: Optional[Dict[str, str]] = None,
     unit_test_file: Optional[str] = None,
     exclude_tests: bool = False,
+    language: Optional[str] = None,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -362,6 +479,8 @@ def code_generator_main(
         input_file_paths_dict["original_prompt_file"] = original_prompt_file_path
     
     command_options: Dict[str, Any] = {"output": output}
+    if language:
+        command_options["language"] = language
 
     try:
         # Read prompt content once to determine LLM state and for construct_paths
@@ -1181,6 +1300,23 @@ def code_generator_main(
                                 raise click.UsageError(f"Generated JSON does not match output_schema: {ve}")
                 except json.JSONDecodeError as jde:
                     raise click.UsageError(f"Generated output is not valid JSON: {jde}")
+
+            # Architecture conformance check: verify generated code exports match
+            # the interface declarations in architecture.json (hard failure on mismatch)
+            if not _env_flag_enabled("PDD_SKIP_CONFORMANCE") and generated_code_content:
+                try:
+                    _verify_architecture_conformance(
+                        generated_code=generated_code_content,
+                        prompt_name=pathlib.Path(prompt_file).name,
+                        arch_path=None,  # Uses default architecture.json
+                        language=language,
+                        verbose=verbose,
+                    )
+                except click.UsageError:
+                    raise  # Re-raise conformance errors as hard failures
+                except Exception as conform_err:
+                    if verbose and not quiet:
+                        console.print(f"[yellow]Warning: Architecture conformance check failed: {conform_err}[/yellow]")
 
             if output_path:
                 p_output = pathlib.Path(output_path)

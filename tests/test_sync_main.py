@@ -12,7 +12,7 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from pdd.sync_main import sync_main, _normalize_prompts_root, _find_prompt_in_contexts, _case_insensitive_prompt_lookup
+from pdd.sync_main import sync_main, _normalize_prompts_root, _find_prompt_in_contexts, _case_insensitive_prompt_lookup, SUPPORTED_SYNC_LANGUAGES
 from pdd import DEFAULT_STRENGTH
 
 # Test Plan
@@ -1084,3 +1084,59 @@ class TestCaseInsensitivePromptLookup:
         result = _case_insensitive_prompt_lookup(query)
         # Should return original since the match is a directory, not a file
         assert result == query
+
+
+# ============================================================================
+# Tests for SUPPORTED_SYNC_LANGUAGES and expanded language discovery
+# ============================================================================
+
+class TestSupportedSyncLanguages:
+    """Tests that SUPPORTED_SYNC_LANGUAGES covers the expected languages."""
+
+    def test_includes_common_languages(self):
+        """SUPPORTED_SYNC_LANGUAGES must include the original 7 languages."""
+        for lang in ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']:
+            assert lang in SUPPORTED_SYNC_LANGUAGES, f"Missing common language: {lang}"
+
+    def test_includes_ruby_and_kotlin(self):
+        """SUPPORTED_SYNC_LANGUAGES must include ruby and kotlin (previously missing)."""
+        assert 'ruby' in SUPPORTED_SYNC_LANGUAGES
+        assert 'kotlin' in SUPPORTED_SYNC_LANGUAGES
+
+    def test_includes_csharp_and_swift(self):
+        """SUPPORTED_SYNC_LANGUAGES must include csharp and swift."""
+        assert 'csharp' in SUPPORTED_SYNC_LANGUAGES
+        assert 'swift' in SUPPORTED_SYNC_LANGUAGES
+
+
+class TestDetectLanguagesWithContextExpanded:
+    """Tests that _detect_languages_with_context discovers non-Python languages."""
+
+    def test_discovers_ruby_prompt_file(self, tmp_path, monkeypatch):
+        """_detect_languages_with_context should find ruby prompt files."""
+        from pdd.sync_main import _detect_languages_with_context
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "my_module_ruby.prompt").write_text("ruby prompt")
+
+        monkeypatch.chdir(tmp_path)
+        # Create minimal .pddrc
+        (tmp_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    paths: ["**"]\n')
+
+        languages = _detect_languages_with_context("my_module", prompts_dir)
+        assert "ruby" in languages, f"Expected 'ruby' in detected languages, got: {list(languages.keys())}"
+
+    def test_discovers_kotlin_prompt_file(self, tmp_path, monkeypatch):
+        """_detect_languages_with_context should find kotlin prompt files."""
+        from pdd.sync_main import _detect_languages_with_context
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "my_module_kotlin.prompt").write_text("kotlin prompt")
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    paths: ["**"]\n')
+
+        languages = _detect_languages_with_context("my_module", prompts_dir)
+        assert "kotlin" in languages, f"Expected 'kotlin' in detected languages, got: {list(languages.keys())}"

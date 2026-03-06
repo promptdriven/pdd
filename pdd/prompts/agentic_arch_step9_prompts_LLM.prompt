@@ -44,6 +44,35 @@ modules from previous issues that are not listed here.
 <include>pdd/templates/generic/generate_prompt.prompt</include>
 </prompt_template>
 
+% Shared Context Document Includes (CRITICAL — every generated prompt MUST have these)
+
+Step 8.5 generated shared context documents in `prompts/_context/`. Every prompt
+you generate MUST include relevant context documents using <include> tags. These
+ensure pdd sync injects the canonical data model into code generation.
+
+ALL prompts MUST include:
+  <context_data_dictionary>
+  <include>prompts/_context/data_dictionary.yaml</include>
+  </context_data_dictionary>
+
+API endpoint prompts MUST ALSO include:
+  <context_api_contracts>
+  <include>prompts/_context/api_contracts.yaml</include>
+  </context_api_contracts>
+
+Entry point / wiring prompts MUST ALSO include:
+  <context_integration_points>
+  <include>prompts/_context/integration_points.yaml</include>
+  </context_integration_points>
+
+Place includes in a "Shared Context" section AFTER the role paragraph, BEFORE Requirements.
+Add a CONSTRAINTS block: "Use ONLY fields/types from the data dictionary. Do NOT assume
+automatic case conversion."
+
+Before adding includes, verify context files exist:
+  ls prompts/_context/data_dictionary.yaml
+If missing, do NOT add <include> tags for nonexistent files.
+
 % Cross-File Consistency Rules (CRITICAL)
 
 When generating prompt files, you MUST enforce cross-file consistency:
@@ -157,7 +186,21 @@ When generating each prompt, you MUST inject the actual data model schemas from 
    - Step 2 naming registry is authoritative for collection/table names
    - If there is a conflict, flag it and use Step 4 as ground truth for data fields
 
-**5. Auth-aware prompt generation:**
+**5. Cross-language field name mapping (for multi-language projects):**
+   - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
+     - Include a "Field Name Mapping" table showing the exact field names in each language:
+       ```
+       ## Field Name Mapping (Python ↔ TypeScript)
+       | Python (snake_case) | TypeScript (camelCase) | API Wire Format |
+       |--------------------|-----------------------|-----------------|
+       | user_id            | userId                | user_id         |
+       | created_at         | createdAt             | created_at      |
+       ```
+     - Specify the API serialization convention: does the REST API use snake_case (Python default) or camelCase (TypeScript default)?
+     - The prompt MUST include: "When serializing/deserializing, use the EXACT field names from the API Wire Format column. Do NOT let language-specific conventions override the wire format."
+   - For enum types shared across languages: ensure enum string values are IDENTICAL in both language prompts (e.g., `"pending"`, not `"PENDING"` in one and `"pending"` in another)
+
+**6. Auth-aware prompt generation:**
    - If a module is tagged "auth" in architecture.json:
      - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
      - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures
@@ -165,6 +208,27 @@ When generating each prompt, you MUST inject the actual data model schemas from 
    - If a module depends on an auth-tagged module:
      - Reference the auth module's interface contract (token types, verification functions)
      - Include token usage patterns in the prompt's "Dependency API Reference" section
+
+% Model Extension Awareness (extends field in architecture.json)
+
+When generating a prompt for a base data model module, scan architecture.json for ALL modules that have an `extends` entry targeting this module. If found:
+
+1. Inject a "Model Extensions" section into the base model's prompt listing the additional fields from dependent modules:
+   ```
+   ## Model Extensions (from dependent modules)
+
+   The following modules extend this data model with additional fields.
+   The base model MUST include these fields to support dependent functionality:
+
+   ### Extended by: [extending_module_filename]
+   | Field Name | Type | Default | Added By |
+   |-----------|------|---------|----------|
+   | [name]    | [type] | [default or "required"] | [module filename] |
+   ```
+
+2. The prompt MUST include: "Include ALL extension fields listed above in the base model definition. These fields are required by dependent modules."
+
+3. If a module's `extends` references a `target_class` that doesn't exist in the target module's interface, flag it as an error.
 
 % Key Rules
 
@@ -240,6 +304,11 @@ This example shows the correct prompt file structure and naming.
 {step2b_output}
 </step2b_output>
 
+% Context Documents Output (from Step 8.5)
+<step8_5_output>
+{step8_5_output}
+</step8_5_output>
+
 When generating prompts, you MUST reference real import paths from the codebase scan.
 You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt.
 You MUST follow existing patterns for auth, data fetching, error handling.
@@ -253,6 +322,13 @@ When generating prompts for modules that depend on sibling project modules:
 1. Add a "Cross-Project Dependencies" section in the prompt body
 2. Include the sibling module's API contract (endpoints, function signatures) from the table above
 3. Only use `<pdd-dependency>` tags for modules within THIS project — cross-project deps go in the prompt body
+4. **If sibling Shared Context Documents are shown above** (data_dictionary.yaml, api_contracts.yaml):
+   - For modules that consume sibling APIs: inject the EXACT endpoint schemas from the
+     sibling's api_contracts.yaml into the prompt's "Cross-Project Dependencies" section
+   - For modules that use shared data types: inject the EXACT field definitions from the
+     sibling's data_dictionary.yaml into the prompt's "Data Model Reference" section
+   - Include a note: "These types are defined in sibling project `<dir>/` — use EXACTLY
+     as specified. Do NOT modify field names or types."
 
 % Your Task
 
