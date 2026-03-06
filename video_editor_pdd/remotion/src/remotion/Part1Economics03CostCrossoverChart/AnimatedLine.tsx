@@ -1,10 +1,6 @@
 import React, { useMemo } from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-
-const CHART_X = 200;
-const CHART_Y = 100;
-const CHART_W = 1620;
-const CHART_H = 780;
+import { WIDTH, HEIGHT, CHART_X, CHART_Y, CHART_W, CHART_H } from "./constants";
 
 interface Point {
   x: number;
@@ -64,7 +60,7 @@ function estimatePathLength(points: Point[]): number {
     const dy = scaled[i].y - scaled[i - 1].y;
     len += Math.sqrt(dx * dx + dy * dy);
   }
-  // Curves are longer than straight lines — scale up estimate
+  // Curves are longer than straight segments — scale up estimate
   return len * 1.2;
 }
 
@@ -86,8 +82,6 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   const pathD = useMemo(() => pointsToSmoothPath(points), [points]);
   const pathLength = useMemo(() => estimatePathLength(points), [points]);
 
-  const drawDuration = drawEndFrame - drawStartFrame;
-
   const drawProgress = interpolate(
     frame,
     [drawStartFrame, drawEndFrame],
@@ -96,20 +90,15 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.inOut(Easing.quad),
-    }
+    },
   );
 
-  // For dashed total-cost line, fade opacity instead of draw
+  // For dashed total-cost line, fade opacity instead of draw-in
   const opacity = dashed
-    ? interpolate(
-        frame,
-        [drawStartFrame, drawEndFrame],
-        [0, maxOpacity],
-        {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-        }
-      )
+    ? interpolate(frame, [drawStartFrame, drawEndFrame], [0, maxOpacity], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      })
     : maxOpacity;
 
   const dashOffset = dashed ? 0 : pathLength * (1 - drawProgress);
@@ -122,10 +111,10 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-    }
+    },
   );
 
-  // Label position: end of line
+  // Label position: right end of line
   const lastPoint = points[points.length - 1];
   const labelX = CHART_X + lastPoint.x * CHART_W + 12;
   const labelY = CHART_Y + CHART_H * (1 - lastPoint.y);
@@ -135,9 +124,9 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         <defs>
@@ -161,7 +150,7 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
           opacity={opacity}
         />
 
-        {/* Label at endpoint */}
+        {/* Label at line endpoint */}
         <text
           x={labelX}
           y={labelY + 6}

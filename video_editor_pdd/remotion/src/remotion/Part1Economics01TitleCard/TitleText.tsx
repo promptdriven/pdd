@@ -24,7 +24,7 @@ export const TitleText: React.FC = () => {
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.bezier(0.25, 0.1, 0.25, 1)),
+      easing: Easing.out(Easing.poly(4)),
     }
   );
 
@@ -46,7 +46,7 @@ export const TitleText: React.FC = () => {
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.bezier(0.25, 0.1, 0.25, 1)),
+      easing: Easing.out(Easing.poly(4)),
     }
   );
 

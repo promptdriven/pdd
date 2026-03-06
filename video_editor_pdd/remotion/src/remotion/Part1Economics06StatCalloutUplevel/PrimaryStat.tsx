@@ -33,7 +33,7 @@ export const PrimaryStat: React.FC = () => {
   });
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 20 }}>
       <div
         style={{
           fontFamily: "Inter, sans-serif",
@@ -55,7 +55,7 @@ export const PrimaryStat: React.FC = () => {
           fontSize: PRIMARY_DESC_SIZE,
           color: PRIMARY_DESC_COLOR,
           opacity: descOpacity,
-          marginTop: 4,
+          marginTop: 6,
         }}
       >
         throughput change

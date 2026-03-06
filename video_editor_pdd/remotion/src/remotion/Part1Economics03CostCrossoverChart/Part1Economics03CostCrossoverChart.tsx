@@ -1,7 +1,6 @@
 import React from "react";
 import {
   AbsoluteFill,
-  Sequence,
   OffthreadVideo,
   staticFile,
   useCurrentFrame,
@@ -11,47 +10,32 @@ import {
 import { ChartAxes } from "./ChartAxes";
 import { AnimatedLine } from "./AnimatedLine";
 import { CrossoverPoint } from "./CrossoverPoint";
-
-// Data points (normalized 0-1)
-const PATCHING_POINTS = [
-  { x: 0, y: 0.15 },
-  { x: 0.2, y: 0.22 },
-  { x: 0.4, y: 0.35 },
-  { x: 0.6, y: 0.55 },
-  { x: 0.8, y: 0.78 },
-  { x: 1.0, y: 0.95 },
-];
-
-const GENERATION_POINTS = [
-  { x: 0, y: 0.9 },
-  { x: 0.2, y: 0.72 },
-  { x: 0.4, y: 0.5 },
-  { x: 0.6, y: 0.35 },
-  { x: 0.8, y: 0.25 },
-  { x: 1.0, y: 0.18 },
-];
-
-const TOTAL_COST_POINTS = [
-  { x: 0, y: 0.82 },
-  { x: 0.2, y: 0.83 },
-  { x: 0.4, y: 0.84 },
-  { x: 0.6, y: 0.86 },
-  { x: 0.8, y: 0.87 },
-  { x: 1.0, y: 0.88 },
-];
-
-// Crossover pixel position for zoom target
-const CHART_X = 200;
-const CHART_Y = 100;
-const CHART_W = 1620;
-const CHART_H = 780;
-const CROSSOVER = { x: 0.42, y: 0.48 };
-const CROSSOVER_PX_X = CHART_X + CROSSOVER.x * CHART_W;
-const CROSSOVER_PX_Y = CHART_Y + CHART_H * (1 - CROSSOVER.y);
-
-// Act G zoom timing (around frame 11100 from global, but relative to this component)
-const ZOOM_START = 2600;
-const ZOOM_END = 2700;
+import {
+  BG_COLOR,
+  PATCHING_POINTS,
+  GENERATION_POINTS,
+  TOTAL_COST_POINTS,
+  PATCHING_COLOR_START,
+  PATCHING_COLOR_END,
+  GENERATION_COLOR_START,
+  GENERATION_COLOR_END,
+  TOTAL_COST_COLOR,
+  PRIMARY_LINE_WIDTH,
+  TOTAL_LINE_WIDTH,
+  LINE_A_START,
+  LINE_A_END,
+  LINE_B_START,
+  LINE_B_END,
+  LINE_C_START,
+  LINE_C_END,
+  CROSSOVER_DOT_START,
+  CROSSOVER_LABEL_START,
+  CROSSOVER_LABEL_END,
+  CROSSOVER_PX_X,
+  CROSSOVER_PX_Y,
+  ZOOM_START,
+  ZOOM_END,
+} from "./constants";
 
 export const defaultPart1Economics03CostCrossoverChartProps = {};
 
@@ -67,7 +51,7 @@ export const Part1Economics03CostCrossoverChart: React.FC = () => {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.inOut(Easing.cubic),
-    }
+    },
   );
 
   // Translate to keep crossover point centered during zoom
@@ -79,7 +63,7 @@ export const Part1Economics03CostCrossoverChart: React.FC = () => {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.inOut(Easing.cubic),
-    }
+    },
   );
 
   const translateY = interpolate(
@@ -90,11 +74,11 @@ export const Part1Economics03CostCrossoverChart: React.FC = () => {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.inOut(Easing.cubic),
-    }
+    },
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0A1628" }}>
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       {/* Veo background video */}
       <AbsoluteFill>
         <OffthreadVideo
@@ -104,7 +88,7 @@ export const Part1Economics03CostCrossoverChart: React.FC = () => {
         />
       </AbsoluteFill>
 
-      {/* Chart overlay with zoom transform */}
+      {/* Chart overlay with Act G zoom transform */}
       <AbsoluteFill
         style={{
           transform: `translate(${translateX}px, ${translateY}px) scale(${zoomScale})`,
@@ -118,48 +102,48 @@ export const Part1Economics03CostCrossoverChart: React.FC = () => {
         <AnimatedLine
           points={PATCHING_POINTS}
           gradientId="patchingGradient"
-          colorStart="#EF4444"
-          colorEnd="#F59E0B"
-          strokeWidth={4}
-          drawStartFrame={60}
-          drawEndFrame={180}
+          colorStart={PATCHING_COLOR_START}
+          colorEnd={PATCHING_COLOR_END}
+          strokeWidth={PRIMARY_LINE_WIDTH}
+          drawStartFrame={LINE_A_START}
+          drawEndFrame={LINE_A_END}
           label="Cost of Patching"
-          labelColor="#EF4444"
+          labelColor={PATCHING_COLOR_START}
         />
 
         {/* Line B: Generation cost — draws frame 120-240 */}
         <AnimatedLine
           points={GENERATION_POINTS}
           gradientId="generationGradient"
-          colorStart="#3B82F6"
-          colorEnd="#22C55E"
-          strokeWidth={4}
-          drawStartFrame={120}
-          drawEndFrame={240}
+          colorStart={GENERATION_COLOR_START}
+          colorEnd={GENERATION_COLOR_END}
+          strokeWidth={PRIMARY_LINE_WIDTH}
+          drawStartFrame={LINE_B_START}
+          drawEndFrame={LINE_B_END}
           label="Cost of Generation"
-          labelColor="#3B82F6"
+          labelColor={GENERATION_COLOR_START}
         />
 
         {/* Line C: Total cost — fades frame 200-260 */}
         <AnimatedLine
           points={TOTAL_COST_POINTS}
           gradientId="totalCostGradient"
-          colorStart="#94A3B8"
-          colorEnd="#94A3B8"
-          strokeWidth={2}
-          drawStartFrame={200}
-          drawEndFrame={260}
+          colorStart={TOTAL_COST_COLOR}
+          colorEnd={TOTAL_COST_COLOR}
+          strokeWidth={TOTAL_LINE_WIDTH}
+          drawStartFrame={LINE_C_START}
+          drawEndFrame={LINE_C_END}
           dashed
           maxOpacity={0.6}
           label="Total Cost"
-          labelColor="#94A3B8"
+          labelColor={TOTAL_COST_COLOR}
         />
 
         {/* Crossover point + label */}
         <CrossoverPoint
-          appearFrame={250}
-          labelStartFrame={280}
-          labelEndFrame={310}
+          appearFrame={CROSSOVER_DOT_START}
+          labelStartFrame={CROSSOVER_LABEL_START}
+          labelEndFrame={CROSSOVER_LABEL_END}
         />
       </AbsoluteFill>
     </AbsoluteFill>

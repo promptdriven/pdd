@@ -2,12 +2,13 @@ import React from "react";
 import { AbsoluteFill, OffthreadVideo, staticFile, Sequence } from "remotion";
 import { ScrimOverlay } from "./ScrimOverlay";
 import { TitleText } from "./TitleText";
+import { BG_COLOR, TOTAL_FRAMES } from "./constants";
 
 export const defaultColdOpen01TitleCardProps = {};
 
 export const ColdOpen01TitleCard: React.FC = () => {
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0A1628" }}>
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       {/* Veo background video */}
       <AbsoluteFill>
         <OffthreadVideo
@@ -17,7 +18,7 @@ export const ColdOpen01TitleCard: React.FC = () => {
       </AbsoluteFill>
 
       {/* Scrim + title overlay — 120 frames (4s at 30fps) */}
-      <Sequence from={0} durationInFrames={120}>
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <ScrimOverlay />
         <TitleText />
       </Sequence>

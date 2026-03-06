@@ -39,7 +39,7 @@ export const SecondaryStat: React.FC = () => {
   });
 
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
         <div
           style={{

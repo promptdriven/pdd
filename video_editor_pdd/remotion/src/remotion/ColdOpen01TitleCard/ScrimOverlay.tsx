@@ -1,11 +1,12 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-
-const SCRIM_COLOR = "15, 23, 42";
-const SCRIM_MAX_OPACITY = 0.7;
-const FADE_IN_END = 30;
-const FADE_OUT_START = 90;
-const FADE_OUT_END = 120;
+import {
+  SCRIM_COLOR,
+  SCRIM_MAX_OPACITY,
+  FADE_IN_END,
+  FADE_OUT_START,
+  FADE_OUT_END,
+} from "./constants";
 
 export const ScrimOverlay: React.FC = () => {
   const frame = useCurrentFrame();
@@ -17,7 +18,10 @@ export const ScrimOverlay: React.FC = () => {
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: frame <= FADE_IN_END ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      easing:
+        frame <= FADE_IN_END
+          ? Easing.out(Easing.cubic)
+          : Easing.in(Easing.cubic),
     }
   );
 

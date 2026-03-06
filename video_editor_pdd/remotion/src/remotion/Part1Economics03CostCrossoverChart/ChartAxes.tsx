@@ -1,19 +1,21 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-
-const CHART_X = 200;
-const CHART_Y = 100;
-const CHART_W = 1620;
-const CHART_H = 780;
-const AXIS_COLOR = "#94A3B8";
-const AXIS_TITLE_COLOR = "#CBD5E1";
-const GRID_COLOR = "#334155";
-
-const AXES_FADE_END = 30;
-const GRID_FADE_START = 30;
-const GRID_FADE_END = 90;
-
-const GRID_FRACTIONS = [0.25, 0.5, 0.75];
+import {
+  WIDTH,
+  HEIGHT,
+  CHART_X,
+  CHART_Y,
+  CHART_W,
+  CHART_H,
+  AXIS_COLOR,
+  AXIS_TITLE_COLOR,
+  GRID_COLOR,
+  AXES_FADE_END,
+  GRID_FADE_START,
+  GRID_FADE_END,
+  GRID_FRACTIONS,
+  X_TICKS,
+} from "./constants";
 
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
@@ -31,18 +33,18 @@ export const ChartAxes: React.FC = () => {
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-    }
+    },
   );
 
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Grid lines */}
+        {/* Horizontal grid lines */}
         {GRID_FRACTIONS.map((frac) => {
           const y = CHART_Y + CHART_H * (1 - frac);
           return (
@@ -83,7 +85,7 @@ export const ChartAxes: React.FC = () => {
         />
 
         {/* X-axis tick marks */}
-        {[0, 0.2, 0.4, 0.6, 0.8, 1.0].map((t) => {
+        {X_TICKS.map((t) => {
           const x = CHART_X + t * CHART_W;
           return (
             <line
@@ -156,7 +158,7 @@ export const ChartAxes: React.FC = () => {
           Time / Codebase Size
         </text>
 
-        {/* Y-axis title (rotated) */}
+        {/* Y-axis title (rotated 90°) */}
         <text
           x={CHART_X - 70}
           y={CHART_Y + CHART_H / 2}
@@ -171,7 +173,7 @@ export const ChartAxes: React.FC = () => {
           Cost per Change
         </text>
 
-        {/* Y-axis labels */}
+        {/* Y-axis labels: $0 at bottom */}
         <text
           x={CHART_X - 16}
           y={CHART_Y + CHART_H + 4}
@@ -184,9 +186,10 @@ export const ChartAxes: React.FC = () => {
         >
           $0
         </text>
+
+        {/* Y-axis labels: percentage markers */}
         {GRID_FRACTIONS.map((frac) => {
           const y = CHART_Y + CHART_H * (1 - frac);
-          const label = `${Math.round(frac * 100)}%`;
           return (
             <text
               key={`ylabel-${frac}`}
@@ -199,7 +202,7 @@ export const ChartAxes: React.FC = () => {
               textAnchor="end"
               opacity={axesOpacity}
             >
-              {label}
+              {`${Math.round(frac * 100)}%`}
             </text>
           );
         })}
