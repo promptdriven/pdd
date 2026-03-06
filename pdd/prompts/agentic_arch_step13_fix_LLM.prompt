@@ -67,12 +67,60 @@ Fix architecture completeness issues:
    - Orphan modules: Connect to dependency graph or verify standalone is OK
    - Missing references: Add referenced module or remove reference
 
-4. **Missing Context Document Includes:**
-   - If prompts/_context/ files exist but prompts don't include them, add <include> tags
-   - Place in "Shared Context" section after role paragraph, before Requirements
-   - ALL prompts: `<include>prompts/_context/data_dictionary.yaml</include>`
-   - API prompts: also `<include>prompts/_context/api_contracts.yaml</include>`
-   - Entry point prompts: also `<include>prompts/_context/integration_points.yaml</include>`
+4. **Missing Context Document Includes (most common fix):**
+   - If prompts/_context/ files exist but prompts don't include them, add a "Shared Context"
+     section to EACH affected prompt file
+   - **How to fix each prompt:** Insert the following block AFTER the first paragraph (role
+     description) and BEFORE the "Requirements" section:
+
+     ```
+     Shared Context (canonical data model — use ONLY these fields and types)
+
+     <context_data_dictionary>
+     <include>prompts/_context/data_dictionary.yaml</include>
+     </context_data_dictionary>
+
+     CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+     ```
+
+   - For API/router prompts, ALSO add before CONSTRAINTS:
+     ```
+     <context_api_contracts>
+     <include>prompts/_context/api_contracts.yaml</include>
+     </context_api_contracts>
+     ```
+
+   - For entry point/main prompts, ALSO add before CONSTRAINTS:
+     ```
+     <context_integration_points>
+     <include>prompts/_context/integration_points.yaml</include>
+     </context_integration_points>
+     ```
+
+   - **Find all affected prompts:**
+     ```bash
+     grep -rL "data_dictionary.yaml" prompts/*.prompt
+     ```
+   - Fix EVERY file listed by that command — do not stop partway through
+
+5. **Enum Value Drift in data_dictionary.yaml:**
+   - If the validation error mentions enum value mismatches vs the PRD, read the original PRD
+     from the GitHub issue and compare every enum in data_dictionary.yaml
+   - Restore ANY missing values, fix ANY renamed values (e.g., "urgent" → "critical")
+   - After fixing data_dictionary.yaml, update the core_enums prompt to match
+
+6. **Inline Duplication of Context YAML Content (prompt compactness):**
+   - If the validation error mentions inline duplication, remove hardcoded entity field tables,
+     enum value lists, and Pydantic schema definitions from prompt files
+   - The `<include>prompts/_context/data_dictionary.yaml</include>` already provides this data
+   - Replace inline tables with brief references, e.g.:
+     - BEFORE: Full `| Field | Type | Constraints |` table with 15 rows
+     - AFTER: `This module operates on the User entity (see data dictionary). Key fields used: id, email, password_hash, deleted_at.`
+   - Similarly for enums:
+     - BEFORE: `Define AuthProvider with values: LOCAL, GOOGLE, APPLE, GITHUB`
+     - AFTER: `Uses AuthProvider enum from data dictionary.`
+   - Keep the `Shared Context` section with `<include>` tags — that's the single source of truth
+   - Keep `## Dependency API Reference` sections (function signatures) — those are NOT in the YAMLs
 
 ---
 

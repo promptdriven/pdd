@@ -131,10 +131,18 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 
 % The prompt you generate must follow this structure:
 1) First paragraph: describe the role and responsibility of the ${MODULE} module/component within the system (consider the LAYER if provided).
+1b) A "Shared Context" section with <include> tags for context YAML files (see output format below). This provides the canonical data model — do NOT duplicate its content elsewhere in the prompt.
 2) A "Requirements" section with numbered points covering functionality, contracts, error handling, validation, logging, performance, and security.
 3) A "Dependencies" section using XML include tags for each dependency (see format below).
 4) An "Instructions" section with precise implementation guidance (clarify inputs/outputs, function/class responsibilities, edge cases, and testing notes).
 5) A clear "Deliverable" section describing the expected code artifacts and entry points.
+
+% Deduplication rule (CRITICAL — keep prompts compact):
+- If `prompts/_context/data_dictionary.yaml` exists, the Shared Context <include> tag already provides all entity field tables, enum values, and Pydantic schema definitions at pdd sync time.
+- Do NOT hardcode entity field tables (e.g., `| Field | Type | Constraints |`) in the prompt body. Instead, reference entities briefly: "This module operates on the `User` entity (see data dictionary). Key fields used: id, email, password_hash."
+- Do NOT list all enum values inline. Instead: "Uses `UploadJobStatus` enum from data dictionary."
+- Do NOT repeat API endpoint request/response schemas if `api_contracts.yaml` is included. Instead: "Implements the `auth_login` endpoint (see API contracts)."
+- The prompt body should contain ONLY implementation logic, dependency signatures, and behavior that is NOT in the context YAMLs.
 
 % Dependencies format and conventions:
 - Read the `example_output_path` from the PDDRC_FILE (`.pddrc`) to determine where example files are located. This path is defined under each context's `defaults.example_output_path` setting.
@@ -174,6 +182,25 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
   ```text
   <prompt>
   [ROLE_PARAGRAPH]
+
+  Shared Context (canonical data model — use ONLY these fields and types)
+
+  <context_data_dictionary>
+  <include>prompts/_context/data_dictionary.yaml</include>
+  </context_data_dictionary>
+
+  [IF API/ROUTER MODULE, ALSO ADD:]
+  <context_api_contracts>
+  <include>prompts/_context/api_contracts.yaml</include>
+  </context_api_contracts>
+
+  [IF ENTRY POINT/MAIN MODULE, ALSO ADD:]
+  <context_integration_points>
+  <include>prompts/_context/integration_points.yaml</include>
+  </context_integration_points>
+
+  CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
   Requirements
   1. [REQ_ITEM_1]
   2. [REQ_ITEM_2]
@@ -197,3 +224,4 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
   </prompt>
   ```
   Replace each `[PLACEHOLDER]` with concrete content while preserving the surrounding structure and literal `<prompt>` / `<include>` tags.
+  IMPORTANT: The Shared Context section with <include> tags for data_dictionary.yaml is MANDATORY in every prompt. Do NOT omit it.
