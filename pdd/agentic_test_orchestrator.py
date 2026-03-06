@@ -486,6 +486,8 @@ def run_agentic_test_orchestrator(
         if not quiet:
             brief = step_output.strip().split("\n")[-1] if step_output.strip() else "Done"
             console.print(f"   -> {brief[:80]}")
+            if step_success:
+                console.print(f"  → Step {step_num} complete.")
 
     # Manual testing steps 6-11
     test_type = context.get("frontend_type", "").lower()
@@ -520,6 +522,8 @@ def run_agentic_test_orchestrator(
             if not quiet:
                 brief = step_output.strip().split("\n")[-1] if step_output.strip() else "Done"
                 console.print(f"   -> {brief[:80]}")
+                if step_success:
+                    console.print(f"  → Step {step_num} complete.")
 
         # Step 7
         step_num = 7
@@ -539,6 +543,8 @@ def run_agentic_test_orchestrator(
                 if not quiet:
                     brief = step_output.strip().split("\n")[-1] if step_output.strip() else "Done"
                     console.print(f"   -> {brief[:80]}")
+                    if step_success:
+                        console.print(f"  → Step {step_num} complete.")
 
         # Steps 8-11 loop
         if run_manual and (coverage_gaps is None or coverage_gaps > 0):
@@ -713,6 +719,8 @@ def run_agentic_test_orchestrator(
         if not quiet:
             brief = step_output.strip().split("\n")[-1] if step_output.strip() else "Done"
             console.print(f"   -> {brief[:80]}")
+            if step_success:
+                console.print(f"  → Step {step_num} complete.")
 
     pr_url = "Unknown"
     if "step17_output" in context:

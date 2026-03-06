@@ -13,7 +13,7 @@
 
 % Context
 
-You are working on step 6 of 18 in an agentic test generation workflow. This step only runs when TEST_TYPE is `web` and `playwright-cli` is available.
+You are working on step 6 of 18 in an agentic test generation workflow. This step only runs when TEST_TYPE is `web` and `Playwright` is available.
 
 % Inputs
 

@@ -78,6 +78,36 @@ Flag ANY of the following as inconsistencies:
 - Env var names that don't match the naming registry
 - Type/class names with different casing or spelling across files
 
+**Phase 4b: Context Document Consistency**
+
+If `prompts/_context/data_dictionary.yaml` exists:
+1. Verify field names in prompts match the data dictionary
+2. Verify enum values in prompts match the data dictionary
+3. Verify collection names in prompts match the data dictionary
+4. If mismatches found, fix the PROMPT to match the data dictionary (not vice versa)
+
+**Phase 4c: Sibling Context Consistency**
+
+{sibling_architectures}
+
+If sibling architectures above contain **Shared Context Documents** (data_dictionary.yaml,
+api_contracts.yaml), perform cross-sub-issue consistency checks:
+
+1. **Shared entity verification:** For every entity in YOUR `prompts/_context/data_dictionary.yaml`
+   that also appears in a sibling's data dictionary:
+   - Field names must match EXACTLY
+   - Field types must be compatible
+   - Enum values must be identical strings
+   - Required/optional status must be consistent
+2. **API contract verification:** For every endpoint in YOUR `prompts/_context/api_contracts.yaml`
+   that also appears in a sibling's api_contracts.yaml:
+   - Request/response field names and types must match
+   - HTTP methods and paths must match
+3. **Prompt file verification:** For every prompt that references a shared entity or API endpoint,
+   verify the prompt uses the EXACT names from the sibling context (not variations)
+4. **If mismatches found:** Fix YOUR context documents and prompt files to match the sibling
+   (the sibling is canonical — it was generated first and code already depends on it)
+
 **Phase 5: Fix Inconsistencies**
 
 If ANY inconsistencies are found:

@@ -153,6 +153,7 @@ If the error shows KeyError for an API key/token, or "Set the XXX environment va
 
 If after 5 iterations the example still crashes, STOP and report the remaining error.
 Do NOT proceed to later steps with a crashing example.
+Do NOT report `STEP_COMPLETE:done` — the session has FAILED.
 
 ### Step 3: Verify Behavior
 
@@ -220,7 +221,7 @@ You are generating unit tests for the module, then fixing any failures.
 The PROMPT FILE is the source of truth. Tests verify that code conforms to the specification.
 
 **Step 4a: Analyze the Project & Existing Tests**
-- Explore the project structure to identify the language and existing test framework
+- Explore the project structure to identify the existing test framework
 - Look for: conftest.py, pytest.ini, setup.cfg, pyproject.toml, package.json, jest.config.*,
   tsconfig.json, pom.xml, build.gradle, Cargo.toml, go.mod, etc.
 - Check existing tests to understand patterns and conventions
@@ -402,11 +403,23 @@ while attempt < 5:
 ```
 
 If after 5 iterations tests still fail, STOP and report the remaining failures.
+Do NOT report `done` — the session has FAILED.
 
-After all steps are complete:
-```
-echo "STEP_COMPLETE:done" >> {progress_file}
-```
+### Final Gate: Confirm All Tests Pass
+
+Before marking the session as complete, you MUST perform a final verification:
+
+1. Run `pytest -xvs {test_path}` one last time.
+2. Check the exit code and output:
+   - If ALL tests pass (exit code 0) → report done:
+     ```
+     echo "STEP_COMPLETE:done" >> {progress_file}
+     ```
+   - If ANY test fails (exit code != 0) → Do NOT report `done`. The session has FAILED.
+     Report the failing tests and stop.
+
+**CRITICAL: NEVER report `STEP_COMPLETE:done` unless the final test run above shows ALL tests passing.**
+A session where tests fail is NOT a success, even if you attempted fixes.
 
 ## Critical Rules
 - DO NOT modify the prompt file ({prompt_path}) — it is the source of truth
@@ -423,3 +436,5 @@ echo "STEP_COMPLETE:done" >> {progress_file}
 - ALWAYS report progress via echo commands after each step completes
 - You may install missing packages with pip if needed
 - CRITICAL: Never include hardcoded absolute paths in generated files
+- CRITICAL: NEVER report `STEP_COMPLETE:done` if any tests are failing. A session with failing
+  tests is a FAILED session. Only report `done` after confirming all tests pass with exit code 0.

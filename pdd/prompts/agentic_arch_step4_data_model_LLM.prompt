@@ -57,6 +57,28 @@ You MUST use existing packages — do NOT introduce packages not in package.json
 You MUST follow existing patterns for auth, data fetching, error handling.
 If an ORM is already in use, you MUST use that same ORM for new data models.
 
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+% CRITICAL — Sibling Data Model Alignment
+
+If sibling architectures above contain **Shared Context Documents** (data_dictionary.yaml),
+you MUST treat them as the canonical source of truth for any entities they define:
+
+1. **Before designing ANY entity**, check if a sibling data dictionary already defines it
+2. **If the entity exists in a sibling**: reuse the EXACT field names, field types, enum values,
+   and required/optional status — do NOT redefine with different names or types
+3. **If you need additional fields** beyond what the sibling defines: add them, but keep all
+   existing fields unchanged
+4. **If no sibling context exists**: design freely, but document your choices clearly for
+   future sibling sub-issues to align with
+5. **Mark shared entities explicitly**: in your "Shared Types" section, note which entities
+   are already defined in sibling projects and which are new
+
+If sibling context documents exist, also read the `api_contracts.yaml` to understand existing
+API endpoint schemas — your data model must be compatible with those contracts.
+
 % CRITICAL: Scope of This Step
 
 This step is ONLY about data modeling. You must:
@@ -82,6 +104,12 @@ If your output contains a "Module List" table or "Dependency Graph", you have do
    - For each entity, define fields with types (string, int, boolean, datetime, enum, etc.)
    - Mark required vs optional fields
    - Identify natural keys vs surrogate keys (UUID, auto-increment)
+   - **CRITICAL — Enum Preservation:** If the PRD explicitly lists enum values (e.g., status values,
+     priority levels, role types), you MUST include ALL of them verbatim. Do NOT simplify, merge,
+     rename, or drop any enum values. For example, if the PRD says priorities are "low, medium,
+     high, critical", you MUST use exactly those four values — do NOT replace "critical" with
+     "urgent" or drop any value. Similarly, if the PRD lists roles as "admin, member, manager,
+     viewer", ALL four must appear in your output.
 
 2. **Define relationships and cardinality:**
    - Map relationships between entities (1:1, 1:N, N:M)
@@ -156,6 +184,13 @@ Your comment should follow this format:
 - **Schema organization:** [e.g., one-file-per-entity in models/, single schema file, ORM-managed]
 - **Note:** Exact file paths are determined in Step 5 (Module Design), not here.
 
+### Enums (Verbatim from PRD)
+| Enum Name | Values (ALL from PRD) | Source |
+|-----------|----------------------|--------|
+| [EnumName] | [value1, value2, value3, ...] | PRD section [X] |
+
+**IMPORTANT: Every enum value listed in the PRD MUST appear in this table. Do NOT omit, rename, or substitute any values.**
+
 ### Shared Types
 - [type_name]: Used by [module_a, module_b, ...]
 
@@ -174,4 +209,5 @@ Your comment should follow this format:
 - Shared types should become their own modules; module-local types stay internal
 - For N:M relationships, always specify the join table structure
 - Do NOT recommend specific file paths for schema/model files — only recommend the organizational pattern. Step 5 will determine file paths based on existing repo conventions.
+- **Enum fidelity is critical:** If the PRD defines enum values, copy them EXACTLY. Common mistakes to avoid: replacing "critical" with "urgent", dropping "in_review" from statuses, omitting "manager"/"viewer" from roles. Count the PRD's enum values and verify your output has the same count.
 - Always post your findings as a GitHub comment before completing

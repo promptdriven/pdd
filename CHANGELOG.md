@@ -1,3 +1,34 @@
+## v0.0.168 (2026-03-05)
+
+### Feat
+
+- add new visual components and sections for economics, mold production, context degradation, and precision tradeoffs.
+- enhance composition handling by merging discovered components with existing timing data, extracting string IDs from mixed-type compositions, and refining component prompt generation with distinct base and output names.
+- Introduce new chart grid, tick, and zoom timing constants and centralize existing component constants into dedicated files.
+- enforce enum fidelity, context doc includes, and prompt deduplication
+- Introduce an animated word-by-word subtitle track component and standardize video section constants across various parts.
+- add new Remotion scenes and components for Part 4, Part 5, and Closing sections, and integrate them into Root.tsx.
+- add numerous new Remotion components for various video sections and scenes.
+- share sibling context documents (data dictionary, API contracts) across sub-issues
+- detect include dependency changes in `pdd update` repo-wide mode
+- add comprehensive video segment specifications for the PDD video.
+- generate rich animated compositions instead of overlays
+
+### Fix
+
+- address Copilot review — glob patterns, conditional mandate, section numbering
+- escape include tag examples in LLM prompts to survive preprocessing
+- PDD fix for #737 (#738)
+- add stdout fallback in error capture and consecutive-provider-failure abort to e2e_fix orchestrator
+- treat unreadable include dependencies as changed to trigger re-sync
+- expand language discovery to all supported languages and harden one-session completion gate
+- replace nonexistent playwright-cli with npx playwright in test prompts
+- spec prompt now instructs a mix of visual types, not just Remotion
+- spec generation prompt now explicitly requires multiple separate files
+- expand spec generation log panel from 1 line to usable height
+- sync context/python_preamble.prompt to public repo for Issue #594 tests
+- add pdd/templates/ to .sync-config.yml to fix CI on promptdriven/pdd
+
 ## v0.0.167 (2026-03-04)
 
 ### Feat

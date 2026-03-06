@@ -44,7 +44,10 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 # Import the code under test
-from pdd.agentic_architecture_orchestrator import run_agentic_architecture_orchestrator
+from pdd.agentic_architecture_orchestrator import (
+    run_agentic_architecture_orchestrator,
+    _validate_generated_test_syntax,
+)
 
 # --- Fixtures ---
 
@@ -112,6 +115,12 @@ def test_happy_path_full_run(mock_dependencies, base_args):
         # Step 7b: architecture review passes (must be before step7 check)
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN\nArchitecture verified.", 0.1, "gpt-4")
+        # Step 8.5: context docs generated (must be before step8 check)
+        if "step8_5" in label:
+            ctx_dir = cwd / "prompts" / "_context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+            return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml, prompts/_context/api_contracts.yaml, prompts/_context/integration_points.yaml", 0.1, "gpt-4")
         # Step 9b: cross-audit passes (must be before step9 check)
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT\nAll prompt files consistent.", 0.1, "gpt-4")
@@ -140,9 +149,9 @@ def test_happy_path_full_run(mock_dependencies, base_args):
 
     # Verify all steps ran:
     # Steps 1-5 = 5 + 1b = 1 + 2b = 1 + 5b = 1
-    # Steps 6-8 = 3 + 7b = 1 + Step 9 = 1 + 9b = 1 + Steps 10-12 = 3
-    # Total: 5 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 3 = 17 calls
-    assert mocks["run"].call_count == 17
+    # Steps 6-8 = 3 + 7b = 1 + 8.5 = 1 + Step 9 = 1 + 9b = 1 + Steps 10-12 = 3
+    # Total: 5 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 1 + 3 = 18 calls
+    assert mocks["run"].call_count == 18
 
     # Verify state was cleared
     mocks["clear_state"].assert_called_once()
@@ -189,6 +198,12 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
         # Step 7b and 9b pass (must be before step7/step9 checks)
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        # Step 8.5: context docs (must be before step8 check)
+        if "step8_5" in label:
+            ctx_dir = cwd / "prompts" / "_context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+            return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
@@ -217,8 +232,8 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
     success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     assert success is True
-    # Calls: steps 1-5 (5) + 1b (1) + 2b (1) + 5b (1) + steps 6-8 (3) + 7b (1) + step 9 (1) + 9b (1) + step 10 (attempt1+fix1+attempt2=3) + steps 11-12 (2) = 19
-    assert mocks["run"].call_count == 19
+    # Calls: steps 1-5 (5) + 1b (1) + 2b (1) + 5b (1) + steps 6-8 (3) + 7b (1) + 8.5 (1) + step 9 (1) + 9b (1) + step 10 (attempt1+fix1+attempt2=3) + steps 11-12 (2) = 20
+    assert mocks["run"].call_count == 20
 
     # Verify the final architecture saved is the one from the fix
     with open(base_args["cwd"] / "architecture.json", "r") as f:
@@ -242,6 +257,12 @@ def test_max_validation_iterations(mock_dependencies, base_args):
         # Step 7b and 9b pass (must be before step7/step9 checks)
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        # Step 8.5: context docs (must be before step8 check)
+        if "step8_5" in label:
+            ctx_dir = cwd / "prompts" / "_context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+            return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
@@ -272,12 +293,12 @@ def test_max_validation_iterations(mock_dependencies, base_args):
     assert success is False
 
     # Count calls:
-    # Steps 1-5: 5 + 1b (1) + 2b (1) + 5b (1) + Steps 6-8: 3 + 7b (1)
+    # Steps 1-5: 5 + 1b (1) + 2b (1) + 5b (1) + Steps 6-8: 3 + 7b (1) + 8.5 (1)
     # Step 9: 1 call + 9b (1)
     # Step 10: 3 attempts + 2 fixes = 5 calls
     # Steps 11-12: 2 calls (they still run after step 10 fails)
-    # Total: 5 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 5 + 2 = 21 calls
-    assert mocks["run"].call_count == 21
+    # Total: 5 + 1 + 1 + 1 + 3 + 1 + 1 + 1 + 1 + 5 + 2 = 22 calls
+    assert mocks["run"].call_count == 22
 
 def test_resumption_from_state(mock_dependencies, base_args):
     """Test resuming from saved state (e.g., Step 3 completed)."""
@@ -303,6 +324,12 @@ def test_resumption_from_state(mock_dependencies, base_args):
         # Step 7b and 9b pass (must be before step7/step9 checks)
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        # Step 8.5: context docs (must be before step8 check)
+        if "step8_5" in label:
+            ctx_dir = cwd / "prompts" / "_context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+            return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step7" in label:
@@ -323,12 +350,12 @@ def test_resumption_from_state(mock_dependencies, base_args):
     success, _, cost, _, _ = run_agentic_architecture_orchestrator(**base_args)
 
     assert success is True
-    # Should run steps 4, 5 (2 calls) + step 5b (1) + steps 6, 7, 8 (3 calls) + 7b (1) + step 9 (1) + 9b (1) + steps 10-12 (3) = 12 calls
+    # Should run steps 4, 5 (2 calls) + step 5b (1) + steps 6, 7, 8 (3 calls) + 7b (1) + 8.5 (1) + step 9 (1) + 9b (1) + steps 10-12 (3) = 13 calls
     # Steps 1, 1b, 2, 3 should be skipped.
-    assert mocks["run"].call_count == 12
+    assert mocks["run"].call_count == 13
 
-    # Cost should include previous cost (0.5) + new costs (0.1 * 12)
-    assert cost == pytest.approx(1.7)
+    # Cost should include previous cost (0.5) + new costs (0.1 * 13)
+    assert cost == pytest.approx(1.8)
 
 def test_missing_template_failure(mock_dependencies, base_args):
     """Test failure when a prompt template is missing."""
@@ -510,7 +537,7 @@ def test_z3_termination_proof():
 
 # --- Tests for Scaffolding File Tracking ---
 
-from pdd.agentic_architecture import _parse_related_issues, _fetch_sibling_architectures, _read_existing_pddrc
+from pdd.agentic_architecture import _parse_related_issues, _fetch_sibling_architectures, _read_existing_pddrc, _read_sibling_context_yamls
 from pdd.agentic_architecture_orchestrator import _parse_files_marker, _verify_files_exist, _ensure_pddrc_contexts_preserved
 
 
@@ -1646,6 +1673,11 @@ def test_resume_from_step_5_5(mock_dependencies, base_args):
         if "step7" in label:
             (cwd / "architecture.json").write_text('[{"ver": 1}]')
             return (True, 'FILES_CREATED: architecture.json', 0.1, "gpt-4")
+        if "step8_5" in label:
+            ctx_dir = cwd / "prompts" / "_context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+            return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml", 0.1, "gpt-4")
         if "step8" in label:
             (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
@@ -1659,14 +1691,15 @@ def test_resume_from_step_5_5(mock_dependencies, base_args):
 
     assert success is True
 
-    # Should run steps 6, 7 (2 calls) + 7b (1) + step 8 (1) + step 9 (1) + 9b (1) + steps 10-12 (3) = 9 calls
+    # Should run steps 6, 7 (2 calls) + 7b (1) + step 8 (1) + 8.5 (1) + step 9 (1) + 9b (1) + steps 10-12 (3) = 10 calls
     # Steps 1-5 and 5b should be skipped
     labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
     assert not any("step5b" in l for l in labels), "Step 5b should be skipped"
     assert any("step6" in l for l in labels), "Step 6 should run"
     assert any("step7b" in l for l in labels), "Step 7b should run"
+    assert any("step8_5" in l for l in labels), "Step 8.5 should run"
     assert any("step9b" in l for l in labels), "Step 9b should run"
-    assert mocks["run"].call_count == 9
+    assert mocks["run"].call_count == 10
 
 
 # ============================================================================
@@ -2028,6 +2061,97 @@ class TestFetchSiblingArchitectures:
         assert result == ""
 
 
+class TestReadSiblingContextYamls:
+    """Tests for _read_sibling_context_yamls helper."""
+
+    def test_reads_data_dictionary_and_api_contracts(self, tmp_path):
+        """Reads both YAML files from sibling _context directory."""
+        ctx_dir = tmp_path / "prompts" / "_context"
+        ctx_dir.mkdir(parents=True)
+        (ctx_dir / "data_dictionary.yaml").write_text("models:\n  User:\n    fields: [id, name]\n")
+        (ctx_dir / "api_contracts.yaml").write_text("endpoints:\n  getUser:\n    method: GET\n")
+
+        result = _read_sibling_context_yamls(tmp_path)
+        assert "data_dictionary.yaml" in result
+        assert "api_contracts.yaml" in result
+        assert "User" in result["data_dictionary.yaml"]
+        assert "getUser" in result["api_contracts.yaml"]
+
+    def test_returns_empty_when_no_context_dir(self, tmp_path):
+        """Returns empty dict when prompts/_context/ doesn't exist."""
+        result = _read_sibling_context_yamls(tmp_path)
+        assert result == {}
+
+    def test_skips_empty_files(self, tmp_path):
+        """Skips YAML files that are empty."""
+        ctx_dir = tmp_path / "prompts" / "_context"
+        ctx_dir.mkdir(parents=True)
+        (ctx_dir / "data_dictionary.yaml").write_text("")
+        (ctx_dir / "api_contracts.yaml").write_text("endpoints:\n  getUser:\n    method: GET\n")
+
+        result = _read_sibling_context_yamls(tmp_path)
+        assert "data_dictionary.yaml" not in result
+        assert "api_contracts.yaml" in result
+
+    def test_partial_context_only_data_dict(self, tmp_path):
+        """Returns only available files."""
+        ctx_dir = tmp_path / "prompts" / "_context"
+        ctx_dir.mkdir(parents=True)
+        (ctx_dir / "data_dictionary.yaml").write_text("models:\n  Order:\n    fields: [id]\n")
+
+        result = _read_sibling_context_yamls(tmp_path)
+        assert "data_dictionary.yaml" in result
+        assert "api_contracts.yaml" not in result
+
+
+class TestFetchSiblingArchitecturesWithContext:
+    """Tests that _fetch_sibling_architectures includes context YAML files."""
+
+    def test_includes_sibling_context_documents(self, tmp_path):
+        """Sibling with context YAMLs has them included in output."""
+        backend_dir = tmp_path / "backend"
+        backend_dir.mkdir()
+        arch_data = [{"filename": "models_Python.prompt", "filepath": "backend/models.py",
+                      "reason": "Data models", "interface": {"type": "module"}}]
+        (backend_dir / "architecture.json").write_text(json.dumps(arch_data))
+
+        ctx_dir = backend_dir / "prompts" / "_context"
+        ctx_dir.mkdir(parents=True)
+        (ctx_dir / "data_dictionary.yaml").write_text("models:\n  User:\n    fields: [id, name]\n")
+
+        result = _fetch_sibling_architectures(tmp_path, "frontend")
+        assert "Shared Context Documents" in result
+        assert "data_dictionary.yaml" in result
+        assert "User" in result
+
+    def test_no_context_docs_no_section(self, tmp_path):
+        """Sibling without context YAMLs doesn't get context section."""
+        backend_dir = tmp_path / "backend"
+        backend_dir.mkdir()
+        arch_data = [{"filename": "models_Python.prompt", "filepath": "backend/models.py",
+                      "reason": "Data models", "interface": {"type": "module"}}]
+        (backend_dir / "architecture.json").write_text(json.dumps(arch_data))
+
+        result = _fetch_sibling_architectures(tmp_path, "frontend")
+        assert "Shared Context Documents" not in result
+        assert "models_Python.prompt" in result  # basic table still present
+
+    def test_includes_full_interface_details(self, tmp_path):
+        """Sibling with rich interfaces has interface details in output."""
+        backend_dir = tmp_path / "backend"
+        backend_dir.mkdir()
+        arch_data = [{"filename": "api_Python.prompt", "filepath": "backend/api.py",
+                      "reason": "API routes",
+                      "interface": {"type": "api", "endpoints": [
+                          {"method": "GET", "path": "/api/users"}
+                      ]}}]
+        (backend_dir / "architecture.json").write_text(json.dumps(arch_data))
+
+        result = _fetch_sibling_architectures(tmp_path, "frontend")
+        assert "Interface Details" in result
+        assert "/api/users" in result
+
+
 class TestReadExistingPddrc:
     """Tests for _read_existing_pddrc helper."""
 
@@ -2129,6 +2253,8 @@ def test_step8_merge_preserves_existing_contexts(mock_dependencies, base_args):
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step8_5" in label:
+            return (True, "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2194,6 +2320,8 @@ def test_step8_merge_noop_when_all_contexts_preserved(mock_dependencies, base_ar
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step8_5" in label:
+            return (True, "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2235,6 +2363,8 @@ def test_step8_stray_pddrc_removed_when_target_dir_set(mock_dependencies, base_a
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step8_5" in label:
+            return (True, "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2280,6 +2410,8 @@ def test_step8_stray_pddrc_moved_to_root_when_root_missing(mock_dependencies, ba
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step8_5" in label:
+            return (True, "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2586,3 +2718,457 @@ def test_generate_first_time_records_registry(mock_dependencies, base_args):
     gen = registry["generations"][0]
     assert sorted(gen["modules_added"]) == ["mod_a_Python.prompt", "mod_b_Python.prompt"]
     assert gen["modules_updated"] == []
+
+
+# === Fix 5: _validate_generated_test_syntax Tests ===
+
+class TestValidateGeneratedTestSyntax:
+    """Tests for _validate_generated_test_syntax (Fix 5)."""
+
+    def test_valid_python_block(self, tmp_path):
+        """Valid Python code block produces no errors."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "test_module_Python.prompt").write_text(
+            "Some prompt text\n"
+            "```python\n"
+            "def hello():\n"
+            "    return 'world'\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_invalid_python_block(self, tmp_path):
+        """Invalid Python code block is detected."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "test_module_Python.prompt").write_text(
+            "```python\n"
+            "def hello(\n"
+            "    return 'world'\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert len(errors) == 1
+        assert "Python syntax error" in errors[0]
+        assert "test_module_Python.prompt" in errors[0]
+
+    def test_valid_typescript_block(self, tmp_path):
+        """Valid TypeScript code block with balanced braces produces no errors."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "api_TypeScript.prompt").write_text(
+            "```typescript\n"
+            "function hello(): string {\n"
+            "  return 'world';\n"
+            "}\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_unbalanced_typescript_block(self, tmp_path):
+        """Unbalanced braces in TypeScript code block are detected."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "api_TypeScript.prompt").write_text(
+            "```typescript\n"
+            "function hello(): string {\n"
+            "  return 'world';\n"
+            "\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert len(errors) == 1
+        assert "api_TypeScript.prompt" in errors[0]
+
+    def test_no_prompts_dir(self, tmp_path):
+        """No prompts directory returns empty errors."""
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_no_code_blocks(self, tmp_path):
+        """Prompt with no code blocks returns no errors."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "plain.prompt").write_text("Just plain text, no code blocks.\n")
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+    def test_multiple_blocks_mixed(self, tmp_path):
+        """Multiple code blocks — valid and invalid — are all checked."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "multi.prompt").write_text(
+            "```python\n"
+            "x = 1\n"
+            "```\n"
+            "\n"
+            "```python\n"
+            "def bad(\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert len(errors) == 1
+        assert "Python syntax error" in errors[0]
+
+    def test_strings_ignored_in_bracket_matching(self, tmp_path):
+        """Braces inside strings should not affect bracket matching."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "strings.prompt").write_text(
+            "```typescript\n"
+            "const x = '{';\n"
+            "const y = '}';\n"
+            "```\n"
+        )
+        errors = _validate_generated_test_syntax(tmp_path)
+        assert errors == []
+
+
+# === Fix 3A: Step 9c Cross-Sub-Issue Reconciliation Tests ===
+
+class TestStep9cReconciliation:
+    """Tests for Step 9c cross-sub-issue reconciliation (Fix 3A)."""
+
+    def test_step9c_runs_when_related_issues_present(self, mock_dependencies, base_args):
+        """Step 9c runs when related_issues is provided."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+        base_args["related_issues"] = [2, 3]
+
+        call_count_tracker = {"step9c_ran": False}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9c" in label:
+                call_count_tracker["step9c_ran"] = True
+                return (True, "RECONCILE_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+                return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+            if "step8" in label:
+                (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+                return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True
+        assert call_count_tracker["step9c_ran"]
+
+    def test_step9c_skipped_when_no_related_issues(self, mock_dependencies, base_args):
+        """Step 9c is skipped when related_issues is empty/None."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9c" in label:
+                pytest.fail("Step 9c should not run when no related issues")
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+                return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+            if "step8" in label:
+                (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+                return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True
+
+    def test_step9c_tracks_modified_files(self, mock_dependencies, base_args):
+        """Step 9c tracks modified files when conflicts are fixed."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+        base_args["related_issues"] = [2]
+
+        # Create the prompt file that will be reported as modified
+        prompts_dir = cwd / "prompts"
+        prompts_dir.mkdir(exist_ok=True)
+        (prompts_dir / "shared_types_Python.prompt").write_text("prompt content")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step1b" in label:
+                return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+            if "step5b" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7b" in label:
+                return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9c" in label:
+                return (True, "RECONCILE_RESULT: CONFLICTS_FIXED\nFILES_MODIFIED: prompts/shared_types_Python.prompt", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            if "step7" in label:
+                (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+                return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+            if "step8" in label:
+                (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+                return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True
+
+
+# ============================================================================
+# Step 8.5: Context Documents Tests
+# ============================================================================
+
+
+class TestStep8_5ContextDocs:
+    """Tests for Step 8.5 shared context document generation."""
+
+    def test_step8_5_context_docs_generated(self, mock_dependencies, base_args):
+        """Step 8.5 generates context documents and tracks them in scaffolding_files."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Resume from step 8 so only 8.5 + 9 + 9b + 10-12 run
+        state = {
+            "last_completed_step": 8,
+            "step_outputs": {
+                "1": "out1", "2": "out2", "3": "out3",
+                "4": "out4", "5": "out5", "6": "out6",
+                "7": '[{"priority": 1, "filename": "test.prompt"}]',
+                "8": "FILES_CREATED: .pddrc",
+            },
+            "total_cost": 0.5,
+            "model_used": "gpt-4",
+        }
+        mocks["load_state"].return_value = (state, 12345)
+
+        # Create .pddrc on disk (required by step 9)
+        (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+        (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step8_5" in label:
+                ctx_dir = cwd / "prompts" / "_context"
+                ctx_dir.mkdir(parents=True, exist_ok=True)
+                (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+                (ctx_dir / "api_contracts.yaml").write_text("endpoints: {}")
+                (ctx_dir / "integration_points.yaml").write_text("shared_utilities: []")
+                return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml, prompts/_context/api_contracts.yaml, prompts/_context/integration_points.yaml", 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, "ok", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        assert success is True
+
+        # Verify step 8.5 ran
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        assert any("step8_5" in l for l in labels), "Step 8.5 should have run"
+
+        # Verify context files tracked
+        save_calls = mocks["save_state"].call_args_list
+        found_ctx_files = False
+        for call in save_calls:
+            call_state = call[0][3]  # 4th positional arg is state
+            scaffolding = call_state.get("scaffolding_files", [])
+            if any("prompts/_context/data_dictionary.yaml" in f for f in scaffolding):
+                found_ctx_files = True
+                break
+        assert found_ctx_files, "Context docs should be tracked in scaffolding_files"
+
+    def test_step8_5_template_missing_skips_gracefully(self, mock_dependencies, base_args):
+        """Step 8.5 is skipped gracefully when template is missing."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Resume from step 8
+        state = {
+            "last_completed_step": 8,
+            "step_outputs": {
+                "1": "out1", "2": "out2", "3": "out3",
+                "4": "out4", "5": "out5", "6": "out6",
+                "7": '[{"priority": 1, "filename": "test.prompt"}]',
+                "8": "FILES_CREATED: .pddrc",
+            },
+            "total_cost": 0.5,
+            "model_used": "gpt-4",
+        }
+        mocks["load_state"].return_value = (state, 12345)
+
+        # Create required files
+        (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+        (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+
+        # Make load_prompt_template return None for step8_5 template
+        def selective_template(name):
+            if "step8_5" in name:
+                return None
+            return "Prompt for {issue_title}"
+
+        mocks["load_template"].side_effect = selective_template
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, "ok", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        assert success is True
+
+        # Verify step 8.5 did NOT run (template missing)
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        assert not any("step8_5" in l for l in labels), "Step 8.5 should be skipped when template missing"
+
+        # Verify step 9 still ran
+        assert any("step9" in l for l in labels), "Step 9 should still run"
+
+    def test_resume_from_step_8_5(self, mock_dependencies, base_args):
+        """Resuming from step 8.5 starts at step 9."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        state = {
+            "last_completed_step": 8.5,
+            "step_outputs": {
+                "1": "out1", "2": "out2", "3": "out3",
+                "4": "out4", "5": "out5", "6": "out6",
+                "7": '[{"priority": 1, "filename": "test.prompt"}]',
+                "8": "FILES_CREATED: .pddrc",
+                "8_5": "FILES_CREATED: prompts/_context/data_dictionary.yaml",
+            },
+            "total_cost": 0.5,
+            "model_used": "gpt-4",
+        }
+        mocks["load_state"].return_value = (state, 12345)
+
+        # Create required files
+        (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+        (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, "ok", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+        assert success is True
+
+        # Step 8.5 should NOT run again (already completed)
+        labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+        assert not any("step8_5" in l for l in labels), "Step 8.5 should not re-run"
+
+        # Step 9 should run
+        assert any("step9" in l for l in labels), "Step 9 should run"
+
+        # Should run: step 9 (1) + 9b (1) + steps 10-12 (3) = 5 calls
+        assert mocks["run"].call_count == 5
+
+    def test_step8_5_output_in_context(self, mock_dependencies, base_args):
+        """Step 8.5 output is available as context for later steps."""
+        mocks = mock_dependencies
+        cwd = base_args["cwd"]
+
+        # Resume from step 8
+        state = {
+            "last_completed_step": 8,
+            "step_outputs": {
+                "1": "out1", "2": "out2", "3": "out3",
+                "4": "out4", "5": "out5", "6": "out6",
+                "7": '[{"priority": 1, "filename": "test.prompt"}]',
+                "8": "FILES_CREATED: .pddrc",
+            },
+            "total_cost": 0.5,
+            "model_used": "gpt-4",
+        }
+        mocks["load_state"].return_value = (state, 12345)
+
+        (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+        (cwd / "architecture.json").write_text('[{"priority": 1, "filename": "test.prompt"}]')
+
+        step8_5_output_text = "FILES_CREATED: prompts/_context/data_dictionary.yaml\nContext docs generated successfully."
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step8_5" in label:
+                ctx_dir = cwd / "prompts" / "_context"
+                ctx_dir.mkdir(parents=True, exist_ok=True)
+                (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+                return (True, step8_5_output_text, 0.1, "gpt-4")
+            if "step9b" in label:
+                return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+            if "step10" in label or "step11" in label or "step12" in label:
+                return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+            return (True, "ok", 0.1, "gpt-4")
+
+        mocks["run"].side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+        assert success is True
+
+        # Verify step 8.5 output is stored in state
+        save_calls = mocks["save_state"].call_args_list
+        found_8_5_output = False
+        for call in save_calls:
+            call_state = call[0][3]
+            step_outputs = call_state.get("step_outputs", {})
+            if "8_5" in step_outputs and step8_5_output_text in step_outputs["8_5"]:
+                found_8_5_output = True
+                break
+        assert found_8_5_output, "Step 8.5 output should be stored in state"

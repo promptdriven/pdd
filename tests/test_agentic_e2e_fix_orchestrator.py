@@ -1369,3 +1369,42 @@ class TestPushWithRetryTokenFile:
 
         # Verify _push_with_retry was called with correct repo params
         mock_push.assert_called_once_with(tmp_path, "myowner", "myrepo")
+
+
+class TestProviderFailureAbort:
+    """Tests for abort on consecutive provider failures."""
+
+    def test_abort_after_3_consecutive_provider_failures(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """3 consecutive 'All agent providers failed' steps should abort early."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_run.return_value = (False, "All agent providers failed: anthropic: Exit code 1", 0.0, "")
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert success is False
+        assert "Aborting" in msg or "consecutive" in msg.lower()
+        assert mock_run.call_count == 3  # Aborted after 3 steps
+
+    def test_provider_failure_counter_resets_on_success(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Success between failures should reset the counter — no abort."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        call_count = [0]
+        def side_effect(**kwargs):
+            call_count[0] += 1
+            n = call_count[0]
+            if n in (1, 2):  # Steps 1-2: provider failure
+                return (False, "All agent providers failed: anthropic: Exit code 1", 0.0, "")
+            if n == 3:  # Step 3: success resets counter
+                return (True, "Step output", 0.1, "claude")
+            if n in (4, 5):  # Steps 4-5: provider failure again
+                return (False, "All agent providers failed: anthropic: Exit code 1", 0.0, "")
+            if n == 9:  # Step 9: success with ALL_TESTS_PASS to end
+                return (True, "ALL_TESTS_PASS", 0.1, "claude")
+            return (True, "Step output", 0.1, "claude")
+
+        mock_run.side_effect = side_effect
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Should NOT have aborted — counter reset at step 3
+        assert mock_run.call_count > 3

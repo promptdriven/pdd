@@ -130,6 +130,32 @@ output_schema:
           job: { type: object }
           message: { type: object }
           config: { type: object }
+      entryPoints:
+        type: array
+        items:
+          type: object
+          required: [file, action]
+          properties:
+            file: { type: string }
+            action: { type: string, enum: [import, register_route, add_to_layout, add_to_config, add_middleware, add_provider] }
+            detail: { type: string }
+      extends:
+        type: array
+        items:
+          type: object
+          required: [target_module, target_class, added_fields]
+          properties:
+            target_module: { type: string }
+            target_class: { type: string }
+            added_fields:
+              type: array
+              items:
+                type: object
+                required: [name, type]
+                properties:
+                  name: { type: string }
+                  type: { type: string }
+                  default: { type: string }
 ---
 
 Purpose: Produce an architecture JSON that enumerates prompt files to generate code files for the project.
@@ -147,6 +173,8 @@ INSTRUCTIONS:
   - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
+- entryPoints (optional): For each module that exports a callable (Cloud Function, API route, page component), specify which existing file must be patched to wire it in. Each entry has `file` (the path to the existing file that must be updated), `action` (one of: import, register_route, add_to_layout, add_to_config, add_middleware, add_provider), and optional `detail` (the exact code or instruction to add). This prevents orphan modules that are never reachable at runtime.
+- extends (optional): When a module adds fields to a data model defined in another module, declare the extension here. Each entry has `target_module` (the module filename being extended), `target_class` (the class/interface name), and `added_fields` (array of {name, type, default?}). This enables the base model's prompt to be aware of all extensions.
 - context_urls (optional): An array of {{url, purpose}} objects associating web documentation references with this module. These are converted to `<web>` tags during prompt generation, enabling the LLM to fetch relevant API documentation. Populate with official docs, tutorials, or code examples relevant to the module's implementation.
 - Valid JSON only. No comments or trailing commas.
 

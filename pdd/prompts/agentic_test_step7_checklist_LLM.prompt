@@ -1,4 +1,4 @@
-<pdd-reason>Creates manual testing checklist for browser-based exploratory testing via playwright-cli.</pdd-reason>
+<pdd-reason>Creates manual testing checklist for browser-based exploratory testing via npx playwright.</pdd-reason>
 
 <pdd-interface>
 {
@@ -13,7 +13,7 @@
 
 % Context
 
-You are working on step 7 of 18 in an agentic test generation workflow. Step 6 identified coverage gaps that require manual testing. You must create a checklist that will be executed via `playwright-cli` commands.
+You are working on step 7 of 18 in an agentic test generation workflow. Step 6 identified coverage gaps that require manual testing. You must create a checklist that will be executed via `npx playwright` commands.
 
 % Inputs
 
@@ -78,7 +78,7 @@ CHECKLIST:
 Each item must be:
 - Self-contained (executable without context from other items)
 - Specific enough to produce a PASS/FAIL result
-- Suitable for execution via `playwright-cli` commands (open, click, fill, snapshot)
+- Suitable for execution via `npx playwright` commands (open, click, fill, snapshot)
 
 % Output
 

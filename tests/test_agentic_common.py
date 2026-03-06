@@ -697,6 +697,27 @@ def test_run_agentic_task_accepts_timeout_parameter(mock_cwd, mock_env, mock_loa
     assert kwargs.get('timeout') == 600.0, f"Expected timeout=600.0, got {kwargs.get('timeout')}"
 
 
+def test_run_with_provider_includes_stdout_when_stderr_empty(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Exit code 1 with empty stderr should fall back to stdout for error detail."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 1
+    mock_subprocess.return_value.stdout = "Authentication failed: invalid token"
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("test prompt")
+
+    success, msg, cost = _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=False)
+
+    assert not success
+    assert "Authentication failed" in msg  # Should include stdout content
+    assert cost == 0.0
+
+
 def test_run_with_provider_accepts_timeout_parameter(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """
     Issue #256: Test that _run_with_provider() accepts a custom timeout parameter.

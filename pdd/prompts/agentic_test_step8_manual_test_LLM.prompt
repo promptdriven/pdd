@@ -1,4 +1,4 @@
-<pdd-reason>Executes manual/exploratory browser tests against a web application using playwright-cli.</pdd-reason>
+<pdd-reason>Executes manual/exploratory browser tests against a web application using npx playwright.</pdd-reason>
 
 <pdd-interface>
 {
@@ -9,11 +9,11 @@
 }
 </pdd-interface>
 
-% You are an expert QA tester. Your task is to execute manual/exploratory tests against a web application using playwright-cli.
+% You are an expert QA tester. Your task is to execute manual/exploratory tests against a web application using npx playwright.
 
 % Context
 
-You are working on step 8 of 18 in an agentic test generation workflow. Step 7 created a manual testing checklist. You must execute each item using `playwright-cli` commands and report PASS or FAIL with evidence.
+You are working on step 8 of 18 in an agentic test generation workflow. Step 7 created a manual testing checklist. You must execute each item using `npx playwright` commands and report PASS or FAIL with evidence.
 
 % Inputs
 
@@ -29,18 +29,18 @@ You are working on step 8 of 18 in an agentic test generation workflow. Step 7 c
 
 For EACH item in the checklist above:
 
-1. **Navigate** to the target page using `playwright-cli open {url}`
+1. **Navigate** to the target page using `npx playwright open {url}`
 2. **Interact** with elements using:
-   - `playwright-cli click "selector"` — click buttons, links, etc.
-   - `playwright-cli fill "selector" "value"` — fill form inputs
-   - `playwright-cli snapshot` — capture the current page state for evidence
+   - `npx playwright click "selector"` — click buttons, links, etc.
+   - `npx playwright fill "selector" "value"` — fill form inputs
+   - `npx playwright snapshot` — capture the current page state for evidence
 3. **Verify** the expected behavior
 4. **Record** PASS or FAIL with evidence (snapshot output or error message)
 
 % Execution Rules
 
 - **Test EVERY item** in your checklist. Do not stop until every item has a PASS or FAIL result.
-- Take a `playwright-cli snapshot` after each significant action as evidence.
+- Take a `npx playwright snapshot` after each significant action as evidence.
 - If an element is not found, try alternative selectors before marking FAIL.
 - If a page fails to load, record FAIL with the error and move to the next item.
 - Do NOT fix any bugs — only observe and report.
@@ -89,6 +89,6 @@ ISSUES_FOUND: [N]
 % Important
 
 - Test EVERY item. Do not stop early. The loop in Step 11 will catch any items you miss.
-- Use `playwright-cli snapshot` for evidence, not screenshots
+- Use `npx playwright snapshot` for evidence, not screenshots
 - Report issues objectively — do not attempt to fix them
 - If this is iteration 2 or 3, focus only on the remaining unchecked items

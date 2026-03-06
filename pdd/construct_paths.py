@@ -965,14 +965,15 @@ def construct_paths(
         if not basename:
             raise ValueError("Basename must be provided in command_options for sync discovery mode.")
         
-        # For discovery, we only need directory paths. Call generate_output_paths with dummy values.
+        # For discovery, we only need directory paths (via .parent) — the language
+        # and extension values here are irrelevant and never used for file output.
         try:
             output_paths_str = generate_output_paths(
                 command="sync",
                 output_locations={},
                 basename=basename,
-                language="python", # Dummy language
-                file_extension=".py", # Dummy extension
+                language="python",
+                file_extension=".py",
                 context_config=context_config,
                 config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
                 path_resolution_mode="cwd",  # Sync resolves paths relative to CWD
@@ -1164,7 +1165,9 @@ def construct_paths(
             # Log the issue for debugging
             if not quiet:
                 console.print(
-                    f"[warning]Warning: Could not determine language for '{command}' command. Using default: {language}[/warning]",
+                    f"[warning]Warning: Could not determine language for '{command}' command. "
+                    f"Defaulting to '{language}'. Pass --language explicitly or ensure prompt "
+                    f"filename ends with _<language>.prompt[/warning]",
                     style="warning"
                 )
     except ValueError as e:

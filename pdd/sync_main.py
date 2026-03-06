@@ -35,6 +35,19 @@ from .template_expander import expand_template
 #   - Double slash (a//b) - requires characters between slashes
 VALID_BASENAME_CHARS = re.compile(r"^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$")
 
+# All languages from language_format.csv that produce code|test|example outputs.
+# Used for prompt discovery when scanning for available language variants.
+SUPPORTED_SYNC_LANGUAGES = [
+    'python', 'java', 'cpp', 'javascript', 'ruby', 'php', 'swift', 'go',
+    'rust', 'kotlin', 'typescript', 'typescriptreact', 'csharp', 'shell',
+    'bash', 'fish', 'zsh', 'powershell', 'perl', 'r', 'matlab', 'lua',
+    'haskell', 'scala', 'groovy', 'dart', 'fsharp', 'assembly', 'fortran',
+    'cobol', 'lisp', 'prolog', 'erlang', 'clojure', 'julia', 'elixir',
+    'pascal', 'vbscript', 'coffeescript', 'objective-c', 'scheme', 'tcl',
+    'd', 'ada', 'nim', 'ocaml', 'lean', 'agda', 'javascriptreact',
+    'svelte', 'vue', 'solidity', 'zig', 'mojo', 'verilog', 'systemverilog',
+]
+
 
 def _validate_basename(basename: str) -> None:
     """Raises UsageError if the basename is invalid."""
@@ -164,9 +177,6 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
 
     contexts = config.get('contexts', {})
 
-    # Common languages to try
-    languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
-
     for context_name, context_config in contexts.items():
         if context_name == 'default':
             continue
@@ -186,7 +196,7 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
         dir_prefix = f"{category}/" if category else ''
 
         # Try each language
-        for lang in languages_to_try:
+        for lang in SUPPORTED_SYNC_LANGUAGES:
             ext = _get_extension_safe(lang)
             template_context = {
                 'name': name_part,
@@ -278,20 +288,18 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                     category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
                     dir_prefix = f"{category}/" if category else ''
 
-                    # Try all known languages
-                    languages_to_try = ['python', 'typescript', 'javascript', 'typescriptreact', 'go', 'rust', 'java']
                     found_lang_to_path: Dict[str, Path] = {}
 
                     # If the template has no {language} placeholder, it's a
-                    # static path — all 7 languages would resolve to the same
+                    # static path — all languages would resolve to the same
                     # file.  Infer the single language from the filename suffix
-                    # instead of iterating (avoids 7x duplicate syncs).
+                    # instead of iterating (avoids duplicate syncs).
                     if '{language}' not in prompt_template and '{ext}' not in prompt_template:
                         full_path = pddrc_parent / prompt_template
                         if full_path.exists():
                             stem = full_path.stem  # e.g. "action_engine_Python"
                             lang_suffix = stem.rsplit('_', 1)[-1].lower()
-                            if lang_suffix in languages_to_try:
+                            if _is_known_language(lang_suffix):
                                 found_lang_to_path[lang_suffix] = full_path
                             else:
                                 # Unrecognised suffix — default to python
@@ -299,7 +307,7 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                         if found_lang_to_path:
                             return _python_first_sorted(found_lang_to_path)
                     else:
-                        for lang in languages_to_try:
+                        for lang in SUPPORTED_SYNC_LANGUAGES:
                             ext = _get_extension_safe(lang)
                             template_context = {
                                 'name': name_part,
@@ -823,6 +831,7 @@ def sync_main(
                             output=str(pdd_files["code"].resolve()),
                             original_prompt_file_path=None,
                             force_incremental_flag=False,
+                            language=resolved_language,
                         )
                         # code_generator_main returns (content, was_incremental, cost, model)
                         pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
