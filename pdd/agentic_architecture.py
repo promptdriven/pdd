@@ -172,9 +172,28 @@ def _parse_related_issues(issue_body: str) -> List[int]:
     return [int(n) for n in refs]
 
 
+def _read_sibling_context_yamls(sibling_dir: Path) -> dict:
+    """Read context YAML files from a sibling project's prompts/_context/ directory."""
+    context_dir = sibling_dir / "prompts" / "_context"
+    result = {}
+    if not context_dir.is_dir():
+        return result
+    for yaml_name in ("data_dictionary.yaml", "api_contracts.yaml"):
+        yaml_path = context_dir / yaml_name
+        if yaml_path.exists():
+            try:
+                content = yaml_path.read_text(encoding="utf-8")
+                if content.strip():
+                    result[yaml_name] = content
+            except IOError:
+                continue
+    return result
+
+
 def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -> str:
     """Scan repo for existing architecture.json files from sibling sub-projects."""
     siblings = {}
+    sibling_contexts: dict = {}
     try:
         children = list(cwd.iterdir())
     except (OSError, IOError):
@@ -190,6 +209,7 @@ def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -
                 arch_data = json.loads(arch_file.read_text(encoding="utf-8"))
                 if isinstance(arch_data, list):
                     siblings[child.name] = arch_data
+                    sibling_contexts[child.name] = _read_sibling_context_yamls(child)
             except (json.JSONDecodeError, IOError):
                 continue
     # Also check root architecture.json if we're generating into a subdir
@@ -200,6 +220,7 @@ def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -
                 arch_data = json.loads(root_arch.read_text(encoding="utf-8"))
                 if isinstance(arch_data, list):
                     siblings["."] = arch_data
+                    sibling_contexts["."] = _read_sibling_context_yamls(cwd)
             except (json.JSONDecodeError, IOError):
                 pass
     if not siblings:
@@ -226,6 +247,30 @@ def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -
             origin_issue = f"#{origin.get('issue_number', '?')}" if isinstance(origin, dict) and origin.get("issue_number") else "-"
             lines.append(f"| {fn} | {fp} | {desc} | {itype} | {origin_issue} |")
         lines.append("")
+
+        # Include full interface details for cross-project dependency resolution
+        interfaces_with_detail = [m for m in modules if isinstance(m.get("interface"), dict)
+                                  and m["interface"].get("type") != "?" and len(m["interface"]) > 1]
+        if interfaces_with_detail:
+            lines.append(f"#### `{dir_name}/` Interface Details")
+            lines.append("")
+            for mod in interfaces_with_detail:
+                fn = mod.get("filename", "?")
+                iface = mod["interface"]
+                lines.append(f"**{fn}** (`{iface.get('type', '?')}`):")
+                lines.append(f"```json\n{json.dumps(iface, indent=2)}\n```")
+                lines.append("")
+
+        # Include sibling context YAML files (data dictionary, API contracts)
+        ctx = sibling_contexts.get(dir_name, {})
+        if ctx:
+            lines.append(f"#### `{dir_name}/` Shared Context Documents")
+            lines.append("")
+            for yaml_name, yaml_content in ctx.items():
+                lines.append(f"**`{dir_name}/prompts/_context/{yaml_name}`:**")
+                lines.append(f"```yaml\n{yaml_content}\n```")
+                lines.append("")
+
     return "\n".join(lines)
 
 

@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main
+from pdd.code_generator_main import code_generator_main, _verify_architecture_conformance
 from pdd.core.cloud import CloudConfig, get_cloud_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
@@ -2540,3 +2540,294 @@ def test_cloud_response_without_examples_used_key(
                         example_info_found = True
         assert cloud_success_found, f"Expected 'Cloud generation successful' in console output"
         assert not example_info_found, f"'Example:' should not appear when examplesUsed key is missing"
+
+
+# === Language parameter passthrough ===
+
+def test_language_param_passed_to_construct_paths(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When language is passed to code_generator_main, it should appear in command_options."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "test_prompt_typescriptreact.prompt"
+    create_file(prompt_file_path, "TSX test prompt")
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "output.tsx")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "TSX test prompt"},
+        {"output": output_file_path_str},
+        "typescriptreact"
+    )
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False,
+        language="typescriptreact",
+    )
+
+    # Verify construct_paths was called with language in command_options
+    call_kwargs = mock_construct_paths_fixture.call_args
+    command_options = call_kwargs.kwargs.get("command_options") or call_kwargs[1].get("command_options")
+    if command_options is None:
+        # Positional arg — construct_paths(input_file_paths, force, quiet, command, command_options, ...)
+        command_options = call_kwargs[0][4] if len(call_kwargs[0]) > 4 else None
+    assert command_options is not None, "command_options should be passed to construct_paths"
+    assert command_options.get("language") == "typescriptreact"
+
+
+def test_language_param_not_set_when_none(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When language is not passed, command_options should not contain 'language' key."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "test_prompt_python.prompt"
+    create_file(prompt_file_path, "Python test prompt")
+
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Python test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), output_file_path_str, None, False,
+    )
+
+    call_kwargs = mock_construct_paths_fixture.call_args
+    command_options = call_kwargs.kwargs.get("command_options") or call_kwargs[1].get("command_options")
+    if command_options is None:
+        command_options = call_kwargs[0][4] if len(call_kwargs[0]) > 4 else None
+    assert command_options is not None
+    assert "language" not in command_options
+
+
+# === Fix 2A: Architecture Conformance Check Tests ===
+
+class TestVerifyArchitectureConformance:
+    """Tests for _verify_architecture_conformance (Fix 2A)."""
+
+    def test_passes_when_all_symbols_present(self, tmp_path):
+        """Conformance check passes when generated code exports all declared symbols."""
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Order", "signature": "class Order(BaseModel)"},
+                            {"name": "User", "signature": "class User(BaseModel)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "from pydantic import BaseModel\n\n"
+            "class Order(BaseModel):\n    id: str\n\n"
+            "class User(BaseModel):\n    name: str\n"
+        )
+
+        # Should not raise
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="models_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_fails_when_symbol_missing(self, tmp_path):
+        """Conformance check raises UsageError when declared symbol is missing."""
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Order", "signature": "class Order(BaseModel)"},
+                            {"name": "User", "signature": "class User(BaseModel)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = "class Order(BaseModel):\n    id: str\n"
+
+        with pytest.raises(click.UsageError, match="User"):
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+    def test_fails_on_camelcase_in_python(self, tmp_path):
+        """Conformance check detects camelCase in Python code."""
+        arch = [
+            {
+                "filename": "utils_Python.prompt",
+                "filepath": "src/utils.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "processData", "signature": "def processData(data)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = "def processData(data):\n    return data\n"
+
+        with pytest.raises(click.UsageError, match="camelCase"):
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="utils_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+    def test_skips_when_no_architecture_file(self, tmp_path):
+        """Conformance check silently skips when architecture.json doesn't exist."""
+        _verify_architecture_conformance(
+            generated_code="def foo(): pass",
+            prompt_name="test_Python.prompt",
+            arch_path=str(tmp_path / "nonexistent.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_skips_when_no_matching_entry(self, tmp_path):
+        """Conformance check silently skips when no matching entry in architecture."""
+        arch = [
+            {
+                "filename": "other_Python.prompt",
+                "filepath": "src/other.py",
+                "interface": {"type": "module", "module": {"functions": []}},
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code="def foo(): pass",
+            prompt_name="missing_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_skips_page_type_modules(self, tmp_path):
+        """Conformance check skips page-type modules (no export symbol checking)."""
+        arch = [
+            {
+                "filename": "dashboard_page_TypeScriptReact.prompt",
+                "filepath": "app/dashboard/page.tsx",
+                "interface": {"type": "page", "page": {"route": "/dashboard"}},
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code="export default function DashboardPage() { return <div/>; }",
+            prompt_name="dashboard_page_TypeScriptReact.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="typescript",
+            verbose=False,
+        )
+
+    def test_typescript_exports_checked(self, tmp_path):
+        """Conformance check validates TypeScript export names."""
+        arch = [
+            {
+                "filename": "api_client_TypeScript.prompt",
+                "filepath": "src/lib/api.ts",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "fetchOrders", "signature": "() => Promise<Order[]>"},
+                            {"name": "createOrder", "signature": "(data: OrderInput) => Promise<Order>"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "export function fetchOrders(): Promise<Order[]> { return fetch('/api/orders'); }\n"
+            "export function createOrder(data: OrderInput): Promise<Order> { return fetch('/api/orders', {method: 'POST'}); }\n"
+        )
+
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="api_client_TypeScript.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="typescript",
+            verbose=False,
+        )
+
+    def test_typescript_missing_export_fails(self, tmp_path):
+        """Conformance check fails when TypeScript is missing a declared export."""
+        arch = [
+            {
+                "filename": "api_client_TypeScript.prompt",
+                "filepath": "src/lib/api.ts",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "fetchOrders", "signature": "() => Promise<Order[]>"},
+                            {"name": "deleteOrder", "signature": "(id: string) => Promise<void>"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = "export function fetchOrders(): Promise<Order[]> { return []; }\n"
+
+        with pytest.raises(click.UsageError, match="deleteOrder"):
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="api_client_TypeScript.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="typescript",
+                verbose=False,
+            )
+
+    def test_skips_on_empty_declared_symbols(self, tmp_path):
+        """Conformance check skips when interface has no declared functions."""
+        arch = [
+            {
+                "filename": "config_Python.prompt",
+                "filepath": "src/config.py",
+                "interface": {"type": "module", "module": {"functions": []}},
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code="FOO = 'bar'\n",
+            prompt_name="config_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )

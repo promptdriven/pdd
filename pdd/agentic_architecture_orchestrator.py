@@ -10,6 +10,7 @@ Step 5b:  Completeness Gate (hard stop if incomplete after 3 retries)
 Steps 6-7: Research dependencies and generate architecture.json
 Step 7b:  Architecture Self-Review (naming, deps, priority consistency)
 Step 8:   Generate .pddrc
+Step 8.5: Generate shared context documents (data dictionary, API contracts)
 Step 9:   Prompt generation
 Step 9b:  Cross-File Consistency Audit (identifier consistency across prompts)
 Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
@@ -65,8 +66,10 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     7: 1000.0,   # Generate (architecture.json + scaffolding)
     7.5: 340.0,  # Architecture self-review
     8: 600.0,    # Generate and validate .pddrc
+    8.5: 600.0,  # Generate context documents (data dictionary, API contracts)
     9: 900.0,    # Generate prompts
     9.5: 600.0,  # Cross-file consistency audit
+    9.7: 600.0,  # Cross-sub-issue reconciliation
     10: 340.0,   # Validate completeness (prompt-level)
     11: 600.0,   # Validate sync (pdd sync --dry-run for each module)
     12: 600.0,   # Validate dependencies (preprocess)
@@ -276,6 +279,80 @@ def _check_validation_result(output: str) -> bool:
     return "VALIDATION_RESULT: VALID" in output
 
 
+def _validate_generated_test_syntax(cwd: Path) -> List[str]:
+    """Scan prompt files for embedded code blocks and validate their syntax.
+
+    Checks Python blocks with ast.parse() and TypeScript/JS blocks with basic
+    brace/bracket matching.  Returns a list of human-readable error strings.
+    Non-blocking — callers should log warnings, not fail the workflow.
+    """
+    import ast as _ast
+    import re as _re
+
+    errors: List[str] = []
+    prompts_dir = cwd / "prompts"
+    if not prompts_dir.exists():
+        return errors
+
+    # Match fenced code blocks: ```python ... ``` or ```typescript ... ```
+    block_pattern = _re.compile(
+        r"```(python|typescript|ts|javascript|js)\s*\n(.*?)```",
+        _re.DOTALL | _re.IGNORECASE,
+    )
+
+    for prompt_file in sorted(prompts_dir.glob("*.prompt")):
+        try:
+            content = prompt_file.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        for match in block_pattern.finditer(content):
+            lang = match.group(1).lower()
+            code = match.group(2)
+
+            if lang == "python":
+                try:
+                    _ast.parse(code)
+                except SyntaxError as exc:
+                    errors.append(
+                        f"{prompt_file.name}: Python syntax error at line {exc.lineno}: {exc.msg}"
+                    )
+            elif lang in ("typescript", "ts", "javascript", "js"):
+                # Lightweight brace/bracket balance check
+                stack: List[str] = []
+                openers = {"(": ")", "[": "]", "{": "}"}
+                closers = {")", "]", "}"}
+                in_string = False
+                string_char = ""
+                for ch in code:
+                    if in_string:
+                        if ch == string_char:
+                            in_string = False
+                        continue
+                    if ch in ("'", '"', '`'):
+                        in_string = True
+                        string_char = ch
+                        continue
+                    if ch in openers:
+                        stack.append(openers[ch])
+                    elif ch in closers:
+                        if not stack or stack[-1] != ch:
+                            errors.append(
+                                f"{prompt_file.name}: TypeScript/JS unmatched '{ch}'"
+                            )
+                            break
+                        stack.pop()
+                if stack and not any(
+                    e.startswith(prompt_file.name) for e in errors
+                ):
+                    errors.append(
+                        f"{prompt_file.name}: TypeScript/JS unclosed bracket(s): "
+                        f"{''.join(stack)}"
+                    )
+
+    return errors
+
+
 def run_agentic_architecture_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -308,6 +385,7 @@ def run_agentic_architecture_orchestrator(
     Steps 6-7: Research dependencies and generate architecture.json
     Step 7b:  Architecture Self-Review (naming, deps, priority consistency)
     Step 8:   Generate .pddrc
+    Step 8.5: Generate shared context documents (data dictionary, API contracts)
     Step 9:   Prompt generation
     Step 9b:  Cross-File Consistency Audit (identifier consistency across prompts)
     Steps 10-12: Validation with in-place fixing (completeness, sync, dependencies)
@@ -409,6 +487,8 @@ def run_agentic_architecture_orchestrator(
         start_step = 2
     elif 9 < last_completed_step < 10:
         start_step = 10
+    elif 8 < last_completed_step < 9:
+        start_step = 9
     elif 7 < last_completed_step < 8:
         start_step = 8
     elif 5 < last_completed_step < 6:
@@ -432,13 +512,20 @@ def run_agentic_architecture_orchestrator(
             console.print(f"Resuming architecture generation for issue #{issue_number}")
             console.print(f"   Steps 1-9 already complete (cached)")
             console.print(f"   Starting Validation Loop (Step 10)")
-    elif last_completed_step >= 8:
-        # If we finished step 8, start at step 9 (prompt generation)
+    elif last_completed_step >= 8.5:
+        # If we finished step 8.5, start at step 9 (prompt generation)
         start_step = 9
         if not quiet:
             console.print(f"Resuming architecture generation for issue #{issue_number}")
-            console.print(f"   Steps 1-8 already complete (cached)")
+            console.print(f"   Steps 1-8.5 already complete (cached)")
             console.print(f"   Starting Step 9 (Prompt Generation)")
+    elif last_completed_step >= 8:
+        # If we finished step 8, start at step 8.5 (context documents)
+        start_step = 9  # Step 8.5 is handled specially after step 8
+        if not quiet:
+            console.print(f"Resuming architecture generation for issue #{issue_number}")
+            console.print(f"   Steps 1-8 already complete (cached)")
+            console.print(f"   Starting Step 8.5 (Context Documents)")
     elif last_completed_step >= 7.5:
         # If we finished step 7b, start at step 8 (.pddrc generation)
         start_step = 8
@@ -459,8 +546,8 @@ def run_agentic_architecture_orchestrator(
             console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
             console.print(f"   Starting from Step {start_step}")
 
-    # Total step count for display (1, 1b, 2, 2b, 3-5, 5b, 6-7, 7b, 8, 9, 9b, 10-13)
-    TOTAL_STEPS = 18
+    # Total step count for display (1, 1b, 2, 2b, 3-5, 5b, 6-7, 7b, 8, 8.5, 9, 9b, 10-13)
+    TOTAL_STEPS = 19
 
     # --- Steps 1-5: Analysis and Design ---
     steps_1_5 = [
@@ -559,6 +646,8 @@ def run_agentic_architecture_orchestrator(
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   → {escape(brief)}")
+            if step_success:
+                console.print(f"  → Step {step_num} complete.")
 
         # --- Step 1b: Complexity Assessment (after Step 1) ---
         if step_num == 1 and step_success and start_step <= 1.5:
@@ -981,6 +1070,8 @@ def run_agentic_architecture_orchestrator(
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   → {escape(brief)}")
+            if step_success:
+                console.print(f"  → Step {step_num} complete.")
 
         # --- Step 7b: Architecture Self-Review (after Step 7) ---
         if step_num == 7 and step_success and start_step <= 7.5 and state.get("last_completed_step", 0) < 7.5:
@@ -1048,6 +1139,73 @@ def run_agentic_architecture_orchestrator(
                 if not quiet:
                     console.print(f"[yellow]Warning: Missing template {review_template_name}, skipping 7b[/yellow]")
 
+    # --- Step 8.5: Generate Shared Context Documents ---
+    if (
+        not skip_prompts
+        and state.get("last_completed_step", 0) >= 8
+        and state.get("last_completed_step", 0) < 8.5
+    ):
+        if not quiet:
+            console.print(f"[bold][Step 8.5/{TOTAL_STEPS}][/bold] Generating shared context documents...")
+
+        ctx_template_name = "agentic_arch_step8_5_context_docs_LLM"
+        ctx_template = load_prompt_template(ctx_template_name)
+        if ctx_template:
+            exclude_keys_8_5 = list(context.keys())
+            ctx_template = preprocess(ctx_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_8_5)
+            ctx_template = ctx_template.replace("{{", "{").replace("}}", "}")
+            formatted_ctx = ctx_template
+            for key, value in context.items():
+                formatted_ctx = formatted_ctx.replace(f'{{{key}}}', str(value))
+
+            timeout_8_5 = ARCH_STEP_TIMEOUTS.get(8.5, 600.0) + timeout_adder
+            ctx_success, ctx_output, ctx_cost, ctx_model = run_agentic_task(
+                instruction=formatted_ctx,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout_8_5,
+                label="step8_5",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+
+            total_cost += ctx_cost
+            model_used = ctx_model
+            state["total_cost"] = total_cost
+
+            context["step8_5_output"] = ctx_output
+            state["step_outputs"]["8_5"] = ctx_output
+            state["last_completed_step"] = 8.5
+
+            # Track created context files
+            created_ctx_files = _parse_files_marker(ctx_output, "FILES_CREATED:")
+            if created_ctx_files:
+                verified_ctx = _verify_files_exist(cwd, created_ctx_files, quiet)
+                for cf in verified_ctx:
+                    if cf not in scaffolding_files:
+                        scaffolding_files.append(cf)
+                state["scaffolding_files"] = scaffolding_files
+                if not quiet and verified_ctx:
+                    console.print(f"   → Context documents created: {len(verified_ctx)}")
+
+            # Verify key context file exists
+            data_dict_path = cwd / "prompts" / "_context" / "data_dictionary.yaml"
+            if data_dict_path.exists():
+                if not quiet:
+                    console.print("   → Data dictionary verified ✓")
+            elif not quiet:
+                console.print("[yellow]Warning: data_dictionary.yaml was not created[/yellow]")
+
+            save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        else:
+            if not quiet:
+                console.print(f"[yellow]Warning: Missing template {ctx_template_name}, skipping 8.5[/yellow]")
+            state["last_completed_step"] = 8.5
+            save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+
     # --- Step 9: Prompt Generation ---
     if not skip_prompts and start_step <= 9:
         if not quiet:
@@ -1113,6 +1271,13 @@ def run_agentic_architecture_orchestrator(
         state["last_completed_step"] = 9
 
         save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+
+        # --- Post-Step-9: Validate embedded code block syntax in prompts ---
+        syntax_errors = _validate_generated_test_syntax(cwd)
+        if syntax_errors and not quiet:
+            console.print("[yellow]Warning: Syntax issues in embedded code blocks:[/yellow]")
+            for err in syntax_errors:
+                console.print(f"   [yellow]• {escape(err)}[/yellow]")
 
     # --- Step 9b: Cross-File Consistency Audit ---
     if not skip_prompts and state.get("last_completed_step", 0) >= 9 and state.get("last_completed_step", 0) < 9.5:
@@ -1183,6 +1348,77 @@ def run_agentic_architecture_orchestrator(
                 console.print(f"[yellow]Warning: Missing template {audit_template_name}, skipping 9b[/yellow]")
             state["last_completed_step"] = 9.5
             save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+
+    # --- Step 9c: Cross-Sub-Issue Reconciliation ---
+    if (
+        not skip_prompts
+        and related_issues
+        and state.get("last_completed_step", 0) >= 9.5
+        and state.get("last_completed_step", 0) < 9.7
+    ):
+        if not quiet:
+            console.print(f"[bold][Step 9c/{TOTAL_STEPS}][/bold] Cross-sub-issue reconciliation...")
+
+        reconcile_template_name = "cross_issue_reconcile_LLM"
+        reconcile_template = load_prompt_template(reconcile_template_name)
+        if reconcile_template:
+            exclude_keys_9c = list(context.keys())
+            reconcile_template = preprocess(reconcile_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys_9c)
+            reconcile_template = reconcile_template.replace("{{", "{").replace("}}", "}")
+            formatted_reconcile = reconcile_template
+            for key, value in context.items():
+                formatted_reconcile = formatted_reconcile.replace(f'{{{key}}}', str(value))
+
+            timeout_9c = ARCH_STEP_TIMEOUTS.get(9.7, 600.0) + timeout_adder
+            reconcile_success, reconcile_output, reconcile_cost, reconcile_model = run_agentic_task(
+                instruction=formatted_reconcile,
+                cwd=cwd,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout_9c,
+                label="step9c",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+
+            total_cost += reconcile_cost
+            model_used = reconcile_model
+            state["total_cost"] = total_cost
+
+            context["step9c_output"] = reconcile_output
+            state["step_outputs"]["9c"] = reconcile_output
+            state["last_completed_step"] = 9.7
+
+            if "RECONCILE_RESULT: CONFLICTS_FIXED" in reconcile_output:
+                modified_files_9c = _parse_files_marker(reconcile_output, "FILES_MODIFIED:")
+                if modified_files_9c:
+                    verified_9c = _verify_files_exist(cwd, modified_files_9c, quiet)
+                    for mf in verified_9c:
+                        if mf not in prompt_files:
+                            prompt_files.append(mf)
+                    state["prompt_files"] = prompt_files
+                if not quiet:
+                    console.print("   → Cross-issue conflicts found and fixed")
+            elif not quiet:
+                console.print("   → All sub-issues are consistent ✓")
+
+            save_result = save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        else:
+            if not quiet:
+                console.print(f"[yellow]Warning: Missing template {reconcile_template_name}, skipping 9c[/yellow]")
+            state["last_completed_step"] = 9.7
+            save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+    elif (
+        not skip_prompts
+        and not related_issues
+        and state.get("last_completed_step", 0) >= 9.5
+        and state.get("last_completed_step", 0) < 9.7
+    ):
+        # No related issues — skip 9c cleanly
+        state["last_completed_step"] = 9.7
+        save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
 
     # --- Validation Steps (10-12) with In-Place Fixing ---
     # Design: Each validation step retries with fixes up to MAX_STEP_RETRIES times.

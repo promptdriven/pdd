@@ -62,7 +62,14 @@ When analyzing modules, consider what already exists in sibling projects. Note e
    - Identify which modules are foundational (no deps) vs. dependent
    - Note interfaces between modules
 
-5. **Establish naming registry (CRITICAL for cross-file consistency):**
+5. **Cross-cutting concern scan (scan existing codebase for guards and middleware):**
+   - Auth guards & middleware: identify existing redirect rules, token validation middleware, route protection patterns
+   - Route protection: which paths are currently protected, what are the redirect destinations (e.g., `/login`, `/auth`)
+   - React effect patterns: look for `useEffect`/`useCallback` dependency cycles in existing context or layout files that new modules must avoid or integrate with
+   - Shared providers: identify existing React context providers (AuthContext, ThemeContext) or Python middleware that wrap routes
+   - Output a "Cross-Cutting Concerns" table listing each concern, the file it lives in, and what new modules must do to integrate (e.g., "add route to bypass list", "wrap component in provider")
+
+6. **Establish naming registry (CRITICAL for cross-file consistency):**
    - Define canonical names for ALL shared identifiers:
      - Database collection/table names (exact casing)
      - API endpoint paths (exact format)
@@ -111,6 +118,12 @@ Your comment should follow this format:
 
 ### Inter-Module Interfaces
 - [module A] -> [module B]: [interface description]
+
+### Cross-Cutting Concerns
+| Concern | File | Type | Impact on New Modules |
+|---------|------|------|-----------------------|
+| [e.g., Auth guard] | [middleware.ts] | [redirect] | [Must add route to unprotected list or wrap in auth check] |
+| [e.g., AuthContext provider] | [app/layout.tsx] | [provider] | [Must be consumed via useAuth() hook] |
 
 ### Naming Registry (Single Source of Truth)
 

@@ -784,7 +784,8 @@ def _run_with_provider(
         return False, str(e), 0.0
 
     if result.returncode != 0:
-        return False, f"Exit code {result.returncode}: {result.stderr}", 0.0
+        error_detail = result.stderr or result.stdout[:500]
+        return False, f"Exit code {result.returncode}: {error_detail}", 0.0
 
     # Parse JSON Output
     try:
