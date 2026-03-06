@@ -75,7 +75,7 @@ export const AnimatedWord: React.FC<AnimatedWordProps> = ({
     fontWeight = ACTIVE_WEIGHT;
     color = ACTIVE_COLOR;
   } else {
-    // Dim transition: easeOutQuad over DIM_DURATION frames
+    // Dim transition: easeOutQuad over DIM_DURATION frames after pop-in completes
     const dimFrame = frame - (wordStartFrame + POP_IN_DURATION);
     const dimProgress = Math.min(Math.max(dimFrame / DIM_DURATION, 0), 1);
     const easedDim = Easing.out(Easing.quad)(dimProgress);

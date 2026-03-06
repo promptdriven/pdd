@@ -6,14 +6,12 @@ export const FPS = 30;
 
 // Subtitle region (bottom 20% of 1080p frame: y 864–1040)
 export const BACKDROP_HEIGHT = 176;
-export const BACKDROP_Y_START = 904; // 1080 - 176
 
 // Backdrop styling
 export const BACKDROP_FILL = "rgba(15, 23, 42, 0.75)";
 export const BACKDROP_BLUR = 8;
 export const BACKDROP_BORDER_COLOR = "rgba(59, 130, 246, 0.15)";
 export const BACKDROP_FEATHER_PX = 16;
-export const TRACK_FADE_IN_FRAMES = 12;
 export const TRACK_FADE_OUT_FRAMES = 20;
 
 // Text container

@@ -21,10 +21,11 @@ export const ArrowIcon: React.FC<ArrowIconProps> = ({ direction, color, size }) 
         marginRight: 12,
       }}
     >
+      {/* Chevron arrow pointing up */}
       <path
-        d="M12 4L12 20M12 4L6 10M12 4L18 10"
+        d="M4 16L12 8L20 16"
         stroke={color}
-        strokeWidth={2.5}
+        strokeWidth={3}
         strokeLinecap="round"
         strokeLinejoin="round"
       />

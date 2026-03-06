@@ -84,7 +84,7 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
         position: "absolute",
         bottom: 0,
         left: 0,
-        width: "100%",
+        width: 1920,
         height: BACKDROP_HEIGHT,
         display: "flex",
         alignItems: "center",

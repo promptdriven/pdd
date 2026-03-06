@@ -7,7 +7,6 @@ import {
   BACKDROP_BORDER_COLOR,
   BACKDROP_HEIGHT,
   BACKDROP_FEATHER_PX,
-  TRACK_FADE_IN_FRAMES,
   TRACK_FADE_OUT_FRAMES,
   TOTAL_FRAMES,
 } from "./constants";
@@ -15,21 +14,12 @@ import {
 export const SubtitleBackdrop: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade in at start, fade out at end
+  // Visible from frame 0, fade out near end
   const opacity = interpolate(
     frame,
-    [
-      0,
-      TRACK_FADE_IN_FRAMES,
-      TOTAL_FRAMES - TRACK_FADE_OUT_FRAMES,
-      TOTAL_FRAMES,
-    ],
-    [0, 1, 1, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
+    [TOTAL_FRAMES - TRACK_FADE_OUT_FRAMES, TOTAL_FRAMES],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
   return (
@@ -40,7 +30,7 @@ export const SubtitleBackdrop: React.FC = () => {
           position: "absolute",
           bottom: BACKDROP_HEIGHT,
           left: 0,
-          width: "100%",
+          width: 1920,
           height: BACKDROP_FEATHER_PX,
           background: `linear-gradient(to bottom, transparent, ${BACKDROP_FILL})`,
           opacity,
@@ -52,7 +42,7 @@ export const SubtitleBackdrop: React.FC = () => {
           position: "absolute",
           bottom: 0,
           left: 0,
-          width: "100%",
+          width: 1920,
           height: BACKDROP_HEIGHT,
           backgroundColor: BACKDROP_FILL,
           backdropFilter: `blur(${BACKDROP_BLUR}px)`,

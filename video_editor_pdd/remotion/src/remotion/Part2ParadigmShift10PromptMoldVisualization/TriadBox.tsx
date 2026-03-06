@@ -254,19 +254,12 @@ export const TriadBox: React.FC<TriadBoxProps> = ({
           borderRadius: BOX_BORDER_RADIUS,
           border: `${BOX_BORDER_WIDTH}px solid ${borderColor}`,
           background: fill,
-          boxShadow: `0 0 20px ${glowColor}`,
+          boxShadow: `0 0 ${20 * (glowOpacity / GLOW_PULSE_MAX)}px ${glowColor}`,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
           gap: 8,
-          opacity: glowOpacity > 0 ? 1 : 1,
-          // Apply pulsing glow via boxShadow
-          ...(glowOpacity > 0
-            ? {
-                boxShadow: `0 0 ${20 * (glowOpacity / GLOW_PULSE_MAX)}px ${glowColor}`,
-              }
-            : {}),
         }}
       >
         {/* Icon */}
