@@ -44,6 +44,35 @@ modules from previous issues that are not listed here.
 <include>pdd/templates/generic/generate_prompt.prompt</include>
 </prompt_template>
 
+% Shared Context Document Includes (CRITICAL — every generated prompt MUST have these)
+
+Step 8.5 generated shared context documents in `prompts/_context/`. Every prompt
+you generate MUST include relevant context documents using <include> tags. These
+ensure pdd sync injects the canonical data model into code generation.
+
+ALL prompts MUST include:
+  <context_data_dictionary>
+  <include>prompts/_context/data_dictionary.yaml</include>
+  </context_data_dictionary>
+
+API endpoint prompts MUST ALSO include:
+  <context_api_contracts>
+  <include>prompts/_context/api_contracts.yaml</include>
+  </context_api_contracts>
+
+Entry point / wiring prompts MUST ALSO include:
+  <context_integration_points>
+  <include>prompts/_context/integration_points.yaml</include>
+  </context_integration_points>
+
+Place includes in a "Shared Context" section AFTER the role paragraph, BEFORE Requirements.
+Add a CONSTRAINTS block: "Use ONLY fields/types from the data dictionary. Do NOT assume
+automatic case conversion."
+
+Before adding includes, verify context files exist:
+  ls prompts/_context/data_dictionary.yaml
+If missing, do NOT add <include> tags for nonexistent files.
+
 % Cross-File Consistency Rules (CRITICAL)
 
 When generating prompt files, you MUST enforce cross-file consistency:
@@ -275,6 +304,11 @@ This example shows the correct prompt file structure and naming.
 {step2b_output}
 </step2b_output>
 
+% Context Documents Output (from Step 8.5)
+<step8_5_output>
+{step8_5_output}
+</step8_5_output>
+
 When generating prompts, you MUST reference real import paths from the codebase scan.
 You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt.
 You MUST follow existing patterns for auth, data fetching, error handling.
@@ -288,6 +322,13 @@ When generating prompts for modules that depend on sibling project modules:
 1. Add a "Cross-Project Dependencies" section in the prompt body
 2. Include the sibling module's API contract (endpoints, function signatures) from the table above
 3. Only use `<pdd-dependency>` tags for modules within THIS project — cross-project deps go in the prompt body
+4. **If sibling Shared Context Documents are shown above** (data_dictionary.yaml, api_contracts.yaml):
+   - For modules that consume sibling APIs: inject the EXACT endpoint schemas from the
+     sibling's api_contracts.yaml into the prompt's "Cross-Project Dependencies" section
+   - For modules that use shared data types: inject the EXACT field definitions from the
+     sibling's data_dictionary.yaml into the prompt's "Data Model Reference" section
+   - Include a note: "These types are defined in sibling project `<dir>/` — use EXACTLY
+     as specified. Do NOT modify field names or types."
 
 % Your Task
 

@@ -33,16 +33,31 @@ You are working on step 9c of the agentic architecture workflow. This step only 
 
 % Your Task
 
+**Step 0: Read sibling context documents from disk (MANDATORY)**
+
+The sibling architecture summary above includes context documents inline. However, you MUST
+also verify by reading the actual files from disk to ensure you have the latest versions:
+
+```bash
+# Find all sibling context directories
+find . -path "*/prompts/_context/data_dictionary.yaml" -not -path "./{target_dir}/*" 2>/dev/null
+find . -path "*/prompts/_context/api_contracts.yaml" -not -path "./{target_dir}/*" 2>/dev/null
+```
+
+Read each file found. These are the canonical data model definitions from sibling sub-issues.
+
 1. **Build a unified type registry across all sub-issues:**
    - Extract all data types, interfaces, and models from the current architecture and sibling architectures
+   - Extract all entities from BOTH your `prompts/_context/data_dictionary.yaml` AND sibling data dictionaries
    - Group types by canonical name (e.g., `User`, `Order`, `Event`)
    - Note which sub-issue defines each type
 
-2. **For shared types, compare field lists:**
+2. **For shared types, compare field lists field-by-field:**
    - If two sub-issues define the same type (e.g., both have a `User` model), verify:
      - Field names match exactly
      - Field types are compatible
      - Required/optional status is consistent
+   - Use the sibling's data_dictionary.yaml as the authoritative source
    - Flag any discrepancy
 
 3. **For cross-language pairs (Python dataclass ↔ TypeScript interface):**
@@ -51,10 +66,13 @@ You are working on step 9c of the agentic architecture workflow. This step only 
    - Verify enum string values are identical
 
 4. **For API contracts:**
+   - Read sibling `api_contracts.yaml` files and compare with yours
    - Verify that API endpoints consumed by one sub-issue match the API endpoints produced by another
    - Check request/response schemas match between producer and consumer
 
 5. **Fix any conflicts found:**
+   - Update YOUR `prompts/_context/data_dictionary.yaml` to match sibling definitions
+   - Update YOUR `prompts/_context/api_contracts.yaml` to match sibling definitions
    - Update prompt files to use consistent type definitions
    - Update architecture.json interface entries if needed
    - Document the resolution in the output

@@ -262,6 +262,25 @@ cat architecture.json | jq -r '.[] | "\(.filename) | \(.interface.type)"'
 - Enum string values differ between language implementations
 - Field count mismatch between cross-language type definitions (off by more than 1 field)
 
+**11. Context Document Include Check**
+
+If `prompts/_context/` directory exists with context files:
+
+```bash
+# Check if context documents exist
+ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml 2>/dev/null
+```
+
+- Every prompt MUST have `<include>prompts/_context/data_dictionary.yaml</include>`
+- API prompts (modules with `interface.type == "api"`) MUST have `<include>prompts/_context/api_contracts.yaml</include>`
+- Entry point / wiring prompts MUST have `<include>prompts/_context/integration_points.yaml</include>`
+
+**Flag as ERROR if:**
+- Context docs exist but prompts don't include them
+
+**Flag as WARNING (not error) if:**
+- Context docs don't exist (older projects or Step 8.5 was skipped)
+
 % Output
 
 **1. Run all validation checks**
@@ -365,6 +384,38 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Verify `external:` dependency references point to modules that exist in the sibling architecture
 - Do NOT flag features as missing if they're implemented in a sibling project
 - DO flag if a cross-project reference points to a non-existent module
+
+**12. Cross-Sub-Issue Data Model Consistency Check**
+
+If sibling architectures above contain **Shared Context Documents** (data_dictionary.yaml),
+perform a data model consistency validation:
+
+```bash
+# Find sibling data dictionaries
+find . -path "*/prompts/_context/data_dictionary.yaml" 2>/dev/null
+```
+
+For every entity in YOUR `prompts/_context/data_dictionary.yaml` that also appears in a
+sibling data dictionary:
+- **Field names** must match exactly (same spelling, same casing)
+- **Field types** must be compatible (e.g., both `str`/`string`, not `str` vs `int`)
+- **Enum values** must be identical strings
+- **Serialization conventions** must match (snake_case vs camelCase)
+
+Similarly, for API contracts:
+```bash
+find . -path "*/prompts/_context/api_contracts.yaml" 2>/dev/null
+```
+
+For every endpoint that appears in both YOUR and a sibling's api_contracts.yaml:
+- Request/response field names and types must match
+- HTTP methods and paths must match
+
+**Flag as ERROR if:**
+- A shared entity has different field names or types across sub-issues
+- A shared enum has different values across sub-issues
+- A shared API endpoint has different request/response schemas across sub-issues
+- Serialization conventions (snake_case/camelCase) differ between sub-issues
 
 % Important
 

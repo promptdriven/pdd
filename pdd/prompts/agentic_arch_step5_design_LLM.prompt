@@ -65,6 +65,11 @@ CRITICAL — Cross-Project Rules:
 3. Mark cross-project dependencies with prefix `[external:<dir>/]` in the dependency graph
 4. If this sub-project needs a shared module that doesn't exist yet, create it and note it should be shared
 5. Read sibling architecture.json files before designing to understand existing interfaces
+6. **If sibling Shared Context Documents are shown above** (data_dictionary.yaml, api_contracts.yaml):
+   - Use the EXACT entity names, field names, and types from sibling data dictionaries
+   - Design modules that consume sibling API endpoints to match the EXACT request/response schemas
+   - When defining interfaces for shared types, use the canonical definitions from sibling context
+   - Do NOT invent new field names for entities already defined in a sibling data dictionary
 
 % Your Task
 
