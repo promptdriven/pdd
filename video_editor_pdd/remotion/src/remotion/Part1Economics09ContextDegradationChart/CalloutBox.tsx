@@ -1,5 +1,6 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, spring } from "remotion";
+import { FPS, CALLOUT_COLOR, CALLOUT_SOURCE_COLOR } from "./constants";
 
 interface CalloutBoxProps {
   appearFrame: number;
@@ -15,7 +16,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({ appearFrame }) => {
   // Slide up with spring
   const slideProgress = spring({
     frame: localFrame,
-    fps: 30,
+    fps: FPS,
     config: { damping: 15, stiffness: 180 },
   });
 
@@ -58,7 +59,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({ appearFrame }) => {
               fontFamily: "Inter, sans-serif",
               fontWeight: 700,
               fontSize: 32,
-              color: "#EF4444",
+              color: CALLOUT_COLOR,
               lineHeight: 1.3,
             }}
           >
@@ -71,7 +72,7 @@ export const CalloutBox: React.FC<CalloutBoxProps> = ({ appearFrame }) => {
               fontFamily: "Inter, sans-serif",
               fontWeight: 400,
               fontSize: 16,
-              color: "#94A3B8",
+              color: CALLOUT_SOURCE_COLOR,
               marginTop: 6,
             }}
           >
