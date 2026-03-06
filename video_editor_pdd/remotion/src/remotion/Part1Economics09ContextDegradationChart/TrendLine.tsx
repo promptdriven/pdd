@@ -1,15 +1,14 @@
 import React, { useMemo } from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-
-const CHART_X = 300;
-const CHART_Y = 150;
-const CHART_W = 1320;
-const CHART_H = 700;
-const BAR_WIDTH = 120;
-const BAR_GAP = 60;
-const NUM_BARS = 5;
-const TOTAL_BARS_WIDTH = NUM_BARS * BAR_WIDTH + (NUM_BARS - 1) * BAR_GAP;
-const BARS_START_X = CHART_X + (CHART_W - TOTAL_BARS_WIDTH) / 2;
+import {
+  WIDTH,
+  HEIGHT,
+  CHART_Y,
+  CHART_H,
+  BARS_START_X,
+  BAR_WIDTH,
+  BAR_GAP,
+} from "./constants";
 
 interface TrendLineProps {
   capabilities: number[];
@@ -33,9 +32,12 @@ export const TrendLine: React.FC<TrendLineProps> = ({
     });
   }, [capabilities]);
 
-  const pathD = useMemo(() => {
+  // Solid path for draw-in animation (dashoffset technique)
+  const solidPathD = useMemo(() => {
     if (points.length < 2) return "";
-    return points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+    return points
+      .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
+      .join(" ");
   }, [points]);
 
   const pathLength = useMemo(() => {
@@ -58,42 +60,77 @@ export const TrendLine: React.FC<TrendLineProps> = ({
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.inOut(Easing.cubic),
-    }
+    },
   );
 
-  const dashOffset = pathLength * (1 - drawProgress);
+  // Use a large dash for the visible portion, gap covers the rest
+  const visibleLength = pathLength * drawProgress;
+  const dashArray = `${visibleLength} ${pathLength}`;
 
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
+        {/* Dashed trend line with draw-in via clipPath */}
+        <defs>
+          <clipPath id="trendLineClip">
+            {/* Clip rectangle that grows with draw progress */}
+            <rect
+              x={points[0]?.x ?? 0}
+              y={0}
+              width={
+                ((points[points.length - 1]?.x ?? 0) - (points[0]?.x ?? 0)) *
+                drawProgress
+              }
+              height={HEIGHT}
+            />
+          </clipPath>
+        </defs>
+
+        {/* Dashed line, revealed progressively by clip */}
         <path
-          d={pathD}
+          d={solidPathD}
           fill="none"
           stroke="#FFFFFF"
           strokeWidth={3}
-          strokeDasharray={`8 6`}
-          strokeDashoffset={dashOffset}
+          strokeDasharray="8 6"
           strokeLinecap="round"
           strokeLinejoin="round"
           opacity={0.6}
+          clipPath="url(#trendLineClip)"
         />
 
-        {/* Dots at each bar top */}
-        {points.map((p, i) => (
-          <circle
-            key={`trend-dot-${i}`}
-            cx={p.x}
-            cy={p.y}
-            r={5}
-            fill="#FFFFFF"
-            opacity={0.6 * drawProgress}
-          />
-        ))}
+        {/* Dots at each bar top — fade in as line reaches them */}
+        {points.map((p, i) => {
+          const pointProgress =
+            i === 0 ? 0 : i / (points.length - 1);
+          const dotOpacity =
+            drawProgress > pointProgress
+              ? interpolate(
+                  drawProgress,
+                  [pointProgress, Math.min(pointProgress + 0.1, 1)],
+                  [0, 0.6],
+                  {
+                    extrapolateLeft: "clamp",
+                    extrapolateRight: "clamp",
+                  },
+                )
+              : 0;
+          return (
+            <circle
+              key={`trend-dot-${i}`}
+              cx={p.x}
+              cy={p.y}
+              r={5}
+              fill="#FFFFFF"
+              opacity={dotOpacity}
+            />
+          );
+        })}
       </svg>
     </AbsoluteFill>
   );
