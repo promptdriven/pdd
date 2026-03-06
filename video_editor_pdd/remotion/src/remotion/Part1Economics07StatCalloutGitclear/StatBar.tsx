@@ -8,7 +8,7 @@ import {
   LABEL_FONT_SIZE,
   STAT_FONT_SIZE,
   ARROW_SIZE,
-  RED,
+  STAT_VALUE_COLOR,
 } from "./constants";
 
 interface StatBarProps {
@@ -36,12 +36,14 @@ export const StatBar: React.FC<StatBarProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
+  // Bar fill: easeOutQuart
   const fill = interpolate(frame, [animStart, animEnd], [0, fillTarget], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.quart),
   });
 
+  // Counter animate: easeOutCubic
   const value = Math.round(
     interpolate(frame, [animStart, animEnd], [0, maxValue], {
       extrapolateLeft: "clamp",
@@ -50,12 +52,13 @@ export const StatBar: React.FC<StatBarProps> = ({
     })
   );
 
+  // Fade in the entire bar row
   const barOpacity = interpolate(frame, [animStart, animStart + 8], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // Arrow pulse: scale oscillates after bar finishes
+  // Arrow pulse: oscillates briefly after bar fill completes
   const pulsePhase = frame - animEnd;
   const arrowScale =
     pulsePhase > 0 && pulsePhase < 30
@@ -66,7 +69,7 @@ export const StatBar: React.FC<StatBarProps> = ({
 
   return (
     <div style={{ opacity: barOpacity, marginBottom: 24 }}>
-      {/* Label row */}
+      {/* Label + stat value row */}
       <div
         style={{
           display: "flex",
@@ -91,7 +94,7 @@ export const StatBar: React.FC<StatBarProps> = ({
               fontFamily: "'Inter', sans-serif",
               fontWeight: 900,
               fontSize: STAT_FONT_SIZE,
-              color: RED,
+              color: STAT_VALUE_COLOR,
             }}
           >
             {prefix}
@@ -101,7 +104,7 @@ export const StatBar: React.FC<StatBarProps> = ({
           <span
             style={{
               fontSize: ARROW_SIZE,
-              color: RED,
+              color: STAT_VALUE_COLOR,
               transform: `scale(${arrowScale})`,
               display: "inline-block",
             }}
@@ -133,5 +136,3 @@ export const StatBar: React.FC<StatBarProps> = ({
     </div>
   );
 };
-
-export default StatBar;

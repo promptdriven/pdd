@@ -1,4 +1,11 @@
 import React from "react";
+import {
+  ACCENT_BAR_WIDTH,
+  CARD_HEIGHT,
+  CARD_BORDER_RADIUS,
+  ACCENT_RED,
+  ACCENT_AMBER,
+} from "./constants";
 
 export const AccentBar: React.FC = () => {
   return (
@@ -7,13 +14,12 @@ export const AccentBar: React.FC = () => {
         position: "absolute",
         left: 0,
         top: 0,
-        bottom: 0,
-        width: 4,
-        borderRadius: "16px 0 0 16px",
-        background: "linear-gradient(to bottom, #EF4444, #F59E0B)",
+        width: ACCENT_BAR_WIDTH,
+        height: CARD_HEIGHT,
+        background: `linear-gradient(to bottom, ${ACCENT_RED}, ${ACCENT_AMBER})`,
+        borderTopLeftRadius: CARD_BORDER_RADIUS,
+        borderBottomLeftRadius: CARD_BORDER_RADIUS,
       }}
     />
   );
 };
-
-export default AccentBar;

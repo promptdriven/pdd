@@ -1,27 +1,27 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-
-const CHART_X = 300;
-const CHART_Y = 150;
-const CHART_W = 1320;
-const CHART_H = 700;
-const AXIS_COLOR = "#94A3B8";
-const AXIS_TITLE_COLOR = "#CBD5E1";
-const GRID_COLOR = "#334155";
-
-const BAR_WIDTH = 120;
-const BAR_GAP = 60;
-const NUM_BARS = 5;
-const TOTAL_BARS_WIDTH = NUM_BARS * BAR_WIDTH + (NUM_BARS - 1) * BAR_GAP;
-const BARS_START_X = CHART_X + (CHART_W - TOTAL_BARS_WIDTH) / 2;
-
-const X_LABELS = ["10%", "25%", "50%", "75%", "100%"];
-const Y_TICKS = [0, 25, 50, 75, 100];
+import {
+  WIDTH,
+  HEIGHT,
+  CHART_X,
+  CHART_Y,
+  CHART_W,
+  CHART_H,
+  BARS_START_X,
+  BAR_WIDTH,
+  BAR_GAP,
+  AXIS_COLOR,
+  AXIS_TITLE_COLOR,
+  GRID_COLOR,
+  AXES_FADE_END,
+  Y_TICKS,
+  BARS,
+} from "./constants";
 
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const axesOpacity = interpolate(frame, [0, 30], [0, 1], {
+  const axesOpacity = interpolate(frame, [0, AXES_FADE_END], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),
@@ -30,9 +30,9 @@ export const ChartAxes: React.FC = () => {
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         {/* Horizontal grid lines */}
@@ -104,10 +104,11 @@ export const ChartAxes: React.FC = () => {
         })}
 
         {/* X-axis tick labels (centered under each bar position) */}
-        {X_LABELS.map((label, i) => {
-          const barCenterX = BARS_START_X + i * (BAR_WIDTH + BAR_GAP) + BAR_WIDTH / 2;
+        {BARS.map((bar, i) => {
+          const barCenterX =
+            BARS_START_X + i * (BAR_WIDTH + BAR_GAP) + BAR_WIDTH / 2;
           return (
-            <g key={`xtick-${label}`} opacity={axesOpacity}>
+            <g key={`xtick-${bar.fillLevel}`} opacity={axesOpacity}>
               <line
                 x1={barCenterX}
                 y1={CHART_Y + CHART_H}
@@ -125,7 +126,7 @@ export const ChartAxes: React.FC = () => {
                 fontWeight={500}
                 textAnchor="middle"
               >
-                {label}
+                {bar.fillLevel}
               </text>
             </g>
           );

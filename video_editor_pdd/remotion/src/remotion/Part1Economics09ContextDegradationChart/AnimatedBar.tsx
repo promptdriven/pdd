@@ -1,9 +1,19 @@
 import React from "react";
-import { AbsoluteFill, useCurrentFrame, spring, interpolate, Easing } from "remotion";
-
-const CHART_X = 300;
-const CHART_Y = 150;
-const CHART_H = 700;
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  spring,
+  interpolate,
+  Easing,
+} from "remotion";
+import {
+  WIDTH,
+  HEIGHT,
+  CHART_Y,
+  CHART_H,
+  FPS,
+  GLOW_PULSE_START,
+} from "./constants";
 
 interface AnimatedBarProps {
   x: number;
@@ -29,7 +39,7 @@ export const AnimatedBar: React.FC<AnimatedBarProps> = ({
   // Bar height spring animation
   const growProgress = spring({
     frame: localFrame,
-    fps: 30,
+    fps: FPS,
     config: { damping: 12, stiffness: 150 },
   });
 
@@ -44,21 +54,29 @@ export const AnimatedBar: React.FC<AnimatedBarProps> = ({
     easing: Easing.out(Easing.quad),
   });
 
-  // Subtle glow pulsing after bars settle (starts around frame 210 globally)
+  // Subtle glow pulsing after all bars settle
   const glowPhase = Math.sin(frame * 0.06);
-  const glowOpacity = frame > 210 ? interpolate(glowPhase, [-1, 1], [0.0, 0.15]) : 0;
+  const glowOpacity =
+    frame > GLOW_PULSE_START
+      ? interpolate(glowPhase, [-1, 1], [0.0, 0.15])
+      : 0;
 
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         <defs>
-          {/* Glow filter for pulsing effect */}
-          <filter id={`glow-${capability}`} x="-50%" y="-50%" width="200%" height="200%">
+          <filter
+            id={`glow-${capability}`}
+            x="-50%"
+            y="-50%"
+            width="200%"
+            height="200%"
+          >
             <feGaussianBlur stdDeviation="8" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />

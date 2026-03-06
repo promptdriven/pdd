@@ -5,7 +5,7 @@ export const WIDTH = 1920;
 export const HEIGHT = 1080;
 export const BG_COLOR = "#0A1628";
 
-// Chart area (from spec)
+// Chart area: (300, 150) to (1620, 850) — 1320px x 700px
 export const CHART_X = 300;
 export const CHART_Y = 150;
 export const CHART_W = 1320;
@@ -35,8 +35,10 @@ export const BARS = [
   { fillLevel: "100%", capability: 15, color: "#EF4444" },
 ];
 
+// Y-axis tick values
+export const Y_TICKS = [0, 25, 50, 75, 100];
+
 // Animation frames (at 30fps)
-export const AXES_FADE_START = 0;
 export const AXES_FADE_END = 30;
 export const BAR_STAGGER_START = 30;
 export const BAR_STAGGER_INTERVAL = 20;
@@ -45,5 +47,6 @@ export const TREND_LINE_START = 140;
 export const TREND_LINE_END = 180;
 export const CALLOUT_START = 180;
 export const CALLOUT_END = 210;
+export const GLOW_PULSE_START = 210;
 export const TOTAL_FRAMES = 900;
 export const FPS = 30;
