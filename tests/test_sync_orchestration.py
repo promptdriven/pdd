@@ -6367,3 +6367,62 @@ def test_validate_imports_dunder_all_augassign_pattern(tmp_path):
     unresolved = _validate_python_imports(code)
     # extra_func is in __all__ (via +=), so it should NOT be flagged
     assert len(unresolved) == 0
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #621: agentic Python sync reports 0% coverage
+# ---------------------------------------------------------------------------
+
+
+def test_agentic_python_sync_measures_real_coverage(orchestration_fixture):
+    """
+    Regression test for issue #621: for Python, agentic test generation success
+    must execute real tests to measure coverage instead of using a synthetic
+    report (which hardcodes coverage=0.0).
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Need tests'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    mock_test.side_effect = None
+    mock_test.return_value = (True, 0.1, "agentic-model", True)
+
+    with patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic, \
+         patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_execute:
+
+        sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+        # Synthetic report hardcodes coverage=0.0 — must NOT be used for Python
+        mock_synthetic.assert_not_called()
+        # Real tests must be executed to measure actual coverage
+        mock_execute.assert_called_once()
+
+
+def test_agentic_non_python_sync_uses_synthetic_report(orchestration_fixture):
+    """
+    Regression test for issue #621 (non-regression side): for non-Python languages
+    (e.g. Go), agentic success should still use the synthetic report since
+    coverage measurement is not supported.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Need tests'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    mock_test.side_effect = None
+    mock_test.return_value = (True, 0.1, "agentic-model", True)
+
+    with patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic, \
+         patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_execute:
+
+        sync_orchestration(basename="calculator", language="go", agentic_mode=True)
+
+        mock_synthetic.assert_called_once()
+        mock_execute.assert_not_called()
