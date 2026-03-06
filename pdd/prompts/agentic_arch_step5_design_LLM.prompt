@@ -59,17 +59,14 @@ If existing reusable modules are listed, reference them as dependencies rather t
 
 {sibling_architectures}
 
-CRITICAL — Cross-Project Rules:
+Note existing sibling modules as available dependencies. Use sibling entity/type names where applicable.
+
+Cross-Project Rules:
 1. DO NOT design modules that duplicate functionality from sibling projects
 2. If a sibling has shared types, auth, or config — reference them as external dependencies
 3. Mark cross-project dependencies with prefix `[external:<dir>/]` in the dependency graph
 4. If this sub-project needs a shared module that doesn't exist yet, create it and note it should be shared
 5. Read sibling architecture.json files before designing to understand existing interfaces
-6. **If sibling Shared Context Documents are shown above** (data_dictionary.yaml, api_contracts.yaml):
-   - Use the EXACT entity names, field names, and types from sibling data dictionaries
-   - Design modules that consume sibling API endpoints to match the EXACT request/response schemas
-   - When defining interfaces for shared types, use the canonical definitions from sibling context
-   - Do NOT invent new field names for entities already defined in a sibling data dictionary
 
 % Your Task
 
@@ -125,18 +122,17 @@ CRITICAL — Cross-Project Rules:
    - Follow standard naming conventions for the tech stack
    - Include appropriate file extensions
 
-8. **Identify integration points (entryPoints) for each module:**
+8. **Identify integration points for each module:**
    - Which existing entry point file must be updated to wire this module in (e.g., main.py, app/layout.tsx, routes/index.ts, middleware.ts)
    - What registration/import code is needed (route registration, layout inclusion, config addition)
    - Whether index pages or redirects are needed for nested routes
-   - Populate the `entryPoints` array in architecture.json for each module that exports a callable (API route, page, Cloud Function, middleware)
    - Flag any module that has NO entry point — it may be an orphan that will never execute at runtime
 
 9. **Guard and cross-cutting concern awareness (from Step 2 analysis):**
-   - Check the Cross-Cutting Concerns table from Step 2 output
+   - Check the Cross-Cutting Concerns from Step 2 output
    - For each new page/route module: if the route will be intercepted by an auth guard, either create a module to update the guard bypass list or document how the module integrates with the guard
    - If a module uses shared context (e.g., AuthContext, ThemeContext): add the context provider module as a dependency and note any required modifications
-   - If existing middleware or layout files need updating for the new module, add an entryPoint entry specifying the required change
+   - If existing middleware or layout files need updating for the new module, document the required change in the Integration Points table
 
 % Output
 

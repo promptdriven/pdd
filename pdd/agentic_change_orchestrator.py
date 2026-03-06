@@ -455,6 +455,29 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
         return ""
 
 
+def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
+    """Check if an open PR already exists for this issue's branch.
+
+    Returns the PR URL if found, None otherwise.
+    """
+    branch = f"change/issue-{issue_number}"
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--repo", f"{repo_owner}/{repo_name}",
+             "--search", f"head:{branch}", "--state", "open",
+             "--json", "url", "--limit", "1"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if data and isinstance(data, list) and data[0].get("url"):
+            return data[0]["url"]
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        pass
+    return None
+
+
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -487,6 +510,13 @@ def run_agentic_change_orchestrator(
     state, loaded_gh_id = load_workflow_state(
         cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
     )
+
+    # Guard: if an open PR already exists for this issue, return early
+    existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
+    if existing_pr:
+        if not quiet:
+            console.print(f"[yellow]PR already exists for issue #{issue_number}: {existing_pr}[/yellow]")
+        return True, f"PR already exists: {existing_pr}", 0.0, "unknown", []
 
     # Check for stale state: if issue was updated since state was saved, start fresh
     if state is not None and issue_updated_at:
@@ -677,22 +707,16 @@ def run_agentic_change_orchestrator(
         state["model_used"] = model_used
 
         if not step_success:
-            # Post a fallback comment on the issue for the failed step
-            post_step_comment(
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                issue_number=issue_number,
-                step_num=step_num,
-                total_steps=13,
-                description=description,
-                output=step_output,
-                cwd=cwd,
-            )
-
             # Track consecutive provider failures for early abort
             if "All agent providers failed" in step_output:
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
+                    post_step_comment(
+                        repo_owner=repo_owner, repo_name=repo_name,
+                        issue_number=issue_number, step_num=step_num,
+                        total_steps=13, description=description,
+                        output=step_output, cwd=cwd,
+                    )
                     state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
                     save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                     return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, []
@@ -701,6 +725,12 @@ def run_agentic_change_orchestrator(
 
             stop_reason = _check_hard_stop(step_num, step_output)
             if stop_reason:
+                post_step_comment(
+                    repo_owner=repo_owner, repo_name=repo_name,
+                    issue_number=issue_number, step_num=step_num,
+                    total_steps=13, description=description,
+                    output=step_output, cwd=cwd,
+                )
                 if not quiet:
                     console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
                 state["last_completed_step"] = step_num
@@ -811,8 +841,6 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
-            if not s11_success:
-                post_step_comment(repo_owner, repo_name, issue_number, 11, 13, "Identify issues", s11_output, cwd)
             if "No Issues Found" in s11_output:
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
@@ -833,8 +861,6 @@ def run_agentic_change_orchestrator(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
-            if not s12_success:
-                post_step_comment(repo_owner, repo_name, issue_number, 12, 13, "Fix issues", s12_output, cwd)
             previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
             state["previous_fixes"] = previous_fixes
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)

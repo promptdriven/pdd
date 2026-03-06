@@ -24,8 +24,7 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
 
 % Architecture
 
-Note: The architecture below contains ONLY the modules being generated in this run.
-If you see modules with `origin` metadata, they were created or updated by the current issue.
+The architecture below is already scoped to only the modules being generated in this run.
 Generate prompt files ONLY for the modules shown below — do NOT generate prompts for
 modules from previous issues that are not listed here.
 
@@ -50,11 +49,11 @@ Step 8.5 generated shared context documents in `prompts/_context/`. Every prompt
 you generate MUST include relevant context documents using &lt;include&gt; tags. These
 ensure pdd sync injects the canonical data model into code generation.
 
-Before adding includes, verify context files exist:
+Step 8.5 generated these files. You MUST include them. The `ls` check below is a safety
+net in case Step 8.5 failed — if a file truly doesn't exist, skip only that file.
 ```bash
 ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml prompts/_context/integration_points.yaml 2>/dev/null
 ```
-If a file does NOT exist, do NOT add &lt;include&gt; tags for it.
 
 For files that DO exist, EVERY prompt MUST contain a "Shared Context" section placed
 AFTER the role paragraph and BEFORE the Requirements section. The section MUST use
@@ -99,7 +98,7 @@ Shared Context section to each one. This check is non-negotiable.
 
 When generating prompt files, you MUST enforce cross-file consistency:
 
-1. **Use the Naming Registry from Step 2:**
+1. **Use the canonical names from the data dictionary and context documents (Step 8.5 output):**
    - Every prompt must use the EXACT canonical names for collections, endpoints, types, env vars
    - If two prompts reference the same database collection, they must use identical names
    - If two prompts import the same hook/utility, they must use identical import paths
@@ -117,7 +116,7 @@ When generating prompt files, you MUST enforce cross-file consistency:
 
 4. **Environment variable documentation:**
    - If a module needs env vars, the prompt must list them in a "Required Environment" section
-   - Use the exact variable names from the naming registry
+   - Use the exact variable names from the context documents
 
 5. **Testing strategy documentation:**
    - If a module depends on external services (auth, databases, third-party APIs),
@@ -127,6 +126,8 @@ When generating prompt files, you MUST enforce cross-file consistency:
      - Error scenarios that tests should cover
 
 % Interface Contract Table (Auto-Extracted from architecture.json) — CRITICAL
+
+This table is a working artifact you build in your reasoning — it is NOT saved to disk. Step 9b will independently verify cross-file consistency.
 
 Before writing ANY prompt file, you MUST build a flat Interface Contract Table from the architecture.json `interface` fields:
 
@@ -200,7 +201,6 @@ Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
 **Schema source priority:**
    - `prompts/_context/data_dictionary.yaml` is authoritative when it exists
    - architecture.json `interface` fields are authoritative for function signatures
-   - Step 2 naming registry is authoritative for collection/table names
 
 % Cross-Language Field Name Mapping (for multi-language projects)
    - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
@@ -224,27 +224,6 @@ Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
    - If a module depends on an auth-tagged module:
      - Reference the auth module's interface contract (token types, verification functions)
      - Include token usage patterns in the prompt's "Dependency API Reference" section
-
-% Model Extension Awareness (extends field in architecture.json)
-
-When generating a prompt for a base data model module, scan architecture.json for ALL modules that have an `extends` entry targeting this module. If found:
-
-1. Inject a "Model Extensions" section into the base model's prompt listing the additional fields from dependent modules:
-   ```
-   ## Model Extensions (from dependent modules)
-
-   The following modules extend this data model with additional fields.
-   The base model MUST include these fields to support dependent functionality:
-
-   ### Extended by: [extending_module_filename]
-   | Field Name | Type | Default | Added By |
-   |-----------|------|---------|----------|
-   | [name]    | [type] | [default or "required"] | [module filename] |
-   ```
-
-2. The prompt MUST include: "Include ALL extension fields listed above in the base model definition. These fields are required by dependent modules."
-
-3. If a module's `extends` references a `target_class` that doesn't exist in the target module's interface, flag it as an error.
 
 % Key Rules
 
@@ -381,6 +360,4 @@ For each module:
 Remember:
 - Check `.pddrc` for the correct prompt directory before creating files
 - Filename comes directly from architecture.json
-- Filenames MUST use valid language suffixes: `TypeScript`, `TypeScriptReact`, `Python`, etc.
-  - ❌ WRONG: `_NextJS.prompt`, `_React.prompt`, `_Node.prompt`
-  - ✅ CORRECT: `_TypeScript.prompt`, `_TypeScriptReact.prompt`, `_Python.prompt`
+- Filenames MUST use valid language suffixes (see architecture schema for full list). Common: `_TypeScript.prompt`, `_TypeScriptReact.prompt`, `_Python.prompt`. Never use framework names like `_NextJS` or `_React`.
