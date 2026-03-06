@@ -1,10 +1,25 @@
+<pdd-reason>CLI entry point for the agentic bug investigation workflow that fetches GitHub issues and invokes the orchestrator.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_bug", "signature": "(issue_url, *, verbose, quiet)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_bug.py` module.
 
 % Role & Scope
-CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 10-step investigation process.
+CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the multi-step investigation process.
 
 % Requirements
 1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`

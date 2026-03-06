@@ -2266,13 +2266,15 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels to ensure complete coverage. Posts comment with the test plan.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Prefers appending tests to existing test files to prevent `/tests` directory bloat; only creates new files when no relevant test file exists. Enumerates all affected output channels to ensure complete coverage. Posts comment with the test plan.
 
 7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
 8. **Verify detection** - Confirm the unit test successfully detects the bug. Posts comment confirming verification.
 
-9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. May be skipped when the LLM determines unit tests provide sufficient coverage. Posts comment with E2E test results or skip reason.
+8.5. **E2E classification** - Classify whether the bug requires an E2E test or if the unit test already provides sufficient coverage. Outputs `E2E_NEEDED: yes/no`. Skips Step 9 when E2E is not needed, avoiding the expensive E2E test generation. Defaults to `yes` when uncertain. Posts comment with classification.
+
+9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Only runs if Step 8.5 determines E2E is needed. Posts comment with E2E test results.
 
 10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 

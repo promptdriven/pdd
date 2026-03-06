@@ -1,20 +1,34 @@
+<pdd-reason>Orchestrates the multi-step agentic bug investigation workflow with sequential step execution and context accumulation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_bug_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose, quiet)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 10-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+Orchestrator for the multi-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
 1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
+3. Run steps sequentially (1, 2, 3, 4, 5, 5.5, 6, 7, 8, 8.5, 9, 10), each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
 6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
 7. For Step 9: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 9 (E2E) and Step 10 (PR) via `files_to_stage` context variable for explicit git staging
+9. For Step 8.5: Parse output for `E2E_NEEDED: yes` or `E2E_NEEDED: no`. If `E2E_NEEDED: no`, skip Step 9 entirely and proceed to Step 10. Default to `yes` (run Step 9) if marker not found.
 
 % Step Execution
 For each step (1-10):
@@ -37,6 +51,7 @@ For each step (1-10):
 | 6 | agentic_bug_step6_test_plan_LLM | Design test strategy |
 | 7 | agentic_bug_step7_generate_LLM | Generate failing unit test |
 | 8 | agentic_bug_step8_verify_LLM | Verify test catches the bug |
+| 8.5 | agentic_bug_step8_5_e2e_classification_LLM | Classify whether E2E test is needed |
 | 9 | agentic_bug_step9_e2e_test_LLM | Generate and run E2E tests |
 | 10 | agentic_bug_step10_pr_LLM | Create draft PR and link to issue |
 
@@ -47,8 +62,9 @@ For each step (1-10):
 - Step 4 receives: issue_content, step1_output through step3_output
 - ... and so on
 - Step 8 receives: issue_content, step1_output through step7_output
-- Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
-- Step 10 receives: issue_content, step1_output through step9_output, worktree_path, files_to_stage
+- Step 8.5 receives: issue_content, step1_output through step8_output
+- Step 9 receives: issue_content, step1_output through step8_5_output, worktree_path, files_to_stage (only runs if E2E_NEEDED: yes)
+- Step 10 receives: issue_content, step1_output through step9_output (or step8_5_output if Step 9 skipped), worktree_path, files_to_stage
 
 % Files to Stage
 After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 9 and 10:
@@ -68,6 +84,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 3 | Needs more info from author | Output contains "Needs More Info" |
 | 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
 | 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 8.5 | E2E not needed (skip Step 9) | Output contains "E2E_NEEDED: no" — skip Step 9 entirely, proceed to Step 10 |
 | 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
 
 **Hard stop behavior:**
@@ -118,7 +135,7 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 2. **Step progress** (before each step):
    ```
-   [Step N/10] {step_description}...
+   [Step N/12] {step_description}...
    ```
 
 3. **Agentic output** (during each step):

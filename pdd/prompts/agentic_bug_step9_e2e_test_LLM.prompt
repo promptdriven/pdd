@@ -4,10 +4,11 @@
 
 % Context
 
-You are working on step 9 of 11 in an agentic bug investigation workflow. Previous steps have:
+You are working on step 9 of 12 in an agentic bug investigation workflow. Previous steps have:
 - Identified the root cause (Step 5)
 - Generated a failing unit test (Step 7)
 - Verified the unit test correctly catches the bug (Step 8)
+- Classified whether an E2E test is needed (Step 8.5)
 
 Now you need to create E2E tests that verify the bug at a higher level of integration.
 
@@ -58,6 +59,10 @@ Now you need to create E2E tests that verify the bug at a higher level of integr
 <step8_output>
 {step8_output}
 </step8_output>
+
+<step8_5_output>
+{step8_5_output}
+</step8_5_output>
 
 % Worktree Information
 
