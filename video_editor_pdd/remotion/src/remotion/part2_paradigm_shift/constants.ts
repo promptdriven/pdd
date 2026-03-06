@@ -17,7 +17,7 @@ export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "Part2ParadigmShiftMain",
+    id: "part2_paradigm_shift_main",
     desc: "Paradigm shift section with background video, narration audio, and subtitles",
   },
 ];

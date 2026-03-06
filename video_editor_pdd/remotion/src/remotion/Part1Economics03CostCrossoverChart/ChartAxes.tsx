@@ -173,7 +173,7 @@ export const ChartAxes: React.FC = () => {
           Cost per Change
         </text>
 
-        {/* Y-axis labels: $0 at bottom */}
+        {/* Y-axis label: $0 at bottom */}
         <text
           x={CHART_X - 16}
           y={CHART_Y + CHART_H + 4}
@@ -187,7 +187,7 @@ export const ChartAxes: React.FC = () => {
           $0
         </text>
 
-        {/* Y-axis labels: percentage markers */}
+        {/* Y-axis percentage markers */}
         {GRID_FRACTIONS.map((frac) => {
           const y = CHART_Y + CHART_H * (1 - frac);
           return (

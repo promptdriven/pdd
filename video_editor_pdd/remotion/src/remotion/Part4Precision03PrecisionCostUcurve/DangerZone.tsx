@@ -4,6 +4,8 @@ import {
   CHART_RIGHT,
   CHART_TOP,
   CHART_BOTTOM,
+  LEFT_DANGER,
+  RIGHT_DANGER,
   FONT_FAMILY,
 } from "./constants";
 
@@ -25,15 +27,9 @@ export const DangerZone: React.FC<DangerZoneProps> = ({
   const chartWidth = CHART_RIGHT - CHART_LEFT;
   const chartHeight = CHART_BOTTOM - CHART_TOP;
 
-  // Left zone: x 0–0.185, Right zone: x 0.815–1.0
-  const x =
-    side === "left"
-      ? CHART_LEFT
-      : CHART_LEFT + chartWidth * 0.815;
-  const width =
-    side === "left"
-      ? chartWidth * 0.185
-      : chartWidth * 0.185;
+  const zone = side === "left" ? LEFT_DANGER : RIGHT_DANGER;
+  const x = CHART_LEFT + chartWidth * zone.xStart;
+  const width = chartWidth * (zone.xEnd - zone.xStart);
 
   return (
     <>

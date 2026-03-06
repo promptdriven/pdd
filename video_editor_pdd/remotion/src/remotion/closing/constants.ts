@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 21.072;
+export const SECTION_DURATION_SECONDS = 21.0;
 export const SECTION_DURATION_FRAMES = Math.round(
   SECTION_FPS * SECTION_DURATION_SECONDS,
 );
@@ -10,31 +10,31 @@ const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.0),
-  VISUAL_00_END: s2f(5.0),
-  VISUAL_01_START: s2f(5.0),
-  VISUAL_01_END: s2f(11.0),
-  VISUAL_02_START: s2f(18.5),
-  VISUAL_02_END: s2f(21.072),
+  VISUAL_00_END: s2f(8.0),
+  VISUAL_01_START: s2f(8.0),
+  VISUAL_01_END: s2f(14.0),
+  VISUAL_02_START: s2f(17.0),
+  VISUAL_02_END: s2f(21.0),
 };
 
 export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "ClosingTitleCard",
-    desc: "Title card introducing the closing section",
+    id: "closing_split_darning_vs_molding",
+    desc: "Split view comparing darning cost growth vs molding flat cost",
   },
   {
     start: BEATS.VISUAL_01_START,
     end: BEATS.VISUAL_01_END,
-    id: "ClosingStatCalloutRoi",
+    id: "closing_stat_callout_roi",
     desc: "3-5x faster iteration with generation, zero residual debt",
   },
   {
     start: BEATS.VISUAL_02_START,
     end: BEATS.VISUAL_02_END,
-    id: "ClosingSplitDarningVsMolding",
-    desc: "Split view comparing darning cost growth vs molding flat cost",
+    id: "closing_title_card",
+    desc: "Title card introducing the closing section",
   },
 ];
 

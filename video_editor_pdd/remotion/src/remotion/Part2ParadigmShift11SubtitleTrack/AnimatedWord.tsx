@@ -21,7 +21,7 @@ import {
   WORD_SPACING,
 } from "./constants";
 
-type WordState = "current" | "recent" | "older" | "exiting";
+export type WordState = "current" | "recent" | "older" | "exiting";
 
 interface AnimatedWordProps {
   word: string;

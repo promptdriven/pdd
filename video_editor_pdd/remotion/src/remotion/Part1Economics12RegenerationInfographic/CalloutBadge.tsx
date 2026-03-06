@@ -28,14 +28,14 @@ export const CalloutBadge: React.FC<CalloutBadgeProps> = ({
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.out(Easing.cubic),
-    }
+    },
   );
 
   const opacity = interpolate(
     frame,
     [appearStart, appearEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
   if (frame < appearStart) return null;

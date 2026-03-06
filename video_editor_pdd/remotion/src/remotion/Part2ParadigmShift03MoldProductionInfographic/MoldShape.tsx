@@ -155,7 +155,6 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
           opacity={wrenchScale}
         >
           <g transform="translate(-16, -16)">
-            {/* Wrench SVG path */}
             <path
               d="M6.3 12.3l10.7 10.7 2-2L8.3 10.3c.3-.9.5-1.8.5-2.8C8.8 3.4 5.4 0 1.3 0L5 3.7 3.7 5 0 1.3c0 4.1 3.4 7.5 7.5 7.5 1-.1 1.9-.2 2.8-.5zM25.7 19.7L15 9l2-2 10.7 10.7c1.2 1.2 1.2 3.1 0 4.2-1.2 1.2-3.1 1.2-4.2 0z"
               fill={FIX_COLOR}

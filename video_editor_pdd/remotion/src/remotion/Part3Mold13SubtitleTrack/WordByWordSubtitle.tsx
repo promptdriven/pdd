@@ -1,5 +1,5 @@
 import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import { AnimatedWord } from "./AnimatedWord";
 
 import {
@@ -13,6 +13,7 @@ import {
   BACKDROP_HEIGHT,
   RECENT_WINDOW_FRAMES,
   SUBTITLE_START_FRAME,
+  WINDOW_SLIDE_DURATION,
 } from "./constants";
 import type { WordEntry } from "./constants";
 
@@ -67,6 +68,21 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
       ? appearedWords.slice(Math.max(0, windowStart - 1), windowStart)
       : [];
 
+  // Smooth lateral scroll offset (easeInOutQuad) when window shifts
+  let scrollOffset = 0;
+  if (visibleWords.length > 0 && windowStart > 0) {
+    const latestWordStart =
+      visibleWords[visibleWords.length - 1].startFrame - SUBTITLE_START_FRAME;
+    const slideProgress = interpolate(
+      frame,
+      [latestWordStart, latestWordStart + WINDOW_SLIDE_DURATION],
+      [0, 1],
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    );
+    const easedSlide = Easing.inOut(Easing.quad)(slideProgress);
+    scrollOffset = interpolate(easedSlide, [0, 1], [-8, 0]);
+  }
+
   // Determine word state for each visible word
   const getWordState = (
     w: WordEntry,
@@ -105,6 +121,8 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
           flexWrap: "wrap",
           alignItems: "center",
           justifyContent: "center",
+          transform: `translateX(${scrollOffset}px)`,
+          willChange: "transform",
         }}
       >
         {/* Exiting words (scrolled out of window) */}

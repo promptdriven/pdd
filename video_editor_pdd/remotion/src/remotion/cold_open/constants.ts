@@ -17,7 +17,7 @@ export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "ColdOpenSection",
+    id: "cold_open_title_card",
     desc: "Cold open with background video, narration audio, and subtitles",
   },
 ];

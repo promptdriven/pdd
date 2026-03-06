@@ -25,32 +25,32 @@ export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "Part3MoldTitleCard",
-    desc: "Title card introducing Part 3: The Mold Has Three Parts",
+    id: "part3_mold_split_prompt_vs_code",
+    desc: "Split view comparing prompt specification to generated code",
   },
   {
     start: BEATS.VISUAL_01_START,
     end: BEATS.VISUAL_01_END,
-    id: "Part3MoldSplitPromptVsCode",
-    desc: "Split view comparing prompt specification to generated code",
+    id: "part3_mold_stat_callout_coderabbit",
+    desc: "CodeRabbit stat: 1.7x more issues in AI-generated code",
   },
   {
     start: BEATS.VISUAL_02_START,
     end: BEATS.VISUAL_02_END,
-    id: "Part3MoldStatCalloutCoderabbit",
-    desc: "CodeRabbit stat: 1.7x more issues in AI-generated code",
+    id: "part3_mold_stat_callout_dora",
+    desc: "DORA metrics: AI with tests yields delivery amplification",
   },
   {
     start: BEATS.VISUAL_03_START,
     end: BEATS.VISUAL_03_END,
-    id: "Part3MoldStatCalloutDora",
-    desc: "DORA metrics: AI with tests yields delivery amplification",
+    id: "part3_mold_stat_callout_nl_context",
+    desc: "41% improved code generation with natural language context",
   },
   {
     start: BEATS.VISUAL_04_START,
     end: BEATS.VISUAL_04_END,
-    id: "Part3MoldStatCalloutNlContext",
-    desc: "41% improved code generation with natural language context",
+    id: "part3_mold_title_card",
+    desc: "Title card introducing Part 3: The Mold Has Three Parts",
   },
 ];
 

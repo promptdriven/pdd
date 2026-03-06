@@ -23,26 +23,26 @@ export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "Part1EconomicsStatCalloutGithub",
-    desc: "GitHub reports developers using Copilot accept nearly 30% of suggestions",
+    id: "part1_economics_split_perception_vs_reality",
+    desc: "Developers feel 30% more productive but quality metrics tell opposite story",
   },
   {
     start: BEATS.VISUAL_01_START,
     end: BEATS.VISUAL_01_END,
-    id: "Part1EconomicsStatCalloutUplevel",
-    desc: "Uplevel found AI-assisted engineers write 26% more code per week",
+    id: "part1_economics_stat_callout_gitclear",
+    desc: "GitClear analysis of 150M lines shows code churn has doubled",
   },
   {
     start: BEATS.VISUAL_02_START,
     end: BEATS.VISUAL_02_END,
-    id: "Part1EconomicsStatCalloutGitclear",
-    desc: "GitClear analysis of 150M lines shows code churn has doubled",
+    id: "part1_economics_stat_callout_github",
+    desc: "GitHub reports developers using Copilot accept nearly 30% of suggestions",
   },
   {
     start: BEATS.VISUAL_03_START,
     end: BEATS.VISUAL_03_END,
-    id: "Part1EconomicsSplitPerceptionVsReality",
-    desc: "Developers feel 30% more productive but quality metrics tell opposite story",
+    id: "part1_economics_stat_callout_uplevel",
+    desc: "Uplevel found AI-assisted engineers write 26% more code per week",
   },
 ];
 

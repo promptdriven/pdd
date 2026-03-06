@@ -23,26 +23,26 @@ export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "Part5CompoundTitleCard",
-    desc: "Title card introducing Part 5: Compound Returns",
+    id: "part5_compound_split_patching_vs_pdd",
+    desc: "Split view comparing patching debt accumulation vs generation debt resets",
   },
   {
     start: BEATS.VISUAL_01_START,
     end: BEATS.VISUAL_01_END,
-    id: "Part5CompoundStatCalloutMaintenance",
-    desc: "80-90% of software cost is maintenance, not features or launch",
+    id: "part5_compound_stat_callout_cisq",
+    desc: "$2.41T cost of poor software quality, technical debt is #1 driver",
   },
   {
     start: BEATS.VISUAL_02_START,
     end: BEATS.VISUAL_02_END,
-    id: "Part5CompoundStatCalloutCisq",
-    desc: "$2.41T cost of poor software quality, technical debt is #1 driver",
+    id: "part5_compound_stat_callout_maintenance",
+    desc: "80-90% of software cost is maintenance, not features or launch",
   },
   {
     start: BEATS.VISUAL_03_START,
     end: BEATS.VISUAL_03_END,
-    id: "Part5CompoundSplitPatchingVsPdd",
-    desc: "Split view comparing patching debt accumulation vs generation debt resets",
+    id: "part5_compound_title_card",
+    desc: "Title card introducing Part 5: Compound Returns",
   },
 ];
 

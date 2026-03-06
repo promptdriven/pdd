@@ -33,8 +33,11 @@ import {
   CROSSOVER_LABEL_END,
   CROSSOVER_PX_X,
   CROSSOVER_PX_Y,
+  CENTER_X,
+  CENTER_Y,
   ZOOM_START,
   ZOOM_END,
+  ZOOM_SCALE_TARGET,
 } from "./constants";
 
 export const defaultPart1Economics03CostCrossoverChartProps = {};
@@ -42,11 +45,11 @@ export const defaultPart1Economics03CostCrossoverChartProps = {};
 export const Part1Economics03CostCrossoverChart: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Act G zoom effect — zooms to crossover point
-  const zoomScale = interpolate(
+  // Act G zoom — scale toward crossover point, translating to center it on screen
+  const zoomProgress = interpolate(
     frame,
     [ZOOM_START, ZOOM_END],
-    [1.0, 2.5],
+    [0, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -54,28 +57,9 @@ export const Part1Economics03CostCrossoverChart: React.FC = () => {
     },
   );
 
-  // Translate to keep crossover point centered during zoom
-  const translateX = interpolate(
-    frame,
-    [ZOOM_START, ZOOM_END],
-    [0, -(CROSSOVER_PX_X - 960) * (zoomScale - 1)],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    },
-  );
-
-  const translateY = interpolate(
-    frame,
-    [ZOOM_START, ZOOM_END],
-    [0, -(CROSSOVER_PX_Y - 540) * (zoomScale - 1)],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    },
-  );
+  const zoomScale = 1.0 + (ZOOM_SCALE_TARGET - 1.0) * zoomProgress;
+  const translateX = (CENTER_X - CROSSOVER_PX_X) * zoomProgress;
+  const translateY = (CENTER_Y - CROSSOVER_PX_Y) * zoomProgress;
 
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>

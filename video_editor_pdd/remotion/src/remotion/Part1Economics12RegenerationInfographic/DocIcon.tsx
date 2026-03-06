@@ -1,5 +1,6 @@
 import React from "react";
 import { useCurrentFrame, spring, interpolate } from "remotion";
+import { MUTED } from "./constants";
 
 interface DocIconProps {
   x: number;
@@ -38,7 +39,7 @@ export const DocIcon: React.FC<DocIconProps> = ({
     frame,
     [appearStart + 20, appearEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
   if (frame < appearStart) return null;
@@ -108,19 +109,14 @@ export const DocIcon: React.FC<DocIconProps> = ({
                     borderRadius: 2,
                   }}
                 />
-              )
+              ),
             )}
           </div>
         )}
       </div>
 
       {/* Labels */}
-      <div
-        style={{
-          textAlign: "center",
-          opacity: labelOpacity,
-        }}
-      >
+      <div style={{ textAlign: "center", opacity: labelOpacity }}>
         <div
           style={{
             fontFamily: "Inter, sans-serif",
@@ -136,7 +132,7 @@ export const DocIcon: React.FC<DocIconProps> = ({
             fontFamily: "Inter, sans-serif",
             fontWeight: 400,
             fontSize: 18,
-            color: "#94A3B8",
+            color: MUTED,
             marginTop: 4,
           }}
         >

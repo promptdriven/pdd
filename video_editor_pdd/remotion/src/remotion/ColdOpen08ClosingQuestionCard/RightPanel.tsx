@@ -10,6 +10,7 @@ import {
   PANEL_FADE_END,
   FADE_OUT_START,
   FADE_OUT_END,
+  MIN_INITIAL_OPACITY,
 } from "./constants";
 
 export const RightPanel: React.FC = () => {
@@ -18,7 +19,7 @@ export const RightPanel: React.FC = () => {
   const fadeIn = interpolate(
     frame,
     [PANEL_FADE_START, PANEL_FADE_END],
-    [0, 1],
+    [MIN_INITIAL_OPACITY, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -52,7 +53,7 @@ export const RightPanel: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Radial glow from center-right */}
+      {/* Radial glow from center-right at 5% opacity */}
       <div
         style={{
           position: "absolute",

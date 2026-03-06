@@ -1,5 +1,11 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
+import {
+  useCurrentFrame,
+  useVideoConfig,
+  interpolate,
+  Easing,
+  spring,
+} from "remotion";
 import { AccentBar } from "./AccentBar";
 import { DetailRow } from "./DetailRow";
 import {
@@ -24,7 +30,6 @@ import {
   DETAIL_2_TEXT,
   DETAIL_2_COLOR,
   SOURCE_TEXT,
-  FPS,
   SLIDE_IN_START,
   SLIDE_IN_END,
   STAT_FADE_START,
@@ -45,11 +50,12 @@ import {
 
 export const StatCalloutCard: React.FC = () => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
   // Card slide in from right using spring
   const slideInProgress = spring({
     frame: frame - SLIDE_IN_START,
-    fps: FPS,
+    fps,
     config: { damping: 15, stiffness: 180 },
   });
 

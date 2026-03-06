@@ -3,7 +3,9 @@ import {
   AbsoluteFill,
   Easing,
   interpolate,
+  OffthreadVideo,
   spring,
+  staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
@@ -147,6 +149,15 @@ export const Part4Precision03PrecisionCostUcurve: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
+      {/* Veo background video */}
+      <AbsoluteFill>
+        <OffthreadVideo
+          src={staticFile("veo/part4_precision.mp4")}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          muted
+        />
+      </AbsoluteFill>
+
       {/* Axes and grid — visible from frame 0 */}
       <ChartAxes axisOpacity={axisOpacity} gridOpacity={gridOpacity} />
 

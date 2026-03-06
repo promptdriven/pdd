@@ -20,16 +20,16 @@ export const ACCENT_BAR_WIDTH = 4;
 export const ACCENT_BAR_COLOR = "#F59E0B";
 
 // Colors
-export const AMBER = "#F59E0B";
+export const STAT_COLOR = "#F59E0B";
 export const DESCRIPTOR_COLOR = "#CBD5E1";
 export const SOURCE_COLOR = "#64748B";
 export const QUALIFIER_COLOR = "#3B82F6";
 
 // Typography sizes
-export const STAT_SIZE = 96;
-export const DESCRIPTOR_SIZE = 28;
-export const SOURCE_SIZE = 16;
-export const QUALIFIER_SIZE = 20;
+export const STAT_FONT_SIZE = 96;
+export const DESCRIPTOR_FONT_SIZE = 28;
+export const SOURCE_FONT_SIZE = 16;
+export const QUALIFIER_FONT_SIZE = 20;
 
 // Data
 export const STAT_TEXT = "10x";
@@ -45,20 +45,20 @@ export const SLIDE_IN_START = 0;
 export const SLIDE_IN_END = 20;
 
 // Stat "10x" scale + fade
-export const STAT_FADE_START = 15;
-export const STAT_FADE_END = 35;
+export const STAT_START = 15;
+export const STAT_END = 35;
 
 // Descriptor text fade in
-export const DESCRIPTOR_FADE_START = 25;
-export const DESCRIPTOR_FADE_END = 40;
+export const DESCRIPTOR_START = 25;
+export const DESCRIPTOR_END = 40;
 
 // Source attribution fade in
-export const SOURCE_FADE_START = 35;
-export const SOURCE_FADE_END = 50;
+export const SOURCE_START = 35;
+export const SOURCE_END = 50;
 
 // Qualifier fade in
-export const QUALIFIER_FADE_START = 45;
-export const QUALIFIER_FADE_END = 65;
+export const QUALIFIER_START = 45;
+export const QUALIFIER_END = 65;
 
 // Card slide out (to right)
 export const SLIDE_OUT_START = 195;

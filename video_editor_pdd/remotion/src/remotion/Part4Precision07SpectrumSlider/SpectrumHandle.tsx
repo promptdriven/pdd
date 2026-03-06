@@ -15,6 +15,8 @@ interface SpectrumHandleProps {
   scale: number;
   /** Color of the glow and handle ring */
   glowColor: string;
+  /** Sinusoidal glow pulse intensity (0-1) */
+  glowPulse: number;
   /** Overall opacity for fade out */
   opacity: number;
 }
@@ -23,6 +25,7 @@ export const SpectrumHandle: React.FC<SpectrumHandleProps> = ({
   position,
   scale,
   glowColor,
+  glowPulse,
   opacity,
 }) => {
   const cx = BAR_X + position * BAR_WIDTH;
@@ -51,7 +54,7 @@ export const SpectrumHandle: React.FC<SpectrumHandleProps> = ({
           height: HANDLE_GLOW_RADIUS * 2,
           borderRadius: "50%",
           backgroundColor: glowColor,
-          opacity: 0.35 * scale,
+          opacity: glowPulse * scale,
           filter: "blur(16px)",
           transform: `scale(${scale})`,
         }}

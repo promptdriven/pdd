@@ -4,7 +4,9 @@ import {
   Easing,
   interpolate,
   interpolateColors,
+  OffthreadVideo,
   spring,
+  staticFile,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
@@ -166,7 +168,15 @@ export const Part4Precision07SpectrumSlider: React.FC = () => {
     [BLUE, BLUE, BALANCED_DIM, AMBER, AMBER]
   );
 
-  // --- Glow pulse (sinusoidal) ---
+  // --- Glow pulse (sinusoidal, 2s period = 60 frames at 30fps) ---
+  const glowPulse = frame >= HANDLE_APPEAR_START
+    ? interpolate(
+        Math.sin(((frame - HANDLE_APPEAR_START) * Math.PI * 2) / 60),
+        [-1, 1],
+        [0.25, 0.5]
+      )
+    : 0.35;
+
   const handleOpacity = sceneFadeOut;
 
   // --- Greenfield card ---
@@ -235,6 +245,15 @@ export const Part4Precision07SpectrumSlider: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
+      {/* Veo background video */}
+      <AbsoluteFill>
+        <OffthreadVideo
+          src={staticFile("veo/part4_precision.mp4")}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          muted
+        />
+      </AbsoluteFill>
+
       {/* Spectrum bar, ticks, and labels */}
       <SpectrumBar
         barWidth={barWidth}
@@ -249,6 +268,7 @@ export const Part4Precision07SpectrumSlider: React.FC = () => {
         position={handlePosition}
         scale={handleScale}
         glowColor={glowColor}
+        glowPulse={glowPulse}
         opacity={handleOpacity}
       />
 

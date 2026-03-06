@@ -19,7 +19,7 @@ export const SubtitleBackdrop: React.FC = () => {
   // Duration within the Sequence (which starts at SUBTITLE_START_FRAME)
   const subtitleDuration = TOTAL_FRAMES - SUBTITLE_START_FRAME;
 
-  // Fade in at start, fade out at end
+  // Fade in at start, fade out at end (easeInOutCubic)
   const opacity = interpolate(
     frame,
     [

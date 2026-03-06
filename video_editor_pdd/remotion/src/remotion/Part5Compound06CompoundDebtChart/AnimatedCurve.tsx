@@ -1,10 +1,6 @@
 import React, { useMemo } from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-
-const CHART_X = 200;
-const CHART_Y = 80;
-const CHART_W = 1620;
-const CHART_H = 800;
+import { WIDTH, HEIGHT, CHART_X, CHART_Y, CHART_W, CHART_H } from "./constants";
 
 interface Point {
   x: number;
@@ -17,8 +13,6 @@ interface AnimatedCurveProps {
   strokeWidth: number;
   drawStartFrame: number;
   drawEndFrame: number;
-  fadeOutStart: number;
-  fadeOutEnd: number;
   label: string;
   smooth?: boolean;
 }
@@ -84,8 +78,6 @@ export const AnimatedCurve: React.FC<AnimatedCurveProps> = ({
   strokeWidth,
   drawStartFrame,
   drawEndFrame,
-  fadeOutStart,
-  fadeOutEnd,
   label,
   smooth = true,
 }) => {
@@ -111,23 +103,13 @@ export const AnimatedCurve: React.FC<AnimatedCurveProps> = ({
     }
   );
 
-  const opacity = interpolate(
-    frame,
-    [drawStartFrame, drawStartFrame + 1, fadeOutStart, fadeOutEnd],
-    [0, 1, 1, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
   const dashOffset = pathLength * (1 - drawProgress);
 
   // Label appears after line finishes drawing
   const labelOpacity = interpolate(
     frame,
-    [drawEndFrame, drawEndFrame + 30, fadeOutStart, fadeOutEnd],
-    [0, 1, 1, 0],
+    [drawEndFrame, drawEndFrame + 30],
+    [0, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -144,12 +126,11 @@ export const AnimatedCurve: React.FC<AnimatedCurveProps> = ({
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Animated curve */}
         <path
           d={pathD}
           fill="none"
@@ -159,7 +140,6 @@ export const AnimatedCurve: React.FC<AnimatedCurveProps> = ({
           strokeLinejoin="round"
           strokeDasharray={`${pathLength} ${pathLength}`}
           strokeDashoffset={dashOffset}
-          opacity={opacity}
         />
 
         {/* Curve label at endpoint */}

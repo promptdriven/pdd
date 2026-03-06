@@ -10,6 +10,7 @@ import {
   PANEL_FADE_END,
   FADE_OUT_START,
   FADE_OUT_END,
+  MIN_INITIAL_OPACITY,
 } from "./constants";
 
 export const LeftPanel: React.FC = () => {
@@ -18,7 +19,7 @@ export const LeftPanel: React.FC = () => {
   const fadeIn = interpolate(
     frame,
     [PANEL_FADE_START, PANEL_FADE_END],
-    [0, 1],
+    [MIN_INITIAL_OPACITY, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -38,10 +39,6 @@ export const LeftPanel: React.FC = () => {
 
   const opacity = fadeIn * fadeOut;
 
-  // Generate code-line texture pattern
-  const lineCount = Math.floor(CANVAS_HEIGHT / CODE_LINE_INTERVAL);
-  const lines = Array.from({ length: lineCount }, (_, i) => i * CODE_LINE_INTERVAL);
-
   return (
     <div
       style={{
@@ -56,20 +53,23 @@ export const LeftPanel: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Subtle code-line texture */}
-      {lines.map((y) => (
-        <div
-          key={y}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: y,
-            width: "100%",
-            height: 1,
-            backgroundColor: CODE_LINE_COLOR,
-          }}
-        />
-      ))}
+      {/* Subtle code-line texture via repeating gradient */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: "100%",
+          height: "100%",
+          backgroundImage: `repeating-linear-gradient(
+            to bottom,
+            ${CODE_LINE_COLOR} 0px,
+            ${CODE_LINE_COLOR} 1px,
+            transparent 1px,
+            transparent ${CODE_LINE_INTERVAL}px
+          )`,
+        }}
+      />
     </div>
   );
 };

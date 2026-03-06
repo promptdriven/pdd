@@ -21,20 +21,20 @@ export const VISUAL_SEQUENCE = [
   {
     start: BEATS.VISUAL_00_START,
     end: BEATS.VISUAL_00_END,
-    id: "Part4PrecisionTitleCard",
-    desc: "Title card introducing Part 4: The Precision Tradeoff",
+    id: "part4_precision_split_prompt_detail_vs_tests",
+    desc: "Split view comparing prompt detail level to test coverage",
   },
   {
     start: BEATS.VISUAL_01_START,
     end: BEATS.VISUAL_01_END,
-    id: "Part4PrecisionSplitPromptDetailVsTests",
-    desc: "Split view comparing prompt detail level to test coverage",
+    id: "part4_precision_stat_callout_prompt_compression",
+    desc: "Stat callout on prompt compression effectiveness",
   },
   {
     start: BEATS.VISUAL_02_START,
     end: BEATS.VISUAL_02_END,
-    id: "Part4PrecisionStatCalloutPromptCompression",
-    desc: "Stat callout on prompt compression effectiveness",
+    id: "part4_precision_title_card",
+    desc: "Title card introducing Part 4: The Precision Tradeoff",
   },
 ];
 

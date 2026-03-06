@@ -1,5 +1,11 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
+import {
+  useCurrentFrame,
+  useVideoConfig,
+  interpolate,
+  Easing,
+  spring,
+} from "remotion";
 import { CautionIcon } from "./CautionIcon";
 import {
   CARD_X,
@@ -25,8 +31,6 @@ import {
   DESCRIPTOR_TEXT,
   SOURCE_TEXT,
   QUALIFIER_TEXT,
-  SLIDE_IN_START,
-  SLIDE_IN_END,
   COUNTER_START,
   COUNTER_END,
   DESCRIPTOR_START,
@@ -42,11 +46,12 @@ import {
 
 export const StatCard: React.FC = () => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
-  // Card slide in using spring
+  // Card slide in using spring (damping: 15, stiffness: 180 per spec)
   const slideInProgress = spring({
-    frame: frame - SLIDE_IN_START,
-    fps: 30,
+    frame,
+    fps,
     config: { damping: 15, stiffness: 180 },
   });
 
@@ -55,7 +60,11 @@ export const StatCard: React.FC = () => {
     frame,
     [SLIDE_OUT_START, SLIDE_OUT_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.in(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.in(Easing.cubic),
+    }
   );
 
   // Combined translateX: slide in from right, then slide out to right
@@ -63,27 +72,21 @@ export const StatCard: React.FC = () => {
   const slideOutX = interpolate(slideOutProgress, [0, 1], [0, SLIDE_DISTANCE]);
   const translateX = frame < SLIDE_OUT_START ? slideInX : slideOutX;
 
-  // Opacity: fade in with slide, fade out with slide
-  const opacityIn = interpolate(
-    frame,
-    [SLIDE_IN_START, SLIDE_IN_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  const opacityOut = interpolate(
-    frame,
-    [SLIDE_OUT_START, SLIDE_OUT_END],
-    [1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  const cardOpacity = Math.min(opacityIn, opacityOut);
+  // Opacity: spring-driven fade in, easeInCubic fade out
+  const opacityIn = interpolate(slideInProgress, [0, 1], [0, 1]);
+  const opacityOut = interpolate(slideOutProgress, [0, 1], [1, 0]);
+  const cardOpacity = frame < SLIDE_OUT_START ? opacityIn : opacityOut;
 
   // Counter animation (0 → 55) with easeOutCubic
   const counterRaw = interpolate(
     frame,
     [COUNTER_START, COUNTER_END],
     [0, STAT_VALUE],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
   const counterValue = Math.round(counterRaw);
 
@@ -92,34 +95,50 @@ export const StatCard: React.FC = () => {
     frame,
     [COUNTER_START, COUNTER_END],
     [0.8, 1.0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
 
-  // Descriptor opacity
+  // Descriptor opacity (easeOutQuad)
   const descriptorOpacity = interpolate(
     frame,
     [DESCRIPTOR_START, DESCRIPTOR_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Source opacity (fades to 0.7)
+  // Source opacity (fades to 0.7, easeOutQuad)
   const sourceOpacity = interpolate(
     frame,
     [SOURCE_START, SOURCE_END],
     [0, 0.7],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Qualifier opacity
+  // Qualifier opacity (easeOutQuad)
   const qualifierOpacity = interpolate(
     frame,
     [QUALIFIER_START, QUALIFIER_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Subtle amber pulse for qualifier (cycles gently when visible)
+  // Subtle amber pulse for qualifier (cycles gently when fully visible)
   const qualifierBrightness =
     frame >= QUALIFIER_END
       ? 1 + 0.08 * Math.sin(((frame - QUALIFIER_END) / 30) * Math.PI * 2)

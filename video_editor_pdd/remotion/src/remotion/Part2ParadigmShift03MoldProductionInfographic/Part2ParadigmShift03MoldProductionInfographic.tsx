@@ -53,8 +53,8 @@ export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
       })
     : 0;
 
-  // Defect part X position for traceback line
-  const defectX = getDefectPartX(frame);
+  // Defect part X position (fixed once defect appears)
+  const defectX = getDefectPartX();
 
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>

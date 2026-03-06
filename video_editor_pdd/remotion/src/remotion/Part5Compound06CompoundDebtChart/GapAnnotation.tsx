@@ -1,5 +1,6 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import { WIDTH, HEIGHT } from "./constants";
 
 interface GapAnnotationProps {
   text: string;
@@ -38,31 +39,13 @@ export const GapAnnotation: React.FC<GapAnnotationProps> = ({
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Annotation text with shadow */}
-        <text
-          x={x}
-          y={y}
-          fill="#FFFFFF"
-          fontSize={28}
-          fontFamily="Inter, sans-serif"
-          fontWeight={600}
-          textAnchor="middle"
-          opacity={opacity}
-          style={{
-            textShadow: "0 2px 8px rgba(0, 0, 0, 0.6)",
-          }}
-        >
-          {text}
-        </text>
-
-        {/* Drop shadow filter for SVG text */}
         <defs>
-          <filter id="textShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <filter id="annotationShadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow
               dx={0}
               dy={2}
@@ -72,7 +55,7 @@ export const GapAnnotation: React.FC<GapAnnotationProps> = ({
           </filter>
         </defs>
 
-        {/* Shadow text underneath */}
+        {/* Annotation text with drop shadow */}
         <text
           x={x}
           y={y}
@@ -82,14 +65,13 @@ export const GapAnnotation: React.FC<GapAnnotationProps> = ({
           fontWeight={600}
           textAnchor="middle"
           opacity={opacity}
-          filter="url(#textShadow)"
+          filter="url(#annotationShadow)"
         >
           {text}
         </text>
 
         {/* Downward arrow */}
         <g opacity={opacity}>
-          {/* Arrow shaft */}
           <line
             x1={x}
             y1={y + 12}
@@ -99,7 +81,6 @@ export const GapAnnotation: React.FC<GapAnnotationProps> = ({
             strokeWidth={2}
             opacity={0.8}
           />
-          {/* Arrowhead */}
           <polygon
             points={`${x - 6},${y + 48} ${x + 6},${y + 48} ${x},${y + 60}`}
             fill="#FFFFFF"

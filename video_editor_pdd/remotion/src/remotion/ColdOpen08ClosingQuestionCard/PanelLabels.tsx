@@ -8,7 +8,6 @@ import {
   LABEL_FONT_SIZE,
   LABEL_PADDING_X,
   LABEL_BOTTOM_Y,
-  CANVAS_WIDTH,
   LABEL_FADE_START,
   LABEL_FADE_END,
   FADE_OUT_START,
@@ -18,17 +17,8 @@ import {
 export const PanelLabels: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const leftLabelOpacity = interpolate(
-    frame,
-    [LABEL_FADE_START, LABEL_FADE_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
-  const rightLabelOpacity = interpolate(
+  // Linear fade-in per spec
+  const labelFadeIn = interpolate(
     frame,
     [LABEL_FADE_START, LABEL_FADE_END],
     [0, 1],
@@ -50,7 +40,7 @@ export const PanelLabels: React.FC = () => {
 
   return (
     <>
-      {/* Left label: "patching" */}
+      {/* Left label: "patching" — bottom-left at (40, 1040) */}
       <div
         style={{
           position: "absolute",
@@ -60,22 +50,22 @@ export const PanelLabels: React.FC = () => {
           fontWeight: 400,
           fontSize: LABEL_FONT_SIZE,
           color: LEFT_LABEL_COLOR,
-          opacity: leftLabelOpacity * fadeOut,
+          opacity: labelFadeIn * fadeOut,
         }}
       >
         {LEFT_LABEL}
       </div>
-      {/* Right label: "building" */}
+      {/* Right label: "building" — bottom-right at (1880, 1040), right-aligned */}
       <div
         style={{
           position: "absolute",
-          right: CANVAS_WIDTH - 1880,
+          right: LABEL_PADDING_X,
           top: LABEL_BOTTOM_Y,
           fontFamily: "'Inter', sans-serif",
           fontWeight: 400,
           fontSize: LABEL_FONT_SIZE,
           color: RIGHT_LABEL_COLOR,
-          opacity: rightLabelOpacity * fadeOut,
+          opacity: labelFadeIn * fadeOut,
           textAlign: "right" as const,
         }}
       >

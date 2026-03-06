@@ -2,8 +2,8 @@ import React from "react";
 import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
 import {
   MOLD_X,
-  MOLD_Y,
   MOLD_W,
+  MOLD_Y,
   MOLD_H,
   PART_Y,
   PART_H,

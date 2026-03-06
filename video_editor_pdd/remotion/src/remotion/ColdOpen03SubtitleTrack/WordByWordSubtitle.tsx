@@ -1,18 +1,18 @@
 import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import { AnimatedWord } from "./AnimatedWord";
 
-const TEXT_MAX_WIDTH = 1600;
-const WINDOW_SIZE = 12;
-const SILENCE_GAP_FRAMES = 9;
-const SEGMENT_CLEAR_DURATION = 10;
-const BACKDROP_HEIGHT = 176;
-
-interface WordEntry {
-  word: string;
-  startFrame: number;
-  segment: number;
-}
+import {
+  TEXT_MAX_WIDTH,
+  TEXT_PADDING_V,
+  TEXT_PADDING_H,
+  BACKDROP_HEIGHT,
+  WINDOW_SIZE,
+  SILENCE_GAP_FRAMES,
+  SEGMENT_CLEAR_DURATION,
+  WINDOW_SLIDE_DURATION,
+} from "./constants";
+import type { WordEntry } from "./constants";
 
 interface WordByWordSubtitleProps {
   words: WordEntry[];
@@ -23,24 +23,23 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  // Find which words are currently visible
+  // Find words that have appeared so far
   const appearedWords = words.filter((w) => w.startFrame <= frame);
 
   if (appearedWords.length === 0) return null;
 
-  // Detect segment transitions: if there's a gap between current segment
-  // and next segment, we may need to clear
+  // Current active word is the last one that started
   const lastAppeared = appearedWords[appearedWords.length - 1];
   const currentSegment = lastAppeared.segment;
 
-  // Check if we're in a segment gap (silence between segments)
+  // Check if we're in a silence gap between segments
   const nextWord = words.find((w) => w.startFrame > frame);
   const isInGap =
     nextWord &&
     nextWord.segment !== currentSegment &&
     frame >= lastAppeared.startFrame + SILENCE_GAP_FRAMES;
 
-  // Segment clear fade
+  // Segment clear fade (10-frame fade when in gap)
   let segmentClearOpacity = 1;
   if (isInGap) {
     const gapStart = lastAppeared.startFrame + SILENCE_GAP_FRAMES;
@@ -52,17 +51,31 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
     );
   }
 
-  // Determine visible window (rolling 12-word window)
+  // Determine rolling window (max 12 words visible)
   const windowStart = Math.max(0, appearedWords.length - WINDOW_SIZE);
   const visibleWords = appearedWords.slice(windowStart);
 
-  // Words being pushed out of window
+  // Words being pushed out of the window
   const exitingWords =
     windowStart > 0
       ? appearedWords.slice(Math.max(0, windowStart - 1), windowStart)
       : [];
 
-  // The active word is the last appeared word
+  // Smooth lateral scroll when window shifts (easeInOutCubic)
+  let scrollOffset = 0;
+  if (visibleWords.length > 0 && windowStart > 0) {
+    const latestWordStart = visibleWords[visibleWords.length - 1].startFrame;
+    const slideProgress = interpolate(
+      frame,
+      [latestWordStart, latestWordStart + WINDOW_SLIDE_DURATION],
+      [0, 1],
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    );
+    const easedSlide = Easing.inOut(Easing.cubic)(slideProgress);
+    scrollOffset = interpolate(easedSlide, [0, 1], [-8, 0]);
+  }
+
+  // Active word index (last appeared word)
   const activeIndex = appearedWords.length - 1;
 
   return (
@@ -77,20 +90,23 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
         alignItems: "center",
         justifyContent: "center",
         opacity: segmentClearOpacity,
+        pointerEvents: "none",
       }}
     >
       <div
         style={{
           maxWidth: TEXT_MAX_WIDTH,
-          padding: "24px 40px",
+          padding: `${TEXT_PADDING_V}px ${TEXT_PADDING_H}px`,
           display: "flex",
           flexWrap: "wrap",
           alignItems: "center",
           justifyContent: "center",
+          transform: `translateX(${scrollOffset}px)`,
+          willChange: "transform",
         }}
       >
-        {/* Exiting words (overflow from window) */}
-        {exitingWords.map((w, i) => (
+        {/* Exiting words (scrolled out of window) */}
+        {exitingWords.map((w) => (
           <AnimatedWord
             key={`exit-${w.word}-${w.startFrame}`}
             word={w.word}
@@ -102,6 +118,7 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
             }
           />
         ))}
+
         {/* Visible words in the rolling window */}
         {visibleWords.map((w, i) => {
           const globalIndex = windowStart + i;

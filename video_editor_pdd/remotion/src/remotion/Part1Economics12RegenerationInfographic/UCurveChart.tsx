@@ -1,45 +1,34 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
-
-// Chart layout
-const CHART_LEFT = 380;
-const CHART_TOP = 520;
-const CHART_WIDTH = 1160;
-const CHART_HEIGHT = 380;
-
-const AXIS_COLOR = "#94A3B8";
-const AXIS_TITLE_COLOR = "#CBD5E1";
-const GRID_COLOR = "#334155";
-const AMBER = "#F59E0B";
-const GREEN = "#22C55E";
-
-// U-curve data points
-const U_CURVE_POINTS = [
-  { x: 10, y: 0.85 },
-  { x: 50, y: 0.55 },
-  { x: 100, y: 0.3 },
-  { x: 200, y: 0.12 },
-  { x: 250, y: 0.08 },
-  { x: 300, y: 0.1 },
-  { x: 500, y: 0.35 },
-  { x: 750, y: 0.6 },
-  { x: 1000, y: 0.82 },
-];
-
-const X_MAX = 1050;
-const Y_MAX = 1.0;
+import {
+  CHART_LEFT,
+  CHART_TOP,
+  CHART_WIDTH,
+  CHART_HEIGHT,
+  AXIS_COLOR,
+  AXIS_TITLE_COLOR,
+  GRID_COLOR,
+  AMBER,
+  GREEN,
+  DANGER_RED,
+  U_CURVE_POINTS,
+  SWEET_SPOT_X,
+  SWEET_SPOT_Y,
+  X_MAX,
+  Y_MAX,
+  X_TICKS,
+  Y_TICKS,
+  CURVE_PATH_LENGTH,
+} from "./constants";
 
 // Convert data coordinates to SVG coordinates
-function dataToSvg(
-  dataX: number,
-  dataY: number
-): { sx: number; sy: number } {
+function dataToSvg(dataX: number, dataY: number): { sx: number; sy: number } {
   const sx = CHART_LEFT + (dataX / X_MAX) * CHART_WIDTH;
   const sy = CHART_TOP + CHART_HEIGHT - (dataY / Y_MAX) * CHART_HEIGHT;
   return { sx, sy };
 }
 
-// Build a smooth cubic bezier path through the U-curve points
+// Build a smooth cubic bezier path through the U-curve points (Catmull-Rom)
 function buildCurvePath(): string {
   const svgPoints = U_CURVE_POINTS.map((p) => dataToSvg(p.x, p.y));
   if (svgPoints.length < 2) return "";
@@ -52,12 +41,11 @@ function buildCurvePath(): string {
     const p2 = svgPoints[i + 1];
     const p3 = svgPoints[Math.min(svgPoints.length - 1, i + 2)];
 
-    // Catmull-Rom to cubic bezier control points
     const tension = 0.3;
-    const cp1x = p1.sx + ((p2.sx - p0.sx) * tension);
-    const cp1y = p1.sy + ((p2.sy - p0.sy) * tension);
-    const cp2x = p2.sx - ((p3.sx - p1.sx) * tension);
-    const cp2y = p2.sy - ((p3.sy - p1.sy) * tension);
+    const cp1x = p1.sx + (p2.sx - p0.sx) * tension;
+    const cp1y = p1.sy + (p2.sy - p0.sy) * tension;
+    const cp2x = p2.sx - (p3.sx - p1.sx) * tension;
+    const cp2y = p2.sy - (p3.sy - p1.sy) * tension;
 
     d += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.sx},${p2.sy}`;
   }
@@ -65,12 +53,12 @@ function buildCurvePath(): string {
   return d;
 }
 
-// Build closed area path for fill
+// Build closed area path for fill below curve
 function buildAreaPath(): string {
   const curvePath = buildCurvePath();
   const lastPoint = dataToSvg(
     U_CURVE_POINTS[U_CURVE_POINTS.length - 1].x,
-    U_CURVE_POINTS[U_CURVE_POINTS.length - 1].y
+    U_CURVE_POINTS[U_CURVE_POINTS.length - 1].y,
   );
   const firstPoint = dataToSvg(U_CURVE_POINTS[0].x, U_CURVE_POINTS[0].y);
   const bottomY = CHART_TOP + CHART_HEIGHT;
@@ -86,9 +74,6 @@ interface UCurveChartProps {
   sweetSpotStart: number;
 }
 
-const X_TICKS = [0, 250, 500, 750, 1000];
-const Y_TICKS = [0, 0.25, 0.5, 0.75, 1.0];
-
 export const UCurveChart: React.FC<UCurveChartProps> = ({
   axesFadeStart,
   axesFadeEnd,
@@ -102,14 +87,22 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
     frame,
     [axesFadeStart, axesFadeEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    },
   );
 
   const curveProgress = interpolate(
     frame,
     [curveDrawStart, curveDrawEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    },
   );
 
   const sweetSpotScale = spring({
@@ -119,10 +112,7 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
   });
 
   const sweetSpotVisible = frame >= sweetSpotStart;
-  const sweetSpot = dataToSvg(250, 0.08);
-
-  // Approximate path length for dash animation
-  const pathLength = 2000;
+  const sweetSpot = dataToSvg(SWEET_SPOT_X, SWEET_SPOT_Y);
 
   const curvePath = buildCurvePath();
   const areaPath = buildAreaPath();
@@ -177,8 +167,8 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
       {/* Y-axis tick labels */}
       {Y_TICKS.map((val) => {
         const { sy } = dataToSvg(0, val);
-        const label = val === 0 ? "Low" : val >= 0.75 ? "High" : "";
-        if (!label) return null;
+        const tickLabel = val === 0 ? "Low" : val >= 0.75 ? "High" : "";
+        if (!tickLabel) return null;
         return (
           <text
             key={`ytick-${val}`}
@@ -191,7 +181,7 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
             textAnchor="end"
             opacity={axesOpacity}
           >
-            {label}
+            {tickLabel}
           </text>
         );
       })}
@@ -256,22 +246,22 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
       {/* Danger zone tints */}
       {curveProgress > 0 && (
         <>
-          {/* Left danger zone */}
+          {/* Left danger zone — tiny modules */}
           <rect
             x={CHART_LEFT}
             y={CHART_TOP}
             width={CHART_WIDTH * 0.08}
             height={CHART_HEIGHT}
-            fill="#EF4444"
+            fill={DANGER_RED}
             opacity={curveProgress * 0.06}
           />
-          {/* Right danger zone */}
+          {/* Right danger zone — oversized modules */}
           <rect
             x={CHART_LEFT + CHART_WIDTH * 0.7}
             y={CHART_TOP}
             width={CHART_WIDTH * 0.3}
             height={CHART_HEIGHT}
-            fill="#EF4444"
+            fill={DANGER_RED}
             opacity={curveProgress * 0.06}
           />
         </>
@@ -279,11 +269,7 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
 
       {/* Area fill under curve */}
       {curveProgress > 0 && (
-        <path
-          d={areaPath}
-          fill={AMBER}
-          opacity={curveProgress * 0.1}
-        />
+        <path d={areaPath} fill={AMBER} opacity={curveProgress * 0.1} />
       )}
 
       {/* U-curve line with draw animation */}
@@ -294,40 +280,37 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
           stroke={AMBER}
           strokeWidth={3}
           strokeLinecap="round"
-          strokeDasharray={pathLength}
-          strokeDashoffset={pathLength * (1 - curveProgress)}
+          strokeDasharray={CURVE_PATH_LENGTH}
+          strokeDashoffset={CURVE_PATH_LENGTH * (1 - curveProgress)}
         />
       )}
 
       {/* Sweet spot marker */}
       {sweetSpotVisible && (
-        <g
-          transform={`translate(${sweetSpot.sx}, ${sweetSpot.sy}) scale(${sweetSpotScale})`}
-          style={{ transformOrigin: `${sweetSpot.sx}px ${sweetSpot.sy}px` }}
-        >
-          {/* Vertical dashed line */}
+        <g>
+          {/* Vertical dashed line from sweet spot down to x-axis */}
           <line
-            x1={0}
-            y1={0}
-            x2={0}
-            y2={CHART_TOP + CHART_HEIGHT - sweetSpot.sy}
+            x1={sweetSpot.sx}
+            y1={sweetSpot.sy}
+            x2={sweetSpot.sx}
+            y2={CHART_TOP + CHART_HEIGHT}
             stroke={GREEN}
             strokeWidth={2}
             strokeDasharray="6 4"
-            opacity={0.7}
+            opacity={0.7 * sweetSpotScale}
           />
 
-          {/* Green dot */}
+          {/* Green dot on curve */}
           <circle
-            cx={0}
-            cy={0}
-            r={8}
+            cx={sweetSpot.sx}
+            cy={sweetSpot.sy}
+            r={8 * sweetSpotScale}
             fill={GREEN}
           />
           <circle
-            cx={0}
-            cy={0}
-            r={14}
+            cx={sweetSpot.sx}
+            cy={sweetSpot.sy}
+            r={14 * sweetSpotScale}
             fill="none"
             stroke={GREEN}
             strokeWidth={2}
@@ -336,36 +319,39 @@ export const UCurveChart: React.FC<UCurveChartProps> = ({
 
           {/* "~250 lines" label */}
           <text
-            x={0}
-            y={-30}
+            x={sweetSpot.sx}
+            y={sweetSpot.sy - 30}
             fill={GREEN}
             fontSize={22}
             fontFamily="Inter, sans-serif"
             fontWeight={700}
             textAnchor="middle"
+            opacity={sweetSpotScale}
           >
             ~250 lines
           </text>
 
           {/* "Sweet spot" pill */}
           <rect
-            x={-50}
-            y={-62}
+            x={sweetSpot.sx - 50}
+            y={sweetSpot.sy - 62}
             width={100}
             height={24}
             rx={12}
             fill={`${GREEN}33`}
             stroke={GREEN}
             strokeWidth={1.5}
+            opacity={sweetSpotScale}
           />
           <text
-            x={0}
-            y={-45}
+            x={sweetSpot.sx}
+            y={sweetSpot.sy - 45}
             fill={GREEN}
             fontSize={13}
             fontFamily="Inter, sans-serif"
             fontWeight={600}
             textAnchor="middle"
+            opacity={sweetSpotScale}
           >
             Sweet spot
           </text>

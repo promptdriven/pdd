@@ -46,3 +46,6 @@ export const LABEL_BOTTOM_Y = 1040;
 // Code texture
 export const CODE_LINE_INTERVAL = 8;
 export const CODE_LINE_COLOR = "rgba(255, 255, 255, 0.04)";
+
+// Minimum opacity at frame 0 so content is visible immediately
+export const MIN_INITIAL_OPACITY = 0.15;

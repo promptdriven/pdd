@@ -1,5 +1,11 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
+import {
+  useCurrentFrame,
+  useVideoConfig,
+  interpolate,
+  Easing,
+  spring,
+} from "remotion";
 import {
   CARD_X,
   CARD_Y,
@@ -11,28 +17,26 @@ import {
   CARD_GLOW,
   ACCENT_BAR_WIDTH,
   ACCENT_BAR_COLOR,
-  AMBER,
+  STAT_COLOR,
   DESCRIPTOR_COLOR,
   SOURCE_COLOR,
   QUALIFIER_COLOR,
-  STAT_SIZE,
-  DESCRIPTOR_SIZE,
-  SOURCE_SIZE,
-  QUALIFIER_SIZE,
+  STAT_FONT_SIZE,
+  DESCRIPTOR_FONT_SIZE,
+  SOURCE_FONT_SIZE,
+  QUALIFIER_FONT_SIZE,
   STAT_TEXT,
   DESCRIPTOR_TEXT,
   SOURCE_TEXT,
   QUALIFIER_TEXT,
-  SLIDE_IN_START,
-  SLIDE_IN_END,
-  STAT_FADE_START,
-  STAT_FADE_END,
-  DESCRIPTOR_FADE_START,
-  DESCRIPTOR_FADE_END,
-  SOURCE_FADE_START,
-  SOURCE_FADE_END,
-  QUALIFIER_FADE_START,
-  QUALIFIER_FADE_END,
+  STAT_START,
+  STAT_END,
+  DESCRIPTOR_START,
+  DESCRIPTOR_END,
+  SOURCE_START,
+  SOURCE_END,
+  QUALIFIER_START,
+  QUALIFIER_END,
   SLIDE_OUT_START,
   SLIDE_OUT_END,
   SLIDE_DISTANCE,
@@ -40,11 +44,12 @@ import {
 
 export const StatCalloutCard: React.FC = () => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
-  // Card slide in from right using spring
+  // Card slide in from right using spring (damping: 15, stiffness: 180)
   const slideInProgress = spring({
-    frame: frame - SLIDE_IN_START,
-    fps: 30,
+    frame,
+    fps,
     config: { damping: 15, stiffness: 180 },
   });
 
@@ -53,65 +58,79 @@ export const StatCalloutCard: React.FC = () => {
     frame,
     [SLIDE_OUT_START, SLIDE_OUT_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.in(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.in(Easing.cubic),
+    }
   );
 
-  // Slide in from right (+200 → 0), slide out to right (0 → +200)
+  // Combined translateX: slide in from right, then slide out to right
   const slideInX = interpolate(slideInProgress, [0, 1], [SLIDE_DISTANCE, 0]);
   const slideOutX = interpolate(slideOutProgress, [0, 1], [0, SLIDE_DISTANCE]);
   const translateX = frame < SLIDE_OUT_START ? slideInX : slideOutX;
 
-  // Opacity: fade in with slide, fade out with slide
-  const opacityIn = interpolate(
-    frame,
-    [SLIDE_IN_START, SLIDE_IN_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  const opacityOut = interpolate(
-    frame,
-    [SLIDE_OUT_START, SLIDE_OUT_END],
-    [1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  const cardOpacity = Math.min(opacityIn, opacityOut);
+  // Opacity: spring-driven fade in, easeInCubic fade out
+  const opacityIn = interpolate(slideInProgress, [0, 1], [0, 1]);
+  const opacityOut = interpolate(slideOutProgress, [0, 1], [1, 0]);
+  const cardOpacity = frame < SLIDE_OUT_START ? opacityIn : opacityOut;
 
-  // Stat "10x" scale (0.8 → 1.0) and opacity (0 → 1)
+  // Stat "10x" scale (0.8 → 1.0) and opacity (0 → 1), easeOutCubic
   const statScale = interpolate(
     frame,
-    [STAT_FADE_START, STAT_FADE_END],
+    [STAT_START, STAT_END],
     [0.8, 1.0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
   const statOpacity = interpolate(
     frame,
-    [STAT_FADE_START, STAT_FADE_END],
+    [STAT_START, STAT_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
 
-  // Descriptor fade
+  // Descriptor fade (easeOutQuad)
   const descriptorOpacity = interpolate(
     frame,
-    [DESCRIPTOR_FADE_START, DESCRIPTOR_FADE_END],
+    [DESCRIPTOR_START, DESCRIPTOR_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Source fade (max 0.7)
+  // Source fade to 0.7 (easeOutQuad)
   const sourceOpacity = interpolate(
     frame,
-    [SOURCE_FADE_START, SOURCE_FADE_END],
+    [SOURCE_START, SOURCE_END],
     [0, 0.7],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Qualifier fade
+  // Qualifier fade (easeOutQuad)
   const qualifierOpacity = interpolate(
     frame,
-    [QUALIFIER_FADE_START, QUALIFIER_FADE_END],
+    [QUALIFIER_START, QUALIFIER_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
   return (
@@ -149,7 +168,7 @@ export const StatCalloutCard: React.FC = () => {
       <div
         style={{
           flex: 1,
-          padding: "32px 40px",
+          padding: "40px 48px",
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
@@ -160,12 +179,13 @@ export const StatCalloutCard: React.FC = () => {
           style={{
             fontFamily: "Inter, sans-serif",
             fontWeight: 900,
-            fontSize: STAT_SIZE,
-            color: AMBER,
+            fontSize: STAT_FONT_SIZE,
+            color: STAT_COLOR,
             lineHeight: 1,
             transform: `scale(${statScale})`,
-            transformOrigin: "left top",
+            transformOrigin: "left center",
             opacity: statOpacity,
+            marginBottom: 8,
           }}
         >
           {STAT_TEXT}
@@ -176,29 +196,14 @@ export const StatCalloutCard: React.FC = () => {
           style={{
             fontFamily: "Inter, sans-serif",
             fontWeight: 500,
-            fontSize: DESCRIPTOR_SIZE,
+            fontSize: DESCRIPTOR_FONT_SIZE,
             color: DESCRIPTOR_COLOR,
             lineHeight: 1.3,
             opacity: descriptorOpacity,
-            marginTop: 8,
+            marginBottom: 24,
           }}
         >
           {DESCRIPTOR_TEXT}
-        </div>
-
-        {/* Qualifier */}
-        <div
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontWeight: 600,
-            fontSize: QUALIFIER_SIZE,
-            color: QUALIFIER_COLOR,
-            lineHeight: 1.4,
-            opacity: qualifierOpacity,
-            marginTop: 12,
-          }}
-        >
-          {QUALIFIER_TEXT}
         </div>
 
         {/* Source attribution */}
@@ -206,15 +211,28 @@ export const StatCalloutCard: React.FC = () => {
           style={{
             fontFamily: "Inter, sans-serif",
             fontWeight: 400,
-            fontSize: SOURCE_SIZE,
+            fontSize: SOURCE_FONT_SIZE,
             color: SOURCE_COLOR,
             lineHeight: 1.4,
             opacity: sourceOpacity,
-            marginTop: "auto",
-            paddingTop: 16,
+            marginBottom: 16,
           }}
         >
           {SOURCE_TEXT}
+        </div>
+
+        {/* Qualifier */}
+        <div
+          style={{
+            fontFamily: "Inter, sans-serif",
+            fontWeight: 600,
+            fontSize: QUALIFIER_FONT_SIZE,
+            color: QUALIFIER_COLOR,
+            lineHeight: 1.4,
+            opacity: qualifierOpacity,
+          }}
+        >
+          {QUALIFIER_TEXT}
         </div>
       </div>
     </div>

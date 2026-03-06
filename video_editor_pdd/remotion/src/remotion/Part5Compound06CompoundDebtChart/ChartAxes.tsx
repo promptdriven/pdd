@@ -1,57 +1,61 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import {
+  WIDTH,
+  HEIGHT,
+  CHART_X,
+  CHART_Y,
+  CHART_W,
+  CHART_H,
+  AXIS_COLOR,
+  AXIS_TITLE_COLOR,
+  GRID_COLOR,
+  TIME_MARKER_COLOR,
+  AXES_FADE_END,
+  GRID_FADE_START,
+  GRID_FADE_END,
+  GRID_FRACTIONS,
+  TIME_MARKERS,
+  X_TICKS,
+} from "./constants";
 
-const CHART_X = 200;
-const CHART_Y = 80;
-const CHART_W = 1620;
-const CHART_H = 800;
-const AXIS_COLOR = "#94A3B8";
-const AXIS_TITLE_COLOR = "#CBD5E1";
-const GRID_COLOR = "#334155";
-const TIME_MARKER_COLOR = "#64748B";
-
-const GRID_FRACTIONS = [0.25, 0.5, 0.75];
-
-const TIME_MARKERS = [
-  { frac: 0.217, label: "Month 6" },
-  { frac: 0.478, label: "Month 12" },
-  { frac: 0.739, label: "Month 18" },
-];
-
-interface ChartAxesProps {
-  masterOpacity: number;
-}
-
-export const ChartAxes: React.FC<ChartAxesProps> = ({ masterOpacity }) => {
+export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const axesOpacity =
-    interpolate(frame, [0, 30], [0, 1], {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }) * masterOpacity;
+  const axesOpacity = interpolate(frame, [0, AXES_FADE_END], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
 
-  const gridOpacity =
-    interpolate(frame, [20, 50], [0, 0.15], {
+  const gridOpacity = interpolate(
+    frame,
+    [GRID_FADE_START, GRID_FADE_END],
+    [0, 0.15],
+    {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.out(Easing.quad),
-    }) * masterOpacity;
+    }
+  );
 
-  const timeMarkerOpacity =
-    interpolate(frame, [20, 50], [0, 0.10], {
+  const timeMarkerOpacity = interpolate(
+    frame,
+    [GRID_FADE_START, GRID_FADE_END],
+    [0, 0.1],
+    {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.out(Easing.quad),
-    }) * masterOpacity;
+    }
+  );
 
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         {/* Horizontal grid lines at 25%, 50%, 75% */}
@@ -126,7 +130,7 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ masterOpacity }) => {
         />
 
         {/* X-axis tick marks */}
-        {[0, 0.217, 0.478, 0.739, 1.0].map((t) => {
+        {X_TICKS.map((t) => {
           const x = CHART_X + t * CHART_W;
           return (
             <line
@@ -199,7 +203,7 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ masterOpacity }) => {
           Time
         </text>
 
-        {/* Y-axis title (rotated) */}
+        {/* Y-axis title (rotated 90 degrees) */}
         <text
           x={CHART_X - 70}
           y={CHART_Y + CHART_H / 2}

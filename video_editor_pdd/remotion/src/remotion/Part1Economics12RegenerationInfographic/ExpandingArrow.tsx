@@ -1,5 +1,6 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { BLUE, GREEN, WHITE } from "./constants";
 
 interface ExpandingArrowProps {
   fromX: number;
@@ -18,7 +19,6 @@ export const ExpandingArrow: React.FC<ExpandingArrowProps> = ({
   fromX,
   fromY,
   toX,
-  toY,
   startWidth,
   endWidth,
   drawStart,
@@ -38,7 +38,7 @@ export const ExpandingArrow: React.FC<ExpandingArrowProps> = ({
     frame,
     [labelAppearStart, labelAppearEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
   if (frame < drawStart) return null;
@@ -47,14 +47,8 @@ export const ExpandingArrow: React.FC<ExpandingArrowProps> = ({
   const currentEndX = fromX + arrowLength * progress;
   const arrowHeadSize = 16;
 
-  // Build expanding arrow polygon
-  const topStartY = fromY - startWidth / 2;
-  const bottomStartY = fromY + startWidth / 2;
-
   // Current thickness at the drawn end
   const currentEndWidth = startWidth + (endWidth - startWidth) * progress;
-  const topEndY = fromY - currentEndWidth / 2;
-  const bottomEndY = fromY + currentEndWidth / 2;
 
   // Arrow shaft polygon (trapezoid shape)
   const shaftEndX = Math.max(fromX, currentEndX - arrowHeadSize);
@@ -63,6 +57,9 @@ export const ExpandingArrow: React.FC<ExpandingArrowProps> = ({
   const shaftProgress =
     arrowLength > 0 ? (shaftEndX - fromX) / arrowLength : 0;
   const shaftEndWidth = startWidth + (endWidth - startWidth) * shaftProgress;
+
+  const topStartY = fromY - startWidth / 2;
+  const bottomStartY = fromY + startWidth / 2;
   const shaftTopEndY = fromY - shaftEndWidth / 2;
   const shaftBottomEndY = fromY + shaftEndWidth / 2;
 
@@ -82,8 +79,8 @@ export const ExpandingArrow: React.FC<ExpandingArrowProps> = ({
           y2={fromY}
           gradientUnits="userSpaceOnUse"
         >
-          <stop offset="0%" stopColor="#3B82F6" />
-          <stop offset="100%" stopColor="#22C55E" />
+          <stop offset="0%" stopColor={BLUE} />
+          <stop offset="100%" stopColor={GREEN} />
         </linearGradient>
       </defs>
 
@@ -115,8 +112,8 @@ export const ExpandingArrow: React.FC<ExpandingArrowProps> = ({
       {/* Label above arrow */}
       <text
         x={(fromX + currentEndX) / 2}
-        y={fromY - endWidth / 2 - 24}
-        fill="#FFFFFF"
+        y={fromY - currentEndWidth / 2 - 24}
+        fill={WHITE}
         fontSize={28}
         fontFamily="Inter, sans-serif"
         fontWeight={700}

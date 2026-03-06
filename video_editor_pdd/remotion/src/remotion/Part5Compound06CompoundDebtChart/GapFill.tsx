@@ -1,10 +1,6 @@
 import React, { useMemo } from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate } from "remotion";
-
-const CHART_X = 200;
-const CHART_Y = 80;
-const CHART_W = 1620;
-const CHART_H = 800;
+import { WIDTH, HEIGHT, CHART_X, CHART_Y, CHART_W, CHART_H } from "./constants";
 
 interface Point {
   x: number;
@@ -16,8 +12,6 @@ interface GapFillProps {
   bottomCurve: Point[];
   fillStartFrame: number;
   fillEndFrame: number;
-  fadeOutStart: number;
-  fadeOutEnd: number;
 }
 
 function toPixel(p: Point): { x: number; y: number } {
@@ -47,8 +41,6 @@ export const GapFill: React.FC<GapFillProps> = ({
   bottomCurve,
   fillStartFrame,
   fillEndFrame,
-  fadeOutStart,
-  fadeOutEnd,
 }) => {
   const frame = useCurrentFrame();
 
@@ -56,16 +48,6 @@ export const GapFill: React.FC<GapFillProps> = ({
     frame,
     [fillStartFrame, fillEndFrame],
     [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
-  const masterOpacity = interpolate(
-    frame,
-    [fillStartFrame, fillStartFrame + 1, fadeOutStart, fadeOutEnd],
-    [0, 1, 1, 0],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -107,31 +89,27 @@ export const GapFill: React.FC<GapFillProps> = ({
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         <defs>
           <linearGradient id="gapGradient" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop
               offset="0%"
-              stopColor="rgba(239, 68, 68, 1)"
+              stopColor="rgb(239, 68, 68)"
               stopOpacity={0.04}
             />
             <stop
               offset="100%"
-              stopColor="rgba(239, 68, 68, 1)"
+              stopColor="rgb(239, 68, 68)"
               stopOpacity={0.15}
             />
           </linearGradient>
         </defs>
 
-        <path
-          d={fillPath}
-          fill="url(#gapGradient)"
-          opacity={masterOpacity}
-        />
+        <path d={fillPath} fill="url(#gapGradient)" />
       </svg>
     </AbsoluteFill>
   );

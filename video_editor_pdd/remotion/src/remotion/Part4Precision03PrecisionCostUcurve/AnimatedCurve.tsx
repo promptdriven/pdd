@@ -68,8 +68,14 @@ export const AnimatedCurve: React.FC<AnimatedCurveProps> = ({
     <svg
       width={1920}
       height={1080}
+      viewBox="0 0 1920 1080"
       style={{ position: "absolute", top: 0, left: 0, opacity }}
     >
+      <defs>
+        <filter id="curveGlow">
+          <feGaussianBlur stdDeviation="8" />
+        </filter>
+      </defs>
       {/* Glow under the curve */}
       <path
         d={pathD}
@@ -81,7 +87,7 @@ export const AnimatedCurve: React.FC<AnimatedCurveProps> = ({
         strokeDasharray={totalLength}
         strokeDashoffset={dashOffset}
         opacity={0.25}
-        filter="blur(8px)"
+        filter="url(#curveGlow)"
       />
       {/* Main curve */}
       <path

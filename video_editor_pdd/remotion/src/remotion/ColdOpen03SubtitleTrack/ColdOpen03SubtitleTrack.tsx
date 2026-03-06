@@ -2,10 +2,7 @@ import React from "react";
 import { AbsoluteFill, Sequence } from "remotion";
 import { SubtitleBackdrop } from "./SubtitleBackdrop";
 import { WordByWordSubtitle } from "./WordByWordSubtitle";
-import { WORD_DATA } from "./constants";
-
-const TOTAL_FRAMES = 470;
-const BG_COLOR = "#0A1628";
+import { WORD_DATA, TOTAL_FRAMES, BG_COLOR } from "./constants";
 
 export const defaultColdOpen03SubtitleTrackProps = {};
 

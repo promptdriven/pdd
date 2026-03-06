@@ -19,8 +19,6 @@ export const WHITE = "#FFFFFF";
 export const DANGER_RED = "#EF4444";
 
 // Part A — Compression Ratio layout
-export const PART_A_TOP = 120;
-export const PART_A_BOTTOM = 440;
 export const SMALL_DOC_POS = { x: 300, y: 260 };
 export const SMALL_DOC_SIZE = { w: 80, h: 100 };
 export const LARGE_DOC_POS = { x: 1400, y: 200 };
@@ -50,8 +48,13 @@ export const U_CURVE_POINTS = [
 ];
 
 export const SWEET_SPOT_X = 250;
-export const X_RANGE = { min: 0, max: 1050 };
-export const Y_RANGE = { min: 0, max: 1.0 };
+export const SWEET_SPOT_Y = 0.08;
+export const X_MAX = 1050;
+export const Y_MAX = 1.0;
+
+// X-axis and Y-axis ticks
+export const X_TICKS = [0, 250, 500, 750, 1000];
+export const Y_TICKS = [0, 0.25, 0.5, 0.75, 1.0];
 
 // Animation frames (at 30fps)
 export const SMALL_DOC_START = 0;
@@ -67,6 +70,8 @@ export const AXES_FADE_END = 130;
 export const CURVE_DRAW_START = 130;
 export const CURVE_DRAW_END = 200;
 export const SWEET_SPOT_START = 190;
-export const SWEET_SPOT_END = 220;
 export const BADGE_START = 210;
 export const BADGE_END = 240;
+
+// Approximate SVG path length for dash animation
+export const CURVE_PATH_LENGTH = 2000;

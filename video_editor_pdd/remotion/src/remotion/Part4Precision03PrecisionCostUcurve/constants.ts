@@ -40,8 +40,10 @@ export const U_CURVE_POINTS = [
 export const SWEET_SPOT = { x: 0.5, y: 0.15 };
 
 // Danger zones (normalized x ranges)
+// Spec: left zone x=200 to x=500 → (0 to 300) / 1620 ≈ 0.185
+// Spec: right zone x=1500 to x=1820 → starts at (1500-200)/1620 ≈ 0.802
 export const LEFT_DANGER = { xStart: 0.0, xEnd: 0.185 };
-export const RIGHT_DANGER = { xStart: 0.815, xEnd: 1.0 };
+export const RIGHT_DANGER = { xStart: 0.802, xEnd: 1.0 };
 
 // Animation timing (frames at 30fps)
 export const AXES_FADE_START = 0;

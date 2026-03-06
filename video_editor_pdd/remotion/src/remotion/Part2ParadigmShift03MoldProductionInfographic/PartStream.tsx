@@ -32,7 +32,7 @@ interface PartInfo {
 
 /**
  * Computes the list of parts that should spawn during the animation.
- * The last part before the stream pause is marked as defective.
+ * A part near the middle of the conveyor at STREAM_PAUSE is marked defective.
  */
 function computeParts(): PartInfo[] {
   const parts: PartInfo[] = [];
@@ -51,12 +51,28 @@ function computeParts(): PartInfo[] {
     f += FAST_INTERVAL;
   }
 
-  // Mark the last part before pause as the defective one
-  if (parts.length > 0) {
-    parts[parts.length - 1].isDefect = true;
+  // Find the part that will be roughly in the middle of the conveyor at STREAM_PAUSE.
+  // This is the part we mark as defective so the "✗" and traceback are visible.
+  const conveyorMidX = CONVEYOR_X_START + (CONVEYOR_X_END - CONVEYOR_X_START) * 0.4;
+  let bestIdx = parts.length - 1;
+  let bestDist = Infinity;
+  for (let i = 0; i < parts.length; i++) {
+    const age = STREAM_PAUSE - parts[i].spawnFrame;
+    const x = interpolate(
+      age,
+      [0, PART_TRAVEL_FRAMES],
+      [CONVEYOR_X_START, CONVEYOR_X_END],
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    );
+    const dist = Math.abs(x - conveyorMidX);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestIdx = i;
+    }
   }
+  parts[bestIdx].isDefect = true;
 
-  // Phase 3: corrected stream (frames 360-570)
+  // Phase 3: corrected stream (frames 390-570)
   f = CORRECTED_STREAM_START;
   while (f < FADEOUT_START) {
     parts.push({ id: id++, spawnFrame: f, isDefect: false });
@@ -71,13 +87,14 @@ const ALL_PARTS = computeParts();
 const DEFECT_PART = ALL_PARTS.find((p) => p.isDefect);
 
 /**
- * Returns the X position of the defect part at a given frame.
+ * Returns the X position of the defect part at DEFECT_APPEAR frame.
+ * The defect part freezes in place once the defect appears.
  */
-export function getDefectPartX(frame: number): number {
+export function getDefectPartX(): number {
   if (!DEFECT_PART) return CONVEYOR_X_START + 200;
-  const localFrame = Math.max(0, frame - DEFECT_PART.spawnFrame);
+  const age = DEFECT_APPEAR - DEFECT_PART.spawnFrame;
   return interpolate(
-    localFrame,
+    age,
     [0, PART_TRAVEL_FRAMES],
     [CONVEYOR_X_START, CONVEYOR_X_END],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
@@ -101,12 +118,22 @@ const SinglePart: React.FC<SinglePartProps> = ({ part, globalFrame }) => {
   });
 
   // Part moves from mold exit to conveyor end
+  let travelFrame = localFrame;
+
+  // Defective part freezes in place once defect appears
+  if (part.isDefect && globalFrame >= DEFECT_APPEAR) {
+    travelFrame = DEFECT_APPEAR - part.spawnFrame;
+  }
+
   const x = interpolate(
-    localFrame,
+    travelFrame,
     [0, PART_TRAVEL_FRAMES],
     [CONVEYOR_X_START, CONVEYOR_X_END],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
+
+  // Don't render parts that have gone past the conveyor end (unless defective/frozen)
+  if (x >= CONVEYOR_X_END && !part.isDefect) return null;
 
   // Fade out at global fadeout
   const fadeOut = interpolate(

@@ -9,6 +9,7 @@ import {
   PANEL_FADE_END,
   FADE_OUT_START,
   FADE_OUT_END,
+  MIN_INITIAL_OPACITY,
 } from "./constants";
 
 export const SplitLine: React.FC = () => {
@@ -17,7 +18,7 @@ export const SplitLine: React.FC = () => {
   const drawProgress = interpolate(
     frame,
     [PANEL_FADE_START, PANEL_FADE_END],
-    [0, 1],
+    [MIN_INITIAL_OPACITY, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",

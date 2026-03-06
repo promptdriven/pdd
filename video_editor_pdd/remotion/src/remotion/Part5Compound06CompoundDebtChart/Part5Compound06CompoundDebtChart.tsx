@@ -12,39 +12,25 @@ import { ChartAxes } from "./ChartAxes";
 import { AnimatedCurve } from "./AnimatedCurve";
 import { GapFill } from "./GapFill";
 import { GapAnnotation } from "./GapAnnotation";
-
-// Patching curve: exponential growth (normalized 0-1)
-const PATCHING_POINTS = [
-  { x: 0, y: 0.02 },
-  { x: 0.087, y: 0.06 },
-  { x: 0.217, y: 0.15 },
-  { x: 0.348, y: 0.30 },
-  { x: 0.478, y: 0.50 },
-  { x: 0.609, y: 0.68 },
-  { x: 0.739, y: 0.82 },
-  { x: 0.870, y: 0.91 },
-  { x: 1.0, y: 0.97 },
-];
-
-// Generation curve: flat with sawtooth resets (normalized 0-1)
-const GENERATION_POINTS = [
-  { x: 0, y: 0.02 },
-  { x: 0.130, y: 0.05 },
-  { x: 0.174, y: 0.01 },
-  { x: 0.304, y: 0.05 },
-  { x: 0.348, y: 0.01 },
-  { x: 0.478, y: 0.05 },
-  { x: 0.522, y: 0.01 },
-  { x: 0.652, y: 0.05 },
-  { x: 0.696, y: 0.01 },
-  { x: 0.826, y: 0.05 },
-  { x: 0.870, y: 0.01 },
-  { x: 1.0, y: 0.04 },
-];
-
-// Frame constants
-const FADEOUT_START = 600;
-const FADEOUT_END = 660;
+import {
+  BG_COLOR,
+  PATCHING_COLOR,
+  GENERATION_COLOR,
+  PATCHING_LINE_WIDTH,
+  GENERATION_LINE_WIDTH,
+  PATCHING_POINTS,
+  GENERATION_POINTS,
+  CURVES_DRAW_START,
+  CURVES_DRAW_DURATION,
+  GAP_FILL_START,
+  GAP_FILL_END,
+  ANNOTATION_FADE_START,
+  ANNOTATION_X,
+  ANNOTATION_Y,
+  FADEOUT_START,
+  FADEOUT_END,
+  TOTAL_FRAMES,
+} from "./constants";
 
 export const defaultPart5Compound06CompoundDebtChartProps = {};
 
@@ -64,7 +50,7 @@ export const Part5Compound06CompoundDebtChart: React.FC = () => {
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0A1628" }}>
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       {/* Veo background video */}
       <AbsoluteFill>
         <OffthreadVideo
@@ -74,63 +60,57 @@ export const Part5Compound06CompoundDebtChart: React.FC = () => {
         />
       </AbsoluteFill>
 
-      {/* Chart overlay */}
+      {/* Chart overlay with master fade-out */}
       <AbsoluteFill style={{ opacity: masterOpacity }}>
         {/* Phase 1-2: Axes, grid, and time markers fade in (frame 0-50) */}
-        <ChartAxes masterOpacity={1} />
+        <ChartAxes />
 
-        {/* Phase 4: Patching curve — exponential climb (frame 45-350) */}
-        <Sequence from={45} durationInFrames={615}>
+        {/* Phase 4: Patching curve — exponential climb (frame 45 onward) */}
+        <Sequence from={CURVES_DRAW_START} durationInFrames={TOTAL_FRAMES - CURVES_DRAW_START}>
           <AnimatedCurve
             points={PATCHING_POINTS}
-            stroke="#EF4444"
-            strokeWidth={4}
+            stroke={PATCHING_COLOR}
+            strokeWidth={PATCHING_LINE_WIDTH}
             drawStartFrame={0}
-            drawEndFrame={305}
-            fadeOutStart={555}
-            fadeOutEnd={615}
+            drawEndFrame={CURVES_DRAW_DURATION}
             label="Patching"
             smooth
           />
         </Sequence>
 
-        {/* Phase 4: Generation curve — flat with sawtooth resets (frame 45-350) */}
-        <Sequence from={45} durationInFrames={615}>
+        {/* Phase 4: Generation curve — flat with sawtooth resets (frame 45 onward) */}
+        <Sequence from={CURVES_DRAW_START} durationInFrames={TOTAL_FRAMES - CURVES_DRAW_START}>
           <AnimatedCurve
             points={GENERATION_POINTS}
-            stroke="#22C55E"
-            strokeWidth={3}
+            stroke={GENERATION_COLOR}
+            strokeWidth={GENERATION_LINE_WIDTH}
             drawStartFrame={0}
-            drawEndFrame={305}
-            fadeOutStart={555}
-            fadeOutEnd={615}
+            drawEndFrame={CURVES_DRAW_DURATION}
             label="Generation"
             smooth={false}
           />
         </Sequence>
 
-        {/* Phase 5: Gap fill between curves (frame 100-350) */}
-        <Sequence from={100} durationInFrames={560}>
+        {/* Phase 5: Gap fill between curves (frame 100 onward) */}
+        <Sequence from={GAP_FILL_START} durationInFrames={TOTAL_FRAMES - GAP_FILL_START}>
           <GapFill
             topCurve={PATCHING_POINTS}
             bottomCurve={GENERATION_POINTS}
             fillStartFrame={0}
-            fillEndFrame={250}
-            fadeOutStart={500}
-            fadeOutEnd={560}
+            fillEndFrame={GAP_FILL_END - GAP_FILL_START}
           />
         </Sequence>
 
-        {/* Phase 6: Gap annotation (frame 300-660) */}
-        <Sequence from={300} durationInFrames={360}>
+        {/* Phase 6: Gap annotation (frame 300 onward) */}
+        <Sequence from={ANNOTATION_FADE_START} durationInFrames={TOTAL_FRAMES - ANNOTATION_FADE_START}>
           <GapAnnotation
             text="The gap compounds"
-            x={1200}
-            y={400}
+            x={ANNOTATION_X}
+            y={ANNOTATION_Y}
             fadeInStart={0}
             fadeInEnd={50}
-            fadeOutStart={300}
-            fadeOutEnd={360}
+            fadeOutStart={TOTAL_FRAMES}
+            fadeOutEnd={TOTAL_FRAMES}
           />
         </Sequence>
       </AbsoluteFill>

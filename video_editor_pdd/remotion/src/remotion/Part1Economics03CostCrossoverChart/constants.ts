@@ -45,7 +45,6 @@ export const GRID_FRACTIONS = [0.25, 0.5, 0.75];
 export const X_TICKS = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
 
 // Animation frames (at 30fps)
-export const AXES_FADE_START = 0;
 export const AXES_FADE_END = 30;
 export const GRID_FADE_START = 30;
 export const GRID_FADE_END = 90;
@@ -63,6 +62,7 @@ export const TOTAL_FRAMES = 2700;
 // Act G zoom timing (relative to component start)
 export const ZOOM_START = 2600;
 export const ZOOM_END = 2700;
+export const ZOOM_SCALE_TARGET = 2.5;
 
 // Data points (normalized 0-1)
 export const PATCHING_POINTS = [
@@ -97,3 +97,7 @@ export const CROSSOVER_POINT = { x: 0.42, y: 0.48 };
 // Derived crossover pixel position
 export const CROSSOVER_PX_X = CHART_X + CROSSOVER_POINT.x * CHART_W;
 export const CROSSOVER_PX_Y = CHART_Y + CHART_H * (1 - CROSSOVER_POINT.y);
+
+// Screen center
+export const CENTER_X = WIDTH / 2;
+export const CENTER_Y = HEIGHT / 2;
