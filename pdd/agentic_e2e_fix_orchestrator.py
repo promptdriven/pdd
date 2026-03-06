@@ -499,6 +499,7 @@ def run_agentic_e2e_fix_orchestrator(
 
     success = False
     final_message = ""
+    consecutive_provider_failures = 0
 
     try:
         # Outer Loop
@@ -604,9 +605,19 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Print brief result
                 if step_success:
+                    consecutive_provider_failures = 0
                     console.print(f"  -> Step {step_num} complete. Cost: ${step_cost:.4f}")
                 else:
                     console.print(f"  -> Step {step_num} [red]failed[/red]. Cost: ${step_cost:.4f}")
+
+                    # Track consecutive provider failures for early abort
+                    if "All agent providers failed" in step_output:
+                        consecutive_provider_failures += 1
+                        if consecutive_provider_failures >= 3:
+                            console.print(f"[bold red]Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable[/bold red]")
+                            return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, changed_files
+                    else:
+                        consecutive_provider_failures = 0
 
                 # 5. Save State
                 state_data = {
