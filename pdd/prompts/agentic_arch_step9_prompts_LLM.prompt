@@ -90,7 +90,7 @@ CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dict
 
 **VERIFICATION (MANDATORY):** After generating ALL prompt files, run:
 ```bash
-grep -rL "data_dictionary.yaml" prompts/*.prompt
+find prompts -name "*.prompt" -print0 | xargs -0 grep -L "data_dictionary.yaml"
 ```
 If ANY prompt files are listed (missing the include), you MUST go back and add the
 Shared Context section to each one. This check is non-negotiable.
@@ -202,7 +202,7 @@ Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
    - architecture.json `interface` fields are authoritative for function signatures
    - Step 2 naming registry is authoritative for collection/table names
 
-**5. Cross-language field name mapping (for multi-language projects):**
+% Cross-Language Field Name Mapping (for multi-language projects)
    - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
      - Include a "Field Name Mapping" table showing the exact field names in each language:
        ```
@@ -216,7 +216,7 @@ Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
      - The prompt MUST include: "When serializing/deserializing, use the EXACT field names from the API Wire Format column. Do NOT let language-specific conventions override the wire format."
    - For enum types shared across languages: ensure enum string values are IDENTICAL in both language prompts (e.g., `"pending"`, not `"PENDING"` in one and `"pending"` in another)
 
-**6. Auth-aware prompt generation:**
+% Auth-Aware Prompt Generation
    - If a module is tagged "auth" in architecture.json:
      - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
      - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures

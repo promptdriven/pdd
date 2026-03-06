@@ -99,7 +99,7 @@ Fix architecture completeness issues:
 
    - **Find all affected prompts:**
      ```bash
-     grep -rL "data_dictionary.yaml" prompts/*.prompt
+     find prompts -name "*.prompt" -exec grep -L "data_dictionary.yaml" {} +
      ```
    - Fix EVERY file listed by that command — do not stop partway through
 

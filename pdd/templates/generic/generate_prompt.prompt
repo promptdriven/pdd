@@ -224,4 +224,4 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
   &lt;/prompt&gt;
   ```
   Replace each `[PLACEHOLDER]` with concrete content while preserving the surrounding structure and literal &lt;include&gt; tags.
-  IMPORTANT: The Shared Context section with &lt;include&gt; tags for data_dictionary.yaml is MANDATORY in every prompt. Do NOT omit it.
+  IMPORTANT: When `prompts/_context/data_dictionary.yaml` exists, the Shared Context section with &lt;include&gt; tags for data_dictionary.yaml is MANDATORY. If that file does not exist, omit this section.

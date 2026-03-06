@@ -274,7 +274,7 @@ ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml pro
 If data_dictionary.yaml exists, check EVERY prompt file:
 ```bash
 # Find prompts MISSING data_dictionary include — every prompt must have it
-grep -rL "data_dictionary.yaml" prompts/*.prompt
+find prompts -name "*.prompt" -exec grep -L "data_dictionary.yaml" {} +
 ```
 
 If api_contracts.yaml exists, check API/router prompts:
