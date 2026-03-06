@@ -297,9 +297,9 @@ for f in $(cat architecture.json | jq -r '.[] | select(.filename | test("main|ap
 done
 ```
 
-- Every prompt MUST have `<include>prompts/_context/data_dictionary.yaml</include>`
-- API prompts (modules with `interface.type == "api"` or router/route in filename) MUST have `<include>prompts/_context/api_contracts.yaml</include>`
-- Entry point / wiring prompts MUST have `<include>prompts/_context/integration_points.yaml</include>`
+- Every prompt MUST have `&lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;`
+- API prompts (modules with `interface.type == "api"` or router/route in filename) MUST have `&lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;`
+- Entry point / wiring prompts MUST have `&lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;`
 
 **Flag as ERROR if:**
 - Context docs exist but ANY prompt is missing them (this is the most common validation failure — check thoroughly)
@@ -309,7 +309,7 @@ done
 
 **11b. Context Document Duplication Check (prompt compactness)**
 
-If `prompts/_context/data_dictionary.yaml` exists AND prompts include it via `<include>` tags,
+If `prompts/_context/data_dictionary.yaml` exists AND prompts include it via &lt;include&gt; tags,
 check that prompts do NOT also hardcode the same content inline. Inline duplication wastes
 tokens and causes synchronization drift when the YAML is updated but the prompt is not.
 
@@ -329,12 +329,12 @@ For each prompt found with inline duplication:
 - If duplicated content exceeds 10 lines, flag as ERROR
 
 **Flag as ERROR if:**
-- A prompt has `<include>` for data_dictionary.yaml AND also contains inline entity field
+- A prompt has &lt;include&gt; for data_dictionary.yaml AND also contains inline entity field
   tables (> 10 lines of `| Field | Type |` tables) — these should be removed
 - A prompt hardcodes all enum values for an enum that exists in the data dictionary
 
 **Flag as WARNING if:**
-- A prompt has a brief entity reference (< 5 lines) alongside the `<include>` — this is
+- A prompt has a brief entity reference (< 5 lines) alongside the &lt;include&gt; — this is
   acceptable as a "key fields used" summary
 
 % Output

@@ -47,14 +47,14 @@ modules from previous issues that are not listed here.
 % Shared Context Document Includes (CRITICAL — every generated prompt MUST have these)
 
 Step 8.5 generated shared context documents in `prompts/_context/`. Every prompt
-you generate MUST include relevant context documents using <include> tags. These
+you generate MUST include relevant context documents using &lt;include&gt; tags. These
 ensure pdd sync injects the canonical data model into code generation.
 
 Before adding includes, verify context files exist:
 ```bash
 ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml prompts/_context/integration_points.yaml 2>/dev/null
 ```
-If a file does NOT exist, do NOT add <include> tags for it.
+If a file does NOT exist, do NOT add &lt;include&gt; tags for it.
 
 For files that DO exist, EVERY prompt MUST contain a "Shared Context" section placed
 AFTER the role paragraph and BEFORE the Requirements section. The section MUST use
@@ -63,24 +63,24 @@ this EXACT format (copy-paste, do not paraphrase):
 ```
 Shared Context (canonical data model — use ONLY these fields and types)
 
-<context_data_dictionary>
-<include>prompts/_context/data_dictionary.yaml</include>
-</context_data_dictionary>
+&lt;context_data_dictionary&gt;
+&lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+&lt;/context_data_dictionary&gt;
 ```
 
 API endpoint prompts (modules with interface.type == "api" or router/route in filename)
 MUST ALSO include:
 ```
-<context_api_contracts>
-<include>prompts/_context/api_contracts.yaml</include>
-</context_api_contracts>
+&lt;context_api_contracts&gt;
+&lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+&lt;/context_api_contracts&gt;
 ```
 
 Entry point / main / wiring prompts MUST ALSO include:
 ```
-<context_integration_points>
-<include>prompts/_context/integration_points.yaml</include>
-</context_integration_points>
+&lt;context_integration_points&gt;
+&lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+&lt;/context_integration_points&gt;
 ```
 
 After the includes, add this constraint line:
@@ -164,15 +164,15 @@ After building all prompts, verify:
 % Data Model Reference Strategy (CRITICAL — avoid duplication)
 
 When `prompts/_context/data_dictionary.yaml` exists, the data model is injected via
-`<include>` tags at pdd sync time. This means prompts MUST NOT duplicate that content inline.
+&lt;include&gt; tags at pdd sync time. This means prompts MUST NOT duplicate that content inline.
 
 **DO NOT** add inline entity field tables (e.g., `## Data Model Reference` with
-`| Field | Type | Constraints |` tables) to prompts. The data dictionary `<include>`
+`| Field | Type | Constraints |` tables) to prompts. The data dictionary &lt;include&gt;
 already provides this. Inline duplication causes synchronization drift when the YAML is
 updated but the hardcoded table in the prompt is not.
 
 **What prompts SHOULD contain instead:**
-1. The `Shared Context` section with `<include>` tags (see above) — this is the single
+1. The `Shared Context` section with &lt;include&gt; tags (see above) — this is the single
    source of truth for entity fields, enum values, and API contracts
 2. A `## Dependency API Reference` section with function signatures from the Interface
    Contract Table — these are NOT in the YAML files and MUST be in the prompt:
@@ -262,19 +262,19 @@ When generating a prompt for a base data model module, scan architecture.json fo
 
    Shared Context (canonical data model — use ONLY these fields and types)
 
-   <context_data_dictionary>
-   <include>prompts/_context/data_dictionary.yaml</include>
-   </context_data_dictionary>
+   &lt;context_data_dictionary&gt;
+   &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+   &lt;/context_data_dictionary&gt;
 
    [If API module, also include:]
-   <context_api_contracts>
-   <include>prompts/_context/api_contracts.yaml</include>
-   </context_api_contracts>
+   &lt;context_api_contracts&gt;
+   &lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+   &lt;/context_api_contracts&gt;
 
    [If entry point module, also include:]
-   <context_integration_points>
-   <include>prompts/_context/integration_points.yaml</include>
-   </context_integration_points>
+   &lt;context_integration_points&gt;
+   &lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+   &lt;/context_integration_points&gt;
 
    CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
 
@@ -284,9 +284,9 @@ When generating a prompt for a base data model module, scan architecture.json fo
    ...
 
    Dependencies
-   <dependency_name>
-     <include>examples/BASENAME_example.EXT</include>
-   </dependency_name>
+   &lt;dependency_name&gt;
+     &lt;include&gt;examples/BASENAME_example.EXT&lt;/include&gt;
+   &lt;/dependency_name&gt;
 
    Testing Strategy (for modules with external dependencies)
    - External services used: [list from architecture.json interface]
@@ -376,7 +376,7 @@ For each module:
 1. Determine the correct directory from `.pddrc` (flat `prompts/` or subdirectory like `prompts/backend/`)
 2. Create file at the correct path (e.g., `prompts/{filename}` or `prompts/backend/{filename}`)
 3. Include rich context from reason, description, interface fields
-4. Add <include> tags for dependencies
+4. Add &lt;include&gt; tags for dependencies
 
 Remember:
 - Check `.pddrc` for the correct prompt directory before creating files

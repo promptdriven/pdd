@@ -76,25 +76,25 @@ Fix architecture completeness issues:
      ```
      Shared Context (canonical data model — use ONLY these fields and types)
 
-     <context_data_dictionary>
-     <include>prompts/_context/data_dictionary.yaml</include>
-     </context_data_dictionary>
+     &lt;context_data_dictionary&gt;
+     &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+     &lt;/context_data_dictionary&gt;
 
      CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
      ```
 
    - For API/router prompts, ALSO add before CONSTRAINTS:
      ```
-     <context_api_contracts>
-     <include>prompts/_context/api_contracts.yaml</include>
-     </context_api_contracts>
+     &lt;context_api_contracts&gt;
+     &lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+     &lt;/context_api_contracts&gt;
      ```
 
    - For entry point/main prompts, ALSO add before CONSTRAINTS:
      ```
-     <context_integration_points>
-     <include>prompts/_context/integration_points.yaml</include>
-     </context_integration_points>
+     &lt;context_integration_points&gt;
+     &lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+     &lt;/context_integration_points&gt;
      ```
 
    - **Find all affected prompts:**
@@ -112,14 +112,14 @@ Fix architecture completeness issues:
 6. **Inline Duplication of Context YAML Content (prompt compactness):**
    - If the validation error mentions inline duplication, remove hardcoded entity field tables,
      enum value lists, and Pydantic schema definitions from prompt files
-   - The `<include>prompts/_context/data_dictionary.yaml</include>` already provides this data
+   - The &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt; already provides this data
    - Replace inline tables with brief references, e.g.:
      - BEFORE: Full `| Field | Type | Constraints |` table with 15 rows
      - AFTER: `This module operates on the User entity (see data dictionary). Key fields used: id, email, password_hash, deleted_at.`
    - Similarly for enums:
      - BEFORE: `Define AuthProvider with values: LOCAL, GOOGLE, APPLE, GITHUB`
      - AFTER: `Uses AuthProvider enum from data dictionary.`
-   - Keep the `Shared Context` section with `<include>` tags — that's the single source of truth
+   - Keep the `Shared Context` section with &lt;include&gt; tags — that's the single source of truth
    - Keep `## Dependency API Reference` sections (function signatures) — those are NOT in the YAMLs
 
 ---
@@ -215,11 +215,11 @@ Fix dependency graph issues in architecture.json:
    - Or remove the module from architecture.json if not needed
 
 5. **Wrong Include Paths:**
-   If `<include>` paths in prompt files don't match .pddrc `example_output_path`:
+   If &lt;include&gt; paths in prompt files don't match .pddrc `example_output_path`:
    - Read `.pddrc` to find the correct `example_output_path` for each context
-   - In each affected prompt file, replace the wrong path prefix in `<include>` tags
+   - In each affected prompt file, replace the wrong path prefix in &lt;include&gt; tags
    - Only fix the prefix, keep the filename unchanged
-   - Example: if `example_output_path` is `context/` and prompt has `<include>src/models_example.py</include>`, change to `<include>context/models_example.py</include>`
+   - Example: if `example_output_path` is `context/` and prompt has `&lt;include&gt;src/models_example.py&lt;/include&gt;`, change to `&lt;include&gt;context/models_example.py&lt;/include&gt;`
    - Skip URLs (`http://`, `https://`), template variables (`${{...}}`), and `pdd/` internal paths
 
 % ============================================================================
