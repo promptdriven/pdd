@@ -246,6 +246,9 @@ def _save_architecture_files(
         clean_content = clean_content.strip()
 
         arch_data = json.loads(clean_content)
+        # Issue #617: ensure filename mirrors filepath (directory structure preserved)
+        from pdd.architecture_sync import normalize_architecture_filenames
+        normalize_architecture_filenames(arch_data)
 
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(arch_data, f, indent=2)
@@ -853,6 +856,9 @@ def run_agentic_architecture_orchestrator(
                             issue_number=issue_number,
                             issue_url=issue_url,
                         )
+                        # Issue #617: ensure filename mirrors filepath
+                        from pdd.architecture_sync import normalize_architecture_filenames
+                        normalize_architecture_filenames(merged_arch)
                         # Write full merged architecture to disk
                         with open(arch_file, "w", encoding="utf-8") as f:
                             json.dump(merged_arch, f, indent=2, ensure_ascii=False)
@@ -885,7 +891,12 @@ def run_agentic_architecture_orchestrator(
                             target_dir=target_dir,
                         )
                     else:
-                        step_output = arch_content
+                        # Issue #617: ensure filename mirrors filepath before keeping on disk
+                        from pdd.architecture_sync import normalize_architecture_filenames
+                        normalize_architecture_filenames(arch_data)
+                        with open(arch_file, "w", encoding="utf-8") as f:
+                            json.dump(arch_data, f, indent=2, ensure_ascii=False)
+                        step_output = json.dumps(arch_data, indent=2)
                         if not quiet:
                             console.print(f"   → architecture.json created with {len(arch_data)} modules")
 

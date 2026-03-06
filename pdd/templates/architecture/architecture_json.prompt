@@ -218,13 +218,13 @@ Before generating architecture, detect the framework from PRD/tech stack:
 
 For frameworks with strict file naming conventions (Next.js, Nuxt, SvelteKit), you MUST follow their required filenames.
 
-FILENAME CONVENTIONS:
-- The "filename" field is the prompt filename: <base>_<Language>.prompt
-- Use DESCRIPTIVE basenames that capture the module's purpose and context
-- The basename should be unique and meaningful so prompts are self-documenting
-- CRITICAL: The filename field must NOT contain slashes (/). Use underscores (_) to separate path components.
-  - WRONG: "api/courses/route_TypeScript.prompt" (slashes create nested directories)
-  - CORRECT: "api_courses_route_TypeScript.prompt" (underscores keep prompt flat)
+FILENAME CONVENTIONS (Issue #617):
+- The "filename" field is the prompt filename and MUST mirror the "filepath" directory structure.
+- Format: same path as filepath, with the file extension replaced by _<Language>.prompt
+- Use forward slashes (/) in filename to preserve the same directory structure as filepath.
+  - CORRECT: filepath="app/api/courses/route.ts" → filename="app/api/courses/route_TypeScript.prompt"
+  - CORRECT: filepath="prisma/schema.prisma" → filename="prisma/schema_Prisma.prompt"
+  - WRONG: "api_courses_route_TypeScript.prompt" (flattened with underscores; do not flatten)
 
 **VALID LANGUAGE SUFFIXES** (MUST use exactly one of these - case-sensitive PascalCase):
 - **TypeScript projects**: `TypeScript` (.ts) or `TypeScriptReact` (.tsx)
@@ -242,17 +242,17 @@ FILENAME CONVENTIONS:
 - ❌ `FastAPI`, `Flask`, `Django` - Use `Python` instead
 - ❌ `Express`, `NestJS` - Use `TypeScript` or `JavaScript` instead
 
-Examples for Next.js App Router (use descriptive names with path context):
-  ✓ "api_courses_route_TypeScript.prompt" - API route for courses endpoint
-  ✓ "api_lessons_id_route_TypeScript.prompt" - API route for lessons with dynamic [id]
-  ✓ "dashboard_page_TypeScriptReact.prompt" - Dashboard page component
-  ✓ "app_layout_TypeScriptReact.prompt" - Root app layout
-  ✓ "auth_middleware_TypeScript.prompt" - Authentication middleware
+Examples for Next.js App Router (filename mirrors filepath):
+  ✓ filepath="app/api/courses/route.ts" → filename="app/api/courses/route_TypeScript.prompt"
+  ✓ filepath="app/api/lessons/[id]/route.ts" → filename="app/api/lessons/[id]/route_TypeScript.prompt"
+  ✓ filepath="app/dashboard/page.tsx" → filename="app/dashboard/page_TypeScriptReact.prompt"
+  ✓ filepath="app/layout.tsx" → filename="app/layout_TypeScriptReact.prompt"
+  ✓ filepath="middleware.ts" → filename="middleware_TypeScript.prompt"
 
 Examples for standard projects (Python, Go, etc.):
-  ✓ "orders_Python.prompt" - Orders module
-  ✓ "api_routes_Python.prompt" - API routes module
-  ✓ "models_Python.prompt" - Data models
+  ✓ filepath="src/orders.py" → filename="src/orders_Python.prompt"
+  ✓ filepath="src/api/routes.py" → filename="src/api/routes_Python.prompt"
+  ✓ filepath="src/models/user.py" → filename="src/models/user_Python.prompt"
 
 Keep names consistent across dependencies - if module A depends on B, use the same naming style.
 

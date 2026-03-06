@@ -251,18 +251,9 @@ ls -la .pdd/backups/ 2>/dev/null
 % STEP C: CLEANUP ARCHITECTURE.JSON (METADATA)
 % ----------------------------------------------------------------------------
 
-**3. Fix architecture.json filename entries with slashes:**
+**3. Fix architecture.json so filename MIRRORS filepath (Issue #617):**
 
-   WRONG:
-   ```json
-   [
-     {{"filename": "prisma/schema_Prisma.prompt", "filepath": "prisma/schema.prisma"}},
-     {{"filename": "app/page_TypeScriptReact.prompt", "filepath": "app/page.tsx"}},
-     {{"filename": "app/api/counter/route_TypeScript.prompt", "filepath": "app/api/counter/route.ts"}}
-   ]
-   ```
-
-   CORRECT:
+   WRONG (flattened with underscores — do NOT use):
    ```json
    [
      {{"filename": "prisma_schema_Prisma.prompt", "filepath": "prisma/schema.prisma"}},
@@ -271,18 +262,26 @@ ls -la .pdd/backups/ 2>/dev/null
    ]
    ```
 
-   **Key rules for architecture.json:**
-   - `filename` = PROMPT file name = FLAT, uses underscores, NO SLASHES
-   - `filepath` = OUTPUT code path = CAN have slashes (this is where code goes)
-   - `filename` becomes the basename for `pdd sync <basename>`
+   CORRECT (filename mirrors filepath — same directory structure):
+   ```json
+   [
+     {{"filename": "prisma/schema_Prisma.prompt", "filepath": "prisma/schema.prisma"}},
+     {{"filename": "app/page_TypeScriptReact.prompt", "filepath": "app/page.tsx"}},
+     {{"filename": "app/api/counter/route_TypeScript.prompt", "filepath": "app/api/counter/route.ts"}}
+   ]
+   ```
+
+   **Key rules for architecture.json (Issue #617):**
+   - `filename` = PROMPT file path = MUST mirror `filepath` (same directories, extension → _Language.prompt)
+   - `filepath` = OUTPUT code path (where generated code goes)
+   - Use forward slashes in filename so it matches the filepath structure (e.g. prisma/schema_Prisma.prompt)
 
 **4. Update dependencies array if filenames changed:**
-   If you rename `prisma/schema_Prisma.prompt` to `prisma_schema_Prisma.prompt`,
-   update ALL modules that reference it in their `dependencies` array:
+   If you change flattened filenames to path-mirroring filenames, update ALL modules that reference them in `dependencies`:
    ```json
    {{
-     "filename": "prisma_client_TypeScript.prompt",
-     "dependencies": ["prisma_schema_Prisma.prompt"]  // ← Update this too!
+     "filename": "lib/prisma_client_TypeScript.prompt",
+     "dependencies": ["prisma/schema_Prisma.prompt"]  // ← Use path-mirroring filename
    }}
    ```
 
@@ -290,24 +289,16 @@ ls -la .pdd/backups/ 2>/dev/null
 % STEP D: CLEANUP .pddrc (METADATA)
 % ----------------------------------------------------------------------------
 
-**5. Fix .pddrc contexts to match corrected filenames:**
+**5. Fix .pddrc contexts to match filename paths (filename mirrors filepath):**
 
-   If you renamed `prisma/schema` to `prisma_schema`, update .pddrc:
+   When filename is `prisma/schema_Prisma.prompt`, the sync basename is path-like (e.g. prisma/schema). Update .pddrc paths to match:
 
-   WRONG (old nested pattern):
-   ```yaml
-   contexts:
-     prisma:
-       paths: ["prisma/*"]  # ❌ Won't match flat basenames
-   ```
-
-   CORRECT (flat pattern):
+   CORRECT (path pattern matches prompt path):
    ```yaml
    contexts:
      prisma_schema:
-       paths: ["*prisma_schema*"]  # ✓ Matches basename "prisma_schema"
+       paths: ["*prisma/schema*"]  # ✓ Matches prompt path prisma/schema_Prisma.prompt
        defaults:
-         # NO prompts_dir here!
          outputs:
            code:
              path: "prisma/schema.prisma"
@@ -322,17 +313,18 @@ ls -la .pdd/backups/ 2>/dev/null
 
    **Strategy A (per-module — Next.js/Nuxt/SvelteKit):** Each module needs its own context.
    **CRITICAL: Put `prompts_dir` ONLY in the `default` context!**
+   When filename mirrors filepath (e.g. app/page_TypeScriptReact.prompt), use path-like patterns:
    ```yaml
    contexts:
-     home_page:
-       paths: ["*home_page*"]
+     app_page:
+       paths: ["*app/page*"]
        defaults:
          outputs:
            code:
              path: "app/page.tsx"  # EXACT path from architecture.json filepath
 
-     api_counter_route:
-       paths: ["*api_counter_route*"]
+     app_api_counter_route:
+       paths: ["*app/api/counter/route*"]
        defaults:
          outputs:
            code:
@@ -468,15 +460,14 @@ Before fixing the validation error, clean up ALL incorrectly placed artifacts:
 
 ```bash
 # A. Find and list problems
-echo "=== Checking for nested prompt files (WRONG) ==="
-find prompts -mindepth 2 -name "*.prompt" 2>/dev/null
-
-echo "=== Checking for slashes in architecture.json filenames (WRONG) ==="
-cat architecture.json | jq -r '.[].filename' | grep '/' || echo "None found"
-
-# B. Delete nested prompt files
-find prompts -mindepth 2 -name "*.prompt" -delete 2>/dev/null
-find prompts -mindepth 1 -type d -empty -delete 2>/dev/null
+echo "=== Checking for flattened filenames in architecture.json (WRONG per Issue #617) ==="
+# Filenames should mirror filepath (contain /). Flat names like prisma_schema_Prisma.prompt are wrong.
+cat architecture.json | jq -r '.[] | "\(.filename) | \(.filepath)"' | while IFS='|' read -r fn fp; do
+  fn="${fn%% *}"; fp="${fp%% *}";
+  # If filepath has / but filename does not, it's flattened (wrong)
+  if [[ "$fp" == */* && "$fn" != */* ]]; then echo "FLATTENED (fix): $fn -> should mirror $fp"; fi;
+done
+# Note: With Issue #617, prompts in subdirs (e.g. prompts/app/, prompts/prisma/) are CORRECT — do not delete them.
 
 # C. Delete orphan code files at wrong paths
 rm -f app/home_page.tsx app/root_layout.tsx 2>/dev/null
@@ -500,37 +491,37 @@ ls -la .pdd/meta/ 2>/dev/null || echo "No .pdd/meta directory"
 
 **Step 3: Fix metadata (architecture.json and .pddrc)**
 
-If architecture.json has slashes in filename fields, rewrite the ENTIRE file with corrected entries:
-- Change `"filename": "prisma/schema_Prisma.prompt"` → `"filename": "prisma_schema_Prisma.prompt"`
-- Update ALL `dependencies` arrays to reference the corrected filenames
-- Ensure .pddrc contexts match the corrected basenames
+If architecture.json has flattened filenames (no slashes), rewrite so filename MIRRORS filepath (Issue #617):
+- Change `"filename": "prisma_schema_Prisma.prompt"` → `"filename": "prisma/schema_Prisma.prompt"` (mirror filepath)
+- Update ALL `dependencies` arrays to reference the path-mirroring filenames
+- Ensure .pddrc contexts use path-like patterns that match the prompt paths
 
 **Step 4: Apply targeted fixes for validation error**
 
 Make ONLY the changes needed to fix this specific validation error:
-- `architecture.json` - If modules need to be added/fixed (ensure filenames have NO slashes)
+- `architecture.json` - If modules need to be added/fixed (ensure filename MIRRORS filepath per Issue #617)
 - `.pddrc` - If sync configuration needs fixing (ensure each module has dedicated context with `outputs.code.path`)
 - Prompt files - If prompts need to be created/fixed (place FLAT in `prompts/` directory)
 
 **Step 5: Write corrected files to disk**
 
 ```bash
-# If architecture.json needs updates (ensure NO slashes in filename field!)
+# If architecture.json needs updates (ensure filename MIRRORS filepath — Issue #617!)
 cat > architecture.json << 'EOF'
 [
   {{
-    "filename": "home_page_TypeScriptReact.prompt",
+    "filename": "app/page_TypeScriptReact.prompt",
     "filepath": "app/page.tsx"
   }}
 ]
 EOF
 
-# If .pddrc needs updates (ensure each module has dedicated context!)
+# If .pddrc needs updates (path patterns should match filename paths — Issue #617)
 cat > .pddrc << 'EOF'
 version: "1.0"
 contexts:
-  home_page:
-    paths: ["*home_page*"]
+  app_page:
+    paths: ["*app/page*"]
     defaults:
       outputs:
         code:
@@ -541,9 +532,9 @@ contexts:
       generate_output_path: "src/"
 EOF
 
-# If prompt files need to be created/fixed - FLAT in prompts/, no subdirectories!
-mkdir -p prompts
-cat > prompts/home_page_TypeScriptReact.prompt << 'EOF'
+# If prompt files need to be created/fixed — path under prompts/ must match filename (e.g. app/page_TypeScriptReact.prompt)
+mkdir -p prompts/app
+cat > prompts/app/page_TypeScriptReact.prompt << 'EOF'
 ...prompt content...
 EOF
 ```
@@ -605,9 +596,9 @@ When fixing errors, do NOT add modules that already exist in sibling projects. U
 - Focus ONLY on fixing the specific validation error reported
 - Don't try to fix issues from other validation steps (they will be checked next)
 - Write files directly to disk - don't just output them
-- architecture.json must be valid JSON array with NO SLASHES in filename field
+- architecture.json must be valid JSON array; filename MUST mirror filepath (same path, extension → _Language.prompt) per Issue #617
 - .pddrc must be valid YAML with proper indentation and dedicated context per module
-- Prompt files MUST be in the correct directory: FLAT in `prompts/` for Strategy A, or in the group's `prompts_dir` subdirectory for Strategy B
+- Prompt files MUST be at the path that matches filename: e.g. filename `app/page_TypeScriptReact.prompt` → file `prompts/app/page_TypeScriptReact.prompt` (Strategy A), or in the group's `prompts_dir` subdirectory for Strategy B
 - Every new module in architecture.json needs a prompt file at the correct path for its strategy
 - Clean up any incorrectly placed files BEFORE creating correct ones
 - After fixes, workflow will re-run ALL validations from step 10

@@ -1,0 +1,181 @@
+[
+  {
+    "reason": "Core utility for calculating and tracking Anthropic API costs based on token usage and model pricing.",
+    "description": "Provides a centralized utility to calculate costs for input, output, and cached tokens across different Claude models. It handles the specific pricing logic for cache writes (25% premium) and cache reads (90% discount).",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "edit_file_tool/cost_tracker_Python.prompt",
+    "filepath": "edit_file_tool/cost_tracker.py",
+    "tags": [
+      "utility",
+      "api",
+      "cost-tracking"
+    ],
+    "context_urls": [
+      {
+        "url": "https://www.anthropic.com/pricing",
+        "purpose": "Reference for Claude API pricing and token costs"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "component": {},
+      "page": {
+        "route": "",
+        "renderingModel": "server",
+        "params": [],
+        "dataSources": [],
+        "layout": {}
+      },
+      "module": {},
+      "api": {},
+      "graphql": {},
+      "cli": {},
+      "job": {},
+      "message": {},
+      "config": {}
+    }
+  },
+  {
+    "reason": "Implementation of the Anthropic text_editor_20250124 tool for programmatic file manipulation.",
+    "description": "Wraps the low-level file editing operations including 'view', 'insert', 'str_replace', and 'undo'. Manages file system interactions and provides a clean interface for the LLM to execute edits.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "edit_file_tool/editor_tool_Python.prompt",
+    "filepath": "edit_file_tool/editor_tool.py",
+    "tags": [
+      "core",
+      "file-io",
+      "anthropic-tools"
+    ],
+    "context_urls": [
+      {
+        "url": "https://docs.anthropic.com/en/docs/build-with-claude/tool-use",
+        "purpose": "Documentation for Anthropic tool use implementation"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "component": {},
+      "page": {
+        "route": "",
+        "renderingModel": "server",
+        "params": [],
+        "dataSources": [],
+        "layout": {}
+      },
+      "module": {},
+      "api": {},
+      "graphql": {},
+      "cli": {},
+      "job": {},
+      "message": {},
+      "config": {}
+    }
+  },
+  {
+    "reason": "Logic for determining when to apply prompt caching based on file size and complexity.",
+    "description": "Implements the 'auto' caching logic. Analyzes file metrics (size, line count, density) to decide if the 1KB/4KB thresholds are met for cost-effective caching.",
+    "dependencies": [],
+    "priority": 3,
+    "filename": "edit_file_tool/cache_manager_Python.prompt",
+    "filepath": "edit_file_tool/cache_manager.py",
+    "tags": [
+      "optimization",
+      "caching"
+    ],
+    "context_urls": [
+      {
+        "url": "https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching",
+        "purpose": "Anthropic prompt caching technical details"
+      }
+    ],
+    "interface": {
+      "type": "module",
+      "component": {},
+      "page": {
+        "route": "",
+        "renderingModel": "server",
+        "params": [],
+        "dataSources": [],
+        "layout": {}
+      },
+      "module": {},
+      "api": {},
+      "graphql": {},
+      "cli": {},
+      "job": {},
+      "message": {},
+      "config": {}
+    }
+  },
+  {
+    "reason": "Main entry point for the library's programmatic API.",
+    "description": "Orchestrates the interaction between the LLM (Claude), the Editor Tool, and the Cache Manager. Handles the conversation loop, 'think' tool integration, and returns success status and total cost.",
+    "dependencies": [
+      "edit_file_tool/cost_tracker_Python.prompt",
+      "edit_file_tool/editor_tool_Python.prompt",
+      "edit_file_tool/cache_manager_Python.prompt"
+    ],
+    "priority": 4,
+    "filename": "edit_file_tool/main_Python.prompt",
+    "filepath": "edit_file_tool/main.py",
+    "tags": [
+      "core",
+      "api",
+      "llm"
+    ],
+    "context_urls": [],
+    "interface": {
+      "type": "module",
+      "component": {},
+      "page": {
+        "route": "",
+        "renderingModel": "server",
+        "params": [],
+        "dataSources": [],
+        "layout": {}
+      },
+      "module": {},
+      "api": {},
+      "graphql": {},
+      "cli": {},
+      "job": {},
+      "message": {},
+      "config": {}
+    }
+  },
+  {
+    "reason": "Command-line interface for the edit-file utility.",
+    "description": "Provides the 'edit-file' command. Parses arguments like --model, --cache, and --verbose. Interfaces with the main library to execute edits from the terminal.",
+    "dependencies": [
+      "edit_file_tool/main_Python.prompt"
+    ],
+    "priority": 5,
+    "filename": "edit_file_tool/cli_Python.prompt",
+    "filepath": "edit_file_tool/cli.py",
+    "tags": [
+      "cli",
+      "interface"
+    ],
+    "context_urls": [],
+    "interface": {
+      "type": "cli",
+      "component": {},
+      "page": {
+        "route": "",
+        "renderingModel": "server",
+        "params": [],
+        "dataSources": [],
+        "layout": {}
+      },
+      "module": {},
+      "api": {},
+      "graphql": {},
+      "cli": {},
+      "job": {},
+      "message": {},
+      "config": {}
+    }
+  }
+]
