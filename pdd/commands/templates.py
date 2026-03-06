@@ -17,7 +17,7 @@ from ..core.errors import handle_error, custom_theme
 def _echo_rich(*renderables):
     """Render Rich objects to plain text and output via click.echo (CliRunner-compatible)."""
     buf = io.StringIO()
-    c = Console(file=buf, highlight=False, force_terminal=False, theme=custom_theme)
+    c = Console(file=buf, highlight=False, force_terminal=False, theme=custom_theme, width=120)
     for r in renderables:
         c.print(r)
     click.echo(buf.getvalue(), nl=False)
