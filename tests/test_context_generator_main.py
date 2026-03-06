@@ -285,7 +285,7 @@ def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, moc
     assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
 
 def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
-    """Test that --format code option uses language extension based on language variable even with explicit --output path."""
+    """Test that explicit --output filename is preserved when format=code."""
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "test.py"
@@ -297,15 +297,51 @@ def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, m
     mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": default_path}, "python")
     mock_context_generator.return_value = ("# Python Example", 0.0, "model")
     
-    # Call with format="code" and explicit output path with wrong extension
+    # Call with format="code" and explicit output path.
     context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
-    
-    # Should have saved to .py file (extension overridden from .md to match language)
-    expected_output = tmp_path / "custom_example.py"
-    assert expected_output.exists(), f"Expected output file {expected_output} to exist"
-    assert expected_output.read_text() == "# Python Example"
-    # Original .md path should not exist
-    assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
+
+    # --output should win over language-derived extension rewriting.
+    assert explicit_output.exists(), f"Expected output file {explicit_output} to exist"
+    assert explicit_output.read_text() == "# Python Example"
+    # Rewritten language extension file must not be created.
+    rewritten_output = tmp_path / "custom_example.py"
+    assert not rewritten_output.exists(), (
+        f"Did not expect rewritten file {rewritten_output} when --output was explicit"
+    )
+
+
+def test_format_code_preserves_explicit_typescriptreact_output_path(
+    mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path
+):
+    """Regression test for issue #551: explicit .tsx output must not become .typescriptreact."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "app_page_TypeScriptReact.prompt"
+    code_file = tmp_path / "app_page.tsx"
+    explicit_output = tmp_path / "examples" / "app" / "app_page_example.tsx"
+    prompt_file.write_text("Prompt")
+    code_file.write_text("Code")
+
+    # construct_paths reports the same explicit output and detected language.
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt", "code_file": "Code"},
+        {"output": str(explicit_output)},
+        "typescriptreact",
+    )
+    mock_context_generator.return_value = ("// Generated TSX", 0.0, "model")
+
+    context_generator_main(
+        mock_ctx,
+        str(prompt_file),
+        str(code_file),
+        str(explicit_output),
+        format="code",
+    )
+
+    assert explicit_output.exists(), f"Expected output file {explicit_output} to exist"
+    assert explicit_output.read_text() == "// Generated TSX"
+    wrong_output = explicit_output.with_suffix(".typescriptreact")
+    assert not wrong_output.exists(), f"Unexpected file created: {wrong_output}"
 
 def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that --format md option works with default output path generation."""
