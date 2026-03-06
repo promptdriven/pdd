@@ -18,19 +18,21 @@ export const ArrowIcon: React.FC<ArrowIconProps> = ({ direction, color }) => {
       style={{ display: "block" }}
     >
       {isUp ? (
-        <path
-          d="M40 16L64 48H16L40 16Z"
-          fill={color}
+        <polyline
+          points="16,56 40,24 64,56"
+          fill="none"
           stroke={color}
-          strokeWidth={2}
+          strokeWidth={8}
+          strokeLinecap="round"
           strokeLinejoin="round"
         />
       ) : (
-        <path
-          d="M40 64L16 32H64L40 64Z"
-          fill={color}
+        <polyline
+          points="16,24 40,56 64,24"
+          fill="none"
           stroke={color}
-          strokeWidth={2}
+          strokeWidth={8}
+          strokeLinecap="round"
           strokeLinejoin="round"
         />
       )}

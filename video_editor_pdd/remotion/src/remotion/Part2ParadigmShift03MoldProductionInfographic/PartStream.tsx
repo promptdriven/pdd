@@ -10,6 +10,7 @@ import {
   PART_Y,
   NORMAL_INTERVAL,
   FAST_INTERVAL,
+  PART_TRAVEL_FRAMES,
   STREAM_START,
   STREAM_FAST_START,
   STREAM_PAUSE,
@@ -31,6 +32,7 @@ interface PartInfo {
 
 /**
  * Computes the list of parts that should spawn during the animation.
+ * The last part before the stream pause is marked as defective.
  */
 function computeParts(): PartInfo[] {
   const parts: PartInfo[] = [];
@@ -49,8 +51,7 @@ function computeParts(): PartInfo[] {
     f += FAST_INTERVAL;
   }
 
-  // Mark one part near defect frame as the defective one
-  // The defective part is the last one before the pause
+  // Mark the last part before pause as the defective one
   if (parts.length > 0) {
     parts[parts.length - 1].isDefect = true;
   }
@@ -63,6 +64,24 @@ function computeParts(): PartInfo[] {
   }
 
   return parts;
+}
+
+// Pre-compute parts list (module-level, deterministic)
+const ALL_PARTS = computeParts();
+const DEFECT_PART = ALL_PARTS.find((p) => p.isDefect);
+
+/**
+ * Returns the X position of the defect part at a given frame.
+ */
+export function getDefectPartX(frame: number): number {
+  if (!DEFECT_PART) return CONVEYOR_X_START + 200;
+  const localFrame = Math.max(0, frame - DEFECT_PART.spawnFrame);
+  return interpolate(
+    localFrame,
+    [0, PART_TRAVEL_FRAMES],
+    [CONVEYOR_X_START, CONVEYOR_X_END],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
 }
 
 interface SinglePartProps {
@@ -82,11 +101,9 @@ const SinglePart: React.FC<SinglePartProps> = ({ part, globalFrame }) => {
   });
 
   // Part moves from mold exit to conveyor end
-  const travelDuration = 120; // frames to traverse conveyor
-
   const x = interpolate(
     localFrame,
-    [0, travelDuration],
+    [0, PART_TRAVEL_FRAMES],
     [CONVEYOR_X_START, CONVEYOR_X_END],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
@@ -106,7 +123,7 @@ const SinglePart: React.FC<SinglePartProps> = ({ part, globalFrame }) => {
   let partScale = popScale;
 
   if (part.isDefect) {
-    // Red flash after defect appear
+    // Red flash after defect appear frame
     const defectLocalFrame = globalFrame - DEFECT_APPEAR;
     if (defectLocalFrame >= 0) {
       const flash = interpolate(
@@ -138,10 +155,8 @@ const SinglePart: React.FC<SinglePartProps> = ({ part, globalFrame }) => {
     }
   }
 
-  // Don't render if fully transparent
   if (partOpacity <= 0) return null;
 
-  // Use <g> with translate/scale for proper SVG center-point scaling
   const cx = x;
   const cy = PART_Y + PART_H / 2;
 
@@ -167,7 +182,7 @@ const SinglePart: React.FC<SinglePartProps> = ({ part, globalFrame }) => {
 
 export const PartStream: React.FC = () => {
   const frame = useCurrentFrame();
-  const parts = useMemo(() => computeParts(), []);
+  const parts = useMemo(() => ALL_PARTS, []);
 
   // Only render parts that have spawned
   const activeParts = parts.filter((p) => frame >= p.spawnFrame);
@@ -180,32 +195,10 @@ export const PartStream: React.FC = () => {
       style={{ position: "absolute", top: 0, left: 0 }}
     >
       {activeParts.map((part) => (
-        <SinglePart
-          key={part.id}
-          part={part}
-          globalFrame={frame}
-        />
+        <SinglePart key={part.id} part={part} globalFrame={frame} />
       ))}
     </svg>
   );
 };
-
-/**
- * Returns the X position of the defect part at a given frame.
- */
-export function getDefectPartX(frame: number): number {
-  const parts = computeParts();
-  const defectPart = parts.find((p) => p.isDefect);
-  if (!defectPart) return CONVEYOR_X_START + 200;
-
-  const localFrame = frame - defectPart.spawnFrame;
-  const travelDuration = 120;
-  return interpolate(
-    Math.max(0, localFrame),
-    [0, travelDuration],
-    [CONVEYOR_X_START, CONVEYOR_X_END],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-}
 
 export default PartStream;

@@ -9,7 +9,7 @@ import { Part3MoldTitleCard } from "../part3_mold_title_card";
 
 export const Part3MoldSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 593.722667;
+  const offsetSeconds = 593.786667;
   const durationSeconds = 280.728;
 
   return (

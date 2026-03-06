@@ -9,8 +9,7 @@ import {
   GRADIENT_START,
   GRADIENT_END,
   PANEL_FADE_END,
-  NODE3_ACTIVATE,
-  NODE1_ACTIVATE,
+  NODES,
 } from "./constants";
 
 interface TimelineTrackProps {
@@ -28,18 +27,39 @@ export const TimelineTrack: React.FC<TimelineTrackProps> = ({
     easing: Easing.out(Easing.cubic),
   });
 
-  // Progress line draws left to right from node1 activate to node3 activate
+  // Segmented progress: draws to each node as it activates
+  // Node 1 (x=400) activates at frame 25, line arrives by frame 55
+  // Node 2 (x=960) activates at frame 90, line arrives by frame 130
+  // Node 3 (x=1520) activates at frame 180, line arrives by frame 220
   const trackLength = TRACK_X_END - TRACK_X_START;
-  const progress = interpolate(
-    frame,
-    [NODE1_ACTIVATE, NODE3_ACTIVATE + 20],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+
+  const node1Frac = (NODES[0].x - TRACK_X_START) / trackLength; // 0
+  const node2Frac = (NODES[1].x - TRACK_X_START) / trackLength; // ~0.5
+  const node3Frac = (NODES[2].x - TRACK_X_START) / trackLength; // 1
+
+  // Segment 1: draw to node 1 (frames 25-55)
+  const seg1 = interpolate(frame, [25, 55], [0, node1Frac], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.inOut(Easing.cubic),
+  });
+
+  // Segment 2: draw from node 1 to node 2 (frames 90-130)
+  const seg2 = interpolate(frame, [90, 130], [node1Frac, node2Frac], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.inOut(Easing.cubic),
+  });
+
+  // Segment 3: draw from node 2 to node 3 (frames 180-220)
+  const seg3 = interpolate(frame, [180, 220], [node2Frac, node3Frac], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.inOut(Easing.cubic),
+  });
+
+  // Overall progress is the max of all segments
+  const progress = Math.max(seg1, seg2, seg3);
   const progressWidth = trackLength * progress;
 
   return (

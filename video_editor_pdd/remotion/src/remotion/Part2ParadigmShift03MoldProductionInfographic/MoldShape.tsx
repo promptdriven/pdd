@@ -1,5 +1,5 @@
 import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
   MOLD_X,
   MOLD_Y,
@@ -10,6 +10,7 @@ import {
   MOLD_CAVITY_W,
   MOLD_CAVITY_H,
   MOLD_CAVITY_FILL,
+  MOLD_LABEL_TEXT,
   MOLD_FADE_START,
   MOLD_FADE_END,
   LABEL_FADE_START,
@@ -18,18 +19,18 @@ import {
   FADEOUT_START,
   FADEOUT_END,
   FIX_COLOR,
+  WRENCH_APPEAR,
+  WRENCH_FLASH_DURATION,
 } from "./constants";
 
 interface MoldShapeProps {
   showWrench: boolean;
   wrenchScale: number;
-  moldBorderFlashGreen: number;
 }
 
 export const MoldShape: React.FC<MoldShapeProps> = ({
   showWrench,
   wrenchScale,
-  moldBorderFlashGreen,
 }) => {
   const frame = useCurrentFrame();
 
@@ -37,9 +38,10 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
     frame,
     [MOLD_FADE_START, MOLD_FADE_END, FADEOUT_START, FADEOUT_END],
     [0, 1, 1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
+  // Pulsing glow on the mold border
   const glowPulse = interpolate(
     Math.sin(frame * 0.08),
     [-1, 1],
@@ -53,16 +55,23 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Border color: orange normally, flashes green when wrench appears
-  const borderColor =
-    moldBorderFlashGreen > 0
-      ? FIX_COLOR
-      : MOLD_GLOW_COLOR;
+  // Border flashes green when wrench appears, then returns to orange
+  const isFlashing =
+    frame >= WRENCH_APPEAR && frame < WRENCH_APPEAR + WRENCH_FLASH_DURATION;
+  const greenFlash = isFlashing
+    ? interpolate(
+        Math.sin((frame - WRENCH_APPEAR) * 0.4),
+        [-1, 1],
+        [0.3, 1.0]
+      )
+    : 0;
+
+  const borderColor = greenFlash > 0.5 ? FIX_COLOR : MOLD_GLOW_COLOR;
 
   const cavityX = MOLD_X + (MOLD_W - MOLD_CAVITY_W) / 2;
   const cavityY = MOLD_Y + (MOLD_H - MOLD_CAVITY_H) / 2;
 
-  // The part exit point — a small opening on the right side of the mold
+  // Exit slot on the right side of the mold
   const exitY = MOLD_Y + MOLD_H / 2;
 
   return (
@@ -111,7 +120,7 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
         opacity={0.8}
       />
 
-      {/* Exit slot indicator — small arrow/slot on right side */}
+      {/* Exit slot on right side */}
       <rect
         x={MOLD_X + MOLD_W - 4}
         y={exitY - 15}
@@ -136,17 +145,17 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
         letterSpacing="0.15em"
         opacity={labelOpacity}
       >
-        MOLD
+        {MOLD_LABEL_TEXT}
       </text>
 
-      {/* Wrench icon (simple SVG wrench) */}
+      {/* Wrench icon (32x32, appears on mold with spring) */}
       {showWrench && (
         <g
           transform={`translate(${MOLD_X + MOLD_W / 2}, ${MOLD_Y - 10}) scale(${wrenchScale})`}
           opacity={wrenchScale}
         >
           <g transform="translate(-16, -16)">
-            {/* Wrench body */}
+            {/* Wrench SVG path */}
             <path
               d="M6.3 12.3l10.7 10.7 2-2L8.3 10.3c.3-.9.5-1.8.5-2.8C8.8 3.4 5.4 0 1.3 0L5 3.7 3.7 5 0 1.3c0 4.1 3.4 7.5 7.5 7.5 1-.1 1.9-.2 2.8-.5zM25.7 19.7L15 9l2-2 10.7 10.7c1.2 1.2 1.2 3.1 0 4.2-1.2 1.2-3.1 1.2-4.2 0z"
               fill={FIX_COLOR}

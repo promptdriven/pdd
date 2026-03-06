@@ -9,31 +9,18 @@ import { ChartAxes } from "./ChartAxes";
 import { AnimatedBar } from "./AnimatedBar";
 import { TrendLine } from "./TrendLine";
 import { CalloutBox } from "./CalloutBox";
-
-// Bar data
-const BARS = [
-  { fillLevel: "10%", capability: 95, color: "#22C55E" },
-  { fillLevel: "25%", capability: 82, color: "#84CC16" },
-  { fillLevel: "50%", capability: 58, color: "#F59E0B" },
-  { fillLevel: "75%", capability: 32, color: "#F97316" },
-  { fillLevel: "100%", capability: 15, color: "#EF4444" },
-];
-
-// Layout
-const CHART_X = 300;
-const CHART_W = 1320;
-const BAR_WIDTH = 120;
-const BAR_GAP = 60;
-const NUM_BARS = 5;
-const TOTAL_BARS_WIDTH = NUM_BARS * BAR_WIDTH + (NUM_BARS - 1) * BAR_GAP;
-const BARS_START_X = CHART_X + (CHART_W - TOTAL_BARS_WIDTH) / 2;
-
-// Animation timing
-const BAR_STAGGER_START = 30;
-const BAR_STAGGER_INTERVAL = 20;
-const TREND_LINE_START = 140;
-const TREND_LINE_END = 180;
-const CALLOUT_START = 180;
+import {
+  BG_COLOR,
+  BARS,
+  BARS_START_X,
+  BAR_WIDTH,
+  BAR_GAP,
+  BAR_STAGGER_START,
+  BAR_STAGGER_INTERVAL,
+  TREND_LINE_START,
+  TREND_LINE_END,
+  CALLOUT_START,
+} from "./constants";
 
 export const defaultPart1Economics09ContextDegradationChartProps = {};
 
@@ -41,7 +28,7 @@ export const Part1Economics09ContextDegradationChart: React.FC = () => {
   const frame = useCurrentFrame();
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0A1628" }}>
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       {/* Veo background video */}
       <AbsoluteFill>
         <OffthreadVideo

@@ -46,7 +46,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1Economics"
         component={Part1EconomicsSection}
-        durationInFrames={11468}
+        durationInFrames={11470}
         fps={30}
         width={1920}
         height={1080}

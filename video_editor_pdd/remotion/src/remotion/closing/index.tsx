@@ -7,7 +7,7 @@ import { ClosingTitleCard } from "../closing_title_card";
 
 export const ClosingSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 1069.786667;
+  const offsetSeconds = 1069.850667;
   const durationSeconds = 21.072;
 
   return (

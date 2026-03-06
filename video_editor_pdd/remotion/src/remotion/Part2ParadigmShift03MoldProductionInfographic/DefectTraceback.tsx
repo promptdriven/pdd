@@ -1,5 +1,5 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
 import {
   MOLD_X,
   MOLD_Y,
@@ -8,10 +8,12 @@ import {
   PART_Y,
   PART_H,
   DEFECT_COLOR,
+  DEFECT_APPEAR,
   TRACEBACK_START,
   TRACEBACK_END,
   FADEOUT_START,
   FADEOUT_END,
+  FPS,
 } from "./constants";
 
 interface DefectTracebackProps {
@@ -23,22 +25,36 @@ export const DefectTraceback: React.FC<DefectTracebackProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  if (frame < TRACEBACK_START) return null;
+  if (frame < DEFECT_APPEAR) return null;
 
-  const drawProgress = interpolate(
-    frame,
-    [TRACEBACK_START, TRACEBACK_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+  // "✗" mark appears at DEFECT_APPEAR (frame 270)
+  const xMarkScale =
+    frame >= DEFECT_APPEAR
+      ? spring({
+          frame: frame - DEFECT_APPEAR,
+          fps: FPS,
+          config: { damping: 14, stiffness: 200 },
+        })
+      : 0;
+
+  // Traceback line draws from frame 290-330
+  const showTraceback = frame >= TRACEBACK_START;
+  const drawProgress = showTraceback
+    ? interpolate(
+        frame,
+        [TRACEBACK_START, TRACEBACK_END],
+        [0, 1],
+        {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+          easing: Easing.inOut(Easing.cubic),
+        }
+      )
+    : 0;
 
   const opacity = interpolate(
     frame,
-    [TRACEBACK_START, TRACEBACK_START + 5, FADEOUT_START, FADEOUT_END],
+    [DEFECT_APPEAR, DEFECT_APPEAR + 5, FADEOUT_START, FADEOUT_END],
     [0, 1, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
@@ -49,7 +65,7 @@ export const DefectTraceback: React.FC<DefectTracebackProps> = ({
   const toX = MOLD_X + MOLD_W;
   const toY = MOLD_Y + MOLD_H / 2;
 
-  // Compute the current endpoint based on draw progress
+  // Current line endpoint based on draw progress
   const currentX = interpolate(drawProgress, [0, 1], [fromX, toX]);
   const currentY = interpolate(drawProgress, [0, 1], [fromY, toY]);
 
@@ -73,24 +89,16 @@ export const DefectTraceback: React.FC<DefectTracebackProps> = ({
         </marker>
       </defs>
 
-      {/* Dashed trace-back line */}
-      <line
-        x1={fromX}
-        y1={fromY}
-        x2={currentX}
-        y2={currentY}
-        stroke={DEFECT_COLOR}
-        strokeWidth={2.5}
-        strokeDasharray="8 5"
-        markerEnd={drawProgress > 0.9 ? "url(#arrowhead)" : undefined}
-      />
-
-      {/* Red "X" mark at defect part when visible */}
-      {frame >= TRACEBACK_START - 20 && (
+      {/* Red "✗" mark above defective part */}
+      <g
+        transform={`translate(${defectX}, ${PART_Y - 10}) scale(${xMarkScale})`}
+        opacity={xMarkScale}
+      >
         <text
-          x={defectX}
-          y={PART_Y - 10}
+          x={0}
+          y={0}
           textAnchor="middle"
+          dominantBaseline="middle"
           fill={DEFECT_COLOR}
           fontSize={28}
           fontFamily="Inter, sans-serif"
@@ -98,6 +106,20 @@ export const DefectTraceback: React.FC<DefectTracebackProps> = ({
         >
           ✗
         </text>
+      </g>
+
+      {/* Dashed trace-back line from defect to mold */}
+      {showTraceback && drawProgress > 0 && (
+        <line
+          x1={fromX}
+          y1={fromY}
+          x2={currentX}
+          y2={currentY}
+          stroke={DEFECT_COLOR}
+          strokeWidth={2.5}
+          strokeDasharray="8 5"
+          markerEnd={drawProgress > 0.9 ? "url(#arrowhead)" : undefined}
+        />
       )}
     </svg>
   );

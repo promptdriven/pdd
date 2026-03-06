@@ -15,6 +15,7 @@ export const Part1Economics10SplitPerceptionReality: React.FC = () => {
         <OffthreadVideo
           src={staticFile("veo/part1_economics.mp4")}
           style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          muted
         />
       </AbsoluteFill>
 

@@ -6,7 +6,7 @@ export const CANVAS_HEIGHT = 1080;
 export const FPS = 30;
 export const TOTAL_FRAMES = 600;
 
-// Infographic region
+// Infographic region / backing panel
 export const PANEL_X = 260;
 export const PANEL_Y = 290;
 export const PANEL_W = 1400;
@@ -25,6 +25,7 @@ export const MOLD_GLOW_COLOR = "#F97316";
 export const MOLD_CAVITY_W = 120;
 export const MOLD_CAVITY_H = 80;
 export const MOLD_CAVITY_FILL = "#1E293B";
+export const MOLD_LABEL_TEXT = "MOLD";
 
 // Conveyor belt
 export const CONVEYOR_X_START = 520;
@@ -42,12 +43,13 @@ export const PART_SPACING = 80;
 export const PART_Y = 510;
 export const NORMAL_INTERVAL = 15;
 export const FAST_INTERVAL = 5;
+export const PART_TRAVEL_FRAMES = 120;
 
 // Counter
 export const COUNTER_X = 1500;
 export const COUNTER_Y = 320;
 
-// Defect
+// Defect / fix
 export const DEFECT_COLOR = "#EF4444";
 export const FIX_COLOR = "#22C55E";
 
@@ -58,29 +60,45 @@ export const TEXT_WHITE = "#FFFFFF";
 export const TEXT_MUTED = "#94A3B8";
 
 // Animation timing (frames at 30fps)
+// Phase 1: Panel + mold fade in (0-1s)
 export const PANEL_FADE_START = 0;
 export const PANEL_FADE_END = 30;
 
 export const MOLD_FADE_START = 0;
 export const MOLD_FADE_END = 30;
 
+// Phase 2: Label + conveyor (0.67-1.33s)
 export const LABEL_FADE_START = 20;
 export const LABEL_FADE_END = 40;
 
 export const CONVEYOR_DRAW_START = 20;
 export const CONVEYOR_DRAW_END = 40;
 
+// Phase 3: Parts stream at normal rate (1.33-6s)
 export const STREAM_START = 40;
+
+// Phase 4: Parts stream at fast rate (6-8s)
 export const STREAM_FAST_START = 180;
+
+// Phase 5: Counter hits 1000+, stream pauses (8-9s)
 export const STREAM_PAUSE = 240;
 
+// Phase 6: Defect appears (9-9.67s)
 export const DEFECT_APPEAR = 270;
+
+// Phase 7: Traceback line (9.67-11s)
 export const TRACEBACK_START = 290;
 export const TRACEBACK_END = 330;
+
+// Phase 8: Wrench fix (11-12s)
 export const WRENCH_APPEAR = 330;
+export const WRENCH_FLASH_DURATION = 30;
+
+// Phase 9: Defect dissolves, corrected stream (12-13s)
 export const DEFECT_DISSOLVE_START = 360;
 export const DEFECT_DISSOLVE_END = 390;
 export const CORRECTED_STREAM_START = 360;
 
+// Phase 10: Fade out (19-20s)
 export const FADEOUT_START = 570;
 export const FADEOUT_END = 600;

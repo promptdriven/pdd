@@ -35,7 +35,7 @@ export const defaultPart2ParadigmShift03MoldProductionInfographicProps = {};
 export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Backing panel opacity
+  // Backing panel opacity: fades in 0-30, holds, fades out 570-600
   const panelOpacity = interpolate(
     frame,
     [PANEL_FADE_START, PANEL_FADE_END, FADEOUT_START, FADEOUT_END],
@@ -43,7 +43,7 @@ export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Wrench spring animation
+  // Wrench spring animation at frame 330
   const showWrench = frame >= WRENCH_APPEAR;
   const wrenchScale = showWrench
     ? spring({
@@ -52,16 +52,6 @@ export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
         config: { damping: 10, stiffness: 180 },
       })
     : 0;
-
-  // Mold border flashes green when wrench appears
-  const moldBorderFlashGreen =
-    frame >= WRENCH_APPEAR && frame < WRENCH_APPEAR + 30
-      ? interpolate(
-          Math.sin((frame - WRENCH_APPEAR) * 0.4),
-          [-1, 1],
-          [0, 1]
-        )
-      : 0;
 
   // Defect part X position for traceback line
   const defectX = getDefectPartX(frame);
@@ -94,11 +84,7 @@ export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
       />
 
       {/* Mold shape with glow and wrench icon */}
-      <MoldShape
-        showWrench={showWrench}
-        wrenchScale={wrenchScale}
-        moldBorderFlashGreen={moldBorderFlashGreen}
-      />
+      <MoldShape showWrench={showWrench} wrenchScale={wrenchScale} />
 
       {/* Conveyor belt */}
       <ConveyorBelt />
@@ -109,7 +95,7 @@ export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
       {/* Part counter */}
       <PartCounter />
 
-      {/* Defect trace-back line (only renders after defect appears) */}
+      {/* Defect "✗" mark + trace-back line (renders from DEFECT_APPEAR onward) */}
       {frame >= DEFECT_APPEAR && (
         <DefectTraceback defectX={defectX} />
       )}
