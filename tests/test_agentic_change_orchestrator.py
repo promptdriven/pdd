@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -56,7 +56,8 @@ def mock_dependencies(temp_cwd):
          patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
          patch("pdd.agentic_change_orchestrator.post_step_comment") as mock_post_comment, \
          patch("pdd.agentic_change_orchestrator.console") as mock_console, \
-         patch("pdd.agentic_change_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_preprocess:
+         patch("pdd.agentic_change_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_preprocess, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
 
         # Default mock behaviors
         mock_run.return_value = (True, "Default Agent Output", 0.1, "gpt-4")
@@ -83,7 +84,8 @@ def mock_dependencies(temp_cwd):
             "clear_state": mock_clear_state,
             "subprocess": mock_subprocess,
             "post_comment": mock_post_comment,
-            "console": mock_console
+            "console": mock_console,
+            "check_pr": mock_check_pr,
         }
 
 # -----------------------------------------------------------------------------
@@ -940,8 +942,9 @@ def mock_dependencies_dict():
          patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
-         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
-        
+         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+
         mock_load.return_value = (None, None)
         mock_save.return_value = 12345
         mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
@@ -950,7 +953,7 @@ def mock_dependencies_dict():
         mock_subprocess.return_value.returncode = 0
         mock_topo_sort.return_value = ([], [])
         mock_get_affected.return_value = []
-        
+
         yield {
             "run": mock_run,
             "load": mock_load,
@@ -961,7 +964,8 @@ def mock_dependencies_dict():
             "build_graph": mock_build_graph,
             "topo_sort": mock_topo_sort,
             "get_affected": mock_get_affected,
-            "gen_script": mock_gen_script
+            "gen_script": mock_gen_script,
+            "check_pr": mock_check_pr,
         }
 
 def test_happy_path_full_execution(mock_dependencies_dict, tmp_path):
@@ -1351,18 +1355,19 @@ def mock_dependencies_v2():
          patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_affected, \
-         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
-        
+         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+
         # Default behaviors
         mock_load.return_value = (None, None) # No existing state
         mock_save.return_value = 12345 # Mock comment ID
         mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
         mock_worktree.return_value = (Path("/tmp/worktree"), None)
-        
+
         # Default run_agentic_task behavior: success
         # Returns (success, output, cost, model)
         mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
-        
+
         yield {
             "run": mock_run,
             "load": mock_load,
@@ -1371,7 +1376,8 @@ def mock_dependencies_v2():
             "template": mock_template,
             "worktree": mock_worktree,
             "subprocess": mock_subprocess,
-            "build_graph": mock_build_graph
+            "build_graph": mock_build_graph,
+            "check_pr": mock_check_pr,
         }
 
 def test_happy_path_full_run(mock_dependencies_v2, tmp_path):
@@ -2241,8 +2247,8 @@ def test_setup_worktree_branch_checked_out_fails_without_fallback(tmp_path):
 
 def test_fallback_comment_on_step_failure(mock_dependencies, temp_cwd):
     """
-    When a step fails, post_step_comment is called for the failed step.
-    When a step succeeds, post_step_comment is NOT called.
+    Soft failures (single provider failure) do NOT trigger post_step_comment.
+    Only hard stops and consecutive provider aborts post comments.
     """
     mocks = mock_dependencies
     mock_run = mocks["run"]
@@ -2276,12 +2282,8 @@ def test_fallback_comment_on_step_failure(mock_dependencies, temp_cwd):
         quiet=True,
     )
 
-    # post_step_comment should be called exactly once (for step 1 failure)
-    assert mock_post_comment.call_count == 1
-    call_kwargs = mock_post_comment.call_args
-    # Verify step_num=1 was passed
-    assert call_kwargs[1].get("step_num", call_kwargs[0][3] if len(call_kwargs[0]) > 3 else None) == 1 or \
-           1 in call_kwargs[0]
+    # Soft failures no longer trigger post_step_comment (prevents GitHub App re-trigger loops)
+    assert mock_post_comment.call_count == 0
 
 
 def test_abort_after_consecutive_provider_failures(mock_dependencies, temp_cwd):
@@ -2311,8 +2313,8 @@ def test_abort_after_consecutive_provider_failures(mock_dependencies, temp_cwd):
     assert success is False
     assert "Aborting" in msg
     assert "consecutive" in msg.lower() or "3" in msg
-    # Should have been called 3 times (once per failed step before abort)
-    assert mock_post_comment.call_count == 3
+    # post_step_comment called once (on the 3rd consecutive failure that triggers abort)
+    assert mock_post_comment.call_count == 1
     # Only 3 steps should have been attempted
     assert mock_run.call_count == 3
 
@@ -2358,8 +2360,8 @@ def test_consecutive_failure_counter_resets(mock_dependencies, temp_cwd):
 
     # Should NOT have aborted (counter reset at step 3 success)
     assert "Aborting" not in msg
-    # post_step_comment called for steps 1, 2, 4, 5 = 4 times
-    assert mock_post_comment.call_count == 4
+    # Soft failures no longer trigger post_step_comment (prevents re-trigger loops)
+    assert mock_post_comment.call_count == 0
 
 
 def test_state_preserved_when_steps_failed(mock_dependencies, temp_cwd):
@@ -2586,3 +2588,163 @@ def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, tem
         assert last["last_completed_step"] == 8, (
             f"last_completed_step should be 8 (last success), got {last['last_completed_step']}"
         )
+
+
+# =============================================================================
+# Issue #756: Existing-PR Guard + post_step_comment Restriction
+# =============================================================================
+
+def test_check_existing_pr_returns_url_when_pr_exists():
+    """_check_existing_pr returns the PR URL when an open PR exists."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        mock_sub.return_value.stdout = json.dumps([
+            {"url": "https://github.com/owner/repo/pull/42"}
+        ])
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result == "https://github.com/owner/repo/pull/42"
+
+
+def test_check_existing_pr_returns_none_when_no_pr():
+    """_check_existing_pr returns None when no open PR exists."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        mock_sub.return_value.stdout = "[]"
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
+
+
+def test_check_existing_pr_returns_none_on_subprocess_error():
+    """_check_existing_pr returns None when gh CLI fails."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 1
+        mock_sub.return_value.stdout = ""
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
+
+
+def test_check_existing_pr_returns_none_on_timeout():
+    """_check_existing_pr returns None on subprocess timeout."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.side_effect = subprocess.TimeoutExpired("gh", 30)
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
+
+
+def test_orchestrator_returns_early_when_pr_exists(mock_dependencies, temp_cwd):
+    """Orchestrator returns early without running any steps when PR already exists."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_check_pr = mocks["check_pr"]
+
+    mock_check_pr.return_value = "https://github.com/owner/repo/pull/99"
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Existing PR",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    assert "PR already exists" in msg
+    assert "https://github.com/owner/repo/pull/99" in msg
+    assert cost == 0.0
+    # No steps should have been executed
+    mock_run.assert_not_called()
+
+
+def test_post_step_comment_called_on_hard_stop(mock_dependencies, temp_cwd):
+    """post_step_comment IS called when a hard stop condition is triggered."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    # Step 1 triggers a hard stop (duplicate)
+    mock_run.return_value = (False, "This is a Duplicate of #42", 0.1, "gpt-4")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Hard stop test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "duplicate" in msg.lower()
+    # Hard stop should trigger a comment
+    assert mock_post_comment.call_count == 1
+
+
+def test_post_step_comment_not_called_on_soft_failure(mock_dependencies, temp_cwd):
+    """post_step_comment is NOT called on soft failures (prevents GitHub App re-trigger)."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (False, "Some transient failure", 0.0, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Soft failure test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # Soft failure should NOT post a comment
+    assert mock_post_comment.call_count == 0
+
+
+def test_post_step_comment_called_on_provider_abort(mock_dependencies, temp_cwd):
+    """post_step_comment IS called when consecutive provider failures trigger abort."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    mock_run.return_value = (False, "All agent providers failed: timeout", 0.0, "")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Provider abort test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Aborting" in msg
+    # Comment posted once (on the 3rd consecutive failure)
+    assert mock_post_comment.call_count == 1
