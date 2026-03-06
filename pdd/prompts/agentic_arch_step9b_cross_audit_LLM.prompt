@@ -14,7 +14,7 @@
 
 % Context
 
-You are working on step 9b of the agentic architecture workflow. Step 9 just generated prompt files for all modules. Before validation (Steps 10-12), you must cross-reference ALL prompt files against each other and the naming registry to catch inconsistencies.
+You are working on step 9b of the agentic architecture workflow. Step 9 just generated prompt files for all modules. Before validation (Steps 10-12), you must cross-reference ALL prompt files against each other and the data dictionary and context YAMLs to catch inconsistencies.
 
 This is the #1 source of bugs in generated code: one file calls a collection "users" while another calls it "user_accounts", or one file imports `useAuth` while another imports `useAuthentication`.
 
@@ -24,7 +24,7 @@ This is the #1 source of bugs in generated code: one file calls a collection "us
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 
-% Step 2: Deep Analysis (includes Naming Registry)
+% Step 2: Deep Analysis
 <step2_output>
 {step2_output}
 </step2_output>
@@ -61,7 +61,7 @@ From each prompt file, extract:
 Build a matrix showing every identifier, where it appears, and what the canonical name should be:
 
 ```
-| Identifier | Type | Referenced In | Canonical Name (from Step 2 Naming Registry) | Match? |
+| Identifier | Type | Referenced In | Canonical Name (from context documents) | Match? |
 |------------|------|---------------|-----------------------------------------------|--------|
 | users | collection | auth_service.prompt, user_api.prompt | users | YES |
 | user_accounts | collection | user_settings.prompt | users | NO — should be "users" |
@@ -75,7 +75,7 @@ Flag ANY of the following as inconsistencies:
 - Different names for the SAME concept across files (e.g., "users" vs "user_accounts")
 - Import paths that differ for the SAME module across files
 - Function signatures that differ for the SAME function across files
-- Env var names that don't match the naming registry
+- Env var names that don't match the context documents
 - Type/class names with different casing or spelling across files
 
 **Phase 4b: Context Document Consistency**
@@ -90,28 +90,18 @@ If `prompts/_context/data_dictionary.yaml` exists:
 
 {sibling_architectures}
 
-If sibling architectures above contain **Shared Context Documents** (data_dictionary.yaml,
-api_contracts.yaml), perform cross-sub-issue consistency checks:
+Sibling context documents are CANONICAL. You MUST use the EXACT field names, types, enum values, and serialization conventions from sibling data_dictionary.yaml and api_contracts.yaml. If your output differs from siblings, fix yours.
 
-1. **Shared entity verification:** For every entity in YOUR `prompts/_context/data_dictionary.yaml`
-   that also appears in a sibling's data dictionary:
-   - Field names must match EXACTLY
-   - Field types must be compatible
-   - Enum values must be identical strings
-   - Required/optional status must be consistent
-2. **API contract verification:** For every endpoint in YOUR `prompts/_context/api_contracts.yaml`
-   that also appears in a sibling's api_contracts.yaml:
-   - Request/response field names and types must match
-   - HTTP methods and paths must match
-3. **Prompt file verification:** For every prompt that references a shared entity or API endpoint,
-   verify the prompt uses the EXACT names from the sibling context (not variations)
-4. **If mismatches found:** Fix YOUR context documents and prompt files to match the sibling
-   (the sibling is canonical — it was generated first and code already depends on it)
+Perform cross-sub-issue consistency checks:
+1. Verify field names, types, enum values, and required/optional status match sibling data dictionaries
+2. Verify API endpoint paths, methods, and request/response schemas match sibling api_contracts
+3. Verify prompt files use the EXACT names from sibling context (not variations)
+4. If mismatches found: fix YOUR context documents and prompt files to match the sibling
 
 **Phase 5: Fix Inconsistencies**
 
 If ANY inconsistencies are found:
-1. Determine the canonical form (from Step 2 naming registry, or the most common usage if not in registry)
+1. Determine the canonical form (from the data dictionary and context YAMLs, or the most common usage if not in context documents)
 2. Fix each affected prompt file IN-PLACE on disk:
    - Replace the inconsistent identifier with the canonical form
    - Ensure the fix doesn't break the prompt's structure
@@ -146,9 +136,9 @@ FILES_MODIFIED: prompts/file1.prompt, prompts/file2.prompt, ...
 % Important
 
 - Read ALL prompt files from disk — do not skip any
-- The Step 2 naming registry is the source of truth for canonical names
+- The data dictionary and context YAMLs are the source of truth for canonical names
 - Fix files IN-PLACE — do not just report issues, actually fix them
 - Preserve each prompt file's overall structure — only change the inconsistent identifiers
-- If a name isn't in the naming registry, use the most common form across files as canonical
+- If a name isn't in the context documents, use the most common form across files as canonical
 - Always output `AUDIT_RESULT: CONSISTENT` or `AUDIT_RESULT: INCONSISTENT`
 - Include `FILES_MODIFIED:` marker if any files were changed (needed for orchestrator tracking)

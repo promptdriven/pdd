@@ -946,15 +946,8 @@ def run_agentic_architecture_orchestrator(
                         with open(arch_file, "w", encoding="utf-8") as f:
                             json.dump(merged_arch, f, indent=2, ensure_ascii=False)
 
-                        # Scope step7_output to only new/updated modules
-                        new_updated_filenames = set(
-                            merge_report["added"] + merge_report["updated"]
-                        )
-                        scoped_modules = [
-                            m for m in merged_arch
-                            if m.get("filename") in new_updated_filenames
-                        ]
-                        step_output = json.dumps(scoped_modules, indent=2)
+                        # Use full merged architecture for downstream steps
+                        step_output = json.dumps(merged_arch, indent=2)
 
                         if not quiet:
                             console.print(
@@ -1107,19 +1100,67 @@ def run_agentic_architecture_orchestrator(
                 state["step_outputs"]["7b"] = review_output
                 state["last_completed_step"] = 7.5
 
-                # If architecture was fixed, re-read it
+                # If architecture was fixed, apply scoped fixes from architecture_review.json
                 if "REVIEW_RESULT: FIXED" in review_output:
                     arch_file = base_dir / "architecture.json"
-                    if arch_file.exists():
+                    review_file = base_dir / "architecture_review.json"
+                    if review_file.exists() and arch_file.exists():
+                        try:
+                            with open(arch_file, "r", encoding="utf-8") as f:
+                                current_arch = json.loads(f.read())
+                            with open(review_file, "r", encoding="utf-8") as f:
+                                review_modules = json.loads(f.read())
+                            if isinstance(current_arch, list) and isinstance(review_modules, list):
+                                # Index reviewed modules by filename
+                                review_by_name = {
+                                    m.get("filename", ""): m
+                                    for m in review_modules if m.get("filename")
+                                }
+                                # Replace only matching modules in current arch
+                                merged = []
+                                for m in current_arch:
+                                    fn = m.get("filename", "")
+                                    if fn in review_by_name:
+                                        merged.append(review_by_name.pop(fn))
+                                    else:
+                                        merged.append(m)
+                                # Append any new modules from review
+                                for m in review_by_name.values():
+                                    merged.append(m)
+                                with open(arch_file, "w", encoding="utf-8") as f:
+                                    json.dump(merged, f, indent=2, ensure_ascii=False)
+                                arch_content = json.dumps(merged, indent=2, ensure_ascii=False)
+                                context["step7_output"] = arch_content
+                                state["step_outputs"]["7"] = arch_content
+                                if not quiet:
+                                    console.print(f"   → Architecture review applied ({len(review_modules)} modules updated)")
+                            # Clean up review file
+                            review_file.unlink(missing_ok=True)
+                        except (json.JSONDecodeError, ValueError, OSError) as e:
+                            if not quiet:
+                                console.print(f"[yellow]Warning: Could not apply architecture review: {e}[/yellow]")
+                    elif arch_file.exists():
+                        # Fallback: agent wrote fixes directly to architecture.json (legacy behavior)
+                        # Re-read but do NOT trust blindly — validate module count
                         try:
                             with open(arch_file, "r", encoding="utf-8") as f:
                                 arch_content = f.read()
                             arch_data = json.loads(arch_content)
                             if isinstance(arch_data, list):
-                                context["step7_output"] = arch_content
-                                state["step_outputs"]["7"] = arch_content
-                                if not quiet:
-                                    console.print("   → Architecture fixed, updated context")
+                                # Safety: if module count dropped, restore from snapshot
+                                snapshot_count = len(existing_arch_snapshot) if existing_arch_snapshot else 0
+                                if len(arch_data) < snapshot_count:
+                                    if not quiet:
+                                        console.print(f"[yellow]Warning: Step 7b reduced modules from {snapshot_count} to {len(arch_data)} — restoring merged architecture[/yellow]")
+                                    merged_content = state["step_outputs"].get("7", "")
+                                    if merged_content:
+                                        with open(arch_file, "w", encoding="utf-8") as f:
+                                            f.write(merged_content)
+                                else:
+                                    context["step7_output"] = arch_content
+                                    state["step_outputs"]["7"] = arch_content
+                                    if not quiet:
+                                        console.print("   → Architecture fixed, updated context")
                         except (json.JSONDecodeError, ValueError):
                             pass
 

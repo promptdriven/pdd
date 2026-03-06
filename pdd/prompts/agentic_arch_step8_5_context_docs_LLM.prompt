@@ -15,7 +15,7 @@
 % Context
 
 You are working on step 8.5 of the agentic architecture workflow. Steps 1-8 have completed:
-- Step 2 produced a naming registry with canonical names for collections, endpoints, types, env vars
+- Step 2 identified shared identifiers (collections, endpoints, types, env vars)
 - Step 2b scanned the existing codebase for conventions (serialization, import paths, case conventions)
 - Step 4 produced data model design (entities, relationships, field names, types)
 - Step 7 generated architecture.json with module definitions and interfaces
@@ -29,7 +29,7 @@ Your job is to distill this information into structured YAML files that every mo
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 
-% Step 2: Deep Analysis (includes Naming Registry)
+% Step 2: Deep Analysis
 <step2_output>
 {step2_output}
 </step2_output>
@@ -60,29 +60,7 @@ Your job is to distill this information into structured YAML files that every mo
 
 % CRITICAL — Sibling Context Alignment
 
-Before generating context documents, check the sibling architectures above for existing
-**Shared Context Documents** (data_dictionary.yaml, api_contracts.yaml). If sibling context
-documents exist:
-
-1. **data_dictionary.yaml alignment:**
-   - For ANY entity that also appears in a sibling data dictionary: use the EXACT same
-     field names, field types, enum values, and required/optional status
-   - Copy the sibling's `serialization:` section verbatim if it exists — serialization
-     conventions MUST be consistent across all sub-issues
-   - You MAY add new entities that don't exist in siblings, but shared entities MUST match
-   - If Step 4 output conflicts with a sibling data dictionary, the sibling data dictionary
-     wins (it is already the canonical source for generated code)
-
-2. **api_contracts.yaml alignment:**
-   - For ANY endpoint that also appears in a sibling api_contracts.yaml: use the EXACT same
-     path, method, request_fields, and response_fields
-   - If this sub-issue consumes an API produced by a sibling, copy the endpoint definition
-     from the sibling's api_contracts.yaml into yours
-   - New endpoints unique to this sub-issue can be defined freely
-
-3. **Verification step (MANDATORY):**
-   After generating your YAML files, compare every shared entity/endpoint against the sibling
-   context and list any differences. If differences exist, fix YOUR files to match the sibling.
+Sibling context documents are CANONICAL. You MUST use the EXACT field names, types, enum values, and serialization conventions from sibling data_dictionary.yaml and api_contracts.yaml. If your output differs from siblings, fix yours.
 
 % Your Task
 
@@ -106,7 +84,7 @@ serialization:
 
 models:
   EntityName:
-    storage: firestore_collection_name  # from Step 2 naming registry
+    storage: firestore_collection_name  # from Step 2 identified identifiers
     fields:
       - name: field_name
         python_type: str
@@ -141,6 +119,12 @@ auxiliary_types:
       - name: field_name
         python_type: str
         typescript_type: string
+
+conventions:
+  database_naming: snake_case       # e.g., user_accounts, order_items
+  api_routes: kebab-case            # e.g., /api/user-accounts
+  typescript_types: PascalCase      # e.g., UserAccount, OrderItem
+  python_models: PascalCase         # e.g., class UserAccount (snake_case fields)
 ```
 
 ### 2. `prompts/_context/api_contracts.yaml`
@@ -211,6 +195,22 @@ shared_utilities:
   - name: useAuth
     import_path: "import { useAuth } from '@/hooks/useAuth'"
     description: "Auth hook used by all protected pages"
+
+environment_variables:
+  - name: DATABASE_URL
+    purpose: "PostgreSQL connection string"
+    required_by: [models, database]
+  - name: JWT_SECRET
+    purpose: "Secret key for JWT token signing"
+    required_by: [auth_service]
+
+error_patterns:
+  - name: NotFoundError
+    description: "Resource not found (404)"
+    module: error_handler
+  - name: ValidationError
+    description: "Input validation failed (400)"
+    module: error_handler
 ```
 
 % Key Rules
@@ -220,19 +220,15 @@ shared_utilities:
    - If the codebase uses camelCase for JSON, document that — don't assume snake_case
    - If there's an existing conversion layer (e.g., Pydantic aliases, class-transformer), document it
 
-2. **Use Step 2 naming registry as source of truth:**
-   - Collection/table names must match the naming registry exactly
-   - Endpoint paths must match the naming registry exactly
-   - Environment variable names must match the naming registry exactly
+2. **Use Step 2 identified identifiers as a guide:**
+   - Collection/table names must be consistent with Step 2 analysis
+   - Endpoint paths must be consistent with Step 2 analysis
+   - Environment variable names must be consistent with Step 2 analysis
 
 3. **Use Step 4 data model as source of truth for entities:**
    - Entity names, field names, field types must come from Step 4
    - If Step 4 and architecture.json disagree, use Step 4 for data fields
-   - **CRITICAL — Enum value cross-check against PRD:** After writing enum values from Step 4,
-     go back to the original PRD (issue_content) and verify that EVERY enum value listed in the
-     PRD appears in your data_dictionary.yaml. If Step 4 dropped, renamed, or simplified any
-     enum values, restore the PRD's original values. The PRD is the ultimate source of truth
-     for enum values — not Step 4.
+   - Step 4 is the sole owner of enum values. Trust Step 4's enum definitions here; Step 13 will catch any PRD drift as a fallback.
 
 4. **Validate generated YAML:**
    After writing each file, validate it:
