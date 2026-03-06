@@ -937,4 +937,20 @@ describe("lib/veo.ts source structure", () => {
   it("uses writeFileSync to save output files", () => {
     expect(sourceCode).toMatch(/writeFileSync/);
   });
+
+  it("extractLastFrame uses ffmpeg -y flag to force overwrite", () => {
+    expect(sourceCode).toMatch(/ffmpeg\s+-y\s/);
+  });
+
+  it("generateVideos call includes httpOptions.timeout", () => {
+    expect(sourceCode).toMatch(/generateVideos\([\s\S]*?httpOptions/);
+  });
+
+  it("getVideosOperation call includes httpOptions.timeout", () => {
+    expect(sourceCode).toMatch(/getVideosOperation\([\s\S]*?httpOptions/);
+  });
+
+  it("files.download call includes httpOptions.timeout", () => {
+    expect(sourceCode).toMatch(/files\.download\([\s\S]*?httpOptions/);
+  });
 });
