@@ -20,7 +20,7 @@ import { Part3MoldStatCalloutCoderabbit } from "./part3_mold_stat_callout_codera
 import { Part3MoldStatCalloutDora } from "./part3_mold_stat_callout_dora";
 import { Part3MoldStatCalloutNlContext } from "./part3_mold_stat_callout_nl_context";
 import { Part3MoldTitleCard } from "./part3_mold_title_card";
-import { Part4PrecisionSplitPromptDetailVsTests } from "./part4_precision_split_prompt_detail_vs_tests";
+import { Part4Precision05SplitPromptDetailVsTests } from "./Part4Precision05SplitPromptDetailVsTests";
 import { Part4PrecisionStatCalloutPromptCompression } from "./part4_precision_stat_callout_prompt_compression";
 import { Part4PrecisionTitleCard } from "./part4_precision_title_card";
 import { Part5CompoundSplitPatchingVsPdd } from "./part5_compound_split_patching_vs_pdd";
@@ -45,6 +45,10 @@ import { Part3Mold04StatCalloutDora } from "./Part3Mold04StatCalloutDora";
 import { Part3Mold12ThreePillarsDiagram } from "./Part3Mold12ThreePillarsDiagram";
 import { Part3Mold13SubtitleTrack } from "./Part3Mold13SubtitleTrack";
 import { Part4Precision01TitleCard } from "./Part4Precision01TitleCard";
+import { Part4Precision07SpectrumSlider } from "./Part4Precision07SpectrumSlider";
+import { Part5Compound05StatCalloutCisq } from "./Part5Compound05StatCalloutCisq";
+import { Part5Compound10QuoteCard } from "./Part5Compound10QuoteCard";
+import { Closing07CtaCard } from "./Closing07CtaCard";
 
 const PREVIEW_DURATION = 150; // 5s at 30fps
 
@@ -204,9 +208,9 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="part4-precision-split-prompt-detail-vs-tests"
-        component={Part4PrecisionSplitPromptDetailVsTests}
-        durationInFrames={PREVIEW_DURATION}
+        id="part4-precision-05-split-prompt-detail-vs-tests"
+        component={Part4Precision05SplitPromptDetailVsTests}
+        durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
@@ -399,6 +403,38 @@ export const RemotionRoot: React.FC = () => {
         id="part4-precision-01-title-card"
         component={Part4Precision01TitleCard}
         durationInFrames={150}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part4-precision-07-spectrum-slider"
+        component={Part4Precision07SpectrumSlider}
+        durationInFrames={750}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part5-compound-05-stat-callout-cisq"
+        component={Part5Compound05StatCalloutCisq}
+        durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part5-compound-10-quote-card"
+        component={Part5Compound10QuoteCard}
+        durationInFrames={240}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="closing-07-cta-card"
+        component={Closing07CtaCard}
+        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
