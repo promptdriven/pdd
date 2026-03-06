@@ -176,7 +176,7 @@ export const stitchFullVideo = async (
   await fs.promises.writeFile(concatFile, concatContents, "utf-8");
 
   try {
-    const cmd = `ffmpeg -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}"`;
+    const cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}"`;
     await execAsync(cmd);
 
     onProgress({

@@ -90,22 +90,22 @@ function listVeoAssets(): string[] {
   return fs.readdirSync(veoPublicDir).filter((f) => f.endsWith(".mp4") || f.endsWith(".webm"));
 }
 
-function buildComponentPrompt(name: string, spec: string, veoAssets: string[]): string {
+function buildComponentPrompt(baseName: string, outputName: string, spec: string, veoAssets: string[]): string {
   const veoSection = veoAssets.length > 0
     ? `\n--- VEO ASSETS ---\nThe following video files are available in remotion/public/veo/.\nUse staticFile("veo/<filename>") to reference them (NOT staticFile("public/veo/...")).\n${veoAssets.map((f) => `- ${f}`).join("\n")}\n--- END VEO ASSETS ---\n`
     : "";
 
-  const exportName = toPascalCase(name);
-  // Extract NN prefix if present (e.g., "01_sock_price_chart" → "01")
+  const exportName = toPascalCase(outputName);
+  // Extract NN prefix from baseName (e.g., "01_sock_price_chart" → "01")
   // Strip prefix before PascalCasing for directory name (e.g., "02-SockPriceChart")
-  const nnMatch = name.match(/^(\d{2})_/);
-  const strippedPascal = nnMatch ? toPascalCase(name.slice(nnMatch[0].length)) : exportName;
+  const nnMatch = baseName.match(/^(\d{2})_/);
+  const strippedPascal = nnMatch ? toPascalCase(baseName.slice(nnMatch[0].length)) : toPascalCase(baseName);
   const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : exportName;
 
   return `
 You are Claude Code. Generate a Remotion animation component as a multi-file directory.
 
-Component name: ${name}
+Component name: ${baseName}
 Export name: ${exportName}
 
 OUTPUT STRUCTURE — create a subdirectory with multiple files:
@@ -517,7 +517,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
           generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
         } else {
           const spec = findSpecForComponent(item.name, item.specDir);
-          const prompt = buildComponentPrompt(item.outputName, spec, veoAssets);
+          const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
           await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
         }
 
@@ -584,7 +584,20 @@ registerExecutor("compositions", (params, send: SseSend) => {
         }
 
         if (discoveredComponents.length > 0) {
-          section.compositions = discoveredComponents;
+          // Merge: preserve existing timing data (startSeconds/durationSeconds) for known components
+          const existingTimingMap = new Map<string, Record<string, unknown>>();
+          const existingComps: Array<string | Record<string, unknown>> = section.compositions || [];
+          for (const comp of existingComps) {
+            if (typeof comp === "object" && comp !== null && comp.id) {
+              existingTimingMap.set(comp.id as string, comp);
+            }
+          }
+          const mergedCompositions: Array<string | Record<string, unknown>> = [];
+          for (const compId of discoveredComponents) {
+            const existing = existingTimingMap.get(compId);
+            mergedCompositions.push(existing ?? compId);
+          }
+          section.compositions = mergedCompositions;
           compositionsUpdated = true;
           onLog(`[compositions] Section "${section.id}" compositions: ${discoveredComponents.join(", ")}`);
         }
@@ -601,18 +614,22 @@ registerExecutor("compositions", (params, send: SseSend) => {
         if (!section.compositions || section.compositions.length === 0) continue;
 
         const sectionRemotionDir = path.join("remotion/src/remotion", section.id);
+        // Extract string IDs from compositions (which may contain timing objects)
+        const componentIds = (section.compositions as Array<string | Record<string, unknown>>).map(
+          (comp) => typeof comp === "string" ? comp : (comp.id as string)
+        );
         try {
           await generateSectionConstants(
             section.id,
             section.compositionId,
-            section.compositions,
+            componentIds,
             sectionRemotionDir,
             onLog,
           );
           await generateSectionComposition(
             section.id,
             section.compositionId,
-            section.compositions,
+            componentIds,
             sectionRemotionDir,
             onLog,
           );

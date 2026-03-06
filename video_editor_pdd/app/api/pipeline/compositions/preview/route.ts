@@ -31,7 +31,10 @@ function resolveCompositionId(
     : config.sections;
 
   for (const section of sections) {
-    const comps: string[] = section.compositions ?? [];
+    const comps: string[] = (section.compositions ?? []).map(
+      (comp: string | Record<string, unknown>) =>
+        typeof comp === "string" ? comp : (comp as Record<string, unknown>).id as string
+    );
     // Check if the section-scoped name is in compositions — return its
     // hyphenated form as the Remotion composition ID (underscores are invalid).
     const scopedName = `${section.id}_${componentName}`;

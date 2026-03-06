@@ -862,10 +862,10 @@ describe("compositions executor factory — section-scoped generation", () => {
     );
     await executor(jest.fn());
 
-    // runClaudeFix should be called with the section-scoped output dir or component name
+    // runClaudeFix should be called with the section-scoped export name (PascalCase)
     expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
     const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
-    expect(prompt).toContain("part3_mold_title_card");
+    expect(prompt).toContain("Part3MoldTitleCard");
   });
 
   it("scopes spec lookup to section specDir when sectionId is provided", async () => {
@@ -938,9 +938,9 @@ describe("compositions executor factory — sectionComponents full-run scoping",
     const prompt1 = mockRunClaudeFix.mock.calls[0][0] as string;
     const prompt2 = mockRunClaudeFix.mock.calls[1][0] as string;
 
-    // Each prompt should reference the section-scoped name
-    expect(prompt1).toContain("intro_title_card");
-    expect(prompt2).toContain("main_title_card");
+    // Each prompt should reference the section-scoped export name (PascalCase)
+    expect(prompt1).toContain("IntroTitleCard");
+    expect(prompt2).toContain("MainTitleCard");
   });
 
   it("uses each section's specDir for spec lookup", async () => {
@@ -2113,6 +2113,30 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
     // The prompt should mention directory-based output, not just single file
     expect(compositionsSourceCode).toMatch(/constants\.ts|sub.*component/i);
   });
+
+  it("buildComponentPrompt derives dirName from baseName, not scoped outputName", () => {
+    // The prompt must accept a baseName parameter for NN-prefix directory naming
+    // so that "10_split_perception_reality" → "10-SplitPerceptionReality" directory
+    // even when the scoped outputName is "part1_economics_10_split_perception_reality"
+    expect(compositionsSourceCode).toMatch(
+      /function\s+buildComponentPrompt\s*\(\s*baseName\s*:\s*string\s*,\s*outputName\s*:\s*string/
+    );
+  });
+
+  it("extracts string IDs from compositions before passing to generateSectionConstants/Composition", () => {
+    // The code must handle mixed-type compositions arrays (strings and timing objects)
+    // by extracting IDs before passing to functions that expect string[]
+    expect(compositionsSourceCode).toMatch(/typeof comp === ["']string["']/);
+  });
+
+  it("discovery merges with existing timing data instead of replacing", () => {
+    // Line 587 must NOT do: section.compositions = discoveredComponents
+    // It must preserve existing timing objects by merging
+    expect(compositionsSourceCode).toMatch(/existingTimingMap|timingMap/);
+    expect(compositionsSourceCode).not.toMatch(
+      /section\.compositions\s*=\s*discoveredComponents\s*;/
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2346,5 +2370,36 @@ describe("GET_CompositionList — component directory detection", () => {
     );
     expect(comp).toBeDefined();
     expect(comp.status).toBe("done");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Preview route: extracts string IDs from mixed compositions
+// ---------------------------------------------------------------------------
+
+describe("compositions preview — handles timing objects in compositions", () => {
+  let previewSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    previewSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "compositions",
+        "preview",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("preview route extracts string IDs from mixed compositions", () => {
+    // preview/route.ts must handle timing objects in section.compositions
+    expect(previewSourceCode).toMatch(/typeof comp === ["']string["']/);
   });
 });

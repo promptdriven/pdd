@@ -657,6 +657,10 @@ describe("lib/render.ts source structure", () => {
     expect(sourceCode).toMatch(/-safe 0/);
   });
 
+  it("stitch command includes -y flag for overwrite", () => {
+    expect(sourceCode).toMatch(/ffmpeg\s+-y\s+-f\s+concat/);
+  });
+
   it("uses -c copy for stream copying", () => {
     expect(sourceCode).toMatch(/-c copy/);
   });
