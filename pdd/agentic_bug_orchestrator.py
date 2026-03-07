@@ -510,7 +510,7 @@ def run_agentic_bug_orchestrator(
                 return False, msg, total_cost, last_model_used, changed_files
 
         # Step 3: Needs Info
-        if step_num == 3 and "Needs More Info" in output:
+        if step_num == 3 and "STOP_CONDITION: Needs More Info" in output:
             msg = "Stopped at Step 3: Insufficient information provided."
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files

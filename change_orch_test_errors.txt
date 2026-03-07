@@ -1,0 +1,129 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.3.5, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+rootdir: /tmp/pdd_job_zEiB6Ft39EPS3u4hYrPq_ruoukn__
+configfile: pytest.ini
+plugins: anyio-4.12.1, asyncio-0.26.0, cov-5.0.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 3 items
+
+tests/test_agentic_change_orchestrator.py::test_step4_clarification_hard_stop_with_stop_condition_tag FAILED [ 33%]
+tests/test_agentic_change_orchestrator.py::test_step7_architectural_decision_hard_stop_with_stop_condition_tag FAILED [ 66%]
+tests/test_agentic_change_orchestrator.py::test_hard_stop_configuration_quiet_mode FAILED [100%]
+
+=================================== FAILURES ===================================
+__________ test_step4_clarification_hard_stop_with_stop_condition_tag __________
+
+mock_dependencies = {'check_pr': <MagicMock name='_check_existing_pr' id='140640796362848'>, 'clear_state': <MagicMock name='clear_workflo...k name='console' id='140640796355056'>, 'load_state': <MagicMock name='load_workflow_state' id='140640796329840'>, ...}
+temp_cwd = PosixPath('/tmp/pytest-of-ubuntu/pytest-7/test_step4_clarification_hard_0')
+
+    def test_step4_clarification_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
+        """
+        Test that Step 4 hard stop uses STOP_CONDITION tag, not loose string matching.
+        A casual mention of 'Clarification Needed' without the tag should NOT stop the workflow.
+        The strict 'STOP_CONDITION: Clarification Needed' tag SHOULD stop it.
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+    
+        # 1. Test casual mention (should NOT stop)
+        def side_effect_run_loose(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step4":
+                return (True, "Just mentioning Clarification Needed casually.", 0.1, "gpt-4")
+            if label == "step9":
+                return (True, "Implementation done. FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+            if label == "step10":
+                return (True, "Architecture updated. ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+    
+        mock_run.side_effect = side_effect_run_loose
+        success, msg, cost, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+            issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+        )
+>       assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+E       AssertionError: Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag
+E       assert False is True
+
+tests/test_agentic_change_orchestrator.py:2782: AssertionError
+_____ test_step7_architectural_decision_hard_stop_with_stop_condition_tag ______
+
+mock_dependencies = {'check_pr': <MagicMock name='_check_existing_pr' id='140640789289712'>, 'clear_state': <MagicMock name='clear_workflo...k name='console' id='140640789150896'>, 'load_state': <MagicMock name='load_workflow_state' id='140640789064944'>, ...}
+temp_cwd = PosixPath('/tmp/pytest-of-ubuntu/pytest-7/test_step7_architectural_decis0')
+
+    def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
+        """
+        Test that Step 7 hard stop uses STOP_CONDITION tag, not loose string matching.
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+    
+        # 1. Test casual mention (should NOT stop)
+        def side_effect_run_loose(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step7":
+                return (True, "Mentioning Architectural Decision Needed casually.", 0.1, "gpt-4")
+            if label == "step9":
+                return (True, "Implementation done. FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+            if label == "step10":
+                return (True, "Architecture updated. ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+    
+        mock_run.side_effect = side_effect_run_loose
+        success, msg, cost, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+            issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+        )
+>       assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+E       AssertionError: Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag
+E       assert False is True
+
+tests/test_agentic_change_orchestrator.py:2838: AssertionError
+___________________ test_hard_stop_configuration_quiet_mode ____________________
+
+mock_dependencies = {'check_pr': <MagicMock name='_check_existing_pr' id='140640790320944'>, 'clear_state': <MagicMock name='clear_workflo...k name='console' id='140640789493424'>, 'load_state': <MagicMock name='load_workflow_state' id='140640789455616'>, ...}
+temp_cwd = PosixPath('/tmp/pytest-of-ubuntu/pytest-7/test_hard_stop_configuration_q0')
+
+    def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):
+        """
+        Test that hard stop works correctly in quiet mode (no console output).
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+    
+        def side_effect_run_strict(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step4":
+                return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+    
+        mock_run.side_effect = side_effect_run_strict
+        success, msg, cost, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+            issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, quiet=True
+        )
+    
+        assert success is False
+        assert "Stopped at step 4" in msg
+        assert mock_run.call_count == 4
+        mocks["save_state"].assert_called()
+>       assert mocks["save_state"].call_args[0][2] == 4
+E       AssertionError: assert 'change' == 4
+
+tests/test_agentic_change_orchestrator.py:2887: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_agentic_change_orchestrator.py::test_step4_clarification_hard_stop_with_stop_condition_tag - AssertionError: Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag
+assert False is True
+FAILED tests/test_agentic_change_orchestrator.py::test_step7_architectural_decision_hard_stop_with_stop_condition_tag - AssertionError: Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag
+assert False is True
+FAILED tests/test_agentic_change_orchestrator.py::test_hard_stop_configuration_quiet_mode - AssertionError: assert 'change' == 4
+============================== 3 failed in 3.93s ===============================

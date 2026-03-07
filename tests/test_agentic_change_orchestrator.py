@@ -449,7 +449,7 @@ def test_step7_stop_with_stop_condition_marker(mock_dependencies, temp_cwd):
     def side_effect(**kwargs):
         label = kwargs.get("label", "")
         if label == "step7":
-            return (True, "Posted to GitHub.\nArchitectural Decision Needed", 0.1, "gpt-4")
+            return (True, "Posted to GitHub.\nSTOP_CONDITION: Architectural Decision Needed", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect
@@ -2748,3 +2748,188 @@ def test_post_step_comment_called_on_provider_abort(mock_dependencies, temp_cwd)
     assert "Aborting" in msg
     # Comment posted once (on the 3rd consecutive failure)
     assert mock_post_comment.call_count == 1
+
+
+def test_step4_clarification_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
+    """
+    Test that Step 4 hard stop uses STOP_CONDITION tag, not loose string matching.
+    A casual mention of 'Clarification Needed' without the tag should NOT stop the workflow.
+    The strict 'STOP_CONDITION: Clarification Needed' tag SHOULD stop it.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # 1. Test casual mention (should NOT stop)
+    def side_effect_run_loose(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "Just mentioning Clarification Needed casually.", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "Implementation done. FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Architecture updated. ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_loose
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+    assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+
+    # 2. Test strict tag (should STOP)
+    mocks["save_state"].reset_mock()
+    mocks["console"].print.reset_mock()
+    mocks["post_comment"].reset_mock()
+    mock_run.reset_mock()
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert mock_run.call_count == 4
+    mocks["save_state"].assert_called()
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 4
+    mocks["console"].print.assert_any_call("[yellow]Investigation stopped at Step 4: Clarification needed[/yellow]")
+
+
+def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
+    """
+    Test that Step 7 hard stop uses STOP_CONDITION tag, not loose string matching.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # 1. Test casual mention (should NOT stop)
+    def side_effect_run_loose(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            return (True, "Mentioning Architectural Decision Needed casually.", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "Implementation done. FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Architecture updated. ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_loose
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+    assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+
+    # 2. Test strict tag
+    mocks["save_state"].reset_mock()
+    mock_run.reset_mock()
+    mocks["console"].print.reset_mock()
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            return (True, "STOP_CONDITION: Architectural Decision Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+
+    assert success is False
+    assert "Stopped at step 7" in msg
+    assert mock_run.call_count == 7
+    mocks["save_state"].assert_called()
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 7
+
+
+def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):
+    """
+    Test that hard stop works correctly in quiet mode (no console output).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, quiet=True
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert mock_run.call_count == 4
+    mocks["save_state"].assert_called()
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 4
+
+    for call in mocks["console"].print.mock_calls:
+        assert "[yellow]Investigation stopped at step 4" not in str(call.args)
+
+
+# -----------------------------------------------------------------------------
+# Unit Tests for _check_hard_stop (Issue #773)
+# -----------------------------------------------------------------------------
+
+def test_check_hard_stop_step4_requires_stop_condition_tag():
+    """
+    _check_hard_stop should only trigger for Step 4 when the output contains
+    'STOP_CONDITION: Clarification Needed', not a casual mention.
+    """
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    # Casual mention should NOT trigger hard stop
+    result = _check_hard_stop(4, "Just mentioning Clarification Needed casually.")
+    assert result is None, (
+        "Bug #773: _check_hard_stop falsely triggers on casual mention of "
+        "'Clarification Needed' without STOP_CONDITION tag"
+    )
+
+    # Strict tag SHOULD trigger hard stop
+    result = _check_hard_stop(4, "I posted the comment. STOP_CONDITION: Clarification Needed")
+    assert result is not None, (
+        "_check_hard_stop should trigger when STOP_CONDITION: Clarification Needed is present"
+    )
+
+
+def test_check_hard_stop_step7_requires_stop_condition_tag():
+    """
+    _check_hard_stop should only trigger for Step 7 when the output contains
+    'STOP_CONDITION: Architectural Decision Needed', not a casual mention.
+    """
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    # Casual mention should NOT trigger hard stop
+    result = _check_hard_stop(7, "Mentioning Architectural Decision Needed in passing.")
+    assert result is None, (
+        "Bug #773: _check_hard_stop falsely triggers on casual mention of "
+        "'Architectural Decision Needed' without STOP_CONDITION tag"
+    )
+
+    # Strict tag SHOULD trigger hard stop
+    result = _check_hard_stop(7, "STOP_CONDITION: Architectural Decision Needed")
+    assert result is not None, (
+        "_check_hard_stop should trigger when STOP_CONDITION: Architectural Decision Needed is present"
+    )

@@ -163,7 +163,7 @@ def test_hard_stop_step_3_needs_info(mock_dependencies, default_args):
     mock_run.side_effect = [
         (True, "Step 1 ok", 0.1, "model"),
         (True, "Step 2 ok", 0.1, "model"),
-        (True, "Cannot proceed. Needs More Info from user.", 0.1, "model")
+        (True, "Cannot proceed. STOP_CONDITION: Needs More Info", 0.1, "model")
     ]
 
     success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
@@ -676,7 +676,7 @@ def test_state_save_after_each_step(mock_dependencies, default_args, tmp_path):
         label = kwargs.get('label', '')
         if label == 'step3':
             # Return "Needs More Info" to trigger hard stop
-            return (True, "Needs More Info", 0.1, "gpt-4")
+            return (True, "STOP_CONDITION: Needs More Info", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -1981,7 +1981,7 @@ def test_failure_handling_does_not_use_step_num_minus_one(mock_dependencies, def
             return (False, "All agent providers failed", 0.0, "")
         if label == 'step3':
             # Trigger hard stop to exit the loop cleanly
-            return (True, "Needs More Info", 0.1, "gpt-4")
+            return (True, "STOP_CONDITION: Needs More Info", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -2791,3 +2791,49 @@ def test_step7_no_markers_no_filesystem_files_still_hard_stops(mock_dependencies
     assert mock_run.call_count == 8
 
 
+def test_step3_needs_more_info_hard_stop_with_stop_condition_tag(mock_dependencies, default_args):
+    """
+    Test that Step 3 hard stop uses STOP_CONDITION tag, not loose string matching.
+    A casual mention of 'Needs More Info' without the tag should NOT stop the workflow.
+    The strict 'STOP_CONDITION: Needs More Info' tag SHOULD stop it.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    mock_run, mock_load, mock_console = mock_dependencies
+
+    # 1. Test casual mention (should NOT stop)
+    def side_effect_run_loose(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, "Just mentioning Needs More Info casually.", 0.1, "gpt-4")
+        if label == "step7":
+            return (True, "Implementation done.\nFILES_CREATED: test_app.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_loose
+
+    with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=["test_app.py"]):
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+
+    # 2. Test strict tag (should STOP)
+    mock_run.reset_mock()
+    mock_console.print.reset_mock()
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, "STOP_CONDITION: Needs More Info", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+
+    with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]):
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at Step 3" in msg
+    assert mock_run.call_count == 3
