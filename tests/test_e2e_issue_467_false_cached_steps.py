@@ -137,7 +137,7 @@ class TestIssue467FalseCachedStepsE2E:
             """Track which steps execute and return success."""
             label = kwargs.get("label", "")
             executed_steps.append(label)
-            if label == "step7":
+            if label == "step9":
                 return (True, "FILES_CREATED: test_file.py", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -148,13 +148,13 @@ class TestIssue467FalseCachedStepsE2E:
 
             run_agentic_bug_orchestrator(**orchestrator_args)
 
-        # FIX VERIFIED: All 11 steps should execute (none skipped)
+        # FIX VERIFIED: All 12 steps should execute (none skipped)
         assert "step1" in executed_steps, (
             f"Step 1 should be re-executed since its cached output was FAILED, "
             f"but executed steps were: {executed_steps}"
         )
-        assert len(executed_steps) == 11, (
-            f"All 11 steps should execute when all cached outputs are FAILED, "
+        assert len(executed_steps) == 12, (
+            f"All 12 steps should execute when all cached outputs are FAILED, "
             f"got {len(executed_steps)} steps: {executed_steps}"
         )
 
@@ -230,7 +230,7 @@ class TestIssue467FalseCachedStepsE2E:
             )
 
         # Verify failed steps DO have FAILED prefix
-        for step_key in ["4", "5", "5.5"]:
+        for step_key in ["4", "5", "6"]:
             if step_key in saved_state["step_outputs"]:
                 assert saved_state["step_outputs"][step_key].startswith("FAILED:"), (
                     f"Step {step_key} failed and should have FAILED prefix"
@@ -243,7 +243,7 @@ class TestIssue467FalseCachedStepsE2E:
             """Track and succeed for all steps."""
             label = kwargs.get("label", "")
             executed_steps.append(label)
-            if label == "step7":
+            if label == "step9":
                 return (True, "FILES_CREATED: test_file.py", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -265,9 +265,9 @@ class TestIssue467FalseCachedStepsE2E:
         assert "step2" not in executed_steps
         assert "step3" not in executed_steps
 
-        # Steps 4, 5, 5.5, 6-10 should all be executed (8 steps)
-        assert len(executed_steps) == 8, (
-            f"Expected 8 steps (4, 5, 5.5, 6-10) but got {len(executed_steps)}: {executed_steps}"
+        # Steps 4-12 should all be executed (9 steps)
+        assert len(executed_steps) == 9, (
+            f"Expected 9 steps (4-12) but got {len(executed_steps)}: {executed_steps}"
         )
 
     def test_state_file_correct_after_consecutive_failures(self, mock_git_repo):

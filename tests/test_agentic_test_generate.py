@@ -457,3 +457,35 @@ def test_model_name_fallback(mock_agents, mock_load, mock_run, mock_env):
 
     assert model == "agentic-cli"
     assert success is True
+
+
+# -----------------------------------------------------------------------------
+# Prompt Template Content Tests
+# -----------------------------------------------------------------------------
+
+
+class TestAgenticTestPromptContent:
+    """Tests that the agentic test generation prompt contains language-specific guidance."""
+
+    def test_prompt_contains_python_import_rules(self):
+        """Bug fix: The agentic test prompt must contain Python-specific import guidance.
+
+        Without this, the agentic generator produces tests like:
+            from src.hello import hello
+        instead of:
+            from hello import hello
+        which causes pytest-cov (--cov=hello) to report 0% coverage.
+        """
+        prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_test_generate_LLM.prompt"
+        prompt_content = prompt_path.read_text()
+
+        # Must contain Python-specific import rule
+        assert "from hello import hello" in prompt_content or "by its filename stem" in prompt_content, (
+            "Agentic test prompt must contain Python-specific import guidance "
+            "to prevent 'from src.hello import hello' style imports"
+        )
+
+        # Must mention sys.path setup for Python
+        assert "sys.path" in prompt_content, (
+            "Agentic test prompt must contain sys.path setup instructions for Python"
+        )

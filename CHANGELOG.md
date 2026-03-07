@@ -1,33 +1,48 @@
+## v0.0.169 (2026-03-07)
+
+### Fix
+
+- pdd sync --agentic Python coverage failures (7 bugs) (#778)
+- step 8.5 merges existing context docs instead of regenerating (#774)
+- pdd change doesn't stop workflow when step asks user for clarification
+- set explicit width in _echo_rich to prevent empty output in headless CI
+- prevent pdd change infinite loop when triggered by GitHub App (#756)
+
 ## v0.0.168 (2026-03-05)
 
 ### Feat
 
-- add new visual components and sections for economics, mold production, context degradation, and precision tradeoffs.
-- enhance composition handling by merging discovered components with existing timing data, extracting string IDs from mixed-type compositions, and refining component prompt generation with distinct base and output names.
-- Introduce new chart grid, tick, and zoom timing constants and centralize existing component constants into dedicated files.
-- enforce enum fidelity, context doc includes, and prompt deduplication
-- Introduce an animated word-by-word subtitle track component and standardize video section constants across various parts.
-- add new Remotion scenes and components for Part 4, Part 5, and Closing sections, and integrate them into Root.tsx.
-- add numerous new Remotion components for various video sections and scenes.
-- share sibling context documents (data dictionary, API contracts) across sub-issues
-- detect include dependency changes in `pdd update` repo-wide mode
-- add comprehensive video segment specifications for the PDD video.
-- generate rich animated compositions instead of overlays
+- **Architecture step 8.5 — shared context documents**: new orchestrator step generates `data_dictionary.yaml`, `api_contracts.yaml`, and `integration_points.yaml` in `prompts/_context/`, providing a single source of truth for field names, types, and enums across all module prompts via `<include>` tags.
+- **Architecture conformance checking**: `pdd generate` now verifies generated code exports against `architecture.json` interface declarations, failing on missing symbols or Python naming-convention violations. Disable with `PDD_SKIP_CONFORMANCE=1`.
+- **Cross-sub-issue reconciliation (step 9.7)**: new `cross_issue_reconcile_LLM.prompt` audits shared types, API contracts, and enum values across related sub-issues for consistency.
+- **Post-generation verification prompt**: new `post_gen_verify_LLM.prompt` for checking generated code against architecture interface declarations.
+- **Entry point wiring check in completeness validation**: step 10 now detects orphan modules (API routes, pages) that export callable functionality but have no `entryPoints` and are unreferenced by other modules.
+- **Generated test syntax validation**: architecture orchestrator scans prompt files for embedded code blocks and validates Python syntax (via `ast.parse`) and TypeScript/JS bracket balance.
+- **Prompt template context injection**: `generate_prompt.prompt` template now includes a `Shared Context` section with `<include>` tags for context YAMLs, with deduplication rules preventing inline field tables when context files exist.
+- **Share sibling context documents across sub-issues**: `_fetch_sibling_architectures` now reads and includes `data_dictionary.yaml` and `api_contracts.yaml` from sibling project directories, with full interface details for cross-project dependency resolution.
+- **Detect include dependency changes in `pdd update`**: repo-wide mode now checks stored include dependency hashes (e.g., shared preambles, examples) and marks modules as changed when any dependency file is modified, deleted, or unreadable.
+- **Expand sync language support**: `SUPPORTED_SYNC_LANGUAGES` list expanded from 7 hardcoded languages to 50+ (all languages from `language_format.csv`), enabling prompt discovery for Svelte, Vue, Zig, Mojo, and many more.
+- **`language` parameter for `code_generator_main`**: new optional parameter passes language context through to conformance checking and command options.
+- **Enforce enum fidelity, context doc includes, and prompt deduplication**: step 9 prompt generation now requires context YAML `<include>` tags in every prompt, forbids inline duplication of data model content, and adds mandatory verification commands.
+- **Step 13 fix prompt expanded**: added fix strategies for missing context document includes, enum value drift, and inline duplication of context YAML content in prompts.
 
 ### Fix
 
-- address Copilot review — glob patterns, conditional mandate, section numbering
-- escape include tag examples in LLM prompts to survive preprocessing
-- PDD fix for #737 (#738)
-- add stdout fallback in error capture and consecutive-provider-failure abort to e2e_fix orchestrator
+- escape `<include>` tag examples in LLM prompts to survive preprocessing (switched to `&lt;include&gt;` entities throughout prompt templates)
+- add stdout fallback in `_run_with_provider` error capture when stderr is empty
+- abort e2e fix orchestrator after 3 consecutive provider failures instead of looping indefinitely
 - treat unreadable include dependencies as changed to trigger re-sync
-- expand language discovery to all supported languages and harden one-session completion gate
-- replace nonexistent playwright-cli with npx playwright in test prompts
-- spec prompt now instructs a mix of visual types, not just Remotion
-- spec generation prompt now explicitly requires multiple separate files
-- expand spec generation log panel from 1 line to usable height
-- sync context/python_preamble.prompt to public repo for Issue #594 tests
-- add pdd/templates/ to .sync-config.yml to fix CI on promptdriven/pdd
+- expand language discovery to all supported languages and harden one-session completion gate — `STEP_COMPLETE:done` is now only emitted after a final passing test run (exit code 0)
+- replace nonexistent `playwright-cli` with `npx playwright` in test prompts
+- improve language detection warning message with actionable guidance (pass `--language` or use `_<language>.prompt` suffix)
+- sync `context/python_preamble.prompt` to public repo for Issue #594 tests
+- add `pdd/templates/` to `.sync-config.yml` to fix CI on promptdriven/pdd
+
+### Refactor
+
+- replace inline `languages_to_try` lists in `sync_main.py` with module-level `SUPPORTED_SYNC_LANGUAGES` constant
+- add `_is_known_language()` helper for language suffix detection in sync discovery
+- remove `# Dummy` comments from `construct_paths.py` placeholder values
 
 ## v0.0.167 (2026-03-04)
 

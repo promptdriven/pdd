@@ -735,7 +735,7 @@ def run_agentic_change_orchestrator(
                     console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
                 state["last_completed_step"] = step_num
                 state["step_outputs"][str(step_num)] = step_output
-                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                save_workflow_state(cwd, issue_number, step_num, state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
@@ -745,7 +745,7 @@ def run_agentic_change_orchestrator(
                 console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
-            save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_workflow_state(cwd, issue_number, step_num, state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
 
         # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
@@ -953,4 +953,3 @@ def run_agentic_change_orchestrator(
             clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
         return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
     return True, "Workflow already completed", total_cost, model_used, changed_files
-""

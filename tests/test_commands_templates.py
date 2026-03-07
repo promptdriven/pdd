@@ -29,9 +29,10 @@ def test_cli_templates_list_default(mock_list_templates, runner):
 
     result = runner.invoke(cli.templates_group, ["list"])
 
+    assert result.exception is None, f"Unexpected exception: {result.exception}"
     assert result.exit_code == 0
     mock_list_templates.assert_called_once_with(None)
-    assert "Available Templates" in result.output
+    assert "Available Templates" in result.output, f"output was: {result.output!r}"
     assert "architecture/architecture_json" in result.output
     assert "Architecture outline" in result.output
 
@@ -80,9 +81,10 @@ def test_cli_templates_show_outputs_sections(mock_show_template, runner):
 
     result = runner.invoke(cli.templates_group, ["show", "architecture/architecture_json"])
 
+    assert result.exception is None, f"Unexpected exception: {result.exception}"
     assert result.exit_code == 0
     mock_show_template.assert_called_once_with("architecture/architecture_json")
-    assert "Template Summary:" in result.output
+    assert "Template Summary:" in result.output, f"output was: {result.output!r}"
     assert "Architecture outline" in result.output
     assert "Version" in result.output
     assert "Variables:" in result.output
@@ -105,9 +107,10 @@ def test_cli_templates_copy_invokes_registry(mock_copy_template, runner, tmp_pat
         ],
     )
 
+    assert result.exception is None, f"Unexpected exception: {result.exception}"
     assert result.exit_code == 0
     mock_copy_template.assert_called_once_with("architecture/architecture_json", str(destination.parent))
-    assert "Copied to" in result.output
+    assert "Copied to" in result.output, f"output was: {result.output!r}"
     assert "architecture_json.prompt" in result.output.replace("\n", "")
 
 def test_cli_templates_group_registered():

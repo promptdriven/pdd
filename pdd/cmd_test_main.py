@@ -142,6 +142,14 @@ def cmd_test_main(
         # The agent writes the test file directly, but we still return the content
         # for consistency with the Python flow
         if generated_content and generated_content.strip():
+            # For Python, apply _inject_sys_path_preamble to ensure correct
+            # sys.path setup, matching the native Python test generation path.
+            # The agent may or may not have added sys.path correctly; this normalizes it.
+            if detected_language and detected_language.lower() == 'python':
+                from .generate_test import _inject_sys_path_preamble
+                generated_content = _inject_sys_path_preamble(generated_content)
+                output_test_path.write_text(generated_content)
+
             if not ctx.obj.get("quiet", False):
                 console.print(f"[green]Agentic test generation completed.[/green]")
         else:

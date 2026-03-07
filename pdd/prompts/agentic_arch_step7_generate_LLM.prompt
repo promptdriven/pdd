@@ -91,10 +91,9 @@ If an existing architecture.json is shown above, you MUST:
    - If a new feature MODIFIES an existing module, UPDATE that module's entry (keep its filename, update description/interface/dependencies)
    - If a new feature requires NEW modules, ADD them alongside existing ones
    - NEVER remove existing modules unless the issue explicitly says to deprecate them
-3. Tag each new/updated module entry with:
-   "origin": {{"issue_number": {issue_number}, "issue_url": "{issue_url}"}}
-4. Re-number priorities so the combined set forms a valid topological order
-5. Write the COMPLETE architecture (existing + new/updated) to `{target_dir}/architecture.json`
+3. Re-number priorities so the combined set forms a valid topological order
+4. Write the COMPLETE architecture (existing + new/updated) to `{target_dir}/architecture.json`
+   Note: The orchestrator code automatically adds `origin` metadata — do NOT add it yourself.
 
 If no existing architecture is shown, generate from scratch as normal.
 
@@ -108,16 +107,15 @@ When generating architecture.json:
 3. Reference sibling modules using `"external:sibling_dir/module_filename"` in dependencies
 4. Note cross-project dependencies in the `reason` field
 
-% Naming Registry Enforcement (from Step 2)
+% Identifier Consistency
 
-The Step 2 output contains a NAMING REGISTRY — a canonical list of shared identifiers.
-You MUST use these EXACT names in architecture.json:
-- `description` field must reference collection/table names exactly as listed
-- `interface.api.endpoints[].path` must match the registered API paths
-- All environment variable references must use registered names
-- Do NOT normalize, rename, or re-case any registered identifier
+Use consistent names throughout architecture.json:
+- `description` field must reference collection/table names consistently
+- `interface.api.endpoints[].path` must use consistent API paths
+- All environment variable references must use consistent names
+- Do NOT normalize, rename, or re-case identifiers between modules
 
-If Step 2's naming registry is missing or incomplete, derive one from the PRD and be consistent.
+Step 8.5 will generate canonical context documents (data dictionary, API contracts) from this output. Be precise and consistent now to avoid drift later.
 
 % Your Task
 

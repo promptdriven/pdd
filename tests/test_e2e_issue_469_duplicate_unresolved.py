@@ -208,7 +208,7 @@ class TestIssue469DuplicateUnresolvedE2E:
                     "mock-model",
                 )
 
-            if "step7" in label:
+            if "step9" in label:
                 return (True, "Generated unit test\nFILES_CREATED: test_fix.py", 0.01, "mock-model")
 
             return (True, f"Mock output for {label}", 0.01, "mock-model")
@@ -232,14 +232,14 @@ class TestIssue469DuplicateUnresolvedE2E:
                 use_github_state=False,
             )
 
-        # The workflow should have continued past Step 1 through all 11 steps
+        # The workflow should have continued past Step 1 through all 12 steps
         assert success is True, (
             f"BUG DETECTED (Issue #469): Workflow should continue when the "
             f"original duplicate was unresolved, but it stopped: {message}"
         )
         assert "step1" in steps_executed, "Step 1 should have executed"
-        assert len(steps_executed) == 11, (
-            f"All 11 steps should execute when duplicate is unresolved. "
+        assert len(steps_executed) == 12, (
+            f"All 12 steps should execute when duplicate is unresolved. "
             f"Got {len(steps_executed)} steps: {steps_executed}"
         )
 

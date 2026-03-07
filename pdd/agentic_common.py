@@ -831,12 +831,83 @@ def _run_with_provider(
                     except:
                         pass
         else:
-            data = json.loads(output_str)
-            
-        return _parse_provider_json(provider, data)
+            # Claude Code may emit non-JSON text to stdout (npm warnings,
+            # upgrade prompts) alongside the JSON result.  Try parsing as
+            # single JSON first, then fall back to line-by-line extraction.
+            try:
+                data = json.loads(output_str)
+            except json.JSONDecodeError:
+                data = _extract_json_from_output(output_str)
+
+        success, text, cost = _parse_provider_json(provider, data)
+        if cost == 0.0 and verbose and isinstance(data, dict):
+            console.print(
+                f"[dim]Warning: {provider} returned $0 cost. "
+                f"JSON keys: {sorted(data.keys())}[/dim]"
+            )
+        return success, text, cost
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
         return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
+
+
+def _extract_json_from_output(output_str: str) -> dict:
+    """Extract a JSON object from output that may contain non-JSON text.
+
+    Claude Code may emit non-JSON text to stdout (npm warnings, upgrade
+    prompts) alongside the JSON result.  Try line-by-line extraction first,
+    then fall back to brace-depth matching on the full string.
+
+    Raises ``json.JSONDecodeError`` if no valid JSON object can be found.
+    """
+    # Try each line individually
+    for line in output_str.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+    # Fallback: brace-depth matching to find the first complete JSON object
+    depth = 0
+    start_index: Optional[int] = None
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(output_str):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start_index = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start_index is not None:
+                candidate = output_str[start_index : i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    start_index = None
+                    continue
+
+    raise json.JSONDecodeError(
+        "No valid JSON object found in output", output_str[:200], 0
+    )
+
 
 def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
     """

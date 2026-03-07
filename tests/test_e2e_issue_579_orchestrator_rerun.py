@@ -9,12 +9,12 @@ running `pdd bug <issue-url>` a second time.
 Bug Context:
 -----------
 When `pdd bug` is run a second time on the same issue:
-- Path 1 (fresh re-run): The orchestrator reaches Step 5.5, calls
+- Path 1 (fresh re-run): The orchestrator reaches Step 7, calls
   _setup_worktree(resume_existing=False), but the branch can't be deleted
   (checked out in main repo). The bug orchestrator returns a hard error
   instead of falling back to `git worktree add --force`.
 - Path 2 (resume re-run): The orchestrator loads cached state showing
-  steps 1-5.5+ completed, tries to recreate the worktree with
+  steps 1-7+ completed, tries to recreate the worktree with
   _setup_worktree(resume_existing=True), but uses `git worktree add`
   without `--force`, failing on stale worktree associations.
 
@@ -132,7 +132,7 @@ class TestIssue579OrchestratorRerunE2E:
         E2E Bug Test (Path 1): Full orchestrator fails on re-run when branch is checked out.
 
         Scenario: User runs `pdd bug <issue>` a second time. The orchestrator reaches
-        Step 5.5 and calls _setup_worktree(resume_existing=False). Since the branch
+        Step 7 and calls _setup_worktree(resume_existing=False). Since the branch
         fix/issue-579 is checked out, _delete_branch() fails, and the bug orchestrator
         returns a hard error instead of falling back to `git worktree add --force`.
 
@@ -160,9 +160,9 @@ class TestIssue579OrchestratorRerunE2E:
         def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
             """Mock LLM calls — return success for all steps.
 
-            Steps 1-5 produce outputs that don't trigger any hard-stop conditions.
-            Step 5.5 triggers worktree creation. If the worktree bug is present,
-            the orchestrator will fail before reaching step 5.5's LLM call.
+            Steps 1-6 produce outputs that don't trigger any hard-stop conditions.
+            Step 7 triggers worktree creation. If the worktree bug is present,
+            the orchestrator will fail before reaching step 7's LLM call.
             """
             step_calls.append(label)
 
@@ -178,20 +178,20 @@ class TestIssue579OrchestratorRerunE2E:
             if label == "step3":
                 return (True, "Sufficient information. Proceeding with investigation.", 0.001, "mock-model")
 
-            # Step 5.5: Prompt classification — must NOT contain "PROMPT_REVIEW:"
-            if label == "step5_5":
+            # Step 7: Prompt classification — must NOT contain "PROMPT_REVIEW:"
+            if label == "step7":
                 return (True, "DEFECT_TYPE: code\nThe bug is in the code.", 0.001, "mock-model")
 
-            # Step 7: Must produce FILES_CREATED to avoid hard stop
-            if label == "step7":
+            # Step 9: Must produce FILES_CREATED to avoid hard stop
+            if label == "step9":
                 return (True, "FILES_CREATED: tests/test_fix.py\nTest generated.", 0.001, "mock-model")
 
-            # Step 8: Must NOT contain "FAIL: Test does not work as expected"
-            if label == "step8":
+            # Step 10: Must NOT contain "FAIL: Test does not work as expected"
+            if label == "step10":
                 return (True, "Test correctly catches the bug.", 0.001, "mock-model")
 
-            # Step 9: E2E test
-            if label == "step9":
+            # Step 11: E2E test
+            if label == "step11":
                 return (True, "E2E_SKIP: Simple bug, no E2E test needed.", 0.001, "mock-model")
 
             return (True, f"Mock success for {label}", 0.001, "mock-model")
@@ -214,7 +214,7 @@ class TestIssue579OrchestratorRerunE2E:
                             use_github_state=False,
                         )
 
-        # The orchestrator should succeed (all 11 steps) even when the branch
+        # The orchestrator should succeed (all 12 steps) even when the branch
         # is already checked out. On buggy code, it fails at worktree creation.
         assert success, (
             f"Orchestrator should succeed on re-run with checked-out branch. "
@@ -224,9 +224,9 @@ class TestIssue579OrchestratorRerunE2E:
             f"Steps executed: {step_calls}"
         )
 
-        # Verify we got past Step 5.5 (where worktree is created)
-        assert "step5_5" in step_calls, (
-            f"Should have reached step 5.5 (worktree creation point). "
+        # Verify we got past Step 7 (where worktree is created)
+        assert "step7" in step_calls, (
+            f"Should have reached step 7 (worktree creation point). "
             f"Steps executed: {step_calls}"
         )
 
@@ -241,7 +241,7 @@ class TestIssue579OrchestratorRerunE2E:
         """
         E2E Bug Test (Path 2): Full orchestrator fails on resume when branch has stale worktree.
 
-        Scenario: Prior `pdd bug` run completed steps 1-7, saved state, and the worktree
+        Scenario: Prior `pdd bug` run completed steps 1-9, saved state, and the worktree
         was cleaned up. The branch still has stale worktree metadata. On resume, the
         orchestrator calls _setup_worktree(resume_existing=True) which uses
         `git worktree add <path> <branch>` without --force, crashing because git thinks
@@ -265,16 +265,17 @@ class TestIssue579OrchestratorRerunE2E:
         cached_state = {
             "workflow": "bug",
             "issue_number": 579,
-            "last_completed_step": 7,
+            "last_completed_step": 9,
             "step_outputs": {
                 "1": "No duplicates found",
                 "2": "Confirmed bug",
                 "3": "Sufficient information",
-                "4": "Bug reproduced",
-                "5": "Root cause identified",
-                "5.5": "DEFECT_TYPE: code",
-                "6": "Test plan created",
-                "7": "FILES_CREATED: tests/test_fix.py",
+                "4": "API research complete",
+                "5": "Bug reproduced",
+                "6": "Root cause identified",
+                "7": "DEFECT_TYPE: code",
+                "8": "Test plan created",
+                "9": "FILES_CREATED: tests/test_fix.py",
             },
             "total_cost": 0.50,
             "model_used": "mock-model",
@@ -297,12 +298,12 @@ class TestIssue579OrchestratorRerunE2E:
         def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
             step_calls.append(label)
 
-            # Step 8: Verify test
-            if label == "step8":
+            # Step 10: Verify test
+            if label == "step10":
                 return (True, "Test correctly catches the bug.", 0.001, "mock-model")
 
-            # Step 9: E2E test
-            if label == "step9":
+            # Step 11: E2E test
+            if label == "step11":
                 return (True, "E2E_SKIP: Simple bug, no E2E test needed.", 0.001, "mock-model")
 
             return (True, f"Mock success for {label}", 0.001, "mock-model")
@@ -336,9 +337,9 @@ class TestIssue579OrchestratorRerunE2E:
             f"Steps executed: {step_calls}"
         )
 
-        # Verify we resumed from step 8 (steps 1-7 were cached)
-        assert "step8" in step_calls, (
-            f"Should have resumed at step 8. Steps executed: {step_calls}"
+        # Verify we resumed from step 10 (steps 1-9 were cached)
+        assert "step10" in step_calls, (
+            f"Should have resumed at step 10. Steps executed: {step_calls}"
         )
 
         # Clean up worktree

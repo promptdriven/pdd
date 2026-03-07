@@ -2616,8 +2616,12 @@ def test_generate_merges_with_existing(mock_dependencies, base_args):
     assert "old_module_Python.prompt" in gen["modules_updated"]
 
 
-def test_step7_output_scoped_to_current_issue(mock_dependencies, base_args):
-    """step7_output in context contains only new/updated modules, not unchanged ones."""
+def test_step7_output_contains_full_merged_architecture(mock_dependencies, base_args):
+    """step7_output in context contains the full merged architecture (all modules).
+
+    After merge, downstream steps (9, 10, etc.) need the complete picture so they
+    can validate cross-module dependencies and generate prompts correctly.
+    """
     mocks = mock_dependencies
     cwd = base_args["cwd"]
 
@@ -2666,13 +2670,142 @@ def test_step7_output_scoped_to_current_issue(mock_dependencies, base_args):
     success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
     assert success is True
 
-    # Verify the step9 instruction contains the scoped step7_output
+    # Verify step9 instruction contains the full merged architecture
     assert "text" in captured_step9_instruction
     step9_text = captured_step9_instruction["text"]
-    # fresh_Python should be in the scoped output (it's new)
+    # Both new and existing modules should be in the full merged output
     assert "fresh_Python.prompt" in step9_text
-    # legacy_Python should NOT be in the scoped step7_output (it's unchanged)
-    assert "legacy_Python.prompt" not in step9_text
+    assert "legacy_Python.prompt" in step9_text
+
+
+def test_step7b_review_file_preserves_sibling_modules(mock_dependencies, base_args):
+    """Step 7b writes fixes to architecture_review.json, not architecture.json.
+
+    When 7b reports FIXED, the orchestrator merges review file into arch
+    without dropping sibling-issue modules.
+    """
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    # Pre-existing architecture with backend modules from issue #11
+    existing_arch = [
+        {"filename": "backend_Python.prompt", "priority": 1, "dependencies": [],
+         "origin": {"issue_number": 11}},
+        {"filename": "models_Python.prompt", "priority": 2, "dependencies": [],
+         "origin": {"issue_number": 11}},
+    ]
+    (cwd / "architecture.json").write_text(json.dumps(existing_arch))
+
+    mocks["load_template"].return_value = "Template {step7_output} title: {issue_title}"
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step7b" in label:
+            # 7b writes ONLY in-scope fixed modules to architecture_review.json
+            review = [
+                {"filename": "cli_Python.prompt", "priority": 3, "dependencies": [],
+                 "description": "Fixed by review", "origin": {"issue_number": 1}},
+            ]
+            (cwd / "architecture_review.json").write_text(json.dumps(review))
+            return (True, "REVIEW_RESULT: FIXED (1 issues)\n\nIssues fixed:\n1. Added description", 0.1, "gpt-4")
+        if "step7" in label:
+            # Step 7 agent writes only CLI module
+            new_arch = [
+                {"filename": "cli_Python.prompt", "priority": 1, "dependencies": []},
+            ]
+            (cwd / "architecture.json").write_text(json.dumps(new_arch))
+            return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: prompts/cli_Python.prompt", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+    assert success is True
+
+    # Verify architecture.json on disk has ALL modules (sibling + fixed)
+    final_arch = json.loads((cwd / "architecture.json").read_text())
+    filenames = [m["filename"] for m in final_arch]
+    assert "backend_Python.prompt" in filenames, "Sibling module from issue #11 was dropped"
+    assert "models_Python.prompt" in filenames, "Sibling module from issue #11 was dropped"
+    assert "cli_Python.prompt" in filenames, "Fixed module from review was not applied"
+
+    # Review file should be cleaned up
+    assert not (cwd / "architecture_review.json").exists()
+
+    # The fixed module should have the review's description
+    cli_mod = next(m for m in final_arch if m["filename"] == "cli_Python.prompt")
+    assert cli_mod["description"] == "Fixed by review"
+
+
+def test_step7b_fallback_restores_on_module_drop(mock_dependencies, base_args):
+    """If 7b writes directly to architecture.json and drops modules, restore merged arch."""
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    # Pre-existing architecture with 2 modules
+    existing_arch = [
+        {"filename": "backend_Python.prompt", "priority": 1, "dependencies": []},
+        {"filename": "models_Python.prompt", "priority": 2, "dependencies": []},
+    ]
+    (cwd / "architecture.json").write_text(json.dumps(existing_arch))
+
+    mocks["load_template"].return_value = "Template {step7_output} title: {issue_title}"
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step7b" in label:
+            # 7b agent disobeys and overwrites architecture.json, dropping modules
+            bad_arch = [
+                {"filename": "cli_Python.prompt", "priority": 1, "dependencies": []},
+            ]
+            (cwd / "architecture.json").write_text(json.dumps(bad_arch))
+            # No review file — legacy behavior
+            return (True, "REVIEW_RESULT: FIXED (1 issues)\n\n1. Removed backend", 0.1, "gpt-4")
+        if "step7" in label:
+            new_arch = [
+                {"filename": "cli_Python.prompt", "priority": 1, "dependencies": []},
+            ]
+            (cwd / "architecture.json").write_text(json.dumps(new_arch))
+            return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: prompts/cli_Python.prompt", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, _, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+    assert success is True
+
+    # Verify architecture.json still has all 3 modules (fallback restored merged arch)
+    final_arch = json.loads((cwd / "architecture.json").read_text())
+    filenames = [m["filename"] for m in final_arch]
+    assert "backend_Python.prompt" in filenames, "Fallback should restore dropped sibling modules"
+    assert "models_Python.prompt" in filenames, "Fallback should restore dropped sibling modules"
+    assert "cli_Python.prompt" in filenames
 
 
 def test_generate_first_time_records_registry(mock_dependencies, base_args):
