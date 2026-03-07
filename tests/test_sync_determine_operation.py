@@ -409,15 +409,17 @@ def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
 def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_test_environment):
     tmp_path = pdd_test_environment
 
-    # Create test file on disk so test_file_exists check passes
+    # Create test file and code file on disk so existence checks pass
     Path("tests").mkdir(exist_ok=True)
     test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
     create_file(test_path, "def test_foo(): pass")
+    code_path = tmp_path / f"{BASENAME}.py"
+    create_file(code_path, "def foo(): pass")
 
     # Mock get_pdd_file_paths to return the test path
     mock_get_pdd_paths.return_value = {
         'prompt': tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
-        'code': tmp_path / f"{BASENAME}.py",
+        'code': code_path,
         'example': tmp_path / f"{BASENAME}_example.py",
         'test': test_path,
     }
@@ -594,6 +596,52 @@ result = add(5, 3)  # Should return 8"""
     assert decision.operation == 'generate'
     assert decision.operation != 'analyze_conflict'
     assert "file missing" in decision.reason.lower() or "new" in decision.reason.lower()
+
+def test_regression_missing_code_with_low_coverage_run_report(pdd_test_environment):
+    """
+    Regression test for commit be50e49ee: when run_report has coverage=0.0 and
+    tests_passed=1 but code file is missing, sync should return 'generate' not 'test'.
+    The bug was that the test-file-existence check didn't also verify the code file
+    exists, causing cmd_test_main to fail with FileNotFoundError on the missing source.
+    """
+    prompts_dir = pdd_test_environment / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_hash = create_file(
+        prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "Create a simple add function"
+    )
+
+    fingerprint_data = {
+        "pdd_version": "0.0.168",
+        "timestamp": "2026-03-07T07:26:01Z",
+        "command": "test",
+        "prompt_hash": prompt_hash,
+        "code_hash": "abc",
+        "example_hash": "def",
+        "test_hash": "ghi",
+    }
+    create_fingerprint_file(
+        get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", fingerprint_data
+    )
+
+    run_report = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "exit_code": 0,
+        "tests_passed": 1,
+        "tests_failed": 0,
+        "coverage": 0.0,
+        "test_hash": "ghi",
+    }
+    create_run_report_file(
+        get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", run_report
+    )
+
+    # Source files NOT created — simulating deletion / stale metadata
+    decision = sync_determine_operation(
+        BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir)
+    )
+    assert decision.operation == 'generate', (
+        f"Expected 'generate' but got '{decision.operation}': {decision.reason}"
+    )
 
 def test_regression_fix_validation_skip_tests_scenarios(pdd_test_environment):
     """

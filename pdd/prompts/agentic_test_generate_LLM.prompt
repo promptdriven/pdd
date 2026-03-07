@@ -74,3 +74,17 @@ The PROMPT FILE is the source of truth. Tests verify that code conforms to the s
 - IMPORTANT: Read actual source files before assuming what functions/classes exist
 - You MUST run the generated test file and ensure it passes before completing
 
+## Python-Specific Rules
+When the language is Python:
+- Use `pytest` as the test framework
+- CRITICAL IMPORT RULE: Import the module by its filename stem, NOT via directory path.
+  - CORRECT: `from hello import hello` (with sys.path setup)
+  - WRONG:  `from src.hello import hello`
+- Add sys.path setup at the top of the test file so pytest can find the code:
+  ```python
+  import sys, os
+  sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+  ```
+- Target 90%+ code coverage
+- Use pytest fixtures, parametrize, and mock patterns
+

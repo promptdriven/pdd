@@ -1672,6 +1672,24 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
                 # Synthetic reports have test_hash=None because no actual test file was involved
                 has_real_test_hash = run_report.test_hash is not None
 
+                code_file_exists = pdd_files.get('code') and pdd_files['code'].exists()
+
+                if not code_file_exists:
+                    # Code file missing — can't run tests or generate tests without it.
+                    # Immediately return 'generate' to regenerate from prompt.
+                    return SyncDecision(
+                        operation='generate',
+                        reason='Code file missing with stale metadata - regenerate from prompt',
+                        confidence=0.95,
+                        estimated_cost=estimate_operation_cost('generate'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'code_file_exists': False,
+                            'test_file_exists': test_file_exists,
+                            'workflow_stage': 'code_missing_regenerate'
+                        }
+                    )
+
                 if not test_file_exists and (not is_agentic_language or not has_real_test_hash):
                     # Test file doesn't exist and either:
                     # - Python (non-agentic): always need the file at expected path
