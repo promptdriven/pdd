@@ -152,7 +152,7 @@ class TestOperationLoggingE2E:
         result = self.run_pdd_command(
             ["test", str(prompt_file), str(code_file), "--output", str(output_file)],
             cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            timeout=600  # 10 minutes — test generation can be slow on shared CI
         )
 
         # Verify command succeeded
