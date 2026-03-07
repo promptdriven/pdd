@@ -104,6 +104,18 @@ If the PRD specifies API routes/endpoints, verify EACH distinct URL pattern has 
 - `GET /api/users/:id` needs a module (or can share with the above if same resource)
 - `POST /api/pipeline/veo/run` needs its OWN module (NOT collapsed with other pipeline routes)
 
+**4b. Subsystem Scope Validation**
+
+If the Step 5 design includes `type: "subsystem"` entries:
+- Each subsystem's `scope` must cover specific, identifiable PRD sections
+- The union of all subsystem scopes plus top-level module responsibilities must cover 100% of PRD requirements
+- Requirements covered by a subsystem's scope are considered COVERED (they will be detailed when the subsystem is expanded)
+- Cross-cutting concerns (auth, config, shared types) must NOT be inside subsystems — they must be top-level modules
+- No PRD requirement should be orphaned (not covered by any subsystem scope or top-level module)
+
+A subsystem entry is considered to COVER all requirements within its declared scope.
+Do NOT flag individual routes/features as MISSING if they fall within a subsystem's scope.
+
 **5. Cross-check Data Model Entities**
 
 Verify each data entity from Step 4 has corresponding modules:
@@ -167,7 +179,7 @@ Verify that modules are not isolated — every module must be connected to the a
 
 Based on your analysis, output one of the following:
 
-**If ALL requirements are covered (100% coverage, no MISSING items):**
+**If ALL requirements are covered (100% coverage, no MISSING items — subsystem-scoped requirements count as covered):**
 
 ```
 VALIDATION_RESULT: VALID

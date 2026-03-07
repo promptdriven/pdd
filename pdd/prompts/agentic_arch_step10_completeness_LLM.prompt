@@ -55,8 +55,10 @@ cat architecture.json | jq -r '.[].filename'
 ls prompts/*.prompt 2>/dev/null
 ```
 
+Skip entries with `interface.type: "subsystem"` — these do not have prompt files.
+
 **Flag as ERROR if:**
-- A module in architecture.json has no corresponding prompt file
+- A non-subsystem module in architecture.json has no corresponding prompt file
 - A prompt file exists that isn't in architecture.json (orphan prompt)
 
 **2. Prompt Content Quality Check**
@@ -108,6 +110,18 @@ cat architecture.json | jq -r '.[].filepath' | grep -E "route\.(ts|js|py)$"
 **Flag as ERROR if:**
 - A specific route path in the PRD has no corresponding module
 - Multiple distinct routes are collapsed under one module
+
+**3c. Subsystem Scope Coverage Check**
+
+If architecture.json contains entries with `interface.type: "subsystem"`:
+- Subsystem entries do NOT need prompt files (skip them in the prompt file existence check)
+- Requirements within a subsystem's declared `scope` are considered DEFERRED, not MISSING
+- Validate that the subsystem's `sub_architecture_dir` exists as a directory
+- If a sub-architecture.json exists in that directory, validate its modules against
+  the subsystem's scope (recursive completeness)
+- If no sub-architecture.json exists yet, mark the subsystem as PENDING (not ERROR)
+
+Do NOT flag subsystem entries as errors for missing prompt files.
 
 **4. Auth Flow Completeness Check**
 

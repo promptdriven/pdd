@@ -358,6 +358,19 @@ The `<pdd-interface>` tag supports four interface types, matching the architectu
 }
 ```
 
+**Subsystem Interface** (hierarchical sub-architecture):
+```json
+{
+  "type": "subsystem",
+  "subsystem": {
+    "sub_architecture_dir": "api/",
+    "scope": "All routes under /api/ in the PRD"
+  }
+}
+```
+
+Subsystem entries are not code modules — they trigger a recursive generation pass focused on the specified scope. The orchestrator generates a separate `architecture.json` in the `sub_architecture_dir`, with all modules scoped to that subsystem. Use subsystems when a flat architecture would exceed ~30 modules.
+
 ### Sync Workflow
 
 1. **Add/edit tags** in your prompt files using the format above
@@ -579,7 +592,7 @@ This style:
 
 - One prompt → one file/module. If a prompt gets too large or brittle, split it into smaller prompts that compose via explicit interfaces.
 - Treat examples as interfaces: create a minimal runnable example demonstrating how the module is meant to be used.
-- Avoid “mega‑prompts” that try to implement an entire subsystem. Use the PDD graph of prompts instead. For how prompts compose via examples, see “Dependencies & Composability (Token‑Efficient Examples)”.
+- Avoid “mega‑prompts” that try to implement an entire subsystem. Use the PDD graph of prompts instead. For projects with 30+ modules, `pdd generate` automatically creates **subsystem entries** that split the architecture into focused sub-passes (e.g., `api/`, `ui/`, `lib/`), ensuring each generation call has tight scope. For how prompts compose via examples, see “Dependencies & Composability (Token‑Efficient Examples)”.
 
 ---
 

@@ -105,34 +105,44 @@ CRITICAL — Cross-Project Rules:
      - Include acceptance criteria for auth error handling: expired tokens, invalid tokens, missing scopes, CSRF state mismatch
    - If no auth is detected, skip this step
 
-4. **Determine dependency graph:**
+4. **Assess whether subsystem hierarchy is needed:**
+   - Count the expected total modules. If > 30, consider grouping into subsystems.
+   - Natural subsystem boundaries: API routes, UI pages, shared libraries, scripts/jobs.
+   - Each subsystem becomes a `type: "subsystem"` entry in the top-level architecture.
+   - Subsystem entries have `interface.type: "subsystem"` with `sub_architecture_dir` and `scope`.
+   - Cross-cutting modules (shared types, config, auth) stay at the top level — not inside subsystems.
+   - If subsystems are used, the top-level design should have 10-20 entries: subsystem entries + cross-cutting modules.
+   - Each subsystem's `scope` field must clearly describe which PRD sections it covers.
+   - Maximum recursion depth: 2 levels (top-level → subsystem, no sub-sub-systems).
+
+5. **Determine dependency graph:**
    - Which modules depend on which
    - Foundational modules (no deps) vs. dependent modules
    - Ensure no circular dependencies
 
-5. **Calculate priority ordering (topological sort):**
+6. **Calculate priority ordering (topological sort):**
    - Priority 1 = generated first (no dependencies)
    - A module's priority must be > all its dependencies' priorities
    - Sequential integers without gaps (1, 2, 3, ...)
 
-6. **Define interfaces:**
-   - For each module, determine the interface type (api, module, page, component, config, etc.)
+7. **Define interfaces:**
+   - For each module, determine the interface type (api, module, page, component, config, subsystem, etc.)
    - Specify key functions, endpoints, or props
    - Note data sources and contracts between modules
 
-7. **Determine file paths:**
+8. **Determine file paths:**
    - Use framework-appropriate directory structure (from step 3 research)
    - Follow standard naming conventions for the tech stack
    - Include appropriate file extensions
 
-8. **Identify integration points (entryPoints) for each module:**
+9. **Identify integration points (entryPoints) for each module:**
    - Which existing entry point file must be updated to wire this module in (e.g., main.py, app/layout.tsx, routes/index.ts, middleware.ts)
    - What registration/import code is needed (route registration, layout inclusion, config addition)
    - Whether index pages or redirects are needed for nested routes
    - Populate the `entryPoints` array in architecture.json for each module that exports a callable (API route, page, Cloud Function, middleware)
    - Flag any module that has NO entry point — it may be an orphan that will never execute at runtime
 
-9. **Guard and cross-cutting concern awareness (from Step 2 analysis):**
+10. **Guard and cross-cutting concern awareness (from Step 2 analysis):**
    - Check the Cross-Cutting Concerns table from Step 2 output
    - For each new page/route module: if the route will be intercepted by an auth guard, either create a module to update the guard bypass list or document how the module integrates with the guard
    - If a module uses shared context (e.g., AuthContext, ThemeContext): add the context provider module as a dependency and note any required modifications
@@ -156,10 +166,13 @@ Your comment should follow this format:
 **Status:** [Design Complete | Clarification Needed]
 
 ### Module List
-| Priority | Module (filename) | Filepath | Dependencies | Interface Type | Acceptance Criteria |
-|----------|-------------------|----------|--------------|----------------|---------------------|
-| 1 | [name]_[Lang].prompt | [path] | [] | [type] | [2-3 testable criteria] |
-| 2 | [name]_[Lang].prompt | [path] | [dep1] | [type] | [2-3 testable criteria] |
+| Priority | Module (filename) | Type | Filepath | Dependencies | Interface Type | Acceptance Criteria |
+|----------|-------------------|------|----------|--------------|----------------|---------------------|
+| 1 | [name]_[Lang].prompt | module | [path] | [] | [type] | [2-3 testable criteria] |
+| 2 | [name]_[Lang].prompt | module | [path] | [dep1] | [type] | [2-3 testable criteria] |
+
+Example subsystem entry (for projects with 30+ modules):
+| 1 | api_subsystem | subsystem | api/ | [shared_types_Python.prompt] | subsystem | Contains all API route modules |
 
 ### Dependency Graph
 ```

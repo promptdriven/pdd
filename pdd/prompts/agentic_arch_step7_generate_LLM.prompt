@@ -166,6 +166,35 @@ Generate a complete, valid architecture.json following these rules:
    - config: keys with name, type, source
    - cli, job, message, graphql as appropriate
 
+8. **Subsystem entries:**
+   - When the Step 5 design includes subsystem entries, generate them with `interface.type: "subsystem"`
+   - Subsystem entries have NO code `filepath` — use the directory path (e.g., `"api/"`)
+   - Required subsystem interface fields:
+     - `sub_architecture_dir`: Target directory for the sub-architecture.json (e.g., `"api/"`)
+     - `scope`: Text describing which PRD sections this subsystem covers
+   - Subsystem entries participate in the dependency graph normally
+   - Subsystem entries get priority numbers like any other entry
+   - Do NOT generate prompt files or scaffolding files for subsystem entries
+   - Example:
+     ```json
+     {
+       "reason": "All API routes for the pipeline subsystem",
+       "description": "Subsystem covering all /api/pipeline/* routes from the PRD",
+       "dependencies": ["shared_types_Python.prompt"],
+       "priority": 3,
+       "filename": "api_pipeline_subsystem",
+       "filepath": "api/",
+       "tags": ["subsystem", "api"],
+       "interface": {
+         "type": "subsystem",
+         "subsystem": {
+           "sub_architecture_dir": "api/",
+           "scope": "All routes under /api/pipeline/ including veo, stitch, and asset-staging"
+         }
+       }
+     }
+     ```
+
 % Output
 
 1. **Write architecture.json to disk**

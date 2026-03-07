@@ -248,6 +248,11 @@ When generating a prompt for a base data model module, scan architecture.json fo
 
 % Key Rules
 
+0. **Skip subsystem entries:** Do NOT generate prompt files for entries with
+   `interface.type: "subsystem"`. These are placeholder entries representing
+   sub-architectures that will be expanded by the orchestrator in a separate pass.
+   Only generate prompts for entries that produce code files.
+
 1. **Prompt file location:**
    - Read `.pddrc` to find `prompts_dir` for the matching context
    - **Per-module contexts (Strategy A):** Prompts go FLAT in `prompts/` (the default `prompts_dir`)

@@ -28,7 +28,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (12-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
-- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
+- `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow, with recursive sub-passes for large PRDs)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (18-step workflow with exploratory testing, contract validation, accessibility audits)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
@@ -1048,6 +1048,8 @@ pdd [GLOBAL OPTIONS] generate --output src/calculator.py  --original-prompt old_
 
 When the positional argument is a GitHub issue URL instead of a prompt file, `generate` enters agentic architecture mode. The issue body serves as the PRD (Product Requirements Document), and an 11-step agentic workflow generates `architecture.json`, `.pddrc`, and prompt files automatically.
 
+For large PRDs (30+ modules), the workflow automatically uses **hierarchical generation**: the top-level `architecture.json` contains subsystem entries (`"type": "subsystem"`) that each trigger a focused sub-generation pass. This produces sub-architecture files (e.g., `api/architecture.json`, `ui/architecture.json`) ensuring route-level and component-level completeness that flat single-pass generation misses.
+
 ```bash
 pdd generate https://github.com/owner/repo/issues/42
 ```
@@ -1085,7 +1087,13 @@ Prerequisites:
 Example:
 ```bash
 pdd generate https://github.com/myorg/myrepo/issues/42
-# Generates: architecture.json, architecture_diagram.html, .pddrc, prompts/*.prompt
+# Small project: architecture.json, architecture_diagram.html, .pddrc, prompts/*.prompt
+# Large project (30+ modules):
+#   architecture.json              <- top-level subsystems + cross-cutting modules
+#   api/architecture.json          <- all API route modules
+#   ui/architecture.json           <- all UI component modules
+#   lib/architecture.json          <- shared utility modules
+#   architecture_diagram.html, .pddrc, prompts/*.prompt
 
 # Skip prompt generation (faster, just architecture)
 pdd generate --skip-prompts https://github.com/myorg/myrepo/issues/42
