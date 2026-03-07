@@ -238,6 +238,7 @@ def run_agentic_change(
         issue_number=issue_number,
         issue_author=author,
         issue_title=title,
+        issue_updated_at=issue_data.get("updated_at", ""),
         cwd=work_dir,
         verbose=verbose,
         quiet=quiet,

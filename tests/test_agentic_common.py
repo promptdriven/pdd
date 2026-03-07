@@ -11,6 +11,7 @@ from pdd.agentic_common import (
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _extract_json_from_output,
     _find_cli_binary,
     _log_agentic_interaction,
     ANTHROPIC_PRICING_BY_FAMILY,
@@ -764,7 +765,7 @@ def test_step_timeouts_dictionary_exists():
 
     This test verifies that:
     1. BUG_STEP_TIMEOUTS dictionary is defined in agentic_bug_orchestrator.py
-    2. Steps 4, 5, and 7 have longer timeouts (>= 600 seconds)
+    2. Steps 5, 6, 7, 9, 10, 11 have longer timeouts (>= 600 seconds)
     3. Other steps have the default or medium timeout
 
     Note: Per-step timeouts now live in their respective orchestrators, not agentic_common.
@@ -776,8 +777,9 @@ def test_step_timeouts_dictionary_exists():
     assert isinstance(BUG_STEP_TIMEOUTS, dict), "BUG_STEP_TIMEOUTS must be a dictionary"
 
     # Verify complex steps have longer timeouts
-    # Steps 4 (reproduce), 5 (root cause), 7 (generate), 8 (verify), 9 (E2E test) need >= 600 seconds
-    complex_steps = [4, 5, 7, 8, 9]
+    # Steps 5 (reproduce), 6 (root cause), 7 (prompt classification),
+    # 9 (generate), 10 (verify), 11 (E2E test) need >= 600 seconds
+    complex_steps = [5, 6, 7, 9, 10, 11]
     for step in complex_steps:
         assert step in BUG_STEP_TIMEOUTS, f"BUG_STEP_TIMEOUTS missing entry for step {step}"
         assert BUG_STEP_TIMEOUTS[step] >= 600.0, (
@@ -785,11 +787,11 @@ def test_step_timeouts_dictionary_exists():
             f"for complex operations (issue #256)"
         )
 
-    # Verify medium complexity step (Verify Fix Plan) has increased timeout
-    assert 6 in BUG_STEP_TIMEOUTS, "BUG_STEP_TIMEOUTS missing entry for step 6"
-    assert BUG_STEP_TIMEOUTS[6] >= 300.0, (
-        f"Step 6 timeout ({BUG_STEP_TIMEOUTS[6]}) should be >= 300 seconds "
-        f"for verify fix plan operations"
+    # Verify medium complexity step (Test Plan) has increased timeout
+    assert 8 in BUG_STEP_TIMEOUTS, "BUG_STEP_TIMEOUTS missing entry for step 8"
+    assert BUG_STEP_TIMEOUTS[8] >= 300.0, (
+        f"Step 8 timeout ({BUG_STEP_TIMEOUTS[8]}) should be >= 300 seconds "
+        f"for test plan operations"
     )
 
     # Verify medium complexity steps have ~400 seconds
@@ -802,7 +804,7 @@ def test_step_timeouts_dictionary_exists():
         )
 
     # Verify simple steps have reasonable timeout (at least 240 seconds)
-    simple_steps = [1, 10]  # Duplicate Check and Create PR
+    simple_steps = [1, 12]  # Duplicate Check and Create PR
     for step in simple_steps:
         assert step in BUG_STEP_TIMEOUTS, f"BUG_STEP_TIMEOUTS missing entry for step {step}"
         assert BUG_STEP_TIMEOUTS[step] >= 240.0, (
@@ -3751,3 +3753,79 @@ def test_pdd_output_cost_path_stripped_from_subprocess_env(mock_cwd, mock_env, m
     args, kwargs = mock_subprocess.call_args
     env_passed = kwargs["env"]
     assert "PDD_OUTPUT_COST_PATH" not in env_passed
+
+
+# ---------------------------------------------------------------------------
+# _extract_json_from_output
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonFromOutput:
+    """Tests for _extract_json_from_output — robust JSON extraction from
+    Claude Code stdout that may contain non-JSON noise."""
+
+    def test_clean_json(self):
+        """Clean single-line JSON parses directly."""
+        raw = '{"result": "done", "total_cost_usd": 0.05}'
+        assert _extract_json_from_output(raw) == {
+            "result": "done",
+            "total_cost_usd": 0.05,
+        }
+
+    def test_json_preceded_by_npm_warnings(self):
+        """JSON preceded by npm warnings is extracted correctly."""
+        raw = (
+            "npm warn deprecated some-pkg@1.0.0: use newer version\n"
+            "npm warn deprecated other-pkg@2.0.0: deprecated\n"
+            '{"result": "success", "total_cost_usd": 1.23}'
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "success"
+        assert data["total_cost_usd"] == 1.23
+
+    def test_json_followed_by_extra_text(self):
+        """JSON followed by trailing text is extracted correctly."""
+        raw = (
+            '{"result": "ok", "total_cost_usd": 0.50}\n'
+            "Update available: 1.2.3 -> 1.3.0\n"
+            "Run `npm update` to update"
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "ok"
+        assert data["total_cost_usd"] == 0.50
+
+    def test_json_surrounded_by_noise(self):
+        """JSON surrounded by non-JSON text on separate lines."""
+        raw = (
+            "Starting Claude Code...\n"
+            "Warning: something\n"
+            '{"result": "done", "cost": 2.0}\n'
+            "Goodbye"
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "done"
+
+    def test_multiline_json_via_brace_fallback(self):
+        """Multi-line JSON object extracted via brace-depth matching fallback."""
+        raw = (
+            "npm warn foo\n"
+            "{\n"
+            '  "result": "ok",\n'
+            '  "total_cost_usd": 0.75\n'
+            "}\n"
+            "done"
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "ok"
+        assert data["total_cost_usd"] == 0.75
+
+    def test_no_json_raises_error(self):
+        """No JSON at all raises JSONDecodeError."""
+        raw = "just some random text\nno json here"
+        with pytest.raises(json.JSONDecodeError):
+            _extract_json_from_output(raw)
+
+    def test_empty_string_raises_error(self):
+        """Empty string raises JSONDecodeError."""
+        with pytest.raises(json.JSONDecodeError):
+            _extract_json_from_output("")

@@ -1414,3 +1414,50 @@ def test_cmd_test_main_non_example_file_uses_code(mock_ctx_fixture, mock_files_f
         generated_test, cost, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST
+
+
+# pylint: disable=redefined-outer-name
+def test_agentic_python_test_gets_sys_path_preamble(mock_ctx_fixture, mock_files_fixture):
+    """
+    When agentic_mode=True and language is Python, the returned test content
+    should have _inject_sys_path_preamble applied so that pytest --cov can
+    find the module under test.
+    """
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    raw_agent_output = (
+        "import pytest\n"
+        "from hello import greet\n\n"
+        "def test_greet():\n"
+        "    assert greet('world') == 'Hello, world!'\n"
+    )
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic:
+
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": mock_files_fixture["output"]},
+            "python"
+        )
+        mock_agentic.return_value = (raw_agent_output, 0.05, "agent_model", True)
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+        generated_content = result[0]
+        # Must contain the canonical sys.path preamble
+        assert "project_root = Path(__file__).resolve().parents[1]" in generated_content
+        assert "sys.path.insert(0, str(project_root))" in generated_content
+        # Original test code must still be present
+        assert "def test_greet():" in generated_content

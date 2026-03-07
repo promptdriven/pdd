@@ -446,3 +446,94 @@ def test_issue_content_curly_braces_escaped(mock_dependencies):
     assert match is not None, "Should find braces before setError"
     braces = match.group(1)
     assert len(braces) == 2, f"Expected 2 opening braces (escaped), got {len(braces)}: '{braces}'"
+
+
+def test_issue_updated_at_passed_to_orchestrator(mock_dependencies):
+    """
+    Verify that issue_updated_at is extracted from the API response and
+    passed through to the orchestrator so staleness detection works.
+    """
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+
+    issue_data = {
+        "title": "Fix Bug",
+        "body": "Bug description",
+        "user": {"login": "author"},
+        "comments_url": "",
+        "updated_at": "2026-03-06T12:00:00Z",
+    }
+
+    def subprocess_side_effect(args, **kwargs):
+        cmd = args if isinstance(args, list) else []
+        if "api" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(issue_data)
+            return m
+        if "repo" in cmd and "clone" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            return m
+        m = MagicMock()
+        m.returncode = 1
+        return m
+
+    mock_subprocess.side_effect = subprocess_side_effect
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+        run_agentic_change("https://github.com/owner/repo/issues/1")
+
+    mock_orch.assert_called_once()
+    call_kwargs = mock_orch.call_args
+    # issue_updated_at should be passed as a positional or keyword arg
+    all_args = call_kwargs[1] if call_kwargs[1] else {}
+    if not all_args:
+        # It might be passed as a positional arg
+        all_args = {}
+    assert call_kwargs[1].get("issue_updated_at") == "2026-03-06T12:00:00Z" or \
+           "2026-03-06T12:00:00Z" in call_kwargs[0], \
+           "issue_updated_at should be passed to orchestrator"
+
+
+def test_issue_updated_at_defaults_to_empty_string(mock_dependencies):
+    """
+    When updated_at is missing from the API response, empty string is passed.
+    """
+    _, mock_subprocess, mock_orch, _ = mock_dependencies
+
+    issue_data = {
+        "title": "Fix Bug",
+        "body": "Bug description",
+        "user": {"login": "author"},
+        "comments_url": "",
+        # No "updated_at" key
+    }
+
+    def subprocess_side_effect(args, **kwargs):
+        cmd = args if isinstance(args, list) else []
+        if "api" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = json.dumps(issue_data)
+            return m
+        if "repo" in cmd and "clone" in cmd:
+            m = MagicMock()
+            m.returncode = 0
+            return m
+        m = MagicMock()
+        m.returncode = 1
+        return m
+
+    mock_subprocess.side_effect = subprocess_side_effect
+
+    with patch("pdd.agentic_change.Path.cwd") as mock_cwd:
+        mock_cwd.return_value.__truediv__.return_value.exists.return_value = False
+        run_agentic_change("https://github.com/owner/repo/issues/1")
+
+    mock_orch.assert_called_once()
+    call_kwargs = mock_orch.call_args
+    # Should be empty string when not present
+    assert call_kwargs[1].get("issue_updated_at") == "" or \
+           "" in call_kwargs[0], \
+           "issue_updated_at should default to empty string"

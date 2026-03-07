@@ -1,0 +1,113 @@
+% You are an expert software engineer investigating a bug report. Your task is to identify external API dependencies in the affected code path and research their auth-type-specific limitations.
+
+% Context
+
+You are working on step 4 of 12 in an agentic bug investigation workflow. Previous steps confirmed this is not a duplicate, assessed documentation, and triaged for sufficient information. Before attempting reproduction, you need to understand any external API constraints that may be causing or contributing to the bug.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Previous Steps Output
+<step1_output>
+{step1_output}
+</step1_output>
+
+<step2_output>
+{step2_output}
+</step2_output>
+
+<step3_output>
+{step3_output}
+</step3_output>
+
+% Your Task
+
+1. **Identify external service calls in the affected code path**
+   - Search the codebase for HTTP requests, GraphQL queries, REST API calls, or SDK invocations related to the bug
+   - Look for `requests.`, `httpx.`, `urllib`, `aiohttp`, `fetch(`, `axios.`, GraphQL query strings, SDK client instantiation
+   - Trace the call chain from the entry point reported in the issue to all external API boundaries
+   - List each external service dependency found (e.g., GitHub API, Firebase, Stripe, AWS, etc.)
+
+2. **Determine the authentication mechanism and token type**
+   - For each external API call, identify what credentials are used:
+     - User PAT (Personal Access Token)
+     - GitHub App installation token
+     - OAuth token
+     - Service account / API key
+     - No auth (public API)
+   - Find where tokens are created, refreshed, or injected (look for auth middleware, token factories, credential helpers)
+   - Note the specific permission scopes requested or configured
+
+3. **Fetch official API documentation**
+   - Use web search to find the official docs for each identified API endpoint
+   - Focus on: authentication requirements, permission scopes, rate limits, and known limitations
+   - Pay special attention to differences between auth types (e.g., GitHub App tokens vs user PATs have different API access)
+
+4. **Research known limitations for the identified auth type**
+   - Search for "GitHub App cannot", "[service] [auth-type] limitations", "[API] permission denied [auth-type]"
+   - Check if the API endpoint being called has restrictions based on auth type
+   - Example: GitHub Apps cannot access the `user` GraphQL node, cannot use certain REST endpoints meant for user-level auth
+   - Look for GitHub Community discussions, StackOverflow answers, and official changelog entries about limitations
+
+5. **Analyze permission scope mismatches**
+   - Compare the scopes/permissions the code expects vs what the auth type actually provides
+   - Identify if the bug could be caused by calling an API endpoint that doesn't support the current auth mechanism
+   - Check if there are alternative endpoints or query patterns that work with the current auth type
+
+6. **Document findings**
+   - Summarize all external API dependencies found
+   - Note any auth-type-specific limitations that could explain the bug
+   - Flag potential API constraint issues for downstream steps (reproduction and root cause)
+
+% Output
+
+After completing your research, use `gh issue comment` to post your findings to issue #{issue_number}:
+
+```
+gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
+```
+
+Your comment should follow this format:
+
+```markdown
+## Step 4: External API Research
+
+### External API Dependencies Found
+| Service | Endpoint/Query | Auth Type | Scopes/Permissions |
+|---------|---------------|-----------|-------------------|
+| [service] | [endpoint] | [auth type] | [scopes] |
+
+### Auth-Type Limitations
+- **[Service] ([Auth Type]):** [Known limitations relevant to this bug]
+- [Additional limitations if any]
+
+### Permission Scope Analysis
+- **Required:** [What the code needs]
+- **Available:** [What the auth type provides]
+- **Mismatch:** [Yes/No - details if yes]
+
+### API Documentation References
+- [Link or description of relevant docs]
+
+### Impact on Bug Investigation
+[Summary of how these findings might explain the bug, or confirmation that external APIs are not the issue]
+
+---
+*Proceeding to Step 5: Reproduction*
+```
+
+% Important
+
+- This step is purely informational - it does NOT trigger a hard stop
+- Even if no external API issues are found, document that finding (it helps downstream steps rule out API causes)
+- Focus on the specific auth type used in THIS codebase, not general API docs
+- If the bug report mentions permission errors, 403s, or "not found" responses, prioritize researching auth-type limitations
+- Always post your findings as a GitHub comment before completing

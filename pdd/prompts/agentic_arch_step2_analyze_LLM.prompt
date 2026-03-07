@@ -14,7 +14,7 @@
 
 % Context
 
-You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extracted the PRD summary. Now you need to decompose features into potential modules.
+You are working on step 2 of 13 in an agentic architecture workflow. Step 1 extracted the PRD summary. Now you need to decompose features into potential modules.
 
 % Inputs
 
@@ -62,27 +62,9 @@ When analyzing modules, consider what already exists in sibling projects. Note e
    - Identify which modules are foundational (no deps) vs. dependent
    - Note interfaces between modules
 
-5. **Cross-cutting concern scan (scan existing codebase for guards and middleware):**
-   - Auth guards & middleware: identify existing redirect rules, token validation middleware, route protection patterns
-   - Route protection: which paths are currently protected, what are the redirect destinations (e.g., `/login`, `/auth`)
-   - React effect patterns: look for `useEffect`/`useCallback` dependency cycles in existing context or layout files that new modules must avoid or integrate with
-   - Shared providers: identify existing React context providers (AuthContext, ThemeContext) or Python middleware that wrap routes
-   - Output a "Cross-Cutting Concerns" table listing each concern, the file it lives in, and what new modules must do to integrate (e.g., "add route to bypass list", "wrap component in provider")
-
-6. **Establish naming registry (CRITICAL for cross-file consistency):**
-   - Define canonical names for ALL shared identifiers:
-     - Database collection/table names (exact casing)
-     - API endpoint paths (exact format)
-     - Environment variable names
-     - Shared type/interface names
-     - Authentication hook/utility names
-     - Error handling pattern names
-   - Specify casing convention per layer:
-     - Database: [snake_case / camelCase / as-specified]
-     - API routes: [kebab-case / camelCase]
-     - TypeScript types: [PascalCase]
-     - Python models: [PascalCase class, snake_case fields]
-   - This registry is the SINGLE SOURCE OF TRUTH — all subsequent steps MUST use these exact names
+5. **Cross-cutting concern awareness:**
+   - Note: Step 2b will scan the actual codebase for existing patterns. This step focuses on PRD analysis only.
+   - From the PRD, identify cross-cutting concerns (auth, error handling, logging, validation) and note which modules will need them.
 
 % Output
 
@@ -119,35 +101,14 @@ Your comment should follow this format:
 ### Inter-Module Interfaces
 - [module A] -> [module B]: [interface description]
 
-### Cross-Cutting Concerns
-| Concern | File | Type | Impact on New Modules |
-|---------|------|------|-----------------------|
-| [e.g., Auth guard] | [middleware.ts] | [redirect] | [Must add route to unprotected list or wrap in auth check] |
-| [e.g., AuthContext provider] | [app/layout.tsx] | [provider] | [Must be consumed via useAuth() hook] |
+### Cross-Cutting Concerns (from PRD)
+- [Auth, error handling, logging, validation — note which modules need each]
 
-### Naming Registry (Single Source of Truth)
-
-#### Database Collections/Tables
-| Canonical Name | Casing | Used By Modules |
-|----------------|--------|-----------------|
-
-#### API Endpoints
-| Path | Method | Handler Module |
-|------|--------|----------------|
-
-#### Shared Types
-| Type Name | Casing | Defined In | Used By |
-|-----------|--------|-----------|---------|
-
-#### Environment Variables
-| Variable Name | Purpose | Required By |
-|---------------|---------|-------------|
-
-#### Conventions
-- Database naming: [convention]
-- API routes: [convention]
-- TypeScript types: [convention]
-- Python: [convention]
+### Identified Shared Identifiers
+- Database collections/tables: [list names mentioned in PRD]
+- API endpoints: [list paths mentioned in PRD]
+- Shared types: [list type names implied by PRD]
+- Environment variables: [list any env vars mentioned in PRD]
 
 ---
 *Proceeding to Step 3: Research*

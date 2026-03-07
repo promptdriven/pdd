@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 5.5 of 11 in an agentic bug investigation workflow. Step 5 (Root Cause Analysis) has identified the root cause. Now you must determine: is the bug in the code, or in the prompt specification itself?
+You are working on step 7 of 12 in an agentic bug investigation workflow. Step 6 (Root Cause Analysis) has identified the root cause. Now you must determine: is the bug in the code, or in the prompt specification itself?
 
 % PDD Background
 
@@ -47,10 +47,14 @@ This project uses Prompt-Driven Development (PDD). In PDD:
 {step5_output}
 </step5_output>
 
+<step6_output>
+{step6_output}
+</step6_output>
+
 % Your Task
 
 1. **Analyze the defect type**
-   - Review the root cause from Step 5
+   - Review the root cause from Step 6
    - Compare the user's expected behavior (from the issue) with the prompt specification
    - Determine if the code correctly implements the prompt
 
@@ -85,7 +89,7 @@ Your comment should follow this format:
 
 **For Code Bug (most common):**
 ```markdown
-## Step 5.5: Prompt Classification
+## Step 7: Prompt Classification
 
 **Classification:** Code Bug
 
@@ -103,12 +107,12 @@ DEFECT_TYPE: code
 The code does not correctly implement the prompt specification. Proceeding with test generation.
 
 ---
-*Proceeding to Step 6: Test Plan*
+*Proceeding to Step 8: Test Plan*
 ```
 
 **For Prompt Defect:**
 ```markdown
-## Step 5.5: Prompt Classification
+## Step 7: Prompt Classification
 
 **Classification:** Prompt Defect
 
@@ -140,12 +144,12 @@ PROMPT_FIXED: prompts/module_name_python.prompt
 The prompt specification was incorrect. The prompt has been fixed. Proceeding with test generation based on the corrected specification.
 
 ---
-*Proceeding to Step 6: Test Plan*
+*Proceeding to Step 8: Test Plan*
 ```
 
 **For Ambiguous Cases (hard stop):**
 ```markdown
-## Step 5.5: Prompt Classification
+## Step 7: Prompt Classification
 
 **Classification:** Needs Human Review
 

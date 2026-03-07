@@ -63,21 +63,7 @@ If an ORM is already in use, you MUST use that same ORM for new data models.
 
 % CRITICAL — Sibling Data Model Alignment
 
-If sibling architectures above contain **Shared Context Documents** (data_dictionary.yaml),
-you MUST treat them as the canonical source of truth for any entities they define:
-
-1. **Before designing ANY entity**, check if a sibling data dictionary already defines it
-2. **If the entity exists in a sibling**: reuse the EXACT field names, field types, enum values,
-   and required/optional status — do NOT redefine with different names or types
-3. **If you need additional fields** beyond what the sibling defines: add them, but keep all
-   existing fields unchanged
-4. **If no sibling context exists**: design freely, but document your choices clearly for
-   future sibling sub-issues to align with
-5. **Mark shared entities explicitly**: in your "Shared Types" section, note which entities
-   are already defined in sibling projects and which are new
-
-If sibling context documents exist, also read the `api_contracts.yaml` to understand existing
-API endpoint schemas — your data model must be compatible with those contracts.
+Sibling context documents are CANONICAL. You MUST use the EXACT field names, types, enum values, and serialization conventions from sibling data_dictionary.yaml and api_contracts.yaml. If your output differs from siblings, fix yours.
 
 % CRITICAL: Scope of This Step
 

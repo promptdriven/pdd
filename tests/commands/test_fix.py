@@ -42,13 +42,21 @@ for _mod_name in _import_mocks:
 # mocking window (e.g. pdd.core.dump imported via pdd.commands.report).
 # These bound MagicMock attributes from the mocked pdd.core.errors and must
 # be re-imported fresh with the real module.
-_core_side_effects = [
+_side_effects = [
     n for n in sys.modules
     if n.startswith("pdd.core.") and n not in _import_mocks
     and n not in _saved_modules
 ]
-for _name in _core_side_effects:
+for _name in _side_effects:
     sys.modules.pop(_name, None)
+
+# Fix pdd.commands.templates.custom_theme which was bound to a MagicMock
+# during the mock window (pdd.commands.__init__ imported templates while
+# pdd.core.errors was mocked).  Re-bind it to the real theme object.
+import pdd.commands.templates as _templates_mod
+from pdd.core.errors import custom_theme as _real_theme
+_templates_mod.custom_theme = _real_theme
+del _templates_mod, _real_theme
 
 # Clean up temporary variables
 del _import_mocks, _saved_modules, _mod_name
