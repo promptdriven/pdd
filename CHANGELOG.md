@@ -1,3 +1,13 @@
+## v0.0.169 (2026-03-07)
+
+### Fix
+
+- pdd sync --agentic Python coverage failures (7 bugs) (#778)
+- step 8.5 merges existing context docs instead of regenerating (#774)
+- pdd change doesn't stop workflow when step asks user for clarification
+- set explicit width in _echo_rich to prevent empty output in headless CI
+- prevent pdd change infinite loop when triggered by GitHub App (#756)
+
 ## v0.0.168 (2026-03-05)
 
 ### Feat
