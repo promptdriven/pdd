@@ -205,6 +205,38 @@ describe("GET — section disambiguation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2c. Digit-prefixed composition ID resolution
+// ---------------------------------------------------------------------------
+
+describe("GET — digit-prefixed composition ID resolution", () => {
+  it("resolves digit-prefixed comp to section-prefixed Remotion ID", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [{
+        id: "part1_economics",
+        label: "Part 1",
+        compositionId: "Part1Economics",
+        compositions: ["03_cost_crossover_chart"],
+        specDir: "part1_economics",
+      }],
+    });
+
+    await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=03_cost_crossover_chart&section=part1_economics")
+    );
+    // Root.tsx registers this as "part1-economics03-cost-crossover-chart"
+    // (PascalCase-to-kebab of Part1Economics03CostCrossoverChart)
+    expect(mockRenderStill.mock.calls[0][0]).toBe("part1-economics03-cost-crossover-chart");
+  });
+
+  it("non-digit comp still uses simple hyphenation", async () => {
+    await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")
+    );
+    expect(mockRenderStill.mock.calls[0][0]).toBe("cold-open-title-card");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3. Serve cached PNG (raw=1)
 // ---------------------------------------------------------------------------
 

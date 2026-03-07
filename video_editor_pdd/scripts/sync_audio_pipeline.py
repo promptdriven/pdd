@@ -40,6 +40,59 @@ def _expand_segment_range(
     return result
 
 
+def load_project(project_dir: str) -> Dict[str, Any]:
+    """Load and validate project.json, normalizing sectionGroups access."""
+    project_path = Path(project_dir) / "project.json"
+    if not project_path.exists():
+        raise FileNotFoundError(f"project.json not found at {project_path}")
+
+    with open(project_path, "r", encoding="utf-8") as f:
+        project = json.load(f)
+
+    section_groups = project.get("sectionGroups")
+    if section_groups is None:
+        section_groups = project.get("audioSync", {}).get("sectionGroups")
+    if section_groups is None:
+        env_groups = os.environ.get("SECTION_GROUPS")
+        if env_groups:
+            section_groups = json.loads(env_groups)
+
+    if section_groups is None:
+        raise ValueError("project.json must include sectionGroups")
+    if not isinstance(section_groups, dict):
+        raise ValueError("sectionGroups must be a dictionary")
+
+    normalized_project = dict(project)
+    normalized_project["sectionGroups"] = section_groups
+    return normalized_project
+
+
+def _coerce_section_groups(
+    raw: Dict[str, Any], output_dir: str
+) -> Dict[str, List[str]]:
+    """Normalize list/range sectionGroups into section_id -> segment_id list."""
+    if not isinstance(raw, dict):
+        raise ValueError("sectionGroups must be a dictionary")
+
+    section_groups: Dict[str, List[str]] = {}
+    for section_id, value in raw.items():
+        if isinstance(value, list):
+            section_groups[section_id] = value
+        elif isinstance(value, dict):
+            start_seg = value.get("startSegment", "")
+            end_seg = value.get("endSegment", "")
+            if start_seg and end_seg:
+                section_groups[section_id] = _expand_segment_range(
+                    section_id, start_seg, end_seg, output_dir
+                )
+            else:
+                section_groups[section_id] = []
+        else:
+            section_groups[section_id] = []
+
+    return section_groups
+
+
 def load_section_groups(
     project_dir: str, output_dir: str
 ) -> Dict[str, List[str]]:
@@ -55,35 +108,12 @@ def load_section_groups(
     if env_groups:
         raw = json.loads(env_groups)
     else:
-        # Read from project.json
-        project_path = Path(project_dir) / "project.json"
-        if not project_path.exists():
-            raise FileNotFoundError(f"project.json not found at {project_path}")
-        with open(project_path, "r", encoding="utf-8") as f:
-            project = json.load(f)
-        raw = project.get("audioSync", {}).get("sectionGroups", {})
+        raw = load_project(project_dir).get("sectionGroups", {})
 
     if not raw:
         raise ValueError("No sectionGroups found")
 
-    section_groups: Dict[str, List[str]] = {}
-    for section_id, value in raw.items():
-        if isinstance(value, list):
-            section_groups[section_id] = value
-        elif isinstance(value, dict):
-            start_seg = value.get("startSegment", "")
-            end_seg = value.get("endSegment", "")
-            if start_seg and end_seg:
-                expanded = _expand_segment_range(
-                    section_id, start_seg, end_seg, output_dir
-                )
-                section_groups[section_id] = expanded
-            else:
-                section_groups[section_id] = []
-        else:
-            section_groups[section_id] = []
-
-    return section_groups
+    return _coerce_section_groups(raw, output_dir)
 
 
 def get_segment_wav_path(output_dir: str, segment_id: str) -> Path:
@@ -416,7 +446,13 @@ def main() -> None:
 
     # Load section groups configuration
     try:
-        section_groups = load_section_groups(args.project_dir, args.output_dir)
+        project = load_project(args.project_dir)
+        raw_section_groups = (
+            json.loads(os.environ["SECTION_GROUPS"])
+            if os.environ.get("SECTION_GROUPS")
+            else project["sectionGroups"]
+        )
+        section_groups = _coerce_section_groups(raw_section_groups, args.output_dir)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         error_result = {
             "sectionId": "__global__",

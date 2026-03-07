@@ -25,7 +25,7 @@ import pytest
 
 # --- Constants ---
 
-PROMPT_PATH = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_bug_step10_pr_LLM.prompt"
+PROMPT_PATH = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_bug_step12_pr_LLM.prompt"
 
 
 # --- Fixtures ---

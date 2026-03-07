@@ -17,7 +17,6 @@ import {
   YLABEL_FADE_END,
   TIMELINE_Y,
   TIMELINE_X_START,
-  TIMELINE_X_END,
   TIMELINE_WIDTH,
   TIMELINE_COLOR,
   SLATE_400,
@@ -26,6 +25,7 @@ import {
   CHART_X,
   CHART_Y,
   CHART_H,
+  BG_COLOR,
 } from "./constants";
 
 export const defaultPart3Mold10RatchetInfographicProps = {};
@@ -33,10 +33,10 @@ export const defaultPart3Mold10RatchetInfographicProps = {};
 export const Part3Mold10RatchetInfographic: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Overall fade envelope: visible from frame 0, fade out at end
+  // Overall fade envelope: fully visible from frame 0, fade out at end
   const overallOpacity = interpolate(
     frame,
-    [0, 5, FADEOUT_START, FADEOUT_END],
+    [0, 1, FADEOUT_START, FADEOUT_END],
     [1, 1, 1, 0],
     {
       extrapolateLeft: "clamp",
@@ -70,7 +70,7 @@ export const Part3Mold10RatchetInfographic: React.FC = () => {
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0A1628" }}>
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       {/* Veo background video */}
       <AbsoluteFill>
         <OffthreadVideo

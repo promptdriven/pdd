@@ -1,32 +1,30 @@
 import React from "react";
 import { Sequence, Audio, OffthreadVideo, staticFile } from "remotion";
 
-import { Part5CompoundSplitPatchingVsPdd } from "../part5_compound_split_patching_vs_pdd";
-import { Part5CompoundStatCalloutCisq } from "../part5_compound_stat_callout_cisq";
-import { Part5CompoundStatCalloutMaintenance } from "../part5_compound_stat_callout_maintenance";
-import { Part5CompoundTitleCard } from "../part5_compound_title_card";
+import { Part5Compound01TitleCard } from "../Part5Compound01TitleCard";
+import { Part5Compound03StatCalloutMaintenance } from "../Part5Compound03StatCalloutMaintenance";
+import { Part5Compound05StatCalloutCisq } from "../Part5Compound05StatCalloutCisq";
+import { Part5Compound06CompoundDebtChart } from "../Part5Compound06CompoundDebtChart";
+import { Part5Compound08SplitPatchingVsPdd } from "../Part5Compound08SplitPatchingVsPdd";
+import { Part5Compound10QuoteCard } from "../Part5Compound10QuoteCard";
+import { Part5Compound11SubtitleTrack } from "../Part5Compound11SubtitleTrack";
 
 export const Part5CompoundSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 971.426667;
+  const offsetSeconds = 971.490667;
   const durationSeconds = 98.424;
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part5_compound/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part5_compound.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Sequence from={Math.round(85.86 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part5CompoundSplitPatchingVsPdd />
-      </Sequence>
-      <Sequence from={Math.round(32.7 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part5CompoundStatCalloutCisq />
-      </Sequence>
-      <Sequence from={Math.round(18.08 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part5CompoundStatCalloutMaintenance />
-      </Sequence>
-      <Sequence from={Math.round(0 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part5CompoundTitleCard />
-      </Sequence>
+      <Part5Compound01TitleCard />
+      <Part5Compound03StatCalloutMaintenance />
+      <Part5Compound05StatCalloutCisq />
+      <Part5Compound06CompoundDebtChart />
+      <Part5Compound08SplitPatchingVsPdd />
+      <Part5Compound10QuoteCard />
+      <Part5Compound11SubtitleTrack />
     </Sequence>
   );
 };

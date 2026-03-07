@@ -43,7 +43,7 @@ export const StatBar: React.FC<StatBarProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  // Bar fill animation with easeOutQuart
+  // Bar fill animation with supported quartic polynomial easing
   const fillProgress = interpolate(
     frame,
     [barStart, barEnd],
@@ -51,7 +51,7 @@ export const StatBar: React.FC<StatBarProps> = ({
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quart),
+      easing: Easing.out(Easing.poly(4)),
     }
   );
 

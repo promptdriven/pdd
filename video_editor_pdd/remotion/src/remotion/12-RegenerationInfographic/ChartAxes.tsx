@@ -149,6 +149,38 @@ export const ChartAxes: React.FC<ChartAxesProps> = ({ opacity }) => {
       >
         Defect Rate
       </div>
+
+      {/* Y-axis "High" / "Low" labels */}
+      <div
+        style={{
+          position: "absolute",
+          left: CHART_LEFT - 16,
+          top: CHART_TOP - 2,
+          opacity,
+          fontFamily: FONT_FAMILY,
+          fontWeight: 500,
+          fontSize: 14,
+          color: MUTED,
+          transform: "translateX(-100%)",
+        }}
+      >
+        High
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: CHART_LEFT - 16,
+          top: CHART_BOTTOM - 14,
+          opacity,
+          fontFamily: FONT_FAMILY,
+          fontWeight: 500,
+          fontSize: 14,
+          color: MUTED,
+          transform: "translateX(-100%)",
+        }}
+      >
+        Low
+      </div>
     </>
   );
 };

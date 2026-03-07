@@ -105,7 +105,7 @@ export const Part3Mold12ThreePillarsDiagram: React.FC = () => {
   // Result "Complete Specification" — fade in with glow
   const resultOpacity = interpolate(frame, [RESULT_START, RESULT_END], [0, 1], {
     ...clamp,
-    easing: Easing.out(Easing.quart),
+    easing: Easing.out(Easing.poly(4)),
   });
 
   // Row 2 label opacities (staggered)

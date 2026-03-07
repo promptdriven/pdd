@@ -2,16 +2,42 @@ import React from "react";
 import {
   AbsoluteFill,
   Audio,
+  Loop,
+  OffthreadVideo,
   Sequence,
   staticFile,
   useCurrentFrame,
 } from "remotion";
 
 import { BEATS, VISUAL_SEQUENCE, Part5CompoundReturnsPropsType } from "./constants";
-import { Part5Compound08SplitPatchingVsPdd, defaultPart5Compound08SplitPatchingVsPddProps } from "../Part5Compound08SplitPatchingVsPdd/Part5Compound08SplitPatchingVsPdd";
-import { Part5Compound05StatCalloutCisq, defaultPart5Compound05StatCalloutCisqProps } from "../Part5Compound05StatCalloutCisq/Part5Compound05StatCalloutCisq";
-import { Part5Compound03StatCalloutMaintenance, defaultPart5Compound03StatCalloutMaintenanceProps } from "../Part5Compound03StatCalloutMaintenance/Part5Compound03StatCalloutMaintenance";
-import { Part5Compound01TitleCard, defaultPart5Compound01TitleCardProps } from "../Part5Compound01TitleCard/Part5Compound01TitleCard";
+import {
+  TitleCard,
+  defaultTitleCardProps,
+} from "../01-TitleCard";
+import {
+  StatCalloutMaintenance,
+  defaultStatCalloutMaintenanceProps,
+} from "../03-StatCalloutMaintenance";
+import {
+  StatCalloutCisq,
+  defaultStatCalloutCisqProps,
+} from "../05-StatCalloutCisq";
+import {
+  CompoundDebtChart,
+  defaultCompoundDebtChartProps,
+} from "../06-CompoundDebtChart";
+import {
+  SplitPatchingVsPdd,
+  defaultSplitPatchingVsPddProps,
+} from "../08-SplitPatchingVsPdd";
+import {
+  QuoteCard,
+  defaultQuoteCardProps,
+} from "../10-QuoteCard";
+import {
+  SubtitleTrack,
+  defaultSubtitleTrackProps,
+} from "../11-SubtitleTrack";
 
 export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () => {
   const frame = useCurrentFrame();
@@ -28,33 +54,52 @@ export const Part5CompoundReturns: React.FC<Part5CompoundReturnsPropsType> = () 
     <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
       <Audio src={staticFile("part5_compound_narration.wav")} />
 
-      {/* Visual 0: part5_compound_split_patching_vs_pdd */}
+      {/* Visual 0: 01_title_card */}
       {activeVisual === 0 && (
         <Sequence from={BEATS.VISUAL_00_START}>
-          <Part5Compound08SplitPatchingVsPdd {...defaultPart5Compound08SplitPatchingVsPddProps} />
+          <TitleCard {...defaultTitleCardProps} />
         </Sequence>
       )}
 
-      {/* Visual 1: part5_compound_stat_callout_cisq */}
+      {/* Visual 1: 03_stat_callout_maintenance */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START}>
-          <Part5Compound05StatCalloutCisq {...defaultPart5Compound05StatCalloutCisqProps} />
+          <StatCalloutMaintenance {...defaultStatCalloutMaintenanceProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: part5_compound_stat_callout_maintenance */}
+      {/* Visual 2: 05_stat_callout_cisq */}
       {activeVisual === 2 && (
         <Sequence from={BEATS.VISUAL_02_START}>
-          <Part5Compound03StatCalloutMaintenance {...defaultPart5Compound03StatCalloutMaintenanceProps} />
+          <StatCalloutCisq {...defaultStatCalloutCisqProps} />
         </Sequence>
       )}
 
-      {/* Visual 3: part5_compound_title_card */}
+      {/* Visual 3: 06_compound_debt_chart */}
       {activeVisual === 3 && (
         <Sequence from={BEATS.VISUAL_03_START}>
-          <Part5Compound01TitleCard {...defaultPart5Compound01TitleCardProps} />
+          <CompoundDebtChart {...defaultCompoundDebtChartProps} />
         </Sequence>
       )}
+
+      {/* Visual 4: 08_split_patching_vs_pdd */}
+      {activeVisual === 4 && (
+        <Sequence from={BEATS.VISUAL_04_START}>
+          <SplitPatchingVsPdd {...defaultSplitPatchingVsPddProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 5: 10_quote_card */}
+      {activeVisual === 5 && (
+        <Sequence from={BEATS.VISUAL_05_START}>
+          <QuoteCard {...defaultQuoteCardProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 6: 11_subtitle_track (spans full section) */}
+      <Sequence from={BEATS.VISUAL_06_START}>
+        <SubtitleTrack {...defaultSubtitleTrackProps} />
+      </Sequence>
     </AbsoluteFill>
   );
 };

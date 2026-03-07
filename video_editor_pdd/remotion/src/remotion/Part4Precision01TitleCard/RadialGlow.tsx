@@ -17,3 +17,5 @@ export const RadialGlow: React.FC<{ opacity: number }> = ({ opacity }) => {
     />
   );
 };
+
+export default RadialGlow;

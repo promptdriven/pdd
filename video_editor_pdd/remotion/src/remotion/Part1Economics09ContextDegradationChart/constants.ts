@@ -4,6 +4,8 @@
 export const WIDTH = 1920;
 export const HEIGHT = 1080;
 export const BG_COLOR = "#0A1628";
+export const FPS = 30;
+export const TOTAL_FRAMES = 900;
 
 // Chart area: (300, 150) to (1620, 850) — 1320px x 700px
 export const CHART_X = 300;
@@ -35,6 +37,13 @@ export const BARS = [
   { fillLevel: "100%", capability: 15, color: "#EF4444" },
 ];
 
+// Pre-computed bar x-positions and top-y coordinates
+export const BAR_POSITIONS = BARS.map((_, i) => BARS_START_X + i * (BAR_WIDTH + BAR_GAP));
+export const BAR_TOPS = BARS.map((bar, i) => ({
+  x: BAR_POSITIONS[i] + BAR_WIDTH / 2,
+  y: CHART_Y + CHART_H * (1 - bar.capability / 100),
+}));
+
 // Y-axis tick values
 export const Y_TICKS = [0, 25, 50, 75, 100];
 
@@ -48,5 +57,3 @@ export const TREND_LINE_END = 180;
 export const CALLOUT_START = 180;
 export const CALLOUT_END = 210;
 export const GLOW_PULSE_START = 210;
-export const TOTAL_FRAMES = 900;
-export const FPS = 30;

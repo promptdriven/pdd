@@ -91,7 +91,9 @@ export const X_TICKS = [0, 0.2, 0.4, 0.6, 0.8, 1.0];
 // Zoom
 export const ZOOM_SCALE_TARGET = 2.5;
 
-// Animation timing (frames at 30fps)
+// Animation timing (frames at 30fps, 210 total = 7s)
+export const TOTAL_FRAMES = 210;
+export const FPS = 30;
 export const ZOOM_START = 0;
 export const ZOOM_END = 40;
 export const STARBURST_START = 20;
@@ -107,5 +109,3 @@ export const HOLD_START = 100;
 export const HOLD_END = 180;
 export const FADE_TO_BLACK_START = 180;
 export const FADE_TO_BLACK_END = 210;
-export const TOTAL_FRAMES = 210;
-export const FPS = 30;

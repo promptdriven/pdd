@@ -1,4 +1,4 @@
-// Part2ParadigmShift05ValueMigrationDiagram constants
+// Part2ParadigmShift05ValueMigrationDiagram — constants
 
 // Canvas
 export const CANVAS_WIDTH = 1920;
@@ -6,7 +6,10 @@ export const CANVAS_HEIGHT = 1080;
 export const FPS = 30;
 export const TOTAL_FRAMES = 450;
 
-// Diagram region — right-aligned panel
+// Background
+export const BG_COLOR = "#0A1628";
+
+// Diagram region — right-aligned backing panel
 export const PANEL_X = 1200;
 export const PANEL_Y = 190;
 export const PANEL_W = 600;
@@ -29,7 +32,7 @@ export const PART_FINAL_SCALE = 0.7;
 export const PART_LABEL_INITIAL_COLOR = "#94A3B8";
 export const PART_LABEL_FINAL_COLOR = "#475569";
 
-// Top icon — THE MOLD
+// Top icon — THE MOLD (document/blueprint shape)
 export const MOLD_CENTER_X = 1500;
 export const MOLD_CENTER_Y = 340;
 export const MOLD_W = 140;
@@ -63,8 +66,7 @@ export const VALUE_BAR_GRADIENT_END = "#3B82F6";
 export const VALUE_BAR_INITIAL_PERCENT = 20;
 export const VALUE_BAR_FINAL_PERCENT = 95;
 
-// Colors
-export const BG_COLOR = "#0A1628";
+// Label colors
 export const TEXT_WHITE = "#FFFFFF";
 export const LABEL_OBJECT_COLOR = "#64748B";
 export const LABEL_SPEC_COLOR = "#3B82F6";
@@ -92,5 +94,5 @@ export const LABEL_BOLD_FRAME = 300;
 export const FADEOUT_START = 360;
 export const FADEOUT_END = 450;
 
-// Glow pulse period (frames)
+// Glow pulse: sinusoidal, ~3s period at 30fps → 2π / 90 ≈ 0.07
 export const GLOW_PULSE_SPEED = 0.07;

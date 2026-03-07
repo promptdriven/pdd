@@ -21,7 +21,8 @@ import {
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const axesOpacity = interpolate(frame, [0, AXES_FADE_END], [0, 1], {
+  // Axes fade in over first 30 frames, but start at 0.15 so content is visible from frame 0
+  const axesOpacity = interpolate(frame, [0, AXES_FADE_END], [0.15, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),

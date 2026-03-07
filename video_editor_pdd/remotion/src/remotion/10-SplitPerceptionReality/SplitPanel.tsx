@@ -1,25 +1,38 @@
 import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing, spring, useVideoConfig } from "remotion";
+import { useCurrentFrame, interpolate, Easing, spring } from "remotion";
+import { ArrowIcon } from "./ArrowIcon";
+import { PanelIcon } from "./PanelIcon";
 import {
-  LEFT_PANEL,
-  RIGHT_PANEL,
-  GREEN,
-  GREEN_MUTED,
-  GREEN_BG,
-  RED,
-  RED_MUTED,
-  RED_BG,
+  PANEL_TOP,
+  PANEL_HEIGHT,
+  LEFT_PANEL_X,
+  LEFT_PANEL_WIDTH,
+  RIGHT_PANEL_X,
+  RIGHT_PANEL_WIDTH,
+  PERCEPTION_COLOR,
+  PERCEPTION_BG,
+  PERCEPTION_MUTED,
+  PERCEPTION_ICON_OPACITY,
+  REALITY_COLOR,
+  REALITY_BG,
+  REALITY_MUTED,
+  REALITY_ICON_OPACITY,
+  STAT_COLOR,
   FONT_FAMILY,
-  HEADER_SIZE,
-  STAT_SIZE,
-  DESCRIPTOR_SIZE,
-  ARROW_SIZE,
+  HEADER_FONT_SIZE,
+  HEADER_LETTER_SPACING,
+  STAT_FONT_SIZE,
+  DESCRIPTOR_FONT_SIZE,
+  PERCEPTION_STAT_VALUE,
+  PERCEPTION_STAT_PREFIX,
+  PERCEPTION_STAT_SUFFIX,
+  PERCEPTION_DESCRIPTOR,
+  REALITY_STAT_VALUE,
+  REALITY_STAT_SUFFIX,
+  REALITY_DESCRIPTOR,
+  SLIDE_DISTANCE,
   PANEL_SLIDE_IN_START,
   PANEL_SLIDE_IN_END,
-  PANEL_SLIDE_OUT_START,
-  PANEL_SLIDE_OUT_END,
-  PANEL_SPRING_DAMPING,
-  PANEL_SPRING_STIFFNESS,
   LEFT_HEADER_START,
   LEFT_HEADER_END,
   LEFT_STAT_START,
@@ -28,6 +41,11 @@ import {
   RIGHT_HEADER_END,
   RIGHT_STAT_START,
   RIGHT_STAT_END,
+  SLIDE_OUT_START,
+  SLIDE_OUT_END,
+  SPRING_DAMPING,
+  SPRING_STIFFNESS,
+  FPS,
 } from "./constants";
 
 interface SplitPanelProps {
@@ -36,125 +54,136 @@ interface SplitPanelProps {
 
 export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
   const isLeft = side === "left";
 
-  const panel = isLeft ? LEFT_PANEL : RIGHT_PANEL;
-  const color = isLeft ? GREEN : RED;
-  const mutedColor = isLeft ? GREEN_MUTED : RED_MUTED;
-  const bgColor = isLeft ? GREEN_BG : RED_BG;
+  // Panel config
+  const panelX = isLeft ? LEFT_PANEL_X : RIGHT_PANEL_X;
+  const panelWidth = isLeft ? LEFT_PANEL_WIDTH : RIGHT_PANEL_WIDTH;
+  const bgColor = isLeft ? PERCEPTION_BG : REALITY_BG;
+  const accentColor = isLeft ? PERCEPTION_COLOR : REALITY_COLOR;
+  const mutedColor = isLeft ? PERCEPTION_MUTED : REALITY_MUTED;
   const headerText = isLeft ? "PERCEPTION" : "REALITY";
-  const statValue = isLeft ? 20 : 19;
-  const statPrefix = isLeft ? "+" : "";
-  const descriptor = isLeft ? "faster (self-reported)" : "slower (measured)";
-  const arrowDirection = isLeft ? "up" : "down";
+  const statValue = isLeft ? PERCEPTION_STAT_VALUE : REALITY_STAT_VALUE;
+  const statPrefix = isLeft ? PERCEPTION_STAT_PREFIX : "";
+  const statSuffix = isLeft ? PERCEPTION_STAT_SUFFIX : REALITY_STAT_SUFFIX;
+  const descriptor = isLeft ? PERCEPTION_DESCRIPTOR : REALITY_DESCRIPTOR;
+  const arrowDirection = isLeft ? ("up" as const) : ("down" as const);
+  const iconType = isLeft ? ("thumbsUp" as const) : ("stopwatch" as const);
+  const iconOpacity = isLeft ? PERCEPTION_ICON_OPACITY : REALITY_ICON_OPACITY;
 
+  // Animation timing
   const headerStart = isLeft ? LEFT_HEADER_START : RIGHT_HEADER_START;
   const headerEnd = isLeft ? LEFT_HEADER_END : RIGHT_HEADER_END;
   const statStart = isLeft ? LEFT_STAT_START : RIGHT_STAT_START;
   const statEnd = isLeft ? LEFT_STAT_END : RIGHT_STAT_END;
 
-  // Panel slide using spring
-  const slideInProgress = spring({
+  // Panel slide in using spring
+  const slideInSpring = spring({
     frame: frame - PANEL_SLIDE_IN_START,
-    fps,
-    config: {
-      damping: PANEL_SPRING_DAMPING,
-      stiffness: PANEL_SPRING_STIFFNESS,
-    },
+    fps: FPS,
+    config: { damping: SPRING_DAMPING, stiffness: SPRING_STIFFNESS },
   });
+  const slideInX = isLeft
+    ? interpolate(slideInSpring, [0, 1], [-SLIDE_DISTANCE, 0])
+    : interpolate(slideInSpring, [0, 1], [SLIDE_DISTANCE, 0]);
 
-  // Slide out using easeInCubic
+  // Panel slide out using easeInCubic
   const slideOutProgress = interpolate(
     frame,
-    [PANEL_SLIDE_OUT_START, PANEL_SLIDE_OUT_END],
+    [SLIDE_OUT_START, SLIDE_OUT_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.in(Easing.cubic) },
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.in(Easing.cubic),
+    },
   );
+  const slideOutX = isLeft
+    ? interpolate(slideOutProgress, [0, 1], [0, -SLIDE_DISTANCE])
+    : interpolate(slideOutProgress, [0, 1], [0, SLIDE_DISTANCE]);
 
-  const slideOffset = isLeft ? -960 : 960;
-  const translateX =
-    slideOffset * (1 - slideInProgress) + slideOffset * slideOutProgress;
+  const translateX = frame < SLIDE_OUT_START ? slideInX : slideOutX;
 
   // Opacity
-  const opacity = interpolate(
+  const opacityIn = interpolate(
     frame,
-    [PANEL_SLIDE_IN_START, PANEL_SLIDE_IN_END, PANEL_SLIDE_OUT_START, PANEL_SLIDE_OUT_END],
-    [0, 1, 1, 0],
+    [PANEL_SLIDE_IN_START, PANEL_SLIDE_IN_END],
+    [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
+  const opacityOut = interpolate(
+    frame,
+    [SLIDE_OUT_START, SLIDE_OUT_END],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+  const panelOpacity = Math.min(opacityIn, opacityOut);
 
-  // Header fade
+  // Header + arrow fade in
   const headerOpacity = interpolate(
     frame,
     [headerStart, headerEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    },
   );
 
-  // Stat counter animate
-  const statProgress = interpolate(
+  // Stat counter animation
+  const counterRaw = interpolate(
     frame,
     [statStart, statEnd],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) },
+    [0, statValue],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    },
   );
-  const displayValue = Math.round(statValue * statProgress);
+  const counterDisplay = Math.round(counterRaw);
 
-  // Descriptor opacity (appears with stat)
+  // Stat scale pop (0.8 -> 1.0)
+  const statScale = interpolate(
+    frame,
+    [statStart, statEnd],
+    [0.8, 1.0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    },
+  );
+
+  // Descriptor fades in slightly after stat starts
   const descriptorOpacity = interpolate(
     frame,
     [statStart + 5, statEnd],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
-  );
-
-  // Arrow chevron path
-  const chevronPath =
-    arrowDirection === "up"
-      ? `M ${ARROW_SIZE * 0.2} ${ARROW_SIZE * 0.65} L ${ARROW_SIZE * 0.5} ${ARROW_SIZE * 0.25} L ${ARROW_SIZE * 0.8} ${ARROW_SIZE * 0.65}`
-      : `M ${ARROW_SIZE * 0.2} ${ARROW_SIZE * 0.35} L ${ARROW_SIZE * 0.5} ${ARROW_SIZE * 0.75} L ${ARROW_SIZE * 0.8} ${ARROW_SIZE * 0.35}`;
-
-  // Icon — thumbs-up silhouette for left, stopwatch for right
-  const iconElement = isLeft ? (
-    <svg width={120} height={120} viewBox="0 0 120 120" style={{ opacity: 0.3 }}>
-      {/* Simplified thumbs-up */}
-      <circle cx={60} cy={40} r={20} fill={GREEN} />
-      <path
-        d="M45 55 Q45 45 55 45 L65 45 Q75 45 75 55 L75 85 Q75 95 65 95 L55 95 Q45 95 45 85 Z"
-        fill={GREEN}
-      />
-      <path
-        d="M75 60 L85 55 Q90 53 90 58 L90 75 Q90 80 85 78 L75 73"
-        fill={GREEN}
-      />
-    </svg>
-  ) : (
-    <svg width={120} height={120} viewBox="0 0 120 120" style={{ opacity: 0.3 }}>
-      {/* Simplified stopwatch */}
-      <circle cx={60} cy={65} r={35} stroke={RED} strokeWidth={4} fill="none" />
-      <line x1={60} y1={65} x2={60} y2={42} stroke={RED} strokeWidth={3} strokeLinecap="round" />
-      <line x1={60} y1={65} x2={75} y2={65} stroke={RED} strokeWidth={3} strokeLinecap="round" />
-      <rect x={55} y={22} width={10} height={10} rx={2} fill={RED} />
-      <line x1={60} y1={22} x2={60} y2={30} stroke={RED} strokeWidth={3} />
-    </svg>
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    },
   );
 
   return (
     <div
       style={{
         position: "absolute",
-        left: panel.x,
-        top: panel.y,
-        width: panel.w,
-        height: panel.h,
+        left: panelX,
+        top: PANEL_TOP,
+        width: panelWidth,
+        height: PANEL_HEIGHT,
         transform: `translateX(${translateX}px)`,
-        opacity,
+        opacity: panelOpacity,
+        overflow: "hidden",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 16,
+        gap: 20,
       }}
     >
       {/* Semi-transparent background */}
@@ -164,11 +193,11 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
           inset: 0,
           backgroundColor: bgColor,
           borderRadius: 16,
-          border: `1px solid ${color}22`,
+          border: `1px solid ${accentColor}22`,
         }}
       />
 
-      {/* Background icon */}
+      {/* Background icon silhouette */}
       <div
         style={{
           position: "absolute",
@@ -177,7 +206,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
           left: isLeft ? undefined : 60,
         }}
       >
-        {iconElement}
+        <PanelIcon type={iconType} color={accentColor} opacity={iconOpacity} />
       </div>
 
       {/* Header */}
@@ -185,10 +214,10 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
         style={{
           fontFamily: FONT_FAMILY,
           fontWeight: 900,
-          fontSize: HEADER_SIZE,
-          color,
-          letterSpacing: "0.15em",
-          textTransform: "uppercase",
+          fontSize: HEADER_FONT_SIZE,
+          letterSpacing: HEADER_LETTER_SPACING,
+          color: accentColor,
+          textTransform: "uppercase" as const,
           opacity: headerOpacity,
           zIndex: 1,
         }}
@@ -196,18 +225,9 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
         {headerText}
       </div>
 
-      {/* Arrow chevron */}
+      {/* Arrow */}
       <div style={{ opacity: headerOpacity, zIndex: 1 }}>
-        <svg width={ARROW_SIZE} height={ARROW_SIZE} viewBox={`0 0 ${ARROW_SIZE} ${ARROW_SIZE}`}>
-          <path
-            d={chevronPath}
-            stroke={color}
-            strokeWidth={6}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            fill="none"
-          />
-        </svg>
+        <ArrowIcon direction={arrowDirection} color={accentColor} />
       </div>
 
       {/* Stat number */}
@@ -215,14 +235,16 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
         style={{
           fontFamily: FONT_FAMILY,
           fontWeight: 900,
-          fontSize: STAT_SIZE,
-          color: "#FFFFFF",
+          fontSize: STAT_FONT_SIZE,
+          color: STAT_COLOR,
           lineHeight: 1,
-          opacity: statProgress > 0 ? 1 : 0,
+          transform: `scale(${statScale})`,
           zIndex: 1,
         }}
       >
-        {statPrefix}{displayValue}%
+        {statPrefix}
+        {counterDisplay}
+        {statSuffix}
       </div>
 
       {/* Descriptor */}
@@ -230,7 +252,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side }) => {
         style={{
           fontFamily: FONT_FAMILY,
           fontWeight: 500,
-          fontSize: DESCRIPTOR_SIZE,
+          fontSize: DESCRIPTOR_FONT_SIZE,
           color: mutedColor,
           opacity: descriptorOpacity,
           zIndex: 1,

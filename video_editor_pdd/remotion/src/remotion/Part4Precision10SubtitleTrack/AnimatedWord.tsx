@@ -6,34 +6,33 @@ import {
   FONT_SIZE,
   LETTER_SPACING,
   TEXT_SHADOW,
-  WORD_APPEAR_DURATION,
   HIGHLIGHT_SCALE_UP_FRAMES,
   HIGHLIGHT_SCALE_DOWN_FRAMES,
-  EXIT_DURATION,
-  EXIT_SLIDE_PX,
   CURRENT_COLOR,
-  CURRENT_WEIGHT,
   CURRENT_SCALE,
   PREVIOUS_COLOR,
   PREVIOUS_OPACITY,
-  PREVIOUS_WEIGHT,
   UPCOMING_COLOR,
   UPCOMING_OPACITY,
-  UPCOMING_WEIGHT,
   WORD_SPACING,
   UNDERLINE_COLOR,
   UNDERLINE_OPACITY,
   UNDERLINE_HEIGHT,
   WORD_FADE_DURATION,
+  EXIT_DURATION,
+  EXIT_SLIDE_PX,
 } from "./constants";
 
-type WordState = "current" | "previous" | "upcoming" | "exiting";
+export type WordState = "current" | "previous" | "upcoming" | "exiting";
 
 interface AnimatedWordProps {
   word: string;
+  /** Frame (within the Sequence) when this word starts being spoken */
   wordStartFrame: number;
+  /** Frame (within the Sequence) when this word stops being spoken */
   wordEndFrame: number;
   state: WordState;
+  /** Frame (within the Sequence) when exit animation begins (for "exiting" state) */
   exitStartFrame: number;
 }
 
@@ -45,52 +44,32 @@ export const AnimatedWord: React.FC<AnimatedWordProps> = ({
   exitStartFrame,
 }) => {
   const frame = useCurrentFrame();
-  const localFrame = frame - wordStartFrame;
 
-  // Word hasn't appeared yet
-  if (localFrame < 0) return null;
-
-  // --- Pop-in animation (easeOutQuad) ---
-  const popInProgress = interpolate(
-    localFrame,
-    [0, WORD_APPEAR_DURATION],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-  const easedPopIn = Easing.out(Easing.quad)(popInProgress);
-
-  const popInOpacity = easedPopIn;
-  const popInScale = interpolate(easedPopIn, [0, 1], [0.9, 1.0]);
-
-  // --- Determine color/weight/opacity based on state ---
+  // --- Determine base color and opacity by state ---
   let color: string;
-  let fontWeight: number;
   let targetOpacity: number;
 
   switch (state) {
     case "current":
       color = CURRENT_COLOR;
-      fontWeight = CURRENT_WEIGHT;
-      targetOpacity = 1;
+      targetOpacity = 1.0;
       break;
     case "previous":
       color = PREVIOUS_COLOR;
-      fontWeight = PREVIOUS_WEIGHT;
       targetOpacity = PREVIOUS_OPACITY;
       break;
     case "upcoming":
       color = UPCOMING_COLOR;
-      fontWeight = UPCOMING_WEIGHT;
       targetOpacity = UPCOMING_OPACITY;
       break;
     case "exiting":
       color = PREVIOUS_COLOR;
-      fontWeight = PREVIOUS_WEIGHT;
       targetOpacity = PREVIOUS_OPACITY;
       break;
   }
 
-  // --- Highlight scale pulse: 1.0→1.05 over 3 frames, 1.05→1.0 over 6 frames ---
+  // --- Highlight scale pulse for current word ---
+  // Scale 1.0→1.05 over 3 frames (easeOutQuad), then 1.05→1.0 over 6 frames (easeOutQuad)
   let highlightScale = 1.0;
   if (state === "current") {
     const scaleUpProgress = interpolate(
@@ -110,17 +89,15 @@ export const AnimatedWord: React.FC<AnimatedWordProps> = ({
     );
 
     if (scaleDownProgress > 0) {
-      // Scaling back down
       const easedDown = Easing.out(Easing.quad)(scaleDownProgress);
       highlightScale = interpolate(easedDown, [0, 1], [CURRENT_SCALE, 1.0]);
     } else {
-      // Scaling up
       const easedUp = Easing.out(Easing.quad)(scaleUpProgress);
       highlightScale = interpolate(easedUp, [0, 1], [1.0, CURRENT_SCALE]);
     }
   }
 
-  // --- Previous word fade: opacity 1.0→0.5 over WORD_FADE_DURATION ---
+  // --- Previous word fade: opacity 1.0→0.5 over WORD_FADE_DURATION after word ends ---
   let fadedOpacity = targetOpacity;
   if (state === "previous" && wordEndFrame > 0) {
     const fadeProgress = interpolate(
@@ -133,36 +110,27 @@ export const AnimatedWord: React.FC<AnimatedWordProps> = ({
     fadedOpacity = interpolate(easedFade, [0, 1], [1.0, PREVIOUS_OPACITY]);
   }
 
-  // --- Exit animation (sliding left, fading out over EXIT_DURATION) ---
+  // --- Exit animation: slide left + fade out over EXIT_DURATION ---
   let exitOpacity = 1;
   let exitTranslateX = 0;
-
   if (state === "exiting" && exitStartFrame > 0) {
-    const exitLocalFrame = frame - exitStartFrame;
     const exitProgress = interpolate(
-      exitLocalFrame,
-      [0, EXIT_DURATION],
+      frame,
+      [exitStartFrame, exitStartFrame + EXIT_DURATION],
       [0, 1],
       { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
     );
     const easedExit = Easing.inOut(Easing.cubic)(exitProgress);
-
-    exitOpacity = interpolate(easedExit, [0, 1], [0.5, 0]);
+    exitOpacity = interpolate(easedExit, [0, 1], [PREVIOUS_OPACITY, 0]);
     exitTranslateX = interpolate(easedExit, [0, 1], [0, -EXIT_SLIDE_PX]);
   }
 
-  // --- Combine animations ---
-  const isStillAppearing = localFrame < WORD_APPEAR_DURATION;
-  const finalScale = isStillAppearing
-    ? popInScale
-    : state === "current"
-      ? highlightScale
-      : 1.0;
-  const baseOpacity =
-    state === "previous" ? fadedOpacity : (isStillAppearing ? popInOpacity : targetOpacity);
+  // --- Combine final values ---
+  const finalScale = state === "current" ? highlightScale : 1.0;
+  const baseOpacity = state === "previous" ? fadedOpacity : targetOpacity;
   const finalOpacity = baseOpacity * exitOpacity;
 
-  // Show amber underline only on current word
+  // Amber underline only on current word
   const showUnderline = state === "current";
 
   return (
@@ -171,7 +139,7 @@ export const AnimatedWord: React.FC<AnimatedWordProps> = ({
         display: "inline-block",
         fontFamily: FONT_FAMILY,
         fontSize: FONT_SIZE,
-        fontWeight,
+        fontWeight: 600,
         letterSpacing: LETTER_SPACING,
         color,
         textShadow: TEXT_SHADOW,

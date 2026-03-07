@@ -1,11 +1,11 @@
 import React from "react";
 import {
   AbsoluteFill,
+  Easing,
+  interpolate,
   OffthreadVideo,
   staticFile,
   useCurrentFrame,
-  interpolate,
-  Easing,
 } from "remotion";
 import { ChartAxes } from "./ChartAxes";
 import { AnimatedLine } from "./AnimatedLine";

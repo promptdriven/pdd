@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+import wave
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -272,7 +273,7 @@ def parse_tts_script(script_path: str, project_dir: str = ".") -> List[Segment]:
 
 
 # ---------------------------------------------------------------------------
-# Audio utilities (numpy float32 + soundfile)
+# Audio utilities
 # ---------------------------------------------------------------------------
 
 def generate_silence(duration_seconds: float, sample_rate: int = SAMPLE_RATE):
@@ -282,11 +283,55 @@ def generate_silence(duration_seconds: float, sample_rate: int = SAMPLE_RATE):
     return np.zeros(num_samples, dtype=np.float32)
 
 
-def write_wav(filepath: str, audio: "np.ndarray", sample_rate: int = SAMPLE_RATE) -> float:
-    """Write a numpy float32 audio array to a WAV file via soundfile."""
-    import soundfile as sf
-    sf.write(filepath, audio, sample_rate)
-    return len(audio) / sample_rate
+def generate_silence_wav_bytes(
+    duration_seconds: float, sample_rate: int = SAMPLE_RATE
+) -> bytes:
+    """Generate raw 16-bit PCM silence bytes for the given duration."""
+    num_samples = int(sample_rate * duration_seconds)
+    return b"\x00\x00" * num_samples
+
+
+def concatenate_pcm(chunks: List[bytes]) -> bytes:
+    """Concatenate raw PCM byte chunks in order."""
+    return b"".join(chunks)
+
+
+def _audio_to_pcm_bytes(audio: Any) -> bytes:
+    """Normalize TTS engine output to 16-bit mono PCM bytes."""
+    if isinstance(audio, (bytes, bytearray)):
+        return bytes(audio)
+
+    import numpy as np
+
+    array = np.asarray(audio)
+    if array.size == 0:
+        return b""
+
+    # Downmix multi-channel audio to mono if needed.
+    if array.ndim > 1:
+        array = array.mean(axis=1)
+
+    if array.dtype.kind == "f":
+        clipped = np.clip(array, -1.0, 1.0)
+        pcm = (clipped * 32767).astype(np.int16)
+    else:
+        pcm = array.astype(np.int16)
+
+    return pcm.tobytes()
+
+
+def write_wav(filepath: str, audio: Any, sample_rate: int = SAMPLE_RATE) -> float:
+    """Write raw PCM bytes or array-like audio to a mono 16-bit WAV file."""
+    pcm_bytes = _audio_to_pcm_bytes(audio)
+    os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+
+    with wave.open(filepath, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm_bytes)
+
+    return len(pcm_bytes) / (sample_rate * 2)
 
 
 # ---------------------------------------------------------------------------
@@ -547,28 +592,29 @@ def render_segment(
     Returns:
         A dict with segmentId, status, and duration (or error).
     """
-    import numpy as np
-
     output_path = os.path.join(output_dir, f"{segment.segment_id}.wav")
 
     try:
-        audio_chunks = []
+        audio_chunks: List[bytes] = []
 
         for chunk in segment.text_chunks:
             if chunk["type"] == "pause":
-                audio_chunks.append(generate_silence(chunk["duration"]))
+                audio_chunks.append(
+                    generate_silence_wav_bytes(chunk["duration"], engine.sample_rate)
+                )
             elif chunk["type"] == "text":
-                audio_chunks.append(engine.synthesize(
+                synthesized = engine.synthesize(
                     chunk["content"],
                     tone=segment.annotations.get("tone"),
                     pace=segment.annotations.get("pace"),
                     emotion=segment.annotations.get("emotion"),
-                ))
+                )
+                audio_chunks.append(_audio_to_pcm_bytes(synthesized))
 
         if not audio_chunks:
-            audio_chunks.append(generate_silence(0.1))
+            audio_chunks.append(generate_silence_wav_bytes(0.1, engine.sample_rate))
 
-        combined = np.concatenate(audio_chunks)
+        combined = concatenate_pcm(audio_chunks)
         duration = write_wav(output_path, combined, engine.sample_rate)
 
         return {
@@ -680,15 +726,26 @@ def main() -> None:
         speaker = tts_config.get("speaker", speaker)
 
     # Load the TTS engine
-    engine = None
     try:
         engine = TTSEngine(args.model, speaker=speaker)
-        print(json.dumps({"type": "info", "message": f"Loaded Qwen3-TTS model: {args.model}, speaker: {speaker}"}), flush=True)
     except Exception as e:
-        print(json.dumps({"type": "info", "message": f"Qwen3-TTS unavailable ({e}), falling back to EdgeTTS"}), flush=True)
+        allow_edge_fallback = os.environ.get("RENDER_TTS_ALLOW_EDGE_FALLBACK") == "1"
+        if not allow_edge_fallback:
+            error_result = {
+                "segmentId": "global",
+                "status": "error",
+                "error": str(e),
+            }
+            print(json.dumps(error_result), flush=True)
+            sys.exit(1)
+        print(
+            f"Qwen3-TTS unavailable ({e}); falling back to EdgeTTS",
+            file=sys.stderr,
+            flush=True,
+        )
         try:
             engine = EdgeTTSEngine()
-            print(json.dumps({"type": "info", "message": "Using EdgeTTS (Microsoft) engine"}), flush=True)
+            print("Using EdgeTTS engine", file=sys.stderr, flush=True)
         except Exception as e2:
             error_result = {
                 "segmentId": "global",

@@ -80,7 +80,7 @@ export const ValueBar: React.FC = () => {
           fill={VALUE_BAR_TRACK_COLOR}
         />
 
-        {/* Animated fill — grows from bottom */}
+        {/* Animated fill — grows from bottom upward */}
         <rect
           x={VALUE_BAR_X - VALUE_BAR_WIDTH / 2}
           y={barBottom - fillHeight}

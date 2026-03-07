@@ -11,19 +11,19 @@ import {
 export const ScrimOverlay: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(
-    frame,
-    [0, FADE_IN_END, FADE_OUT_START, FADE_OUT_END],
-    [0, 1, 1, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing:
-        frame <= FADE_IN_END
-          ? Easing.out(Easing.cubic)
-          : Easing.in(Easing.cubic),
-    }
-  );
+  const fadeIn = interpolate(frame, [0, FADE_IN_END], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+
+  const fadeOut = interpolate(frame, [FADE_OUT_START, FADE_OUT_END], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.cubic),
+  });
+
+  const opacity = fadeIn * fadeOut;
 
   return (
     <AbsoluteFill

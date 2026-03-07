@@ -2,25 +2,40 @@ import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
   WIDTH,
-  HEIGHT,
   SOURCE_COLOR,
   FONT_FAMILY,
-  SOURCE_SIZE,
+  SOURCE_FONT_SIZE,
+  SOURCE_TEXT,
   SOURCE_FADE_START,
   SOURCE_FADE_END,
-  PANEL_SLIDE_OUT_START,
-  PANEL_SLIDE_OUT_END,
+  SLIDE_OUT_START,
+  SLIDE_OUT_END,
 } from "./constants";
 
 export const SourceAttribution: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(
+  // Fade in
+  const fadeIn = interpolate(
     frame,
-    [SOURCE_FADE_START, SOURCE_FADE_END, PANEL_SLIDE_OUT_START, PANEL_SLIDE_OUT_END],
-    [0, 1, 1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) },
+    [SOURCE_FADE_START, SOURCE_FADE_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    },
   );
+
+  // Fade out
+  const fadeOut = interpolate(
+    frame,
+    [SLIDE_OUT_START, SLIDE_OUT_END],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+
+  const opacity = Math.min(fadeIn, fadeOut);
 
   return (
     <div
@@ -32,12 +47,12 @@ export const SourceAttribution: React.FC = () => {
         textAlign: "center",
         fontFamily: FONT_FAMILY,
         fontWeight: 400,
-        fontSize: SOURCE_SIZE,
+        fontSize: SOURCE_FONT_SIZE,
         color: SOURCE_COLOR,
         opacity,
       }}
     >
-      METR Study, 2024
+      {SOURCE_TEXT}
     </div>
   );
 };

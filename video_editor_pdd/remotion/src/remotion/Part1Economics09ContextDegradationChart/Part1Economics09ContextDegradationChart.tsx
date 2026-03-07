@@ -1,10 +1,5 @@
 import React from "react";
-import {
-  AbsoluteFill,
-  OffthreadVideo,
-  staticFile,
-  useCurrentFrame,
-} from "remotion";
+import { AbsoluteFill, OffthreadVideo, staticFile } from "remotion";
 import { ChartAxes } from "./ChartAxes";
 import { AnimatedBar } from "./AnimatedBar";
 import { TrendLine } from "./TrendLine";
@@ -12,9 +7,9 @@ import { CalloutBox } from "./CalloutBox";
 import {
   BG_COLOR,
   BARS,
-  BARS_START_X,
+  BAR_POSITIONS,
   BAR_WIDTH,
-  BAR_GAP,
+  BAR_TOPS,
   BAR_STAGGER_START,
   BAR_STAGGER_INTERVAL,
   TREND_LINE_START,
@@ -25,8 +20,6 @@ import {
 export const defaultPart1Economics09ContextDegradationChartProps = {};
 
 export const Part1Economics09ContextDegradationChart: React.FC = () => {
-  const frame = useCurrentFrame();
-
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       {/* Veo background video */}
@@ -40,33 +33,29 @@ export const Part1Economics09ContextDegradationChart: React.FC = () => {
 
       {/* Chart overlay */}
       <AbsoluteFill>
-        {/* Axes — visible from frame 0 */}
+        {/* Axes — visible from frame 0 (starts at 15% opacity) */}
         <ChartAxes />
 
-        {/* Bars — staggered growth */}
-        {BARS.map((bar, i) => {
-          const barX = BARS_START_X + i * (BAR_WIDTH + BAR_GAP);
-          const growStart = BAR_STAGGER_START + i * BAR_STAGGER_INTERVAL;
-          return (
-            <AnimatedBar
-              key={bar.fillLevel}
-              x={barX}
-              width={BAR_WIDTH}
-              capability={bar.capability}
-              color={bar.color}
-              growStartFrame={growStart}
-            />
-          );
-        })}
+        {/* Bars — staggered growth starting at frame 30 */}
+        {BARS.map((bar, i) => (
+          <AnimatedBar
+            key={bar.fillLevel}
+            x={BAR_POSITIONS[i]}
+            width={BAR_WIDTH}
+            capability={bar.capability}
+            color={bar.color}
+            growStartFrame={BAR_STAGGER_START + i * BAR_STAGGER_INTERVAL}
+          />
+        ))}
 
-        {/* Trend line connecting bar tops */}
+        {/* Trend line connecting bar tops — draws frame 140-180 */}
         <TrendLine
-          capabilities={BARS.map((b) => b.capability)}
+          points={BAR_TOPS}
           drawStartFrame={TREND_LINE_START}
           drawEndFrame={TREND_LINE_END}
         />
 
-        {/* Callout box */}
+        {/* Callout box — slides in at frame 180 */}
         <CalloutBox appearFrame={CALLOUT_START} />
       </AbsoluteFill>
     </AbsoluteFill>

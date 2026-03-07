@@ -47,6 +47,12 @@ jest.mock("@/lib/project", () => ({
   saveProject: (...args: unknown[]) => mockSaveProject(...args),
 }));
 
+const mockRenderStill = jest.fn();
+
+jest.mock("@/lib/render", () => ({
+  renderStill: (...args: unknown[]) => mockRenderStill(...args),
+}));
+
 // Mock fs
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
@@ -272,6 +278,7 @@ beforeEach(() => {
   mockRunClaudeFix.mockReset();
   mockLoadProject.mockReset();
   mockSaveProject.mockReset();
+  mockRenderStill.mockReset();
   mockExistsSync.mockReset();
   mockReadFileSync.mockReset();
   mockReaddirSync.mockReset();
@@ -289,6 +296,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockResolvedValue("test-job-compositions-001");
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockLoadProject.mockReturnValue(mockProjectConfig());
+  mockRenderStill.mockResolvedValue(undefined);
   mockRandomUUID.mockReturnValue("test-uuid-staging-001");
   mockExecSync.mockReturnValue("");
   mockOpenSync.mockReturnValue(99);
@@ -651,11 +659,11 @@ describe("compositions executor factory — component generation", () => {
     expect(doneEvent![0].name).toBe("HeroSection");
   });
 
-  it("emits 'error' status and throws when component generation fails", async () => {
+  it("emits 'error', still regenerates wrappers/bundle, and then throws when component generation fails", async () => {
     mockExistsSync.mockReturnValue(false);
     mockReaddirSync.mockReturnValue([]);
     mockRunClaudeFix.mockRejectedValue(new Error("Claude error"));
-    // Don't set up spawn - the executor should throw before reaching the wrapper step
+    setupMockSpawn(0);
 
     const mockSend = jest.fn();
     const executor = registerCallArgs.factory(
@@ -670,6 +678,22 @@ describe("compositions executor factory — component generation", () => {
     );
     expect(errorEvent).toBeDefined();
     expect(errorEvent![0].name).toBe("HeroSection");
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "python3",
+      ["scripts/generate_section_compositions.py", "--force"],
+      expect.objectContaining({
+        cwd: process.cwd(),
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+    );
+    expect(mockExecSync).toHaveBeenCalledWith(
+      "npx remotion bundle src/index.ts --out build",
+      expect.objectContaining({
+        cwd: expect.stringContaining("remotion"),
+        stdio: "pipe",
+        timeout: 120_000,
+      })
+    );
   });
 
   it("scopes runClaudeFix to remotion/src/remotion/ directory", async () => {
@@ -1671,6 +1695,46 @@ describe("GET_CompositionList — section-scoped components", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 15c. GET_CompositionList — section-prefixed PascalCase directory detection
+// ---------------------------------------------------------------------------
+
+describe("GET_CompositionList — section-prefixed PascalCase directory detection", () => {
+  it("returns 'done' when {SectionPascal}{NN}{PascalName}/index.ts exists but {NN}-{PascalName}/ does not", async () => {
+    const pathMod = require("path");
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      // Only Pascal-prefixed dir exists, NOT kebab dir
+      if (typeof p === "string" && p.endsWith(pathMod.join("Part1Economics06StatCalloutUplevel", "index.ts"))) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string, opts?: any) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          { name: "06_stat_callout_uplevel.md", isDirectory: () => false, isFile: () => true },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Stat Callout\nSome content");
+
+    // Use a project config with a section id that has underscore (part1_economics)
+    const config = mockProjectConfig();
+    config.sections[0].id = "part1_economics";
+    config.sections[0].specDir = "specs/part1_economics";
+    config.sections[0].compositionId = "Part1Economics";
+    mockLoadProject.mockReturnValue(config);
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const section = data.sections.find((s: any) => s.id === "part1_economics");
+    const comp = section?.components.find((c: any) => c.name === "06_stat_callout_uplevel");
+    expect(comp).toBeDefined();
+    expect(comp.status).toBe("done");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 16. GET_CompositionList — wrapper naming convention
 // ---------------------------------------------------------------------------
 
@@ -2076,6 +2140,298 @@ describe("specs route — enhanced prompt with spec.md and word timestamps", () 
 });
 
 // ---------------------------------------------------------------------------
+// 21b. Discovery runs even when generation throws (try-finally)
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — discovery runs after generation error", () => {
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  it("runs discovery and updates project.json even when a component fails to generate", async () => {
+    setupMockSpawn(0);
+
+    // Set up: two components, second one fails
+    // loadProject is called multiple times (duration calc, sectionComponents lookup, discovery)
+    // specDir is relative to SPECS_DIR (cwd/specs/), so just "cold_open" not "specs/cold_open"
+    mockLoadProject.mockImplementation(() => {
+      const c = mockProjectConfig();
+      c.sections[0].specDir = "cold_open";
+      c.sections[0].id = "cold_open";
+      return c;
+    });
+
+    // First call succeeds, second call fails
+    mockRunClaudeFix
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("Claude timeout"));
+
+    const pathMod = require("path");
+    // SPECS_DIR in route.ts is path.join(cwd, "specs"), and section.specDir = "cold_open"
+    // so sectionSpecDir = path.join(cwd, "specs", "cold_open")
+    const specsDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      // Spec dir exists
+      if (p === specsDir) return true;
+      // The first component's directory exists (discovery checks TitleCard/index.ts for non-digit-prefixed base)
+      if (p === pathMod.join(remotionDir, "TitleCard", "index.ts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string, opts?: object) => {
+      if (typeof p === "string" && p.includes("specs") && p.includes("cold_open")) {
+        return [
+          { name: "title_card.md", isFile: () => true },
+          { name: "hero_section.md", isFile: () => true },
+        ];
+      }
+      // veo dir
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Spec content");
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "cold_open", components: ["title_card", "hero_section"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+
+    // Should throw the generation error
+    await expect(executor(jest.fn())).rejects.toThrow("Claude timeout");
+
+    // But discovery should have run — saveProject should have been called
+    expect(mockSaveProject).toHaveBeenCalled();
+  });
+
+  it("still throws the original error after discovery completes", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/cold_open";
+    config.sections[0].id = "cold_open";
+    mockLoadProject.mockReturnValue(config);
+
+    mockRunClaudeFix.mockRejectedValueOnce(new Error("Network failure"));
+
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockImplementation((p: string, opts?: object) => {
+      if (typeof p === "string" && p.includes("specs/cold_open")) {
+        return [{ name: "title_card.md", isFile: () => true }];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Spec content");
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "cold_open", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+
+    await expect(executor(jest.fn())).rejects.toThrow("Network failure");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21c. Generated component smoke validation
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — generated preview validation", () => {
+  function setupMockSpawn(exitCode = 0) {
+    const proc = createMockSpawnProcess(exitCode);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+    return proc;
+  }
+
+  it("smoke-renders generated preview compositions after bundling", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "cold_open";
+    config.sections[0].specDir = "cold_open";
+    config.sections[0].compositionId = "ColdOpenSection";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      if (p === pathMod.join(remotionDir, "ColdOpen05CrossfadeTransition", "index.ts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs") && p.includes("cold_open")) {
+        return [{ name: "05_crossfade_transition.md", isFile: () => true }];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Spec content");
+
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "cold_open", components: ["05_crossfade_transition"] },
+        ],
+        wrappers: [],
+      },
+      jest.fn()
+    );
+
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "cold-open05-crossfade-transition",
+      30,
+      expect.any(String)
+    );
+  });
+
+  it("fails the stage when smoke validation of a generated composition fails", async () => {
+    setupMockSpawn(0);
+    mockRenderStill.mockRejectedValueOnce(new Error("Runtime render error"));
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "part1_economics";
+    config.sections[0].specDir = "part1_economics";
+    config.sections[0].compositionId = "Part1Economics";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "part1_economics");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      if (p === pathMod.join(remotionDir, "Part1Economics07StatCalloutGitclear", "index.ts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs") && p.includes("part1_economics")) {
+        return [{ name: "07_stat_callout_gitclear.md", isFile: () => true }];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Spec content");
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "part1_economics", components: ["07_stat_callout_gitclear"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+
+    await expect(executor(jest.fn())).rejects.toThrow("Component validation failed");
+
+    const errorEvent = mockSend.mock.calls.find(
+      (c: any[]) => c[0]?.type === "component" && c[0]?.status === "error"
+    );
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent![0].name).toBe("07_stat_callout_gitclear");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21c. buildComponentPrompt uses exportName as dirName
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — buildComponentPrompt dirName alignment", () => {
+  let compositionsSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    compositionsSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "compositions",
+        "run",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("uses exportName as dirName in buildComponentPrompt (not NN-PascalName format)", () => {
+    // Extract just the buildComponentPrompt function source (ends at line "async function generateSectionConstants")
+    const funcStart = compositionsSourceCode.indexOf("function buildComponentPrompt");
+    const funcEnd = compositionsSourceCode.indexOf("async function generateSectionConstants");
+    const funcSource = compositionsSourceCode.slice(funcStart, funcEnd);
+
+    // dirName should equal exportName in buildComponentPrompt
+    expect(funcSource).toMatch(/const dirName = exportName;/);
+    // Should NOT have the old NN-prefix logic for dirName in buildComponentPrompt
+    expect(funcSource).not.toMatch(/nnMatch.*strippedPascal.*dirName|dirName.*nnMatch/);
+  });
+
+  it("generates prompt with exportName directory for section-scoped components", () => {
+    // When baseName is "05_crossfade_transition" and outputName is "cold_open_05_crossfade_transition"
+    // the prompt should use ColdOpen05CrossfadeTransition/ as the directory
+    // (not 05-CrossfadeTransition/ which is the old behavior)
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockReturnValue("# Spec");
+
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/cold_open";
+    config.sections[0].id = "cold_open";
+    mockLoadProject.mockReturnValue(config);
+
+    // Call runClaudeFix to capture the prompt
+    mockRunClaudeFix.mockResolvedValue(undefined);
+    const proc = createMockSpawnProcess(0);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "cold_open", components: ["05_crossfade_transition"] },
+        ],
+        wrappers: [],
+      },
+      mockSend
+    );
+
+    return executor(jest.fn()).then(() => {
+      const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+      // Should reference ColdOpen05CrossfadeTransition directory
+      expect(prompt).toContain("ColdOpen05CrossfadeTransition/");
+      // Should NOT reference 05-CrossfadeTransition directory
+      expect(prompt).not.toContain("05-CrossfadeTransition/");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 22. buildComponentPrompt supports multi-file output
 // ---------------------------------------------------------------------------
 
@@ -2114,6 +2470,11 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
     expect(compositionsSourceCode).toMatch(/constants\.ts|sub.*component/i);
   });
 
+  it("instructs Claude to use supported quartic easing", () => {
+    expect(compositionsSourceCode).toContain("Easing.poly(4)");
+    expect(compositionsSourceCode).toContain("NOT Easing.quart");
+  });
+
   it("buildComponentPrompt derives dirName from baseName, not scoped outputName", () => {
     // The prompt must accept a baseName parameter for NN-prefix directory naming
     // so that "10_split_perception_reality" → "10-SplitPerceptionReality" directory
@@ -2136,6 +2497,14 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
     expect(compositionsSourceCode).not.toMatch(
       /section\.compositions\s*=\s*discoveredComponents\s*;/
     );
+  });
+
+  it("discovery checks section-prefixed PascalCase directory for digit-prefixed components", () => {
+    // When a component like 07_monitor_glow_overlay exists in a directory named
+    // ColdOpen07MonitorGlowOverlay/ (section-prefixed PascalCase), the discovery
+    // logic must find it — not just check for 07-MonitorGlowOverlay/
+    expect(compositionsSourceCode).toMatch(/pascalDirIndex/);
+    expect(compositionsSourceCode).toMatch(/sectionPascal/);
   });
 });
 

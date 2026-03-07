@@ -10,31 +10,32 @@ import {
   TRACK_FADE_IN_FRAMES,
   TRACK_FADE_OUT_FRAMES,
   TOTAL_FRAMES,
-  SUBTITLE_START_FRAME,
 } from "./constants";
 
 export const SubtitleBackdrop: React.FC = () => {
   const frame = useCurrentFrame();
+  const totalFrames = TOTAL_FRAMES;
 
-  // Duration within the Sequence (which starts at SUBTITLE_START_FRAME)
-  const subtitleDuration = TOTAL_FRAMES - SUBTITLE_START_FRAME;
-
-  // Fade in at start (0→0.6 over 15 frames), fade out at end (0.6→0 over 15 frames)
-  const opacity = interpolate(
+  // Fade in: 0→1 over first 15 frames (easeInOutCubic)
+  const fadeInProgress = interpolate(
     frame,
-    [
-      0,
-      TRACK_FADE_IN_FRAMES,
-      subtitleDuration - TRACK_FADE_OUT_FRAMES,
-      subtitleDuration,
-    ],
-    [0, 0.6, 0.6, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
+    [0, TRACK_FADE_IN_FRAMES],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
+  const fadeIn = Easing.inOut(Easing.cubic)(fadeInProgress);
+
+  // Fade out: 1→0 over last 15 frames (easeInOutCubic)
+  const fadeOutProgress = interpolate(
+    frame,
+    [totalFrames - TRACK_FADE_OUT_FRAMES, totalFrames],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+  const fadeOut = 1 - Easing.inOut(Easing.cubic)(fadeOutProgress);
+
+  // Combine: min of fadeIn and fadeOut (multiply works too since both are 0-1)
+  const opacity = Math.min(fadeIn, fadeOut);
 
   return (
     <>

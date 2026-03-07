@@ -1,109 +1,115 @@
 import React from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
 import {
+  WIDTH,
+  HEIGHT,
   CROSSOVER_PX_X,
   CROSSOVER_PX_Y,
   STARBURST_COLOR,
-  STARBURST_FLASH_START,
+  STARBURST_MIN_RADIUS,
+  STARBURST_MAX_RADIUS,
+  STARBURST_START,
   STARBURST_FLASH_END,
-  STARBURST_SETTLE,
-  FADE_START,
-  FADE_END,
+  FADE_TO_BLACK_START,
+  FADE_TO_BLACK_END,
 } from "./constants";
 
 export const Starburst: React.FC = () => {
   const frame = useCurrentFrame();
 
-  if (frame < STARBURST_FLASH_START) return null;
-
-  // Radius: 60 → 200px during flash
+  // Radius expansion: 60 → 200px over frames 20-50
   const radius = interpolate(
     frame,
-    [STARBURST_FLASH_START, STARBURST_FLASH_END],
-    [60, 200],
+    [STARBURST_START, STARBURST_FLASH_END],
+    [STARBURST_MIN_RADIUS, STARBURST_MAX_RADIUS],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
-  // Base opacity: 0 → 1.0 → 0.8
-  const baseOpacity = interpolate(
+  // Opacity: 0 → 1.0 (flash) → 0.8 (settle), then gentle pulse
+  const flashOpacity = interpolate(
     frame,
-    [STARBURST_FLASH_START, 35, STARBURST_FLASH_END, FADE_START, FADE_END],
-    [0, 1.0, 0.8, 0.8, 0],
+    [STARBURST_START, STARBURST_START + 15, STARBURST_FLASH_END],
+    [0, 1.0, 0.8],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-    }
+      easing: Easing.out(Easing.poly(4)),
+    },
   );
 
-  // Gentle sinusoidal pulse during hold phase (1.5s period = 0.14 rad/frame at 30fps)
+  // Sinusoidal pulse during hold (frames 50+): oscillates 0.7-0.9
   const pulseOpacity =
-    frame > STARBURST_SETTLE
+    frame > STARBURST_FLASH_END
       ? interpolate(Math.sin(frame * 0.14), [-1, 1], [0.7, 0.9])
-      : 1.0;
+      : flashOpacity;
 
-  const finalOpacity = baseOpacity * pulseOpacity;
+  // Fade out with the fade-to-black
+  const fadeOut = interpolate(
+    frame,
+    [FADE_TO_BLACK_START, FADE_TO_BLACK_END],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    },
+  );
+
+  const opacity = pulseOpacity * fadeOut;
+
+  if (frame < STARBURST_START) return null;
 
   return (
     <AbsoluteFill>
       <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
+        width={WIDTH}
+        height={HEIGHT}
+        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         <defs>
-          <radialGradient id="starburstGradient">
+          {/* Inner bright starburst */}
+          <radialGradient id="starburstGlow">
             <stop offset="0%" stopColor="#FFFFFF" stopOpacity={1} />
-            <stop offset="30%" stopColor={STARBURST_COLOR} stopOpacity={0.8} />
+            <stop offset="30%" stopColor={STARBURST_COLOR} stopOpacity={0.9} />
+            <stop offset="100%" stopColor={STARBURST_COLOR} stopOpacity={0} />
+          </radialGradient>
+          {/* Outer soft halo */}
+          <radialGradient id="starburstHalo">
+            <stop offset="0%" stopColor={STARBURST_COLOR} stopOpacity={0.4} />
             <stop offset="100%" stopColor={STARBURST_COLOR} stopOpacity={0} />
           </radialGradient>
         </defs>
 
-        {/* Outer glow */}
+        {/* Outer halo (larger, softer) */}
+        <circle
+          cx={CROSSOVER_PX_X}
+          cy={CROSSOVER_PX_Y}
+          r={radius * 1.5}
+          fill="url(#starburstHalo)"
+          opacity={opacity * 0.6}
+        />
+
+        {/* Main starburst */}
         <circle
           cx={CROSSOVER_PX_X}
           cy={CROSSOVER_PX_Y}
           r={radius}
-          fill="url(#starburstGradient)"
-          opacity={finalOpacity}
+          fill="url(#starburstGlow)"
+          opacity={opacity}
         />
 
-        {/* Inner bright core */}
+        {/* Bright core */}
         <circle
           cx={CROSSOVER_PX_X}
           cy={CROSSOVER_PX_Y}
           r={radius * 0.15}
           fill="#FFFFFF"
-          opacity={finalOpacity}
+          opacity={opacity}
         />
-
-        {/* Starburst rays */}
-        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => {
-          const rad = (angle * Math.PI) / 180;
-          const innerR = radius * 0.25;
-          const outerR = radius * 0.85;
-          const x1 = CROSSOVER_PX_X + Math.cos(rad) * innerR;
-          const y1 = CROSSOVER_PX_Y + Math.sin(rad) * innerR;
-          const x2 = CROSSOVER_PX_X + Math.cos(rad) * outerR;
-          const y2 = CROSSOVER_PX_Y + Math.sin(rad) * outerR;
-          return (
-            <line
-              key={angle}
-              x1={x1}
-              y1={y1}
-              x2={x2}
-              y2={y2}
-              stroke={STARBURST_COLOR}
-              strokeWidth={2}
-              opacity={finalOpacity * 0.6}
-              strokeLinecap="round"
-            />
-          );
-        })}
       </svg>
     </AbsoluteFill>
   );

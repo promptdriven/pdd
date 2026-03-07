@@ -1,32 +1,36 @@
 import React from "react";
 import { Sequence, Audio, OffthreadVideo, staticFile } from "remotion";
 
-import { Part1EconomicsSplitPerceptionVsReality } from "../part1_economics_split_perception_vs_reality";
-import { Part1EconomicsStatCalloutGitclear } from "../part1_economics_stat_callout_gitclear";
-import { Part1EconomicsStatCalloutGithub } from "../part1_economics_stat_callout_github";
-import { Part1EconomicsStatCalloutUplevel } from "../part1_economics_stat_callout_uplevel";
+import { Part1Economics01TitleCard } from "../Part1Economics01TitleCard";
+import { Part1Economics03CostCrossoverChart } from "../Part1Economics03CostCrossoverChart";
+import { Part1Economics04StatCalloutGithub } from "../Part1Economics04StatCalloutGithub";
+import { Part1Economics06StatCalloutUplevel } from "../Part1Economics06StatCalloutUplevel";
+import { Part1Economics07StatCalloutGitclear } from "../Part1Economics07StatCalloutGitclear";
+import { Part1Economics09ContextDegradationChart } from "../Part1Economics09ContextDegradationChart";
+import { Part1Economics10SplitPerceptionReality } from "../Part1Economics10SplitPerceptionReality";
+import { Part1Economics12RegenerationInfographic } from "../Part1Economics12RegenerationInfographic";
+import { Part1Economics13CrossoverZoom } from "../Part1Economics13CrossoverZoom";
+import { Part1Economics14SubtitleTrack } from "../Part1Economics14SubtitleTrack";
 
 export const Part1EconomicsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 15.68;
+  const offsetSeconds = 15.744;
   const durationSeconds = 382.314667;
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("part1_economics/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/part1_economics.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Sequence from={Math.round(255.68 * fps)} durationInFrames={Math.ceil(10 * fps)}>
-        <Part1EconomicsSplitPerceptionVsReality />
-      </Sequence>
-      <Sequence from={Math.round(115.58 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part1EconomicsStatCalloutGitclear />
-      </Sequence>
-      <Sequence from={Math.round(68.64 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part1EconomicsStatCalloutGithub />
-      </Sequence>
-      <Sequence from={Math.round(83.82 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <Part1EconomicsStatCalloutUplevel />
-      </Sequence>
+      <Part1Economics01TitleCard />
+      <Part1Economics03CostCrossoverChart />
+      <Part1Economics04StatCalloutGithub />
+      <Part1Economics06StatCalloutUplevel />
+      <Part1Economics07StatCalloutGitclear />
+      <Part1Economics09ContextDegradationChart />
+      <Part1Economics10SplitPerceptionReality />
+      <Part1Economics12RegenerationInfographic />
+      <Part1Economics13CrossoverZoom />
+      <Part1Economics14SubtitleTrack />
     </Sequence>
   );
 };

@@ -1,39 +1,26 @@
 import React, { useMemo } from "react";
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  WIDTH,
-  HEIGHT,
-  CHART_Y,
-  CHART_H,
-  BARS_START_X,
-  BAR_WIDTH,
-  BAR_GAP,
-} from "./constants";
+import { WIDTH, HEIGHT, TREND_LINE_COLOR } from "./constants";
+
+interface Point {
+  x: number;
+  y: number;
+}
 
 interface TrendLineProps {
-  capabilities: number[];
+  points: Point[];
   drawStartFrame: number;
   drawEndFrame: number;
 }
 
 export const TrendLine: React.FC<TrendLineProps> = ({
-  capabilities,
+  points,
   drawStartFrame,
   drawEndFrame,
 }) => {
   const frame = useCurrentFrame();
 
-  // Compute bar top center points
-  const points = useMemo(() => {
-    return capabilities.map((cap, i) => {
-      const barX = BARS_START_X + i * (BAR_WIDTH + BAR_GAP) + BAR_WIDTH / 2;
-      const barTopY = CHART_Y + CHART_H * (1 - cap / 100);
-      return { x: barX, y: barTopY };
-    });
-  }, [capabilities]);
-
-  // Solid path for draw-in animation (dashoffset technique)
-  const solidPathD = useMemo(() => {
+  const pathD = useMemo(() => {
     if (points.length < 2) return "";
     return points
       .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`)
@@ -63,10 +50,6 @@ export const TrendLine: React.FC<TrendLineProps> = ({
     },
   );
 
-  // Use a large dash for the visible portion, gap covers the rest
-  const visibleLength = pathLength * drawProgress;
-  const dashArray = `${visibleLength} ${pathLength}`;
-
   return (
     <AbsoluteFill>
       <svg
@@ -75,33 +58,32 @@ export const TrendLine: React.FC<TrendLineProps> = ({
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Dashed trend line with draw-in via clipPath */}
+        {/* Use strokeDashoffset to progressively reveal a clip path,
+            then clip the dashed trend line through it */}
         <defs>
-          <clipPath id="trendLineClip">
-            {/* Clip rectangle that grows with draw progress */}
-            <rect
-              x={points[0]?.x ?? 0}
-              y={0}
-              width={
-                ((points[points.length - 1]?.x ?? 0) - (points[0]?.x ?? 0)) *
-                drawProgress
-              }
-              height={HEIGHT}
+          <clipPath id="trendDrawClip">
+            <path
+              d={pathD}
+              fill="none"
+              stroke="white"
+              strokeWidth={20}
+              strokeDasharray={`${pathLength} ${pathLength}`}
+              strokeDashoffset={pathLength * (1 - drawProgress)}
             />
           </clipPath>
         </defs>
 
-        {/* Dashed line, revealed progressively by clip */}
+        {/* Dashed trend line, revealed progressively by clip */}
         <path
-          d={solidPathD}
+          d={pathD}
           fill="none"
-          stroke="#FFFFFF"
+          stroke={TREND_LINE_COLOR}
           strokeWidth={3}
+          strokeOpacity={0.6}
           strokeDasharray="8 6"
           strokeLinecap="round"
           strokeLinejoin="round"
-          opacity={0.6}
-          clipPath="url(#trendLineClip)"
+          clipPath="url(#trendDrawClip)"
         />
 
         {/* Dots at each bar top — fade in as line reaches them */}
@@ -126,7 +108,7 @@ export const TrendLine: React.FC<TrendLineProps> = ({
               cx={p.x}
               cy={p.y}
               r={5}
-              fill="#FFFFFF"
+              fill={TREND_LINE_COLOR}
               opacity={dotOpacity}
             />
           );

@@ -50,7 +50,7 @@ import {
   BG_COLOR,
 } from "./constants";
 
-/** Lerp between two hex colors */
+/** Linearly interpolate between two hex colors */
 function lerpColor(
   frame: number,
   inputRange: [number, number],
@@ -84,7 +84,7 @@ export const defaultPart2ParadigmShift05ValueMigrationDiagramProps = {};
 export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // --- Panel opacity ---
+  // --- Panel opacity (fade in + fade out) ---
   const panelAppear = interpolate(
     frame,
     [PANEL_FADE_IN_START, PANEL_FADE_IN_END],
@@ -99,7 +99,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
   );
   const panelOpacity = panelAppear * panelFadeOut;
 
-  // --- Part icon animations ---
+  // --- THE PART icon animations ---
   const partScale = interpolate(
     frame,
     [DIM_BRIGHTEN_START, DIM_BRIGHTEN_END],
@@ -136,7 +136,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
     [PART_LABEL_INITIAL_COLOR, PART_LABEL_FINAL_COLOR]
   );
 
-  // --- Mold icon animations ---
+  // --- THE MOLD icon animations ---
   const moldScale = interpolate(
     frame,
     [DIM_BRIGHTEN_START, DIM_BRIGHTEN_END],
@@ -159,7 +159,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Pulsing glow after particles settle
+  // Pulsing glow after particles settle (sinusoidal, ~3s period)
   const glowPulseOpacity =
     frame > VALUE_BAR_ANIM_END
       ? interpolate(
@@ -174,7 +174,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
           { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
         );
 
-  // Mold label styling
+  // Mold label color transition
   const moldLabelColor = lerpColor(
     frame,
     [DIM_BRIGHTEN_START, DIM_BRIGHTEN_END],
@@ -182,7 +182,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
   );
   const isBold = frame >= LABEL_BOLD_FRAME;
 
-  // Master fade-out for icons layer
+  // Master fade-out for the icons SVG layer
   const iconsFadeOut = interpolate(
     frame,
     [FADEOUT_START, FADEOUT_END],
@@ -201,7 +201,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
         />
       </AbsoluteFill>
 
-      {/* Backing panel */}
+      {/* Backing panel with blur */}
       <div
         style={{
           position: "absolute",
@@ -249,7 +249,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
               stroke={partBorder}
               strokeWidth={2}
             />
-            {/* Small detail lines to suggest a "part" */}
+            {/* Detail lines suggesting a "part" */}
             <line
               x1={-PART_W / 4}
               y1={-PART_H / 6}
@@ -292,7 +292,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
           </text>
 
           {/* === THE MOLD (top icon) — document/blueprint shape === */}
-          {/* Glow behind mold icon */}
+          {/* Glow ring behind mold icon */}
           <rect
             x={MOLD_CENTER_X - MOLD_W / 2 - 10}
             y={MOLD_CENTER_Y - MOLD_H / 2 - 10}
@@ -319,7 +319,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
               stroke={MOLD_BORDER_COLOR}
               strokeWidth={2}
             />
-            {/* Folded corner */}
+            {/* Folded corner detail */}
             <path
               d={`M ${MOLD_W / 2 - 20} ${-MOLD_H / 2}
                   L ${MOLD_W / 2 - 20} ${-MOLD_H / 2 + 20}
@@ -374,7 +374,7 @@ export const Part2ParadigmShift05ValueMigrationDiagram: React.FC = () => {
           {/* THE MOLD label */}
           <text
             x={MOLD_CENTER_X}
-            y={MOLD_CENTER_Y - MOLD_H / 2 * moldScale - 18}
+            y={MOLD_CENTER_Y - (MOLD_H / 2) * moldScale - 18}
             fill={moldLabelColor}
             fontSize={20}
             fontFamily="Inter, sans-serif"

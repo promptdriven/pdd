@@ -16,19 +16,24 @@ export const defaultPart5Compound01TitleCardProps = {};
 export const Part5Compound01TitleCard: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const bgOpacity = interpolate(
+  const fadeIn = interpolate(frame, [0, BG_FADE_IN_END], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+
+  const fadeOut = interpolate(
     frame,
-    [0, BG_FADE_IN_END, CARD_FADE_OUT_START, CARD_FADE_OUT_END],
-    [0, 1, 1, 0],
+    [CARD_FADE_OUT_START, CARD_FADE_OUT_END],
+    [1, 0],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing:
-        frame <= BG_FADE_IN_END
-          ? Easing.out(Easing.cubic)
-          : Easing.in(Easing.cubic),
+      easing: Easing.in(Easing.cubic),
     }
   );
+
+  const bgOpacity = fadeIn * fadeOut;
 
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR, opacity: bgOpacity }}>

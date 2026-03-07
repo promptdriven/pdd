@@ -1474,7 +1474,8 @@ class TestGenerateClearsStaleRunReport:
              patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
-             patch('pdd.sync_orchestration.META_DIR', meta_dir):
+             patch('pdd.sync_orchestration.META_DIR', meta_dir), \
+             patch('pdd.operation_log.META_DIR', str(meta_dir)):
 
             # Configure lock mock
             mock_lock.return_value.__enter__.return_value = mock_lock

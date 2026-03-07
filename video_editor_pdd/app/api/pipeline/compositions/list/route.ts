@@ -107,12 +107,19 @@ function buildComponent(name: string, sectionId?: string): CompositionComponent 
   const strippedPascal = nnMatch ? toPascalCase(name.slice(nnMatch[0].length)) : toPascalCase(name);
   const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : strippedPascal;
   const dirExists = fs.existsSync(path.join(REMOTION_DIR, dirName, "index.ts"));
+  // Also check section-prefixed PascalCase directory (e.g., Part1Economics06StatCalloutUplevel/)
+  let pascalDirExists = false;
+  if (!dirExists && sectionId && nnMatch) {
+    const sectionPascal = toPascalCase(sectionId);
+    const fullPascal = `${sectionPascal}${nnMatch[1]}${strippedPascal}`;
+    pascalDirExists = fs.existsSync(path.join(REMOTION_DIR, fullPascal, "index.ts"));
+  }
   // Then check section-scoped file ({sectionId}_{name}.tsx), fall back to flat ({name}.tsx)
   const scopedExists = sectionId && fs.existsSync(path.join(REMOTION_DIR, `${sectionId}_${name}.tsx`));
   const flatExists = fs.existsSync(path.join(REMOTION_DIR, `${name}.tsx`));
   return {
     name,
-    status: dirExists || scopedExists || flatExists ? "done" : "missing",
+    status: dirExists || pascalDirExists || scopedExists || flatExists ? "done" : "missing",
     error: null,
   };
 }

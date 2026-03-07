@@ -9,6 +9,24 @@ import { renderStill } from "@/lib/render";
 const PREVIEWS_DIR = path.join(process.cwd(), "outputs", "previews");
 const FPS = 30;
 
+function toPascalCase(s: string): string {
+  return s.replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
+}
+
+/**
+ * Convert a composition name + section ID to the Remotion composition ID
+ * that Root.tsx registers (PascalCase identifier → kebab-case).
+ */
+function compToRemotionId(compId: string, sectionId: string): string {
+  let pascal = toPascalCase(compId);
+  // If PascalCase starts with a digit, prefix with section PascalCase
+  if (/^\d/.test(pascal)) {
+    pascal = toPascalCase(sectionId) + pascal;
+  }
+  // PascalCase → kebab-case
+  return pascal.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+}
+
 /**
  * Resolve a component name to a Remotion compositionId by scanning project.json sections.
  *
@@ -36,14 +54,14 @@ function resolveCompositionId(
         typeof comp === "string" ? comp : (comp as Record<string, unknown>).id as string
     );
     // Check if the section-scoped name is in compositions — return its
-    // hyphenated form as the Remotion composition ID (underscores are invalid).
+    // Remotion composition ID (PascalCase → kebab-case to match Root.tsx).
     const scopedName = `${section.id}_${componentName}`;
     if (comps.includes(scopedName)) {
-      return scopedName.replace(/_/g, "-");
+      return compToRemotionId(scopedName, section.id);
     }
     // Check if the component name is already section-scoped in the list
     if (comps.includes(componentName)) {
-      return componentName.replace(/_/g, "-");
+      return compToRemotionId(componentName, section.id);
     }
     // Fallback _main components → section wrapper
     if (componentName === `${section.id}_main`) {

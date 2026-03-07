@@ -14,13 +14,10 @@ interface CalloutPillProps {
   text: string;
   textColor: string;
   fontSize: number;
-  /** Frame at which this callout starts (relative to parent Sequence) */
   appearFrame: number;
   animDuration: number;
-  /** Position offset from crossover point */
   offsetX: number;
   offsetY: number;
-  /** Slide direction: positive = from right, negative = from left */
   slideFromX: number;
 }
 

@@ -32,6 +32,47 @@ def to_pascal_case(section_id: str) -> str:
     return ''.join(part.capitalize() for part in parts if part)
 
 
+def resolve_comp_import(comp_id: str, section_id: str, remotion_src: str) -> tuple:
+    """Resolve the JS identifier and import path for a composition.
+
+    Digit-prefixed PascalCase names are invalid JS identifiers, so we prefix
+    them with the section's PascalCase name. We then check the filesystem
+    to find the correct import path.
+
+    Returns:
+        (js_identifier, import_path) e.g. ("Part1Economics07StatCalloutGitclear", "Part1Economics07StatCalloutGitclear")
+    """
+    comp_pascal = to_pascal_case(comp_id)
+    section_pascal = to_pascal_case(section_id)
+
+    # If PascalCase starts with a digit, prefix with section PascalCase
+    if comp_pascal and comp_pascal[0].isdigit():
+        comp_pascal = section_pascal + comp_pascal
+
+    # Resolve the import path by checking filesystem in priority order
+    if remotion_src:
+        # 1. PascalCase directory (e.g. Part1Economics07StatCalloutGitclear/)
+        pascal_dir = os.path.join(remotion_src, comp_pascal)
+        if os.path.isdir(pascal_dir):
+            return (comp_pascal, comp_pascal)
+
+        # 2. Kebab-style directory (e.g. 07-StatCalloutGitclear/)
+        # Build kebab from comp_id: "07_stat_callout_gitclear" -> "07-StatCalloutGitclear"
+        parts = re.split(r'[_\-]', comp_id)
+        kebab_name = parts[0] + '-' + ''.join(p.capitalize() for p in parts[1:] if p) if len(parts) > 1 else comp_id
+        kebab_dir = os.path.join(remotion_src, kebab_name)
+        if os.path.isdir(kebab_dir):
+            return (comp_pascal, kebab_name)
+
+        # 3. Flat file (e.g. 07_stat_callout_gitclear.tsx)
+        flat_file = os.path.join(remotion_src, f'{comp_id}.tsx')
+        if os.path.isfile(flat_file):
+            return (comp_pascal, comp_id)
+
+    # Fallback: use comp_id as import path
+    return (comp_pascal, comp_id)
+
+
 def load_project_json(project_dir: str) -> Dict[str, Any]:
     """Load and parse project.json from the given directory."""
     project_path = os.path.join(project_dir, 'project.json')
@@ -106,12 +147,13 @@ def generate_section_component(
         lines.append(f'import {{ {component_name} as {component_name}Base }} from "../{component_name}";')
 
     # Import sub-compositions if present
+    remotion_src_dir = remotion_src or ''
     if compositions:
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             if comp_id:
-                comp_pascal = to_pascal_case(comp_id)
-                lines.append(f'import {{ {comp_pascal} }} from "../{comp_id}";')
+                comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src_dir)
+                lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
 
     if has_flat_file or compositions:
         lines.append('')
@@ -142,7 +184,7 @@ def generate_section_component(
             start_seconds = comp.get('startSeconds') if isinstance(comp, dict) else None
             comp_duration = comp.get('durationSeconds') if isinstance(comp, dict) else None
             if comp_id:
-                comp_pascal = to_pascal_case(comp_id)
+                comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src_dir)
                 if start_seconds is not None and comp_duration is not None:
                     lines.append(f'      <Sequence from={{Math.round({start_seconds} * fps)}} durationInFrames={{Math.ceil({comp_duration} * fps)}}>')
                     lines.append(f'        <{comp_pascal} />')
@@ -183,15 +225,18 @@ def generate_root_tsx(
         lines.append(f'import {{ {component_name} }} from "./{section_id}";')
 
     # Import individual components for preview compositions
-    all_comp_ids: List[str] = []
+    remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
+    imported_pascals: set = set()
     for section in sections:
+        section_id = section['id']
         compositions = section.get('compositions', [])
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-            if comp_id and comp_id not in all_comp_ids:
-                comp_pascal = to_pascal_case(comp_id)
-                lines.append(f'import {{ {comp_pascal} }} from "./{comp_id}";')
-                all_comp_ids.append(comp_id)
+            if comp_id:
+                comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
+                if comp_pascal not in imported_pascals:
+                    lines.append(f'import {{ {comp_pascal} }} from "./{import_path}";')
+                    imported_pascals.add(comp_pascal)
 
     lines.append('')
     lines.append('const PREVIEW_DURATION = 150; // 5s at 30fps')
@@ -224,14 +269,19 @@ def generate_root_tsx(
     # Remotion composition IDs cannot contain underscores — use hyphens.
     registered: set = set()
     for section in sections:
+        section_id = section['id']
         compositions = section.get('compositions', [])
         width = section.get('width', 1920)
         height = section.get('height', 1080)
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-            if comp_id and comp_id not in registered:
-                comp_pascal = to_pascal_case(comp_id)
-                remotion_id = comp_id.replace('_', '-')
+            if comp_id:
+                comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
+                if comp_pascal in registered:
+                    continue
+                # Use hyphenated comp_pascal as the Remotion composition ID
+                # to ensure uniqueness across sections
+                remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
                 lines.append(f'      <Composition')
                 lines.append(f'        id="{remotion_id}"')
                 lines.append(f'        component={{{comp_pascal}}}')
@@ -240,7 +290,7 @@ def generate_root_tsx(
                 lines.append(f'        width={{{width}}}')
                 lines.append(f'        height={{{height}}}')
                 lines.append(f'      />')
-                registered.add(comp_id)
+                registered.add(comp_pascal)
 
     lines.append('    </>')
     lines.append('  );')
@@ -314,16 +364,19 @@ def _merge_root_tsx(
     # Individual component compositions (for preview rendering)
     registered_comps: set = set()
     for section in sections:
+        section_id = section['id']
         compositions = section.get('compositions', [])
         width = section.get('width', 1920)
         height = section.get('height', 1080)
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-            if comp_id and comp_id not in registered_comps:
-                comp_pascal = to_pascal_case(comp_id)
-                import_line = f'import {{ {comp_pascal} }} from "./{comp_id}";'
+            if comp_id:
+                comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
+                if comp_pascal in registered_comps:
+                    continue
+                import_line = f'import {{ {comp_pascal} }} from "./{import_path}";'
                 import_lines.append(import_line)
-                remotion_id = comp_id.replace('_', '-')
+                remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
                 comp_block = (
                     f'      <Composition\n'
                     f'        id="{remotion_id}"\n'
@@ -335,7 +388,7 @@ def _merge_root_tsx(
                     f'      />'
                 )
                 composition_lines.append(comp_block)
-                registered_comps.add(comp_id)
+                registered_comps.add(comp_pascal)
 
     # Remove existing section and component imports (lines importing from ./...)
     section_ids = {s['id'] for s in sections}

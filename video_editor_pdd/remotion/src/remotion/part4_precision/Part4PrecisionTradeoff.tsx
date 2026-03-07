@@ -10,9 +10,27 @@ import {
 } from "remotion";
 
 import { BEATS, VISUAL_SEQUENCE, Part4PrecisionTradeoffPropsType } from "./constants";
-import { Part4Precision05SplitPromptDetailVsTests, defaultPart4Precision05SplitPromptDetailVsTestsProps } from "../Part4Precision05SplitPromptDetailVsTests";
-import { Part4Precision04StatCalloutPromptCompression, defaultPart4Precision04StatCalloutPromptCompressionProps } from "../Part4Precision04StatCalloutPromptCompression";
-import { Part4Precision01TitleCard, defaultPart4Precision01TitleCardProps } from "../Part4Precision01TitleCard";
+import { TitleCard, defaultTitleCardProps } from "../01-TitleCard";
+import {
+  PrecisionCostUcurve,
+  defaultPrecisionCostUcurveProps,
+} from "../03-PrecisionCostUcurve";
+import {
+  StatCalloutPromptCompression,
+  defaultStatCalloutPromptCompressionProps,
+} from "../04-StatCalloutPromptCompression";
+import {
+  SplitPromptDetailVsTests,
+  defaultSplitPromptDetailVsTestsProps,
+} from "../05-SplitPromptDetailVsTests";
+import {
+  SpectrumSlider,
+  defaultSpectrumSliderProps,
+} from "../07-SpectrumSlider";
+import {
+  SubtitleTrack,
+  defaultSubtitleTrackProps,
+} from "../10-SubtitleTrack";
 
 export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> = () => {
   const frame = useCurrentFrame();
@@ -29,24 +47,45 @@ export const Part4PrecisionTradeoff: React.FC<Part4PrecisionTradeoffPropsType> =
     <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
       <Audio src={staticFile("part4_precision_narration.wav")} />
 
-      {/* Visual 0: part4_precision_split_prompt_detail_vs_tests */}
+      {/* Visual 0: 01_title_card */}
       {activeVisual === 0 && (
         <Sequence from={BEATS.VISUAL_00_START}>
-          <Part4Precision05SplitPromptDetailVsTests {...defaultPart4Precision05SplitPromptDetailVsTestsProps} />
+          <TitleCard {...defaultTitleCardProps} />
         </Sequence>
       )}
 
-      {/* Visual 1: part4_precision_stat_callout_prompt_compression */}
+      {/* Visual 1: 03_precision_cost_ucurve */}
       {activeVisual === 1 && (
         <Sequence from={BEATS.VISUAL_01_START}>
-          <Part4Precision04StatCalloutPromptCompression {...defaultPart4Precision04StatCalloutPromptCompressionProps} />
+          <PrecisionCostUcurve {...defaultPrecisionCostUcurveProps} />
         </Sequence>
       )}
 
-      {/* Visual 2: part4_precision_title_card */}
+      {/* Visual 2: 04_stat_callout_prompt_compression */}
       {activeVisual === 2 && (
         <Sequence from={BEATS.VISUAL_02_START}>
-          <Part4Precision01TitleCard {...defaultPart4Precision01TitleCardProps} />
+          <StatCalloutPromptCompression {...defaultStatCalloutPromptCompressionProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 3: 05_split_prompt_detail_vs_tests */}
+      {activeVisual === 3 && (
+        <Sequence from={BEATS.VISUAL_03_START}>
+          <SplitPromptDetailVsTests {...defaultSplitPromptDetailVsTestsProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 4: 07_spectrum_slider */}
+      {activeVisual === 4 && (
+        <Sequence from={BEATS.VISUAL_04_START}>
+          <SpectrumSlider {...defaultSpectrumSliderProps} />
+        </Sequence>
+      )}
+
+      {/* Visual 5: 10_subtitle_track */}
+      {activeVisual === 5 && (
+        <Sequence from={BEATS.VISUAL_05_START}>
+          <SubtitleTrack {...defaultSubtitleTrackProps} />
         </Sequence>
       )}
     </AbsoluteFill>

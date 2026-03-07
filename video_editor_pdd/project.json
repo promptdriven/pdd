@@ -20,14 +20,15 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 15.68,
+      "durationSeconds": 15.744,
       "offsetSeconds": 0,
       "compositions": [
-        {
-          "id": "cold_open_title_card",
-          "startSeconds": 0,
-          "durationSeconds": 5
-        }
+        "01_title_card",
+        "03_subtitle_track",
+        "05_crossfade_transition",
+        "06_fade_bookends",
+        "07_monitor_glow_overlay",
+        "08_closing_question_card"
       ]
     },
     {
@@ -38,30 +39,18 @@
       "remotionDir": "S01-Economics",
       "compositionId": "Part1Economics",
       "durationSeconds": 382.314667,
-      "offsetSeconds": 15.68,
+      "offsetSeconds": 15.744,
       "compositions": [
-        {
-          "id": "part1_economics_split_perception_vs_reality",
-          "startSeconds": 255.68,
-          "durationSeconds": 10,
-          "triggerKeyword": "slower"
-        },
-        {
-          "id": "part1_economics_stat_callout_gitclear",
-          "startSeconds": 115.58,
-          "durationSeconds": 5,
-          "triggerKeyword": "churn"
-        },
-        {
-          "id": "part1_economics_stat_callout_github",
-          "startSeconds": 68.64,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part1_economics_stat_callout_uplevel",
-          "startSeconds": 83.82,
-          "durationSeconds": 5
-        }
+        "01_title_card",
+        "03_cost_crossover_chart",
+        "04_stat_callout_github",
+        "06_stat_callout_uplevel",
+        "07_stat_callout_gitclear",
+        "09_context_degradation_chart",
+        "10_split_perception_reality",
+        "12_regeneration_infographic",
+        "13_crossover_zoom",
+        "14_subtitle_track"
       ]
     },
     {
@@ -72,9 +61,15 @@
       "remotionDir": "S02-ParadigmShift",
       "compositionId": "Part2ParadigmShift",
       "durationSeconds": 195.792,
-      "offsetSeconds": 397.994667,
+      "offsetSeconds": 398.058667,
       "compositions": [
-        "part2_paradigm_shift_main"
+        "01_title_card",
+        "03_mold_production_infographic",
+        "05_value_migration_diagram",
+        "07_hdl_timeline",
+        "08_split_manual_vs_specification",
+        "10_prompt_mold_visualization",
+        "11_subtitle_track"
       ]
     },
     {
@@ -85,33 +80,16 @@
       "remotionDir": "S03-MoldThreeParts",
       "compositionId": "Part3MoldThreeParts",
       "durationSeconds": 280.728,
-      "offsetSeconds": 593.786667,
+      "offsetSeconds": 593.850667,
       "compositions": [
-        {
-          "id": "part3_mold_split_prompt_vs_code",
-          "startSeconds": 21,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part3_mold_stat_callout_coderabbit",
-          "startSeconds": 25.72,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part3_mold_stat_callout_dora",
-          "startSeconds": 40.82,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part3_mold_stat_callout_nl_context",
-          "startSeconds": 207.3,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part3_mold_title_card",
-          "startSeconds": 0,
-          "durationSeconds": 5
-        }
+        "01_title_card",
+        "03_stat_callout_coderabbit",
+        "04_stat_callout_dora",
+        "06_split_prompt_vs_code",
+        "08_stat_callout_nl_context",
+        "10_ratchet_infographic",
+        "12_three_pillars_diagram",
+        "13_subtitle_track"
       ]
     },
     {
@@ -122,23 +100,14 @@
       "remotionDir": "S04-PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoff",
       "durationSeconds": 96.912,
-      "offsetSeconds": 874.5146669999999,
+      "offsetSeconds": 874.578667,
       "compositions": [
-        {
-          "id": "part4_precision_split_prompt_detail_vs_tests",
-          "startSeconds": 25.38,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part4_precision_stat_callout_prompt_compression",
-          "startSeconds": 26.32,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part4_precision_title_card",
-          "startSeconds": 0,
-          "durationSeconds": 5
-        }
+        "01_title_card",
+        "03_precision_cost_ucurve",
+        "04_stat_callout_prompt_compression",
+        "05_split_prompt_detail_vs_tests",
+        "07_spectrum_slider",
+        "10_subtitle_track"
       ]
     },
     {
@@ -149,29 +118,15 @@
       "remotionDir": "S05-CompoundReturns",
       "compositionId": "Part5CompoundReturns",
       "durationSeconds": 98.424,
-      "offsetSeconds": 971.426667,
+      "offsetSeconds": 971.490667,
       "compositions": [
-        {
-          "id": "part5_compound_split_patching_vs_pdd",
-          "startSeconds": 85.86,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part5_compound_stat_callout_cisq",
-          "startSeconds": 32.7,
-          "durationSeconds": 5,
-          "triggerKeyword": "trillion"
-        },
-        {
-          "id": "part5_compound_stat_callout_maintenance",
-          "startSeconds": 18.08,
-          "durationSeconds": 5
-        },
-        {
-          "id": "part5_compound_title_card",
-          "startSeconds": 0,
-          "durationSeconds": 5
-        }
+        "01_title_card",
+        "03_stat_callout_maintenance",
+        "05_stat_callout_cisq",
+        "06_compound_debt_chart",
+        "08_split_patching_vs_pdd",
+        "10_quote_card",
+        "11_subtitle_track"
       ]
     },
     {
@@ -182,24 +137,13 @@
       "remotionDir": "S06-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 21.072,
-      "offsetSeconds": 1069.850667,
+      "offsetSeconds": 1069.914667,
       "compositions": [
-        {
-          "id": "closing_split_darning_vs_molding",
-          "startSeconds": 18.5,
-          "durationSeconds": 5,
-          "triggerKeyword": "mold"
-        },
-        {
-          "id": "closing_stat_callout_roi",
-          "startSeconds": 0,
-          "durationSeconds": 5
-        },
-        {
-          "id": "closing_title_card",
-          "startSeconds": 0,
-          "durationSeconds": 5
-        }
+        "01_title_card",
+        "03_stat_callout_roi",
+        "05_split_darning_vs_molding",
+        "07_cta_card",
+        "08_subtitle_track"
       ]
     }
   ],

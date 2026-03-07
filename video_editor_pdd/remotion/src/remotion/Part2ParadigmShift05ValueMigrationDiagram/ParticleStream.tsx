@@ -36,21 +36,20 @@ export const ParticleStream: React.FC = () => {
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         {Array.from({ length: PARTICLE_COUNT }).map((_, i) => {
-          // Each particle has a staggered phase so they spread across the stream
-          const cycleLength = 90; // frames per full travel
+          const cycleLength = 90; // frames per full upward travel
           const offset = (i / PARTICLE_COUNT) * cycleLength;
           const localFrame = frame - PARTICLES_START;
           const t = ((localFrame + offset) % cycleLength) / cycleLength;
 
-          // y moves from bottom (STREAM_FROM_Y) to top (STREAM_TO_Y)
+          // y: bottom (STREAM_FROM_Y) → top (STREAM_TO_Y)
           const y = STREAM_FROM_Y - t * streamHeight;
 
-          // Sinusoidal wave on x
+          // Sinusoidal wave on x axis
           const x =
             PART_CENTER_X +
             Math.sin(t * Math.PI * 4 + i * 0.7) * PARTICLE_WAVE_AMPLITUDE;
 
-          // Fade in at bottom, fade out at top
+          // Fade in near bottom, fade out near top
           const particleOpacity = interpolate(
             t,
             [0, 0.1, 0.85, 1],

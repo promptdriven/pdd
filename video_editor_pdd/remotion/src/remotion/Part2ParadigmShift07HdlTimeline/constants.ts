@@ -10,7 +10,7 @@ export const PANEL_Y = 700;
 export const PANEL_W = 1400;
 export const PANEL_H = 280;
 export const PANEL_RADIUS = 16;
-export const PANEL_BG = "rgba(15, 23, 42, 0.8)";
+export const PANEL_BG = "rgb(15, 23, 42)";
 
 // Timeline track
 export const TRACK_Y = 810;

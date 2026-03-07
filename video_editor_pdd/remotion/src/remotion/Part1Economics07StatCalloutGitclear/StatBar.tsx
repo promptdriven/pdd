@@ -36,11 +36,11 @@ export const StatBar: React.FC<StatBarProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  // Bar fill: easeOutQuart
+  // Bar fill: easeOutQuart via supported quartic polynomial easing
   const fill = interpolate(frame, [animStart, animEnd], [0, fillTarget], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quart),
+    easing: Easing.out(Easing.poly(4)),
   });
 
   // Counter animate: easeOutCubic

@@ -43,6 +43,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from generate_section_compositions import (
     to_pascal_case,
+    resolve_comp_import,
     load_project_json,
     get_fps,
     generate_section_component,
@@ -1390,3 +1391,103 @@ class TestCompositionTiming:
         root = generate_root_tsx(sections, 30, "")
         assert 'Part1EconomicsStatCalloutGitclear' in root
         assert 'part1-economics-stat-callout-gitclear' in root
+
+
+class TestDigitPrefixedIdentifiers:
+    """Tests for digit-prefixed composition IDs producing valid JS identifiers."""
+
+    def test_resolve_comp_import_prefixes_digit_leading_names(self, tmp_path):
+        """Digit-leading PascalCase names get prefixed with section PascalCase."""
+        remotion_src = str(tmp_path)
+        # Create a PascalCase directory so it resolves
+        (tmp_path / "Part1Economics07StatCalloutGitclear").mkdir()
+        comp_pascal, import_path = resolve_comp_import(
+            "07_stat_callout_gitclear", "part1_economics", remotion_src
+        )
+        assert comp_pascal == "Part1Economics07StatCalloutGitclear"
+        assert import_path == "Part1Economics07StatCalloutGitclear"
+        # Must not start with a digit
+        assert not comp_pascal[0].isdigit()
+
+    def test_resolve_comp_import_kebab_fallback(self, tmp_path):
+        """Falls back to kebab directory if PascalCase directory doesn't exist."""
+        remotion_src = str(tmp_path)
+        (tmp_path / "07-StatCalloutGitclear").mkdir()
+        comp_pascal, import_path = resolve_comp_import(
+            "07_stat_callout_gitclear", "part1_economics", remotion_src
+        )
+        assert comp_pascal == "Part1Economics07StatCalloutGitclear"
+        assert import_path == "07-StatCalloutGitclear"
+
+    def test_resolve_comp_import_no_prefix_for_alpha_leading(self, tmp_path):
+        """Non-digit-leading names are NOT prefixed."""
+        remotion_src = str(tmp_path)
+        comp_pascal, import_path = resolve_comp_import(
+            "cold_open_title_card", "cold_open", remotion_src
+        )
+        assert comp_pascal == "ColdOpenTitleCard"
+        # Should not have double section prefix
+        assert not comp_pascal.startswith("ColdOpenColdOpen")
+
+    def test_root_tsx_no_digit_leading_identifiers(self):
+        """Root.tsx must not contain identifiers starting with digits."""
+        sections = [{
+            "id": "part1_economics",
+            "compositionId": "Part1Economics",
+            "durationSeconds": 100,
+            "compositions": ["07_stat_callout_gitclear", "09_context_degradation_chart"],
+        }]
+        root = generate_root_tsx(sections, 30, "")
+        # No import should have a digit-starting identifier
+        import re
+        imports = re.findall(r'import \{ (\w+) \}', root)
+        for ident in imports:
+            assert not ident[0].isdigit(), f"Invalid JS identifier: {ident}"
+        # Should contain the section-prefixed versions
+        assert "Part1Economics07StatCalloutGitclear" in root
+        assert "Part1Economics09ContextDegradationChart" in root
+
+    def test_section_wrapper_no_digit_leading_identifiers(self):
+        """Section wrapper must not contain identifiers starting with digits."""
+        section = {
+            "id": "part5_compound",
+            "durationSeconds": 50,
+            "compositions": ["08_split_patching_vs_pdd", "10_quote_card"],
+        }
+        tsx = generate_section_component(section, 30)
+        import re
+        imports = re.findall(r'import \{ (\w+) \}', tsx)
+        for ident in imports:
+            assert not ident[0].isdigit(), f"Invalid JS identifier: {ident}"
+        assert "Part5Compound08SplitPatchingVsPdd" in tsx
+        assert "Part5Compound10QuoteCard" in tsx
+
+    def test_duplicate_comp_ids_across_sections_resolved(self):
+        """Same comp_id in different sections gets unique identifiers."""
+        sections = [
+            {
+                "id": "part2_paradigm_shift",
+                "compositionId": "Part2ParadigmShift",
+                "durationSeconds": 100,
+                "compositions": ["11_subtitle_track"],
+            },
+            {
+                "id": "part5_compound",
+                "compositionId": "Part5CompoundReturns",
+                "durationSeconds": 100,
+                "compositions": ["11_subtitle_track"],
+            },
+        ]
+        root = generate_root_tsx(sections, 30, "")
+        assert "Part2ParadigmShift11SubtitleTrack" in root
+        assert "Part5Compound11SubtitleTrack" in root
+
+    def test_script_source_has_digit_check(self):
+        """The script must contain code that checks for digit-prefixed identifiers."""
+        script_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..", "scripts", "generate_section_compositions.py"
+        )
+        with open(script_path, "r") as f:
+            source = f.read()
+        assert "isdigit" in source

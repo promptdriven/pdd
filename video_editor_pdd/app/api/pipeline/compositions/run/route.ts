@@ -1,12 +1,14 @@
 import { NextRequest } from "next/server";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { spawn, execSync } from "child_process";
 
 import { runPipelineStage, registerExecutor } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject, saveProject } from "@/lib/project";
+import { renderStill } from "@/lib/render";
 import type { SseSend } from "@/lib/types";
 
 type SectionComponentEntry = {
@@ -96,11 +98,11 @@ function buildComponentPrompt(baseName: string, outputName: string, spec: string
     : "";
 
   const exportName = toPascalCase(outputName);
-  // Extract NN prefix from baseName (e.g., "01_sock_price_chart" → "01")
-  // Strip prefix before PascalCasing for directory name (e.g., "02-SockPriceChart")
-  const nnMatch = baseName.match(/^(\d{2})_/);
-  const strippedPascal = nnMatch ? toPascalCase(baseName.slice(nnMatch[0].length)) : toPascalCase(baseName);
-  const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : exportName;
+  // Use exportName as directory name to match what Claude Code actually creates.
+  // Previously used NN-PascalName format (e.g., "05-CrossfadeTransition") but Claude
+  // would create section-prefixed dirs (e.g., "ColdOpen05CrossfadeTransition") instead,
+  // causing a mismatch that broke discovery.
+  const dirName = exportName;
 
   return `
 You are Claude Code. Generate a Remotion animation component as a multi-file directory.
@@ -125,6 +127,7 @@ CRITICAL RENDERING REQUIREMENTS:
 - Use an <AbsoluteFill> with a non-black background color (e.g., "#0A1628" dark navy).
 - All animated elements must use bright, high-contrast colors (e.g., white, bright blue #3B82F6, green #22C55E).
 - Every visual element must have explicit width, height, and position.
+- Use only supported Remotion easing APIs. For quartic easing, use Easing.poly(4), NOT Easing.quart.
 - Do NOT import external data files (e.g., JSON word timestamps) that may not exist.
   If subtitles are needed, embed word data inline or skip subtitles.
 - Only import from "remotion" — do not import from other local files in the component directory.
@@ -389,6 +392,61 @@ function toPascalCase(s: string): string {
   return s.replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
 }
 
+function compToRemotionId(compId: string, sectionId: string): string {
+  let pascal = toPascalCase(compId);
+  if (/^\d/.test(pascal)) {
+    pascal = toPascalCase(sectionId) + pascal;
+  }
+  return pascal.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
+}
+
+type ProjectSectionForValidation = {
+  id: string;
+  compositions?: Array<string | { id: string }>;
+};
+
+type ValidationTarget = {
+  componentName: string;
+  sectionId: string;
+  compositionId: string;
+};
+
+function resolveValidationTargets(
+  componentName: string,
+  preferredSectionId: string | undefined,
+  sections: ProjectSectionForValidation[],
+): ValidationTarget[] {
+  const sectionIds = preferredSectionId
+    ? [preferredSectionId]
+    : sections
+        .filter((section) => {
+          const compIds = (section.compositions ?? []).map((comp) =>
+            typeof comp === "string" ? comp : comp.id
+          );
+          return compIds.includes(componentName) || compIds.includes(`${section.id}_${componentName}`);
+        })
+        .map((section) => section.id);
+
+  return sectionIds.map((sid) => ({
+    componentName,
+    sectionId: sid,
+    compositionId: compToRemotionId(componentName, sid),
+  }));
+}
+
+async function validatePreviewComposition(target: ValidationTarget): Promise<void> {
+  const outputPath = path.join(
+    os.tmpdir(),
+    `composition-smoke-${target.compositionId}-${Date.now()}.png`,
+  );
+
+  try {
+    await renderStill(target.compositionId, 30, outputPath);
+  } finally {
+    fs.rmSync(outputPath, { force: true });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Executor registration for compositions stage
 // ---------------------------------------------------------------------------
@@ -474,7 +532,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
     // are generated with section-scoped filenames to avoid collisions.
     const sectionComponents = params.sectionComponents as SectionComponentEntry[] | undefined;
 
-    type WorkItem = { name: string; outputName: string; specDir?: string };
+    type WorkItem = { name: string; outputName: string; specDir?: string; sectionId?: string };
     const workItems: WorkItem[] = [];
 
     if (sectionComponents && sectionComponents.length > 0) {
@@ -489,6 +547,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
             name,
             outputName: alreadyScoped ? name : `${entry.sectionId}_${name}`,
             specDir,
+            sectionId: entry.sectionId,
           });
         }
       }
@@ -499,38 +558,50 @@ registerExecutor("compositions", (params, send: SseSend) => {
           name,
           outputName: alreadyScoped ? name : (sectionId ? `${sectionId}_${name}` : name),
           specDir: sectionSpecDir,
+          sectionId,
         });
       }
     }
 
     const total = workItems.length + wrappers.length || 1;
     let completed = 0;
+    const validatedItems: Array<{ name: string; sectionId?: string }> = [];
 
     // Generate components via Claude Code (or deterministic fallback for _main)
-    for (const item of workItems) {
-      send({ type: "component", name: item.name, status: "generating" });
-      onLog(`[compositions] Generating component: ${item.outputName}`);
+    // Wrap in try-finally so discovery always runs even if generation fails.
+    // This ensures project.json is updated for components that succeeded.
+    let generationError: Error | null = null;
 
-      try {
-        if (item.name.endsWith("_main")) {
-          const spec = findSpecForComponent(item.name, item.specDir);
-          generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
-        } else {
-          const spec = findSpecForComponent(item.name, item.specDir);
-          const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
-          await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
+    try {
+      for (const item of workItems) {
+        send({ type: "component", name: item.name, status: "generating" });
+        onLog(`[compositions] Generating component: ${item.outputName}`);
+
+        try {
+          if (item.name.endsWith("_main")) {
+            const spec = findSpecForComponent(item.name, item.specDir);
+            generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
+          } else {
+            const spec = findSpecForComponent(item.name, item.specDir);
+            const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
+            await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
+          }
+
+          send({ type: "component", name: item.name, status: "done" });
+          validatedItems.push({ name: item.name, sectionId: item.sectionId });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          send({ type: "component", name: item.name, status: "error" });
+          onLog(`[compositions] Error generating ${item.name}: ${msg}`);
+          generationError = err instanceof Error ? err : new Error(String(err));
+          break;
+        } finally {
+          completed++;
+          progressFn?.(Math.round((completed / total) * 100));
         }
-
-        send({ type: "component", name: item.name, status: "done" });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown error";
-        send({ type: "component", name: item.name, status: "error" });
-        onLog(`[compositions] Error generating ${item.name}: ${msg}`);
-        throw err;
-      } finally {
-        completed++;
-        progressFn?.(Math.round((completed / total) * 100));
       }
+    } catch (err) {
+      generationError = err instanceof Error ? err : new Error(String(err));
     }
 
     // Discover generated components per section and populate compositions[]
@@ -564,7 +635,16 @@ registerExecutor("compositions", (params, send: SseSend) => {
           const dirIndex = path.join(REMOTION_SCOPE_DIR, dirName, "index.ts");
           const scopedTsx = path.join(REMOTION_SCOPE_DIR, `${section.id}_${base}.tsx`);
           const flatTsx = path.join(REMOTION_SCOPE_DIR, `${base}.tsx`);
+          // Also check section-prefixed PascalCase directory (e.g., ColdOpen07MonitorGlowOverlay/)
+          let pascalDirIndex: string | null = null;
+          if (nnMatch) {
+            const sectionPascal = toPascalCase(section.id);
+            const fullPascal = `${sectionPascal}${nnMatch[1]}${strippedPascal}`;
+            pascalDirIndex = path.join(REMOTION_SCOPE_DIR, fullPascal, "index.ts");
+          }
           if (fs.existsSync(dirIndex)) {
+            discoveredComponents.push(base);
+          } else if (pascalDirIndex && fs.existsSync(pascalDirIndex)) {
             discoveredComponents.push(base);
           } else if (fs.existsSync(scopedTsx)) {
             discoveredComponents.push(`${section.id}_${base}`);
@@ -641,6 +721,12 @@ registerExecutor("compositions", (params, send: SseSend) => {
       }
     }
 
+    if (generationError) {
+      onLog(
+        "[compositions] Component generation had errors; continuing wrapper/root regeneration for successful components."
+      );
+    }
+
     // Always run the section compositions script to generate/update Root.tsx
     // and section wrapper components from project.json.
     if (wrappers.length > 0) {
@@ -691,6 +777,46 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
     send({ type: "bundle", status: "done" });
     onLog("[compositions] Remotion bundle rebuilt.");
+
+    const freshConfigForValidation = loadProject();
+    const validationTargets = new Map<string, ValidationTarget>();
+    for (const item of validatedItems) {
+      const targets = resolveValidationTargets(
+        item.name,
+        item.sectionId,
+        freshConfigForValidation.sections,
+      );
+      for (const target of targets) {
+        validationTargets.set(`${target.sectionId}:${target.componentName}`, target);
+      }
+    }
+
+    const validationFailures: string[] = [];
+    for (const target of validationTargets.values()) {
+      try {
+        onLog(
+          `[compositions] Validating preview composition: ${target.componentName} (${target.compositionId})`
+        );
+        await validatePreviewComposition(target);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown validation error";
+        validationFailures.push(`${target.componentName}: ${msg}`);
+        send({ type: "component", name: target.componentName, status: "error" });
+        onLog(
+          `[compositions] Validation failed for ${target.componentName}: ${msg}`
+        );
+      }
+    }
+
+    if (validationFailures.length > 0 && !generationError) {
+      generationError = new Error(
+        `Component validation failed: ${validationFailures.join("; ")}`
+      );
+    }
+
+    if (generationError) {
+      throw generationError;
+    }
   };
 });
 
@@ -720,4 +846,3 @@ export async function POST(request: NextRequest): Promise<Response> {
     },
   });
 }
-

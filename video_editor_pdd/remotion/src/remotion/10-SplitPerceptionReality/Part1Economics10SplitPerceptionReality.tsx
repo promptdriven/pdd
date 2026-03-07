@@ -3,11 +3,12 @@ import {
   AbsoluteFill,
   OffthreadVideo,
   staticFile,
+  Sequence,
 } from "remotion";
-import { BG_COLOR } from "./constants";
 import { SplitPanel } from "./SplitPanel";
 import { VerticalDivider } from "./VerticalDivider";
 import { SourceAttribution } from "./SourceAttribution";
+import { BG_COLOR, TOTAL_FRAMES } from "./constants";
 
 export const defaultPart1Economics10SplitPerceptionRealityProps = {};
 
@@ -23,17 +24,22 @@ export const Part1Economics10SplitPerceptionReality: React.FC = () => {
         />
       </AbsoluteFill>
 
-      {/* Left panel — Perception */}
-      <SplitPanel side="left" />
+      {/* Split-screen overlay */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <AbsoluteFill>
+          {/* Left panel — Perception */}
+          <SplitPanel side="left" />
 
-      {/* Divider */}
-      <VerticalDivider />
+          {/* Divider */}
+          <VerticalDivider />
 
-      {/* Right panel — Reality */}
-      <SplitPanel side="right" />
+          {/* Right panel — Reality */}
+          <SplitPanel side="right" />
 
-      {/* Source attribution */}
-      <SourceAttribution />
+          {/* Source attribution */}
+          <SourceAttribution />
+        </AbsoluteFill>
+      </Sequence>
     </AbsoluteFill>
   );
 };

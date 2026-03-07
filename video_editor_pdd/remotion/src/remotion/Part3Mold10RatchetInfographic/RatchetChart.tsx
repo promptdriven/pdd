@@ -9,8 +9,6 @@ import {
   TOTAL_BARS,
   TEST_GREEN,
   TEST_GREEN_70,
-  TEST_GREEN_10,
-  TEST_GREEN_50_GLOW,
   RATCHET_LINE_WIDTH,
   PULSE_START,
   PULSE_PERIOD,
@@ -20,7 +18,7 @@ import {
 export const RatchetChart: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // How many bars are currently visible (1 bar per frame after BARS_START)
+  // How many bars are currently visible (spread evenly across BARS_START→BARS_END)
   const barDuration = BARS_END - BARS_START;
   const barsPerFrame = TOTAL_BARS / barDuration;
   const visibleCount = Math.min(
@@ -30,7 +28,7 @@ export const RatchetChart: React.FC = () => {
 
   if (visibleCount <= 0) return null;
 
-  // Subtle pulse on the line during hold phase
+  // Subtle pulse on the line during hold phase (frame 180-300)
   const pulseOpacity =
     frame >= PULSE_START && frame < FADEOUT_START
       ? 0.85 +
@@ -38,7 +36,7 @@ export const RatchetChart: React.FC = () => {
           Math.sin(((frame - PULSE_START) / PULSE_PERIOD) * Math.PI * 2)
       : 1;
 
-  // Build the stepped ratchet line path
+  // Build the stepped ratchet line path + fill area
   const visibleBars = BAR_DATA.slice(0, visibleCount);
   let linePath = "";
   let fillPath = "";
@@ -79,7 +77,7 @@ export const RatchetChart: React.FC = () => {
         style={{ position: "absolute", top: 0, left: 0 }}
       >
         <defs>
-          {/* Gradient fill below the ratchet line */}
+          {/* Gradient fill below the ratchet line: green 10% at top → transparent at bottom */}
           <linearGradient
             id="ratchetFillGrad"
             x1="0"
@@ -87,11 +85,17 @@ export const RatchetChart: React.FC = () => {
             x2="0"
             y2="1"
           >
-            <stop offset="0%" stopColor={TEST_GREEN} stopOpacity={0.1} />
+            <stop offset="0%" stopColor={TEST_GREEN} stopOpacity={0.15} />
             <stop offset="100%" stopColor={TEST_GREEN} stopOpacity={0} />
           </linearGradient>
-          {/* Glow filter for the ratchet line */}
-          <filter id="ratchetGlow" x="-20%" y="-20%" width="140%" height="140%">
+          {/* Glow filter for the ratchet line: 0 0 8px rgba(34, 197, 94, 0.5) */}
+          <filter
+            id="ratchetGlow"
+            x="-20%"
+            y="-20%"
+            width="140%"
+            height="140%"
+          >
             <feGaussianBlur stdDeviation="4" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
@@ -105,7 +109,7 @@ export const RatchetChart: React.FC = () => {
           <path d={fillPath} fill="url(#ratchetFillGrad)" opacity={0.6} />
         )}
 
-        {/* Test bars */}
+        {/* Test bars — vertical rectangles rising from timeline */}
         {visibleBars.map((bar, i) => {
           // Each bar pops up with easeOutQuad
           const barAppearFrame =
@@ -136,7 +140,7 @@ export const RatchetChart: React.FC = () => {
           );
         })}
 
-        {/* Ratchet stepped line */}
+        {/* Ratchet stepped line — monotonically increasing */}
         {linePath && (
           <path
             d={linePath}

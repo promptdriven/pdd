@@ -37,7 +37,7 @@ export const Starburst: React.FC = () => {
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quart),
+      easing: Easing.out(Easing.poly(4)),
     },
   );
 

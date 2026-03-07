@@ -47,7 +47,7 @@ export const AnimatedBar: React.FC<AnimatedBarProps> = ({
   const currentHeight = targetHeight * growProgress;
   const barY = CHART_Y + CHART_H - currentHeight;
 
-  // Label fade in
+  // Label fade in after bar mostly grown
   const labelOpacity = interpolate(localFrame, [20, 30], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",

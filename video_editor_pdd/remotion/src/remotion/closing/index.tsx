@@ -1,28 +1,26 @@
 import React from "react";
 import { Sequence, Audio, OffthreadVideo, staticFile } from "remotion";
 
-import { ClosingSplitDarningVsMolding } from "../closing_split_darning_vs_molding";
-import { ClosingStatCalloutRoi } from "../closing_stat_callout_roi";
-import { ClosingTitleCard } from "../closing_title_card";
+import { Closing01TitleCard } from "../Closing01TitleCard";
+import { Closing03StatCalloutRoi } from "../Closing03StatCalloutRoi";
+import { Closing05SplitDarningVsMolding } from "../Closing05SplitDarningVsMolding";
+import { Closing07CtaCard } from "../Closing07CtaCard";
+import { Closing08SubtitleTrack } from "../Closing08SubtitleTrack";
 
 export const ClosingSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 1069.850667;
+  const offsetSeconds = 1069.914667;
   const durationSeconds = 21.072;
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("closing/narration.wav")} />
       <OffthreadVideo src={staticFile("veo/closing.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Sequence from={Math.round(18.5 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <ClosingSplitDarningVsMolding />
-      </Sequence>
-      <Sequence from={Math.round(0 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <ClosingStatCalloutRoi />
-      </Sequence>
-      <Sequence from={Math.round(0 * fps)} durationInFrames={Math.ceil(5 * fps)}>
-        <ClosingTitleCard />
-      </Sequence>
+      <Closing01TitleCard />
+      <Closing03StatCalloutRoi />
+      <Closing05SplitDarningVsMolding />
+      <Closing07CtaCard />
+      <Closing08SubtitleTrack />
     </Sequence>
   );
 };

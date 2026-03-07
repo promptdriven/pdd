@@ -66,21 +66,30 @@ export const TitleText: React.FC = () => {
       style={{
         position: "absolute",
         top: TITLE_Y,
-        left: "50%",
-        transform: `translateX(-50%) scale(${scale}) rotateX(${rotateX}deg)`,
-        transformOrigin: "center center",
+        left: 0,
+        right: 0,
+        display: "flex",
+        justifyContent: "center",
+        perspective: 800,
         opacity: fadeIn * fadeOut,
-        fontFamily: "'Inter', sans-serif",
-        fontWeight: TITLE_FONT_WEIGHT,
-        fontSize: TITLE_FONT_SIZE,
-        color: TITLE_COLOR,
-        letterSpacing: TITLE_LETTER_SPACING,
-        textShadow: TITLE_SHADOW,
-        textAlign: "center" as const,
-        whiteSpace: "nowrap" as const,
       }}
     >
-      {TITLE_TEXT}
+      <div
+        style={{
+          transform: `scale(${scale}) rotateX(${rotateX}deg)`,
+          transformOrigin: "center center",
+          fontFamily: "'Inter', sans-serif",
+          fontWeight: TITLE_FONT_WEIGHT,
+          fontSize: TITLE_FONT_SIZE,
+          color: TITLE_COLOR,
+          letterSpacing: TITLE_LETTER_SPACING,
+          textShadow: TITLE_SHADOW,
+          textAlign: "center" as const,
+          whiteSpace: "nowrap" as const,
+        }}
+      >
+        {TITLE_TEXT}
+      </div>
     </div>
   );
 };
