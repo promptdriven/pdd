@@ -509,6 +509,32 @@ Instead of manually writing `architecture.json`, you can point `pdd generate` at
    pdd sync my_module
    ```
 
+### Large PRDs (30+ modules)
+
+For large projects, `pdd generate` automatically detects when the PRD warrants more than ~30 modules and switches to **hierarchical generation**:
+
+1. **Top-level pass**: Identifies 10-15 subsystems (e.g., `api`, `ui`, `lib`, `scripts`)
+2. **Sub-passes**: Each subsystem gets its own focused generation, producing `<subsystem>/architecture.json`
+3. **Global merge**: All sub-architectures are merged into a unified dependency graph
+
+This ensures route-level completeness — every distinct API endpoint, UI page, and utility gets its own module, rather than being collapsed into a single "catch-all" module.
+
+**Directory structure after hierarchical generation:**
+```
+my_project_pdd/
+  architecture.json              <- top-level subsystems + cross-cutting modules
+  api/
+    architecture.json            <- focused: all API route modules
+  ui/
+    architecture.json            <- focused: all UI component modules
+  lib/
+    architecture.json            <- shared utilities
+  .pddrc
+  prompts/*.prompt
+```
+
+Cross-subsystem dependencies use the `<subsystem>/` path prefix (e.g., `api/auth_route_python.prompt`) to reference modules in other subsystems within the same project.
+
 ### Resuming a Failed Run
 
 If the workflow stops (e.g., PRD needs clarification):

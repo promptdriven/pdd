@@ -503,3 +503,15 @@ PDD now includes auth-aware detection and scaffolding across the pipeline:
 2. Add Pattern 14 fixtures from `context/test.prompt` to your test files
 3. Ensure auth modules use dependency injection (injectable OAuth client, injectable token verifier)
 4. Re-run `pdd sync` on auth modules to regenerate tests with auth-aware patterns
+
+---
+
+## Q: My PRD has 70+ modules. Will `pdd generate` miss some?
+
+For large PRDs, `pdd generate` uses **hierarchical architecture generation**. Instead of asking one LLM call to enumerate all modules (which predictably collapses sub-routes), it:
+
+1. Identifies top-level subsystems (api, ui, lib, etc.)
+2. Runs a focused generation pass per subsystem
+3. Merges everything into a unified dependency graph
+
+This ensures every distinct API route, UI component, and utility gets its own module. The threshold is configurable but defaults to ~30 modules.

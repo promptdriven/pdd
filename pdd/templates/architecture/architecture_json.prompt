@@ -91,7 +91,7 @@ output_schema:
       interface:
         type: object
         properties:
-          type: { type: string, enum: [component, page, module, api, graphql, cli, job, message, config] }
+          type: { type: string, enum: [component, page, module, api, graphql, cli, job, message, config, subsystem] }
           component: { type: object }
           page:
             type: object
@@ -130,6 +130,13 @@ output_schema:
           job: { type: object }
           message: { type: object }
           config: { type: object }
+          subsystem:
+            type: object
+            required: [sub_architecture_dir, scope]
+            properties:
+              sub_architecture_dir: { type: string }
+              scope: { type: string }
+              max_modules: { type: integer }
       entryPoints:
         type: array
         items:
@@ -235,6 +242,9 @@ INTERFACE TYPES (emit only applicable):
 - job: trigger {schedule? | event?}, inputs? (array), outputs? (array), retryPolicy? (string)
 - message: topics (array of {name, direction: "publish"|"subscribe", schema?, qos?})
 - config: keys (array of {name, type, default?, required?, source: "env"|"file"|"secret"})
+- subsystem: sub_architecture_dir (string, target directory for sub-architecture.json),
+  scope (string, description of what PRD sections this subsystem covers),
+  max_modules? (integer, expected module count hint)
 
 FRAMEWORK DETECTION (do this first):
 Before generating architecture, detect the framework from PRD/tech stack:
@@ -355,5 +365,8 @@ CONTENT GUIDANCE:
 - Descriptions must be architectural and actionable: responsibilities, interfaces, error handling, cross-cutting concerns.
 - For API items, outline endpoints (method, path, auth) and high-level request/response shapes.
 - For page/component items, include the route, key props, and data sources.
+- For subsystem items, specify the scope (which PRD sections/features it covers) and
+  the sub_architecture_dir (where its architecture.json will be generated). Subsystem
+  entries do NOT have filepath — they produce a sub-architecture.json, not code.
 
 DO NOT INCLUDE the schema or these conventions in the output; return only the JSON array.

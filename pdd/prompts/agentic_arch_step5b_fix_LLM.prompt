@@ -62,8 +62,17 @@ This is a TEXT-ONLY step. Do NOT run bash commands or create files on disk. You 
    - **Filename**: Follow PDD convention `<base>_<LangOrFramework>.prompt`
    - **Filepath**: Use framework-appropriate path from Step 3 research
    - **Dependencies**: List modules this new module depends on
-   - **Interface type**: api/module/page/component/config
+   - **Interface type**: api/module/page/component/config/subsystem
    - **Description**: What this module implements
+
+   **When adding subsystems to fix scale issues:** If the completeness errors indicate
+   too many modules are being designed in a single pass (or many routes are being collapsed),
+   consider grouping related modules into subsystem entries instead of listing every module:
+   - Create a `type: "subsystem"` entry with appropriate `scope` covering the missing requirements
+   - Move related existing modules into the subsystem's scope description
+   - Keep cross-cutting modules (auth, config, types) at the top level
+   - Update dependencies: other top-level modules that depend on subsystem-internal modules
+     should depend on the subsystem entry instead
 
    **For wiring gaps specifically, apply these fix templates:**
 

@@ -79,6 +79,15 @@ If ANY modules: NO → Strategy A
 If mixed: Use Strategy A for non-derivable modules, Strategy B for derivable groups
 ```
 
+**Subsystem entries:** If architecture.json contains entries with `interface.type: "subsystem"`,
+these entries do NOT need their own .pddrc context entries. They represent future sub-architectures
+that will generate their own .pddrc contexts when expanded by the orchestrator.
+Skip subsystem entries when building context mappings. Only process entries with actual
+`filepath` values pointing to code files.
+
+However, if the existing .pddrc already contains contexts for subsystem directories
+(from a previous expansion), preserve them during merge.
+
 % ============================================================================
 % STRATEGY A: Per-Module Exact Paths (Next.js/Nuxt/SvelteKit)
 % ============================================================================

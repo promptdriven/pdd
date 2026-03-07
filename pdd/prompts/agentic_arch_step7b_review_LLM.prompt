@@ -97,6 +97,17 @@ Check for modules with overlapping responsibility:
 - Modules with very similar names but different implementations
 - If duplicates found, merge them into one module
 
+**7. Subsystem Entry Validation**
+
+If architecture.json contains entries with `interface.type: "subsystem"`:
+- Verify `sub_architecture_dir` is a valid directory path (ends with `/`)
+- Verify `scope` is non-empty and references specific PRD sections
+- Verify subsystem entries do NOT have a `filepath` pointing to a code file
+- Verify no two subsystems have overlapping scopes
+- Verify cross-cutting modules (auth, config, shared types) are NOT inside subsystems
+- Verify subsystem entries participate correctly in the dependency graph
+  (other modules can depend on them, and they can depend on top-level modules)
+
 % Output
 
 After completing your review:
