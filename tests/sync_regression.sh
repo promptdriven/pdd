@@ -1133,6 +1133,102 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
     fi
 fi
 
+# 11. Hello World End-to-End (agentic sync pipeline)
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "11" ]; then
+    log "11. Testing hello world end-to-end agentic sync pipeline"
+
+    # Clean any previous hello artifacts and metadata
+    rm -f "src/hello.py" "tests/test_hello.py" "examples/hello_example.py"
+    rm -f "$SYNC_META_DIR/hello_python.json" "$SYNC_META_DIR/hello_python_run.json"
+    rm -f "$SYNC_META_DIR/hello_python_sync.log"
+
+    # Create the hello prompt (matches examples/hello/hello_python.prompt)
+    cat << 'HELLO_EOF' > "prompts/hello_python.prompt"
+write a python function 'hello' that prints "hello"
+HELLO_EOF
+
+    # Run full agentic sync pipeline
+    log "11a. Running pdd sync hello --agentic"
+    if run_pdd_command sync --agentic --budget 5.0 --max-attempts 3 --context regression_pdd "hello"; then
+        log "Validation success: hello world agentic sync completed"
+    else
+        log_error "Validation failed: hello world agentic sync"
+        exit 1
+    fi
+
+    # Verify code file was generated
+    log "11b. Checking generated code file"
+    check_sync_files "hello" "python" false
+
+    # Verify test file was generated
+    log "11c. Checking generated test file"
+    if [ -f "tests/test_hello.py" ] && [ -s "tests/test_hello.py" ]; then
+        log "Validation success: test_hello.py exists and is not empty"
+    else
+        log_error "Validation failed: test_hello.py not found or empty"
+        exit 1
+    fi
+
+    # Run the generated tests
+    log "11d. Running generated tests"
+    if PYTHONPATH="src:${PYTHONPATH:-}" python -m pytest "tests/test_hello.py" --rootdir . -v >> "$LOG_FILE" 2>&1; then
+        log "Validation success: hello world generated tests passed"
+    else
+        log_error "Validation failed: hello world generated tests did not pass"
+        exit 1
+    fi
+
+    log "Hello world end-to-end agentic sync test PASSED"
+fi
+
+# 12. Hello World End-to-End (one-session agentic sync pipeline)
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "12" ]; then
+    log "12. Testing hello world end-to-end one-session agentic sync pipeline"
+
+    # Clean any previous hello artifacts and metadata
+    rm -f "src/hello.py" "tests/test_hello.py" "examples/hello_example.py"
+    rm -f "$SYNC_META_DIR/hello_python.json" "$SYNC_META_DIR/hello_python_run.json"
+    rm -f "$SYNC_META_DIR/hello_python_sync.log"
+
+    # Create the hello prompt (matches examples/hello/hello_python.prompt)
+    cat << 'HELLO_EOF' > "prompts/hello_python.prompt"
+write a python function 'hello' that prints "hello"
+HELLO_EOF
+
+    # Run full one-session agentic sync pipeline
+    log "12a. Running pdd sync hello --agentic --one-session"
+    if run_pdd_command sync --agentic --one-session --budget 5.0 --max-attempts 3 --context regression_pdd "hello"; then
+        log "Validation success: hello world one-session agentic sync completed"
+    else
+        log_error "Validation failed: hello world one-session agentic sync"
+        exit 1
+    fi
+
+    # Verify code file was generated
+    log "12b. Checking generated code file"
+    check_sync_files "hello" "python" false
+
+    # Verify test file was generated
+    log "12c. Checking generated test file"
+    if [ -f "tests/test_hello.py" ] && [ -s "tests/test_hello.py" ]; then
+        log "Validation success: test_hello.py exists and is not empty"
+    else
+        log_error "Validation failed: test_hello.py not found or empty"
+        exit 1
+    fi
+
+    # Run the generated tests
+    log "12d. Running generated tests"
+    if PYTHONPATH="src:${PYTHONPATH:-}" python -m pytest "tests/test_hello.py" --rootdir . -v >> "$LOG_FILE" 2>&1; then
+        log "Validation success: hello world one-session generated tests passed"
+    else
+        log_error "Validation failed: hello world one-session generated tests did not pass"
+        exit 1
+    fi
+
+    log "Hello world end-to-end one-session agentic sync test PASSED"
+fi
+
 # --- Final Summary ---
 log_timestamped "======== Sync Regression Tests Completed (Target: $TARGET_TEST) ========"
 log "----------------------------------------"
@@ -1176,6 +1272,8 @@ log "- Complex scenarios: TESTED"
 log "- Error handling: TESTED"
 log "- Context integration: TESTED"
 log "- Performance and concurrency: TESTED"
+log "- Hello world E2E agentic sync: TESTED"
+log "- Hello world E2E one-session agentic sync: TESTED"
 log "========================================="
 
 cd .. # Return to original directory
