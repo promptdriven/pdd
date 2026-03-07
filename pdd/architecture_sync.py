@@ -17,6 +17,60 @@ from typing import Any, Dict, List, Optional
 
 from lxml import etree
 
+from .architecture_sync_helper import filepath_to_prompt_filename
+
+# --- Issue #617: filename mirrors filepath ---
+
+# Extension (with dot, lowercased) -> PascalCase language for architecture.json
+_EXT_TO_LANGUAGE: Dict[str, str] = {
+    ".py": "Python",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScriptReact",
+    ".js": "JavaScript",
+    ".jsx": "JavaScriptReact",
+    ".prisma": "Prisma",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".java": "Java",
+    ".rb": "Ruby",
+    ".php": "PHP",
+    ".swift": "Swift",
+    ".kt": "Kotlin",
+    ".cs": "C#",
+    ".sql": "SQL",
+    ".html": "HTML",
+    ".css": "CSS",
+    ".scala": "Scala",
+    ".cpp": "C++",
+    ".c": "C",
+    ".sh": "Shell",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+    ".json": "JSON",
+    ".md": "Markdown",
+}
+
+
+def _language_from_filepath(filepath: str) -> str:
+    """Infer PascalCase language from output filepath extension (Issue #617)."""
+    ext = Path(filepath).suffix.lower()
+    if ext and ext.startswith("."):
+        return _EXT_TO_LANGUAGE.get(ext, "Python")  # safe default
+    return "Python"
+
+
+def normalize_architecture_filenames(arch_data: List[Dict[str, Any]]) -> None:
+    """
+    Set each module's filename from filepath so it mirrors directory structure (Issue #617).
+    Mutates arch_data in place. Use after parsing architecture.json from LLM or template.
+    """
+    for entry in arch_data:
+        filepath = entry.get("filepath")
+        if not filepath or not isinstance(filepath, str):
+            continue
+        language = _language_from_filepath(filepath)
+        entry["filename"] = filepath_to_prompt_filename(filepath, language)
+
 
 # --- Constants ---
 # Use Path.cwd() instead of __file__ so it works with the user's project directory,
