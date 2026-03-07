@@ -19,15 +19,15 @@ Orchestrator for the agentic architecture workflow. Runs each step as a separate
 2. Return 5-tuple: (success, final_message, total_cost, model_used, output_files)
 3. Accumulate step outputs as context for subsequent steps; track total cost.
 4. `base_dir = cwd / target_dir` if target_dir else cwd (create if needed).
-5. Support fractional step resume logic (e.g., 1.5, 2.5, 5.5, 7.5, 9.5).
+5. Support fractional step resume logic (e.g., 1.5, 2.5, 5.5, 7.5, 8.5, 9.5, 9.7).
 6. Validation failures in steps 10-12 must block final success (return False).
 
 % Per-Step Timeouts
 ```python
 ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
-    1: 340.0, 1.5: 340.0, 2: 340.0, 2.5: 340.0, 3: 600.0, 4: 600.0, 5: 600.0, 
-    5.5: 600.0, 6: 600.0, 7: 1000.0, 7.5: 340.0, 8: 600.0, 9: 900.0, 
-    9.5: 600.0, 10: 340.0, 11: 600.0, 12: 600.0, 13: 900.0
+    1: 340.0, 1.5: 340.0, 2: 340.0, 2.5: 340.0, 3: 600.0, 4: 600.0, 5: 600.0,
+    5.5: 600.0, 6: 600.0, 7: 1000.0, 7.5: 340.0, 8: 600.0, 8.5: 600.0, 9: 900.0,
+    9.5: 600.0, 9.7: 600.0, 10: 340.0, 11: 600.0, 12: 600.0, 13: 900.0
 }
 ```
 
@@ -46,8 +46,10 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 | 7 | agentic_arch_step7_generate_LLM | Generate architecture.json and scaffolding files |
 | 7b | agentic_arch_step7b_review_LLM | Architecture self-review (naming, deps, priority) |
 | 8 | agentic_arch_step8_pddrc_LLM | Generate and validate .pddrc configuration |
+| 8.5 | agentic_arch_step8_5_context_docs_LLM | Generate/update shared context documents (data dictionary, API contracts, integration points) |
 | 9 | agentic_arch_step9_prompts_LLM | Generate prompt files (skipped if skip_prompts) |
 | 9b | agentic_arch_step9b_cross_audit_LLM | Cross-file consistency audit for identifiers |
+| 9c | cross_issue_reconcile_LLM | Cross-sub-issue reconciliation (only when related_issues present) |
 | 10 | agentic_arch_step10_completeness_LLM | Validate architecture completeness |
 | 11 | agentic_arch_step11_sync_LLM | Validate sync configuration |
 | 12 | agentic_arch_step12_deps_LLM | Validate prompt dependencies |
@@ -63,11 +65,13 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 8. **Step 7 (Generation)**: Detect no-ops via MD5 hash of `architecture.json`. Parse `FILES_CREATED:`. If `existing_architecture` exists, snapshot it before Step 7; after Step 7, call `merge_architecture` to merge new modules with existing, write merged result, and scope `step7_output` to only new/updated modules. Call `record_generation` to record in architecture registry.
 9. **Step 7b (Self-Review)**: If `REVIEW_RESULT: FIXED`, re-read `architecture.json` into context.
 10. **Step 8 (.pddrc)**: After generation, call `_ensure_pddrc_contexts_preserved` to restore any contexts the LLM dropped from existing `.pddrc`. If `target_dir` is set, detect and remove stray `.pddrc` from the subdirectory (move to root if root is missing, else delete).
-11. **Step 9b (Consistency Audit)**: If `AUDIT_RESULT: INCONSISTENT`, parse `FILES_MODIFIED:` and update `prompt_files`.
-12. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
-13. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
-14. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
-15. **Step Completion Marker**: After each successful step, print `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
+11. **Step 8.5 (Context Docs)**: Before running, read existing `prompts/_context/*.yaml` files (`data_dictionary.yaml`, `api_contracts.yaml`, `integration_points.yaml`) from `base_dir` and inject their content into context as `existing_context_docs`. The LLM merges updates into existing docs rather than regenerating from scratch. After generation, verify `data_dictionary.yaml` exists on disk. Runs only when `not skip_prompts` and `last_completed_step >= 8` and `< 8.5`.
+12. **Step 9b (Consistency Audit)**: If `AUDIT_RESULT: INCONSISTENT`, parse `FILES_MODIFIED:` and update `prompt_files`.
+13. **Step 9c (Cross-Sub-Issue Reconciliation)**: Runs only when `related_issues` is present and `last_completed_step >= 9.5` and `< 9.7`. If `RECONCILE_RESULT: CONFLICTS_FIXED`, parse `FILES_MODIFIED:` and update `prompt_files`. If no `related_issues`, skip cleanly by advancing `last_completed_step` to 9.7.
+14. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
+15. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
+16. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
+17. **Step Completion Marker**: After each successful step, print `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
 
 % Dependencies
 <agentic_common>

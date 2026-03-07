@@ -50,7 +50,7 @@ except ImportError:
     HAS_MERMAID = False
 
 # Initialize console for rich output
-console = Console()
+console = Console(width=120)
 
 # Per-Step Timeouts (Workflow specific)
 ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
@@ -1186,6 +1186,23 @@ def run_agentic_architecture_orchestrator(
         and state.get("last_completed_step", 0) >= 8
         and state.get("last_completed_step", 0) < 8.5
     ):
+        # Read existing context docs so the LLM can merge rather than regenerate
+        existing_ctx_parts = []
+        ctx_dir = base_dir / "prompts" / "_context"
+        for ctx_filename in ("data_dictionary.yaml", "api_contracts.yaml", "integration_points.yaml"):
+            ctx_file = ctx_dir / ctx_filename
+            if ctx_file.exists():
+                try:
+                    with open(ctx_file, "r", encoding="utf-8") as f:
+                        existing_ctx_parts.append(f"--- {ctx_filename} ---\n{f.read()}")
+                except OSError as e:
+                    if not quiet:
+                        console.print(f"[yellow]Warning: Failed to read existing context doc {ctx_filename}: {e}[/yellow]")
+        if existing_ctx_parts:
+            context["existing_context_docs"] = "\n\n".join(existing_ctx_parts)
+        else:
+            context["existing_context_docs"] = ""
+
         if not quiet:
             console.print(f"[bold][Step 8.5/{TOTAL_STEPS}][/bold] Generating shared context documents...")
 
@@ -1230,7 +1247,7 @@ def run_agentic_architecture_orchestrator(
                     console.print(f"   → Context documents created: {len(verified_ctx)}")
 
             # Verify key context file exists
-            data_dict_path = cwd / "prompts" / "_context" / "data_dictionary.yaml"
+            data_dict_path = base_dir / "prompts" / "_context" / "data_dictionary.yaml"
             if data_dict_path.exists():
                 if not quiet:
                     console.print("   → Data dictionary verified ✓")

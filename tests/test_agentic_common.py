@@ -11,6 +11,7 @@ from pdd.agentic_common import (
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
+    _extract_json_from_output,
     _find_cli_binary,
     _log_agentic_interaction,
     ANTHROPIC_PRICING_BY_FAMILY,
@@ -3751,3 +3752,79 @@ def test_pdd_output_cost_path_stripped_from_subprocess_env(mock_cwd, mock_env, m
     args, kwargs = mock_subprocess.call_args
     env_passed = kwargs["env"]
     assert "PDD_OUTPUT_COST_PATH" not in env_passed
+
+
+# ---------------------------------------------------------------------------
+# _extract_json_from_output
+# ---------------------------------------------------------------------------
+
+
+class TestExtractJsonFromOutput:
+    """Tests for _extract_json_from_output — robust JSON extraction from
+    Claude Code stdout that may contain non-JSON noise."""
+
+    def test_clean_json(self):
+        """Clean single-line JSON parses directly."""
+        raw = '{"result": "done", "total_cost_usd": 0.05}'
+        assert _extract_json_from_output(raw) == {
+            "result": "done",
+            "total_cost_usd": 0.05,
+        }
+
+    def test_json_preceded_by_npm_warnings(self):
+        """JSON preceded by npm warnings is extracted correctly."""
+        raw = (
+            "npm warn deprecated some-pkg@1.0.0: use newer version\n"
+            "npm warn deprecated other-pkg@2.0.0: deprecated\n"
+            '{"result": "success", "total_cost_usd": 1.23}'
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "success"
+        assert data["total_cost_usd"] == 1.23
+
+    def test_json_followed_by_extra_text(self):
+        """JSON followed by trailing text is extracted correctly."""
+        raw = (
+            '{"result": "ok", "total_cost_usd": 0.50}\n'
+            "Update available: 1.2.3 -> 1.3.0\n"
+            "Run `npm update` to update"
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "ok"
+        assert data["total_cost_usd"] == 0.50
+
+    def test_json_surrounded_by_noise(self):
+        """JSON surrounded by non-JSON text on separate lines."""
+        raw = (
+            "Starting Claude Code...\n"
+            "Warning: something\n"
+            '{"result": "done", "cost": 2.0}\n'
+            "Goodbye"
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "done"
+
+    def test_multiline_json_via_brace_fallback(self):
+        """Multi-line JSON object extracted via brace-depth matching fallback."""
+        raw = (
+            "npm warn foo\n"
+            "{\n"
+            '  "result": "ok",\n'
+            '  "total_cost_usd": 0.75\n'
+            "}\n"
+            "done"
+        )
+        data = _extract_json_from_output(raw)
+        assert data["result"] == "ok"
+        assert data["total_cost_usd"] == 0.75
+
+    def test_no_json_raises_error(self):
+        """No JSON at all raises JSONDecodeError."""
+        raw = "just some random text\nno json here"
+        with pytest.raises(json.JSONDecodeError):
+            _extract_json_from_output(raw)
+
+    def test_empty_string_raises_error(self):
+        """Empty string raises JSONDecodeError."""
+        with pytest.raises(json.JSONDecodeError):
+            _extract_json_from_output("")

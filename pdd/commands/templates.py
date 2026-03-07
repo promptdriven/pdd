@@ -20,7 +20,9 @@ def _echo_rich(*renderables):
     c = Console(file=buf, highlight=False, force_terminal=False, theme=custom_theme, width=120)
     for r in renderables:
         c.print(r)
-    click.echo(buf.getvalue(), nl=False)
+    text = buf.getvalue()
+    if text:
+        click.echo(text, nl=False)
 
 @click.group(name="templates")
 def templates_group():
