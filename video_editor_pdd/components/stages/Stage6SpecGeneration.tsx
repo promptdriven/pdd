@@ -3,6 +3,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import {
+  extractNarrationSyncQuotes,
+  findMatchingScriptSection,
+  parseScriptSections,
+  scriptLineMatchesNarration,
+} from '@/lib/spec-script-context';
 import { readSseStartResult } from '../../lib/client/sse-utils';
 import { SseLogPanel } from '../SseLogPanel';
 
@@ -25,6 +31,10 @@ type SpecSection = {
 
 type SpecListResponse = {
   sections: SpecSection[];
+};
+
+type ScriptResponse = {
+  content?: string;
 };
 
 type BadgeInfo = {
@@ -54,10 +64,19 @@ const badgeFromFirstLine = (line?: string): BadgeInfo | null => {
   return null;
 };
 
+const scriptKindClasses: Record<string, string> = {
+  visual: 'border-teal-700 bg-teal-900/40 text-teal-200',
+  narrator: 'border-blue-700 bg-blue-900/40 text-blue-200',
+  text: 'border-slate-700 bg-slate-800 text-slate-300',
+};
+
 export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAdvance }) => {
   const [sections, setSections] = useState<SpecSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [scriptContent, setScriptContent] = useState('');
+  const [scriptLoading, setScriptLoading] = useState(true);
+  const [scriptError, setScriptError] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     if (typeof window === 'undefined') return {};
@@ -109,6 +128,36 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   useEffect(() => {
     fetchSpecList();
   }, [fetchSpecList]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchScript = async () => {
+      try {
+        setScriptLoading(true);
+        const res = await fetch('/api/project/script');
+        if (!res.ok) throw new Error(`Failed to fetch script: ${res.status}`);
+        const data = (await res.json()) as ScriptResponse;
+        if (!isMounted) return;
+        setScriptContent(data.content ?? '');
+        setScriptError(null);
+      } catch (err) {
+        if (!isMounted) return;
+        setScriptContent('');
+        setScriptError((err as Error).message);
+      } finally {
+        if (isMounted) {
+          setScriptLoading(false);
+        }
+      }
+    };
+
+    fetchScript();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Persist expanded state
   useEffect(() => {
@@ -206,6 +255,42 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   const editorTitle = useMemo(() => {
     return selectedFile ? `Editing: ${selectedFile.path}` : 'Select a spec file to edit';
   }, [selectedFile]);
+
+  const selectedSection = useMemo(() => {
+    return sections.find((section) => section.id === selectedSectionId) ?? null;
+  }, [sections, selectedSectionId]);
+
+  const parsedScriptSections = useMemo(() => {
+    return parseScriptSections(scriptContent);
+  }, [scriptContent]);
+
+  const selectedScriptSection = useMemo(() => {
+    if (!selectedSection) return null;
+    return findMatchingScriptSection(parsedScriptSections, selectedSection);
+  }, [parsedScriptSections, selectedSection]);
+
+  const narrationSyncQuotes = useMemo(() => {
+    return extractNarrationSyncQuotes(editorValue);
+  }, [editorValue]);
+
+  const selectedScriptHeading = useMemo(() => {
+    if (selectedScriptSection) return selectedScriptSection.heading;
+    if (selectedSection) return selectedSection.label;
+    return 'No section selected';
+  }, [selectedScriptSection, selectedSection]);
+
+  const isHighlightedScriptLine = useCallback(
+    (lineIndex: number) => {
+      if (!selectedScriptSection) return false;
+      const line = selectedScriptSection.lines[lineIndex];
+      if (!line) return false;
+      if (scriptLineMatchesNarration(line, narrationSyncQuotes)) return true;
+      if (line.kind !== 'narrator') return false;
+      const nextLine = selectedScriptSection.lines[lineIndex + 1];
+      return nextLine ? scriptLineMatchesNarration(nextLine, narrationSyncQuotes) : false;
+    },
+    [narrationSyncQuotes, selectedScriptSection]
+  );
 
   return (
     <div className="w-full space-y-6">
@@ -320,20 +405,99 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                   ref={editorContainerRef}
                                   className="rounded border border-slate-700 bg-slate-800 p-3"
                                 >
-                                  <div className="mb-2 flex items-center justify-between">
+                                  <div className="mb-3 flex items-center justify-between gap-3">
                                     <div className="text-sm font-medium">{editorTitle}</div>
                                     {saving && <div className="text-xs text-slate-400">Saving…</div>}
                                   </div>
-                                  <CodeMirror
-                                    value={editorValue}
-                                    height="240px"
-                                    extensions={[markdown()]}
-                                    onChange={(value) => setEditorValue(value)}
-                                    onBlur={handleEditorBlur}
-                                    basicSetup={{ lineNumbers: true }}
-                                    theme="dark"
-                                  />
-                                  {editorLoading && <div className="mt-2 text-xs text-slate-400">Loading file…</div>}
+                                  <div className="grid gap-3 lg:grid-cols-2">
+                                    <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60">
+                                      <div className="border-b border-slate-700 px-3 py-2">
+                                        <div className="text-sm font-medium text-slate-100">Script Context</div>
+                                        <div className="text-xs text-slate-400">{selectedScriptHeading}</div>
+                                      </div>
+                                      <div className="space-y-3 p-3">
+                                        <div className="text-xs text-slate-400">
+                                          Highlighted lines come from the spec&apos;s Narration Sync quote.
+                                        </div>
+
+                                        {narrationSyncQuotes.length > 0 ? (
+                                          <div className="flex flex-wrap gap-2">
+                                            {narrationSyncQuotes.map((quote) => (
+                                              <span
+                                                key={quote}
+                                                className="rounded border border-amber-700 bg-amber-900/30 px-2 py-1 text-[11px] text-amber-200"
+                                              >
+                                                &quot;{quote}&quot;
+                                              </span>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <div className="text-xs text-slate-500">
+                                            No Narration Sync quote found in this spec.
+                                          </div>
+                                        )}
+
+                                        <div className="max-h-[320px] space-y-1 overflow-y-auto">
+                                          {scriptLoading && (
+                                            <div className="text-sm text-slate-400">Loading script…</div>
+                                          )}
+                                          {!scriptLoading && scriptError && (
+                                            <div className="text-sm text-red-400">
+                                              Script unavailable: {scriptError}
+                                            </div>
+                                          )}
+                                          {!scriptLoading && !scriptError && !selectedScriptSection && (
+                                            <div className="text-sm text-slate-400">
+                                              No matching script section found.
+                                            </div>
+                                          )}
+                                          {!scriptLoading &&
+                                            !scriptError &&
+                                            selectedScriptSection?.lines.map((line, lineIndex) => {
+                                              const isHighlighted = isHighlightedScriptLine(lineIndex);
+                                              return (
+                                                <div
+                                                  key={`${line.lineNumber}-${line.rawText}`}
+                                                  className={`grid grid-cols-[auto_auto_1fr] gap-3 rounded px-2 py-1 ${
+                                                    isHighlighted
+                                                      ? 'bg-amber-500/10 ring-1 ring-amber-500/40'
+                                                      : 'bg-transparent'
+                                                  }`}
+                                                >
+                                                  <span className="w-8 text-right font-mono text-[11px] text-slate-500">
+                                                    {line.lineNumber}
+                                                  </span>
+                                                  <span
+                                                    className={`inline-flex h-5 items-center rounded border px-1.5 text-[10px] uppercase tracking-wide ${
+                                                      scriptKindClasses[line.kind]
+                                                    }`}
+                                                  >
+                                                    {line.kind}
+                                                  </span>
+                                                  <span className="min-w-0 whitespace-pre-wrap font-mono text-xs text-slate-200">
+                                                    {line.text}
+                                                  </span>
+                                                </div>
+                                              );
+                                            })}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60 p-3">
+                                      <div className="mb-2 text-sm font-medium text-slate-100">Visual Spec</div>
+                                      <CodeMirror
+                                        value={editorValue}
+                                        height="320px"
+                                        extensions={[markdown()]}
+                                        onChange={(value) => setEditorValue(value)}
+                                        onBlur={handleEditorBlur}
+                                        basicSetup={{ lineNumbers: true }}
+                                        theme="dark"
+                                      />
+                                      {editorLoading && <div className="mt-2 text-xs text-slate-400">Loading file…</div>}
+                                    </div>
+                                  </div>
                                 </div>
                               </td>
                             </tr>

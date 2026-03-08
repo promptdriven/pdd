@@ -764,7 +764,7 @@ describe("inline CodeMirror editor", () => {
   });
 
   it("sets editor height", () => {
-    expect(sourceCode).toMatch(/height="240px"/);
+    expect(sourceCode).toMatch(/height="320px"/);
   });
 });
 
