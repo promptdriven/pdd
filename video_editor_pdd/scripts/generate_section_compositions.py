@@ -86,6 +86,60 @@ def load_project_json(project_dir: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def resolve_section_base_component(
+    section: Dict[str, Any],
+    remotion_src: str,
+) -> Optional[tuple[str, str]]:
+    """Resolve an authored section-level component to delegate wrapper rendering.
+
+    Priority order:
+    1. Section-local composition file: {section_id}/{compositionId}.tsx
+    2. Section-local wrapper-named file: {section_id}/{SectionPascal}Section.tsx
+    3. Top-level composition file: {compositionId}.tsx
+    4. Top-level wrapper-named file: {SectionPascal}Section.tsx
+
+    Section-local files take precedence because they contain the authored timing
+    logic for the full section. Falling back to top-level files preserves the
+    prior "flat section file" behavior for Claude-generated outputs.
+    """
+    if not remotion_src:
+        return None
+
+    section_id = section['id']
+    section_pascal = to_pascal_case(section_id)
+    component_name = f'{section_pascal}Section'
+    composition_id = section.get('compositionId', component_name)
+
+    candidates = [
+        (
+            composition_id,
+            os.path.join(remotion_src, section_id, f'{composition_id}.tsx'),
+            f'./{composition_id}',
+        ),
+        (
+            component_name,
+            os.path.join(remotion_src, section_id, f'{component_name}.tsx'),
+            f'./{component_name}',
+        ),
+        (
+            composition_id,
+            os.path.join(remotion_src, f'{composition_id}.tsx'),
+            f'../{composition_id}',
+        ),
+        (
+            component_name,
+            os.path.join(remotion_src, f'{component_name}.tsx'),
+            f'../{component_name}',
+        ),
+    ]
+
+    for export_name, abs_path, import_path in candidates:
+        if os.path.isfile(abs_path):
+            return (export_name, import_path)
+
+    return None
+
+
 def get_fps(project_data: Dict[str, Any]) -> int:
     """Extract FPS from project.json render config, defaulting to 30."""
     render_config = project_data.get('render', {})
@@ -100,9 +154,10 @@ def generate_section_component(
 ) -> str:
     """Generate the TSX source code for a section wrapper component.
 
-    When a Claude-generated flat section file ({ComponentName}.tsx) exists in
-    remotion_src, the wrapper delegates to it (imports as Base) and only adds
-    sub-compositions on top.  Otherwise renders its own Audio/Video.
+    When an authored section-level composition exists, the wrapper delegates to
+    it and does not re-mount child compositions on top. This avoids double-
+    rendering the full section, which otherwise causes every animation layer to
+    appear simultaneously over the Veo clip.
     """
     section_id = section['id']
     pascal_name = to_pascal_case(section_id)
@@ -111,16 +166,13 @@ def generate_section_component(
     offset_seconds = section.get('offsetSeconds', 0)
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
 
-    # Check for flat section file to delegate to
-    has_flat_file = False
-    if remotion_src:
-        flat_file_path = os.path.join(remotion_src, f'{component_name}.tsx')
-        has_flat_file = os.path.isfile(flat_file_path)
+    base_component = resolve_section_base_component(section, remotion_src)
+    has_base_component = base_component is not None
 
     # Detect available assets in remotion/public/ (only when NOT delegating)
     has_narration = False
     has_veo_clip = False
-    if not has_flat_file and remotion_public:
+    if not has_base_component and remotion_public:
         narration_path = os.path.join(remotion_public, section_id, 'narration.wav')
         has_narration = os.path.isfile(narration_path)
         veo_clip_path = os.path.join(remotion_public, 'veo', f'{section_id}.mp4')
@@ -130,7 +182,7 @@ def generate_section_component(
 
     # Imports
     remotion_imports = ['Sequence']
-    if not has_flat_file:
+    if not has_base_component:
         if has_narration:
             remotion_imports.append('Audio')
         if has_veo_clip:
@@ -142,20 +194,23 @@ def generate_section_component(
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('')
 
-    # Import flat file as Base when delegating
-    if has_flat_file:
-        lines.append(f'import {{ {component_name} as {component_name}Base }} from "../{component_name}";')
+    # Import authored section component as Base when delegating
+    if has_base_component and base_component is not None:
+        export_name, import_path = base_component
+        lines.append(
+            f'import {{ {export_name} as {component_name}Base }} from "{import_path}";'
+        )
 
     # Import sub-compositions if present
     remotion_src_dir = remotion_src or ''
-    if compositions:
+    if compositions and not has_base_component:
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             if comp_id:
                 comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src_dir)
                 lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
 
-    if has_flat_file or compositions:
+    if has_base_component or (compositions and not has_base_component):
         lines.append('')
 
     # Component definition
@@ -167,8 +222,8 @@ def generate_section_component(
     lines.append('  return (')
     lines.append(f'    <Sequence from={{0}} durationInFrames={{Math.ceil(durationSeconds * fps)}}>')
 
-    if has_flat_file:
-        # Delegate to flat file for base content (video, audio, subtitles)
+    if has_base_component:
+        # Delegate to the authored section composition (timing + orchestration).
         lines.append(f'      <{component_name}Base />')
     else:
         # Render Audio/Video directly
@@ -178,7 +233,7 @@ def generate_section_component(
             lines.append(f'      <OffthreadVideo src={{staticFile("veo/{section_id}.mp4")}} style={{{{ width: "100%", height: "100%" }}}} />')
 
     # Sub-compositions rendered on top
-    if compositions:
+    if compositions and not has_base_component:
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             start_seconds = comp.get('startSeconds') if isinstance(comp, dict) else None
@@ -191,7 +246,7 @@ def generate_section_component(
                     lines.append(f'      </Sequence>')
                 else:
                     lines.append(f'      <{comp_pascal} />')
-    elif not has_flat_file and not has_veo_clip:
+    elif not has_base_component and not has_veo_clip:
         lines.append('      {/* Sub-compositions will be added here */}')
 
     lines.append('    </Sequence>')

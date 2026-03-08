@@ -44,6 +44,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 from generate_section_compositions import (
     to_pascal_case,
     resolve_comp_import,
+    resolve_section_base_component,
     load_project_json,
     get_fps,
     generate_section_component,
@@ -1303,21 +1304,48 @@ class TestRootTsxFlatFilePreference:
 
 
 class TestWrapperDelegation:
-    """Wrapper should delegate to flat file when it exists, rendering sub-compositions on top."""
+    """Wrapper should delegate to an authored section component when one exists."""
 
-    def test_wrapper_delegates_to_flat_file(self, tmp_path):
-        """When flat file exists, wrapper imports it as Base and renders it, no Audio/Video."""
+    def test_wrapper_prefers_section_local_base_component(self, tmp_path):
+        """Section-local section component should take precedence over top-level files."""
+        remotion_src = str(tmp_path)
+        section_dir = tmp_path / "cold_open"
+        section_dir.mkdir()
+        (section_dir / "ColdOpenSection.tsx").write_text("export const ColdOpenSection = () => null;")
+        (tmp_path / "ColdOpenSection.tsx").write_text("export const ColdOpenSection = () => null;")
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 15,
+            "offsetSeconds": 0,
+            "compositions": ["cold_open_title_card"],
+        }
+        tsx = generate_section_component(section, 30, remotion_public="", remotion_src=remotion_src)
+
+        assert 'import { ColdOpenSection as ColdOpenSectionBase } from "./ColdOpenSection"' in tsx
+        assert '<ColdOpenSectionBase />' in tsx
+        assert '<ColdOpenTitleCard />' not in tsx
+        assert 'Audio' not in tsx
+        assert 'OffthreadVideo' not in tsx
+
+    def test_wrapper_falls_back_to_top_level_base_component(self, tmp_path):
+        """Top-level section file is still used when no section-local component exists."""
         remotion_src = str(tmp_path)
         (tmp_path / "ColdOpenSection.tsx").write_text("export const ColdOpenSection = () => null;")
 
-        section = {"id": "cold_open", "durationSeconds": 15, "offsetSeconds": 0, "compositions": ["cold_open_title_card"]}
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 15,
+            "offsetSeconds": 0,
+            "compositions": ["cold_open_title_card"],
+        }
         tsx = generate_section_component(section, 30, remotion_public="", remotion_src=remotion_src)
 
         assert 'import { ColdOpenSection as ColdOpenSectionBase } from "../ColdOpenSection"' in tsx
         assert '<ColdOpenSectionBase />' in tsx
-        assert '<ColdOpenTitleCard />' in tsx
-        assert 'Audio' not in tsx
-        assert 'OffthreadVideo' not in tsx
+        assert '<ColdOpenTitleCard />' not in tsx
 
     def test_wrapper_falls_back_without_flat_file(self, tmp_path):
         """When no flat file exists, wrapper renders its own Audio/Video."""
@@ -1328,6 +1356,28 @@ class TestWrapperDelegation:
 
         assert 'ColdOpenSectionBase' not in tsx
         assert '<ColdOpenTitleCard />' in tsx
+
+
+class TestSectionBaseResolution:
+    """Section wrapper delegation should resolve the correct base component path."""
+
+    def test_resolve_section_base_component_prefers_section_local(self, tmp_path):
+        remotion_src = str(tmp_path)
+        section_dir = tmp_path / "part1_economics"
+        section_dir.mkdir()
+        (section_dir / "Part1Economics.tsx").write_text("export const Part1Economics = () => null;")
+        (tmp_path / "Part1Economics.tsx").write_text("export const Part1Economics = () => null;")
+
+        section = {
+            "id": "part1_economics",
+            "compositionId": "Part1Economics",
+            "durationSeconds": 382,
+        }
+
+        assert resolve_section_base_component(section, remotion_src) == (
+            "Part1Economics",
+            "./Part1Economics",
+        )
 
 
 class TestCompositionTiming:
