@@ -2,7 +2,6 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e/tests/integration',
-  globalSetup: './e2e/tests/integration/global-setup.ts',
   globalTeardown: './e2e/tests/integration/global-teardown.ts',
   timeout: 1_800_000,
   expect: {
@@ -19,10 +18,10 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 npx next dev -p 3001',
+    command: 'npx tsx e2e/tests/integration/start-server.ts',
     port: 3001,
     reuseExistingServer: false,
-    timeout: 60_000,
+    timeout: 180_000,
   },
   projects: [
     {

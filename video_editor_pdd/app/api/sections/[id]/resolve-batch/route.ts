@@ -14,6 +14,14 @@ export const dynamic = "force-dynamic";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
+function toPascalCase(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join("");
+}
+
 function buildRemotionPrompt(annotation: Annotation): string {
   const analysisJson = annotation.analysis ? JSON.stringify(annotation.analysis, null, 2) : "none";
   return `
@@ -182,13 +190,10 @@ export async function POST(_request: Request, { params }: RouteParams) {
       // Render the affected section
       const project = loadProject();
       const section = getSection(sectionId, project);
-      if (!section) {
-        throw new Error(`Section "${sectionId}" not found`);
-      }
-
+      const compositionId = section?.compositionId ?? `${toPascalCase(sectionId)}Section`;
       const outputPath = path.join("outputs", "sections", `${sectionId}.mp4`);
-      onLog(`Rendering section ${sectionId} → ${outputPath}`);
-      await renderSection(section.compositionId, outputPath, (progress) => {
+      onLog(`Rendering section ${sectionId} (${compositionId}) → ${outputPath}`);
+      await renderSection(compositionId, outputPath, (progress) => {
         onLog.progress?.(progress.percent);
         onLog(progress.message);
       });

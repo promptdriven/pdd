@@ -18,10 +18,10 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 npx next dev -p 3001',
+    command: 'CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 npx next build && CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 npx next start -p 3001',
     port: 3001,
     reuseExistingServer: false,
-    timeout: 60_000,
+    timeout: 180_000,
   },
   projects: [
     {

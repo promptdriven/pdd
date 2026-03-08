@@ -250,6 +250,102 @@ def resolve_section_base_component(
     return None
 
 
+def generate_generated_timeline_wrapper(
+    section: Dict[str, Any],
+    fps: int,
+    needs_direct_audio: bool,
+    needs_direct_video: bool,
+    direct_audio_src: Optional[str],
+    direct_video_src: Optional[str],
+    remotion_src: str,
+) -> Optional[str]:
+    """Generate a deterministic wrapper for Stage 8-generated section timelines.
+
+    Claude can generate component files and constants nondeterministically, but
+    the final section wrapper must remain deterministic. When Stage 8 marks a
+    section timeline as generated and constants.ts exists, we render the active
+    visual directly from VISUAL_SEQUENCE using exact filesystem-resolved imports.
+    """
+    section_id = section['id']
+    if section.get('timelineSource') != 'generated' or not remotion_src:
+        return None
+
+    constants_path = os.path.join(remotion_src, section_id, 'constants.ts')
+    if not os.path.isfile(constants_path):
+        return None
+
+    pascal_name = to_pascal_case(section_id)
+    component_name = f'{pascal_name}Section'
+    duration_seconds = section.get('durationSeconds', 0)
+    compositions: List[Dict[str, Any]] = section.get('compositions', [])
+
+    resolved_components: List[tuple[str, str, str]] = []
+    for comp in compositions:
+        comp_id = comp if isinstance(comp, str) else comp.get('id', '')
+        if not comp_id or comp_id.startswith('veo:'):
+            continue
+        comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
+        resolved_components.append((comp_id, comp_pascal, import_path))
+
+    remotion_imports = ['Sequence', 'useCurrentFrame']
+    if needs_direct_audio:
+        remotion_imports.append('Audio')
+    if needs_direct_video:
+        remotion_imports.append('OffthreadVideo')
+    if needs_direct_audio or needs_direct_video:
+        remotion_imports.append('staticFile')
+
+    lines: List[str] = []
+    lines.append('import React from "react";')
+    lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
+    lines.append('import { VISUAL_SEQUENCE } from "./constants";')
+
+    for _, comp_pascal, import_path in resolved_components:
+        lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
+
+    lines.append('')
+    lines.append('const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {')
+    for comp_id, comp_pascal, _ in resolved_components:
+        lines.append(f'  "{comp_id}": {comp_pascal},')
+    lines.append('};')
+    lines.append('')
+    lines.append(f'export const {component_name}: React.FC = () => {{')
+    lines.append(f'  const fps = {fps};')
+    lines.append(f'  const durationSeconds = {duration_seconds};')
+    lines.append('  const frame = useCurrentFrame();')
+    lines.append('  let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;')
+    lines.append('  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {')
+    lines.append('    if (frame >= VISUAL_SEQUENCE[i].start) {')
+    lines.append('      activeVisual = VISUAL_SEQUENCE[i];')
+    lines.append('      break;')
+    lines.append('    }')
+    lines.append('  }')
+    lines.append('  const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;')
+    lines.append('')
+    lines.append('  return (')
+    lines.append('    <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>')
+    if needs_direct_audio and direct_audio_src is not None:
+        lines.append(f'      <Audio src={{staticFile("{direct_audio_src}")}} />')
+    if needs_direct_video and direct_video_src is not None:
+        lines.append(f'      <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} />')
+    lines.append('      {ActiveComponent && activeVisual ? (')
+    lines.append('        <Sequence')
+    lines.append('          from={activeVisual.start}')
+    lines.append('          durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}')
+    lines.append('        >')
+    lines.append('          <ActiveComponent />')
+    lines.append('        </Sequence>')
+    lines.append('      ) : null}')
+    lines.append('    </Sequence>')
+    lines.append('  );')
+    lines.append('};')
+    lines.append('')
+    lines.append(f'export default {component_name};')
+    lines.append('')
+
+    return '\n'.join(lines)
+
+
 def get_fps(project_data: Dict[str, Any]) -> int:
     """Extract FPS from project.json render config, defaulting to 30."""
     render_config = project_data.get('render', {})
@@ -296,6 +392,18 @@ def generate_section_component(
     direct_video_src = resolve_direct_video_src(section_id, remotion_public)
     needs_direct_audio = bool(direct_audio_src) and (not has_base_component or not component_has_audio)
     needs_direct_video = bool(direct_video_src) and (not has_base_component or not component_has_video)
+
+    generated_timeline_wrapper = generate_generated_timeline_wrapper(
+        section,
+        fps,
+        needs_direct_audio,
+        needs_direct_video,
+        direct_audio_src,
+        direct_video_src,
+        remotion_src,
+    )
+    if generated_timeline_wrapper is not None:
+        return generated_timeline_wrapper
 
     lines: List[str] = []
 

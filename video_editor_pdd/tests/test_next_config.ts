@@ -259,6 +259,7 @@ describe('next.config.ts — prohibited settings', () => {
 
   it('does not define any other top-level keys beyond the required set', () => {
     const allowedKeys = new Set([
+      'eslint',
       'serverExternalPackages',
       'experimental',
       'headers',

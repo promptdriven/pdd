@@ -1,11 +1,11 @@
-# TTS Script — Integration Test
+# TTS Script - Integration Test Video
 
 ## Annotations Key
 
-- `[TONE: ...]` — Overall vocal quality
-- `[PACE: ...]` — Speaking speed
-- `[PAUSE: Xs]` — Silence between blocks
-- `[EMOTION: ...]` — Emotional coloring
+- `[TONE: ...]` - Overall vocal quality
+- `[PACE: ...]` - Speaking speed
+- `[PAUSE: Xs]` - Silence duration
+- `[EMOTION: ...]` - Emotional coloring
 
 ---
 
@@ -54,3 +54,7 @@
 > It uses Veo-generated clips with narration overlay.
 
 [PAUSE: 1.0s]
+
+---
+
+**Total Narration Blocks:** 4

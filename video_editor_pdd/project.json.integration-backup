@@ -20,7 +20,7 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 0,
+      "durationSeconds": 10.344,
       "offsetSeconds": 0
     },
     {
@@ -30,8 +30,8 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 11.184,
+      "offsetSeconds": 10.344
     }
   ],
   "audioSync": {

@@ -1440,6 +1440,83 @@ class TestSectionBaseResolution:
         )
 
 
+class TestGeneratedTimelineWrapper:
+    """Generated section timelines should render deterministically in the wrapper."""
+
+    def test_generated_timeline_uses_constants_and_exact_component_imports(self, tmp_path):
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        component_dir = remotion_src / "VeoSection01OpeningTitleCard"
+        section_dir.mkdir()
+        component_dir.mkdir()
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "01_opening_title_card", desc: "Intro" }];'
+        )
+        (component_dir / "index.ts").write_text(
+            'export const VeoSection01OpeningTitleCard = () => null;\n'
+            'export default VeoSection01OpeningTitleCard;'
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "veo_section.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo_section" / "narration.wav").parent.mkdir(parents=True)
+        (remotion_public / "veo_section" / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 12,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "compositions": ["01_opening_title_card"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        )
+
+        assert 'import { VISUAL_SEQUENCE } from "./constants";' in tsx
+        assert 'import { VeoSection01OpeningTitleCard } from "../VeoSection01OpeningTitleCard";' in tsx
+        assert 'const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {' in tsx
+        assert 'const frame = useCurrentFrame();' in tsx
+        assert 'const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;' in tsx
+        assert '<ActiveComponent />' in tsx
+        assert 'staticFile("veo_section/narration.wav")' in tsx
+        assert 'staticFile("veo/veo_section.mp4")' in tsx
+        assert 'SectionBase' not in tsx
+
+    def test_generated_timeline_falls_back_when_constants_are_missing(self, tmp_path):
+        remotion_src = tmp_path
+        section_dir = remotion_src / "cold_open"
+        section_dir.mkdir()
+        (section_dir / "ColdOpenSection.tsx").write_text(
+            "export const ColdOpenSection = () => null;"
+        )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 12,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "compositions": ["cold_open_title_card"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public="",
+            remotion_src=str(remotion_src),
+        )
+
+        assert 'import { VISUAL_SEQUENCE } from "./constants";' not in tsx
+        assert 'import { ColdOpenSection as ColdOpenSectionBase } from "./ColdOpenSection"' in tsx
+        assert '<ColdOpenSectionBase />' in tsx
+
+
 class TestSectionAssetAliases:
     """Compatibility aliases should be created for common Claude staticFile drift."""
 

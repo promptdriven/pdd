@@ -9,7 +9,7 @@ import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject, saveProject } from "@/lib/project";
 import { renderStill } from "@/lib/render";
-import type { SseSend } from "@/lib/types";
+import type { Section, SseSend } from "@/lib/types";
 
 type SectionComponentEntry = {
   sectionId: string;
@@ -23,11 +23,27 @@ type RunBody = {
   sectionComponents?: SectionComponentEntry[];
 };
 
+type SectionComposition = NonNullable<Section["compositions"]>[number];
+
 const REMOTION_SCOPE_DIR = path.join(process.cwd(), "remotion/src/remotion");
 const SPECS_DIR = path.join(process.cwd(), "specs");
 
 /** Names that are section-level metadata, not visual components. */
 const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
+
+function hasAuthoredSectionTimeline(section: Pick<Section, "id" | "compositionId">): boolean {
+  const sectionPascal = toPascalCase(section.id);
+  const componentName = `${sectionPascal}Section`;
+  const remotionSrc = path.join(process.cwd(), "remotion", "src", "remotion");
+  const candidates = [
+    path.join(remotionSrc, section.id, `${section.compositionId}.tsx`),
+    path.join(remotionSrc, section.id, `${componentName}.tsx`),
+    path.join(remotionSrc, `${section.compositionId}.tsx`),
+    path.join(remotionSrc, `${componentName}.tsx`),
+  ];
+
+  return candidates.some((candidate) => fs.existsSync(candidate));
+}
 
 // ---------------------------------------------------------------------------
 // Utility: find spec file content for a component (best effort)
@@ -670,19 +686,23 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
         if (discoveredComponents.length > 0) {
           // Merge: preserve existing timing data (startSeconds/durationSeconds) for known components
-          const existingTimingMap = new Map<string, Record<string, unknown>>();
-          const existingComps: Array<string | Record<string, unknown>> = section.compositions || [];
+          const existingTimingMap = new Map<string, Exclude<SectionComposition, string>>();
+          const existingComps: SectionComposition[] = section.compositions || [];
           for (const comp of existingComps) {
             if (typeof comp === "object" && comp !== null && comp.id) {
-              existingTimingMap.set(comp.id as string, comp);
+              existingTimingMap.set(comp.id, comp);
             }
           }
-          const mergedCompositions: Array<string | Record<string, unknown>> = [];
+          const mergedCompositions: SectionComposition[] = [];
           for (const compId of discoveredComponents) {
             const existing = existingTimingMap.get(compId);
             mergedCompositions.push(existing ?? compId);
           }
           section.compositions = mergedCompositions;
+          section.timelineSource =
+            section.timelineSource === "generated" || !hasAuthoredSectionTimeline(section)
+              ? "generated"
+              : "authored";
           compositionsUpdated = true;
           onLog(`[compositions] Section "${section.id}" compositions: ${discoveredComponents.join(", ")}`);
         }
@@ -697,21 +717,18 @@ registerExecutor("compositions", (params, send: SseSend) => {
       // that has discovered components (animation components → constants → composition)
       for (const section of freshConfig.sections) {
         if (!section.compositions || section.compositions.length === 0) continue;
+        if (section.timelineSource !== "generated") {
+          onLog(`[compositions] Preserving authored section timeline for ${section.id}.`);
+          continue;
+        }
 
         const sectionRemotionDir = path.join("remotion/src/remotion", section.id);
         // Extract string IDs from compositions (which may contain timing objects)
-        const componentIds = (section.compositions as Array<string | Record<string, unknown>>).map(
+        const componentIds = (section.compositions as SectionComposition[]).map(
           (comp) => typeof comp === "string" ? comp : (comp.id as string)
         );
         try {
           await generateSectionConstants(
-            section.id,
-            section.compositionId,
-            componentIds,
-            sectionRemotionDir,
-            onLog,
-          );
-          await generateSectionComposition(
             section.id,
             section.compositionId,
             componentIds,

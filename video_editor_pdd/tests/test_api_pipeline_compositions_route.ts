@@ -2617,7 +2617,7 @@ describe("compositions executor — generateSectionConstants", () => {
 // 24. generateSectionComposition generates activeVisual pattern
 // ---------------------------------------------------------------------------
 
-describe("compositions executor — generateSectionComposition", () => {
+describe("compositions executor — generated section timelines", () => {
   function setupMockSpawn(exitCode = 0) {
     const proc = createMockSpawnProcess(exitCode);
     mockSpawn.mockReturnValue(proc);
@@ -2653,7 +2653,7 @@ describe("compositions executor — generateSectionComposition", () => {
     });
   }
 
-  it("calls runClaudeFix with prompt mentioning activeVisual pattern", async () => {
+  it("marks discovered sections as generated when no authored timeline exists", async () => {
     const config = mockProjectConfig();
     config.sections[0].specDir = "specs/intro";
     mockLoadProject.mockReturnValue(config);
@@ -2667,15 +2667,12 @@ describe("compositions executor — generateSectionComposition", () => {
     );
     await executor(jest.fn());
 
-    const allCalls = mockRunClaudeFix.mock.calls;
-    const compositionCall = allCalls.find(
-      (call: any[]) =>
-        typeof call[0] === "string" && call[0].includes("activeVisual")
-    );
-    expect(compositionCall).toBeDefined();
+    const savedConfig = mockSaveProject.mock.calls.at(-1)?.[0];
+    expect(savedConfig).toBeDefined();
+    expect(savedConfig.sections[0].timelineSource).toBe("generated");
   });
 
-  it("references Audio and OffthreadVideo in section composition prompt", async () => {
+  it("does not ask Claude to generate a section composition prompt for generated timelines", async () => {
     const config = mockProjectConfig();
     config.sections[0].specDir = "specs/intro";
     mockLoadProject.mockReturnValue(config);
@@ -2693,10 +2690,9 @@ describe("compositions executor — generateSectionComposition", () => {
     const compositionCall = allCalls.find(
       (call: any[]) =>
         typeof call[0] === "string" &&
-        call[0].includes("Audio") &&
-        call[0].includes("OffthreadVideo")
+        call[0].includes("activeVisual")
     );
-    expect(compositionCall).toBeDefined();
+    expect(compositionCall).toBeUndefined();
   });
 });
 

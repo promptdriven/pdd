@@ -77,9 +77,22 @@ export async function POST(request: Request): Promise<NextResponse> {
  * Returns 400 if content is missing or not a string.
  */
 export async function PUT(request: Request): Promise<NextResponse> {
+  let body: unknown;
+
   try {
-    const body = await request.json();
-    const { content } = body;
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const content =
+      body && typeof body === "object" && "content" in body
+        ? (body as { content?: unknown }).content
+        : undefined;
 
     if (content === undefined || content === null || typeof content !== "string") {
       return NextResponse.json(

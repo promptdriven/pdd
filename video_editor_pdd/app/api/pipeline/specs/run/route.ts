@@ -77,14 +77,22 @@ registerExecutor("specs", (params, _send) => {
       .progress;
     progressFn?.(0);
 
-    // Generate specs one section at a time so each Claude invocation has a
-    // focused task and we get per-section progress updates.
-    for (let i = 0; i < sectionIds.length; i++) {
-      const sid = sectionIds[i];
+    const totalSections = sectionIds.length || 1;
+    let completedSections = 0;
+    let nextIndex = 0;
+    const workerCount = Math.min(2, sectionIds.length || 1);
+
+    const runSection = async (): Promise<void> => {
+      const currentIndex = nextIndex++;
+      if (currentIndex >= sectionIds.length) {
+        return;
+      }
+
+      const sid = sectionIds[currentIndex];
       const dir = specDirMap.get(sid) ?? sid;
       const ctx = sectionContextMap.get(sid)!;
 
-      onLog(`[specs] Generating specs for section: ${sid} (${i + 1}/${sectionIds.length})`);
+      onLog(`[specs] Generating specs for section: ${sid} (${currentIndex + 1}/${sectionIds.length})`);
 
       const sectionContext = `
 ### Section: ${sid} → specs/${dir}/
@@ -171,10 +179,16 @@ ${sectionContext}
 
       await runClaudeFix(prompt, specsBase, onLog);
 
-      const pct = Math.round(((i + 1) / sectionIds.length) * 100);
+      completedSections += 1;
+      const pct = Math.round((completedSections / totalSections) * 100);
       progressFn?.(pct);
       onLog(`[specs] Section ${sid} complete (${pct}%)`);
-    }
+      await runSection();
+    };
+
+    await Promise.all(
+      Array.from({ length: workerCount }, () => runSection())
+    );
   };
 });
 

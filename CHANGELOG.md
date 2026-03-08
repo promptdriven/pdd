@@ -1,3 +1,21 @@
+## v0.0.170 (2026-03-07)
+
+### Feat
+
+- update TTS script for integration testing and commit Playwright integration test results.
+- Add independent test verification for agentic orchestrator's ALL_TESTS_PASS claims and update related tests.
+- implement independent verification for agent's ALL_TESTS_PASS claims in the e2e fix orchestrator.
+
+### Fix
+
+- **test-batch-ann-1772952765768**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772952338234**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772950126527**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772933408546**: Subtitle font size 96px causes text to clip the ri
+- push upstream tracking and junk file filter (#787)
+- increase timeout for test_test_logs_manual_invocation (300s → 600s)
+- make hello world test file checks non-fatal in CI
+
 ## v0.0.169 (2026-03-07)
 
 ### Feat

@@ -655,15 +655,18 @@ describe("POST — runJob executor: section rendering after fixes", () => {
     );
   });
 
-  it("throws error when section is not found", async () => {
+  it("falls back to a PascalCase Section composition when project metadata is missing", async () => {
     mockGetSection.mockReturnValue(null);
 
-    await POST(makeRequest(), makeParams("nonexistent"));
+    await POST(makeRequest(), makeParams("cold_open"));
 
     const executorFn = mockRunJob.mock.calls[0][1];
+    await executorFn(jest.fn());
 
-    await expect(executorFn(jest.fn())).rejects.toThrow(
-      'Section "nonexistent" not found'
+    expect(mockRenderSection).toHaveBeenCalledWith(
+      "ColdOpenSection",
+      "outputs/sections/cold_open.mp4",
+      expect.any(Function),
     );
   });
 
