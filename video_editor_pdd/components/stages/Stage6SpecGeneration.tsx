@@ -78,6 +78,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   const [latestJobId, setLatestJobId] = useState<string | null>(null);
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Reusable spec list fetcher (called on mount and after regeneration)
   const fetchSpecList = useCallback(async () => {
@@ -114,6 +115,10 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
     if (typeof window === 'undefined') return;
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(expanded));
   }, [expanded]);
+
+  useEffect(() => {
+    editorContainerRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedFile, selectedSectionId]);
 
   const handleToggleSection = useCallback((id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -164,6 +169,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
     setSelectedFile(file);
     setSelectedSectionId(sectionId);
     setEditorLoading(true);
+    setEditorValue('');
     try {
       const res = await fetch(`/api/pipeline/specs/file?path=${encodeURIComponent(file.path)}`);
       if (!res.ok) throw new Error(`Failed to load file: ${res.status}`);
@@ -265,68 +271,78 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                   <tbody>
                     {section.files.map((file) => {
                       const badge = badgeFromFirstLine(file.firstLine);
+                      const isSelectedFile =
+                        selectedSectionId === section.id && selectedFile?.path === file.path;
                       return (
-                        <tr key={file.path} className="border-t">
-                          <td className="py-2">
-                            {badge ? (
-                              <span
-                                className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${badge.colorClass}`}
+                        <React.Fragment key={file.path}>
+                          <tr className="border-t">
+                            <td className="py-2">
+                              {badge ? (
+                                <span
+                                  className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${badge.colorClass}`}
+                                >
+                                  [{badge.label}]
+                                </span>
+                              ) : (
+                                <span className="text-xs text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="py-2 font-mono text-xs text-slate-300">{file.path}</td>
+                            <td className="py-2">
+                              {file.exists ? (
+                                <span className="text-green-600">exists</span>
+                              ) : (
+                                <span className="text-red-500">missing</span>
+                              )}
+                            </td>
+                            <td className="py-2 text-right">
+                              <button
+                                className="mr-2 rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                                onClick={() => loadSpecFile(file, section.id)}
+                                title="Open in editor"
                               >
-                                [{badge.label}]
-                              </span>
-                            ) : (
-                              <span className="text-xs text-slate-400">—</span>
-                            )}
-                          </td>
-                          <td className="py-2 font-mono text-xs text-slate-300">{file.path}</td>
-                          <td className="py-2">
-                            {file.exists ? (
-                              <span className="text-green-600">exists</span>
-                            ) : (
-                              <span className="text-red-500">missing</span>
-                            )}
-                          </td>
-                          <td className="py-2 text-right">
-                            <button
-                              className="mr-2 rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                              onClick={() => loadSpecFile(file, section.id)}
-                              title="Open in editor"
-                            >
-                              ✎
-                            </button>
-                            <button
-                              className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-                              onClick={() => handleRegenerateFile(file.path)}
-                              title="Regenerate file"
-                            >
-                              ↺
-                            </button>
-                          </td>
-                        </tr>
+                                ✎
+                              </button>
+                              <button
+                                className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                                onClick={() => handleRegenerateFile(file.path)}
+                                title="Regenerate file"
+                              >
+                                ↺
+                              </button>
+                            </td>
+                          </tr>
+
+                          {isSelectedFile && (
+                            <tr className="border-t border-slate-700 bg-slate-800/70">
+                              <td colSpan={4} className="p-3">
+                                <div
+                                  ref={editorContainerRef}
+                                  className="rounded border border-slate-700 bg-slate-800 p-3"
+                                >
+                                  <div className="mb-2 flex items-center justify-between">
+                                    <div className="text-sm font-medium">{editorTitle}</div>
+                                    {saving && <div className="text-xs text-slate-400">Saving…</div>}
+                                  </div>
+                                  <CodeMirror
+                                    value={editorValue}
+                                    height="240px"
+                                    extensions={[markdown()]}
+                                    onChange={(value) => setEditorValue(value)}
+                                    onBlur={handleEditorBlur}
+                                    basicSetup={{ lineNumbers: true }}
+                                    theme="dark"
+                                  />
+                                  {editorLoading && <div className="mt-2 text-xs text-slate-400">Loading file…</div>}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
                 </table>
-
-                {/* Inline Editor — only shown in the section owning the selected file */}
-                {selectedFile && selectedSectionId === section.id && (
-                  <div className="mt-4 rounded border border-slate-700 bg-slate-800 p-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-sm font-medium">{editorTitle}</div>
-                      {saving && <div className="text-xs text-slate-400">Saving…</div>}
-                    </div>
-                    <CodeMirror
-                      value={editorValue}
-                      height="240px"
-                      extensions={[markdown()]}
-                      onChange={(value) => setEditorValue(value)}
-                      onBlur={handleEditorBlur}
-                      basicSetup={{ lineNumbers: true }}
-                      theme="dark"
-                    />
-                    {editorLoading && <div className="text-xs text-slate-400 mt-2">Loading file…</div>}
-                  </div>
-                )}
               </div>
             )}
           </div>

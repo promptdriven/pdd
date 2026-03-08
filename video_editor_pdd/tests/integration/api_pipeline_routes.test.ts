@@ -350,6 +350,26 @@ describe("GET /api/pipeline/specs/list", () => {
       expect(section.files.length).toBeGreaterThanOrEqual(1);
     }
   });
+
+  it("filters AUDIT_ markdown files out of the editable spec list", async () => {
+    const introSpecDir = path.join(tmpDir, "specs", "intro");
+    fs.writeFileSync(path.join(introSpecDir, "scene.md"), "[Remotion] scene spec");
+    fs.writeFileSync(
+      path.join(introSpecDir, "AUDIT_scene.md"),
+      "## Verdict\nFAIL\n## Summary\nBroken\n"
+    );
+
+    const response = await GET_specsList();
+    const body = await response.json();
+
+    const intro = body.sections.find((section: { id: string }) => section.id === "intro");
+    expect(intro).toBeDefined();
+    expect(intro.files.some((file: { path: string }) => file.path.includes("AUDIT_"))).toBe(false);
+    expect(intro.files.some((file: { path: string }) => file.path.endsWith("scene.md"))).toBe(true);
+
+    fs.unlinkSync(path.join(introSpecDir, "scene.md"));
+    fs.unlinkSync(path.join(introSpecDir, "AUDIT_scene.md"));
+  });
 });
 
 // =========================================================================

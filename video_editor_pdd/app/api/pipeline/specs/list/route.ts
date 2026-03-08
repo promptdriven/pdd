@@ -24,6 +24,29 @@ interface SpecSection {
   files: SpecFile[];
 }
 
+function normalizeRelativeSpecDir(specDir: string): string {
+  return specDir.replace(/^specs[\\/]/, "").replace(/\\/g, "/");
+}
+
+function resolveSpecDirPaths(specDir: string, specsRoot: string): {
+  abs: string;
+  rel: string;
+} {
+  const abs = path.isAbsolute(specDir)
+    ? specDir
+    : path.join(specsRoot, normalizeRelativeSpecDir(specDir));
+
+  const relativeFromRoot = path.relative(specsRoot, abs).replace(/\\/g, "/");
+  const relDir = relativeFromRoot.startsWith("..")
+    ? normalizeRelativeSpecDir(specDir)
+    : relativeFromRoot;
+
+  return {
+    abs,
+    rel: path.posix.join("specs", relDir),
+  };
+}
+
 function readFirstLine(filePath: string): string | undefined {
   try {
     const content = fs.readFileSync(filePath, "utf-8");
@@ -45,6 +68,7 @@ function listSpecFiles(specDirAbs: string, specDirRel: string): SpecFile[] {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.endsWith(".md") && !entry.name.endsWith(".txt")) continue;
+    if (entry.name.startsWith("AUDIT_")) continue;
 
     const absPath = path.join(specDirAbs, entry.name);
     const relPath = path.join(specDirRel, entry.name);
@@ -66,8 +90,10 @@ export async function GET(): Promise<NextResponse> {
     const sections: SpecSection[] = [];
 
     for (const section of config.sections) {
-      const specDirRel = path.join("specs", section.specDir);
-      const specDirAbs = path.join(specsRoot, section.specDir);
+      const { rel: specDirRel, abs: specDirAbs } = resolveSpecDirPaths(
+        section.specDir,
+        specsRoot
+      );
 
       const files = listSpecFiles(specDirAbs, specDirRel);
 

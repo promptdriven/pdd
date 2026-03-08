@@ -261,6 +261,10 @@ describe("state management", () => {
   it("has saveTimerRef for debounce", () => {
     expect(sourceCode).toMatch(/saveTimerRef\s*=\s*useRef/);
   });
+
+  it("has editorContainerRef for inline editor scrolling", () => {
+    expect(sourceCode).toMatch(/editorContainerRef\s*=\s*useRef/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -417,6 +421,10 @@ describe("load spec file for editor", () => {
     expect(sourceCode).toMatch(/setSelectedSectionId\s*\(\s*sectionId\s*\)/);
   });
 
+  it("clears stale editor content before loading a new file", () => {
+    expect(sourceCode).toMatch(/setEditorValue\s*\(\s*['"]['"]\s*\)/);
+  });
+
   it("tracks editorLoading state", () => {
     expect(sourceCode).toMatch(/setEditorLoading\s*\(\s*true\s*\)/);
     expect(sourceCode).toMatch(/setEditorLoading\s*\(\s*false\s*\)/);
@@ -489,6 +497,22 @@ describe("editor title", () => {
 
   it("shows placeholder when no file is selected", () => {
     expect(sourceCode).toMatch(/Select a spec file to edit/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 20a. Inline editor placement and visibility
+// ---------------------------------------------------------------------------
+
+describe("inline editor placement", () => {
+  it("renders the editor directly under the selected file row", () => {
+    expect(sourceCode).toMatch(/selectedFile\?\.path\s*===\s*file\.path/);
+    expect(sourceCode).toMatch(/selectedSectionId\s*===\s*section\.id/);
+    expect(sourceCode).toMatch(/<td\s+colSpan=\{4\}/);
+  });
+
+  it("scrolls the inline editor into view when a file is selected", () => {
+    expect(sourceCode).toMatch(/editorContainerRef\.current\?\.scrollIntoView/);
   });
 });
 
@@ -680,7 +704,8 @@ describe("inline CodeMirror editor", () => {
   });
 
   it("editor is only shown when selectedFile matches current section", () => {
-    expect(sourceCode).toMatch(/selectedFile\s*&&\s*selectedSectionId\s*===\s*section\.id/);
+    expect(sourceCode).toMatch(/const\s+isSelectedFile\s*=/);
+    expect(sourceCode).toMatch(/selectedSectionId\s*===\s*section\.id\s*&&\s*selectedFile\?\.path\s*===\s*file\.path/);
   });
 
   it("shows editor title", () => {
