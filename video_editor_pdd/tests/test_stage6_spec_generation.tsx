@@ -11,6 +11,7 @@
  *   3. Section groups are collapsible (expanded state persisted in localStorage).
  *   4. Each spec row shows: visual type badge [Remotion]/[veo:]/[title:]/[split:], status (exists/missing), [✎] open in editor, [↺] regenerate that file.
  *   5. Clicking [✎]: opens an inline CodeMirror Markdown editor below the table. Auto-saves via PUT /api/pipeline/specs/file on blur + 1s debounce.
+ *   5b. The inline editor shows script context side by side with the selected spec, aligned by section heading and Narration Sync quotes.
  *   6. SSE log in an expandable drawer at the bottom.
  *   7. 'use client' directive.
  *   8. Visual type badge colors: Remotion=blue, veo=purple, title=teal, split=orange.
@@ -117,6 +118,14 @@ describe("import structure", () => {
 
   it("imports SseLogPanel", () => {
     expect(sourceCode).toMatch(/import\s+\{?\s*SseLogPanel\s*\}?\s+from/);
+  });
+
+  it("imports script context helpers", () => {
+    expect(sourceCode).toMatch(/from\s+['"]@\/lib\/spec-script-context['"]/);
+    expect(sourceCode).toMatch(/parseScriptSections/);
+    expect(sourceCode).toMatch(/findMatchingScriptSection/);
+    expect(sourceCode).toMatch(/extractNarrationSyncQuotes/);
+    expect(sourceCode).toMatch(/scriptLineMatchesNarration/);
   });
 });
 
@@ -265,6 +274,12 @@ describe("state management", () => {
   it("has editorContainerRef for inline editor scrolling", () => {
     expect(sourceCode).toMatch(/editorContainerRef\s*=\s*useRef/);
   });
+
+  it("tracks script content, loading, and error state", () => {
+    expect(sourceCode).toMatch(/\[\s*scriptContent\s*,\s*setScriptContent\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*scriptLoading\s*,\s*setScriptLoading\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*scriptError\s*,\s*setScriptError\s*\]/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -296,6 +311,26 @@ describe("spec list loading on mount", () => {
 
   it("defines fetchSpecList as reusable callback", () => {
     expect(sourceCode).toMatch(/const\s+fetchSpecList\s*=\s*useCallback/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9b. Script loading and section alignment
+// ---------------------------------------------------------------------------
+
+describe("script loading and alignment", () => {
+  it("fetches main script from GET /api/project/script", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/project\/script['"]\s*\)/);
+  });
+
+  it("parses script sections and resolves the matching section for the selected spec", () => {
+    expect(sourceCode).toMatch(/parseScriptSections\s*\(\s*scriptContent\s*\)/);
+    expect(sourceCode).toMatch(/findMatchingScriptSection\s*\(/);
+    expect(sourceCode).toMatch(/selectedSection\??/);
+  });
+
+  it("extracts Narration Sync quotes from the current spec content", () => {
+    expect(sourceCode).toMatch(/extractNarrationSyncQuotes\s*\(\s*editorValue\s*\)/);
   });
 });
 
@@ -513,6 +548,12 @@ describe("inline editor placement", () => {
 
   it("scrolls the inline editor into view when a file is selected", () => {
     expect(sourceCode).toMatch(/editorContainerRef\.current\?\.scrollIntoView/);
+  });
+
+  it("renders a Script Context panel beside the spec editor", () => {
+    expect(sourceCode).toContain("Script Context");
+    expect(sourceCode).toMatch(/No matching script section found/);
+    expect(sourceCode).toMatch(/scriptLineMatchesNarration/);
   });
 });
 

@@ -55,6 +55,7 @@ async function navigateWithMockedSpecs(
     files: Array<{ path: string; exists: boolean; firstLine?: string }>;
   }>,
   fileContentOverrides: Record<string, string> = {},
+  scriptContent = '# Mock Script\n\n## Cold Open\n\n**NARRATOR:**\nA mocked narration line.',
 ) {
   await page.route('**/api/pipeline/specs/list', (route) => {
     return route.fulfill({
@@ -77,6 +78,14 @@ async function navigateWithMockedSpecs(
       });
     }
     return route.fallback();
+  });
+
+  await page.route('**/api/project/script', (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ content: scriptContent }),
+    });
   });
 
   await navigateToStage6(page);
@@ -757,6 +766,52 @@ test.describe('Stage 6: Interactive QA - Comprehensive Feature Testing', () => {
         path: path.join(SCREENSHOT_DIR, 'stage6-E9-editor.png'),
         fullPage: true,
       });
+    });
+
+    test('E10: Script Context panel shows aligned narration beside the spec editor', async ({ page }) => {
+      await navigateWithMockedSpecs(
+        page,
+        [
+          {
+            id: 'cold_open',
+            label: 'Cold Open',
+            files: [
+              { path: 'specs/00-cold-open/spec.md', exists: true, firstLine: '[Remotion] Title Card' },
+            ],
+          },
+        ],
+        {
+          'specs/00-cold-open/spec.md': [
+            '# Section 1.1: Cold Open',
+            '',
+            '## Narration Sync',
+            '> "A clean narration line for the cold open."',
+            '',
+            '## Code Structure (Remotion)',
+            '```typescript',
+            '<Sequence />',
+            '```',
+          ].join('\n'),
+        },
+        [
+          '# Mock Script',
+          '',
+          '## COLD OPEN',
+          '',
+          '**[VISUAL: [Remotion] Title text lands in the center.]**',
+          '',
+          '**NARRATOR:**',
+          'A clean narration line for the cold open.',
+        ].join('\n'),
+      );
+
+      const editBtn = page.locator('button[title="Open in editor"]').first();
+      await editBtn.click();
+      await page.waitForTimeout(500);
+
+      await expect(page.locator('text=Script Context')).toBeVisible();
+      await expect(page.locator('text=COLD OPEN')).toBeVisible();
+      await expect(page.locator('text=A clean narration line for the cold open.')).toHaveCount(2);
     });
   });
 
