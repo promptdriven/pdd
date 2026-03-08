@@ -15,7 +15,7 @@ export const BACKDROP_FEATHER_PX = 16;
 export const TRACK_FADE_OUT_FRAMES = 20;
 
 // Text container
-export const TEXT_MAX_WIDTH = 1440;
+export const TEXT_MAX_WIDTH = 1280;
 export const TEXT_PADDING_V = 24;
 export const TEXT_PADDING_H = 40;
 

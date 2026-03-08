@@ -102,6 +102,7 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
           flexWrap: "wrap",
           alignItems: "center",
           justifyContent: "center",
+          overflow: "hidden",
           transform: `translateX(${scrollOffset}px)`,
           willChange: "transform",
         }}
