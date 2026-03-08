@@ -12,6 +12,8 @@ from typing import List, Tuple, Dict, Any, Optional, Set
 
 from rich.console import Console
 
+import re as _re
+
 from .agentic_common import (
     run_agentic_task,
     load_workflow_state,
@@ -22,6 +24,7 @@ from .agentic_common import (
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
+from .pytest_output import run_pytest_and_capture_output
 
 # Constants
 STEP_NAMES = {
@@ -147,6 +150,93 @@ def _is_intermediate_file(filepath: str) -> bool:
         return True
 
     return False
+
+
+def _extract_test_files(
+    issue_content: str,
+    changed_files: List[str],
+    cwd: Path,
+    initial_file_hashes: Optional[Dict[str, Optional[str]]] = None,
+) -> List[str]:
+    """Extract test file paths from issue content, changed files, and disk changes.
+
+    Looks for:
+    - E2E_FILES_CREATED: markers from pdd bug output
+    - FILES_CREATED: markers
+    - File paths matching test_*.py in changed_files
+    - Test files actually created/modified on disk (hash comparison)
+
+    Returns only paths that exist on disk, deduplicated.
+    """
+    test_files: List[str] = []
+    seen: set = set()
+
+    def _add(path: str) -> None:
+        path = path.strip()
+        if path and path not in seen and (cwd / path).exists():
+            seen.add(path)
+            test_files.append(path)
+
+    # Parse markers from issue content
+    for line in issue_content.splitlines():
+        for prefix in ("E2E_FILES_CREATED:", "FILES_CREATED:"):
+            if line.strip().startswith(prefix):
+                content = line.split(":", 1)[1].strip()
+                for p in content.split(","):
+                    p = p.strip()
+                    if p.endswith(".py") and ("test_" in p or p.startswith("test_")):
+                        _add(p)
+
+    # Include test files from changed_files list
+    for f in changed_files:
+        basename = Path(f).name
+        if basename.startswith("test_") and basename.endswith(".py"):
+            _add(f)
+
+    # Scan issue content for inline test file references
+    for match in _re.finditer(r'((?:[\w/.-]+/)?test_[\w.-]+\.py)', issue_content):
+        _add(match.group(1))
+
+    # Detect test files actually created/modified on disk during workflow
+    if initial_file_hashes is not None:
+        actual_changes = _detect_changed_files(cwd, initial_file_hashes)
+        for f in actual_changes:
+            basename = Path(f).name
+            if basename.startswith("test_") and basename.endswith(".py"):
+                _add(f)
+
+    return test_files
+
+
+def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]:
+    """Run pytest on test files via subprocess. Returns (all_passed, output).
+
+    Uses run_pytest_and_capture_output from pytest_output.py for subprocess-based
+    pytest execution — the same function used by fix_error_loop.
+    """
+    all_outputs: List[str] = []
+    all_passed = True
+
+    for test_file in test_files:
+        abs_path = str(cwd / test_file)
+        result = run_pytest_and_capture_output(abs_path)
+        if not result or not result.get("test_results"):
+            all_passed = False
+            all_outputs.append(f"{test_file}: no results (pytest error)")
+            continue
+
+        tr = result["test_results"][0]
+        failures = tr.get("failures", 0) + tr.get("errors", 0)
+        passed = tr.get("passed", 0)
+        stdout = tr.get("standard_output", "")
+
+        if failures > 0:
+            all_passed = False
+            all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+        else:
+            all_outputs.append(f"{test_file}: {passed} passed")
+
+    return all_passed, "\n".join(all_outputs)
 
 
 def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identified_units_str: str) -> Dict[str, Any]:
@@ -700,10 +790,25 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Early Exit (Step 2): ALL_TESTS_PASS
                 if step_num == 2 and "ALL_TESTS_PASS" in step_output:
-                    console.print("[green]ALL_TESTS_PASS detected in Step 2. Exiting loop.[/green]")
-                    success = True
-                    final_message = "All tests passed during e2e check."
-                    break
+                    # Independent verification: don't trust LLM output alone
+                    test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                    if test_files:
+                        verified, verify_output = _verify_tests_independently(test_files, cwd)
+                        if verified:
+                            console.print("[green]ALL_TESTS_PASS verified by independent pytest run.[/green]")
+                            success = True
+                            final_message = "All tests passed (independently verified)."
+                            break
+                        else:
+                            console.print("[bold red]LLM claimed ALL_TESTS_PASS but independent verification FAILED.[/bold red]")
+                            step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
+                            step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                            last_completed_step = step_num - 1
+                    else:
+                        console.print("[yellow]No test files found for independent verification. Trusting LLM output.[/yellow]")
+                        success = True
+                        final_message = "All tests passed during e2e check (no independent verification)."
+                        break
 
                 # Check Early Exit (Step 3): NOT_A_BUG
                 if step_num == 3 and "NOT_A_BUG" in step_output:
@@ -715,10 +820,26 @@ def run_agentic_e2e_fix_orchestrator(
                 # Check Loop Control (Step 9)
                 if step_num == 9:
                     if "ALL_TESTS_PASS" in step_output:
-                        console.print("[green]ALL_TESTS_PASS detected in Step 9.[/green]")
-                        success = True
-                        final_message = "All tests passed after fixes."
-                        break
+                        # Independent verification: don't trust LLM output alone
+                        test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                        if test_files:
+                            verified, verify_output = _verify_tests_independently(test_files, cwd)
+                            if verified:
+                                console.print("[green]ALL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
+                                success = True
+                                final_message = "All tests passed after fixes (independently verified)."
+                                break
+                            else:
+                                console.print("[bold red]LLM claimed ALL_TESTS_PASS at Step 9 but independent verification FAILED.[/bold red]")
+                                step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
+                                step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                                last_completed_step = step_num - 1
+                                # Don't break — fall through to cycle increment
+                        else:
+                            console.print("[green]ALL_TESTS_PASS detected in Step 9.[/green]")
+                            success = True
+                            final_message = "All tests passed after fixes."
+                            break
                     elif "MAX_CYCLES_REACHED" in step_output:
                         console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
                     elif "CONTINUE_CYCLE" not in step_output:

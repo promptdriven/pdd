@@ -8,12 +8,14 @@ Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
 import re
+from typing import Dict, Optional
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from pdd.load_prompt_template import load_prompt_template
+from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently
 
 
 def _strip_pdd_metadata(template: str) -> str:
@@ -564,13 +566,19 @@ class TestExistingEarlyExits:
     continue to work correctly.
     """
 
-    def test_all_tests_pass_early_exit_step2(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_all_tests_pass_early_exit_step2(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """ALL_TESTS_PASS in Step 2 should exit the workflow successfully.
 
         This tests the existing early exit at Step 2 (lines 504-509 in
         agentic_e2e_fix_orchestrator.py).
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Mock independent verification to confirm tests pass
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
 
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
@@ -589,13 +597,19 @@ class TestExistingEarlyExits:
             f"Expected 2 step calls (Steps 1-2) but got {mock_run.call_count}."
         )
 
-    def test_all_tests_pass_step9_exits_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_all_tests_pass_step9_exits_loop(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """ALL_TESTS_PASS in Step 9 should exit the loop successfully.
 
         This tests the existing early exit at Step 9 (lines 513-517 in
         agentic_e2e_fix_orchestrator.py).
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Mock independent verification to confirm tests pass
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
 
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
@@ -1385,9 +1399,15 @@ class TestProviderFailureAbort:
         assert "Aborting" in msg or "consecutive" in msg.lower()
         assert mock_run.call_count == 3  # Aborted after 3 steps
 
-    def test_provider_failure_counter_resets_on_success(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_provider_failure_counter_resets_on_success(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """Success between failures should reset the counter — no abort."""
         mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Mock independent verification to confirm tests pass
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
 
         call_count = [0]
         def side_effect(**kwargs):
@@ -1687,3 +1707,216 @@ class TestCommitAndPushIntermediateFileFiltering:
         assert "error_output_models.txt" not in staged_files, (
             "error_output_models.txt should NOT be staged"
         )
+
+class TestIndependentTestVerification:
+    """Tests for issue #588: Independent pytest verification of LLM claims.
+
+    The orchestrator must not trust the LLM's ALL_TESTS_PASS claim blindly.
+    After the LLM claims tests pass, we run pytest independently via subprocess
+    and only accept the claim if the real pytest run confirms it.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_all_tests_pass_hallucinated(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """LLM claims ALL_TESTS_PASS but independent pytest finds failures.
+
+        Primary bug reproducer for issue #588: The LLM hallucinated passing
+        test results. The orchestrator should NOT exit successfully; it should
+        override the step output with the real failure and continue to Step 3+.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Independent verification finds failures
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (False, "FAILED tests/test_e2e_webhook.py::test_repositories_added - AssertionError")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should NOT have exited successfully at Step 2
+        assert success is False, (
+            "Orchestrator should NOT report success when independent verification fails"
+        )
+        # Should have continued past Step 2 (at least to Step 3)
+        assert mock_run.call_count > 2, (
+            f"Expected workflow to continue past Step 2 but only ran {mock_run.call_count} steps"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_all_tests_pass_verified(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """LLM claims ALL_TESTS_PASS and independent pytest confirms all pass.
+
+        Happy path: verification succeeds, early exit after Step 2.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (True, "1 passed in 0.5s")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is True, f"Should succeed when independently verified: {msg}"
+        assert "verified" in msg.lower(), f"Message should mention verification: {msg}"
+        assert mock_run.call_count == 2
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step9_all_tests_pass_hallucinated(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """LLM claims ALL_TESTS_PASS at Step 9 but independent pytest finds failures.
+
+        Same hallucination check for Step 9's ALL_TESTS_PASS exit.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (False, "FAILED tests/test_e2e_webhook.py::test_foo")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Verification complete. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should NOT have exited successfully
+        assert success is False, (
+            "Orchestrator should NOT report success when Step 9 verification fails"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_no_test_files_fallback(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """No test files extractable from issue — trusts LLM (backwards compatible).
+
+        When we can't find test files for independent verification, we fall back
+        to trusting the LLM output (same as old behavior).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = []  # No test files found
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is True, f"Should succeed with fallback when no test files: {msg}"
+        assert mock_run.call_count == 2
+        # verify_tests_independently should NOT have been called
+        mock_verify.assert_not_called()
+
+    def test_extract_test_files_from_issue_content(self, tmp_path):
+        """Unit test for _extract_test_files helper.
+
+        Should parse test paths from issue comments containing E2E_FILES_CREATED
+        markers and step comments referencing test files.
+        """
+        # Create test files on disk so they pass the existence check
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_webhook_payload.py").touch()
+        (tmp_path / "tests" / "test_e2e_repositories_added.py").touch()
+
+        issue_content = (
+            "## Step 11: E2E Test\n"
+            "E2E_FILES_CREATED: tests/test_e2e_webhook_payload.py, tests/test_e2e_repositories_added.py\n"
+            "Both tests verify the webhook payload handling.\n"
+        )
+        changed_files = ["tests/test_e2e_webhook_payload.py", "src/webhook.py"]
+
+        result = _extract_test_files(issue_content, changed_files, tmp_path)
+
+        assert "tests/test_e2e_webhook_payload.py" in result
+        assert "tests/test_e2e_repositories_added.py" in result
+        # Non-test files should NOT be included
+        assert "src/webhook.py" not in result
+
+    def test_extract_test_files_from_changed_files(self, tmp_path):
+        """Test files from changed_files list should be included."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_foo.py").touch()
+
+        result = _extract_test_files("No markers here", ["tests/test_foo.py", "src/foo.py"], tmp_path)
+
+        assert "tests/test_foo.py" in result
+        assert "src/foo.py" not in result
+
+    def test_extract_test_files_deduplicates(self, tmp_path):
+        """Same test file from multiple sources should appear only once."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_foo.py").touch()
+
+        issue_content = "E2E_FILES_CREATED: tests/test_e2e_foo.py\n"
+        changed_files = ["tests/test_e2e_foo.py"]
+
+        result = _extract_test_files(issue_content, changed_files, tmp_path)
+
+        assert result.count("tests/test_e2e_foo.py") == 1
+
+    def test_extract_test_files_from_disk_changes(self, tmp_path):
+        """Test files created on disk during workflow should be detected.
+
+        Reproduces the actual issue #588 scenario: issue_content has no
+        test file markers, changed_files is empty, but the agent created
+        test files on disk. Hash comparison should find them.
+        """
+        import subprocess
+        # Initialize a git repo so _get_modified_and_untracked works
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        (tmp_path / "tests").mkdir()
+        test_file = tmp_path / "tests" / "test_issue_588_regression.py"
+        test_file.write_text("def test_something(): pass")
+        # Also create a non-test file to ensure it's filtered out
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "webhook.py").write_text("# code")
+
+        # initial_file_hashes is empty (snapshot before workflow started)
+        # but the test file now exists on disk as untracked
+        initial_hashes: Dict[str, Optional[str]] = {}
+
+        # No markers in issue, no changed_files from LLM output
+        result = _extract_test_files(
+            "Generic bug description with no test files",
+            [],
+            tmp_path,
+            initial_hashes,
+        )
+
+        assert "tests/test_issue_588_regression.py" in result
+        assert "src/webhook.py" not in result
