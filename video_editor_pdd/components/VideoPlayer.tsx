@@ -38,6 +38,7 @@ export default function VideoPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -53,6 +54,7 @@ export default function VideoPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [speechAvailable, setSpeechAvailable] = useState(false);
   const [inputMethod, setInputMethod] = useState<'typed' | 'speech'>('typed');
+  const [isScrubbing, setIsScrubbing] = useState(false);
 
   // Setup Web Speech API
   useEffect(() => {
@@ -334,6 +336,51 @@ export default function VideoPlayer({
     );
   }, [duration]);
 
+  const seekToClientX = useCallback((clientX: number) => {
+    const videoEl = videoRef.current;
+    const progressEl = progressBarRef.current;
+    if (!videoEl || !progressEl) return;
+
+    const effectiveDuration = duration || videoEl.duration || 0;
+    if (!Number.isFinite(effectiveDuration) || effectiveDuration <= 0) return;
+
+    const rect = progressEl.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    const percent = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const nextTime = percent * effectiveDuration;
+    videoEl.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }, [duration]);
+
+  const handleProgressPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      setIsScrubbing(true);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      seekToClientX(event.clientX);
+    },
+    [seekToClientX]
+  );
+
+  const handleProgressPointerMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!isScrubbing) return;
+      seekToClientX(event.clientX);
+    },
+    [isScrubbing, seekToClientX]
+  );
+
+  const handleProgressPointerUp = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      seekToClientX(event.clientX);
+      setIsScrubbing(false);
+    },
+    [seekToClientX]
+  );
+
   const toggleFullscreen = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -490,7 +537,15 @@ export default function VideoPlayer({
         </div>
       </div>
 
-      <div className="relative h-2 bg-gray-700 rounded cursor-pointer">
+      <div
+        ref={progressBarRef}
+        className="relative h-2 bg-gray-700 rounded cursor-pointer touch-none"
+        onPointerDown={handleProgressPointerDown}
+        onPointerMove={handleProgressPointerMove}
+        onPointerUp={handleProgressPointerUp}
+        onPointerCancel={() => setIsScrubbing(false)}
+        aria-label="Seek timeline"
+      >
         <div
           className="absolute left-0 top-0 h-2 bg-blue-500 rounded"
           style={{ width: `${progressPercent}%` }}
@@ -498,9 +553,14 @@ export default function VideoPlayer({
         {annotations.map((a) => (
           <button
             key={a.id}
+            type="button"
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={() => {
               const videoEl = videoRef.current;
-              if (videoEl && a.timestamp != null) videoEl.currentTime = a.timestamp;
+              if (videoEl && a.timestamp != null) {
+                videoEl.currentTime = a.timestamp;
+                setCurrentTime(a.timestamp);
+              }
             }}
             className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0 -translate-y-1"
             style={{ left: `${a.timestamp != null ? (a.timestamp / duration) * 100 : 0}%` }}

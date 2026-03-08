@@ -538,6 +538,10 @@ describe("progress bar", () => {
     expect(sourceCode).toMatch(/relative\s+h-2\s+bg-gray-700/);
   });
 
+  it("keeps a ref to the progress bar for mouse seek math", () => {
+    expect(sourceCode).toMatch(/progressBarRef\s*=\s*useRef\s*<\s*HTMLDivElement\s*>\s*\(\s*null\s*\)/);
+  });
+
   it("renders progress fill with bg-blue-500", () => {
     expect(sourceCode).toMatch(/bg-blue-500/);
   });
@@ -560,6 +564,23 @@ describe("progress bar", () => {
 
   it("clicking a marker seeks video to that timestamp", () => {
     expect(sourceCode).toMatch(/videoEl\.currentTime\s*=\s*a\.timestamp/);
+  });
+
+  it("clicking or dragging the bar seeks using clientX and bar width", () => {
+    expect(sourceCode).toMatch(/seekToClientX/);
+    expect(sourceCode).toMatch(/getBoundingClientRect\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/clientX/);
+    expect(sourceCode).toMatch(/percent\s*=\s*clamp\(\(clientX\s*-\s*rect\.left\)\s*\/\s*rect\.width/);
+  });
+
+  it("binds pointer handlers to the progress bar container", () => {
+    expect(sourceCode).toMatch(/onPointerDown=\{handleProgressPointerDown\}/);
+    expect(sourceCode).toMatch(/onPointerMove=\{handleProgressPointerMove\}/);
+    expect(sourceCode).toMatch(/onPointerUp=\{handleProgressPointerUp\}/);
+  });
+
+  it("updates currentTime state immediately after seeking with the mouse", () => {
+    expect(sourceCode).toMatch(/setCurrentTime\(nextTime\)/);
   });
 
   it("provides aria-label for annotation markers", () => {

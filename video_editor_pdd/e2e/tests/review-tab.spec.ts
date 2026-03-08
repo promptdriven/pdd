@@ -354,6 +354,8 @@ test.describe('Review Tab', () => {
     const video = page.locator('video');
     await expect(video).toBeAttached();
 
+    const beforeSeek = await video.evaluate((v: HTMLVideoElement) => v.currentTime);
+
     // The progress bar is the div with class "relative h-2 bg-gray-700 rounded cursor-pointer"
     const progressBar = page.locator('.h-2.bg-gray-700.rounded.cursor-pointer');
     await expect(progressBar).toBeVisible();
@@ -366,7 +368,11 @@ test.describe('Review Tab', () => {
       await page.waitForTimeout(500);
     }
 
-    // The video element should still be attached (no crash from clicking progress bar)
+    const currentTime = await video.evaluate((v: HTMLVideoElement) => v.currentTime);
+    expect(currentTime).toBeGreaterThan(beforeSeek);
+    expect(currentTime).toBeGreaterThan(1);
+
+    // The video element should still be attached after seeking
     await expect(video).toBeAttached();
   });
 
