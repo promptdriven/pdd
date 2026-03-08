@@ -7,7 +7,7 @@ export const AnimationSection02KeyVisual: React.FC = () => {
   const frame = useCurrentFrame();
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#0A1628", justifyContent: "center", alignItems: "center", fontFamily: "sans-serif" }}>
+    <AbsoluteFill style={{ backgroundColor: "#00FF00", justifyContent: "center", alignItems: "center", fontFamily: "sans-serif" }}>
       <div style={{ position: "absolute", top: 72, left: 72, color: "#F8FAFC", fontSize: 52, fontWeight: 700 }}>
         Key Visual
       </div>
