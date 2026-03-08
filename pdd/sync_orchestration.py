@@ -2104,8 +2104,9 @@ def sync_orchestration(
                                 if isinstance(result, tuple) and len(result) >= 4:
                                     agentic_success = result[3]
 
-                                # For agentic test generation (non-Python): if agent succeeded, skip execution
-                                # and create synthetic RunReport instead (tests already ran in agentic mode)
+                                # For agentic test generation: if the agent reports success, trust its tests.
+                                # Python/TypeScript still execute tests to measure real coverage; other languages skip
+                                # execution and create a synthetic RunReport instead (tests already ran in agentic mode).
                                 if agentic_success is True:
                                     if language.lower() in ('python', 'typescript'):
                                         # Python/TS have coverage tooling — measure actual coverage instead of synthetic 0%
