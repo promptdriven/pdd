@@ -90,6 +90,7 @@ export const WordByWordSubtitle: React.FC<WordByWordSubtitleProps> = ({
         alignItems: "center",
         justifyContent: "center",
         opacity: segmentClearOpacity,
+        overflow: "hidden",
         pointerEvents: "none",
       }}
     >

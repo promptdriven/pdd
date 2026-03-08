@@ -15,13 +15,13 @@ export const BACKDROP_FEATHER_PX = 16;
 export const TRACK_FADE_OUT_FRAMES = 20;
 
 // Text container
-export const TEXT_MAX_WIDTH = 1600;
+export const TEXT_MAX_WIDTH = 1440;
 export const TEXT_PADDING_V = 24;
 export const TEXT_PADDING_H = 40;
 
 // Typography
 export const FONT_FAMILY = "'Inter', sans-serif";
-export const FONT_SIZE = 36;
+export const FONT_SIZE = 32;
 export const WORD_SPACING = 12;
 export const TEXT_SHADOW = "0 2px 8px rgba(0, 0, 0, 0.5)";
 
