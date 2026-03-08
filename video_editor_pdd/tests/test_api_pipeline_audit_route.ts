@@ -10,12 +10,12 @@
  *      Launches one agent per section concurrently. Returns SSE stream with { jobId }.
  *   2. Each per-section agent: calls renderStill() for segment midpoints → calls
  *      runClaudeAnalysis() comparing the still PNG against the spec file → writes
- *      specs/{sectionId}/AUDIT_{specName}.md with pass/fail verdict and details.
+ *      specs/{specDir}/AUDIT_{specName}.md with pass/fail verdict and details.
  *   3. GET /api/pipeline/audit/results — returns { sections: AuditSectionResult[] }
  *      with passCount, failCount, status ('done'|'pending'|'error'), and specs array.
  *   4. No authentication required.
  *   5. Still output path: outputs/audit/{sectionId}/{specName}_frame.png
- *   6. Audit report path: specs/{sectionId}/AUDIT_{specName}.md
+ *   6. Audit report path: specs/{specDir}/AUDIT_{specName}.md
  *   7. Concurrent agents: Promise.all(sections.map(...))
  *   8. Emit per-section events: { type: 'audit-section', sectionId, status, passCount, failCount }
  *   9. GET parses AUDIT_*.md files to extract verdicts (## Verdict heading)
@@ -634,7 +634,7 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const writePath = mockWriteFileSync.mock.calls[0][0];
     expect(writePath).toBe(
-      pathMod.join("specs", "intro", "AUDIT_visual.md")
+      pathMod.join(process.cwd(), "specs", "intro", "AUDIT_visual.md")
     );
 
     const content = mockWriteFileSync.mock.calls[0][1];
@@ -785,7 +785,7 @@ describe("audit executor factory", () => {
     );
   });
 
-  it("audit report path follows specs/{sectionId}/AUDIT_{specName}.md", async () => {
+  it("audit report path follows specs/{specDir}/AUDIT_{specName}.md", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[1]]; // main
     mockLoadProject.mockReturnValue(config);
@@ -799,7 +799,31 @@ describe("audit executor factory", () => {
 
     const pathMod = require("path");
     expect(mockWriteFileSync.mock.calls[0][0]).toBe(
-      pathMod.join("specs", "main", "AUDIT_transition.md")
+      pathMod.join(process.cwd(), "specs", "main", "AUDIT_transition.md")
+    );
+  });
+
+  it("writes audit report into section.specDir even when it differs from section.id", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "intro",
+        specDir: "cold_open",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["title_card.md"]);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const pathMod = require("path");
+    expect(mockWriteFileSync.mock.calls[0][0]).toBe(
+      pathMod.join(process.cwd(), "specs", "cold_open", "AUDIT_title_card.md")
     );
   });
 
@@ -962,6 +986,43 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].verdict).toBe("FAIL");
     expect(intro.specs[0].summary).toBe("Error parsing audit report");
     expect(intro.failCount).toBe(1);
+  });
+
+  it("reads audit files from specs/{specDir} when project.json omits the specs/ prefix", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        specDir: "cold_open",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const specPath = pathMod.join(specDir, "title_card.md");
+    const auditPath = pathMod.join(specDir, "AUDIT_title_card.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir || candidate === specPath
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) return ["AUDIT_title_card.md", "title_card.md"];
+      throw new Error(`Unexpected directory read: ${candidate}`);
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === auditPath) {
+        return "## Verdict\npass\n## Summary\nFrame matches spec\n";
+      }
+      throw new Error(`Unexpected file read: ${candidate}`);
+    });
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    expect(mockReaddirSync).toHaveBeenCalledWith(specDir);
+    expect(body.sections[0].specs[0].specPath).toBe("specs/cold_open/title_card.md");
+    expect(body.sections[0].passCount).toBe(1);
   });
 });
 

@@ -5,6 +5,10 @@ import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { renderStill } from "@/lib/render";
 import { runClaudeAnalysis } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
+import {
+  resolveSectionSpecDir,
+  resolveSectionSpecFile,
+} from "../_lib/spec-paths";
 import type { AnnotationAnalysis, Section, SseSend } from "@/lib/types";
 
 // --- app/api/pipeline/audit/run/route.ts ---
@@ -36,12 +40,13 @@ async function auditSection(
   send: SseSend,
   onLog: (msg: string) => void
 ): Promise<{ passCount: number; failCount: number }> {
-  const specDir = path.join(process.cwd(), "specs", section.specDir);
+  const specDir = resolveSectionSpecDir(section.specDir);
   const specFiles = fs.existsSync(specDir)
     ? fs
         .readdirSync(specDir)
         .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
     : [];
+  const fps = loadProject().render.fps ?? 30;
 
   let passCount = 0;
   let failCount = 0;
@@ -59,7 +64,6 @@ async function auditSection(
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
 
     // Render midpoint still
-    const fps = loadProject().render.fps ?? 30;
     const midpointFrame = Math.floor((section.durationSeconds / 2) * fps);
     onLog(
       `[audit] Rendering still for ${section.id} (${specName}) at frame ${midpointFrame}`
@@ -90,11 +94,11 @@ Use severity="pass" if the frame fully satisfies the spec.
 
     const auditReport = `## Verdict\n${verdict}\n## Summary\n${analysis.technicalAssessment}\n`;
 
-    const auditPath = path.join(
-      "specs",
-      section.id,
+    const auditPath = resolveSectionSpecFile(
+      section.specDir,
       `AUDIT_${specName}.md`
     );
+    fs.mkdirSync(path.dirname(auditPath), { recursive: true });
     fs.writeFileSync(auditPath, auditReport, "utf-8");
   }
 

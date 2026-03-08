@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
+import {
+  resolveSectionSpecDir,
+  resolveSectionSpecFile,
+  toSectionSpecPath,
+} from "../_lib/spec-paths";
 
 type SpecAuditResult = {
   specName: string;
@@ -44,7 +49,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
     const results: AuditSectionResult[] = [];
 
     for (const section of config.sections) {
-      const specDir = section.specDir;
+      const specDir = resolveSectionSpecDir(section.specDir);
       const files = fs.existsSync(specDir) ? fs.readdirSync(specDir) : [];
 
       const auditFiles = files.filter((f) => f.startsWith("AUDIT_"));
@@ -69,11 +74,11 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           if (verdict === "PASS") passCount++;
           else failCount++;
 
-          const specSourcePath = path.join(specDir, `${specName}.md`);
-          // Ensure specPath starts with "specs/" for /api/pipeline/specs/file compatibility
-          const safeSpecPath = specSourcePath.startsWith("specs/")
-            ? specSourcePath
-            : `specs/${specSourcePath}`;
+          const specSourcePath = resolveSectionSpecFile(
+            section.specDir,
+            `${specName}.md`
+          );
+          const safeSpecPath = toSectionSpecPath(section.specDir, `${specName}.md`);
 
           specs.push({
             specName,

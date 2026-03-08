@@ -16,7 +16,7 @@
  *   5. FAIL rows show: [View Frame] (opens still PNG in modal), [View Spec]
  *      (opens spec file in inline viewer), [Create Annotation →] (pre-fills
  *      annotation form and switches to Review tab).
- *   6. SSE shows per-agent progress: `{ type: 'audit-section', sectionId, passCount, failCount }`.
+ *   6. Audit run stream shows per-agent progress: `{ type: 'audit-section', sectionId, passCount, failCount }`.
  *   7. `'use client'` directive.
  */
 
@@ -91,8 +91,9 @@ describe("API endpoints", () => {
     expect(sourceCode).toMatch(/method\s*:\s*['"]POST['"]/);
   });
 
-  it("uses SSE stream endpoint for audit progress", () => {
-    expect(sourceCode).toMatch(/\/api\/pipeline\/audit\/stream/);
+  it("reads the audit run response stream for progress", () => {
+    expect(sourceCode).toMatch(/res\.body\?\.getReader\(\)/);
+    expect(sourceCode).toMatch(/new\s+TextDecoder/);
   });
 
   it("uses GET /api/pipeline/specs/file for spec viewer", () => {
@@ -175,8 +176,8 @@ describe("Toolbar buttons", () => {
     expect(sourceCode).toMatch(/fetch\(\s*['"]\/api\/pipeline\/audit\/run['"]\s*,\s*\{/);
   });
 
-  it("handleAuditRun sends JSON body with sectionId when provided", () => {
-    expect(sourceCode).toMatch(/JSON\.stringify\(sectionId\s*\?\s*\{\s*sectionId\s*\}\s*:\s*\{\}\)/);
+  it("handleAuditRun sends JSON body with sections array when provided", () => {
+    expect(sourceCode).toMatch(/JSON\.stringify\(sectionId\s*\?\s*\{\s*sections:\s*\[\s*sectionId\s*\]\s*\}\s*:\s*\{\}\)/);
   });
 });
 
@@ -370,9 +371,9 @@ describe("Create Annotation handler", () => {
 // 12. SSE Stream Progress (Req 6)
 // ---------------------------------------------------------------------------
 
-describe("SSE stream progress", () => {
-  it("creates EventSource for audit progress", () => {
-    expect(sourceCode).toMatch(/new\s+EventSource/);
+describe("Audit run stream progress", () => {
+  it("reads from the POST response stream", () => {
+    expect(sourceCode).toMatch(/res\.body\?\.getReader\(\)/);
   });
 
   it("listens for audit-section events", () => {
@@ -391,16 +392,16 @@ describe("SSE stream progress", () => {
     expect(sourceCode).toMatch(/data\.failCount/);
   });
 
-  it("sets status to running on SSE update", () => {
-    expect(sourceCode).toMatch(/status:\s*['"]running['"]/);
+  it("updates status from streamed audit events", () => {
+    expect(sourceCode).toMatch(/status:\s*data\.status/);
   });
 
-  it("closes EventSource on error", () => {
-    expect(sourceCode).toMatch(/es\.close\(\)/);
+  it("refreshes audit results after the stream completes", () => {
+    expect(sourceCode).toMatch(/await\s+refreshResults\(\)/);
   });
 
-  it("closes EventSource on cleanup", () => {
-    expect(sourceCode).toMatch(/return\s*\(\)\s*=>\s*es\.close\(\)/);
+  it("cancels the reader after consuming the stream", () => {
+    expect(sourceCode).toMatch(/reader\.cancel\(\)/);
   });
 });
 
@@ -481,6 +482,10 @@ describe("Loading and error states", () => {
 describe("Empty state", () => {
   it("displays message when no audit results available", () => {
     expect(sourceCode).toContain("No audit results available.");
+  });
+
+  it("shows a message when a section has no audit report rows yet", () => {
+    expect(sourceCode).toContain("No audit reports found yet.");
   });
 
   it("empty state is conditional on sections length", () => {
@@ -638,15 +643,15 @@ describe("Audit section dropdown", () => {
 // ---------------------------------------------------------------------------
 
 describe("Cleanup and mount safety", () => {
-  it("uses mounted flag to prevent state updates after unmount", () => {
-    expect(sourceCode).toMatch(/let\s+mounted\s*=\s*true/);
+  it("uses mountedRef to prevent state updates after unmount", () => {
+    expect(sourceCode).toMatch(/mountedRef\s*=\s*useRef\(true\)/);
   });
 
-  it("sets mounted to false in cleanup", () => {
-    expect(sourceCode).toMatch(/mounted\s*=\s*false/);
+  it("sets mountedRef.current to false in cleanup", () => {
+    expect(sourceCode).toMatch(/mountedRef\.current\s*=\s*false/);
   });
 
-  it("checks mounted before setting state", () => {
-    expect(sourceCode).toMatch(/if\s*\(mounted\)/);
+  it("checks mountedRef.current before setting state", () => {
+    expect(sourceCode).toMatch(/if\s*\(mountedRef\.current\)/);
   });
 });

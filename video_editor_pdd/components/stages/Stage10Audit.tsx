@@ -62,62 +62,54 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
   const [error, setError] = useState<string | null>(null);
   const [auditDropdownOpen, setAuditDropdownOpen] = useState(false);
   const auditDropdownRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
 
   // Frame modal
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
 
-  // Load audit results on mount
   useEffect(() => {
-    let mounted = true;
-    const fetchResults = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await fetch('/api/pipeline/audit/results');
-        if (!res.ok) throw new Error('Failed to load audit results.');
-        const data: AuditResultsResponse = await res.json();
-        if (mounted) setSections(data.sections || []);
-      } catch (err: any) {
-        if (mounted) setError(err.message || 'Failed to load audit results.');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    };
-    fetchResults();
+    mountedRef.current = true;
     return () => {
-      mounted = false;
+      mountedRef.current = false;
     };
   }, []);
 
-  // SSE stream for per-agent progress
-  useEffect(() => {
-    const es = new EventSource('/api/pipeline/audit/stream');
-    es.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'audit-section') {
-          setSections((prev) =>
-            prev.map((s) =>
-              s.sectionId === data.sectionId
-                ? {
-                    ...s,
-                    passCount: data.passCount ?? s.passCount,
-                    failCount: data.failCount ?? s.failCount,
-                    status: 'running',
-                  }
-                : s
-            )
-          );
-        }
-      } catch {
-        // Ignore malformed events
+  const refreshResults = useCallback(async (showLoading = false) => {
+    try {
+      if (showLoading && mountedRef.current) setLoading(true);
+      if (mountedRef.current) setError(null);
+      const res = await fetch('/api/pipeline/audit/results');
+      if (!res.ok) throw new Error('Failed to load audit results.');
+      const data: AuditResultsResponse = await res.json();
+      if (mountedRef.current) setSections(data.sections || []);
+    } catch (err: any) {
+      if (mountedRef.current) {
+        setError(err.message || 'Failed to load audit results.');
       }
-    };
-    es.onerror = () => {
-      es.close();
-    };
-    return () => es.close();
+    } finally {
+      if (showLoading && mountedRef.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshResults(true);
+  }, [refreshResults]);
+
+  const applyAuditEvent = useCallback((data: Partial<SectionAudit> & { sectionId: string }) => {
+    if (!mountedRef.current) return;
+    setSections((prev) =>
+      prev.map((section) =>
+        section.sectionId === data.sectionId
+          ? {
+              ...section,
+              passCount: data.passCount ?? section.passCount,
+              failCount: data.failCount ?? section.failCount,
+              status: data.status ?? section.status,
+            }
+          : section
+      )
+    );
   }, []);
 
   useEffect(() => {
@@ -132,12 +124,83 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
   }, [auditDropdownOpen]);
 
   const handleAuditRun = useCallback(async (sectionId?: string) => {
-    await fetch('/api/pipeline/audit/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(sectionId ? { sectionId } : {}),
-    });
-  }, []);
+    try {
+      if (mountedRef.current) {
+        setError(null);
+        setSections((prev) =>
+          prev.map((section) =>
+            !sectionId || section.sectionId === sectionId
+              ? { ...section, status: 'running' }
+              : section
+          )
+        );
+      }
+
+      const res = await fetch('/api/pipeline/audit/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sectionId ? { sections: [sectionId] } : {}),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to run audit.');
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        await refreshResults();
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!mountedRef.current) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          const dataLine = part
+            .split('\n')
+            .find((line) => line.startsWith('data: '));
+          if (!dataLine) continue;
+
+          try {
+            const data = JSON.parse(dataLine.slice(6));
+            if (data?.type === 'audit-section' && typeof data.sectionId === 'string') {
+              applyAuditEvent({
+                sectionId: data.sectionId,
+                passCount: data.passCount,
+                failCount: data.failCount,
+                status: data.status,
+              });
+            }
+
+            if (data?.type === 'error') {
+              if (mountedRef.current) {
+                setError(data.message || 'Audit failed.');
+              }
+            }
+          } catch {
+            // Ignore malformed chunks and keep reading the stream.
+          }
+        }
+      }
+
+      await reader.cancel().catch(() => {});
+      await refreshResults();
+    } catch (err: any) {
+      if (mountedRef.current) {
+        setError(err.message || 'Failed to run audit.');
+      }
+      await refreshResults();
+    }
+  }, [applyAuditEvent, refreshResults]);
 
   const toggleExpanded = useCallback((sectionId: string) => {
     setExpanded((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
@@ -293,6 +356,9 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                     <div className="col-span-3">Spec</div>
                     <div className="col-span-7">Summary</div>
                   </div>
+                  {section.specs.length === 0 && (
+                    <div className="p-3 text-xs text-white/50">No audit reports found yet.</div>
+                  )}
                   {section.specs.map((spec) => {
                     const key = `${section.sectionId}:${spec.specName}`;
                     const frame = `/api/video/outputs/audit/${section.sectionId}/${spec.specName}_frame.png`;
