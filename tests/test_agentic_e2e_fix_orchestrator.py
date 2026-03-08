@@ -8,12 +8,14 @@ Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
 import re
+from typing import Dict, Optional
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from pdd.load_prompt_template import load_prompt_template
+from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently
 
 
 def _strip_pdd_metadata(template: str) -> str:
@@ -564,13 +566,19 @@ class TestExistingEarlyExits:
     continue to work correctly.
     """
 
-    def test_all_tests_pass_early_exit_step2(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_all_tests_pass_early_exit_step2(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """ALL_TESTS_PASS in Step 2 should exit the workflow successfully.
 
         This tests the existing early exit at Step 2 (lines 504-509 in
         agentic_e2e_fix_orchestrator.py).
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Mock independent verification to confirm tests pass
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
 
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
@@ -589,13 +597,19 @@ class TestExistingEarlyExits:
             f"Expected 2 step calls (Steps 1-2) but got {mock_run.call_count}."
         )
 
-    def test_all_tests_pass_step9_exits_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_all_tests_pass_step9_exits_loop(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """ALL_TESTS_PASS in Step 9 should exit the loop successfully.
 
         This tests the existing early exit at Step 9 (lines 513-517 in
         agentic_e2e_fix_orchestrator.py).
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Mock independent verification to confirm tests pass
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
 
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
@@ -1234,7 +1248,7 @@ class TestPushWithRetryTokenFile:
             call_count += 1
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            if cmd == ["git", "push"] and call_count == 1:
+            if cmd == ["git", "push", "-u", "origin", "HEAD"] and call_count == 1:
                 # First push fails with auth error
                 result.returncode = 1
                 result.stderr = "fatal: Authentication failed for 'https://github.com/owner/repo.git'"
@@ -1242,7 +1256,7 @@ class TestPushWithRetryTokenFile:
                 result.stdout = "https://github.com/owner/repo.git"
             elif cmd[0:3] == ["git", "remote", "set-url"]:
                 pass  # No-op
-            elif cmd == ["git", "push"] and call_count > 1:
+            elif cmd == ["git", "push", "-u", "origin", "HEAD"] and call_count > 1:
                 pass  # Second push succeeds
 
             return result
@@ -1298,7 +1312,7 @@ class TestPushWithRetryTokenFile:
         def mock_run_side_effect(cmd, **kwargs):
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            if cmd == ["git", "push"]:
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
                 if not set_url_calls:
                     # First push fails
                     result.returncode = 1
@@ -1334,7 +1348,7 @@ class TestPushWithRetryTokenFile:
             call_count += 1
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            if cmd == ["git", "push"] and call_count == 1:
+            if cmd == ["git", "push", "-u", "origin", "HEAD"] and call_count == 1:
                 result.returncode = 1
                 result.stderr = "remote: HTTP Basic: Access denied"
             elif cmd[0:3] == ["git", "remote", "get-url"]:
@@ -1385,9 +1399,15 @@ class TestProviderFailureAbort:
         assert "Aborting" in msg or "consecutive" in msg.lower()
         assert mock_run.call_count == 3  # Aborted after 3 steps
 
-    def test_provider_failure_counter_resets_on_success(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_provider_failure_counter_resets_on_success(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """Success between failures should reset the counter — no abort."""
         mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Mock independent verification to confirm tests pass
+        mock_extract.return_value = ["tests/test_foo.py"]
+        mock_verify.return_value = (True, "1 passed")
 
         call_count = [0]
         def side_effect(**kwargs):
@@ -1408,3 +1428,495 @@ class TestProviderFailureAbort:
 
         # Should NOT have aborted — counter reset at step 3
         assert mock_run.call_count > 3
+
+
+class TestIsIntermediateFile:
+    """Direct unit tests for _is_intermediate_file (Issue #383).
+
+    Tests the pure function in isolation — faster and more targeted than
+    going through _commit_and_push.
+    """
+
+    @pytest.fixture
+    def is_intermediate(self):
+        """Import helper."""
+        from pdd.agentic_e2e_fix_orchestrator import _is_intermediate_file
+        return _is_intermediate_file
+
+    # --- Should be filtered (True) ---
+
+    @pytest.mark.parametrize("path", [
+        "module_fixed.py",
+        "pdd/auth_test_commands_auth_fixed.py",
+        "tests/test_auth_test_commands_auth_fixed.py",
+    ])
+    def test_underscore_fixed_suffix_filtered(self, is_intermediate, path):
+        """Files with _fixed suffix in stem should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "module.fixed.py",
+        "pdd/handler.fixed.py",
+    ])
+    def test_dot_fixed_suffix_filtered(self, is_intermediate, path):
+        """Files with .fixed suffix in stem should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "module-fixed.py",
+        "pdd/service-fixed.py",
+    ])
+    def test_hyphen_fixed_suffix_filtered(self, is_intermediate, path):
+        """Files with -fixed suffix in stem should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "module.py.bak",
+        "module.py.backup",
+        "module.py.orig",
+        "module.py.tmp",
+        "pdd/deep/nested/file.py.bak",
+    ])
+    def test_backup_extensions_filtered(self, is_intermediate, path):
+        """Files with backup extensions should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "error_output.txt",
+        "error_output_models.txt",
+        "pdd/error_output_auth.txt",
+    ])
+    def test_error_output_files_filtered(self, is_intermediate, path):
+        """error_output debug files should be filtered (gap fix for #383)."""
+        assert is_intermediate(path) is True
+
+    # --- Should NOT be filtered (False) — false-positive guards ---
+
+    @pytest.mark.parametrize("path", [
+        "fix_error_loop.py",
+        "pdd/fix_error_loop.py",
+        "tests/test_agentic_fix.py",
+        "fixed.py",
+        "tests/test_fixed_point_math.py",
+        "pdd/currency_fixed_rate.py",
+        "pdd/prefix_fixer.py",
+        "conftest.py",
+        "pdd/__init__.py",
+        "README.md",
+        "extensions/github_pdd_app/src/models.py",
+        "error_output.py",
+    ])
+    def test_legitimate_files_not_filtered(self, is_intermediate, path):
+        """Legitimate files must NOT be caught by the filter."""
+        assert is_intermediate(path) is False
+
+    # --- Nested subdirectory paths ---
+
+    @pytest.mark.parametrize("path,expected", [
+        ("pdd/utils/deep/module_fixed.py", True),
+        ("a/b/c/d/backup.py.orig", True),
+        ("src/nested/handler-fixed.py", True),
+        ("pdd/utils/deep/module.py", False),
+        ("a/b/c/d/real_code.py", False),
+    ])
+    def test_nested_subdirectory_paths(self, is_intermediate, path, expected):
+        """Filter should work correctly regardless of directory depth."""
+        assert is_intermediate(path) is expected
+
+
+class TestCommitAndPushIntermediateFileFiltering:
+    """Tests for issue #383: _commit_and_push should filter out intermediate files.
+
+    The `pdd fix agentic` command creates intermediate/debug files with suffixes
+    like `_fixed.py` during the fix workflow. These files should NOT be committed.
+    """
+
+    @pytest.fixture
+    def mock_git_repo(self, tmp_path, monkeypatch):
+        """Create a mock git repository for testing _commit_and_push behavior."""
+        import subprocess
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=tmp_path, capture_output=True,
+        )
+
+        (tmp_path / "initial.py").write_text("# initial")
+        subprocess.run(["git", "add", "initial.py"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"],
+            cwd=tmp_path, capture_output=True,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def test_commit_and_push_filters_fixed_suffix_files(self, mock_git_repo):
+        """_commit_and_push should NOT stage files with _fixed suffix."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        (cwd / "auth.py").write_text("# fixed auth code")
+        (cwd / "auth_fixed.py").write_text("# intermediate backup")
+        (cwd / "test_auth_fixed.py").write_text("# intermediate test backup")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote configured"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=383,
+                issue_title="Test issue",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        assert "auth.py" in staged_files, "Legitimate file should be staged"
+        assert "auth_fixed.py" not in staged_files, (
+            "Files with _fixed suffix should NOT be staged (Issue #383)"
+        )
+        assert "test_auth_fixed.py" not in staged_files, (
+            "Test files with _fixed suffix should NOT be staged (Issue #383)"
+        )
+
+    def test_commit_and_push_filters_backup_extension_files(self, mock_git_repo):
+        """_commit_and_push should NOT stage files with backup extensions."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        (cwd / "module.py").write_text("# fixed module")
+        (cwd / "module.py.bak").write_text("# backup")
+        (cwd / "module.py.orig").write_text("# original")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=383,
+                issue_title="Test issue",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        assert "module.py" in staged_files, "Legitimate file should be staged"
+        assert "module.py.bak" not in staged_files, "Files with .bak should NOT be staged"
+        assert "module.py.orig" not in staged_files, "Files with .orig should NOT be staged"
+
+    def test_commit_and_push_filters_error_output_files(self, mock_git_repo):
+        """_commit_and_push should NOT stage error_output debug files."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        (cwd / "module.py").write_text("# fixed module")
+        (cwd / "error_output.txt").write_text("debug output")
+        (cwd / "error_output_models.txt").write_text("debug output")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=383,
+                issue_title="Test issue",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        assert "module.py" in staged_files, "Legitimate file should be staged"
+        assert "error_output.txt" not in staged_files, (
+            "error_output.txt should NOT be staged"
+        )
+        assert "error_output_models.txt" not in staged_files, (
+            "error_output_models.txt should NOT be staged"
+        )
+
+class TestIndependentTestVerification:
+    """Tests for issue #588: Independent pytest verification of LLM claims.
+
+    The orchestrator must not trust the LLM's ALL_TESTS_PASS claim blindly.
+    After the LLM claims tests pass, we run pytest independently via subprocess
+    and only accept the claim if the real pytest run confirms it.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_all_tests_pass_hallucinated(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """LLM claims ALL_TESTS_PASS but independent pytest finds failures.
+
+        Primary bug reproducer for issue #588: The LLM hallucinated passing
+        test results. The orchestrator should NOT exit successfully; it should
+        override the step output with the real failure and continue to Step 3+.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Independent verification finds failures
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (False, "FAILED tests/test_e2e_webhook.py::test_repositories_added - AssertionError")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should NOT have exited successfully at Step 2
+        assert success is False, (
+            "Orchestrator should NOT report success when independent verification fails"
+        )
+        # Should have continued past Step 2 (at least to Step 3)
+        assert mock_run.call_count > 2, (
+            f"Expected workflow to continue past Step 2 but only ran {mock_run.call_count} steps"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_all_tests_pass_verified(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """LLM claims ALL_TESTS_PASS and independent pytest confirms all pass.
+
+        Happy path: verification succeeds, early exit after Step 2.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (True, "1 passed in 0.5s")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is True, f"Should succeed when independently verified: {msg}"
+        assert "verified" in msg.lower(), f"Message should mention verification: {msg}"
+        assert mock_run.call_count == 2
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step9_all_tests_pass_hallucinated(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """LLM claims ALL_TESTS_PASS at Step 9 but independent pytest finds failures.
+
+        Same hallucination check for Step 9's ALL_TESTS_PASS exit.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (False, "FAILED tests/test_e2e_webhook.py::test_foo")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Verification complete. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should NOT have exited successfully
+        assert success is False, (
+            "Orchestrator should NOT report success when Step 9 verification fails"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_no_test_files_fallback(self, mock_extract, mock_verify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """No test files extractable from issue — trusts LLM (backwards compatible).
+
+        When we can't find test files for independent verification, we fall back
+        to trusting the LLM output (same as old behavior).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = []  # No test files found
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is True, f"Should succeed with fallback when no test files: {msg}"
+        assert mock_run.call_count == 2
+        # verify_tests_independently should NOT have been called
+        mock_verify.assert_not_called()
+
+    def test_extract_test_files_from_issue_content(self, tmp_path):
+        """Unit test for _extract_test_files helper.
+
+        Should parse test paths from issue comments containing E2E_FILES_CREATED
+        markers and step comments referencing test files.
+        """
+        # Create test files on disk so they pass the existence check
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_webhook_payload.py").touch()
+        (tmp_path / "tests" / "test_e2e_repositories_added.py").touch()
+
+        issue_content = (
+            "## Step 11: E2E Test\n"
+            "E2E_FILES_CREATED: tests/test_e2e_webhook_payload.py, tests/test_e2e_repositories_added.py\n"
+            "Both tests verify the webhook payload handling.\n"
+        )
+        changed_files = ["tests/test_e2e_webhook_payload.py", "src/webhook.py"]
+
+        result = _extract_test_files(issue_content, changed_files, tmp_path)
+
+        assert "tests/test_e2e_webhook_payload.py" in result
+        assert "tests/test_e2e_repositories_added.py" in result
+        # Non-test files should NOT be included
+        assert "src/webhook.py" not in result
+
+    def test_extract_test_files_from_changed_files(self, tmp_path):
+        """Test files from changed_files list should be included."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_foo.py").touch()
+
+        result = _extract_test_files("No markers here", ["tests/test_foo.py", "src/foo.py"], tmp_path)
+
+        assert "tests/test_foo.py" in result
+        assert "src/foo.py" not in result
+
+    def test_extract_test_files_deduplicates(self, tmp_path):
+        """Same test file from multiple sources should appear only once."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_foo.py").touch()
+
+        issue_content = "E2E_FILES_CREATED: tests/test_e2e_foo.py\n"
+        changed_files = ["tests/test_e2e_foo.py"]
+
+        result = _extract_test_files(issue_content, changed_files, tmp_path)
+
+        assert result.count("tests/test_e2e_foo.py") == 1
+
+    def test_extract_test_files_from_disk_changes(self, tmp_path):
+        """Test files created on disk during workflow should be detected.
+
+        Reproduces the actual issue #588 scenario: issue_content has no
+        test file markers, changed_files is empty, but the agent created
+        test files on disk. Hash comparison should find them.
+        """
+        import subprocess
+        # Initialize a git repo so _get_modified_and_untracked works
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        (tmp_path / "tests").mkdir()
+        test_file = tmp_path / "tests" / "test_issue_588_regression.py"
+        test_file.write_text("def test_something(): pass")
+        # Also create a non-test file to ensure it's filtered out
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "webhook.py").write_text("# code")
+
+        # initial_file_hashes is empty (snapshot before workflow started)
+        # but the test file now exists on disk as untracked
+        initial_hashes: Dict[str, Optional[str]] = {}
+
+        # No markers in issue, no changed_files from LLM output
+        result = _extract_test_files(
+            "Generic bug description with no test files",
+            [],
+            tmp_path,
+            initial_hashes,
+        )
+
+        assert "tests/test_issue_588_regression.py" in result
+        assert "src/webhook.py" not in result

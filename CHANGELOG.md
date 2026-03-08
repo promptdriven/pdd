@@ -1,12 +1,56 @@
-## v0.0.169 (2026-03-07)
+## v0.0.170 (2026-03-07)
+
+### Feat
+
+- update TTS script for integration testing and commit Playwright integration test results.
+- Add independent test verification for agentic orchestrator's ALL_TESTS_PASS claims and update related tests.
+- implement independent verification for agent's ALL_TESTS_PASS claims in the e2e fix orchestrator.
 
 ### Fix
 
-- pdd sync --agentic Python coverage failures (7 bugs) (#778)
-- step 8.5 merges existing context docs instead of regenerating (#774)
-- pdd change doesn't stop workflow when step asks user for clarification
-- set explicit width in _echo_rich to prevent empty output in headless CI
-- prevent pdd change infinite loop when triggered by GitHub App (#756)
+- **test-batch-ann-1772952765768**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772952338234**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772950126527**: Subtitle font size 96px causes text to clip the ri
+- **test-batch-ann-1772933408546**: Subtitle font size 96px causes text to clip the ri
+- push upstream tracking and junk file filter (#787)
+- increase timeout for test_test_logs_manual_invocation (300s → 600s)
+- make hello world test file checks non-fatal in CI
+
+## v0.0.169 (2026-03-07)
+
+### Feat
+
+- **12-step agentic bug workflow**: new step 4 (API Research) identifies external API dependencies and auth-type-specific limitations before reproduction; all subsequent steps renumbered (old 4→5, 5→6, etc.)
+- **Cross-step consistency validation in bug prompts**: steps 8, 9, 10 now validate that generated test mocks don't contradict investigation findings from earlier steps, preventing false-positive tests that pass with wrong mocks
+- **Existing PR guard for `pdd change`**: change orchestrator checks for an existing open PR on the issue branch and returns early if found
+- **Robust JSON extraction from provider output**: new `_extract_json_from_output()` handles non-JSON text (npm warnings, upgrade prompts) mixed with provider JSON via line-by-line parsing and brace-depth matching fallback
+- **Python-specific agentic test generation**: `pdd test --agentic` applies `_inject_sys_path_preamble` for Python tests; test generation prompt adds pytest conventions, sys.path setup, and coverage targeting rules
+- **`pdd sync` test_extend enabled for Python in agentic mode**: previously skipped for all agentic languages, now only non-Python languages skip since Python has reliable coverage tooling
+- **Coverage config auto-injection**: `pdd sync` generates a temporary `.coveragerc` excluding `if __name__ == "__main__"` blocks when no project-level coverage config exists
+
+### Fix
+
+- `pdd sync --agentic` Python coverage failures (7 bugs): coverage regex avoids matching ANSI escape codes, temp `.coveragerc` auto-injection, test_extend enabled for Python agentic, real test execution for Python agentic
+- step 8.5 merges existing context docs instead of regenerating from scratch — reads existing `prompts/_context/*.yaml` and injects into LLM context for incremental updates
+- `pdd change` doesn't stop workflow when step asks user for clarification — hard stop detection now requires `STOP_CONDITION:` prefix
+- set explicit `width=120` in `Console()` / `_echo_rich` to prevent empty output in headless CI
+- prevent `pdd change` infinite loop when triggered by GitHub App
+- `sync_determine_operation` returns `generate` when code file is missing with stale metadata, preventing test-only loops on missing code
+- architecture step 7b review scoped to current issue's modules only via `origin.issue_number` filtering — prevents overwriting sibling sub-issue modules in shared `architecture.json`
+- architecture step 7 passes full merged architecture to downstream steps (not just new/updated modules), fixing missing context for steps 8–13
+- change orchestrator only posts GitHub issue comments on hard stops and 3x provider abort (not on every failed step)
+
+### Refactor
+
+- architecture step 2 prompt simplified — removed inline naming registry tables and cross-cutting concern scan (deferred to step 2b codebase scan), focusing on PRD-based module decomposition
+- architecture step 8.5 prompt refactored for merge-first approach with existing context docs
+- architecture step 7b review prompt scoped by `origin.issue_number` with explicit instructions to leave other issues' modules untouched
+- architecture step 10 completeness prompt removed entry point wiring check section (moved to step 7b)
+
+### Docs
+
+- add `PDD_GAP_ANALYSIS.md` — comprehensive gap analysis of PDD prompt quality
+- add `PDD_PROMPT_IMPROVEMENT_GUIDE.md` — guide for improving PDD prompts
 
 ## v0.0.168 (2026-03-05)
 

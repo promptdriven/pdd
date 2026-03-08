@@ -87,6 +87,7 @@ OpenAI,gpt-4o-mini,0.15,0.6,1450,TRUE,,OPENAI_API_KEY,,,none,0
 
         # Force local execution and point to custom CSV
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_SUPPRESS_SETUP_REMINDER", "1")
         monkeypatch.setenv("OPENAI_API_KEY", "fake-openai-key-for-testing")
         monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key-for-testing")
 
@@ -136,15 +137,19 @@ OpenAI,gpt-4o-mini,0.15,0.6,1450,TRUE,,OPENAI_API_KEY,,,none,0
                                 # (missing <include> files, different cwd). This test is about
                                 # warning suppression, not prompt preprocessing.
                                 with patch('pdd.code_generator_main.pdd_preprocess', side_effect=lambda text, **kwargs: text):
-                                    from pdd import cli
+                                    # Bypass unfinished_prompt which may fail in Cloud Batch
+                                    # when mock LLM returns empty content. This test is about
+                                    # warning suppression, not completion detection.
+                                    with patch('pdd.code_generator.unfinished_prompt', return_value=("Mock check", True, 0.0, "mock")):
+                                        from pdd import cli
 
-                                    runner = CliRunner()
-                                    result = runner.invoke(cli.cli, [
-                                        "--local",  # Force local execution
-                                        "generate",
-                                        "test_python.prompt",
-                                        "--output", "output.py"
-                                    ], catch_exceptions=False)
+                                        runner = CliRunner()
+                                        result = runner.invoke(cli.cli, [
+                                            "--local",  # Force local execution
+                                            "generate",
+                                            "test_python.prompt",
+                                            "--output", "output.py"
+                                        ], catch_exceptions=False)
 
         # 6. THE KEY ASSERTION: No warning about missing base model
         # Check that the command completed successfully
