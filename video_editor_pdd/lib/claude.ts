@@ -4,6 +4,8 @@ import { spawn } from 'child_process';
 import type { AnnotationAnalysis, ClaudeFixResult } from './types';
 
 const TIMEOUT_MS = 600_000;
+const FIX_MODEL =
+  process.env.CLAUDE_FIX_MODEL ?? 'claude-opus-4-6';
 const FAST_DRY_RUN_MODEL =
   process.env.CLAUDE_DRY_RUN_MODEL ?? 'claude-sonnet-4-5';
 
@@ -198,7 +200,7 @@ export async function runClaudeFix(
 ): Promise<ClaudeFixResult> {
   const args = [
     '--model',
-    'claude-opus-4-6',
+    FIX_MODEL,
     '--output-format',
     'json',
     '--allowedTools',

@@ -1,0 +1,62 @@
+{
+  "name": "integration-test",
+  "outputResolution": {
+    "width": 1280,
+    "height": 720
+  },
+  "tts": {
+    "engine": "qwen3-tts",
+    "modelPath": "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "tokenizerPath": "models/Qwen3-TTS-Tokenizer-12Hz",
+    "speaker": "Aiden",
+    "speakingRate": 0.95,
+    "sampleRate": 24000
+  },
+  "sections": [
+    {
+      "id": "animation_section",
+      "label": "Animation Section",
+      "videoFile": "animation_section.mp4",
+      "specDir": "animation_section",
+      "remotionDir": "S00-AnimationSection",
+      "compositionId": "AnimationSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "veo_section",
+      "label": "Veo Section",
+      "videoFile": "veo_section.mp4",
+      "specDir": "veo_section",
+      "remotionDir": "S01-VeoSection",
+      "compositionId": "VeoSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    }
+  ],
+  "audioSync": {
+    "sectionGroups": {
+      "animation_section": {
+        "startSegment": "animation_section_001",
+        "endSegment": "animation_section_002"
+      },
+      "veo_section": {
+        "startSegment": "veo_section_001",
+        "endSegment": "veo_section_002"
+      }
+    },
+    "silenceGapDefault": 0.3
+  },
+  "veo": {
+    "model": "veo-3.1-generate-preview",
+    "defaultAspectRatio": "16:9",
+    "maxConcurrentGenerations": 4,
+    "references": [],
+    "frameChains": []
+  },
+  "render": {
+    "maxParallelRenders": 3,
+    "useLambda": false,
+    "lambdaRegion": "us-east-1"
+  }
+}

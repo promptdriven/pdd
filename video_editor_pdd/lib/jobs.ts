@@ -115,6 +115,30 @@ function updateProgress(jobId: string, percent: number): void {
   ).run(percent, nowIso(), jobId);
 }
 
+function parseJobParams(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') {
+    return raw as Record<string, unknown>;
+  }
+
+  if (typeof raw !== 'string') {
+    return {};
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
@@ -155,8 +179,7 @@ export function getJob(jobId: string): Job | undefined {
 
   if (!row) return undefined;
 
-  const params =
-    typeof row.params === 'string' ? JSON.parse(row.params) : row.params;
+  const params = parseJobParams(row.params);
 
   return {
     id: row.id as string,
@@ -164,7 +187,7 @@ export function getJob(jobId: string): Job | undefined {
     status: row.status as JobStatus,
     progress: (row.progress as number) ?? 0,
     error: (row.error as string | null) ?? null,
-    params: params as Record<string, unknown>,
+    params,
     logs: (row.logs as string) ?? '',
     retryOf: (row.retryOf as string | null) ?? null,
     createdAt: row.createdAt as string,
@@ -260,8 +283,7 @@ export async function retryJob(jobId: string): Promise<string> {
     throw new Error(`Job not found: ${jobId}`);
   }
 
-  const params =
-    typeof row.params === 'string' ? JSON.parse(row.params) : row.params;
+  const params = parseJobParams(row.params);
 
   const factory = EXECUTORS.get(row.stage);
   if (!factory) {

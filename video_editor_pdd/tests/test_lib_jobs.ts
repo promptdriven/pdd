@@ -328,6 +328,26 @@ describe("getJob", () => {
     expect(typeof job!.params).toBe("object");
   });
 
+  it("returns empty params object when stored params string is blank", () => {
+    const jobId = createJob("setup", {});
+    testDb
+      .prepare("UPDATE jobs SET params = ? WHERE id = ?")
+      .run("", jobId);
+
+    const job = getJob(jobId);
+    expect(job!.params).toEqual({});
+  });
+
+  it("returns empty params object when stored params string is malformed", () => {
+    const jobId = createJob("setup", {});
+    testDb
+      .prepare("UPDATE jobs SET params = ? WHERE id = ?")
+      .run("{not-valid-json", jobId);
+
+    const job = getJob(jobId);
+    expect(job!.params).toEqual({});
+  });
+
   it("returns progress as number", () => {
     const jobId = createJob("render", {});
     const job = getJob(jobId);
