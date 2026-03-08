@@ -1,0 +1,109 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e1]:
+  - main [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - button "Pipeline" [ref=e5]
+        - button "Review" [ref=e6]
+      - generic [ref=e7]:
+        - complementary [ref=e8]:
+          - generic [ref=e9] [cursor=pointer]:
+            - generic [ref=e10]: "1"
+            - generic [ref=e11]: Setup
+            - generic [ref=e12]: ●
+          - generic [ref=e13] [cursor=pointer]:
+            - generic [ref=e14]: "2"
+            - generic [ref=e15]: Script
+            - generic [ref=e16]: ●
+          - generic [ref=e17] [cursor=pointer]:
+            - generic [ref=e18]: "3"
+            - generic [ref=e19]: TTS Script
+            - generic [ref=e20]: ●
+          - generic [ref=e21] [cursor=pointer]:
+            - generic [ref=e22]: "4"
+            - generic [ref=e23]: TTS Render
+            - generic [ref=e24]: ●
+          - generic [ref=e25] [cursor=pointer]:
+            - generic [ref=e26]: "5"
+            - generic [ref=e27]: Audio Sync
+            - generic [ref=e28]: ●
+          - generic "Claude CLI timeout after 600s" [ref=e29] [cursor=pointer]:
+            - generic [ref=e30]: "6"
+            - generic [ref=e31]: Spec Gen
+            - generic "Claude CLI timeout after 600s" [ref=e32]: ✕
+          - generic [ref=e33] [cursor=pointer]:
+            - generic [ref=e34]: "7"
+            - generic [ref=e35]: Veo Gen
+            - generic [ref=e36]: ○
+          - generic [ref=e37] [cursor=pointer]:
+            - generic [ref=e38]: "8"
+            - generic [ref=e39]: Compositions
+            - generic [ref=e40]: ○
+          - generic [ref=e41] [cursor=pointer]:
+            - generic [ref=e42]: "9"
+            - generic [ref=e43]: Render
+            - generic [ref=e44]: ○
+          - generic [ref=e45] [cursor=pointer]:
+            - generic [ref=e46]: "10"
+            - generic [ref=e47]: Audit
+            - generic [ref=e48]: ○
+        - main [ref=e49]:
+          - generic [ref=e50]:
+            - generic [ref=e51]:
+              - heading "Stage 6 — Spec Generation" [level=2] [ref=e52]
+              - generic [ref=e53]:
+                - button "Generate All Specs" [active] [ref=e54]
+                - button "Continue →" [ref=e55]
+            - generic [ref=e56]:
+              - generic [ref=e57]:
+                - button "▾ Animation Section" [ref=e58]:
+                  - generic [ref=e59]: ▾
+                  - generic [ref=e60]: Animation Section
+                - button "↺ Regenerate" [ref=e61]
+              - table [ref=e63]:
+                - rowgroup [ref=e64]:
+                  - row "Type Path Status Actions" [ref=e65]:
+                    - columnheader "Type" [ref=e66]
+                    - columnheader "Path" [ref=e67]
+                    - columnheader "Status" [ref=e68]
+                    - columnheader "Actions" [ref=e69]
+                - rowgroup [ref=e70]:
+                  - row "— specs/animation_section/spec.md missing ✎ ↺" [ref=e71]:
+                    - cell "—" [ref=e72]
+                    - cell "specs/animation_section/spec.md" [ref=e73]
+                    - cell "missing" [ref=e74]
+                    - cell "✎ ↺" [ref=e75]:
+                      - button "✎" [ref=e76]
+                      - button "↺" [ref=e77]
+            - generic [ref=e78]:
+              - generic [ref=e79]:
+                - button "▾ Veo Section" [ref=e80]:
+                  - generic [ref=e81]: ▾
+                  - generic [ref=e82]: Veo Section
+                - button "↺ Regenerate" [ref=e83]
+              - table [ref=e85]:
+                - rowgroup [ref=e86]:
+                  - row "Type Path Status Actions" [ref=e87]:
+                    - columnheader "Type" [ref=e88]
+                    - columnheader "Path" [ref=e89]
+                    - columnheader "Status" [ref=e90]
+                    - columnheader "Actions" [ref=e91]
+                - rowgroup [ref=e92]:
+                  - row "— specs/veo_section/spec.md missing ✎ ↺" [ref=e93]:
+                    - cell "—" [ref=e94]
+                    - cell "specs/veo_section/spec.md" [ref=e95]
+                    - cell "missing" [ref=e96]
+                    - cell "✎ ↺" [ref=e97]:
+                      - button "✎" [ref=e98]
+                      - button "↺" [ref=e99]
+            - generic [ref=e101]:
+              - generic [ref=e102]:
+                - generic [ref=e103]: "[17:56:50] [specs] Generating specs for section: animation_section (1/2)"
+                - generic [ref=e104]: "[18:06:52] Error: Claude CLI timeout after 600s"
+              - generic [ref=e105]: "✕ Error: Claude CLI timeout after 600s"
+  - button "Open Next.js Dev Tools" [ref=e111] [cursor=pointer]:
+    - img [ref=e112]
+  - alert [ref=e115]
+```

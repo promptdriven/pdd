@@ -76,9 +76,31 @@ export default function Page() {
     const loadProject = async () => {
       setLoadingProject(true);
       try {
-        const res = await fetch('/api/project');
-        if (!res.ok) throw new Error('Failed to load project');
-        const data = (await res.json()) as ProjectConfig;
+        let data: ProjectConfig | null = null;
+        let lastError: Error | null = null;
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const res = await fetch('/api/project');
+            if (!res.ok) throw new Error('Failed to load project');
+            const raw = await res.text();
+            if (!raw.trim()) throw new Error('Failed to load project');
+            data = JSON.parse(raw) as ProjectConfig;
+            break;
+          } catch (err) {
+            lastError =
+              err instanceof Error ? err : new Error('Failed to load project');
+
+            if (attempt < 4) {
+              await new Promise((resolve) => window.setTimeout(resolve, 500));
+            }
+          }
+        }
+
+        if (!data) {
+          throw lastError ?? new Error('Failed to load project');
+        }
+
         if (cancelled) return;
         setProjectConfig(data);
         const firstSection = data.sections?.[0];

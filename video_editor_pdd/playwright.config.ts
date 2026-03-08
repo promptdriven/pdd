@@ -17,6 +17,12 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'on-first-retry',
   },
+  webServer: {
+    command: 'npx next dev -p 3001',
+    port: 3001,
+    reuseExistingServer: false,
+    timeout: 60_000,
+  },
   projects: [
     {
       name: 'chromium',

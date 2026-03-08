@@ -1,8 +1,8 @@
 {
-  "name": "3blue1brown-antibiotics",
+  "name": "integration-test",
   "outputResolution": {
-    "width": 1920,
-    "height": 1080
+    "width": 1280,
+    "height": 720
   },
   "tts": {
     "engine": "qwen3-tts",
@@ -14,168 +14,35 @@
   },
   "sections": [
     {
-      "id": "cold_open",
-      "label": "Cold Open",
-      "videoFile": "cold_open.mp4",
-      "specDir": "cold_open",
-      "remotionDir": "S00-ColdOpen",
-      "compositionId": "ColdOpenSection",
-      "durationSeconds": 15.744,
-      "offsetSeconds": 0,
-      "compositions": [
-        "01_title_card",
-        "03_subtitle_track",
-        "05_crossfade_transition",
-        "06_fade_bookends",
-        "07_monitor_glow_overlay",
-        "08_closing_question_card"
-      ]
+      "id": "animation_section",
+      "label": "Animation Section",
+      "videoFile": "animation_section.mp4",
+      "specDir": "animation_section",
+      "remotionDir": "S00-AnimationSection",
+      "compositionId": "AnimationSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     },
     {
-      "id": "part1_economics",
-      "label": "Part 1: Economics",
-      "videoFile": "part1_economics.mp4",
-      "specDir": "part1_economics",
-      "remotionDir": "S01-Economics",
-      "compositionId": "Part1Economics",
-      "durationSeconds": 382.314667,
-      "offsetSeconds": 15.744,
-      "compositions": [
-        "01_title_card",
-        "03_cost_crossover_chart",
-        "04_stat_callout_github",
-        "06_stat_callout_uplevel",
-        "07_stat_callout_gitclear",
-        "09_context_degradation_chart",
-        "10_split_perception_reality",
-        "12_regeneration_infographic",
-        "13_crossover_zoom",
-        "14_subtitle_track"
-      ]
-    },
-    {
-      "id": "part2_paradigm_shift",
-      "label": "Part 2: Paradigm Shift",
-      "videoFile": "part2_paradigm_shift.mp4",
-      "specDir": "02-paradigm-shift",
-      "remotionDir": "S02-ParadigmShift",
-      "compositionId": "Part2ParadigmShift",
-      "durationSeconds": 195.792,
-      "offsetSeconds": 398.058667,
-      "compositions": [
-        "01_title_card",
-        "03_mold_production_infographic",
-        "05_value_migration_diagram",
-        "07_hdl_timeline",
-        "08_split_manual_vs_specification",
-        "10_prompt_mold_visualization",
-        "11_subtitle_track"
-      ]
-    },
-    {
-      "id": "part3_mold",
-      "label": "Part 3: The Mold",
-      "videoFile": "part3_mold.mp4",
-      "specDir": "03-mold-has-three-parts",
-      "remotionDir": "S03-MoldThreeParts",
-      "compositionId": "Part3MoldThreeParts",
-      "durationSeconds": 280.728,
-      "offsetSeconds": 593.850667,
-      "compositions": [
-        "01_title_card",
-        "03_stat_callout_coderabbit",
-        "04_stat_callout_dora",
-        "06_split_prompt_vs_code",
-        "08_stat_callout_nl_context",
-        "10_ratchet_infographic",
-        "12_three_pillars_diagram",
-        "13_subtitle_track"
-      ]
-    },
-    {
-      "id": "part4_precision",
-      "label": "Part 4: Precision Tradeoff",
-      "videoFile": "part4_precision.mp4",
-      "specDir": "04-precision-brings-cost",
-      "remotionDir": "S04-PrecisionTradeoff",
-      "compositionId": "Part4PrecisionTradeoff",
-      "durationSeconds": 96.912,
-      "offsetSeconds": 874.578667,
-      "compositions": [
-        "01_title_card",
-        "03_precision_cost_ucurve",
-        "04_stat_callout_prompt_compression",
-        "05_split_prompt_detail_vs_tests",
-        "07_spectrum_slider",
-        "10_subtitle_track"
-      ]
-    },
-    {
-      "id": "part5_compound",
-      "label": "Part 5: Compound Returns",
-      "videoFile": "part5_compound.mp4",
-      "specDir": "05-compound",
-      "remotionDir": "S05-CompoundReturns",
-      "compositionId": "Part5CompoundReturns",
-      "durationSeconds": 98.424,
-      "offsetSeconds": 971.490667,
-      "compositions": [
-        "01_title_card",
-        "03_stat_callout_maintenance",
-        "05_stat_callout_cisq",
-        "06_compound_debt_chart",
-        "08_split_patching_vs_pdd",
-        "10_quote_card",
-        "11_subtitle_track"
-      ]
-    },
-    {
-      "id": "closing",
-      "label": "Closing",
-      "videoFile": "closing.mp4",
-      "specDir": "06-closing",
-      "remotionDir": "S06-Closing",
-      "compositionId": "ClosingSection",
-      "durationSeconds": 21.072,
-      "offsetSeconds": 1069.914667,
-      "compositions": [
-        "01_title_card",
-        "03_stat_callout_roi",
-        "05_split_darning_vs_molding",
-        "07_cta_card",
-        "08_subtitle_track"
-      ]
+      "id": "veo_section",
+      "label": "Veo Section",
+      "videoFile": "veo_section.mp4",
+      "specDir": "veo_section",
+      "remotionDir": "S01-VeoSection",
+      "compositionId": "VeoSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     }
   ],
   "audioSync": {
     "sectionGroups": {
-      "cold_open": {
-        "startSegment": "cold_open_001",
-        "endSegment": "cold_open_006"
+      "animation_section": {
+        "startSegment": "animation_section_001",
+        "endSegment": "animation_section_002"
       },
-      "part1_economics": {
-        "startSegment": "part1_economics_001",
-        "endSegment": "part1_economics_030"
-      },
-      "closing": {
-        "startSegment": "closing_001",
-        "endSegment": "closing_006"
-      },
-      "part2_paradigm_shift": {
-        "startSegment": "part2_paradigm_shift_001",
-        "endSegment": "part2_paradigm_shift_019"
-      },
-      "part3_mold": {
-        "startSegment": "part3_mold_001",
-        "endSegment": "part3_mold_025"
-      },
-      "part4_precision": {
-        "startSegment": "part4_precision_001",
-        "endSegment": "part4_precision_011"
-      },
-      "part5_compound": {
-        "startSegment": "part5_compound_001",
-        "endSegment": "part5_compound_010"
+      "veo_section": {
+        "startSegment": "veo_section_001",
+        "endSegment": "veo_section_002"
       }
     },
     "silenceGapDefault": 0.3
@@ -184,26 +51,8 @@
     "model": "veo-3.1-generate-preview",
     "defaultAspectRatio": "16:9",
     "maxConcurrentGenerations": 4,
-    "references": [
-      {
-        "id": "alex",
-        "label": "Alex (protagonist)",
-        "imagePath": "references/cold-open/developer_reference.png",
-        "sections": [
-          "cold_open",
-          "part1_economics"
-        ]
-      }
-    ],
-    "frameChains": [
-      {
-        "clips": [
-          "cold_open_veo_01",
-          "cold_open_veo_02"
-        ],
-        "referenceId": "alex"
-      }
-    ]
+    "references": [],
+    "frameChains": []
   },
   "render": {
     "maxParallelRenders": 3,

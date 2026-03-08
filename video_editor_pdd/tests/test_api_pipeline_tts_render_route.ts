@@ -549,6 +549,18 @@ describe("executor — spawn command", () => {
     expect(args[0]).toContain("render_tts.py");
   });
 
+  it("enables Edge TTS fallback by default in the child environment", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    const [, , options] = mockSpawn.mock.calls[0];
+    expect(options.env.RENDER_TTS_ALLOW_EDGE_FALLBACK).toBe("1");
+  });
+
   it("passes --segment flags when segments are provided", async () => {
     mockExistsSync.mockReturnValue(false);
     mockReaddirSync.mockReturnValue([]);

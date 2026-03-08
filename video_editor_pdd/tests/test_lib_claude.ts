@@ -54,7 +54,7 @@ jest.mock("child_process", () => ({
 }));
 
 // Must import after jest.mock
-import { runClaudeAnalysis, runClaudeFix } from "../lib/claude";
+import { runClaudeAnalysis, runClaudeFix, runClaudeFixDryRun } from "../lib/claude";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -436,6 +436,34 @@ describe("runClaudeFix — returns parsed result", () => {
     expect(result.filesModified).toEqual(["src/comp.tsx", "src/styles.ts"]);
     expect(result.changeDescription).toBe("Updated timing parameters");
     expect(result.confidence).toBe(0.92);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8b. runClaudeFixDryRun — spawn arguments
+// ---------------------------------------------------------------------------
+
+describe("runClaudeFixDryRun — spawn arguments", () => {
+  beforeEach(() => {
+    mockProc = createMockProc();
+    lastSpawnArgs = null;
+  });
+
+  it("uses the faster default dry-run model", () => {
+    const promise = runClaudeFixDryRun("preview this", "/project/dir");
+    emitAndClose(
+      mockProc,
+      JSON.stringify({ ...sampleFixResult, proposedDiff: "--- a\n+++ b\n" }),
+      "",
+      0
+    );
+
+    return promise.then(() => {
+      const args = lastSpawnArgs!.args;
+      const modelIdx = args.indexOf("--model");
+      expect(modelIdx).toBeGreaterThan(-1);
+      expect(args[modelIdx + 1]).toBe("claude-sonnet-4-5");
+    });
   });
 });
 

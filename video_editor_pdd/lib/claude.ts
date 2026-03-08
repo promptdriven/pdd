@@ -4,6 +4,8 @@ import { spawn } from 'child_process';
 import type { AnnotationAnalysis, ClaudeFixResult } from './types';
 
 const TIMEOUT_MS = 600_000;
+const FAST_DRY_RUN_MODEL =
+  process.env.CLAUDE_DRY_RUN_MODEL ?? 'claude-sonnet-4-5';
 
 /**
  * Attempts to parse JSON from the Claude CLI output using multiple strategies.
@@ -230,7 +232,7 @@ Instead, describe what changes you would make. Return JSON:
 
   const args = [
     '--model',
-    'claude-opus-4-6',
+    FAST_DRY_RUN_MODEL,
     '--output-format',
     'json',
     '--allowedTools',
