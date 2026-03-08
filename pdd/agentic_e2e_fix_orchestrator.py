@@ -98,6 +98,57 @@ def _parse_dev_units(output: str) -> str:
             return line.split(":", 1)[1].strip()
     return ""
 
+# Patterns for intermediate/debug files that should not be committed
+# These are created by `pdd fix` as intermediate outputs (see generate_output_paths.py)
+_FIXED_SUFFIXES = ("_fixed", ".fixed", "-fixed")
+_BACKUP_EXTENSIONS = (".bak", ".backup", ".orig", ".tmp")
+
+
+def _is_intermediate_file(filepath: str) -> bool:
+    """Check if a file is an intermediate/debug file that should not be committed.
+
+    Intermediate files are created during the `pdd fix` workflow as default outputs
+    and should be filtered out before committing changes.
+
+    Patterns detected:
+    - *_fixed.* (e.g., module_fixed.py, test_auth_fixed.py)
+    - *.fixed.* (e.g., module.fixed.py)
+    - *-fixed.* (e.g., module-fixed.py)
+    - *.bak, *.backup, *.orig, *.tmp extensions
+    - error_output*.txt (e.g., error_output.txt, error_output_models.txt)
+
+    Args:
+        filepath: Relative path to the file
+
+    Returns:
+        True if the file should be excluded from commits
+    """
+    path = Path(filepath)
+    stem = path.stem  # filename without extension
+    suffix = path.suffix  # extension including dot
+
+    # Check for backup extensions (e.g., foo.py.bak, foo.py.backup)
+    if suffix in _BACKUP_EXTENSIONS:
+        return True
+
+    # Check for double extensions with backup (e.g., foo.py.orig)
+    if path.suffixes and len(path.suffixes) >= 2:
+        if path.suffixes[-1] in _BACKUP_EXTENSIONS:
+            return True
+
+    # Check for fixed patterns in the stem
+    # e.g., module_fixed.py -> stem is "module_fixed"
+    for fixed_suffix in _FIXED_SUFFIXES:
+        if stem.endswith(fixed_suffix):
+            return True
+
+    # Check for error_output debug files (e.g., error_output.txt, error_output_models.txt)
+    if suffix == ".txt" and stem.startswith("error_output"):
+        return True
+
+    return False
+
+
 def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identified_units_str: str) -> Dict[str, Any]:
     """Updates dev unit states based on Step 8 output."""
     identified_units = [u.strip() for u in identified_units_str.split(",") if u.strip()]
@@ -250,7 +301,7 @@ def _push_with_retry(
         (success, message)
     """
     push_result = subprocess.run(
-        ["git", "push"],
+        ["git", "push", "-u", "origin", "HEAD"],
         cwd=cwd,
         capture_output=True,
         text=True
@@ -303,7 +354,7 @@ def _push_with_retry(
 
         # Retry push
         retry_result = subprocess.run(
-            ["git", "push"],
+            ["git", "push", "-u", "origin", "HEAD"],
             cwd=cwd,
             capture_output=True,
             text=True
@@ -362,20 +413,26 @@ def _commit_and_push(
     current_hashes = _get_file_hashes(cwd)
 
     # Find files that changed during workflow
-    files_to_commit: List[str] = []
+    changed_files_raw: List[str] = []
     for filepath, current_hash in current_hashes.items():
         if filepath not in initial_file_hashes:
             # New file created during workflow
-            files_to_commit.append(filepath)
+            changed_files_raw.append(filepath)
         elif initial_file_hashes[filepath] != current_hash:
             # Content changed during workflow
-            files_to_commit.append(filepath)
+            changed_files_raw.append(filepath)
+
+    # Filter out intermediate/debug files (Issue #383)
+    # These are created by `pdd fix` as default outputs and should not be committed
+    files_to_commit = [f for f in changed_files_raw if not _is_intermediate_file(f)]
 
     if not files_to_commit:
         # Fallback: hash snapshot may be tainted (captured after a prior
         # interrupted run's modifications already existed on disk). Check
         # git diff directly to catch orphaned unstaged changes (#545).
         fallback_files = _get_modified_and_untracked(cwd)
+        # Apply the same intermediate file filter to fallback files
+        fallback_files = [f for f in fallback_files if not _is_intermediate_file(f)]
         if fallback_files:
             files_to_commit = list(fallback_files)
         elif _has_unpushed_commits(cwd):
@@ -691,8 +748,6 @@ def run_agentic_e2e_fix_orchestrator(
                 )
 
         if success:
-            clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
-
             # Detect actual file changes via hash comparison (not LLM output parsing)
             # This fixes issue #355: summary showing empty "Files changed" despite
             # real modifications, especially on early exit at Step 2.
@@ -719,8 +774,10 @@ def run_agentic_e2e_fix_orchestrator(
             )
             if commit_success:
                 console.print(f"   [green]{commit_message}[/green]")
+                clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
             else:
                 console.print(f"   [yellow]Warning: {commit_message}[/yellow]")
+                return False, final_message, total_cost, model_used, changed_files
 
             return True, final_message, total_cost, model_used, changed_files
         else:

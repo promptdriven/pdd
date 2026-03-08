@@ -1234,7 +1234,7 @@ class TestPushWithRetryTokenFile:
             call_count += 1
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            if cmd == ["git", "push"] and call_count == 1:
+            if cmd == ["git", "push", "-u", "origin", "HEAD"] and call_count == 1:
                 # First push fails with auth error
                 result.returncode = 1
                 result.stderr = "fatal: Authentication failed for 'https://github.com/owner/repo.git'"
@@ -1242,7 +1242,7 @@ class TestPushWithRetryTokenFile:
                 result.stdout = "https://github.com/owner/repo.git"
             elif cmd[0:3] == ["git", "remote", "set-url"]:
                 pass  # No-op
-            elif cmd == ["git", "push"] and call_count > 1:
+            elif cmd == ["git", "push", "-u", "origin", "HEAD"] and call_count > 1:
                 pass  # Second push succeeds
 
             return result
@@ -1298,7 +1298,7 @@ class TestPushWithRetryTokenFile:
         def mock_run_side_effect(cmd, **kwargs):
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            if cmd == ["git", "push"]:
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
                 if not set_url_calls:
                     # First push fails
                     result.returncode = 1
@@ -1334,7 +1334,7 @@ class TestPushWithRetryTokenFile:
             call_count += 1
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
-            if cmd == ["git", "push"] and call_count == 1:
+            if cmd == ["git", "push", "-u", "origin", "HEAD"] and call_count == 1:
                 result.returncode = 1
                 result.stderr = "remote: HTTP Basic: Access denied"
             elif cmd[0:3] == ["git", "remote", "get-url"]:
@@ -1408,3 +1408,282 @@ class TestProviderFailureAbort:
 
         # Should NOT have aborted — counter reset at step 3
         assert mock_run.call_count > 3
+
+
+class TestIsIntermediateFile:
+    """Direct unit tests for _is_intermediate_file (Issue #383).
+
+    Tests the pure function in isolation — faster and more targeted than
+    going through _commit_and_push.
+    """
+
+    @pytest.fixture
+    def is_intermediate(self):
+        """Import helper."""
+        from pdd.agentic_e2e_fix_orchestrator import _is_intermediate_file
+        return _is_intermediate_file
+
+    # --- Should be filtered (True) ---
+
+    @pytest.mark.parametrize("path", [
+        "module_fixed.py",
+        "pdd/auth_test_commands_auth_fixed.py",
+        "tests/test_auth_test_commands_auth_fixed.py",
+    ])
+    def test_underscore_fixed_suffix_filtered(self, is_intermediate, path):
+        """Files with _fixed suffix in stem should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "module.fixed.py",
+        "pdd/handler.fixed.py",
+    ])
+    def test_dot_fixed_suffix_filtered(self, is_intermediate, path):
+        """Files with .fixed suffix in stem should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "module-fixed.py",
+        "pdd/service-fixed.py",
+    ])
+    def test_hyphen_fixed_suffix_filtered(self, is_intermediate, path):
+        """Files with -fixed suffix in stem should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "module.py.bak",
+        "module.py.backup",
+        "module.py.orig",
+        "module.py.tmp",
+        "pdd/deep/nested/file.py.bak",
+    ])
+    def test_backup_extensions_filtered(self, is_intermediate, path):
+        """Files with backup extensions should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "error_output.txt",
+        "error_output_models.txt",
+        "pdd/error_output_auth.txt",
+    ])
+    def test_error_output_files_filtered(self, is_intermediate, path):
+        """error_output debug files should be filtered (gap fix for #383)."""
+        assert is_intermediate(path) is True
+
+    # --- Should NOT be filtered (False) — false-positive guards ---
+
+    @pytest.mark.parametrize("path", [
+        "fix_error_loop.py",
+        "pdd/fix_error_loop.py",
+        "tests/test_agentic_fix.py",
+        "fixed.py",
+        "tests/test_fixed_point_math.py",
+        "pdd/currency_fixed_rate.py",
+        "pdd/prefix_fixer.py",
+        "conftest.py",
+        "pdd/__init__.py",
+        "README.md",
+        "extensions/github_pdd_app/src/models.py",
+        "error_output.py",
+    ])
+    def test_legitimate_files_not_filtered(self, is_intermediate, path):
+        """Legitimate files must NOT be caught by the filter."""
+        assert is_intermediate(path) is False
+
+    # --- Nested subdirectory paths ---
+
+    @pytest.mark.parametrize("path,expected", [
+        ("pdd/utils/deep/module_fixed.py", True),
+        ("a/b/c/d/backup.py.orig", True),
+        ("src/nested/handler-fixed.py", True),
+        ("pdd/utils/deep/module.py", False),
+        ("a/b/c/d/real_code.py", False),
+    ])
+    def test_nested_subdirectory_paths(self, is_intermediate, path, expected):
+        """Filter should work correctly regardless of directory depth."""
+        assert is_intermediate(path) is expected
+
+
+class TestCommitAndPushIntermediateFileFiltering:
+    """Tests for issue #383: _commit_and_push should filter out intermediate files.
+
+    The `pdd fix agentic` command creates intermediate/debug files with suffixes
+    like `_fixed.py` during the fix workflow. These files should NOT be committed.
+    """
+
+    @pytest.fixture
+    def mock_git_repo(self, tmp_path, monkeypatch):
+        """Create a mock git repository for testing _commit_and_push behavior."""
+        import subprocess
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=tmp_path, capture_output=True,
+        )
+
+        (tmp_path / "initial.py").write_text("# initial")
+        subprocess.run(["git", "add", "initial.py"], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial commit"],
+            cwd=tmp_path, capture_output=True,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def test_commit_and_push_filters_fixed_suffix_files(self, mock_git_repo):
+        """_commit_and_push should NOT stage files with _fixed suffix."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        (cwd / "auth.py").write_text("# fixed auth code")
+        (cwd / "auth_fixed.py").write_text("# intermediate backup")
+        (cwd / "test_auth_fixed.py").write_text("# intermediate test backup")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote configured"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=383,
+                issue_title="Test issue",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        assert "auth.py" in staged_files, "Legitimate file should be staged"
+        assert "auth_fixed.py" not in staged_files, (
+            "Files with _fixed suffix should NOT be staged (Issue #383)"
+        )
+        assert "test_auth_fixed.py" not in staged_files, (
+            "Test files with _fixed suffix should NOT be staged (Issue #383)"
+        )
+
+    def test_commit_and_push_filters_backup_extension_files(self, mock_git_repo):
+        """_commit_and_push should NOT stage files with backup extensions."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        (cwd / "module.py").write_text("# fixed module")
+        (cwd / "module.py.bak").write_text("# backup")
+        (cwd / "module.py.orig").write_text("# original")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=383,
+                issue_title="Test issue",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        assert "module.py" in staged_files, "Legitimate file should be staged"
+        assert "module.py.bak" not in staged_files, "Files with .bak should NOT be staged"
+        assert "module.py.orig" not in staged_files, "Files with .orig should NOT be staged"
+
+    def test_commit_and_push_filters_error_output_files(self, mock_git_repo):
+        """_commit_and_push should NOT stage error_output debug files."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        (cwd / "module.py").write_text("# fixed module")
+        (cwd / "error_output.txt").write_text("debug output")
+        (cwd / "error_output_models.txt").write_text("debug output")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=383,
+                issue_title="Test issue",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        assert "module.py" in staged_files, "Legitimate file should be staged"
+        assert "error_output.txt" not in staged_files, (
+            "error_output.txt should NOT be staged"
+        )
+        assert "error_output_models.txt" not in staged_files, (
+            "error_output_models.txt should NOT be staged"
+        )
