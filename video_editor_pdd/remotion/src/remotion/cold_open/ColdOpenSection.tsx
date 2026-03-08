@@ -48,7 +48,7 @@ export const ColdOpenSection: React.FC<ColdOpenSectionPropsType> = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
-      <Audio src={staticFile("cold_open_narration.wav")} />
+      <Audio src={staticFile("cold_open/narration.wav")} />
 
       {/* Visual 0: 01_title_card */}
       {activeVisual === 0 && (
