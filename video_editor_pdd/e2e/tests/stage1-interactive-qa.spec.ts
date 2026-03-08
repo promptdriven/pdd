@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
 import fs from 'fs';
+import { loadActiveProjectFixture } from './helpers/project-fixtures';
 
 const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 const PROJECT_JSON_PATH = path.join(__dirname, '..', '..', 'project.json');
@@ -11,9 +12,11 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
 
   // Snapshot the original project.json before any tests run, restore after all
   let originalProjectJson: string;
+  let initialProject = loadActiveProjectFixture();
 
   test.beforeAll(async () => {
     originalProjectJson = fs.readFileSync(PROJECT_JSON_PATH, 'utf8');
+    initialProject = JSON.parse(originalProjectJson);
   });
 
   test.afterAll(async () => {
@@ -35,82 +38,70 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
       await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'A1-stage1-heading.png'), fullPage: true });
     });
 
-    test('A2: project name shows "3blue1brown-antibiotics"', async ({ page }) => {
+    test('A2: project name matches project.json', async ({ page }) => {
       const nameInput = page.locator('label', { hasText: 'Project Name' }).locator('..').locator('input');
-      await expect(nameInput).toHaveValue('3blue1brown-antibiotics');
+      await expect(nameInput).toHaveValue(initialProject.name);
     });
 
-    test('A3: resolution dropdown shows 1920x1080', async ({ page }) => {
+    test('A3: resolution dropdown matches project.json', async ({ page }) => {
       const resSelect = page.locator('select').first();
-      await expect(resSelect).toHaveValue('1920x1080');
+      const resolution = `${initialProject.outputResolution.width}x${initialProject.outputResolution.height}`;
+      await expect(resSelect).toHaveValue(resolution);
     });
 
-    test('A4: TTS Speaker shows "Aiden"', async ({ page }) => {
+    test('A4: TTS Speaker matches project.json', async ({ page }) => {
       const speakerInput = page.locator('label', { hasText: 'TTS Speaker' }).locator('..').locator('input');
-      await expect(speakerInput).toHaveValue('Aiden');
+      await expect(speakerInput).toHaveValue(initialProject.tts.speaker);
     });
 
-    test('A5: TTS Speaking Rate shows 0.95', async ({ page }) => {
+    test('A5: TTS Speaking Rate matches project.json', async ({ page }) => {
       const rateInput = page.locator('label', { hasText: 'TTS Speaking Rate' }).locator('..').locator('input');
-      await expect(rateInput).toHaveValue('0.95');
+      await expect(rateInput).toHaveValue(String(initialProject.tts.speakingRate));
     });
 
-    test('A6: TTS Sample Rate shows 24000', async ({ page }) => {
+    test('A6: TTS Sample Rate matches project.json', async ({ page }) => {
       const sampleInput = page.locator('label', { hasText: 'TTS Sample Rate' }).locator('..').locator('input');
-      await expect(sampleInput).toHaveValue('24000');
+      await expect(sampleInput).toHaveValue(String(initialProject.tts.sampleRate));
     });
 
-    test('A7: Veo Model shows "veo-3.1-generate-preview"', async ({ page }) => {
+    test('A7: Veo Model matches project.json', async ({ page }) => {
       const veoInput = page.locator('label', { hasText: 'Veo Model' }).locator('..').locator('input');
-      await expect(veoInput).toHaveValue('veo-3.1-generate-preview');
+      await expect(veoInput).toHaveValue(initialProject.veo.model);
     });
 
-    test('A8: Veo Aspect Ratio shows 16:9', async ({ page }) => {
+    test('A8: Veo Aspect Ratio matches project.json', async ({ page }) => {
       const aspectSelect = page.locator('label', { hasText: 'Veo Aspect Ratio' }).locator('..').locator('select');
-      await expect(aspectSelect).toHaveValue('16:9');
+      await expect(aspectSelect).toHaveValue(initialProject.veo.defaultAspectRatio);
     });
 
-    test('A9: Max Parallel Renders shows 3', async ({ page }) => {
+    test('A9: Max Parallel Renders matches project.json', async ({ page }) => {
       const rendersInput = page.locator('label', { hasText: 'Max Parallel Renders' }).locator('..').locator('input');
-      await expect(rendersInput).toHaveValue('3');
+      await expect(rendersInput).toHaveValue(String(initialProject.render.maxParallelRenders));
     });
 
-    test('A10: Section Registry table has exactly 7 rows', async ({ page }) => {
+    test('A10: Section Registry table matches project.json row order', async ({ page }) => {
       const rows = page.locator('tbody tr');
-      await expect(rows).toHaveCount(7);
+      await expect(rows).toHaveCount(initialProject.sections.length);
 
-      // Verify specific section IDs match project.json
-      const expectedIds = [
-        'cold_open', 'part1_economics', 'part2_paradigm_shift',
-        'part3_mold', 'part4_precision', 'part5_compound', 'closing',
-      ];
-      for (let i = 0; i < expectedIds.length; i++) {
+      for (let i = 0; i < initialProject.sections.length; i++) {
         const idCell = rows.nth(i).locator('td').nth(1);
-        await expect(idCell).toHaveText(expectedIds[i]);
+        await expect(idCell).toHaveText(initialProject.sections[i].id);
       }
     });
 
     test('A11: Section Registry labels match project.json', async ({ page }) => {
       const rows = page.locator('tbody tr');
-      const expectedLabels = [
-        'Cold Open', 'Part 1: Economics', 'Part 2: Paradigm Shift',
-        'Part 3: The Mold', 'Part 4: Precision Tradeoff', 'Part 5: Compound Returns', 'Closing',
-      ];
-      for (let i = 0; i < expectedLabels.length; i++) {
+      for (let i = 0; i < initialProject.sections.length; i++) {
         const labelCell = rows.nth(i).locator('td').nth(2);
-        await expect(labelCell).toHaveText(expectedLabels[i]);
+        await expect(labelCell).toHaveText(initialProject.sections[i].label);
       }
     });
 
     test('A12: Section Registry compositionIds match project.json', async ({ page }) => {
       const rows = page.locator('tbody tr');
-      const expectedComps = [
-        'ColdOpenSection', 'Part1Economics', 'Part2ParadigmShift',
-        'Part3MoldThreeParts', 'Part4PrecisionTradeoff', 'Part5CompoundReturns', 'ClosingSection',
-      ];
-      for (let i = 0; i < expectedComps.length; i++) {
+      for (let i = 0; i < initialProject.sections.length; i++) {
         const compCell = rows.nth(i).locator('td').nth(3);
-        await expect(compCell).toHaveText(expectedComps[i]);
+        await expect(compCell).toHaveText(initialProject.sections[i].compositionId);
       }
     });
 
@@ -196,12 +187,13 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
   // Group C: Section Registry CRUD
   // =========================================================================
   test.describe('Group C: Section Registry CRUD', () => {
-    test('C1: Add Section appends a new row (7 → 8)', async ({ page }) => {
+    test('C1: Add Section appends a new row', async ({ page }) => {
       const rows = page.locator('tbody tr');
-      await expect(rows).toHaveCount(7);
+      const initialCount = initialProject.sections.length;
+      await expect(rows).toHaveCount(initialCount);
 
       await page.locator('button', { hasText: '+ Add Section' }).click();
-      await expect(rows).toHaveCount(8);
+      await expect(rows).toHaveCount(initialCount + 1);
 
       // New row should have "New Section" as label
       const lastRow = rows.last();
@@ -277,9 +269,10 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
       await expect(firstRow.locator('button', { hasText: '✎' })).toBeVisible();
     });
 
-    test('C6: delete section removes row (7 → 6)', async ({ page }) => {
+    test('C6: delete section removes row', async ({ page }) => {
       const rows = page.locator('tbody tr');
-      await expect(rows).toHaveCount(7);
+      const initialCount = initialProject.sections.length;
+      await expect(rows).toHaveCount(initialCount);
 
       // Get the ID of first row before deleting
       const firstId = await rows.first().locator('td').nth(1).textContent();
@@ -288,7 +281,7 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
       await rows.first().locator('button', { hasText: '✕' }).click();
 
       // Row count decreased
-      await expect(rows).toHaveCount(6);
+      await expect(rows).toHaveCount(initialCount - 1);
 
       // First row should now be what was previously the second row
       const newFirstId = await rows.first().locator('td').nth(1).textContent();
@@ -642,7 +635,7 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
       await firstRow.locator('button', { hasText: '✎' }).click();
 
       const idInput = firstRow.locator('td').nth(1).locator('input');
-      await expect(idInput).toHaveValue('cold_open');
+      await expect(idInput).toHaveValue(initialProject.sections[0].id);
 
       await idInput.clear();
       await idInput.fill('new_cold_open');

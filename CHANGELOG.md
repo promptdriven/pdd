@@ -2,19 +2,26 @@
 
 ### Feat
 
-- update TTS script for integration testing and commit Playwright integration test results.
-- Add independent test verification for agentic orchestrator's ALL_TESTS_PASS claims and update related tests.
-- implement independent verification for agent's ALL_TESTS_PASS claims in the e2e fix orchestrator.
+- **Independent test verification for ALL_TESTS_PASS**: the e2e fix orchestrator no longer trusts the LLM's claim that all tests pass — it runs `pytest` independently via subprocess on extracted test files and rejects false positives, continuing the fix loop when verification fails
+- **Intermediate file filtering in `_commit_and_push`**: `*_fixed.*`, `*.bak`, `*.backup`, `*.orig`, `*.tmp`, and `error_output*.txt` files created during `pdd fix` are now filtered out before committing (fixes issue #383 where debug files like `auth_test_commands_auth_fixed.py` leaked into PRs)
+- **`git push -u origin HEAD`**: push commands in the e2e fix orchestrator now set upstream tracking, fixing failures on branches without a remote tracking ref
+- **Hello world E2E agentic sync tests**: new regression test cases 11 (multi-session) and 12 (one-session) verify the full `pdd sync --agentic` pipeline end-to-end on a minimal "hello world" prompt
 
 ### Fix
 
-- **test-batch-ann-1772952765768**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772952338234**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772950126527**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772933408546**: Subtitle font size 96px causes text to clip the ri
-- push upstream tracking and junk file filter (#787)
-- increase timeout for test_test_logs_manual_invocation (300s → 600s)
+- **Workflow state cleared only after successful commit**: `clear_workflow_state` now runs after `_commit_and_push` succeeds (not before), and the orchestrator returns early on commit failure — prevents losing workflow state when the commit step fails
+- **E2E test stability**: `test_e2e_issue_296_custom_csv` patches `unfinished_prompt` to avoid Cloud Batch failures on empty mock LLM content; sets `PDD_SUPPRESS_SETUP_REMINDER` env var
+- increase timeout for `test_test_logs_manual_invocation` (300s → 600s)
 - make hello world test file checks non-fatal in CI
+
+### Build
+
+- CI cloud-batch task ranges updated: sync regression slots expanded from 54–63 to 54–65, downstream ranges shifted accordingly to accommodate new hello world tests
+
+### Test
+
+- **E2E test for issue #383**: new `test_e2e_issue_383_commit_intermediate_files.py` sets up a real git repo and verifies `_commit_and_push` filters out intermediate `*_fixed.py` and backup files
+- comprehensive unit tests for `_is_intermediate_file`, `_extract_test_files`, and `_verify_tests_independently` added to `test_agentic_e2e_fix_orchestrator.py`
 
 ## v0.0.169 (2026-03-07)
 

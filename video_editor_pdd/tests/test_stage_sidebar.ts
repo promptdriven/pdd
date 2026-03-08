@@ -254,6 +254,11 @@ describe("sidebar container", () => {
 // ---------------------------------------------------------------------------
 
 describe("row styling", () => {
+  it("renders stage rows as buttons", () => {
+    expect(sourceCode).toMatch(/<button/);
+    expect(sourceCode).toMatch(/type="button"/);
+  });
+
   it("applies cursor-pointer to each row", () => {
     expect(sourceCode).toMatch(/cursor-pointer/);
   });
@@ -286,6 +291,10 @@ describe("row styling", () => {
 describe("click handling", () => {
   it("calls onStageSelect with the stage on click", () => {
     expect(sourceCode).toMatch(/onClick=\{\(\)\s*=>\s*onStageSelect\(stage\)\}/);
+  });
+
+  it("marks the active stage with aria-current=step", () => {
+    expect(sourceCode).toMatch(/aria-current=\{isActive\s*\?\s*'step'\s*:\s*undefined\}/);
   });
 });
 

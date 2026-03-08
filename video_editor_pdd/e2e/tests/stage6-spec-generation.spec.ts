@@ -1,4 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { getProjectSections } from './helpers/project-fixtures';
+
+const PROJECT_SECTIONS = getProjectSections();
+const FIRST_SECTION = PROJECT_SECTIONS[0];
+const SECOND_SECTION = PROJECT_SECTIONS[Math.min(1, PROJECT_SECTIONS.length - 1)];
+const LAST_SECTION = PROJECT_SECTIONS[PROJECT_SECTIONS.length - 1];
 
 test.describe('Stage 6: Spec Generation', () => {
   test.beforeEach(async ({ page }) => {
@@ -32,16 +38,15 @@ test.describe('Stage 6: Spec Generation', () => {
   });
 
   test('renders section accordion cards from project.json', async ({ page }) => {
-    // The project has 7 sections; each should appear as a card with its label
-    await expect(page.locator('text=Cold Open').first()).toBeVisible();
-    await expect(page.locator('text=Part 1: Economics').first()).toBeVisible();
-    await expect(page.locator('text=Closing').first()).toBeVisible();
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible();
+    await expect(page.locator('text=' + SECOND_SECTION.label).first()).toBeVisible();
+    await expect(page.locator('text=' + LAST_SECTION.label).first()).toBeVisible();
   });
 
   test('section labels have readable dark text on white card (dark theme fix)', async ({ page }) => {
     // Bug fix: section toggle button text was white-on-white in dark theme.
     // After fix, it should have explicit dark text color (text-slate-800).
-    const sectionBtn = page.locator('button', { hasText: 'Cold Open' }).first();
+    const sectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
     await expect(sectionBtn).toBeVisible();
 
     const color = await sectionBtn.evaluate((el) => getComputedStyle(el).color);
@@ -56,11 +61,11 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('each section has a Regenerate button', async ({ page }) => {
     // Wait for section data to load (Loading spec list... disappears)
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
     // The Regenerate button text includes a unicode arrow: "↺ Regenerate"
     const regenerateButtons = page.locator('button:has-text("Regenerate")');
     const count = await regenerateButtons.count();
-    expect(count).toBeGreaterThanOrEqual(7);
+    expect(count).toBeGreaterThanOrEqual(PROJECT_SECTIONS.length);
   });
 
   test('file table displays Type, Path, Status, Actions headers', async ({ page }) => {
@@ -72,7 +77,7 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('file status shows missing when spec files do not exist', async ({ page }) => {
     // Wait for sections to load
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
     // All spec files are "missing" since specs/ directory is empty
     const missingBadges = page.locator('text=missing');
     await expect(missingBadges.first()).toBeVisible();
@@ -87,7 +92,7 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('accordion sections can collapse and expand', async ({ page }) => {
     // Sections use expanded state with ▾/▸ arrows. Find the first section toggle.
-    const toggleBtn = page.locator('button', { hasText: 'Cold Open' }).first();
+    const toggleBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
     await expect(toggleBtn).toBeVisible();
 
     // Check if section is currently expanded (▾ arrow visible)
@@ -172,7 +177,7 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('Edit button opens inline CodeMirror editor', async ({ page }) => {
     // Wait for sections to load
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
     // Mock the file content endpoint
     await page.route('**/api/pipeline/specs/file**', (route) => {
@@ -202,7 +207,7 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('File regenerate button triggers POST /api/pipeline/specs/run with file path', async ({ page }) => {
     // Wait for sections to load
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
     let postCalled = false;
     let requestBody: any = null;
@@ -232,7 +237,7 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('Section regenerate button triggers POST /api/pipeline/specs/run with section id', async ({ page }) => {
     // Wait for sections to load
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
     let postCalled = false;
     let requestBody: any = null;
@@ -353,10 +358,10 @@ test.describe('Stage 6: Spec Generation', () => {
 
   test('localStorage persists accordion collapsed state across page reload', async ({ page }) => {
     // Wait for sections to load
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
-    // Find the Cold Open toggle button and ensure it's expanded (▾)
-    const toggleBtn = page.locator('button', { hasText: 'Cold Open' }).first();
+    // Find the first section toggle button and ensure it's expanded (▾)
+    const toggleBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
     const isExpanded = await toggleBtn.locator('text=▾').isVisible().catch(() => false);
 
     if (!isExpanded) {
@@ -365,7 +370,7 @@ test.describe('Stage 6: Spec Generation', () => {
       await page.waitForTimeout(300);
     }
 
-    // Collapse Cold Open
+    // Collapse the first section
     await toggleBtn.click();
     await page.waitForTimeout(300);
     await expect(toggleBtn.locator('text=▸')).toBeVisible();
@@ -379,8 +384,8 @@ test.describe('Stage 6: Spec Generation', () => {
     await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1500);
 
-    // Cold Open should still be collapsed (localStorage persisted)
-    const toggleBtnAfter = page.locator('button', { hasText: 'Cold Open' }).first();
+    // The first section should still be collapsed (localStorage persisted)
+    const toggleBtnAfter = page.locator('button', { hasText: FIRST_SECTION.label }).first();
     await expect(toggleBtnAfter).toBeVisible({ timeout: 10000 });
     await expect(toggleBtnAfter.locator('text=▸')).toBeVisible();
   });
@@ -516,7 +521,7 @@ test.describe('Stage 6: Spec Generation', () => {
   test('editor auto-save triggers PUT /api/pipeline/specs/file after blur (1s debounce)', async ({
     page,
   }) => {
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
     // Mock file GET
     await page.route('**/api/pipeline/specs/file**', (route) => {
@@ -572,7 +577,7 @@ test.describe('Stage 6: Spec Generation', () => {
   });
 
   test('"Saving…" indicator appears during auto-save and disappears after', async ({ page }) => {
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
     // Mock file GET
     await page.route('**/api/pipeline/specs/file**', (route) => {
@@ -623,7 +628,7 @@ test.describe('Stage 6: Spec Generation', () => {
   test('CodeMirror editor text is visible (not white-on-white)', async ({ page }) => {
     // Bug: without theme="dark", CodeMirror uses a light (white) background but the
     // parent container is dark and global CSS makes text white → white text on white bg.
-    await expect(page.locator('text=Cold Open').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
 
     // Mock the file GET to return content we can check
     await page.route('**/api/pipeline/specs/file**', (route) => {

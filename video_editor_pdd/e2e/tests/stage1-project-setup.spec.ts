@@ -1,4 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { getProjectSections, loadActiveProjectFixture } from './helpers/project-fixtures';
+
+const ACTIVE_PROJECT = loadActiveProjectFixture();
+const PROJECT_SECTIONS = getProjectSections();
 
 test.describe('Stage 1: Project Setup', () => {
   test.beforeEach(async ({ page }) => {
@@ -21,8 +25,9 @@ test.describe('Stage 1: Project Setup', () => {
   test('output resolution dropdown exists', async ({ page }) => {
     const resolutionSelect = page.locator('select').first();
     await expect(resolutionSelect).toBeVisible();
-    // Should have the default 1920x1080 value
-    await expect(resolutionSelect).toHaveValue('1920x1080');
+    await expect(resolutionSelect).toHaveValue(
+      `${ACTIVE_PROJECT.outputResolution.width}x${ACTIVE_PROJECT.outputResolution.height}`
+    );
   });
 
   test('TTS speaker input exists', async ({ page }) => {
@@ -65,6 +70,24 @@ test.describe('Stage 1: Project Setup', () => {
   test('Save button exists and is green', async ({ page }) => {
     const saveBtn = page.locator('button', { hasText: 'Save' });
     await expect(saveBtn).toBeVisible();
+  });
+
+  test('Continue button exists and navigates to Stage 2', async ({ page }) => {
+    const continueBtn = page.locator('button', { hasText: 'Continue →' });
+    await expect(continueBtn).toBeVisible();
+
+    await continueBtn.click();
+
+    await expect(page.locator('h2', { hasText: 'Stage 2 — Script Editor' })).toBeVisible();
+  });
+
+  test('Sidebar Script stage is clickable from Stage 1', async ({ page }) => {
+    const scriptStageBtn = page.getByRole('button', { name: /^2\s+Script\b/ });
+    await expect(scriptStageBtn).toBeVisible();
+
+    await scriptStageBtn.click();
+
+    await expect(page.locator('h2', { hasText: 'Stage 2 — Script Editor' })).toBeVisible();
   });
 
   test('clicking Add Section adds a new row', async ({ page }) => {
@@ -207,15 +230,16 @@ test.describe('Stage 1: Project Setup', () => {
 
   test('Output Resolution select changes value when new option selected', async ({ page }) => {
     const resolutionSelect = page.locator('select').first();
-    await expect(resolutionSelect).toHaveValue('1920x1080');
+    const initialResolution = `${ACTIVE_PROJECT.outputResolution.width}x${ACTIVE_PROJECT.outputResolution.height}`;
+    const alternateResolution = initialResolution === '1920x1080' ? '1280x720' : '1920x1080';
 
-    // Change to 1280x720
-    await resolutionSelect.selectOption('1280x720');
-    await expect(resolutionSelect).toHaveValue('1280x720');
+    await expect(resolutionSelect).toHaveValue(initialResolution);
 
-    // Change back
-    await resolutionSelect.selectOption('1920x1080');
-    await expect(resolutionSelect).toHaveValue('1920x1080');
+    await resolutionSelect.selectOption(alternateResolution);
+    await expect(resolutionSelect).toHaveValue(alternateResolution);
+
+    await resolutionSelect.selectOption(initialResolution);
+    await expect(resolutionSelect).toHaveValue(initialResolution);
   });
 
   test('TTS Speaking Rate input accepts a numeric value', async ({ page }) => {
@@ -364,7 +388,7 @@ test.describe('Stage 1: Project Setup', () => {
     await firstRow.locator('button', { hasText: '✎' }).click();
 
     const idInput = firstRow.locator('td').nth(1).locator('input');
-    await expect(idInput).toHaveValue('cold_open');
+    await expect(idInput).toHaveValue(PROJECT_SECTIONS[0].id);
 
     await idInput.clear();
     await idInput.fill('new_cold_open');

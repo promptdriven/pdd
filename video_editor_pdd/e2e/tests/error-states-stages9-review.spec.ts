@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { getProjectSections } from './helpers/project-fixtures';
+
+const PROJECT_SECTION_COUNT = getProjectSections().length;
 
 test.describe('Error States: Stage 9 (Render & Stitch)', () => {
   test('render status API returns 500 on load — page still renders heading, does not crash', async ({ page }) => {
@@ -209,7 +212,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Wait for table rows to load
-    await expect(page.locator('tbody tr')).toHaveCount(7);
+    await expect(page.locator('tbody tr')).toHaveCount(PROJECT_SECTION_COUNT);
 
     // Mock the render run API to return 500
     await page.route('**/api/pipeline/render/run', (route) => {
@@ -228,8 +231,8 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     // Page should still be functional
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
 
-    // All 7 rows should still be present (other sections unaffected)
-    await expect(page.locator('tbody tr')).toHaveCount(7);
+    // All rows should still be present (other sections unaffected)
+    await expect(page.locator('tbody tr')).toHaveCount(PROJECT_SECTION_COUNT);
 
     // Other sections' re-render buttons should still be visible and clickable
     const secondRerenderButton = page.locator('tbody tr').nth(1).locator('button[title="Re-render"]');

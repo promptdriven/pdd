@@ -2,6 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e/tests',
+  testIgnore: ['**/integration/**'],
   timeout: 30000,
   expect: {
     timeout: 10000,
@@ -18,7 +19,7 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 npx next build && CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 npx next start -p 3001',
+    command: 'CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 PDD_DETERMINISTIC_PIPELINE=1 npx next build && CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 PDD_DETERMINISTIC_PIPELINE=1 npx next start -p 3001',
     port: 3001,
     reuseExistingServer: false,
     timeout: 180_000,

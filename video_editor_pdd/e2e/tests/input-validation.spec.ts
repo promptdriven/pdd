@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { getProjectSections } from './helpers/project-fixtures';
+
+const PROJECT_SECTION_COUNT = getProjectSections().length;
 
 // Valid mock response for PUT /api/project (matches the shape used by existing tests)
 const MOCK_PROJECT_RESPONSE = {
@@ -591,7 +594,7 @@ test.describe('Section Operations Edge Cases', () => {
 
     const tableRows = page.locator('tbody tr');
     const initialCount = await tableRows.count();
-    expect(initialCount).toBe(7);
+    expect(initialCount).toBe(PROJECT_SECTION_COUNT);
 
     // Delete all 7 sections one by one (always delete the first remaining row)
     for (let i = 0; i < initialCount; i++) {

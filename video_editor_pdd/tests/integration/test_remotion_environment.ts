@@ -37,6 +37,45 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
   }
 }
 
+type ProjectSectionFixture = {
+  id: string;
+  label: string;
+  compositionId: string;
+};
+
+type ProjectFixture = {
+  sections: ProjectSectionFixture[];
+};
+
+function loadActiveProjectFixture(): ProjectFixture {
+  const projectPath = path.join(process.cwd(), "project.json");
+  return JSON.parse(fs.readFileSync(projectPath, "utf-8")) as ProjectFixture;
+}
+
+function getSectionWrapperPath(sectionId: string): string {
+  return path.join(process.cwd(), "remotion", "src", "remotion", sectionId, "index.tsx");
+}
+
+function getSectionWrapperSource(sectionId: string): string {
+  return fs.readFileSync(getSectionWrapperPath(sectionId), "utf-8");
+}
+
+function extractStaticFileAssets(source: string): string[] {
+  return Array.from(source.matchAll(/staticFile\((["'`])(.+?)\1\)/g), (match) => match[2]);
+}
+
+const ACTIVE_PROJECT = loadActiveProjectFixture();
+const ACTIVE_SECTIONS = ACTIVE_PROJECT.sections;
+const FIX_TARGET_SECTION = ACTIVE_SECTIONS[0];
+const RENDER_SMOKE_SECTION =
+  ACTIVE_SECTIONS.find((section) => {
+    const wrapperPath = getSectionWrapperPath(section.id);
+    if (!fs.existsSync(wrapperPath)) return false;
+    return extractStaticFileAssets(getSectionWrapperSource(section.id)).some((asset) =>
+      asset.endsWith(".mp4"),
+    );
+  }) ?? FIX_TARGET_SECTION;
+
 // ---------------------------------------------------------------------------
 // Step 1 — Bundle path
 // ---------------------------------------------------------------------------
@@ -80,27 +119,36 @@ describe("Remotion bundle", () => {
 // ---------------------------------------------------------------------------
 
 describe("Remotion assets", () => {
-  it("cold_open narration WAV exists", () => {
-    const wav = path.join(process.cwd(), "remotion/public/cold_open/narration.wav");
-    expect(fs.existsSync(wav)).toBe(true);
-    expect(fs.statSync(wav).size).toBeGreaterThan(0);
-  });
+  for (const section of ACTIVE_SECTIONS) {
+    it(`${section.id} narration WAV exists`, () => {
+      const wav = path.join(process.cwd(), "remotion", "public", section.id, "narration.wav");
+      expect(fs.existsSync(wav)).toBe(true);
+      expect(fs.statSync(wav).size).toBeGreaterThan(0);
+    });
 
-  it("VEO cold_open clip exists", () => {
-    const mp4 = path.join(process.cwd(), "remotion/public/veo/cold_open.mp4");
-    expect(fs.existsSync(mp4)).toBe(true);
-    expect(fs.statSync(mp4).size).toBeGreaterThan(0);
-  });
+    it(`${section.id} section wrapper source exists`, () => {
+      expect(fs.existsSync(getSectionWrapperPath(section.id))).toBe(true);
+    });
 
-  it("ColdOpenSection.tsx source exists", () => {
-    const tsx = path.join(process.cwd(), "remotion/src/remotion/ColdOpenSection.tsx");
-    expect(fs.existsSync(tsx)).toBe(true);
-  });
+    it(`${section.id} wrapper staticFile assets exist`, () => {
+      const assets = extractStaticFileAssets(getSectionWrapperSource(section.id));
+      expect(assets.length).toBeGreaterThan(0);
 
-  it("Root.tsx registers ColdOpenSection composition", () => {
+      for (const asset of assets) {
+        const assetPath = path.join(process.cwd(), "remotion", "public", asset);
+        expect(fs.existsSync(assetPath)).toBe(true);
+        expect(fs.statSync(assetPath).size).toBeGreaterThan(0);
+      }
+    });
+  }
+
+  it("Root.tsx registers every active project composition", () => {
     const rootPath = path.join(process.cwd(), "remotion/src/remotion/Root.tsx");
     const content = fs.readFileSync(rootPath, "utf-8");
-    expect(content).toMatch(/id=["']ColdOpenSection["']/);
+
+    for (const section of ACTIVE_SECTIONS) {
+      expect(content).toContain(`id="${section.compositionId}"`);
+    }
   });
 });
 
@@ -111,7 +159,10 @@ describe("Remotion assets", () => {
 describe("renderSection", () => {
   // Remotion serveUrl must be the DIRECTORY containing index.html, not the file itself
   const bundlePath = path.join(process.cwd(), "remotion", "build");
-  const outPath = path.join(os.tmpdir(), `cold_open_test_${Date.now()}.mp4`);
+  const outPath = path.join(
+    os.tmpdir(),
+    `${RENDER_SMOKE_SECTION.id}_test_${Date.now()}.mp4`,
+  );
 
   beforeAll(() => {
     // Set the bundle path so renderSection uses the pre-compiled bundle
@@ -127,7 +178,7 @@ describe("renderSection", () => {
   });
 
   it(
-    "renders ColdOpenSection to a non-empty MP4 file",
+    `renders ${RENDER_SMOKE_SECTION.compositionId} to a non-empty MP4 file`,
     async () => {
       await withRetry(async () => {
         // Clean up any partial output from previous attempt
@@ -135,7 +186,7 @@ describe("renderSection", () => {
 
         const { renderSection } = await import("@/lib/render");
 
-        await renderSection("ColdOpenSection", outPath, (progress) => {
+        await renderSection(RENDER_SMOKE_SECTION.compositionId, outPath, (progress) => {
           expect(typeof progress.percent).toBe("number");
           expect(progress.percent).toBeGreaterThanOrEqual(0);
           expect(progress.percent).toBeLessThanOrEqual(100);
@@ -190,16 +241,16 @@ describe("preview-fixes API", () => {
          VALUES (?, ?, ?, ?, ?, 0, ?)`
       ).run(
         annId,
-        "cold_open",
+        FIX_TARGET_SECTION.id,
         5.0,
-        "Subtitle font size 96px causes text to clip the right edge of the frame",
+        `Change the primary background accent in ${FIX_TARGET_SECTION.label} to #00FF00.`,
         JSON.stringify({
           severity: "minor",
           fixType: "remotion",
           confidence: 0.85,
           technicalAssessment:
-            "The subtitle fontSize prop is too large; text overflows the composition width",
-          suggestedFixes: ["Reduce fontSize from 96 to 64 or lower"],
+            "The current color treatment should shift to a clearly visible green accent.",
+          suggestedFixes: ["Update the background accent color to #00FF00"],
         }),
         new Date().toISOString()
       );
@@ -211,7 +262,7 @@ describe("preview-fixes API", () => {
         );
 
         const req = new NextRequest(
-          "http://localhost/api/sections/cold_open/preview-fixes",
+          `http://localhost/api/sections/${FIX_TARGET_SECTION.id}/preview-fixes`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -219,7 +270,7 @@ describe("preview-fixes API", () => {
           }
         );
 
-        const res = await POST(req, { params: { id: "cold_open" } });
+        const res = await POST(req, { params: { id: FIX_TARGET_SECTION.id } });
         expect(res.status).toBe(200);
 
         const body = await res.json();
@@ -283,11 +334,13 @@ describe("resolve-batch pipeline", () => {
       "remotion",
       "build"
     );
+    process.env.PDD_DETERMINISTIC_PIPELINE = "1";
   });
 
   afterAll(() => {
     delete process.env.DB_PATH;
     delete process.env.REMOTION_BUNDLE_PATH;
+    delete process.env.PDD_DETERMINISTIC_PIPELINE;
     for (const ext of ["", "-shm", "-wal"]) {
       const p = tmpDbPath + ext;
       if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -307,16 +360,16 @@ describe("resolve-batch pipeline", () => {
          VALUES (?, ?, ?, ?, ?, 0, ?)`
       ).run(
         annId,
-        "cold_open",
+        FIX_TARGET_SECTION.id,
         5.0,
-        "Subtitle font size 96px causes text to clip the right edge of the frame",
+        `Change the primary background accent in ${FIX_TARGET_SECTION.label} to #00FF00.`,
         JSON.stringify({
           severity: "minor",
           fixType: "remotion",
           confidence: 0.85,
           technicalAssessment:
-            "The subtitle fontSize prop is too large; text overflows the composition width",
-          suggestedFixes: ["Reduce fontSize from 96 to 64 or lower"],
+            "The current color treatment should shift to a clearly visible green accent.",
+          suggestedFixes: ["Update the background accent color to #00FF00"],
         }),
         new Date().toISOString()
       );
@@ -328,7 +381,7 @@ describe("resolve-batch pipeline", () => {
         );
 
         const req = new NextRequest(
-          "http://localhost/api/sections/cold_open/resolve-batch",
+          `http://localhost/api/sections/${FIX_TARGET_SECTION.id}/resolve-batch`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -336,7 +389,7 @@ describe("resolve-batch pipeline", () => {
           }
         );
 
-        const res = await POST(req, { params: { id: "cold_open" } });
+        const res = await POST(req, { params: { id: FIX_TARGET_SECTION.id } });
         expect(res.status).toBe(200);
 
         const { jobId } = await res.json();

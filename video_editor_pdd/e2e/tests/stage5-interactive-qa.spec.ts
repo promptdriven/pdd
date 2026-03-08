@@ -211,9 +211,9 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
           silenceGapDefault: 0.5,
         },
       });
-      // The intro input should show "seg_001, seg_005" (normalized from SegmentRange)
+      // The intro input should show the fully expanded range derived from SegmentRange.
       const introInput = page.locator('input[placeholder="segment1, segment2, segment3"]').first();
-      await expect(introInput).toHaveValue('seg_001, seg_005');
+      await expect(introInput).toHaveValue('seg_001, seg_002, seg_003, seg_004, seg_005');
     });
 
     test('B7: Input has bg-slate-800 border-slate-600 styling', async ({ page }) => {
@@ -280,8 +280,11 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
       expect(putBody).toBeTruthy();
       expect(putBody.audioSync).toBeTruthy();
       expect(putBody.audioSync.sectionGroups).toBeTruthy();
-      // The intro group should contain updated values
-      expect(putBody.audioSync.sectionGroups.intro).toEqual(['seg_new_1', 'seg_new_2']);
+      // The component stores editable arrays locally, then serializes them as SegmentRange objects.
+      expect(putBody.audioSync.sectionGroups.intro).toEqual({
+        startSegment: 'seg_new_1',
+        endSegment: 'seg_new_2',
+      });
     });
 
     test('C3: Button shows "Saving…" and is disabled during save', async ({ page }) => {

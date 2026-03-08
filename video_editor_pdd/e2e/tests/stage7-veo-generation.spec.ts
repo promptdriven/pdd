@@ -1,7 +1,40 @@
 import { test, expect } from '@playwright/test';
+import { loadActiveProjectFixture } from './helpers/project-fixtures';
+
+const ACTIVE_PROJECT = loadActiveProjectFixture();
+const MOCK_CLIPS = ACTIVE_PROJECT.sections.map((section, index) => ({
+  id: section.id,
+  sectionId: section.id,
+  aspectRatio: ACTIVE_PROJECT.veo.defaultAspectRatio,
+  status: 'missing',
+  stale: false,
+  frameChainDeps: index === 0 ? [] : [ACTIVE_PROJECT.sections[index - 1].id],
+}));
+const MOCK_REFERENCES =
+  ACTIVE_PROJECT.veo.references && ACTIVE_PROJECT.veo.references.length > 0
+    ? ACTIVE_PROJECT.veo.references.map((ref) => ({ id: ref.id, label: ref.label }))
+    : [{ id: 'alex', label: 'Alex (protagonist)' }];
 
 test.describe('Stage 7: Veo Generation', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/pipeline/veo/clips', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ clips: MOCK_CLIPS, references: MOCK_REFERENCES }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/stream', (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+        body: 'data: {"type":"connected"}\n\n',
+      })
+    );
+    await page.route('**/api/video/outputs/veo/references/*.png', (route) =>
+      route.fulfill({ status: 404, contentType: 'text/plain', body: 'missing' })
+    );
+
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Click on Veo Gen stage in sidebar
@@ -24,8 +57,7 @@ test.describe('Stage 7: Veo Generation', () => {
   });
 
   test('displays character reference with label', async ({ page }) => {
-    // The project has one reference: "Alex (protagonist)"
-    await expect(page.locator('text=Alex (protagonist)').first()).toBeVisible();
+    await expect(page.locator(`text=${MOCK_REFERENCES[0].label}`).first()).toBeVisible();
   });
 
   test('displays reference Regenerate button', async ({ page }) => {
@@ -40,9 +72,10 @@ test.describe('Stage 7: Veo Generation', () => {
   });
 
   test('displays frame chain dependencies', async ({ page }) => {
-    // Frame chaining should show dependency arrows like "outputs/veo/cold_open_last_frame.png -> part1_economics"
-    await expect(page.locator('text=cold_open').first()).toBeVisible();
-    await expect(page.locator('text=part1_economics').first()).toBeVisible();
+    await expect(page.locator(`text=${MOCK_CLIPS[0].id}`).first()).toBeVisible();
+    if (MOCK_CLIPS.length > 1) {
+      await expect(page.locator(`text=${MOCK_CLIPS[1].id}`).first()).toBeVisible();
+    }
   });
 
   test('frame chain display shows clean clip IDs not raw file paths', async ({ page }) => {
@@ -108,9 +141,8 @@ test.describe('Stage 7: Veo Generation', () => {
   });
 
   test('clip table shows all project sections as rows', async ({ page }) => {
-    // 7 sections in project.json -> 7 clip rows
     const rows = page.locator('tbody tr');
-    await expect(rows).toHaveCount(7);
+    await expect(rows).toHaveCount(MOCK_CLIPS.length);
   });
 
   test('clip table text is readable (dark theme fix)', async ({ page }) => {
@@ -137,8 +169,7 @@ test.describe('Stage 7: Veo Generation', () => {
   });
 
   test('clip aspect ratio is 16:9', async ({ page }) => {
-    // All clips should show 16:9 from project.json defaultAspectRatio
-    await expect(page.locator('td', { hasText: '16:9' }).first()).toBeVisible();
+    await expect(page.locator('td', { hasText: ACTIVE_PROJECT.veo.defaultAspectRatio }).first()).toBeVisible();
   });
 
   test('displays Clip Events section', async ({ page }) => {
@@ -201,10 +232,9 @@ test.describe('Stage 7: Veo Generation', () => {
     await page.waitForTimeout(500);
 
     expect(postCalled).toBe(true);
-    // Should send all 7 clip IDs
     expect(requestBody).toHaveProperty('clips');
     expect(Array.isArray(requestBody.clips)).toBe(true);
-    expect(requestBody.clips.length).toBe(7);
+    expect(requestBody.clips.length).toBe(MOCK_CLIPS.length);
   });
 
   test('Generate Missing button triggers POST /api/pipeline/veo/run for missing clips only', async ({ page }) => {
@@ -272,7 +302,7 @@ test.describe('Stage 7: Veo Generation', () => {
     expect(requestBody.clips.length).toBeGreaterThan(0);
     // If we picked a different section, it should be fewer than all clips
     if (optionCount > 1) {
-      expect(requestBody.clips.length).toBeLessThanOrEqual(7);
+      expect(requestBody.clips.length).toBeLessThanOrEqual(MOCK_CLIPS.length);
     }
   });
 

@@ -1,4 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { getProjectSections } from './helpers/project-fixtures';
+
+const PROJECT_SECTIONS = getProjectSections();
+const FIRST_SECTION = PROJECT_SECTIONS[0];
 
 test.describe('Stage 8: Composition Generation', () => {
   test.beforeEach(async ({ page }) => {
@@ -32,32 +36,27 @@ test.describe('Stage 8: Composition Generation', () => {
   });
 
   test('displays section accordions for all project sections', async ({ page }) => {
-    // Project has 7 sections - each should be visible as a collapsible section
-    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Part 1: Economics' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Part 2: Paradigm Shift' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Part 3: The Mold' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Part 4: Precision Tradeoff' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Part 5: Compound Returns' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Closing' }).first()).toBeVisible();
+    for (const section of PROJECT_SECTIONS) {
+      await expect(page.locator('button', { hasText: section.label }).first()).toBeVisible();
+    }
   });
 
   test('section accordions are togglable', async ({ page }) => {
     // Initially sections show "Hide"
-    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
-    await expect(coldOpenBtn).toBeVisible();
+    const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
+    await expect(firstSectionBtn).toBeVisible();
 
     // The Hide/Show text should be visible
-    const hideShow = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    const hideShow = firstSectionBtn.locator('span', { hasText: /Hide|Show/ });
     await expect(hideShow).toBeVisible();
 
     // Click to collapse
-    await coldOpenBtn.click();
-    await expect(coldOpenBtn.locator('span', { hasText: 'Show' })).toBeVisible();
+    await firstSectionBtn.click();
+    await expect(firstSectionBtn.locator('span', { hasText: 'Show' })).toBeVisible();
 
     // Click to expand again
-    await coldOpenBtn.click();
-    await expect(coldOpenBtn.locator('span', { hasText: 'Hide' })).toBeVisible();
+    await firstSectionBtn.click();
+    await expect(firstSectionBtn.locator('span', { hasText: 'Hide' })).toBeVisible();
   });
 
   test('displays Section Wrappers heading', async ({ page }) => {
@@ -125,7 +124,7 @@ test.describe('Stage 8: Composition Generation', () => {
   });
 
   test('section accordion text is readable', async ({ page }) => {
-    const sectionBtn = page.locator('button', { hasText: 'Cold Open' });
+    const sectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
     await expect(sectionBtn).toBeVisible();
 
     const color = await sectionBtn.evaluate((el) => {
@@ -153,15 +152,15 @@ test.describe('Stage 8: Composition Generation', () => {
     }
   });
 
-  test('wrapper status badges show Missing', async ({ page }) => {
+  test('wrapper status badges are visible', async ({ page }) => {
     // Scroll down to see Section Wrappers
     const wrapperHeading = page.locator('h4', { hasText: 'Section Wrappers' });
     await wrapperHeading.scrollIntoViewIfNeeded();
     await expect(wrapperHeading).toBeVisible();
-    // Wrappers are rendered below the section accordions with status badges
-    const missingBadges = page.locator('span.rounded-full', { hasText: 'Missing' });
-    await expect(missingBadges.first()).toBeVisible({ timeout: 5000 });
-    const count = await missingBadges.count();
+    const wrapperSection = wrapperHeading.locator('..');
+    const badges = wrapperSection.locator('span.rounded-full');
+    await expect(badges.first()).toBeVisible({ timeout: 5000 });
+    const count = await badges.count();
     expect(count).toBeGreaterThan(0);
   });
 
@@ -211,7 +210,7 @@ test.describe('Stage 8: Composition Generation', () => {
 
   test('Preview button opens dialog modal', async ({ page }) => {
     // Wait for composition data to load and sections to render
-    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('button', { hasText: FIRST_SECTION.label }).first()).toBeVisible({ timeout: 10000 });
 
     // Mock the preview endpoint
     await page.route('**/api/pipeline/compositions/preview**', (route) => {
@@ -222,12 +221,12 @@ test.describe('Stage 8: Composition Generation', () => {
       });
     });
 
-    // Ensure the Cold Open section is expanded (should be by default)
-    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
-    const hideShowSpan = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    // Ensure the first section is expanded (it should be by default)
+    const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
+    const hideShowSpan = firstSectionBtn.locator('span', { hasText: /Hide|Show/ });
     const text = await hideShowSpan.textContent();
     if (text?.trim() === 'Show') {
-      await coldOpenBtn.click();
+      await firstSectionBtn.click();
       await page.waitForTimeout(300);
     }
 
@@ -250,7 +249,7 @@ test.describe('Stage 8: Composition Generation', () => {
   });
 
   test('Preview dialog close button closes modal', async ({ page }) => {
-    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('button', { hasText: FIRST_SECTION.label }).first()).toBeVisible({ timeout: 10000 });
 
     // Mock the preview endpoint
     await page.route('**/api/pipeline/compositions/preview**', (route) => {
@@ -261,12 +260,12 @@ test.describe('Stage 8: Composition Generation', () => {
       });
     });
 
-    // Ensure the Cold Open section is expanded
-    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
-    const hideShowSpan = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    // Ensure the first section is expanded
+    const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
+    const hideShowSpan = firstSectionBtn.locator('span', { hasText: /Hide|Show/ });
     const text = await hideShowSpan.textContent();
     if (text?.trim() === 'Show') {
-      await coldOpenBtn.click();
+      await firstSectionBtn.click();
       await page.waitForTimeout(300);
     }
 
@@ -292,10 +291,28 @@ test.describe('Stage 8: Composition Generation', () => {
   });
 
   test('Regenerate button triggers POST /api/pipeline/compositions/run with component name', async ({ page }) => {
-    await expect(page.locator('button', { hasText: 'Cold Open' })).toBeVisible({ timeout: 10000 });
-
     let postCalled = false;
     let requestBody: any = null;
+
+    await page.route('**/api/pipeline/compositions/list', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              id: 'animation_section',
+              label: FIRST_SECTION.label,
+              components: [{ name: 'TitleSlide', status: 'missing', error: null }],
+              wrappers: [{ name: 'animation_sectionWrapper', status: 'done', error: null }],
+            },
+          ],
+        }),
+      })
+    );
+    await page.route('**/api/pipeline/veo/staging-manifest', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
 
     await page.route('**/api/pipeline/compositions/run', (route) => {
       postCalled = true;
@@ -307,28 +324,32 @@ test.describe('Stage 8: Composition Generation', () => {
       });
     });
 
-    // Ensure the Cold Open section is expanded
-    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
-    const hideShowSpan = coldOpenBtn.locator('span', { hasText: /Hide|Show/ });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+
+    // Ensure the first section is expanded
+    const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
+    await expect(firstSectionBtn).toBeVisible({ timeout: 10000 });
+    const hideShowSpan = firstSectionBtn.locator('span', { hasText: /Hide|Show/ });
     const text = await hideShowSpan.textContent();
     if (text?.trim() === 'Show') {
-      await coldOpenBtn.click();
+      await firstSectionBtn.click();
       await page.waitForTimeout(300);
     }
 
-    // The per-component regenerate button shows "↺" text
-    const regenBtn = page.locator('button', { hasText: '↺' }).first();
-    const regenCount = await regenBtn.count();
-    if (regenCount > 0) {
-      await regenBtn.click();
-      await page.waitForTimeout(500);
+    const componentRow = page.locator('[data-testid="component-row-TitleSlide"]');
+    await expect(componentRow).toBeVisible();
+    const regenBtn = componentRow.locator('button', { hasText: '↺' });
+    await expect(regenBtn).toBeVisible();
+    await regenBtn.click();
+    await page.waitForTimeout(500);
 
-      expect(postCalled).toBe(true);
-      // Should send { components: [componentName] }
-      expect(requestBody).toHaveProperty('components');
-      expect(Array.isArray(requestBody.components)).toBe(true);
-      expect(requestBody.components.length).toBe(1);
-    }
+    expect(postCalled).toBe(true);
+    expect(requestBody).toHaveProperty('components');
+    expect(Array.isArray(requestBody.components)).toBe(true);
+    expect(requestBody.components).toEqual(['TitleSlide']);
   });
 
   test('Stage All Missing button triggers POST /api/pipeline/asset-staging/run', async ({ page }) => {
@@ -518,7 +539,7 @@ test.describe('Stage 8: Error Row Log Drawer', () => {
 // ── Bug 3: Generate All Compositions sends no payload body ────────────────────
 
 test.describe('Stage 8: Generate All Compositions Payload', () => {
-  test('Generate All Compositions sends all component and wrapper IDs in payload', async ({ page }) => {
+  test('Generate All Compositions sends sectionComponents and wrapper IDs in payload', async ({ page }) => {
     await page.route('**/api/pipeline/compositions/list', (route: any) =>
       route.fulfill({
         status: 200,
@@ -569,14 +590,16 @@ test.describe('Stage 8: Generate All Compositions Payload', () => {
     await page.waitForTimeout(500);
 
     expect(requestBody).not.toBeNull();
-    expect(requestBody.components).toContain('TitleSlide');
-    expect(requestBody.components).toContain('IntroSlide');
-    expect(requestBody.components).toContain('Part1Main');
+    expect(Array.isArray(requestBody.sectionComponents)).toBe(true);
+    expect(requestBody.sectionComponents).toEqual([
+      { sectionId: 'cold_open', components: ['TitleSlide', 'IntroSlide'] },
+      { sectionId: 'part1', components: ['Part1Main'] },
+    ]);
     expect(requestBody.wrappers).toContain('cold_openWrapper');
     expect(requestBody.wrappers).toContain('part1Wrapper');
   });
 
-  test('Generate All Compositions with no sections sends empty arrays not undefined', async ({ page }) => {
+  test('Generate All Compositions with no sections sends empty sectionComponents and wrappers arrays', async ({ page }) => {
     await page.route('**/api/pipeline/compositions/list', (route: any) =>
       route.fulfill({
         status: 200,
@@ -609,8 +632,8 @@ test.describe('Stage 8: Generate All Compositions Payload', () => {
     await page.waitForTimeout(500);
 
     expect(requestBody).not.toBeNull();
-    expect(Array.isArray(requestBody.components)).toBe(true);
-    expect(requestBody.components).toHaveLength(0);
+    expect(Array.isArray(requestBody.sectionComponents)).toBe(true);
+    expect(requestBody.sectionComponents).toHaveLength(0);
     expect(Array.isArray(requestBody.wrappers)).toBe(true);
     expect(requestBody.wrappers).toHaveLength(0);
   });
@@ -636,12 +659,12 @@ test.describe('Stage 8: Preview Dialog Centering', () => {
       })
     );
 
-    // Wait for sections to load, then ensure Cold Open is expanded
-    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
-    await expect(coldOpenBtn).toBeVisible({ timeout: 15000 });
-    const spanText = await coldOpenBtn.locator('span', { hasText: /Hide|Show/ }).textContent();
+    // Wait for sections to load, then ensure the first section is expanded
+    const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
+    await expect(firstSectionBtn).toBeVisible({ timeout: 15000 });
+    const spanText = await firstSectionBtn.locator('span', { hasText: /Hide|Show/ }).textContent();
     if (spanText?.trim() === 'Show') {
-      await coldOpenBtn.click();
+      await firstSectionBtn.click();
       await page.waitForTimeout(300);
     }
 
@@ -676,11 +699,11 @@ test.describe('Stage 8: Preview Dialog Centering', () => {
       })
     );
 
-    const coldOpenBtn = page.locator('button', { hasText: 'Cold Open' });
-    await expect(coldOpenBtn).toBeVisible({ timeout: 15000 });
-    const spanText = await coldOpenBtn.locator('span', { hasText: /Hide|Show/ }).textContent();
+    const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
+    await expect(firstSectionBtn).toBeVisible({ timeout: 15000 });
+    const spanText = await firstSectionBtn.locator('span', { hasText: /Hide|Show/ }).textContent();
     if (spanText?.trim() === 'Show') {
-      await coldOpenBtn.click();
+      await firstSectionBtn.click();
       await page.waitForTimeout(300);
     }
 

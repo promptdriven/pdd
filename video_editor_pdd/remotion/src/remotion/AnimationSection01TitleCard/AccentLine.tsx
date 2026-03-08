@@ -12,7 +12,7 @@ export const AccentLine: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
+      easing: Easing.inOut(Easing.cubic),
     }
   );
 
@@ -21,12 +21,12 @@ export const AccentLine: React.FC = () => {
       style={{
         position: 'absolute',
         left: '50%',
-        top: POSITIONS.titleY + 120,
+        top: POSITIONS.accentLineY,
         transform: 'translateX(-50%)',
         width,
         height: DIMENSIONS.accentLineHeight,
         backgroundColor: COLORS.accentLine,
-        boxShadow: `0 0 20px ${COLORS.accentLine}`,
+        boxShadow: `0 0 ${DIMENSIONS.glowBlurRadius}px ${COLORS.accentLine}`,
       }}
     />
   );

@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import { readSseStartResult } from '../../lib/client/sse-utils';
 import { SseLogPanel } from '../SseLogPanel';
 
 interface Stage6SpecGenerationProps {
@@ -126,57 +127,16 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok || !res.body) return;
+      if (!res.ok) return;
 
-      // The endpoint returns text/event-stream. Read until we find the jobId
-      // in a "complete" event, then release the reader (SseLogPanel opens its own stream).
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let foundJobId = false;
-      let isErrorEvent = false;
-
-      while (!foundJobId) {
-        const { done: streamDone, value } = await reader.read();
-        if (streamDone) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-
-        for (const line of lines) {
-          if (line === 'event: error') {
-            isErrorEvent = true;
-            continue;
-          }
-
-          if (!line.startsWith('data: ')) continue;
-
-          try {
-            const data = JSON.parse(line.slice(6));
-
-            if (isErrorEvent) {
-              setError(data?.message ?? 'Spec generation failed');
-              foundJobId = true;
-              break;
-            }
-
-            if (data?.jobId) {
-              setLatestJobId(data.jobId);
-              foundJobId = true;
-              break;
-            }
-          } catch {
-            // Incomplete JSON fragment — will be re-processed once buffer grows
-          }
-          isErrorEvent = false;
-        }
-
-        // Retain the last incomplete line across reads (handles chunk boundaries)
-        buffer = buffer.endsWith('\n') ? '' : (lines[lines.length - 1] ?? '');
+      const { jobId, errorMessage } = await readSseStartResult(res);
+      if (errorMessage) {
+        setError(errorMessage);
       }
-
-      // Release the reader — SseLogPanel opens its own EventSource for logs
-      reader.cancel().catch(() => {});
+      if (jobId) {
+        setError(null);
+        setLatestJobId(jobId);
+      }
     } catch {
       // Ignore network/parse errors — button should not get stuck
     }
@@ -372,10 +332,14 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
           </div>
         ))}
 
-      {/* SSE Log Panel */}
-      <div className="mt-6">
-        <SseLogPanel jobId={latestJobId} onDone={fetchSpecList} logClassName="max-h-[50vh]" />
-      </div>
+      <details className="mt-6 rounded border border-slate-700 bg-slate-900/60">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-200">
+          Spec Generation Logs
+        </summary>
+        <div className="border-t border-slate-700 p-4">
+          <SseLogPanel jobId={latestJobId} onDone={fetchSpecList} logClassName="max-h-[50vh]" />
+        </div>
+      </details>
     </div>
   );
 };

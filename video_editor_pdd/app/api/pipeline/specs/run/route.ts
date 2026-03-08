@@ -6,6 +6,10 @@ import { runPipelineStage, registerExecutor } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
+import {
+  isDeterministicPipelineMode,
+  writeDeterministicSpecsForSection,
+} from "@/lib/deterministic-pipeline";
 
 // ----------------------------------------------------------------------------
 // Register specs executor (runs Claude scoped to /specs)
@@ -78,6 +82,23 @@ registerExecutor("specs", (params, _send) => {
     progressFn?.(0);
 
     const totalSections = sectionIds.length || 1;
+
+    if (isDeterministicPipelineMode()) {
+      sectionIds.forEach((sid, index) => {
+        const section = cfg.sections.find((candidate) => candidate.id === sid);
+        if (!section) {
+          return;
+        }
+
+        onLog(`[specs] Generating specs for section: ${sid} (${index + 1}/${sectionIds.length})`);
+        writeDeterministicSpecsForSection(process.cwd(), section, onLog);
+        const pct = Math.round(((index + 1) / totalSections) * 100);
+        progressFn?.(pct);
+        onLog(`[specs] Section ${sid} complete (${pct}%)`);
+      });
+      return;
+    }
+
     let completedSections = 0;
     let nextIndex = 0;
     const workerCount = Math.min(2, sectionIds.length || 1);

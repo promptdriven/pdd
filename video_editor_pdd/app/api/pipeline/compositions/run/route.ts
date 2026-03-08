@@ -10,6 +10,11 @@ import { runClaudeFix } from "@/lib/claude";
 import { loadProject, saveProject } from "@/lib/project";
 import { renderStill } from "@/lib/render";
 import type { Section, SseSend } from "@/lib/types";
+import {
+  isDeterministicPipelineMode,
+  writeDeterministicComponent,
+  writeDeterministicSectionConstants,
+} from "@/lib/deterministic-pipeline";
 
 type SectionComponentEntry = {
   sectionId: string;
@@ -594,12 +599,28 @@ registerExecutor("compositions", (params, send: SseSend) => {
     let generationError: Error | null = null;
 
     try {
-      for (const item of workItems) {
+      let nextWorkIndex = 0;
+      const workerCount = workItems.length >= 4 ? 2 : 1;
+
+      const runNextItem = async (): Promise<void> => {
+        if (generationError) {
+          return;
+        }
+
+        const currentIndex = nextWorkIndex++;
+        if (currentIndex >= workItems.length) {
+          return;
+        }
+
+        const item = workItems[currentIndex];
         send({ type: "component", name: item.name, status: "generating" });
         onLog(`[compositions] Generating component: ${item.outputName}`);
 
         try {
-          if (item.name.endsWith("_main")) {
+          if (isDeterministicPipelineMode()) {
+            const spec = findSpecForComponent(item.name, item.specDir);
+            writeDeterministicComponent(REMOTION_SCOPE_DIR, item.outputName, spec, onLog);
+          } else if (item.name.endsWith("_main")) {
             const spec = findSpecForComponent(item.name, item.specDir);
             generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
           } else {
@@ -615,12 +636,18 @@ registerExecutor("compositions", (params, send: SseSend) => {
           send({ type: "component", name: item.name, status: "error" });
           onLog(`[compositions] Error generating ${item.name}: ${msg}`);
           generationError = err instanceof Error ? err : new Error(String(err));
-          break;
+          return;
         } finally {
           completed++;
           progressFn?.(Math.round((completed / total) * 100));
         }
-      }
+
+        await runNextItem();
+      };
+
+      await Promise.all(
+        Array.from({ length: workerCount }, () => runNextItem())
+      );
     } catch (err) {
       generationError = err instanceof Error ? err : new Error(String(err));
     }
@@ -663,13 +690,13 @@ registerExecutor("compositions", (params, send: SseSend) => {
             const fullPascal = `${sectionPascal}${nnMatch[1]}${strippedPascal}`;
             pascalDirIndex = path.join(REMOTION_SCOPE_DIR, fullPascal, "index.ts");
           }
-          if (fs.existsSync(dirIndex)) {
-            discoveredComponents.push(base);
-          } else if (pascalDirIndex && fs.existsSync(pascalDirIndex)) {
-            discoveredComponents.push(base);
-          } else if (fs.existsSync(scopedTsx)) {
+          if (fs.existsSync(scopedTsx)) {
             discoveredComponents.push(`${section.id}_${base}`);
           } else if (fs.existsSync(flatTsx)) {
+            discoveredComponents.push(base);
+          } else if (fs.existsSync(dirIndex)) {
+            discoveredComponents.push(base);
+          } else if (pascalDirIndex && fs.existsSync(pascalDirIndex)) {
             discoveredComponents.push(base);
           }
         }
@@ -728,13 +755,17 @@ registerExecutor("compositions", (params, send: SseSend) => {
           (comp) => typeof comp === "string" ? comp : (comp.id as string)
         );
         try {
-          await generateSectionConstants(
-            section.id,
-            section.compositionId,
-            componentIds,
-            sectionRemotionDir,
-            onLog,
-          );
+          if (isDeterministicPipelineMode()) {
+            writeDeterministicSectionConstants(process.cwd(), section, componentIds, onLog);
+          } else {
+            await generateSectionConstants(
+              section.id,
+              section.compositionId,
+              componentIds,
+              sectionRemotionDir,
+              onLog,
+            );
+          }
         } catch (err) {
           const msg = err instanceof Error ? err.message : "Unknown error";
           onLog(`[compositions] Warning: section constants/composition generation failed for ${section.id}: ${msg}`);

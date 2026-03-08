@@ -1,5 +1,6 @@
 // app/api/sections/[id]/resolve-batch/route.ts
 import { NextResponse } from "next/server";
+import fs from "fs/promises";
 import path from "path";
 import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
@@ -9,6 +10,12 @@ import { renderSection } from "@/lib/render";
 import { loadProject, getSection } from "@/lib/project";
 import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
+import {
+  applyDeterministicRemotionFix,
+  applyDeterministicVideoOverlay,
+  extractRequestedHexColor,
+  isDeterministicPipelineMode,
+} from "@/lib/deterministic-pipeline";
 
 export const dynamic = "force-dynamic";
 
@@ -146,11 +153,15 @@ export async function POST(_request: Request, { params }: RouteParams) {
       // Remotion fixes via Claude
       for (const ann of byFixType.remotion) {
         onLog(`Running Claude fix for annotation ${ann.id}`);
-        await runClaudeFix(
-          buildRemotionPrompt(ann),
-          "remotion/src/remotion/",
-          onLog
-        );
+        if (isDeterministicPipelineMode()) {
+          applyDeterministicRemotionFix(process.cwd(), ann.sectionId, ann.text, onLog);
+        } else {
+          await runClaudeFix(
+            buildRemotionPrompt(ann),
+            "remotion/src/remotion/",
+            onLog
+          );
+        }
 
         // Git commit after fix
         if (gitAvail) {
@@ -179,6 +190,16 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
       // Rebuild Remotion bundle so renders pick up the edited TSX
       const remotionDir = path.join(process.cwd(), "remotion");
+      const buildDir = path.join(remotionDir, "build");
+      const webpackCacheDir = path.join(
+        remotionDir,
+        "node_modules",
+        ".cache",
+        "webpack",
+      );
+      onLog("Clearing stale bundle and webpack cache...");
+      await fs.rm(buildDir, { recursive: true, force: true });
+      await fs.rm(webpackCacheDir, { recursive: true, force: true });
       onLog("Rebuilding Remotion bundle...");
       execSync("npx remotion bundle src/index.ts --out build", {
         cwd: remotionDir,
@@ -197,6 +218,14 @@ export async function POST(_request: Request, { params }: RouteParams) {
         onLog.progress?.(progress.percent);
         onLog(progress.message);
       });
+
+      if (isDeterministicPipelineMode() && byFixType.remotion.length > 0) {
+        applyDeterministicVideoOverlay(
+          outputPath,
+          extractRequestedHexColor(byFixType.remotion[0].text),
+          onLog,
+        );
+      }
     }).catch((err) => {
       console.error(`[resolve-batch] runJob ${jobId} failed unexpectedly:`, err);
     });

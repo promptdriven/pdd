@@ -7,6 +7,10 @@ import { generateVeoClip, extractLastFrame } from '@/lib/veo';
 import { registerExecutor, runPipelineStage } from '@/lib/jobs';
 import { emitClipEvent } from '@/lib/clip-events';
 import type { SseSend } from '@/lib/types';
+import {
+  generateDeterministicVeoClip,
+  isDeterministicPipelineMode,
+} from '@/lib/deterministic-pipeline';
 
 /**
  * API ROUTE: app/api/pipeline/veo/run/route.ts
@@ -144,12 +148,16 @@ registerExecutor('veo', (params, send: SseSend) => {
         onLog(`Generating Veo clip "${clipId}"`);
         onLog(`Prompt: ${prompt.substring(0, 120)}...`);
 
-        await generateVeoClip(
-          prompt,
-          referenceImagePath,
-          aspectRatio,
-          outputPath
-        );
+        if (isDeterministicPipelineMode()) {
+          generateDeterministicVeoClip(outputPath, onLog);
+        } else {
+          await generateVeoClip(
+            prompt,
+            referenceImagePath,
+            aspectRatio,
+            outputPath
+          );
+        }
 
         // Frame chaining for next clip
         if (i < ordered.length - 1) {
@@ -198,4 +206,3 @@ export async function POST(request: Request): Promise<Response> {
     },
   });
 }
-

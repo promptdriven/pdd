@@ -111,10 +111,12 @@ export default function StageSidebar({
         const isActive = stage === activeStage;
         const entry = stageStatuses[stage];
         return (
-          <div
+          <button
+            type="button"
             key={stage}
             onClick={() => onStageSelect(stage)}
-            className={`cursor-pointer px-3 py-2 flex items-center gap-2 hover:bg-white/5 transition-colors ${
+            aria-current={isActive ? 'step' : undefined}
+            className={`w-full appearance-none border-0 bg-transparent cursor-pointer px-3 py-2 flex items-center gap-2 text-left hover:bg-white/5 transition-colors focus:outline-none ${
               isActive ? 'border-l-2 border-blue-400 bg-white/5' : ''
             }`}
             title={entry?.status === 'error' ? entry.error || 'Error' : undefined}
@@ -122,7 +124,7 @@ export default function StageSidebar({
             <span className="text-xs text-muted-foreground w-6">{number}</span>
             <span className="flex-1 text-sm">{label}</span>
             {entry && renderBadge(entry)}
-          </div>
+          </button>
         );
       })}
     </aside>

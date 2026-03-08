@@ -1,7 +1,22 @@
 import { test, expect } from '@playwright/test';
+import { buildMockAuditResults, loadActiveProjectFixture } from './helpers/project-fixtures';
+
+const ACTIVE_PROJECT = loadActiveProjectFixture();
+const PROJECT_SECTIONS = ACTIVE_PROJECT.sections;
 
 test.describe('Stage 10: Audit', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/pipeline/audit/results', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(buildMockAuditResults()),
+      });
+    });
+    await page.route('**/api/pipeline/audit/stream', (route) =>
+      route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' })
+    );
+
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Click on Audit stage in sidebar
@@ -52,11 +67,11 @@ test.describe('Stage 10: Audit', () => {
     await expect(page.locator('button', { hasText: 'Audit Section' })).toBeVisible();
   });
 
-  test('section rows are present (7 sections)', async ({ page }) => {
+  test('section rows are present for the active project', async ({ page }) => {
     // Wait for sections to load from API
     await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
     const viewReportButtons = page.locator('button', { hasText: 'View Report' });
-    await expect(viewReportButtons).toHaveCount(7);
+    await expect(viewReportButtons).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('section labels are visible in table', async ({ page }) => {
@@ -68,7 +83,7 @@ test.describe('Stage 10: Audit', () => {
     // The section labels are in the grid rows alongside View Report buttons
     // Verify by checking that the number of View Report buttons matches expected sections
     const rows = page.locator('button', { hasText: 'View Report' });
-    await expect(rows).toHaveCount(7);
+    await expect(rows).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('section label text is readable on dark background (dark theme fix)', async ({ page }) => {
@@ -124,13 +139,13 @@ test.describe('Stage 10: Audit', () => {
   test('each section has a "View Report" button', async ({ page }) => {
     await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
     const buttons = page.locator('button', { hasText: 'View Report' });
-    await expect(buttons).toHaveCount(7);
+    await expect(buttons).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('each section has an "Audit" re-run button', async ({ page }) => {
     await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
     const auditButtons = page.locator('button', { hasText: '↺ Audit' });
-    await expect(auditButtons).toHaveCount(7);
+    await expect(auditButtons).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('"View Report" button text is readable (dark theme fix)', async ({ page }) => {
@@ -209,7 +224,7 @@ test.describe('Stage 10: Audit', () => {
     // It should contain buttons for each section
     const dropdownItems = dropdownMenu.locator('button');
     const count = await dropdownItems.count();
-    expect(count).toBe(7);
+    expect(count).toBe(PROJECT_SECTIONS.length);
   });
 
   test('Audit Section dropdown closes on outside click', async ({ page }) => {

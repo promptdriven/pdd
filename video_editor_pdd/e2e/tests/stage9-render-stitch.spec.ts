@@ -1,7 +1,19 @@
 import { test, expect } from '@playwright/test';
+import { buildMockRenderStatus, loadActiveProjectFixture } from './helpers/project-fixtures';
+
+const ACTIVE_PROJECT = loadActiveProjectFixture();
+const PROJECT_SECTIONS = ACTIVE_PROJECT.sections;
 
 test.describe('Stage 9: Render & Stitch', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/pipeline/render/status', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(buildMockRenderStatus()),
+      });
+    });
+
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Click on Render stage in sidebar
@@ -126,16 +138,16 @@ test.describe('Stage 9: Render & Stitch', () => {
     }
   });
 
-  test('section renders table shows all 7 project sections', async ({ page }) => {
+  test('section renders table shows all project sections', async ({ page }) => {
     const rows = page.locator('tbody tr');
-    await expect(rows).toHaveCount(7);
+    await expect(rows).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('section IDs are visible in table (dark theme fix)', async ({ page }) => {
     // After fix, section IDs should use explicit dark text color
     const firstSectionCell = page.locator('tbody tr').first().locator('td').nth(1);
     await expect(firstSectionCell).toBeVisible();
-    await expect(firstSectionCell).toContainText('cold_open');
+    await expect(firstSectionCell).toContainText(PROJECT_SECTIONS[0].id);
 
     const color = await firstSectionCell.evaluate((el) => getComputedStyle(el).color);
     const match = color.match(/(\d+)/g);
@@ -166,7 +178,7 @@ test.describe('Stage 9: Render & Stitch', () => {
 
   test('each row has a selection checkbox', async ({ page }) => {
     const checkboxes = page.locator('tbody tr input[type="checkbox"]');
-    await expect(checkboxes).toHaveCount(7);
+    await expect(checkboxes).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('checkboxes are toggleable', async ({ page }) => {
@@ -181,29 +193,28 @@ test.describe('Stage 9: Render & Stitch', () => {
   test('each row has a preview button', async ({ page }) => {
     // Rendered sections use title="Preview", missing sections use title="Not yet rendered"
     const previewButtons = page.locator('tbody tr button[title="Preview"], tbody tr button[title="Not yet rendered"]');
-    await expect(previewButtons).toHaveCount(7);
+    await expect(previewButtons).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('each row has a re-render button', async ({ page }) => {
     const rerenderButtons = page.locator('tbody tr button[title="Re-render"]');
-    await expect(rerenderButtons).toHaveCount(7);
+    await expect(rerenderButtons).toHaveCount(PROJECT_SECTIONS.length);
   });
 
-  test('all sections show Missing status', async ({ page }) => {
-    // Wait for rows to be present
-    await expect(page.locator('tbody tr')).toHaveCount(7);
-    // Status badge renders as "Missing" in a rounded span
-    const missingBadges = page.locator('tbody span.rounded-full', { hasText: 'Missing' });
-    const count = await missingBadges.count();
-    expect(count).toBeGreaterThanOrEqual(1);
+  test('render status badges are visible', async ({ page }) => {
+    await expect(page.locator('tbody tr')).toHaveCount(PROJECT_SECTIONS.length);
+    const statusBadges = page.locator('tbody span.rounded-full');
+    expect(await statusBadges.count()).toBeGreaterThanOrEqual(1);
+    await expect(page.locator('tbody span.rounded-full', { hasText: 'Rendered' }).first()).toBeVisible();
+    if (PROJECT_SECTIONS.length > 1) {
+      await expect(page.locator('tbody span.rounded-full', { hasText: 'Missing' }).first()).toBeVisible();
+    }
   });
 
-  test('all sections show 0% progress', async ({ page }) => {
-    await expect(page.locator('tbody tr')).toHaveCount(7);
-    // Progress text uses class text-slate-400 (not text-slate-500)
-    const progressTexts = page.locator('tbody .text-xs', { hasText: '0%' });
-    const count = await progressTexts.count();
-    expect(count).toBeGreaterThanOrEqual(1);
+  test('progress values are visible for each section', async ({ page }) => {
+    await expect(page.locator('tbody tr')).toHaveCount(PROJECT_SECTIONS.length);
+    const progressTexts = page.locator('tbody td .text-xs.text-slate-400.mt-1');
+    await expect(progressTexts).toHaveCount(PROJECT_SECTIONS.length);
   });
 
   test('no console errors on load', async ({ page }) => {
@@ -300,7 +311,7 @@ test.describe('Stage 9: Render & Stitch', () => {
     await firstPreviewButton.click();
     await page.waitForTimeout(500);
 
-    // The modal overlay should appear with "Preview — cold_open" text
+    // The modal overlay should appear with the first section ID
     await expect(page.locator('text=Preview —')).toBeVisible();
 
     // A video element should be present inside the modal
@@ -363,32 +374,28 @@ test.describe('Stage 9: Render & Stitch', () => {
     expect(capturedBody).not.toBeNull();
     expect(capturedBody).toHaveProperty('sections');
     expect(capturedBody.sections).toHaveLength(1);
-    expect(capturedBody.sections[0]).toBe('cold_open');
+    expect(capturedBody.sections[0]).toBe(PROJECT_SECTIONS[0].id);
   });
 
   test('Multiple checkboxes can be toggled independently', async ({ page }) => {
     const checkboxes = page.locator('tbody tr input[type="checkbox"]');
-    await expect(checkboxes).toHaveCount(7);
+    await expect(checkboxes).toHaveCount(PROJECT_SECTIONS.length);
 
-    // Check the first and third checkboxes
     const firstCheckbox = checkboxes.nth(0);
-    const thirdCheckbox = checkboxes.nth(2);
-
     await firstCheckbox.check();
-    await thirdCheckbox.check();
-
-    // Verify both are checked
     await expect(firstCheckbox).toBeChecked();
-    await expect(thirdCheckbox).toBeChecked();
 
-    // Verify the second checkbox is NOT checked
-    const secondCheckbox = checkboxes.nth(1);
-    await expect(secondCheckbox).not.toBeChecked();
-
-    // Uncheck the first, verify only the third is still checked
-    await firstCheckbox.uncheck();
-    await expect(firstCheckbox).not.toBeChecked();
-    await expect(thirdCheckbox).toBeChecked();
+    if (PROJECT_SECTIONS.length > 1) {
+      const secondCheckbox = checkboxes.nth(1);
+      await secondCheckbox.check();
+      await expect(secondCheckbox).toBeChecked();
+      await firstCheckbox.uncheck();
+      await expect(firstCheckbox).not.toBeChecked();
+      await expect(secondCheckbox).toBeChecked();
+    } else {
+      await firstCheckbox.uncheck();
+      await expect(firstCheckbox).not.toBeChecked();
+    }
   });
 
   // ── Bug regression tests ──────────────────────────────────────────────────

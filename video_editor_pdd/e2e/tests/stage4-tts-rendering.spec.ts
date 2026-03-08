@@ -1,7 +1,20 @@
 import { test, expect } from '@playwright/test';
 
+const DEFAULT_SEGMENTS = [
+  { id: 'seg-default-001', status: 'done', text: 'Completed segment.' },
+  { id: 'seg-default-002', status: 'missing', text: 'Pending segment.' },
+];
+
 test.describe('Stage 4: TTS Rendering', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/pipeline/tts-render/segments', (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ segments: DEFAULT_SEGMENTS }),
+      })
+    );
+
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     // Click on TTS Render stage

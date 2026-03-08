@@ -146,7 +146,13 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         return;
       }
       const extractedJobId = await extractJobIdFromSse(res);
-      if (extractedJobId) setJobId(extractedJobId);
+      if (extractedJobId) {
+        setJobId(extractedJobId);
+      } else {
+        setClips((prev) =>
+          prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'error' } : c))
+        );
+      }
     } catch (err) {
       // Revert optimistic status on network/parse error
       setClips((prev) =>

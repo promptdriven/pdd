@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, useVideoConfig, random, interpolate } from 'remotion';
+import { useCurrentFrame, useVideoConfig, random } from 'remotion';
 import { PARTICLES, CANVAS } from './constants';
 
 interface Particle {
@@ -41,11 +41,7 @@ export const ParticleSystem: React.FC = () => {
         const xOffset = Math.sin(time * 2 + particle.id) * particle.xDrift;
         const x = particle.startX + xOffset;
 
-        const opacity = interpolate(
-          random(`particle-opacity-${particle.id}`),
-          [0, 1],
-          [0.3, 0.8]
-        );
+        const opacity = 0.3;
 
         return (
           <div

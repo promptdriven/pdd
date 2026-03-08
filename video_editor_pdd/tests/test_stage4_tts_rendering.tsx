@@ -808,11 +808,12 @@ describe("layout and structure", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 30. Render Missing early return on empty (bug fix)
+// 30. Render Missing forwards missing list to batch render
 // ---------------------------------------------------------------------------
 
 describe("Render Missing early return", () => {
-  it("handleRenderMissing returns early when no missing segments", () => {
-    expect(sourceCode).toMatch(/missing\.length\s*===\s*0/);
+  it("handleRenderMissing computes missing ids and forwards them to startBatchRender", () => {
+    expect(sourceCode).toMatch(/const\s+missing\s*=\s*segments\.filter\(\(s\)\s*=>\s*s\.status\s*!==\s*'done'\)\.map\(\(s\)\s*=>\s*s\.id\)/);
+    expect(sourceCode).toMatch(/startBatchRender\s*\(\s*missing\s*\)/);
   });
 });

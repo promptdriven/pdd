@@ -31,6 +31,7 @@ export const TYPOGRAPHY = {
 
 export const POSITIONS = {
   titleY: 460,
+  accentLineY: 530,
   subtitleY: 580,
   titleStartY: 500,
 };

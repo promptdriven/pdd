@@ -3,6 +3,11 @@ import path from "path";
 import { createSseStream } from "@/lib/sse";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { runClaudeFix } from "@/lib/claude";
+import { loadProject } from "@/lib/project";
+import {
+  isDeterministicPipelineMode,
+  writeDeterministicTtsScript,
+} from "@/lib/deterministic-pipeline";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +39,12 @@ You are allowed to read/write files ONLY in the narrative/ directory.
  */
 registerExecutor("tts-script", (_params, _send) => {
   return async (onLog) => {
+    if (isDeterministicPipelineMode()) {
+      const project = loadProject();
+      writeDeterministicTtsScript(process.cwd(), project.sections, onLog);
+      return;
+    }
+
     await runClaudeFix(
       TTS_SCRIPT_PROMPT,
       path.join(process.cwd(), "narrative"),

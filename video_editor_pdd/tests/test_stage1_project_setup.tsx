@@ -500,6 +500,10 @@ describe("save functionality", () => {
     expect(sourceCode).toMatch(/Save\s*✓/);
   });
 
+  it("renders a [Continue →] button", () => {
+    expect(sourceCode).toMatch(/Continue\s*→/);
+  });
+
   it("handleSave makes a PUT request to /api/project", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/project['"]/);
     expect(sourceCode).toMatch(/method\s*:\s*['"]PUT['"]/);
@@ -647,6 +651,10 @@ describe("StagePanelProps compatibility", () => {
 
   it("accepts onAdvance callback prop", () => {
     expect(sourceCode).toMatch(/onAdvance\s*[:\?]/);
+  });
+
+  it("wires Continue button to onAdvance", () => {
+    expect(sourceCode).toMatch(/onClick=\{\(\)\s*=>\s*onAdvance\?\.\(\)\}/);
   });
 
   it("guards against null projectConfig before rendering form", () => {

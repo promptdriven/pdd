@@ -342,9 +342,11 @@ describe("run specs handler", () => {
     expect(sourceCode).toMatch(/JSON\.stringify\s*\(\s*payload\s*\)/);
   });
 
-  it("extracts jobId from response and sets latestJobId", () => {
-    expect(sourceCode).toMatch(/data\?\.jobId/);
-    expect(sourceCode).toMatch(/setLatestJobId\s*\(\s*data\.jobId\s*\)/);
+  it("uses readSseStartResult to extract jobId and errorMessage", () => {
+    expect(sourceCode).toMatch(/readSseStartResult\s*\(\s*res\s*\)/);
+    expect(sourceCode).toMatch(/const\s*\{\s*jobId\s*,\s*errorMessage\s*\}\s*=/);
+    expect(sourceCode).toMatch(/setLatestJobId\s*\(\s*jobId\s*\)/);
+    expect(sourceCode).toMatch(/if\s*\(\s*errorMessage\s*\)\s*\{\s*setError\s*\(\s*errorMessage\s*\)/);
   });
 });
 
@@ -705,8 +707,9 @@ describe("inline CodeMirror editor", () => {
 // ---------------------------------------------------------------------------
 
 describe("SSE log panel", () => {
-  it("renders logs directly without a <details> wrapper (always visible)", () => {
-    expect(sourceCode).not.toMatch(/<details[\s\S]*?<SseLogPanel/);
+  it("renders SseLogPanel inside a <details> drawer", () => {
+    expect(sourceCode).toMatch(/<details[\s\S]*?<SseLogPanel/);
+    expect(sourceCode).toMatch(/<summary[\s\S]*?Spec Generation Logs/);
   });
 
   it("renders SseLogPanel component", () => {

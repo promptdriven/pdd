@@ -2672,6 +2672,51 @@ describe("compositions executor — generated section timelines", () => {
     expect(savedConfig.sections[0].timelineSource).toBe("generated");
   });
 
+  it("prefers section-scoped flat files over shared legacy component directories during discovery", async () => {
+    const pathMod = require("path");
+    const config = mockProjectConfig();
+    config.sections[0].id = "intro";
+    config.sections[0].specDir = "specs/intro";
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes(pathMod.join("specs", "specs/intro"))) return true;
+      if (p.endsWith(pathMod.join("01-Chart", "index.ts"))) return true;
+      if (p.endsWith("intro_01_chart.tsx")) return true;
+      if (p.includes("_words.json")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          { name: "01_chart.md", isDirectory: () => false, isFile: () => true },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("_words.json")) {
+        return JSON.stringify([]);
+      }
+      if (typeof p === "string" && p.includes("01_chart.md")) {
+        return "# Chart spec\nSome content";
+      }
+      return "";
+    });
+    setupMockSpawn(0);
+
+    const executor = registerCallArgs.factory(
+      { components: ["01_chart"], wrappers: [], sectionId: "intro" },
+      jest.fn(),
+    );
+    await executor(jest.fn());
+
+    const savedConfig = mockSaveProject.mock.calls.at(-1)?.[0];
+    expect(savedConfig.sections[0].compositions).toContain("intro_01_chart");
+    expect(savedConfig.sections[0].compositions).not.toContain("01_chart");
+  });
+
   it("does not ask Claude to generate a section composition prompt for generated timelines", async () => {
     const config = mockProjectConfig();
     config.sections[0].specDir = "specs/intro";

@@ -20,8 +20,28 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 10.624,
+      "offsetSeconds": 0,
+      "timelineSource": "generated",
+      "compositions": [
+        "animation_section_01_title_card",
+        "02_bar_chart_key_visual",
+        "02_intro_data_pulse",
+        "03_blue_circle_pulse",
+        "03_key_visual_bar_chart",
+        "03_particle_transition",
+        "04_circle_to_square_transform",
+        "04_remotion_logo_reveal",
+        "05_animation_engine_diagram",
+        "05_animation_showcase",
+        "05_bar_chart_key_visual",
+        "06_framework_comparison",
+        "06_split_before_after",
+        "06_split_summary",
+        "07_before_after_split_summary",
+        "08_closing_badge",
+        "08_section_closing_card"
+      ]
     },
     {
       "id": "veo_section",
@@ -30,8 +50,25 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 11.456,
+      "offsetSeconds": 10.624,
+      "timelineSource": "generated",
+      "compositions": [
+        "veo_section_01_title_card",
+        "03_narration_overlay_intro",
+        "05_narration_overlay_forest",
+        "05_veo_badge_callout",
+        "06_split_ocean_forest",
+        "06_veo_badge_callout",
+        "06_veo_technology_callout",
+        "07_split_comparison",
+        "07_veo_badge_callout",
+        "07_waveform_visualizer",
+        "08_section_end_card",
+        "08_split_ocean_forest",
+        "08_veo_technology_callout",
+        "09_section_outro"
+      ]
     }
   ],
   "audioSync": {

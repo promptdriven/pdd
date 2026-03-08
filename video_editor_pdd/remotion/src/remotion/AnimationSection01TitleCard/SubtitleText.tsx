@@ -12,18 +12,7 @@ export const SubtitleText: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.ease),
-    }
-  );
-
-  const blur = interpolate(
-    frame,
-    [ANIMATION_TIMING.subtitleFadeStart, ANIMATION_TIMING.subtitleFadeEnd],
-    [10, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.ease),
+      easing: Easing.out(Easing.quad),
     }
   );
 
@@ -38,7 +27,6 @@ export const SubtitleText: React.FC = () => {
         justifyContent: 'center',
         alignItems: 'center',
         opacity,
-        filter: `blur(${blur}px)`,
       }}
     >
       <p
@@ -51,7 +39,7 @@ export const SubtitleText: React.FC = () => {
           margin: 0,
         }}
       >
-        Visual Storytelling Through Motion
+        Integration Test Video
       </p>
     </div>
   );

@@ -24,6 +24,8 @@ interface Stage2ScriptEditorProps {
 
 const SPLIT_KEY = 'script-editor-split-ratio';
 
+const clampSplitRatio = (value: number) => Math.min(0.85, Math.max(0.15, value));
+
 /**
  * Stage2ScriptEditor component provides a dual-pane interface for editing scripts.
  * It includes a CodeMirror editor on the left and a structured preview on the right.
@@ -49,7 +51,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
     const stored = typeof window !== 'undefined' ? localStorage.getItem(SPLIT_KEY) : null;
     if (stored) {
       const parsed = parseFloat(stored);
-      if (!Number.isNaN(parsed)) setSplitRatio(parsed);
+      if (!Number.isNaN(parsed)) setSplitRatio(clampSplitRatio(parsed));
     }
   }, []);
 
@@ -230,7 +232,7 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
     const onMouseMove = (evt: MouseEvent) => {
       const delta = evt.clientX - startX;
       const newRatio = (startRatio * rect.width + delta) / rect.width;
-      const clamped = Math.min(0.85, Math.max(0.15, newRatio));
+      const clamped = clampSplitRatio(newRatio);
       setSplitRatio(clamped);
     };
 

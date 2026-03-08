@@ -199,7 +199,6 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
   const handleRenderAll = () => startBatchRender();
   const handleRenderMissing = () => {
     const missing = segments.filter((s) => s.status !== 'done').map((s) => s.id);
-    if (missing.length === 0) return;
     startBatchRender(missing);
   };
 

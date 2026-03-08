@@ -251,12 +251,22 @@ export default function Stage1ProjectSetup({
             <span className="w-2.5 h-2.5 rounded-full bg-yellow-400" />
           )}
         </div>
-        <button
-          onClick={handleSave}
-          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
-        >
-          Save ✓
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+          >
+            Save ✓
+          </button>
+          <button
+            type="button"
+            onClick={() => onAdvance?.()}
+            disabled={!onAdvance}
+            className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Continue →
+          </button>
+        </div>
       </div>
 
       {toast && (
