@@ -842,7 +842,29 @@ describe("GET_clips — response shape", () => {
       expect(clip).toHaveProperty("status");
       expect(clip).toHaveProperty("stale");
       expect(clip).toHaveProperty("frameChainDeps");
+      expect(clip).toHaveProperty("specPath");
     }
+  });
+
+  it("returns the canonical markdown spec path when a section contains a Veo markdown spec", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("outputs/veo")) return false;
+      return p.includes("specs/intro");
+    });
+    mockReaddirSync.mockReturnValue(["01_title.md", "02_blank.md", "03_ocean.md"]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("01_title.md")) return "[title:]";
+      if (p.includes("02_blank.md")) return "[veo:]";
+      if (p.includes("03_ocean.md")) return "[veo: Ocean wave at sunset]";
+      return "";
+    });
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips[0].specPath).toBe("specs/intro/02_blank.md");
   });
 
   it("sets aspectRatio from project config", async () => {

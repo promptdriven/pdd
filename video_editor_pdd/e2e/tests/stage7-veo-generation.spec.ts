@@ -39,7 +39,7 @@ test.describe('Stage 7: Veo Generation', () => {
     await page.waitForLoadState('networkidle');
     // Click on Veo Gen stage in sidebar
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     // Wait for clip data to load (loading state disappears, table appears)
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
   });
@@ -201,7 +201,7 @@ test.describe('Stage 7: Veo Generation', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(2000);
     // Filter out non-application errors
     const appErrors = errors.filter(

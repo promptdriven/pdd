@@ -11,6 +11,11 @@ import {
   generateDeterministicVeoClip,
   isDeterministicPipelineMode,
 } from '@/lib/deterministic-pipeline';
+import {
+  extractVeoMarker,
+  normalizeSpecDir,
+  selectCanonicalVeoPromptSpec,
+} from '@/lib/veo-spec-context';
 
 /**
  * API ROUTE: app/api/pipeline/veo/run/route.ts
@@ -18,24 +23,16 @@ import {
 
 export const runtime = 'nodejs';
 
-/**
- * Extract a Veo prompt from a [veo: ...] marker inside markdown content.
- * Returns null if no marker is found.
- */
-function extractVeoMarker(content: string): string | null {
-  const match = content.match(/\[veo:\s*(.+?)\]/i);
-  return match ? match[1].trim() : null;
-}
-
 /** Resolve a Veo prompt from specs on disk */
 function resolveVeoPrompt(sectionId: string): string {
   const cwd = process.cwd();
+  const normalizedSpecDir = normalizeSpecDir(sectionId);
 
   // 1. Check JSON and text candidates first
   const candidates = [
-    path.join(cwd, 'specs', sectionId, 'veo.json'),
-    path.join(cwd, 'specs', sectionId, 'spec.json'),
-    path.join(cwd, 'specs', sectionId, 'veo.txt'),
+    path.join(cwd, 'specs', normalizedSpecDir, 'veo.json'),
+    path.join(cwd, 'specs', normalizedSpecDir, 'spec.json'),
+    path.join(cwd, 'specs', normalizedSpecDir, 'veo.txt'),
   ];
 
   for (const file of candidates) {
@@ -57,18 +54,18 @@ function resolveVeoPrompt(sectionId: string): string {
   }
 
   // 2. Scan markdown files in specs/{sectionId}/ for [veo: ...] markers
-  const specDir = path.join(cwd, 'specs', sectionId);
+  const specDir = path.join(cwd, 'specs', normalizedSpecDir);
   if (fs.existsSync(specDir)) {
-    const mdFiles = fs
+    const markdownEntries = fs
       .readdirSync(specDir)
-      .filter((f) => f.endsWith('.md'))
-      .sort();
+      .filter((file) => file.endsWith('.md') && !file.startsWith('AUDIT_'))
+      .map((file) => ({
+        path: path.posix.join('specs', normalizedSpecDir, file),
+        content: fs.readFileSync(path.join(specDir, file), 'utf-8'),
+      }));
 
-    for (const mdFile of mdFiles) {
-      const content = fs.readFileSync(path.join(specDir, mdFile), 'utf-8');
-      const prompt = extractVeoMarker(content);
-      if (prompt) return prompt;
-    }
+    const canonicalSpec = selectCanonicalVeoPromptSpec(markdownEntries);
+    if (canonicalSpec) return canonicalSpec.prompt;
   }
 
   // 3. Check narrative/main_script.md for this section's [veo:] marker
@@ -91,7 +88,7 @@ function resolveVeoPrompt(sectionId: string): string {
   }
 
   throw new Error(
-    `No Veo prompt found for section "${sectionId}". Checked JSON/txt candidates and markdown files in specs/${sectionId}/.`
+    `No Veo prompt found for section "${sectionId}". Checked JSON/txt candidates and markdown files in specs/${normalizedSpecDir}/.`
   );
 }
 

@@ -11,6 +11,7 @@ interface VeoClip {
   sectionId: string;
   aspectRatio: string;
   status: VeoClipStatus;
+  specPath?: string | null;
   stale?: boolean;
   frameChainDeps?: string[];
 }
@@ -52,11 +53,16 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
   const [error, setError] = useState<string | null>(null);
 
   const [selectedSection, setSelectedSection] = useState<string>('');
+  const [selectedClipId, setSelectedClipId] = useState<string>('');
+  const [selectedSpecContent, setSelectedSpecContent] = useState('');
+  const [selectedSpecLoading, setSelectedSpecLoading] = useState(false);
+  const [selectedSpecError, setSelectedSpecError] = useState<string | null>(null);
   const [autoComposite, setAutoComposite] = useState(false);
 
   const [logs, setLogs] = useState<ClipLog[]>([]);
   const [jobId, setJobId] = useState<string | null>(null);
   const [brokenRefs, setBrokenRefs] = useState<Set<string>>(new Set());
+  const [brokenVideos, setBrokenVideos] = useState<Set<string>>(new Set());
   const [regeneratingRefId, setRegeneratingRefId] = useState<string | null>(null);
 
   const fetchClips = async () => {
@@ -76,6 +82,9 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
 
       if (!selectedSection && fetchedClips.length > 0) {
         setSelectedSection(fetchedClips[0].sectionId);
+      }
+      if (!selectedClipId && fetchedClips.length > 0) {
+        setSelectedClipId(fetchedClips[0].id);
       }
     } catch (err: any) {
       setError(err.message || 'Unknown error');
@@ -126,6 +135,64 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
     }
     return map;
   }, [clips]);
+
+  const selectedClip = useMemo(() => {
+    return clips.find((clip) => clip.id === selectedClipId) ?? null;
+  }, [clips, selectedClipId]);
+
+  useEffect(() => {
+    if (clips.length === 0) {
+      setSelectedClipId('');
+      return;
+    }
+
+    const hasSelectedClip = clips.some((clip) => clip.id === selectedClipId);
+    if (!hasSelectedClip) {
+      setSelectedClipId(clips[0].id);
+    }
+  }, [clips, selectedClipId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadSelectedSpec = async () => {
+      if (!selectedClip?.specPath) {
+        setSelectedSpecContent('');
+        setSelectedSpecError(null);
+        setSelectedSpecLoading(false);
+        return;
+      }
+
+      try {
+        setSelectedSpecLoading(true);
+        setSelectedSpecError(null);
+        setSelectedSpecContent('');
+        const res = await fetch(
+          `/api/pipeline/specs/file?path=${encodeURIComponent(selectedClip.specPath)}`
+        );
+        if (!res.ok) {
+          throw new Error(`Failed to load spec: ${res.status}`);
+        }
+
+        const data = await res.json();
+        if (!isMounted) return;
+        setSelectedSpecContent(data?.content ?? '');
+      } catch (err) {
+        if (!isMounted) return;
+        setSelectedSpecError((err as Error).message);
+      } finally {
+        if (isMounted) {
+          setSelectedSpecLoading(false);
+        }
+      }
+    };
+
+    loadSelectedSpec();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedClip]);
 
   const handleRunClips = async (clipIds: string[]) => {
     if (!clipIds.length) return;
@@ -316,6 +383,71 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
           </div>
         </div>
 
+        <div className="grid gap-4 xl:grid-cols-2" data-testid="veo-comparison-panel">
+          <div className="bg-slate-900 rounded-lg shadow border border-slate-700 overflow-hidden">
+            <div className="border-b border-slate-700 px-4 py-3">
+              <div className="text-sm font-semibold text-slate-200">Veo Spec</div>
+              <div className="text-xs text-slate-400">
+                {selectedClip?.specPath ?? 'No canonical Veo markdown spec found for this clip'}
+              </div>
+            </div>
+            <div className="p-4">
+              {selectedSpecLoading && (
+                <div className="text-sm text-slate-400">Loading canonical Veo spec…</div>
+              )}
+              {!selectedSpecLoading && selectedSpecError && (
+                <div className="text-sm text-red-400">Error loading spec: {selectedSpecError}</div>
+              )}
+              {!selectedSpecLoading && !selectedSpecError && !selectedClip?.specPath && (
+                <div className="text-sm text-slate-400">
+                  No canonical Veo markdown spec found for this clip.
+                </div>
+              )}
+              {!selectedSpecLoading && !selectedSpecError && selectedClip?.specPath && (
+                <pre className="max-h-[360px] overflow-y-auto whitespace-pre-wrap rounded border border-slate-700 bg-slate-950/60 p-3 font-mono text-xs text-slate-200">
+                  {selectedSpecContent}
+                </pre>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-slate-900 rounded-lg shadow border border-slate-700 overflow-hidden">
+            <div className="border-b border-slate-700 px-4 py-3">
+              <div className="text-sm font-semibold text-slate-200">Generated Video</div>
+              <div className="text-xs text-slate-400">
+                {selectedClip ? `${selectedClip.id} · ${selectedClip.aspectRatio}` : 'No clip selected'}
+              </div>
+            </div>
+            <div className="p-4">
+              {!selectedClip && (
+                <div className="text-sm text-slate-400">Select a clip to compare its Veo spec and video.</div>
+              )}
+              {selectedClip && selectedClip.status !== 'done' && (
+                <div className="rounded border border-slate-700 bg-slate-950/60 p-4 text-sm text-slate-400">
+                  This clip is currently {selectedClip.status}. Generate it to compare the rendered video against the spec.
+                </div>
+              )}
+              {selectedClip && selectedClip.status === 'done' && brokenVideos.has(selectedClip.id) && (
+                <div className="rounded border border-red-700/60 bg-red-950/30 p-4 text-sm text-red-300">
+                  The generated Veo video could not be loaded from disk.
+                </div>
+              )}
+              {selectedClip && selectedClip.status === 'done' && !brokenVideos.has(selectedClip.id) && (
+                <video
+                  key={selectedClip.id}
+                  controls
+                  preload="metadata"
+                  className="aspect-video w-full rounded border border-slate-700 bg-black"
+                  src={`/api/video/outputs/veo/${selectedClip.id}.mp4`}
+                  onError={() =>
+                    setBrokenVideos((prev) => new Set([...prev, selectedClip.id]))
+                  }
+                />
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Clip Table */}
         <div className="bg-slate-900 rounded-lg shadow border border-slate-700 overflow-hidden">
           <table className="w-full text-sm">
@@ -330,7 +462,13 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             </thead>
             <tbody>
               {clips.map((clip) => (
-                <tr key={clip.id} className="border-t">
+                <tr
+                  key={clip.id}
+                  className={`border-t cursor-pointer transition-colors hover:bg-slate-800/40 ${
+                    selectedClipId === clip.id ? 'bg-slate-800/60' : ''
+                  }`}
+                  onClick={() => setSelectedClipId(clip.id)}
+                >
                   <td className="px-4 py-2 font-medium text-slate-200">
                     {clip.id}{' '}
                     {clip.stale && <span className="text-amber-500 ml-1">⚠</span>}

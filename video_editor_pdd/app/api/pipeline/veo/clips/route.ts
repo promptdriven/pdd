@@ -3,6 +3,10 @@ import path from "path";
 import { NextResponse } from "next/server";
 
 import { loadProject } from "@/lib/project";
+import {
+  normalizeSpecDir,
+  selectCanonicalVeoMarkdownSpec,
+} from "@/lib/veo-spec-context";
 
 /**
  * GET /api/pipeline/veo/clips
@@ -20,6 +24,7 @@ interface VeoClip {
   status: VeoClipStatus;
   stale: boolean;
   frameChainDeps: string[];
+  specPath: string | null;
 }
 
 interface ReferencePortrait {
@@ -43,6 +48,7 @@ export async function GET(): Promise<NextResponse> {
 
     const clips: VeoClip[] = sections.map((section, idx) => {
       const clipId = section.id;
+      const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
 
       const clipPath = path.join(
         process.cwd(),
@@ -81,6 +87,24 @@ export async function GET(): Promise<NextResponse> {
         }
       }
 
+      let specPath: string | null = null;
+      const specDir = path.join(process.cwd(), "specs", normalizedSpecDir);
+      if (fs.existsSync(specDir)) {
+        try {
+          const markdownEntries = fs
+            .readdirSync(specDir)
+            .filter((file) => file.endsWith(".md") && !file.startsWith("AUDIT_"))
+            .map((file) => ({
+              path: path.posix.join("specs", normalizedSpecDir, file),
+              content: fs.readFileSync(path.join(specDir, file), "utf-8"),
+          }));
+          const canonicalSpec = selectCanonicalVeoMarkdownSpec(markdownEntries);
+          specPath = canonicalSpec?.path ?? null;
+        } catch {
+          specPath = null;
+        }
+      }
+
       return {
         id: clipId,
         sectionId: section.id,
@@ -88,6 +112,7 @@ export async function GET(): Promise<NextResponse> {
         status,
         stale,
         frameChainDeps,
+        specPath,
       };
     });
 

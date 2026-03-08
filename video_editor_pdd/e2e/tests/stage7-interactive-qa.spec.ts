@@ -5,7 +5,6 @@ const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 
 /**
  * Navigate to Stage 7 (Veo Generation) via the sidebar.
- * Uses 3-attempt retry with sidebar `div.cursor-pointer.nth(6)`.
  */
 async function navigateToStage7(page: import('@playwright/test').Page) {
   await page.goto('/');
@@ -19,26 +18,8 @@ async function navigateToStage7(page: import('@playwright/test').Page) {
 
   const heading = page.locator('h2', { hasText: 'Stage 7' });
 
-  // Attempt 1: Playwright click
-  await sidebar.locator('div.cursor-pointer').nth(6).click();
-  try {
-    await expect(heading).toBeVisible({ timeout: 3000 });
-  } catch {
-    // Attempt 2: JS click
-    await page.waitForTimeout(500);
-    await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[6]) (items[6] as HTMLElement).click();
-    });
-    try {
-      await expect(heading).toBeVisible({ timeout: 3000 });
-    } catch {
-      // Attempt 3: force click after longer wait
-      await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(6).click({ force: true });
-      await expect(heading).toBeVisible({ timeout: 10000 });
-    }
-  }
+  await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
+  await expect(heading).toBeVisible({ timeout: 10000 });
 
   await page.waitForTimeout(500);
 }
@@ -54,10 +35,12 @@ async function navigateWithMockedClips(
     sectionId: string;
     aspectRatio: string;
     status: string;
+    specPath?: string | null;
     stale?: boolean;
     frameChainDeps?: string[];
   }>,
   references: Array<{ id: string; label?: string }> = [],
+  specFileContent: Record<string, string> = {},
 ) {
   await page.route('**/api/pipeline/veo/clips', (route) => {
     return route.fulfill({
@@ -89,6 +72,28 @@ async function navigateWithMockedClips(
     });
   });
 
+  await page.route('**/api/pipeline/specs/file**', (route) => {
+    const url = new URL(route.request().url());
+    const specPath = url.searchParams.get('path') ?? '';
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        content:
+          specFileContent[specPath] ??
+          '# Veo Spec\n\n[veo: A cinematic ocean wave at sunset]\n\n## Visual Description\nGolden-hour ocean footage.',
+      }),
+    });
+  });
+
+  await page.route('**/api/video/outputs/veo/*.mp4', (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: 'video/mp4',
+      body: '',
+    });
+  });
+
   await navigateToStage7(page);
   await page.waitForTimeout(500);
 }
@@ -99,6 +104,7 @@ const MOCK_CLIPS = [
     sectionId: 'cold_open',
     aspectRatio: '16:9',
     status: 'missing',
+    specPath: 'specs/cold_open/02_ocean.md',
     stale: false,
     frameChainDeps: [],
   },
@@ -107,6 +113,7 @@ const MOCK_CLIPS = [
     sectionId: 'part1_economics',
     aspectRatio: '16:9',
     status: 'done',
+    specPath: 'specs/part1_economics/02_ocean.md',
     stale: false,
     frameChainDeps: ['cold_open'],
   },
@@ -115,6 +122,7 @@ const MOCK_CLIPS = [
     sectionId: 'part2_history',
     aspectRatio: '16:9',
     status: 'generating',
+    specPath: 'specs/part2_history/02_ocean.md',
     stale: false,
     frameChainDeps: ['part1_economics'],
   },
@@ -123,6 +131,7 @@ const MOCK_CLIPS = [
     sectionId: 'part3_future',
     aspectRatio: '9:16',
     status: 'error',
+    specPath: 'specs/part3_future/02_ocean.md',
     stale: true,
     frameChainDeps: ['part2_history'],
   },
@@ -185,7 +194,25 @@ test.describe('Stage 7: Interactive QA - Comprehensive Feature Testing', () => {
       expect(cls).toContain('bg-emerald-600');
     });
 
-    test('A7: Auto-composite checkbox and label visible', async ({ page }) => {
+    test('A7: Selected clip shows Veo spec beside generated video preview', async ({ page }) => {
+      await navigateWithMockedClips(page, MOCK_CLIPS, MOCK_REFERENCES, {
+        'specs/cold_open/02_ocean.md': [
+          '[veo: A cinematic ocean wave at sunset]',
+          '',
+          '# Ocean Wave Sunset',
+          '',
+          '## Visual Description',
+          'A calm ocean wave rolling onto a beach at golden hour.',
+        ].join('\n'),
+      });
+
+      await expect(page.locator('text=Veo Spec')).toBeVisible();
+      await expect(page.locator('text=Generated Video')).toBeVisible();
+      await expect(page.locator('text=Ocean Wave Sunset')).toBeVisible();
+      await expect(page.locator('video')).toBeVisible();
+    });
+
+    test('A8: Auto-composite checkbox and label visible', async ({ page }) => {
       await navigateWithMockedClips(page, MOCK_CLIPS, MOCK_REFERENCES);
       const label = page.locator('text=Auto-composite split-screen');
       await expect(label).toBeVisible();
@@ -194,7 +221,7 @@ test.describe('Stage 7: Interactive QA - Comprehensive Feature Testing', () => {
       await expect(checkbox).not.toBeChecked();
     });
 
-    test('A8: Loading state shows "Loading Veo clips…"', async ({ page }) => {
+    test('A9: Loading state shows "Loading Veo clips…"', async ({ page }) => {
       // Delay the clips response so loading state is visible
       await page.route('**/api/pipeline/veo/clips', async (route) => {
         await new Promise((r) => setTimeout(r, 3000));

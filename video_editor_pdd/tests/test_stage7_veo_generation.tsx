@@ -10,6 +10,7 @@
  *   2. Left column: Character References panel with thumbnail per portrait and [↺ Regenerate] per reference. POST /api/pipeline/veo/references/run.
  *   3. Left column: Frame Chaining display showing text-based chain: clip1 → clip2 → clip3 per section.
  *   4. Right column: Clip list table — columns: clip ID, section, aspect ratio, status badge, stale ⚠ warning, [↺ per-clip regenerate].
+ *   4b. A selected clip shows the canonical Veo markdown spec side by side with the generated video.
  *   5. Toolbar: [Generate All] / [Generate Missing] / section dropdown for [Generate Section].
  *   6. Auto-composite checkbox for paired 9:16 and 16:9 clips composited as split-screen.
  *   7. SSE progress shows per-clip events.
@@ -102,6 +103,10 @@ describe("import structure", () => {
   it("imports SseLogPanel", () => {
     expect(sourceCode).toMatch(/import\s+\{?\s*SseLogPanel\s*\}?\s+from/);
   });
+
+  it("tracks canonical markdown spec metadata on clips", () => {
+    expect(sourceCode).toMatch(/specPath/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -123,6 +128,10 @@ describe("type definitions", () => {
     expect(sourceCode).toMatch(/sectionId\s*:\s*string/);
     expect(sourceCode).toMatch(/aspectRatio\s*:\s*string/);
     expect(sourceCode).toMatch(/status\s*:\s*VeoClipStatus/);
+  });
+
+  it("VeoClip has optional specPath field for the canonical Veo markdown spec", () => {
+    expect(sourceCode).toMatch(/specPath\?\s*:\s*string\s*\|\s*null/);
   });
 
   it("VeoClip has optional stale boolean field", () => {
@@ -221,6 +230,13 @@ describe("state management", () => {
   it("tracks jobId state as string | null", () => {
     expect(sourceCode).toMatch(/\[\s*jobId\s*,\s*setJobId\s*\]/);
   });
+
+  it("tracks selected clip and spec preview state", () => {
+    expect(sourceCode).toMatch(/\[\s*selectedClipId\s*,\s*setSelectedClipId\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*selectedSpecContent\s*,\s*setSelectedSpecContent\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*selectedSpecLoading\s*,\s*setSelectedSpecLoading\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*selectedSpecError\s*,\s*setSelectedSpecError\s*\]/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -253,8 +269,26 @@ describe("clip loading on mount", () => {
     expect(sourceCode).toMatch(/setSelectedSection\s*\(\s*fetchedClips\[0\]\.sectionId\s*\)/);
   });
 
+  it("initializes selectedClipId from first clip", () => {
+    expect(sourceCode).toMatch(/setSelectedClipId\s*\(\s*fetchedClips\[0\]\.id\s*\)/);
+  });
+
   it("uses useEffect for mount-time fetch", () => {
     expect(sourceCode).toMatch(/useEffect\s*\(\s*\(\)\s*=>\s*\{/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8b. Selected spec loading
+// ---------------------------------------------------------------------------
+
+describe("selected spec loading", () => {
+  it("fetches canonical spec content from GET /api/pipeline/specs/file when a clip is selected", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/pipeline\/specs\/file\?path=\$\{encodeURIComponent\s*\(\s*selectedClip\.specPath\s*\)\}/);
+  });
+
+  it("handles clips without a canonical markdown spec", () => {
+    expect(sourceCode).toMatch(/No canonical Veo markdown spec found for this clip/);
   });
 });
 
@@ -418,6 +452,10 @@ describe("clip list table", () => {
 
   it("renders statusBadge for each clip", () => {
     expect(sourceCode).toMatch(/statusBadge\s*\(\s*clip\.status\s*\)/);
+  });
+
+  it("selects a clip row when clicked", () => {
+    expect(sourceCode).toMatch(/onClick=\{\(\)\s*=>\s*setSelectedClipId\s*\(\s*clip\.id\s*\)\s*\}/);
   });
 });
 
@@ -608,6 +646,12 @@ describe("layout structure", () => {
 
   it("uses dark-themed rounded-lg shadow for card panels", () => {
     expect(sourceCode).toMatch(/bg-slate-900 rounded-lg shadow/);
+  });
+
+  it("renders a Veo spec vs generated video comparison panel", () => {
+    expect(sourceCode).toContain("Veo Spec");
+    expect(sourceCode).toContain("Generated Video");
+    expect(sourceCode).toMatch(/\/api\/video\/outputs\/veo\/\$\{selectedClip\.id\}\.mp4/);
   });
 });
 
