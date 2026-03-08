@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence } from "remotion";
+import { Sequence, OffthreadVideo, staticFile } from "remotion";
 
 import { ColdOpenSection as ColdOpenSectionBase } from "./ColdOpenSection";
 
@@ -10,6 +10,7 @@ export const ColdOpenSection: React.FC = () => {
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
+      <OffthreadVideo src={staticFile("veo/cold_open.mp4")} style={{ width: "100%", height: "100%" }} />
       <ColdOpenSectionBase />
     </Sequence>
   );

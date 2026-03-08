@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence } from "remotion";
+import { Sequence, OffthreadVideo, staticFile } from "remotion";
 
 import { Part1Economics as Part1EconomicsSectionBase } from "./Part1Economics";
 
@@ -10,6 +10,7 @@ export const Part1EconomicsSection: React.FC = () => {
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
+      <OffthreadVideo src={staticFile("veo/part1_economics.mp4")} style={{ width: "100%", height: "100%" }} />
       <Part1EconomicsSectionBase />
     </Sequence>
   );

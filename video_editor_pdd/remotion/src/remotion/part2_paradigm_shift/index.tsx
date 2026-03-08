@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence } from "remotion";
+import { Sequence, OffthreadVideo, staticFile } from "remotion";
 
 import { Part2ParadigmShift as Part2ParadigmShiftSectionBase } from "./Part2ParadigmShift";
 
@@ -10,6 +10,7 @@ export const Part2ParadigmShiftSection: React.FC = () => {
 
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
+      <OffthreadVideo src={staticFile("veo/part2_paradigm_shift.mp4")} style={{ width: "100%", height: "100%" }} />
       <Part2ParadigmShiftSectionBase />
     </Sequence>
   );

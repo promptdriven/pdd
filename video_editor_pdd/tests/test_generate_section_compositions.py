@@ -44,6 +44,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 from generate_section_compositions import (
     to_pascal_case,
     resolve_comp_import,
+    ensure_section_asset_aliases,
     resolve_section_base_component,
     load_project_json,
     get_fps,
@@ -1357,6 +1358,64 @@ class TestWrapperDelegation:
         assert 'ColdOpenSectionBase' not in tsx
         assert '<ColdOpenTitleCard />' in tsx
 
+    def test_wrapper_adds_direct_video_when_section_component_has_audio_only(self, tmp_path):
+        """Section-local timing component can rely on wrapper for the Veo underlay."""
+        remotion_src = str(tmp_path)
+        remotion_public = tmp_path / "public"
+        section_dir = tmp_path / "part1_economics"
+        section_dir.mkdir()
+        (section_dir / "Part1Economics.tsx").write_text(
+            'import { Audio, staticFile } from "remotion";\n'
+            'export const Part1Economics = () => <Audio src={staticFile("part1_economics_narration.wav")} />;'
+        )
+
+        audio_alias = remotion_public / "part1_economics_narration.wav"
+        video_file = remotion_public / "veo" / "part1_economics.mp4"
+        audio_alias.parent.mkdir(parents=True)
+        video_file.parent.mkdir(parents=True)
+        audio_alias.write_bytes(b"RIFF" + b"\x00" * 32)
+        video_file.write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "part1_economics",
+            "compositionId": "Part1Economics",
+            "durationSeconds": 382,
+            "offsetSeconds": 0,
+            "compositions": ["03_cost_crossover_chart"],
+        }
+        tsx = generate_section_component(section, 30, str(remotion_public), remotion_src=remotion_src)
+
+        assert 'import { Part1Economics as Part1EconomicsSectionBase } from "./Part1Economics"' in tsx
+        assert '<Part1EconomicsSectionBase />' in tsx
+        assert 'staticFile("veo/part1_economics.mp4")' in tsx
+        assert 'staticFile("part1_economics_narration.wav")' not in tsx
+
+    def test_wrapper_adds_direct_audio_when_component_audio_ref_is_missing(self, tmp_path):
+        """Wrapper should fill in canonical narration when the section component ref is broken."""
+        remotion_src = str(tmp_path)
+        remotion_public = tmp_path / "public"
+        section_dir = tmp_path / "part1_economics"
+        section_dir.mkdir()
+        (section_dir / "Part1Economics.tsx").write_text(
+            'import { Audio, staticFile } from "remotion";\n'
+            'export const Part1Economics = () => <Audio src={staticFile("missing_alias.wav")} />;'
+        )
+
+        canonical_audio = remotion_public / "part1_economics" / "narration.wav"
+        canonical_audio.parent.mkdir(parents=True)
+        canonical_audio.write_bytes(b"RIFF" + b"\x00" * 32)
+
+        section = {
+            "id": "part1_economics",
+            "compositionId": "Part1Economics",
+            "durationSeconds": 382,
+            "offsetSeconds": 0,
+        }
+        tsx = generate_section_component(section, 30, str(remotion_public), remotion_src=remotion_src)
+
+        assert 'staticFile("part1_economics/narration.wav")' in tsx
+        assert '<Part1EconomicsSectionBase />' in tsx
+
 
 class TestSectionBaseResolution:
     """Section wrapper delegation should resolve the correct base component path."""
@@ -1377,7 +1436,32 @@ class TestSectionBaseResolution:
         assert resolve_section_base_component(section, remotion_src) == (
             "Part1Economics",
             "./Part1Economics",
+            str(section_dir / "Part1Economics.tsx"),
         )
+
+
+class TestSectionAssetAliases:
+    """Compatibility aliases should be created for common Claude staticFile drift."""
+
+    def test_creates_top_level_audio_alias(self, tmp_path):
+        remotion_public = tmp_path / "public"
+        canonical = remotion_public / "cold_open" / "narration.wav"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"RIFF" + b"\x00" * 32)
+
+        ensure_section_asset_aliases("cold_open", str(remotion_public))
+
+        assert (remotion_public / "cold_open_narration.wav").exists()
+
+    def test_creates_root_video_alias(self, tmp_path):
+        remotion_public = tmp_path / "public"
+        canonical = remotion_public / "veo" / "cold_open.mp4"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"\x00" * 32)
+
+        ensure_section_asset_aliases("cold_open", str(remotion_public))
+
+        assert (remotion_public / "cold_open.mp4").exists()
 
 
 class TestCompositionTiming:

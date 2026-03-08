@@ -266,18 +266,18 @@ export const ${pascalCompositionId}: React.FC<${pascalCompositionId}PropsType> =
   }
   return (
     <AbsoluteFill style={{ backgroundColor: "#0a0a1a" }}>
-      <Audio src={staticFile("${sectionId}_narration.wav")} />
+      <Audio src={staticFile("${sectionId}/narration.wav")} />
       {/* For each visual in VISUAL_SEQUENCE: */}
       {activeVisual === 0 && (
         <Sequence from={BEATS.VISUAL_00_START}>
           <ComponentName {...defaultComponentNameProps} />
         </Sequence>
       )}
-      {/* For veo: entries, use OffthreadVideo with Loop: */}
+      {/* For veo: entries, use OffthreadVideo with Loop and canonical public path: */}
       {activeVisual === N && (
         <Sequence from={BEATS.VISUAL_NN_START}>
           <AbsoluteFill><Loop durationInFrames={240}>
-            <OffthreadVideo src={staticFile("clip.mp4")} style={{ width: "100%", height: "100%" }} />
+            <OffthreadVideo src={staticFile("veo/<filename>.mp4")} style={{ width: "100%", height: "100%" }} />
           </Loop></AbsoluteFill>
         </Sequence>
       )}
@@ -285,6 +285,11 @@ export const ${pascalCompositionId}: React.FC<${pascalCompositionId}PropsType> =
   );
 };
 \`\`\`
+
+MEDIA PATH CONTRACT:
+- Narration audio must use staticFile("${sectionId}/narration.wav")
+- Veo clips must use staticFile("veo/<filename>") using the exact filename from the available assets list
+- Do not invent alternate paths like "${sectionId}_narration.wav" or bare "clip.mp4"
 
 Component IDs in VISUAL_SEQUENCE order:
 ${componentIds.map((id, i) => `- Visual ${i}: ${id}${id.startsWith("veo:") ? " (use OffthreadVideo + Loop)" : ""}`).join("\n")}

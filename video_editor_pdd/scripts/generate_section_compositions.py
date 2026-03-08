@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -86,10 +87,119 @@ def load_project_json(project_dir: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+STATIC_FILE_RE = re.compile(r'staticFile\(\s*["\']([^"\']+)["\']\s*\)')
+AUDIO_EXTENSIONS = {'.wav', '.mp3', '.aac', '.m4a', '.ogg'}
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v'}
+
+
+def _read_text_if_exists(path: str) -> str:
+    """Return file contents when the file exists and is readable."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return ''
+
+
+def _existing_static_path(remotion_public: str, candidates: List[str]) -> Optional[str]:
+    """Return the first staticFile() path that exists under remotion/public."""
+    if not remotion_public:
+        return None
+
+    for rel_path in candidates:
+        if os.path.isfile(os.path.join(remotion_public, rel_path)):
+            return rel_path
+    return None
+
+
+def ensure_section_asset_aliases(section_id: str, remotion_public: str) -> None:
+    """Create compatibility aliases for common Claude-generated staticFile paths.
+
+    We keep the canonical staged asset locations:
+      - {section_id}/narration.wav
+      - veo/{section_id}.mp4
+
+    But Claude-generated section compositions commonly drift to these variants:
+      - {section_id}_narration.wav
+      - {section_id}.mp4
+
+    Creating aliases here makes wrapper generation and final render tolerant to
+    those variations without relying on Claude to be perfectly deterministic.
+    """
+    if not remotion_public:
+        return
+
+    canonical_audio = os.path.join(remotion_public, section_id, 'narration.wav')
+    audio_alias = os.path.join(remotion_public, f'{section_id}_narration.wav')
+    if os.path.isfile(canonical_audio) and not os.path.isfile(audio_alias):
+        os.makedirs(os.path.dirname(audio_alias), exist_ok=True)
+        shutil.copy2(canonical_audio, audio_alias)
+
+    for ext in ['.mp4', '.webm', '.mov', '.m4v']:
+        canonical_video = os.path.join(remotion_public, 'veo', f'{section_id}{ext}')
+        video_alias = os.path.join(remotion_public, f'{section_id}{ext}')
+        if os.path.isfile(canonical_video) and not os.path.isfile(video_alias):
+            os.makedirs(os.path.dirname(video_alias), exist_ok=True)
+            shutil.copy2(canonical_video, video_alias)
+
+
+def resolve_direct_audio_src(section_id: str, remotion_public: str) -> Optional[str]:
+    """Resolve the canonical/compatible narration asset for wrapper use."""
+    return _existing_static_path(
+        remotion_public,
+        [
+            f'{section_id}/narration.wav',
+            f'{section_id}_narration.wav',
+        ],
+    )
+
+
+def resolve_direct_video_src(section_id: str, remotion_public: str) -> Optional[str]:
+    """Resolve the canonical/compatible Veo asset for wrapper use."""
+    candidates: List[str] = []
+    for ext in ['.mp4', '.webm', '.mov', '.m4v']:
+        candidates.extend([
+            f'veo/{section_id}{ext}',
+            f'{section_id}{ext}',
+        ])
+    return _existing_static_path(remotion_public, candidates)
+
+
+def detect_component_media(
+    source: str,
+    remotion_public: str,
+) -> Dict[str, bool]:
+    """Detect whether a component already owns working audio/video media refs."""
+    refs = STATIC_FILE_RE.findall(source)
+    has_audio_tag = 'Audio' in source
+    has_video_tag = 'OffthreadVideo' in source
+
+    audio_refs = [
+        ref for ref in refs if Path(ref).suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    video_refs = [
+        ref for ref in refs if Path(ref).suffix.lower() in VIDEO_EXTENSIONS
+    ]
+
+    has_audio = has_audio_tag and any(
+        os.path.isfile(os.path.join(remotion_public, ref))
+        for ref in audio_refs
+    )
+    has_video = has_video_tag and any(
+        os.path.isfile(os.path.join(remotion_public, ref))
+        for ref in video_refs
+    )
+
+    return {
+        'has_audio': has_audio,
+        'has_video': has_video,
+    }
+
+
 def resolve_section_base_component(
     section: Dict[str, Any],
     remotion_src: str,
-) -> Optional[tuple[str, str]]:
+) -> Optional[tuple[str, str, str]]:
     """Resolve an authored section-level component to delegate wrapper rendering.
 
     Priority order:
@@ -135,7 +245,7 @@ def resolve_section_base_component(
 
     for export_name, abs_path, import_path in candidates:
         if os.path.isfile(abs_path):
-            return (export_name, import_path)
+            return (export_name, import_path, abs_path)
 
     return None
 
@@ -166,29 +276,37 @@ def generate_section_component(
     offset_seconds = section.get('offsetSeconds', 0)
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
 
+    ensure_section_asset_aliases(section_id, remotion_public)
+
     base_component = resolve_section_base_component(section, remotion_src)
     has_base_component = base_component is not None
+    component_has_audio = False
+    component_has_video = False
+    if has_base_component and base_component is not None and remotion_public:
+        _, _, component_abs_path = base_component
+        media = detect_component_media(
+            _read_text_if_exists(component_abs_path),
+            remotion_public,
+        )
+        component_has_audio = media['has_audio']
+        component_has_video = media['has_video']
 
     # Detect available assets in remotion/public/ (only when NOT delegating)
-    has_narration = False
-    has_veo_clip = False
-    if not has_base_component and remotion_public:
-        narration_path = os.path.join(remotion_public, section_id, 'narration.wav')
-        has_narration = os.path.isfile(narration_path)
-        veo_clip_path = os.path.join(remotion_public, 'veo', f'{section_id}.mp4')
-        has_veo_clip = os.path.isfile(veo_clip_path)
+    direct_audio_src = resolve_direct_audio_src(section_id, remotion_public)
+    direct_video_src = resolve_direct_video_src(section_id, remotion_public)
+    needs_direct_audio = bool(direct_audio_src) and (not has_base_component or not component_has_audio)
+    needs_direct_video = bool(direct_video_src) and (not has_base_component or not component_has_video)
 
     lines: List[str] = []
 
     # Imports
     remotion_imports = ['Sequence']
-    if not has_base_component:
-        if has_narration:
-            remotion_imports.append('Audio')
-        if has_veo_clip:
-            remotion_imports.append('OffthreadVideo')
-        if has_narration or has_veo_clip:
-            remotion_imports.append('staticFile')
+    if needs_direct_audio:
+        remotion_imports.append('Audio')
+    if needs_direct_video:
+        remotion_imports.append('OffthreadVideo')
+    if needs_direct_audio or needs_direct_video:
+        remotion_imports.append('staticFile')
 
     lines.append('import React from "react";')
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
@@ -196,7 +314,7 @@ def generate_section_component(
 
     # Import authored section component as Base when delegating
     if has_base_component and base_component is not None:
-        export_name, import_path = base_component
+        export_name, import_path, _ = base_component
         lines.append(
             f'import {{ {export_name} as {component_name}Base }} from "{import_path}";'
         )
@@ -222,15 +340,15 @@ def generate_section_component(
     lines.append('  return (')
     lines.append(f'    <Sequence from={{0}} durationInFrames={{Math.ceil(durationSeconds * fps)}}>')
 
+    # Render missing direct assets first so the authored component can overlay them.
+    if needs_direct_audio and direct_audio_src is not None:
+        lines.append(f'      <Audio src={{staticFile("{direct_audio_src}")}} />')
+    if needs_direct_video and direct_video_src is not None:
+        lines.append(f'      <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} />')
+
     if has_base_component:
-        # Delegate to the authored section composition (timing + orchestration).
+        # Delegate to the authored section composition for timing / orchestration.
         lines.append(f'      <{component_name}Base />')
-    else:
-        # Render Audio/Video directly
-        if has_narration:
-            lines.append(f'      <Audio src={{staticFile("{section_id}/narration.wav")}} />')
-        if has_veo_clip:
-            lines.append(f'      <OffthreadVideo src={{staticFile("veo/{section_id}.mp4")}} style={{{{ width: "100%", height: "100%" }}}} />')
 
     # Sub-compositions rendered on top
     if compositions and not has_base_component:
@@ -246,7 +364,7 @@ def generate_section_component(
                     lines.append(f'      </Sequence>')
                 else:
                     lines.append(f'      <{comp_pascal} />')
-    elif not has_base_component and not has_veo_clip:
+    elif not has_base_component and not needs_direct_video:
         lines.append('      {/* Sub-compositions will be added here */}')
 
     lines.append('    </Sequence>')
