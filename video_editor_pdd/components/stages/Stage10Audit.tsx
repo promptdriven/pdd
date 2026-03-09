@@ -56,17 +56,14 @@ const verdictClasses: Record<Verdict, string> = {
 export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10AuditProps) {
   const [sections, setSections] = useState<SectionAudit[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [specViewerOpen, setSpecViewerOpen] = useState<Record<string, boolean>>({});
   const [specContent, setSpecContent] = useState<Record<string, string>>({});
+  const [loadingSpec, setLoadingSpec] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [auditDropdownOpen, setAuditDropdownOpen] = useState(false);
+  const [activeVideoKey, setActiveVideoKey] = useState<string | null>(null);
   const auditDropdownRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(true);
-
-  // Frame modal
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
-  const [frameUrl, setFrameUrl] = useState<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -206,32 +203,52 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
     setExpanded((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
   }, []);
 
-  const openFrameModal = useCallback((url: string) => {
-    setFrameUrl(url);
-    dialogRef.current?.showModal();
+  const toggleVideoPreview = useCallback((key: string) => {
+    setActiveVideoKey((prev) => (prev === key ? null : key));
   }, []);
 
-  const closeFrameModal = useCallback(() => {
-    dialogRef.current?.close();
-    setFrameUrl(null);
-  }, []);
+  const loadSpecContent = useCallback(
+    async (key: string, specPath?: string) => {
+      if (!specPath || specContent[key] || loadingSpec[key]) {
+        return;
+      }
 
-  const toggleSpecViewer = useCallback(
-    async (sectionId: string, specName: string, specPath?: string) => {
-      const key = `${sectionId}:${specName}`;
-      setSpecViewerOpen((prev) => ({ ...prev, [key]: !prev[key] }));
-      if (!specContent[key] && specPath) {
+      if (mountedRef.current) {
+        setLoadingSpec((prev) => ({ ...prev, [key]: true }));
+      }
+
+      try {
         const res = await fetch(`/api/pipeline/specs/file?path=${encodeURIComponent(specPath)}`);
+        if (!mountedRef.current) return;
         if (res.ok) {
           const data = await res.json();
           setSpecContent((prev) => ({ ...prev, [key]: data.content ?? '' }));
         } else {
           setSpecContent((prev) => ({ ...prev, [key]: 'Failed to load spec file.' }));
         }
+      } catch {
+        if (mountedRef.current) {
+          setSpecContent((prev) => ({ ...prev, [key]: 'Failed to load spec file.' }));
+        }
+      } finally {
+        if (mountedRef.current) {
+          setLoadingSpec((prev) => ({ ...prev, [key]: false }));
+        }
       }
     },
-    [specContent]
+    [loadingSpec, specContent]
   );
+
+  useEffect(() => {
+    sections.forEach((section) => {
+      if (!expanded[section.sectionId]) return;
+      section.specs.forEach((spec) => {
+        if (spec.verdict !== 'FAIL') return;
+        const key = `${section.sectionId}:${spec.specName}`;
+        void loadSpecContent(key, spec.specPath);
+      });
+    });
+  }, [expanded, loadSpecContent, sections]);
 
   const handleCreateAnnotation = useCallback(
     (sectionId: string, finding: string, frameUrl: string) => {
@@ -362,6 +379,8 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                   {section.specs.map((spec) => {
                     const key = `${section.sectionId}:${spec.specName}`;
                     const frame = `/api/video/outputs/audit/${section.sectionId}/${spec.specName}_frame.png`;
+                    const sectionVideo = `/api/video/outputs/sections/${section.sectionId}.mp4`;
+                    const showInlineVideo = activeVideoKey === key;
                     return (
                       <div key={key} className="border-t border-white/10">
                         <div className="grid grid-cols-12 gap-2 p-2 items-center text-sm">
@@ -377,40 +396,71 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                         </div>
 
                         {spec.verdict === 'FAIL' && (
-                          <div className="flex gap-4 px-2 pb-2 text-xs text-white/60">
-                            <button
-                              className="text-blue-400 hover:underline"
-                              onClick={() => openFrameModal(frame)}
-                            >
-                              View Frame
-                            </button>
-                            <button
-                              className="text-blue-400 hover:underline"
-                              onClick={() =>
-                                toggleSpecViewer(section.sectionId, spec.specName, spec.specPath)
-                              }
-                            >
-                              View Spec
-                            </button>
-                            <button
-                              className="text-blue-400 hover:underline"
-                              onClick={() =>
-                                handleCreateAnnotation(
-                                  section.sectionId,
-                                  spec.finding || spec.summary,
-                                  frame
-                                )
-                              }
-                            >
-                              Create Annotation →
-                            </button>
-                          </div>
-                        )}
+                          <>
+                            <div className="grid gap-3 px-2 pb-3 lg:grid-cols-2">
+                              <div className="rounded border border-white/10 bg-black/20 p-2">
+                                <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">
+                                  Frame Preview
+                                </div>
+                                <div className="overflow-hidden rounded border border-white/10">
+                                  {showInlineVideo ? (
+                                    <video
+                                      src={sectionVideo}
+                                      poster={frame}
+                                      controls
+                                      autoPlay
+                                      className="w-full bg-black/40"
+                                    />
+                                  ) : (
+                                    <img
+                                      src={frame}
+                                      alt={`${spec.specName} audit frame`}
+                                      className="w-full bg-black/40"
+                                    />
+                                  )}
+                                </div>
+                              </div>
 
-                        {specViewerOpen[key] && (
-                          <pre className="text-xs overflow-auto max-h-64 bg-black/30 border-t border-white/10 p-2 text-white/80">
-                            {specContent[key] || 'Loading spec...'}
-                          </pre>
+                              <div className="rounded border border-white/10 bg-black/20 p-2">
+                                <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">
+                                  <span>Spec Preview</span>
+                                  {spec.specPath && (
+                                    <span className="normal-case tracking-normal text-white/35">
+                                      {spec.specPath}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-white/10 bg-black/30 p-3 font-mono text-[11px] leading-relaxed text-white/80">
+                                  {spec.specPath
+                                    ? (loadingSpec[key] && !specContent[key]
+                                        ? 'Loading spec...'
+                                        : specContent[key] || 'Loading spec...')
+                                    : 'No spec file linked.'}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex gap-4 px-2 pb-2 text-xs text-white/60">
+                              <button
+                                className="text-blue-400 hover:underline"
+                                onClick={() => toggleVideoPreview(key)}
+                              >
+                                Play Video
+                              </button>
+                              <button
+                                className="text-blue-400 hover:underline"
+                                onClick={() =>
+                                  handleCreateAnnotation(
+                                    section.sectionId,
+                                    spec.finding || spec.summary,
+                                    frame
+                                  )
+                                }
+                              >
+                                Create Annotation →
+                              </button>
+                            </div>
+                          </>
                         )}
                       </div>
                     );
@@ -421,20 +471,6 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
           ))}
         </div>
       )}
-
-      <dialog ref={dialogRef} className="rounded-lg p-0 max-w-3xl w-full bg-gray-900 text-white">
-        <div className="p-4 border-b border-white/10 flex justify-between items-center">
-          <span className="font-semibold text-white">Audit Frame</span>
-          <button onClick={closeFrameModal} className="text-white/50 hover:text-white/80">
-            ✕
-          </button>
-        </div>
-        {frameUrl && (
-          <div className="p-4">
-            <img src={frameUrl} alt="Audit frame" className="max-w-full rounded" />
-          </div>
-        )}
-      </dialog>
     </div>
   );
 }

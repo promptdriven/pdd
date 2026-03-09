@@ -21,7 +21,7 @@ test.describe('Stage 10: Audit', () => {
     await page.waitForLoadState('networkidle');
     // Click on Audit stage in sidebar
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     // Wait for audit results to load (section rows appear or empty state)
     await expect(
       page.locator('h2', { hasText: 'Audit Results' })
@@ -175,7 +175,7 @@ test.describe('Stage 10: Audit', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await page.waitForTimeout(3000);
     const appErrors = errors.filter(
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
@@ -322,8 +322,7 @@ test.describe('Stage 10: Audit', () => {
     expect(typeof capturedBody.sectionId).toBe('string');
   });
 
-  test('View Frame opens dialog with image', async ({ page }) => {
-    // Mock the audit results to include specs with View Frame
+  test('Play Video swaps the frame preview into an inline section video', async ({ page }) => {
     await page.route('**/api/pipeline/audit/results', async (route) => {
       await route.fulfill({
         status: 200,
@@ -355,7 +354,7 @@ test.describe('Stage 10: Audit', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
     await page.waitForTimeout(1000);
 
@@ -365,22 +364,19 @@ test.describe('Stage 10: Audit', () => {
     await viewReportButton.click();
     await page.waitForTimeout(500);
 
-    // Click "View Frame" button
-    const viewFrameButton = page.locator('button', { hasText: 'View Frame' }).first();
-    await expect(viewFrameButton).toBeVisible({ timeout: 5000 });
-    await viewFrameButton.click();
+    const playVideoButton = page.locator('button', { hasText: 'Play Video' }).first();
+    await expect(playVideoButton).toBeVisible({ timeout: 5000 });
+    await playVideoButton.click();
     await page.waitForTimeout(500);
 
-    // The dialog should be open with the "Audit Frame" heading
-    await expect(page.locator('text=Audit Frame')).toBeVisible();
-
-    // An img element should be visible inside the dialog
-    const dialogImg = page.locator('dialog img');
-    await expect(dialogImg).toBeAttached();
+    const inlineVideo = page.locator('video').first();
+    await expect(inlineVideo).toBeVisible();
+    await expect(page.locator('img[alt="color_balance audit frame"]')).toHaveCount(0);
+    const src = await inlineVideo.getAttribute('src');
+    expect(src).toBe('/api/video/outputs/sections/cold_open.mp4');
   });
 
-  test('View Spec toggles spec content visibility', async ({ page }) => {
-    // Mock the audit results to include a spec with specPath
+  test('FAIL rows show inline spec content without clicking a view button', async ({ page }) => {
     await page.route('**/api/pipeline/audit/results', async (route) => {
       await route.fulfill({
         status: 200,
@@ -420,7 +416,7 @@ test.describe('Stage 10: Audit', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
     await page.waitForTimeout(1000);
 
@@ -430,18 +426,65 @@ test.describe('Stage 10: Audit', () => {
     await viewReportButton.click();
     await page.waitForTimeout(500);
 
-    // Click "View Spec" to toggle it open
-    const viewSpecButton = page.locator('button', { hasText: 'View Spec' }).first();
-    await expect(viewSpecButton).toBeVisible({ timeout: 5000 });
-    await viewSpecButton.click();
+    await expect(page.getByText('Frame Preview')).toBeVisible();
+    await expect(page.getByText('Spec Preview')).toBeVisible();
+    await expect(page.getByText('name: color_balance')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('FAIL rows show inline frame and spec preview beside the summary', async ({ page }) => {
+    await page.route('**/api/pipeline/audit/results', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sections: [
+            {
+              sectionId: 'cold_open',
+              sectionLabel: 'Cold Open',
+              passCount: 0,
+              failCount: 1,
+              status: 'done',
+              specs: [
+                {
+                  specName: 'color_balance',
+                  verdict: 'FAIL',
+                  summary: 'Colors off',
+                  finding: 'Too dark',
+                  specPath: '/specs/color.yaml',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.route('**/api/pipeline/specs/file**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          content: 'name: color_balance\nthreshold: 0.8\ndescription: Check color balance',
+        }),
+      });
+    });
+
+    await page.route('**/api/pipeline/audit/stream', (route) => {
+      route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' });
+    });
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    const sidebar = page.locator('aside');
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
+    await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
     await page.waitForTimeout(1000);
 
-    // The spec content should now be visible
-    const specContent = page.locator('pre').first();
-    await expect(specContent).toBeVisible({ timeout: 5000 });
+    await page.locator('button', { hasText: 'View Report' }).first().click();
 
-    // Click "View Spec" again to toggle it closed
-    await viewSpecButton.click();
-    await page.waitForTimeout(500);
+    await expect(page.getByText('Frame Preview')).toBeVisible();
+    await expect(page.getByText('Spec Preview')).toBeVisible();
+    await expect(page.locator('img[alt=\"color_balance audit frame\"]')).toBeVisible();
+    await expect(page.getByText('name: color_balance')).toBeVisible({ timeout: 5000 });
   });
 });

@@ -240,18 +240,18 @@ test.describe('Stage 10 QA – B: Verdict Badges & Spec Detail Rows', () => {
     await expect(summaryCell).toHaveClass(/text-white\/70/);
   });
 
-  test('B5: FAIL row shows action buttons View Frame, View Spec, Create Annotation', async ({ page }) => {
-    await expect(page.locator('button', { hasText: 'View Frame' }).first()).toBeVisible();
-    await expect(page.locator('button', { hasText: 'View Spec' }).first()).toBeVisible();
+  test('B5: FAIL row shows Play Video and Create Annotation actions plus inline previews', async ({ page }) => {
+    await expect(page.getByText('Frame Preview').first()).toBeVisible();
+    await expect(page.getByText('Spec Preview').first()).toBeVisible();
+    await expect(page.locator('button', { hasText: 'Play Video' }).first()).toBeVisible();
     await expect(page.locator('button', { hasText: 'Create Annotation →' }).first()).toBeVisible();
   });
 
   test('B6: PASS row does NOT show action buttons', async ({ page }) => {
-    // PASS spec rows should not have View Frame / View Spec / Create Annotation
+    // PASS spec rows should not have Play Video / Create Annotation
     // The PASS specs are title_visible, logo_centered, audio_sync
-    // Count total View Frame buttons — should match FAIL count (1 in cold_open)
-    const viewFrameButtons = page.locator('button', { hasText: 'View Frame' });
-    await expect(viewFrameButtons).toHaveCount(1);
+    const playVideoButtons = page.locator('button', { hasText: 'Play Video' });
+    await expect(playVideoButtons).toHaveCount(1);
   });
 
   test('B7: both PASS and FAIL verdicts visible in same expanded section', async ({ page }) => {
@@ -480,37 +480,33 @@ test.describe('Stage 10 QA – E: Frame Modal & Spec Viewer', () => {
     await page.waitForTimeout(500);
   });
 
-  test('E1: View Frame opens dialog with "Audit Frame" header', async ({ page }) => {
-    await page.locator('button', { hasText: 'View Frame' }).first().click();
+  test('E1: Play Video shows inline section video player', async ({ page }) => {
+    await page.locator('button', { hasText: 'Play Video' }).first().click();
     await page.waitForTimeout(500);
 
-    await expect(page.locator('dialog span', { hasText: 'Audit Frame' })).toBeVisible();
+    await expect(page.locator('video').first()).toBeVisible();
   });
 
-  test('E2: dialog contains img with correct audit frame src', async ({ page }) => {
-    await page.locator('button', { hasText: 'View Frame' }).first().click();
+  test('E2: inline player uses correct section video src', async ({ page }) => {
+    await page.locator('button', { hasText: 'Play Video' }).first().click();
     await page.waitForTimeout(500);
 
-    const img = page.locator('dialog img');
-    await expect(img).toBeAttached();
-    const src = await img.getAttribute('src');
-    expect(src).toBe('/api/video/outputs/audit/cold_open/text_readable_frame.png');
+    await expect(page.locator('video').first()).toBeVisible();
+    const inlineVideo = page.locator('video').first();
+    await expect(inlineVideo).toBeAttached();
+    const src = await inlineVideo.getAttribute('src');
+    expect(src).toBe('/api/video/outputs/sections/cold_open.mp4');
   });
 
-  test('E3: dialog close button ✕ closes dialog', async ({ page }) => {
-    await page.locator('button', { hasText: 'View Frame' }).first().click();
+  test('E3: Play Video replaces the frame image with inline video', async ({ page }) => {
+    await expect(page.locator('img[alt="text_readable audit frame"]')).toBeVisible();
+    await page.locator('button', { hasText: 'Play Video' }).first().click();
     await page.waitForTimeout(500);
-    await expect(page.locator('dialog span', { hasText: 'Audit Frame' })).toBeVisible();
-
-    // Click the ✕ close button
-    await page.locator('dialog button', { hasText: '✕' }).click();
-    await page.waitForTimeout(300);
-
-    // Dialog should be closed (not visible)
-    await expect(page.locator('dialog span', { hasText: 'Audit Frame' })).not.toBeVisible();
+    await expect(page.locator('video').first()).toBeVisible();
+    await expect(page.locator('img[alt="text_readable audit frame"]')).toHaveCount(0);
   });
 
-  test('E4: View Spec toggles inline pre element', async ({ page }) => {
+  test('E4: inline spec preview is visible without clicking a button', async ({ page }) => {
     // Mock spec file fetch
     await page.route('**/api/pipeline/specs/file**', (route) =>
       route.fulfill({
@@ -520,23 +516,10 @@ test.describe('Stage 10 QA – E: Frame Modal & Spec Viewer', () => {
       }),
     );
 
-    // No <pre> initially
-    await expect(page.locator('pre')).not.toBeVisible();
-
-    // Click View Spec
-    await page.locator('button', { hasText: 'View Spec' }).first().click();
-    await page.waitForTimeout(500);
-
-    // <pre> should appear
-    await expect(page.locator('pre').first()).toBeVisible();
-
-    // Click View Spec again to close
-    await page.locator('button', { hasText: 'View Spec' }).first().click();
-    await page.waitForTimeout(300);
-    await expect(page.locator('pre')).not.toBeVisible();
+    await expect(page.locator('.whitespace-pre-wrap').first()).toBeVisible();
   });
 
-  test('E5: spec viewer shows "Loading spec..." while fetching', async ({ page }) => {
+  test('E5: inline spec preview shows "Loading spec..." while fetching', async ({ page }) => {
     // Use a delayed route to catch the loading state
     await page.route('**/api/pipeline/specs/file**', async (route) => {
       await new Promise((r) => setTimeout(r, 2000));
@@ -547,13 +530,11 @@ test.describe('Stage 10 QA – E: Frame Modal & Spec Viewer', () => {
       });
     });
 
-    await page.locator('button', { hasText: 'View Spec' }).first().click();
-
     // Should show loading text
-    await expect(page.locator('pre', { hasText: 'Loading spec...' })).toBeVisible({ timeout: 2000 });
+    await expect(page.locator('.whitespace-pre-wrap', { hasText: 'Loading spec...' })).toBeVisible({ timeout: 2000 });
   });
 
-  test('E6: spec viewer shows fetched content after load', async ({ page }) => {
+  test('E6: inline spec preview shows fetched content after load', async ({ page }) => {
     await page.route('**/api/pipeline/specs/file**', (route) =>
       route.fulfill({
         status: 200,
@@ -562,26 +543,24 @@ test.describe('Stage 10 QA – E: Frame Modal & Spec Viewer', () => {
       }),
     );
 
-    await page.locator('button', { hasText: 'View Spec' }).first().click();
     await page.waitForTimeout(1000);
 
-    await expect(page.locator('pre', { hasText: 'name: text_readable' })).toBeVisible();
-    await expect(page.locator('pre', { hasText: 'threshold: 12px' })).toBeVisible();
+    await expect(page.locator('.whitespace-pre-wrap', { hasText: 'name: text_readable' })).toBeVisible();
+    await expect(page.locator('.whitespace-pre-wrap', { hasText: 'threshold: 12px' })).toBeVisible();
   });
 
-  test('E7: spec viewer shows error on fetch failure', async ({ page }) => {
+  test('E7: inline spec preview shows error on fetch failure', async ({ page }) => {
     await page.route('**/api/pipeline/specs/file**', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"not found"}' }),
     );
 
-    await page.locator('button', { hasText: 'View Spec' }).first().click();
     await page.waitForTimeout(1000);
 
-    await expect(page.locator('pre', { hasText: 'Failed to load spec file.' })).toBeVisible();
+    await expect(page.locator('.whitespace-pre-wrap', { hasText: 'Failed to load spec file.' })).toBeVisible();
   });
 
-  test('E8: screenshot — frame modal open with image', async ({ page }) => {
-    await page.locator('button', { hasText: 'View Frame' }).first().click();
+  test('E8: screenshot — inline section video open', async ({ page }) => {
+    await page.locator('button', { hasText: 'Play Video' }).first().click();
     await page.waitForTimeout(500);
 
     await page.screenshot({
@@ -618,9 +597,8 @@ test.describe('Stage 10 QA – F: Create Annotation & Tab Navigation', () => {
     await expect(createButtons).toHaveCount(1);
 
     // Verify that the button is NOT inside a PASS verdict row
-    // View Frame buttons also only 1 (for the FAIL)
-    const viewFrameButtons = page.locator('button', { hasText: 'View Frame' });
-    await expect(viewFrameButtons).toHaveCount(1);
+    const playVideoButtons = page.locator('button', { hasText: 'Play Video' });
+    await expect(playVideoButtons).toHaveCount(1);
   });
 
   test('F3: clicking Create Annotation triggers callback (no crash)', async ({ page }) => {
@@ -641,7 +619,7 @@ test.describe('Stage 10 QA – F: Create Annotation & Tab Navigation', () => {
     expect(appErrors).toHaveLength(0);
   });
 
-  test('F4: View Frame / View Spec / Create Annotation all absent for PASS specs', async ({ page }) => {
+  test('F4: Play Video / Create Annotation both absent for PASS specs', async ({ page }) => {
     // Create a section with only PASS specs
     const passOnlySection = [
       {
@@ -671,19 +649,17 @@ test.describe('Stage 10 QA – F: Create Annotation & Tab Navigation', () => {
     await page.locator('button', { hasText: 'View Report' }).first().click();
     await page.waitForTimeout(500);
 
-    await expect(page.locator('button', { hasText: 'View Frame' })).toHaveCount(0);
-    await expect(page.locator('button', { hasText: 'View Spec' })).toHaveCount(0);
+    await expect(page.locator('button', { hasText: 'Play Video' })).toHaveCount(0);
     await expect(page.locator('button', { hasText: 'Create Annotation →' })).toHaveCount(0);
   });
 
-  test('F5: expanded FAIL section shows all three action buttons', async ({ page }) => {
+  test('F5: expanded FAIL section shows Play Video and Create Annotation for each fail row', async ({ page }) => {
     // Expand Part 3: Mold (2 FAIL specs)
     await page.locator('button', { hasText: 'View Report' }).last().click();
     await page.waitForTimeout(500);
 
     // Should have 2 of each action button
-    await expect(page.locator('button', { hasText: 'View Frame' })).toHaveCount(2);
-    await expect(page.locator('button', { hasText: 'View Spec' })).toHaveCount(2);
+    await expect(page.locator('button', { hasText: 'Play Video' })).toHaveCount(2);
     await expect(page.locator('button', { hasText: 'Create Annotation →' })).toHaveCount(2);
   });
 
@@ -767,7 +743,7 @@ test.describe('Stage 10 QA – G: Error States & Network Failures', () => {
     expect(crashErrors).toHaveLength(0);
   });
 
-  test('G5: spec file fetch 500 shows error in pre', async ({ page }) => {
+  test('G5: spec file fetch 500 shows error in inline preview', async ({ page }) => {
     await navigateWithMockedResults(page, ALL_STATUS_SECTIONS);
 
     await page.route('**/api/pipeline/specs/file**', (route) =>
@@ -778,11 +754,9 @@ test.describe('Stage 10 QA – G: Error States & Network Failures', () => {
     await page.locator('button', { hasText: 'View Report' }).first().click();
     await page.waitForTimeout(500);
 
-    // Click View Spec on FAIL row
-    await page.locator('button', { hasText: 'View Spec' }).first().click();
     await page.waitForTimeout(1000);
 
-    await expect(page.locator('pre', { hasText: 'Failed to load spec file.' })).toBeVisible();
+    await expect(page.locator('.whitespace-pre-wrap', { hasText: 'Failed to load spec file.' })).toBeVisible();
   });
 
   test('G6: empty sections shows empty state message', async ({ page }) => {

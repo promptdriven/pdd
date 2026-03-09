@@ -13,9 +13,8 @@
  *      Trigger `POST /api/pipeline/audit/run`.
  *   4. [View Report] expands the row inline showing per-spec verdict rows:
  *      verdict badge (PASS=green / FAIL=red), spec name, one-line summary.
- *   5. FAIL rows show: [View Frame] (opens still PNG in modal), [View Spec]
- *      (opens spec file in inline viewer), [Create Annotation →] (pre-fills
- *      annotation form and switches to Review tab).
+ *   5. FAIL rows show inline frame/spec previews; [Play Video] swaps the
+ *      frame preview into an inline section video player, plus [Create Annotation →].
  *   6. Audit run stream shows per-agent progress: `{ type: 'audit-section', sectionId, passCount, failCount }`.
  *   7. `'use client'` directive.
  */
@@ -236,28 +235,48 @@ describe("FAIL row actions", () => {
     expect(sourceCode).toMatch(/spec\.verdict\s*===\s*['"]FAIL['"]/);
   });
 
-  it("renders View Frame button for FAIL rows", () => {
-    expect(sourceCode).toContain("View Frame");
+  it("renders inline Frame Preview label for FAIL rows", () => {
+    expect(sourceCode).toContain("Frame Preview");
   });
 
-  it("renders View Spec button for FAIL rows", () => {
-    expect(sourceCode).toContain("View Spec");
+  it("renders inline Spec Preview label for FAIL rows", () => {
+    expect(sourceCode).toContain("Spec Preview");
+  });
+
+  it("shows inline frame image beside the summary for FAIL rows", () => {
+    expect(sourceCode).toMatch(/<img\s+src=\{frame\}/);
+  });
+
+  it("renders a two-column inline preview layout for FAIL rows", () => {
+    expect(sourceCode).toMatch(/grid[\s\S]*lg:grid-cols-2/);
+  });
+
+  it("renders Play Video button for FAIL rows", () => {
+    expect(sourceCode).toContain("Play Video");
+  });
+
+  it("does not render View Frame button anymore", () => {
+    expect(sourceCode).not.toContain("View Frame");
+  });
+
+  it("does not render View Spec button anymore", () => {
+    expect(sourceCode).not.toContain("View Spec");
   });
 
   it("renders Create Annotation → button for FAIL rows", () => {
     expect(sourceCode).toContain("Create Annotation →");
   });
 
-  it("View Frame opens modal with frame PNG", () => {
-    expect(sourceCode).toMatch(/openFrameModal/);
+  it("Play Video toggles inline section video playback", () => {
+    expect(sourceCode).toMatch(/toggleVideoPreview/);
   });
 
   it("frame URL follows spec pattern /api/video/outputs/audit/{sectionId}/{specName}_frame.png", () => {
     expect(sourceCode).toMatch(/\/api\/video\/outputs\/audit\/\$\{.*sectionId.*\}\/\$\{.*specName.*\}_frame\.png/);
   });
 
-  it("View Spec toggles spec viewer", () => {
-    expect(sourceCode).toMatch(/toggleSpecViewer/);
+  it("section video URL follows /api/video/outputs/sections/{sectionId}.mp4", () => {
+    expect(sourceCode).toMatch(/\/api\/video\/outputs\/sections\/\$\{section\.sectionId\}\.mp4/);
   });
 
   it("Create Annotation → calls handleCreateAnnotation", () => {
@@ -265,47 +284,57 @@ describe("FAIL row actions", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 9. Frame Modal (Spec: dialog with img)
-// ---------------------------------------------------------------------------
-
-describe("Frame modal", () => {
-  it("renders a <dialog> element", () => {
-    expect(sourceCode).toMatch(/<dialog/);
+describe("Inline spec preview loading", () => {
+  it("prefetches spec content for expanded FAIL rows", () => {
+    expect(sourceCode).toMatch(/loadSpecContent/);
   });
 
-  it("uses dialogRef for the dialog element", () => {
-    expect(sourceCode).toMatch(/ref=\{dialogRef\}/);
+  it("shows Loading spec... in the inline preview while fetching", () => {
+    expect(sourceCode).toContain("Loading spec...");
   });
 
-  it("dialog contains an img element for the frame", () => {
-    expect(sourceCode).toMatch(/<img\s+src=\{frameUrl\}/);
-  });
-
-  it("showModal is called to open the dialog", () => {
-    expect(sourceCode).toMatch(/dialogRef\.current\?\.showModal\(\)/);
-  });
-
-  it("close is called to close the dialog", () => {
-    expect(sourceCode).toMatch(/dialogRef\.current\?\.close\(\)/);
-  });
-
-  it("has a close button", () => {
-    expect(sourceCode).toContain("✕");
-  });
-
-  it("dialog has Audit Frame title", () => {
-    expect(sourceCode).toContain("Audit Frame");
+  it("renders inline spec content with whitespace preservation", () => {
+    expect(sourceCode).toMatch(/whitespace-pre-wrap/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 10. Spec Viewer (Spec: inline <pre> with spec content)
+// 9. Inline Video Preview
+// ---------------------------------------------------------------------------
+
+describe("Inline video preview", () => {
+  it("renders an inline <video> element for the active section render", () => {
+    expect(sourceCode).toMatch(/<video[\s\S]*src=\{sectionVideo\}/);
+  });
+
+  it("video element has controls enabled", () => {
+    expect(sourceCode).toMatch(/<video[\s\S]*controls/);
+  });
+
+  it("video element autoplays when activated", () => {
+    expect(sourceCode).toMatch(/<video[\s\S]*autoPlay/);
+  });
+
+  it("video element uses the audit frame as poster art", () => {
+    expect(sourceCode).toMatch(/<video[\s\S]*poster=\{frame\}/);
+  });
+
+  it("shows the Frame Preview heading while toggling between image and video", () => {
+    expect(sourceCode).toContain("Frame Preview");
+  });
+
+  it("does not render a dialog-based video modal anymore", () => {
+    expect(sourceCode).not.toMatch(/<dialog/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Spec Preview (inline content)
 // ---------------------------------------------------------------------------
 
 describe("Spec viewer", () => {
-  it("renders inline <pre> for spec content", () => {
-    expect(sourceCode).toMatch(/<pre\s+className="text-xs overflow-auto max-h-64/);
+  it("renders inline spec content container", () => {
+    expect(sourceCode).toMatch(/whitespace-pre-wrap/);
   });
 
   it("fetches spec file from GET /api/pipeline/specs/file", () => {
@@ -330,8 +359,8 @@ describe("Spec viewer", () => {
     // it must parse JSON and extract the content field
     // Look for the pattern: res.json() followed by using .content in the spec viewer logic
     const specViewerSection = sourceCode.slice(
-      sourceCode.indexOf("toggleSpecViewer"),
-      sourceCode.indexOf("toggleSpecViewer") + 500
+      sourceCode.indexOf("loadSpecContent"),
+      sourceCode.indexOf("loadSpecContent") + 800
     );
     expect(specViewerSection).not.toMatch(/res\.text\(\)/);
   });
@@ -576,16 +605,20 @@ describe("React state management", () => {
     expect(sourceCode).toMatch(/useState<Record<string,\s*boolean>>/);
   });
 
+  it("uses useState for loading spec content", () => {
+    expect(sourceCode).toMatch(/useState<Record<string,\s*boolean>>\(\{\}\)/);
+  });
+
+  it("uses useState for the active inline video key", () => {
+    expect(sourceCode).toMatch(/useState<string\s*\|\s*null>\(null\)/);
+  });
+
   it("uses useState for loading", () => {
     expect(sourceCode).toMatch(/useState\(true\)/);
   });
 
   it("uses useState for error", () => {
     expect(sourceCode).toMatch(/useState<string\s*\|\s*null>/);
-  });
-
-  it("uses useRef for dialog element", () => {
-    expect(sourceCode).toMatch(/useRef<HTMLDialogElement/);
   });
 
   it("uses useCallback for handlers", () => {
