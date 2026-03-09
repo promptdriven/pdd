@@ -326,7 +326,14 @@ def generate_output_paths(
                 final_path = os.path.join(user_path, default_filename)
             else:
                 logger.debug(f"User path '{user_path}' identified as a specific file path.")
-                final_path = user_path # Assume it's a full path or filename
+                # If the user-provided path already has an extension, respect it.
+                # Otherwise, append the language-derived file_extension.
+                user_path_stem, user_path_ext = os.path.splitext(user_path)
+                if user_path_ext:
+                    final_path = user_path
+                else:
+                    final_path = user_path_stem + file_extension
+                logger.debug(f"Resolved final_path for specific file: {final_path} (original user_path: {user_path}, file_extension: {file_extension})")
 
         # 1b. For fix and auto-deps commands, input_file_dirs takes priority over context config
         # This ensures fix outputs stay next to the original input files instead of
@@ -561,7 +568,7 @@ if __name__ == '__main__':
 
     paths5 = generate_output_paths(
         command='fix',
-        output_locations={}, # No user input
+        output_locations={},
         basename=mock_basename,
         language=mock_language,
         file_extension=mock_extension,
@@ -622,7 +629,7 @@ if __name__ == '__main__':
     # }
 
     # --- Test Case 9: Detect command default (using basename) ---
-    print("\n--- Test Case 9: Detect (Default) ---")
+    print("--- Test Case 9: Detect (Default) ---")
     paths9 = generate_output_paths(
         command='detect',
         output_locations={},
@@ -706,3 +713,49 @@ if __name__ == '__main__':
     #   'output_program': f'/path/to/cwd/{env_verify_prog_path}'
     # }
     del os.environ['PDD_VERIFY_PROGRAM_OUTPUT_PATH'] # Clean up
+
+    # --- Test Case 14: Generate command, user specifies filename with explicit extension (e.g., .tsx) ---
+    print("\n--- Test Case 14: Generate (User Filename with Explicit .tsx Extension) ---")
+    paths14 = generate_output_paths(
+        command='generate',
+        output_locations={'output': 'my_app_page.tsx'}, # User explicitly provides .tsx
+        basename="my_app_page",
+        language="typescriptreact",
+        file_extension=".tsx", # Derived from language_format.csv
+        context_config={}
+    )
+    print(f"Result: {paths14}")
+    # Expected: {'output': '/path/to/cwd/my_app_page.tsx'}
+
+    # --- Test Case 15: Generate command, user specifies filename with explicit non-language extension ---
+    print("\n--- Test Case 15: Generate (User Filename with Explicit .xyz Extension) ---")
+    paths15 = generate_output_paths(
+        command='generate',
+        output_locations={'output': 'report.xyz'}, # User explicitly provides .xyz
+        basename="my_report",
+        language="python",
+        file_extension=".py", # Derived from language_format.csv
+        context_config={}
+    )
+    print(f"Result: {paths15}")
+    # Expected: {'output': '/path/to/cwd/report.xyz'}
+
+    # --- Test Case 16: Generate command, user specifies filename WITHOUT explicit extension ---
+    print("--- Test Case 16: Generate (User Filename WITHOUT Explicit Extension) ---")
+    paths16 = generate_output_paths(
+        command='generate',
+        output_locations={'output': 'my_script'}, # User provides no extension
+        basename="my_script_name",
+        language="javascript",
+        file_extension=".js", # Derived from language_format.csv
+        context_config={}
+    )
+    print(f"Result: {paths16}")
+    # Expected: {'output': '/path/to/cwd/my_script.js'}
+
+    # Clean up any created directories for consistency in standalone test runs
+    for d in [test_dir_gen, test_dir_fix, test_dir_env_code, test_dir_env_results, test_dir_verify_prog]:
+        if os.path.exists(d):
+            os.rmdir(d) # Only removes empty directories
+
+    print("All test cases executed. Please review the output to verify expected results.")

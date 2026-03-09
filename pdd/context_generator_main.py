@@ -104,16 +104,41 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         command_options = {"output": output}
         if format is not None:
             command_options["format"] = format
-        resolved_config, input_strings, output_file_paths, language = construct_paths(input_file_paths=input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="example", command_options=command_options, context_override=ctx.obj.get('context'), confirm_callback=ctx.obj.get('confirm_callback'))
+        resolved_config, input_strings, output_file_paths, language = construct_paths(
+            input_file_paths=input_file_paths,
+            force=ctx.obj.get('force', False),
+            quiet=ctx.obj.get('quiet', False),
+            command="example",
+            command_options=command_options,
+            context_override=ctx.obj.get('context'),
+            confirm_callback=ctx.obj.get('confirm_callback'),
+        )
         prompt_content = input_strings.get("prompt_file", "")
         code_content = input_strings.get("code_file", "")
-        if output and not output.endswith("/") and not Path(output).is_dir():
-            # When format is specified, ensure the output path uses the correct extension
-            if format is not None:
-                output_path = Path(output)
+
+        # Resolve the final output path.
+        #
+        # Rules:
+        # - If the user provided an explicit filename via --output, respect it exactly
+        #   (do not rewrite the suffix based on format or language).
+        # - If no explicit filename was provided, start from construct_paths' output
+        #   and, when format is specified, normalize the suffix accordingly.
+        explicit_file_output = (
+            output
+            and not output.endswith("/")
+            and not Path(output).is_dir()
+        )
+
+        if explicit_file_output:
+            # User passed a concrete filename; it is authoritative.
+            resolved_output = output
+        else:
+            base_output = output_file_paths.get("output")
+            if base_output and format is not None:
+                output_path = Path(base_output)
                 format_lower = format.lower()
                 if format_lower == "md":
-                    # Replace extension with .md to match format constraint
+                    # Force .md only for auto-generated output paths
                     resolved_output = str(output_path.with_suffix(".md"))
                 elif format_lower == "code":
                     # For code format, determine the correct language extension based on language
@@ -122,11 +147,10 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
                     resolved_output = str(output_path.with_suffix(lang_ext))
                 else:
                     # Fallback (shouldn't happen due to click.Choice validation)
-                    resolved_output = output
+                    resolved_output = base_output
             else:
-                resolved_output = output
-        else:
-            resolved_output = output_file_paths.get("output")
+                resolved_output = base_output
+
         is_local = ctx.obj.get("local", False)
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', DEFAULT_TEMPERATURE)

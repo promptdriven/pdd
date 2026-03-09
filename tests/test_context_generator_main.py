@@ -262,7 +262,7 @@ def test_cloud_generation_receives_token_parameter(mock_ctx, mock_construct_path
 
 
 def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
-    """Test that --format md option overrides extension even with explicit --output path."""
+    """Test that explicit --output path is respected exactly (no extension rewriting per #551)."""
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "test.prompt"
     code_file = tmp_path / "test.py"
@@ -277,12 +277,9 @@ def test_format_md_with_explicit_output_path(mock_ctx, mock_construct_paths, moc
     # Call with format="md" and explicit output path
     context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="md")
     
-    # Should have saved to .md file (extension overridden from .py)
-    expected_output = tmp_path / "custom_example.md"
-    assert expected_output.exists(), f"Expected output file {expected_output} to exist"
-    assert expected_output.read_text() == "# Markdown Example"
-    # Original .py path should not exist
-    assert not explicit_output.exists(), f"Original path {explicit_output} should not exist (extension was changed)"
+    # Explicit filename is used as-is (no extension rewriting)
+    assert explicit_output.exists(), f"Expected output file {explicit_output} to exist"
+    assert explicit_output.read_text() == "# Markdown Example"
 
 def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that explicit --output filename is preserved when format=code."""
@@ -296,7 +293,7 @@ def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, m
     default_path = str(tmp_path / "test_example.py")  # Default path would have .py extension
     mock_construct_paths.return_value = ({}, {"prompt_file": "Prompt", "code_file": "Code"}, {"output": default_path}, "python")
     mock_context_generator.return_value = ("# Python Example", 0.0, "model")
-    
+
     # Call with format="code" and explicit output path.
     context_generator_main(mock_ctx, str(prompt_file), str(code_file), str(explicit_output), format="code")
 
@@ -342,6 +339,7 @@ def test_format_code_preserves_explicit_typescriptreact_output_path(
     assert explicit_output.read_text() == "// Generated TSX"
     wrong_output = explicit_output.with_suffix(".typescriptreact")
     assert not wrong_output.exists(), f"Unexpected file created: {wrong_output}"
+
 
 def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that --format md option works with default output path generation."""
