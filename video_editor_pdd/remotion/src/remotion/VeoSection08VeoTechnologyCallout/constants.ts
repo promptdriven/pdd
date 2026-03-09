@@ -7,110 +7,86 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#0A1628',
-  panelBg: 'rgba(8, 18, 35, 0.94)',
-  panelBorder: 'rgba(59, 130, 246, 0.3)',
-  panelGlow: 'rgba(59, 130, 246, 0.12)',
-  accentBlue: '#3B82F6',
-  accentCyan: '#06B6D4',
-  accentGreen: '#22C55E',
-  accentAmber: '#F59E0B',
-  headingText: '#FFFFFF',
-  labelText: '#94A3B8',
-  valueText: '#F1F5F9',
-  metricLabel: '#64748B',
-  metricValue: '#E2E8F0',
-  barTrack: 'rgba(59, 130, 246, 0.12)',
-  barFill: '#3B82F6',
-  barFillGreen: '#22C55E',
-  barFillCyan: '#06B6D4',
-  divider: 'rgba(148, 163, 184, 0.15)',
-  dotActive: '#22C55E',
-  dotPulse: 'rgba(34, 197, 94, 0.4)',
-  gridLine: 'rgba(59, 130, 246, 0.06)',
+  cardBg: 'rgba(15, 15, 15, 0.85)',
+  cardBorder: 'rgba(255, 255, 255, 0.08)',
+  headerText: '#FFFFFF',
+  nodeLabel: '#FFFFFF',
+  nodeIndigo: '#818CF8',
+  nodeAmber: '#F59E0B',
+  nodeAmberFill: 'rgba(245, 158, 11, 0.15)',
+  nodeEmerald: '#34D399',
+  arrowColor: 'rgba(255, 255, 255, 0.4)',
+  iconStroke: '#FFFFFF',
 };
 
 export const TYPOGRAPHY = {
-  heading: {
-    fontSize: 20,
+  header: {
+    fontSize: 22,
     fontFamily: 'Inter, sans-serif',
     fontWeight: 700 as const,
-    letterSpacing: '2px',
+    letterSpacing: '1px',
   },
-  metricLabel: {
-    fontSize: 11,
-    fontFamily: 'Inter, sans-serif',
-    fontWeight: 500 as const,
-    letterSpacing: '1.2px',
-    textTransform: 'uppercase' as const,
-  },
-  metricValue: {
-    fontSize: 28,
-    fontFamily: 'Inter, sans-serif',
-    fontWeight: 700 as const,
-    letterSpacing: '-0.5px',
-  },
-  metricUnit: {
-    fontSize: 14,
-    fontFamily: 'Inter, sans-serif',
-    fontWeight: 500 as const,
-  },
-  pipelineLabel: {
-    fontSize: 12,
+  nodeLabel: {
+    fontSize: 16,
     fontFamily: 'Inter, sans-serif',
     fontWeight: 600 as const,
-    letterSpacing: '0.8px',
   },
 };
 
-export const PANEL = {
-  x: 80,
-  y: 680,
-  width: 1760,
-  height: 340,
-  borderRadius: 16,
-  padding: 36,
+export const CARD = {
+  width: 800,
+  height: 280,
+  borderRadius: 20,
+  centerX: CANVAS.width / 2,
+  restY: 680,
+  offscreenY: 1100,
+  exitY: 720,
 };
 
+export const NODE = {
+  width: 160,
+  height: 80,
+  borderRadius: 12,
+  borderWidth: 2,
+  gap: 60, // arrow length between nodes
+};
+
+export const FLOW_NODES = [
+  { label: 'Text Prompt', borderColor: COLORS.nodeIndigo, filled: false },
+  { label: 'Veo AI', borderColor: COLORS.nodeAmber, filled: true },
+  { label: 'Video Clip', borderColor: COLORS.nodeEmerald, filled: false },
+];
+
+export const HEADER_TEXT = 'How Veo Works';
+
 export const ANIMATION = {
-  // Panel reveal: slide up + fade in, frames 0-12
-  panelRevealEnd: 12,
-  panelSlideDistance: 50,
+  // Card slide in: frames 0-20
+  cardSlideInStart: 0,
+  cardSlideInEnd: 20,
 
-  // Heading: frames 0-10
-  headingEnd: 10,
+  // Node 1 fade in: frames 20-35
+  node1Start: 20,
+  node1End: 35,
 
-  // Metrics counter: frames 5-35, stagger 4 frames each
-  metricsStart: 5,
-  metricsStagger: 4,
-  metricCountDuration: 20,
+  // Arrow 1 draw + Node 2: frames 30-40
+  arrow1Start: 30,
+  arrow1End: 40,
+  node2Start: 30,
+  node2End: 40,
 
-  // Pipeline bars: frames 15-50
-  pipelineStart: 15,
-  pipelineStagger: 5,
-  pipelineGrowDuration: 18,
+  // Arrow 2 draw + Node 3: frames 40-50
+  arrow2Start: 40,
+  arrow2End: 50,
+  node3Start: 40,
+  node3End: 50,
 
-  // Waveform: continuous
-  waveformSpeed: 0.12,
+  // Hold: frames 50-75 (amber pulse on Veo AI)
+  holdStart: 50,
+  holdEnd: 75,
 
-  // Fade out: frames 80-90
-  fadeOutStart: 80,
+  // Fade out: frames 75-90
+  fadeOutStart: 75,
   fadeOutEnd: 90,
 
   totalDuration: 90,
 };
-
-export const METRICS = [
-  { label: 'RESOLUTION', value: 1080, unit: 'p', suffix: ' HD' },
-  { label: 'FRAME RATE', value: 30, unit: 'fps', suffix: '' },
-  { label: 'CLIP LENGTH', value: 8, unit: 's', suffix: ' avg' },
-  { label: 'COHERENCE', value: 97, unit: '%', suffix: '' },
-];
-
-export const PIPELINE_STAGES = [
-  { label: 'Scene Understanding', progress: 100, color: '#22C55E' },
-  { label: 'Motion Synthesis', progress: 100, color: '#3B82F6' },
-  { label: 'Temporal Coherence', progress: 97, color: '#06B6D4' },
-  { label: 'Output Encoding', progress: 100, color: '#F59E0B' },
-];
-
-export const HEADING_TEXT = 'VEO RENDERING PIPELINE';

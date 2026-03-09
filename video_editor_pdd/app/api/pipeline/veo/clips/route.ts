@@ -7,6 +7,7 @@ import {
   normalizeSpecDir,
   selectCanonicalVeoMarkdownSpec,
 } from "@/lib/veo-spec-context";
+import { resolveSectionHasVeoIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
 
 /**
  * GET /api/pipeline/veo/clips
@@ -45,8 +46,31 @@ export async function GET(): Promise<NextResponse> {
     const config = loadProject();
     const sections = config.sections;
     const aspectRatio = config.veo.defaultAspectRatio;
+    const mainScriptPath = path.join(process.cwd(), "narrative", "main_script.md");
+    let mainScriptContent: string | null = null;
 
-    const clips: VeoClip[] = sections.map((section, idx) => {
+    if (fs.existsSync(mainScriptPath)) {
+      try {
+        mainScriptContent = fs.readFileSync(mainScriptPath, "utf-8");
+      } catch {
+        mainScriptContent = null;
+      }
+    }
+
+    const eligibleSections = sections.filter((section) => {
+      if (!mainScriptContent) {
+        return true;
+      }
+
+      return (
+        resolveSectionHasVeoIntent(mainScriptContent, {
+          id: section.id,
+          label: section.label,
+        }) !== false
+      );
+    });
+
+    const clips: VeoClip[] = eligibleSections.map((section, idx) => {
       const clipId = section.id;
       const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
 
@@ -57,7 +81,7 @@ export async function GET(): Promise<NextResponse> {
         `${clipId}.mp4`
       );
 
-      const prevSection = sections[idx - 1];
+      const prevSection = eligibleSections[idx - 1];
       // frameChainDeps exposes clean clip IDs for the UI (e.g. "cold_open")
       const frameChainDeps: string[] = prevSection ? [prevSection.id] : [];
       // depFilePaths are used internally for staleness checking only

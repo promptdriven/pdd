@@ -10,6 +10,7 @@ import {
   isDeterministicPipelineMode,
   writeDeterministicSpecsForSection,
 } from "@/lib/deterministic-pipeline";
+import { resolveSectionHasVeoIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
 
 // ----------------------------------------------------------------------------
 // Register specs executor (runs Claude scoped to /specs)
@@ -18,6 +19,7 @@ registerExecutor("specs", (params, _send) => {
   return async (onLog) => {
     const cfg = loadProject();
     const allSectionIds = cfg.sections.map((s) => s.id);
+    const sectionMap = new Map(cfg.sections.map((section) => [section.id, section]));
 
     // Map section ID → specDir from project config (list API uses specDir)
     const specDirMap = new Map<string, string>();
@@ -37,6 +39,16 @@ registerExecutor("specs", (params, _send) => {
 
     const specsBase = path.join(process.cwd(), "specs");
     const dataDir = path.join(process.cwd(), "data");
+    const mainScriptPath = path.join(process.cwd(), "narrative", "main_script.md");
+    let mainScriptContent: string | null = null;
+
+    if (fs.existsSync(mainScriptPath)) {
+      try {
+        mainScriptContent = fs.readFileSync(mainScriptPath, "utf-8");
+      } catch {
+        mainScriptContent = null;
+      }
+    }
 
     // Read spec.md and word timestamps BEFORE cleaning, so the narrative
     // context survives the stale-file purge.
@@ -111,7 +123,15 @@ registerExecutor("specs", (params, _send) => {
 
       const sid = sectionIds[currentIndex];
       const dir = specDirMap.get(sid) ?? sid;
+      const section = sectionMap.get(sid);
       const ctx = sectionContextMap.get(sid)!;
+      const hasVeoIntent =
+        section && mainScriptContent
+          ? resolveSectionHasVeoIntent(mainScriptContent, {
+              id: section.id,
+              label: section.label,
+            })
+          : null;
 
       onLog(`[specs] Generating specs for section: ${sid} (${currentIndex + 1}/${sectionIds.length})`);
 
@@ -120,6 +140,32 @@ registerExecutor("specs", (params, _send) => {
 ${ctx.specMd ? `\nNarrative arc (spec.md):\n${ctx.specMd}\n` : "(No spec.md found — infer visual needs from section name.)"}
 ${ctx.hasWords ? `Word timestamps available at: data/${sid}_words.json (use for frame-accurate timing)` : "(No word timestamps available yet.)"}
 `;
+
+      const sectionVisualGuidance =
+        hasVeoIntent === false
+          ? `
+This section does NOT use Veo footage in main_script.md.
+Do NOT create any [veo:] specs for this section.
+Use [Remotion], [title:], and [split:] only for this section.
+A typical section here should lean on 3-6 [Remotion] animations plus 1-2 [title:] or [split:] cards.
+`.trim()
+          : hasVeoIntent === true
+            ? `
+This section explicitly includes [veo:] footage in main_script.md.
+Include at least one [veo:] spec and align it to the quoted script beat that calls for footage.
+Mix [veo:] with [Remotion], [title:], and [split:] only where the script supports it.
+A typical section here should have a mix: 2-4 [Remotion] animations, 1-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
+`.trim()
+            : `
+Script intent could not be resolved for this section, so infer the right mix from the section narrative.
+A typical section should have a mix: 2-4 [Remotion] animations, 2-3 [veo:] clips, and 1-2 [title:] or [split:] cards when the script suggests cinematic footage.
+`.trim();
+
+      const sectionVisualGuidanceList = sectionVisualGuidance
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => `- ${line}`)
+        .join("\n");
 
       const prompt = `
 You are generating rich visual spec markdown files for a video pipeline.
@@ -138,7 +184,7 @@ Instructions:
   [veo:] — for cinematic video footage or B-roll (live-action style, no data overlay)
   [title:] — for title cards, section headers, or text-only screens
   [split:] — for split-screen comparison layouts
-- A typical section should have a mix: 2-4 [Remotion] animations, 2-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
+${sectionVisualGuidanceList}
 - You should generate at least 4-8 spec files per section.
 ${files.length > 0 ? `- Only generate these specific files: ${files.join(", ")}` : "- Generate ALL spec files needed for the section."}
 

@@ -1,4 +1,5 @@
 // Component-level constants for VeoSection06VeoBadgeCallout
+// Floating "Powered by Veo" badge pill — upper-right overlay
 
 export const CANVAS = {
   width: 1920,
@@ -7,14 +8,11 @@ export const CANVAS = {
 
 export const COLORS = {
   background: 'transparent',
-  gradientFrom: 'transparent',
-  gradientTo: '#00000088',
-  badgeBg: '#1E293B99',
-  badgeBorder: '#22C55E40',
-  badgeText: '#22C55E',
-  badgeIcon: '#22C55E',
-  subtitleText: '#FFFFFF',
-  progressBar: '#22C55E',
+  badgeBg: 'rgba(0, 0, 0, 0.7)',
+  badgeBorder: 'rgba(245, 158, 11, 0.4)',
+  badgeText: '#F59E0B',
+  sparkleIcon: '#F59E0B',
+  dropShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
 };
 
 export const TYPOGRAPHY = {
@@ -22,59 +20,46 @@ export const TYPOGRAPHY = {
     fontSize: 14,
     fontFamily: 'Inter',
     fontWeight: 600 as const,
-    letterSpacing: '2px',
-    textTransform: 'uppercase' as const,
-  },
-  subtitle: {
-    fontSize: 30,
-    fontFamily: 'Inter',
-    fontWeight: 400 as const,
-    letterSpacing: '0.3px',
+    letterSpacing: '0.5px',
   },
 };
 
 export const POSITIONS = {
-  badgeX: 120,
-  badgeY: 870,
-  subtitleX: 120,
-  subtitleY: 930,
-  progressBarY: 1076,
+  badgeRestX: 1680,
+  badgeOffscreenX: 1960,
+  badgeY: 60,
 };
 
 export const DIMENSIONS = {
-  gradientBarHeight: 180,
-  badgeWidth: 220,
-  badgeHeight: 40,
-  badgeBorderRadius: 20,
-  progressBarHeight: 4,
-  subtitleMaxWidth: 1400,
-  playIconSize: 8,
+  badgeWidth: 200,
+  badgeHeight: 44,
+  badgeBorderRadius: 24,
+  sparkleSize: 16,
 };
 
 export const ANIMATION = {
-  // Gradient bar fade in: frames 0-10
-  gradientFadeStart: 0,
-  gradientFadeEnd: 10,
-  gradientMaxOpacity: 0.85,
+  // Slide in: frames 0-15
+  slideInStart: 0,
+  slideInEnd: 15,
 
-  // Badge slide in: frames 8-22
-  badgeSlideStart: 8,
-  badgeSlideDistance: 340, // from -220 → 120
+  // Sparkle rotation: frames 15-20
+  sparkleRotateStart: 15,
+  sparkleRotateEnd: 20,
 
-  // Subtitle type-on: frames 15-55
-  subtitleTypeStart: 15,
-  charsPerFrame: 1.3,
+  // Breathing hold: frames 20-75
+  breathingStart: 20,
+  breathingEnd: 75,
+  breathingCycleDuration: 60, // frames per full breathing cycle
 
-  // Progress bar: frames 10-80
-  progressStart: 10,
-  progressDuration: 70,
+  // Scale breathing range
+  breathingScaleMin: 1.0,
+  breathingScaleMax: 1.03,
 
-  // Fade out: frames 80-90
-  fadeOutStart: 80,
-  fadeOutEnd: 90,
+  // Slide out: frames 75-90
+  slideOutStart: 75,
+  slideOutEnd: 90,
 
   totalDuration: 90,
 };
 
-export const NARRATION_TEXT = 'It uses Veo-generated clips with narration overlay.';
-export const BADGE_LABEL = 'VEO GENERATED';
+export const BADGE_TEXT = 'Powered by Veo';

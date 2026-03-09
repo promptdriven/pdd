@@ -8,15 +8,14 @@ export const CANVAS = {
 export const COLORS = {
   background: 'transparent',
   pillBackground: 'rgba(0, 0, 0, 0.55)',
-  pillBorder: 'rgba(255, 255, 255, 0.12)',
+  pillBorder: 'rgba(255, 255, 255, 0.1)',
   text: '#FFFFFF',
-  accent: '#34D399',
-  accentGlow: 'rgba(52, 211, 153, 0.6)',
+  progress: '#34D399',
   textShadow: 'rgba(0, 0, 0, 0.4)',
 };
 
 export const TYPOGRAPHY = {
-  subtitle: {
+  narration: {
     fontSize: 28,
     fontFamily: 'Inter',
     fontWeight: 500 as const,
@@ -25,40 +24,35 @@ export const TYPOGRAPHY = {
 };
 
 export const POSITIONS = {
-  pillY: 920,
+  pillY: 780,
 };
 
 export const DIMENSIONS = {
-  pillWidth: 900,
-  pillHeight: 72,
-  pillBorderRadius: 36,
-  accentBarWidth: 4,
-  accentBarHeight: 48,
-  accentBarInset: 16,
+  pillPaddingH: 48,
+  pillHeight: 64,
+  pillBorderRadius: 16,
   blurRadius: 12,
+  progressBarHeight: 3,
 };
 
 export const ANIMATION_TIMING = {
-  // Pill slide in from right
-  slideInStart: 0,
-  slideInEnd: 15,
-  slideDistance: 200,
+  // Pill fade in + slide up (frame 0-15)
+  pillFadeInStart: 0,
+  pillFadeInEnd: 15,
+  pillSlideFrom: 800,
+  pillSlideTo: 780,
 
-  // Accent bar scale in
-  accentBarStart: 10,
-  accentBarEnd: 20,
+  // Text fade in (frame 10-20)
+  textFadeInStart: 10,
+  textFadeInEnd: 20,
 
-  // Text clip-path reveal
-  textRevealStart: 12,
-  textRevealEnd: 55,
+  // Progress bar fill (frame 15-75)
+  progressStart: 15,
+  progressEnd: 75,
 
-  // Hold
-  holdEnd: 75,
-
-  // Pill slide out to left
-  slideOutStart: 75,
-  slideOutEnd: 90,
-  slideOutDistance: 200,
+  // Fade out (frame 75-90)
+  fadeOutStart: 75,
+  fadeOutEnd: 90,
 
   totalDuration: 90,
 };

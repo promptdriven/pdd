@@ -1,28 +1,18 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import {
-  COLORS,
-  TYPOGRAPHY,
-  PANEL,
-  ANIMATION,
-  METRICS,
-  PIPELINE_STAGES,
-  HEADING_TEXT,
-} from './constants';
-import { MetricCard } from './MetricCard';
-import { PipelineBar } from './PipelineBar';
-import { WaveformVisual } from './WaveformVisual';
-import { StatusIndicator } from './StatusIndicator';
-import { GridBackground } from './GridBackground';
+import { COLORS, CARD, ANIMATION, HEADER_TEXT } from './constants';
+import { FlowNode } from './FlowNode';
+import { FlowArrow } from './FlowArrow';
+import { CardHeader } from './CardHeader';
 
 export const VeoSection08VeoTechnologyCallout: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Panel reveal: slide up + fade in, frames 0-12
-  const panelOpacity = interpolate(
+  // Card slide in: Y from 1100 → 680, opacity 0 → 1 (frames 0-20)
+  const cardY = interpolate(
     frame,
-    [0, ANIMATION.panelRevealEnd],
-    [0.5, 1],
+    [ANIMATION.cardSlideInStart, ANIMATION.cardSlideInEnd],
+    [CARD.offscreenY, CARD.restY],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -30,10 +20,10 @@ export const VeoSection08VeoTechnologyCallout: React.FC = () => {
     },
   );
 
-  const panelTranslateY = interpolate(
+  const cardOpacity = interpolate(
     frame,
-    [0, ANIMATION.panelRevealEnd],
-    [ANIMATION.panelSlideDistance, 0],
+    [ANIMATION.cardSlideInStart, ANIMATION.cardSlideInEnd],
+    [0.15, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -41,31 +31,7 @@ export const VeoSection08VeoTechnologyCallout: React.FC = () => {
     },
   );
 
-  // Heading fade in
-  const headingOpacity = interpolate(
-    frame,
-    [0, ANIMATION.headingEnd],
-    [0.3, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(2)),
-    },
-  );
-
-  // Accent line width
-  const accentWidth = interpolate(
-    frame,
-    [0, ANIMATION.headingEnd + 5],
-    [20, 120],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
-    },
-  );
-
-  // Global fade out
+  // Card fade out: opacity 1 → 0, Y 680 → 720 (frames 75-90)
   const fadeOutOpacity = interpolate(
     frame,
     [ANIMATION.fadeOutStart, ANIMATION.fadeOutEnd],
@@ -73,242 +39,112 @@ export const VeoSection08VeoTechnologyCallout: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.poly(3)),
+      easing: Easing.in(Easing.poly(2)),
     },
   );
+
+  const fadeOutY = interpolate(
+    frame,
+    [ANIMATION.fadeOutStart, ANIMATION.fadeOutEnd],
+    [0, 40],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.poly(2)),
+    },
+  );
+
+  const finalOpacity = cardOpacity * fadeOutOpacity;
+  const finalY = cardY + fadeOutY;
+
+  // Whether to show glow on Veo AI node (during hold phase)
+  const showVeoGlow = frame >= ANIMATION.holdStart;
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: COLORS.background,
-        opacity: fadeOutOpacity,
       }}
     >
-      {/* Subtle grid background */}
-      <GridBackground />
-
-      {/* Top-right decorative glow */}
+      {/* Card panel */}
       <div
         style={{
           position: 'absolute',
-          right: 100,
-          top: 60,
-          width: 500,
-          height: 500,
-          borderRadius: '50%',
-          background: `radial-gradient(circle, ${COLORS.panelGlow} 0%, transparent 70%)`,
-          opacity: interpolate(frame, [0, 15], [0.2, 0.7], {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-          }),
-        }}
-      />
-
-      {/* Main bottom panel */}
-      <div
-        style={{
-          position: 'absolute',
-          left: PANEL.x,
-          top: PANEL.y,
-          width: PANEL.width,
-          height: PANEL.height,
-          borderRadius: PANEL.borderRadius,
-          backgroundColor: COLORS.panelBg,
-          border: `1px solid ${COLORS.panelBorder}`,
-          boxShadow: `0 -4px 40px ${COLORS.panelGlow}, inset 0 1px 0 rgba(255,255,255,0.04)`,
-          opacity: panelOpacity,
-          transform: `translateY(${panelTranslateY}px)`,
-          overflow: 'hidden',
+          left: (1920 - CARD.width) / 2,
+          top: finalY,
+          width: CARD.width,
+          height: CARD.height,
+          borderRadius: CARD.borderRadius,
+          backgroundColor: COLORS.cardBg,
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          border: `1px solid ${COLORS.cardBorder}`,
+          opacity: finalOpacity,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px 40px',
         }}
       >
-        {/* Panel content */}
+        {/* Header text */}
+        <CardHeader text={HEADER_TEXT} />
+
+        {/* Flow diagram: Node → Arrow → Node → Arrow → Node */}
         <div
           style={{
-            position: 'relative',
-            padding: PANEL.padding,
-            width: '100%',
-            height: '100%',
             display: 'flex',
-            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 0,
           }}
         >
-          {/* Header row */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-              opacity: headingOpacity,
-              marginBottom: 6,
-            }}
-          >
-            <StatusIndicator />
-            <span
-              style={{
-                color: COLORS.headingText,
-                fontSize: TYPOGRAPHY.heading.fontSize,
-                fontFamily: TYPOGRAPHY.heading.fontFamily,
-                fontWeight: TYPOGRAPHY.heading.fontWeight,
-                letterSpacing: TYPOGRAPHY.heading.letterSpacing,
-                marginLeft: 12,
-              }}
-            >
-              {HEADING_TEXT}
-            </span>
-          </div>
-
-          {/* Accent line */}
-          <div
-            style={{
-              width: accentWidth,
-              height: 2,
-              borderRadius: 1,
-              background: `linear-gradient(90deg, ${COLORS.accentBlue}, ${COLORS.accentCyan})`,
-              marginBottom: 24,
-            }}
+          {/* Node 1: Text Prompt */}
+          <FlowNode
+            label="Text Prompt"
+            borderColor={COLORS.nodeIndigo}
+            filled={false}
+            icon="cursor"
+            animStartFrame={ANIMATION.node1Start}
+            animEndFrame={ANIMATION.node1End}
+            showGlow={false}
           />
 
-          {/* Two-column layout */}
-          <div
-            style={{
-              display: 'flex',
-              gap: 40,
-              flex: 1,
-            }}
-          >
-            {/* Left: Metrics row + waveform */}
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 24,
-                width: 740,
-                flexShrink: 0,
-              }}
-            >
-              {/* Metrics cards row */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 20,
-                  justifyContent: 'space-between',
-                }}
-              >
-                {METRICS.map((metric, i) => (
-                  <MetricCard
-                    key={metric.label}
-                    label={metric.label}
-                    value={metric.value}
-                    unit={metric.unit}
-                    suffix={metric.suffix}
-                    index={i}
-                  />
-                ))}
-              </div>
+          {/* Arrow 1 */}
+          <FlowArrow
+            drawStartFrame={ANIMATION.arrow1Start}
+            drawEndFrame={ANIMATION.arrow1End}
+          />
 
-              {/* Waveform visual */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 16,
-                }}
-              >
-                <span
-                  style={{
-                    color: COLORS.metricLabel,
-                    fontSize: 11,
-                    fontFamily: 'Inter, sans-serif',
-                    fontWeight: 500,
-                    letterSpacing: '1px',
-                    textTransform: 'uppercase' as const,
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  SIGNAL
-                </span>
-                <WaveformVisual />
-              </div>
-            </div>
+          {/* Node 2: Veo AI */}
+          <FlowNode
+            label="Veo AI"
+            borderColor={COLORS.nodeAmber}
+            filled={true}
+            icon="sparkle"
+            animStartFrame={ANIMATION.node2Start}
+            animEndFrame={ANIMATION.node2End}
+            showGlow={showVeoGlow}
+          />
 
-            {/* Vertical divider */}
-            <div
-              style={{
-                width: 1,
-                backgroundColor: COLORS.divider,
-                flexShrink: 0,
-              }}
-            />
+          {/* Arrow 2 */}
+          <FlowArrow
+            drawStartFrame={ANIMATION.arrow2Start}
+            drawEndFrame={ANIMATION.arrow2End}
+          />
 
-            {/* Right: Pipeline progress bars */}
-            <div
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                gap: 2,
-              }}
-            >
-              <span
-                style={{
-                  color: COLORS.labelText,
-                  fontSize: 11,
-                  fontFamily: 'Inter, sans-serif',
-                  fontWeight: 600,
-                  letterSpacing: '1.5px',
-                  textTransform: 'uppercase' as const,
-                  marginBottom: 10,
-                  opacity: interpolate(
-                    frame,
-                    [ANIMATION.pipelineStart, ANIMATION.pipelineStart + 8],
-                    [0, 1],
-                    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
-                  ),
-                }}
-              >
-                PIPELINE STATUS
-              </span>
-              {PIPELINE_STAGES.map((stage, i) => (
-                <PipelineBar
-                  key={stage.label}
-                  label={stage.label}
-                  progress={stage.progress}
-                  color={stage.color}
-                  index={i}
-                />
-              ))}
-            </div>
-          </div>
+          {/* Node 3: Video Clip */}
+          <FlowNode
+            label="Video Clip"
+            borderColor={COLORS.nodeEmerald}
+            filled={false}
+            icon="film"
+            animStartFrame={ANIMATION.node3Start}
+            animEndFrame={ANIMATION.node3End}
+            showGlow={false}
+          />
         </div>
       </div>
-
-      {/* Top decorative concentric arcs (right side) */}
-      {[120, 200, 280].map((radius, i) => {
-        const ringOpacity = interpolate(
-          frame,
-          [5 + i * 4, 20 + i * 4],
-          [0, 0.1 - i * 0.02],
-          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
-        );
-        const rotation = frame * (0.2 + i * 0.1);
-        return (
-          <div
-            key={radius}
-            style={{
-              position: 'absolute',
-              right: 300 - radius,
-              top: 150 - radius,
-              width: radius * 2,
-              height: radius * 2,
-              borderRadius: '50%',
-              border: `1px solid ${COLORS.accentCyan}`,
-              opacity: ringOpacity,
-              transform: `rotate(${rotation}deg)`,
-            }}
-          />
-        );
-      })}
     </AbsoluteFill>
   );
 };

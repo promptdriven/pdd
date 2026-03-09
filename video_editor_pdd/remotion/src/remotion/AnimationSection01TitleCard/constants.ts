@@ -6,58 +6,38 @@ export const CANVAS = {
 };
 
 export const COLORS = {
-  gradientTop: '#0A1628',
-  gradientBottom: '#1E3A8A',
+  background: '#0B1120',
+  radialGlowCenter: '#1A2744',
   titleText: '#FFFFFF',
-  subtitleText: '#94A3B8',
-  accentLine: '#3B82F6',
-  particleColor: '#3B82F6',
+  accentLine: '#38BDF8',
 };
 
 export const TYPOGRAPHY = {
   title: {
-    fontSize: 96,
+    fontSize: 72,
     fontFamily: 'Inter',
     fontWeight: 'bold' as const,
-    letterSpacing: '-2px',
+    letterSpacing: '6px',
   },
-  subtitle: {
-    fontSize: 32,
-    fontFamily: 'Inter',
-    fontWeight: 'normal' as const,
-    letterSpacing: '0px',
-  },
-};
-
-export const POSITIONS = {
-  titleY: 460,
-  accentLineY: 530,
-  subtitleY: 580,
-  titleStartY: 500,
 };
 
 export const DIMENSIONS = {
-  accentLineHeight: 4,
-  accentLineWidth: 400,
-  glowBlurRadius: 40,
+  accentLineHeight: 2,
+  accentLineMaxWidth: 400,
+  radialGlowDiameter: 600,
+  titleToRuleGap: 16,
 };
 
 export const ANIMATION_TIMING = {
+  // Frame 0-15: Background + radial glow fade in
   backgroundFadeStart: 0,
   backgroundFadeEnd: 15,
-  titleSlideStart: 15,
-  titleSlideEnd: 45,
-  accentLineStart: 30,
-  accentLineEnd: 60,
-  subtitleFadeStart: 45,
-  subtitleFadeEnd: 75,
+  // Frame 15-45: Title fade in with upward drift
+  titleFadeStart: 15,
+  titleFadeEnd: 45,
+  // Frame 45-65: Horizontal rule expands
+  ruleFadeStart: 45,
+  ruleFadeEnd: 65,
+  // Frame 65-90: Hold
   totalDuration: 90,
-};
-
-export const PARTICLES = {
-  count: 60,
-  speed: 2,
-  minSize: 2,
-  maxSize: 6,
-  color: COLORS.particleColor,
 };

@@ -1,70 +1,55 @@
 [Remotion]
 
-# Section 2.5: Narration Text Overlay — Forest
+# Section 2.5: Narration Overlay — Forest
 
 **Tool:** Remotion
 **Duration:** ~3s
-**Timestamp:** 0:05 - 0:08
+**Timestamp:** 0:12 - 0:15
 
 ## Visual Description
-A lower-third narration overlay that appears over the aerial forest canopy footage. The text "It uses Veo-generated clips with narration overlay" slides in from the right as a frosted glass pill, positioned in the lower third of the frame. The text is white against a blurred semi-transparent dark backdrop, allowing the green forest footage to remain visible beneath. A thin emerald accent bar pulses once along the left edge of the pill to signal the new narration beat.
+A narration text overlay appears over the continuing aerial forest footage. The text "It uses Veo-generated clips with narration overlay." fades in within the same frosted-glass pill style established in the intro overlay, maintaining visual consistency. The progress bar tracks narration timing in a green accent to complement the forest visuals.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: transparent (overlaid on Veo clip)
-- Grid lines: none
+- Background: Transparent overlay on top of Veo footage layer
 
 ### Chart/Visual Elements
-- Pill container: 900px wide, 72px tall, centered horizontally at y=920, border-radius 36px
-- Pill background: rgba(0, 0, 0, 0.55) with backdrop-filter blur(12px)
-- Text content: "It uses Veo-generated clips with narration overlay."
-- Accent bar: 4px wide, 48px tall, left edge of pill (x inset 16px), color #34D399 (emerald)
-- Subtle border: 1px solid rgba(255, 255, 255, 0.12)
+- Frosted-glass pill: Rounded rectangle (borderRadius 16px), centered horizontally at Y=780, width auto-fit to text + 48px padding, height 64px
+  - Background: rgba(0, 0, 0, 0.55) with backdrop-blur(12px)
+  - Border: 1px solid rgba(255, 255, 255, 0.1)
+- Narration text: Centered inside pill
+- Progress bar: 3px tall, bottom edge of pill, fills left-to-right
+  - Color: #34D399 (emerald accent, complementing forest visuals)
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Pill slides in from right (translateX +200px → 0px) while fading in (opacity 0→1).
-2. **Frame 10-20 (0.33-0.67s):** Accent bar scales in vertically (scaleY 0→1) with a slight glow pulse.
-3. **Frame 12-55 (0.4-1.83s):** Text reveals left-to-right via clip-path (inset right 100%→0%).
-4. **Frame 55-75 (1.83-2.5s):** Hold. Full text visible.
-5. **Frame 75-90 (2.5-3.0s):** Pill slides out to left (translateX 0 → -200px) with fade-out (opacity 1→0).
+1. **Frame 0-15 (0-0.5s):** Pill container fades in from 0% to 100% opacity, slides up from Y=800 to Y=780.
+2. **Frame 10-20 (0.33-0.67s):** Narration text fades in from 0% to 100% opacity.
+3. **Frame 15-75 (0.5-2.5s):** Progress bar fills from 0% to 100% width.
+4. **Frame 75-90 (2.5-3s):** Entire pill and text fade out to 0% opacity.
 
 ### Typography
-- Subtitle text: Inter Medium, 28px, white (#FFFFFF), letter-spacing 0.3px
-- Text shadow: 0 1px 6px rgba(0,0,0,0.4)
+- Narration text: Inter Medium, 28px, #FFFFFF, text-align center
+- No additional labels
 
 ### Easing
-- Pill slide-in: `easeOutCubic`
-- Accent bar: `easeOutBack` (slight overshoot)
-- Text reveal: `easeInOutQuad`
-- Pill slide-out: `easeInCubic`
+- Pill fade/slide: `easeOutCubic`
+- Text fade: `easeOutQuad`
+- Progress bar: `linear`
+- Fade out: `easeInQuad`
 
 ## Narration Sync
 > "It uses Veo-generated clips with narration overlay."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={150} durationInFrames={90}>
-  <AbsoluteFill style={{ justifyContent: "flex-end", alignItems: "center" }}>
-    <SlideIn direction="right" distance={200} duration={15}>
-      <FrostedPill width={900} height={72} blur={12} opacity={0.55}>
-        <Sequence from={10}>
-          <AccentBar width={4} height={48} color="#34D399" />
-        </Sequence>
-        <Sequence from={12}>
-          <ClipReveal direction="left-to-right" duration={43}>
-            <NarrationText
-              text="It uses Veo-generated clips with narration overlay."
-              font="Inter Medium"
-              size={28}
-              color="#FFFFFF"
-            />
-          </ClipReveal>
-        </Sequence>
-      </FrostedPill>
-    </SlideIn>
-  </AbsoluteFill>
+<Sequence from={360} durationInFrames={90}>
+  <NarrationPill
+    text="It uses Veo-generated clips with narration overlay."
+    progressColor="#34D399"
+    position={{ x: "center", y: 780 }}
+  />
 </Sequence>
 ```
 
@@ -72,11 +57,8 @@ A lower-third narration overlay that appears over the aerial forest canopy foota
 ```json
 {
   "narrationText": "It uses Veo-generated clips with narration overlay.",
-  "pillWidth": 900,
-  "pillHeight": 72,
-  "accentColor": "#34D399",
-  "blurRadius": 12,
-  "textPositionY": 920
+  "pillBackground": "rgba(0, 0, 0, 0.55)",
+  "progressColor": "#34D399"
 }
 ```
 

@@ -2,57 +2,44 @@
 
 # Section 2.4: Forest Canopy Aerial
 
-**Tool:** Veo
+**Tool:** Veo (AI-generated footage)
 **Duration:** ~3s
-**Timestamp:** 0:05 - 0:08
+**Timestamp:** 0:09 - 0:12
 
 ## Visual Description
-An aerial drone shot looking straight down at a lush green forest canopy. Sunlight filters through gaps in the leaves, creating dappled pools of golden light on the canopy surface. The camera drifts slowly forward, revealing the organic fractal patterns of treetops. The color palette is rich emerald greens with warm golden highlights where the sun penetrates. Slight atmospheric haze adds depth between the canopy layers.
+An aerial drone shot looking down over a lush green forest canopy with sunlight filtering through the leaves. The camera drifts slowly forward, creating a sense of peaceful exploration. Shafts of golden light pierce through gaps in the foliage, creating dappled patterns on the lower canopy layers. No text overlays — pure cinematic nature B-roll.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: n/a (full-frame video)
-- Grid lines: none
+- Background: N/A (full-frame video footage)
 
 ### Chart/Visual Elements
 - Full-frame Veo-generated video clip
-- No overlay graphics during this beat
-- Color grading: lush naturalistic (boosted greens in midtones, warm golden highlights)
-- Speed: 1.0x real-time
-- Camera: slow forward drift (~2px/frame equivalent movement)
+- Color palette: Deep emerald (#065F46), forest green (#166534), golden light (#FBBF24), shadow (#1A2E05)
+- Camera angle: Top-down aerial, slight forward drift
+- Motion: Slow forward dolly, ~0.5m/s apparent speed
 
 ### Animation Sequence
-1. **Frame 0-90 (0-3s):** Continuous aerial footage. Camera drifts slowly forward over canopy. Sunlight beams shift subtly as perspective changes.
+1. **Frame 0-90 (0-3s):** Continuous aerial footage plays. Camera drifts forward over canopy. Sunlight shafts shift subtly as perspective changes. No additional Remotion overlays.
 
 ### Typography
-- None (pure video footage)
+- None — pure footage
 
 ### Easing
-- Clip fade-in: `easeOutQuad` (0.3s crossfade from previous visual)
-- Clip fade-out: `easeInQuad` (0.3s crossfade to next visual)
+- N/A (video playback)
 
 ## Narration Sync
 > "It uses Veo-generated clips with narration overlay."
 
-## Veo Prompt
-```
-An aerial drone shot of a green forest canopy with sunlight filtering through the leaves
-```
-
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={150} durationInFrames={90}>
-  <AbsoluteFill>
-    <OffthreadVideo
-      src={staticFile("veo_section/forest_canopy_aerial.mp4")}
-      playbackRate={1.0}
-      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-    />
-    <CrossFade durationInFrames={9} direction="in" />
-    <CrossFade durationInFrames={9} direction="out" />
-  </AbsoluteFill>
+<Sequence from={270} durationInFrames={90}>
+  <OffthreadVideo
+    src={staticFile("veo/forest_canopy_aerial.mp4")}
+    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+  />
 </Sequence>
 ```
 
@@ -60,9 +47,8 @@ An aerial drone shot of a green forest canopy with sunlight filtering through th
 ```json
 {
   "veoPrompt": "An aerial drone shot of a green forest canopy with sunlight filtering through the leaves",
-  "playbackRate": 1.0,
-  "crossfadeDuration": 9,
-  "clipSource": "veo_section/forest_canopy_aerial.mp4"
+  "clipSource": "veo/forest_canopy_aerial.mp4",
+  "playbackRate": 1.0
 }
 ```
 

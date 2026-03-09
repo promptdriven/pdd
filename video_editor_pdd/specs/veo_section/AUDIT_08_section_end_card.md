@@ -1,4 +1,0 @@
-## Verdict
-fail
-## Summary
-The rendered frame completely fails to match the spec (08_split_ocean_forest.md, which supersedes the deprecated 08_section_end_card.md). The spec requires a split-screen layout with (1) left panel showing an ocean sunset still with warm tint and 'Ocean at Sunset' label in #D4A574, (2) right panel showing a forest canopy still with cool tint and 'Forest Canopy' label in #86EFAC, (3) a vertical divider at x=960 in #475569, (4) a centered 'Veo 3.1' pill badge at (960, 500), and (5) a deep charcoal (#0F1419) background. Instead, the frame shows a dark navy background with no split-screen panels, no imagery, no divider, no badge, and only a generic placeholder message ('This is the second section of the integration test video.') with a small orange horizontal line above it. The component appears to be rendering a default/fallback section end card rather than the specified split-summary composition.

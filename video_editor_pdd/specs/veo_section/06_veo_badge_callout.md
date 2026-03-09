@@ -4,91 +4,62 @@
 
 **Tool:** Remotion
 **Duration:** ~3s
-**Timestamp:** 0:05 - 0:08
+**Timestamp:** 0:15 - 0:18
 
 ## Visual Description
-An animated lower-third badge and subtitle overlay that appears over the forest canopy footage. A rounded pill-shaped badge reading "VEO GENERATED" slides in from the left, followed by the narration subtitle typing on below it. The badge has a translucent dark glass-morphism backing with a subtle green border glow, tying into the forest visuals behind it. A thin progress bar tracks across the bottom edge of the gradient strip.
+A floating badge appears in the upper-right corner identifying the footage as Veo-generated. The badge is a compact rounded pill with the text "Powered by Veo" and a small sparkle icon. It slides in from the right edge and hovers with a gentle breathing animation (scale pulse), providing attribution without obscuring the footage underneath.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: transparent (overlaid on Veo clip)
-- Grid lines: none
+- Background: Transparent overlay on top of Veo footage layer
 
 ### Chart/Visual Elements
-- Gradient bar: full-width, height 180px, anchored to bottom, gradient from transparent → #00000088
-- Badge pill: positioned at (120, 870), 220x40px, background #1E293B with 60% opacity, border 1px #22C55E40, borderRadius 20px
-  - Badge text: "VEO GENERATED" — color #22C55E, 14px, letter-spacing 2px, uppercase
-  - Badge icon: small play-triangle (8px) to left of text, color #22C55E
-- Subtitle text: positioned at (120, 930), max-width 1400px
-  - "It uses Veo-generated clips with narration overlay."
-- Progress bar: bottom edge (y=1076), height 4px, color #22C55E, width animates 0→100%
+- Badge pill: Rounded rectangle (borderRadius 24px), positioned at top-right (X=1680, Y=60), 200px x 44px
+  - Background: rgba(0, 0, 0, 0.7) with backdrop-blur(8px)
+  - Border: 1px solid rgba(245, 158, 11, 0.4)
+- Sparkle icon: 16x16px SVG, #F59E0B, positioned left of text inside pill
+- Badge text: "Powered by Veo"
+- Subtle drop shadow: 0 2px 8px rgba(0, 0, 0, 0.3)
 
 ### Animation Sequence
-1. **Frame 0-10 (0-0.33s):** Gradient bar fades in (opacity 0→0.85).
-2. **Frame 8-22 (0.27-0.73s):** Badge pill slides in from left (x: -220 → 120) with slight bounce. Play icon spins 360° on entry.
-3. **Frame 15-55 (0.5-1.83s):** Subtitle text types on character by character (~1.3 chars/frame).
-4. **Frame 10-80 (0.33-2.67s):** Progress bar grows from left to right (width 0% → 100%).
-5. **Frame 80-90 (2.67-3.0s):** All elements fade out (opacity 1→0).
+1. **Frame 0-15 (0-0.5s):** Badge slides in from X=1960 (offscreen right) to X=1680. Opacity 0% to 100%.
+2. **Frame 15-20 (0.5-0.67s):** Sparkle icon rotates 360 degrees once.
+3. **Frame 20-75 (0.67-2.5s):** Badge holds position. Gentle scale breathing: 1.0 → 1.03 → 1.0 over 60 frames, looping.
+4. **Frame 75-90 (2.5-3s):** Badge slides out to X=1960. Opacity fades to 0%.
 
 ### Typography
-- Badge label: Inter SemiBold, 14px, green (#22C55E), tracking 2px, uppercase
-- Subtitle: Inter Regular, 30px, white (#FFFFFF), letter-spacing 0.3px
-- Text shadow: 0 2px 6px rgba(0,0,0,0.5)
+- Badge text: Inter SemiBold, 14px, #F59E0B, letter-spacing 0.5px
+- No additional labels
 
 ### Easing
-- Badge slide: `spring({ damping: 14, stiffness: 180 })`
-- Progress bar: `linear`
-- Text type-on: `linear`
-- Fade out: `easeInCubic`
+- Slide in: `easeOutBack` (slight overshoot)
+- Sparkle rotation: `easeInOutSine`
+- Scale breathing: `easeInOutSine`
+- Slide out: `easeInCubic`
 
 ## Narration Sync
-> "It uses Veo-generated clips with narration overlay."
+> (No narration — badge appears as ambient overlay during footage)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={150} durationInFrames={90}>
-  <AbsoluteFill style={{ justifyContent: "flex-end" }}>
-    <GradientBar height={180} opacity={0.85} fadeIn={10} />
-    <Sequence from={8}>
-      <SlideIn from="left" distance={340} spring={{ damping: 14, stiffness: 180 }}>
-        <Badge
-          text="VEO GENERATED"
-          icon="play"
-          bgColor="#1E293B99"
-          textColor="#22C55E"
-          borderColor="#22C55E40"
-          position={[120, 870]}
-        />
-      </SlideIn>
-    </Sequence>
-    <Sequence from={15}>
-      <TypeOnText
-        text="It uses Veo-generated clips with narration overlay."
-        charsPerFrame={1.3}
-        font="Inter"
-        size={30}
-        color="#FFFFFF"
-        position={[120, 930]}
-      />
-    </Sequence>
-    <Sequence from={10}>
-      <ProgressBar y={1076} height={4} color="#22C55E" durationInFrames={70} />
-    </Sequence>
-  </AbsoluteFill>
+<Sequence from={450} durationInFrames={90}>
+  <VeoBadge
+    text="Powered by Veo"
+    icon="sparkle"
+    position={{ x: 1680, y: 60 }}
+    accentColor="#F59E0B"
+  />
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "narrationText": "It uses Veo-generated clips with narration overlay.",
-  "badgeLabel": "VEO GENERATED",
-  "badgeColor": "#22C55E",
-  "typeSpeed": 1.3,
-  "progressBarDuration": 70,
-  "gradientBarHeight": 180
+  "badgeText": "Powered by Veo",
+  "accentColor": "#F59E0B",
+  "position": { "x": 1680, "y": 60 }
 }
 ```
 

@@ -4,7 +4,6 @@ import { AbsoluteFill, useCurrentFrame, random } from 'remotion';
 export const FilmGrainOverlay: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Generate a grid of semi-random dots that shift each frame for grain effect
   const grainElements = React.useMemo(() => {
     const elements: React.CSSProperties[] = [];
     const cols = 48;
@@ -14,8 +13,8 @@ export const FilmGrainOverlay: React.FC = () => {
       const row = Math.floor(i / cols);
       elements.push({
         position: 'absolute' as const,
-        left: (col / cols) * 100 + '%',
-        top: (row / rows) * 100 + '%',
+        left: `${(col / cols) * 100}%`,
+        top: `${(row / rows) * 100}%`,
         width: 1920 / cols,
         height: 1080 / rows,
       });
@@ -24,7 +23,7 @@ export const FilmGrainOverlay: React.FC = () => {
   }, []);
 
   return (
-    <AbsoluteFill style={{ opacity: 0.04, mixBlendMode: 'overlay' }}>
+    <AbsoluteFill style={{ opacity: 0.03, mixBlendMode: 'overlay' }}>
       {grainElements.map((style, i) => {
         const brightness = random(`grain-${i}-${frame % 3}`) > 0.5 ? 1 : 0;
         return (

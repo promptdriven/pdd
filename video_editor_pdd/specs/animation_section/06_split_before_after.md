@@ -1,75 +1,65 @@
 [split:]
 
-# Section 1.6: Split-Screen Before/After Comparison
+# Section 1.6: Split Before/After Comparison
 
 **Tool:** Remotion
-**Duration:** ~2s (60 frames)
-**Timestamp:** 0:07 - 0:09
+**Duration:** ~4s
+**Timestamp:** 0:23 - 0:27
 
 ## Visual Description
-A split-screen layout divides the frame vertically into two halves. The left panel is labeled "Before" with a static image placeholder on a muted gray background, representing traditional video editing. The right panel is labeled "After" with an animated gradient background and floating code snippets, representing Remotion-powered automation. A vertical divider line wipes from top to bottom between the two panels. Each side has a small icon badge — a film-reel icon on the left and a code-bracket icon on the right.
+A split-screen comparison layout divided by a vertical center line. The left half shows the "Before" state — the original blue circle on a dark background — and the right half shows the "After" state — the green square at its final resting position. A bold divider line separates the two halves, with "BEFORE" and "AFTER" labels at the top of each panel. The divider slides in from the top, revealing each side simultaneously.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #0F172A (slate-950)
-- Vertical divider at X=960
+- Background: Left half #111827, right half #111827 (matching, with a subtle 1-shade difference: right is #0F172A for visual distinction)
+- Grid lines: None
 
 ### Chart/Visual Elements
-- **Left panel (Before):**
-  - Background: #1E293B (slate-800)
-  - Label "Before" at (240, 120), 48px Inter bold, #94A3B8
-  - Film-reel icon: 40x40px SVG at (240, 200), #64748B
-  - Static placeholder bars: 3 horizontal gray bars (#334155) at Y=350, Y=450, Y=550, widths 300px, 220px, 260px
-- **Right panel (After):**
-  - Background: Animated gradient 135deg from #1E3A8A to #0F172A, slowly shifting hue
-  - Label "After" at (1200, 120), 48px Inter bold, #60A5FA
-  - Code-bracket icon: 40x40px SVG at (1200, 200), #3B82F6
-  - Floating code tokens: 5 small pill shapes with text like `<Sequence>`, `spring()`, `interpolate()`, drifting upward at varied speeds, #3B82F6 at 40% opacity
-- **Divider line:** 4px wide, #3B82F6, full height, glow 20px blur at 30% opacity
+- Left panel (0-959px): Blue circle, 160px diameter, fill #3B82F6, centered at (480, 540)
+- Right panel (961-1920px): Green square, 160x160px, fill #22C55E, centered at (1440, 540)
+- Vertical divider: 3px solid #F8FAFC (slate-50), from (960, 0) to (960, 1080)
+- "BEFORE" label: Top-left panel, positioned at (480, 80), centered
+- "AFTER" label: Top-right panel, positioned at (1440, 80), centered
+- Subtle vignette on each panel edge (inner shadow, 40px)
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Left panel slides in from left edge (X offset -960 to 0)
-2. **Frame 8-20 (0.27-0.67s):** Divider line wipes top-to-bottom (height 0 to 1080px)
-3. **Frame 12-25 (0.4-0.83s):** Right panel slides in from right edge (X offset +960 to 0)
-4. **Frame 20-35 (0.67-1.17s):** "Before" label fades in, static bars appear sequentially
-5. **Frame 25-40 (0.83-1.33s):** "After" label fades in, code tokens begin floating upward
-6. **Frame 40-60 (1.33-2.0s):** Hold — left side static, right side code tokens continue drifting
+1. **Frame 0-15 (0-0.5s):** Vertical divider slides down from top (y: -1080 → 0). Both panels are masked/hidden until divider arrives.
+2. **Frame 15-40 (0.5-1.33s):** Left panel fades in — blue circle scales from 0.8 → 1.0 with opacity 0% → 100%. "BEFORE" label fades in.
+3. **Frame 20-45 (0.67-1.5s):** Right panel fades in — green square scales from 0.8 → 1.0 with opacity 0% → 100%. "AFTER" label fades in.
+4. **Frame 45-120 (1.5-4.0s):** Hold — both panels fully visible, static layout for viewer to absorb the comparison.
 
 ### Typography
-- Panel labels: Inter, 48px, bold (weight 700), #94A3B8 (left) / #60A5FA (right)
-- Code tokens: JetBrains Mono, 16px, normal, #3B82F6
+- Panel labels: Inter Bold, 28px, #F8FAFC (slate-50), uppercase, letter-spacing 4px
+- No additional text
 
 ### Easing
-- Panel slide-in: `easeOutCubic`
-- Divider wipe: `easeInOutQuad`
-- Label fade: `easeOutQuad`
-- Token drift: `linear` (continuous)
+- Divider slide: `easeOutCubic`
+- Panel reveals: `easeOutQuad`
+- Shape scale-in: `easeOutCubic`
 
 ## Narration Sync
-> "It uses only Remotion animations with no Veo clips."
-
-Appears during the tail of Segment 2 (7.0s-9.0s). The split comparison visually contrasts traditional video (static) with Remotion (animated code), reinforcing the "only Remotion" message.
+> (Bridge visual — no direct narration; visual recap of the transformation)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={210} durationInFrames={60}>
-  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
-    <Sequence from={0}>
-      <SlidingPanel side="left" background="#1E293B">
-        <PanelLabel text="Before" color="#94A3B8" icon="film-reel" />
-        <StaticBars count={3} color="#334155" />
-      </SlidingPanel>
+<Sequence from={0} durationInFrames={120}>
+  <AbsoluteFill>
+    <Sequence from={15}>
+      <LeftPanel>
+        <Circle radius={80} fill="#3B82F6" />
+        <PanelLabel text="BEFORE" />
+      </LeftPanel>
     </Sequence>
-    <Sequence from={8}>
-      <DividerLine color="#3B82F6" glowBlur={20} />
+    <Sequence from={20}>
+      <RightPanel>
+        <Square size={160} fill="#22C55E" />
+        <PanelLabel text="AFTER" />
+      </RightPanel>
     </Sequence>
-    <Sequence from={12}>
-      <SlidingPanel side="right" background="gradient">
-        <PanelLabel text="After" color="#60A5FA" icon="code-brackets" />
-        <FloatingCodeTokens tokens={['<Sequence>', 'spring()', 'interpolate()']} />
-      </SlidingPanel>
+    <Sequence from={0} durationInFrames={15}>
+      <VerticalDivider />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -79,11 +69,21 @@ Appears during the tail of Segment 2 (7.0s-9.0s). The split comparison visually 
 ```json
 {
   "panels": {
-    "left": { "label": "Before", "background": "#1E293B", "accent": "#94A3B8" },
-    "right": { "label": "After", "background": "gradient", "accent": "#60A5FA" }
+    "left": {
+      "label": "BEFORE",
+      "background": "#111827",
+      "shape": { "type": "circle", "radius": 80, "fill": "#3B82F6" }
+    },
+    "right": {
+      "label": "AFTER",
+      "background": "#0F172A",
+      "shape": { "type": "square", "size": 160, "fill": "#22C55E" }
+    }
   },
-  "codeTokens": ["<Sequence>", "spring()", "interpolate()", "useCurrentFrame()", "<AbsoluteFill>"],
-  "divider": { "color": "#3B82F6", "width": 4, "glowBlur": 20 }
+  "divider": {
+    "color": "#F8FAFC",
+    "width": 3
+  }
 }
 ```
 

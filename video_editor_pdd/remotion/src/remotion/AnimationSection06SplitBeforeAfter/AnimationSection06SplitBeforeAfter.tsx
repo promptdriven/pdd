@@ -3,75 +3,36 @@ import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   CANVAS,
   COLORS,
-  TYPOGRAPHY,
-  POSITIONS,
+  DIMENSIONS,
   ANIMATION_TIMING,
 } from './constants';
-import { FilmReelIcon } from './FilmReelIcon';
-import { CodeBracketIcon } from './CodeBracketIcon';
-import { StaticBars } from './StaticBars';
-import { FloatingCodeTokens } from './FloatingCodeTokens';
 import { DividerLine } from './DividerLine';
+import { BeforeCircle } from './BeforeCircle';
+import { AfterSquare } from './AfterSquare';
+import { PanelLabel } from './PanelLabel';
 
 export const AnimationSection06SplitBeforeAfter: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Left panel slide in from left
-  const leftOffsetX = interpolate(
+  // Left panel opacity
+  const leftOpacity = interpolate(
     frame,
-    [ANIMATION_TIMING.leftSlideStart, ANIMATION_TIMING.leftSlideEnd],
-    [-CANVAS.dividerX, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
-  );
-
-  // Right panel slide in from right
-  const rightOffsetX = interpolate(
-    frame,
-    [ANIMATION_TIMING.rightSlideStart, ANIMATION_TIMING.rightSlideEnd],
-    [CANVAS.dividerX, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
-  );
-
-  // Before label fade
-  const beforeLabelOpacity = interpolate(
-    frame,
-    [ANIMATION_TIMING.beforeLabelStart, ANIMATION_TIMING.beforeLabelEnd],
+    [ANIMATION_TIMING.leftPanelStart, ANIMATION_TIMING.leftPanelEnd],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  // After label fade
-  const afterLabelOpacity = interpolate(
+  // Right panel opacity
+  const rightOpacity = interpolate(
     frame,
-    [ANIMATION_TIMING.afterLabelStart, ANIMATION_TIMING.afterLabelEnd],
+    [ANIMATION_TIMING.rightPanelStart, ANIMATION_TIMING.rightPanelEnd],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
-
-  // Animated gradient hue shift for right panel
-  const hueShift = interpolate(frame, [0, ANIMATION_TIMING.totalDuration], [0, 20], {
-    extrapolateRight: 'clamp',
-  });
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
-      {/* LEFT PANEL — "Before" */}
+    <AbsoluteFill style={{ backgroundColor: COLORS.backgroundLeft }}>
+      {/* Left panel: Before */}
       <div
         style={{
           position: 'absolute',
@@ -79,52 +40,29 @@ export const AnimationSection06SplitBeforeAfter: React.FC = () => {
           top: 0,
           width: CANVAS.dividerX,
           height: CANVAS.height,
-          backgroundColor: COLORS.leftPanel,
-          transform: `translateX(${leftOffsetX}px)`,
+          backgroundColor: COLORS.backgroundLeft,
+          opacity: leftOpacity,
           overflow: 'hidden',
         }}
       >
-        {/* Before label */}
+        <BeforeCircle />
+        <PanelLabel
+          text="BEFORE"
+          fadeStart={ANIMATION_TIMING.leftPanelStart}
+          fadeEnd={ANIMATION_TIMING.leftPanelEnd}
+        />
+        {/* Inner vignette */}
         <div
           style={{
             position: 'absolute',
-            left: POSITIONS.leftLabelX,
-            top: POSITIONS.labelY,
-            opacity: beforeLabelOpacity,
+            inset: 0,
+            boxShadow: `inset 0 0 ${DIMENSIONS.vignetteSize}px rgba(0, 0, 0, 0.4)`,
+            pointerEvents: 'none',
           }}
-        >
-          <span
-            style={{
-              fontFamily: TYPOGRAPHY.label.fontFamily,
-              fontSize: TYPOGRAPHY.label.fontSize,
-              fontWeight: TYPOGRAPHY.label.fontWeight,
-              color: COLORS.beforeLabel,
-            }}
-          >
-            Before
-          </span>
-        </div>
-
-        {/* Film reel icon */}
-        <div
-          style={{
-            position: 'absolute',
-            left: POSITIONS.leftLabelX,
-            top: POSITIONS.iconY,
-            opacity: beforeLabelOpacity,
-          }}
-        >
-          <FilmReelIcon />
-        </div>
-
-        {/* Static placeholder bars */}
-        <StaticBars />
+        />
       </div>
 
-      {/* Divider line */}
-      <DividerLine />
-
-      {/* RIGHT PANEL — "After" */}
+      {/* Right panel: After */}
       <div
         style={{
           position: 'absolute',
@@ -132,47 +70,30 @@ export const AnimationSection06SplitBeforeAfter: React.FC = () => {
           top: 0,
           width: CANVAS.dividerX,
           height: CANVAS.height,
-          background: `linear-gradient(135deg, hsl(${220 + hueShift}, 73%, 33%) 0%, ${COLORS.rightGradientEnd} 100%)`,
-          transform: `translateX(${rightOffsetX}px)`,
+          backgroundColor: COLORS.backgroundRight,
+          opacity: rightOpacity,
           overflow: 'hidden',
         }}
       >
-        {/* After label */}
+        <AfterSquare />
+        <PanelLabel
+          text="AFTER"
+          fadeStart={ANIMATION_TIMING.rightPanelStart}
+          fadeEnd={ANIMATION_TIMING.rightPanelEnd}
+        />
+        {/* Inner vignette */}
         <div
           style={{
             position: 'absolute',
-            left: POSITIONS.rightLabelX - CANVAS.dividerX,
-            top: POSITIONS.labelY,
-            opacity: afterLabelOpacity,
+            inset: 0,
+            boxShadow: `inset 0 0 ${DIMENSIONS.vignetteSize}px rgba(0, 0, 0, 0.4)`,
+            pointerEvents: 'none',
           }}
-        >
-          <span
-            style={{
-              fontFamily: TYPOGRAPHY.label.fontFamily,
-              fontSize: TYPOGRAPHY.label.fontSize,
-              fontWeight: TYPOGRAPHY.label.fontWeight,
-              color: COLORS.afterLabel,
-            }}
-          >
-            After
-          </span>
-        </div>
-
-        {/* Code bracket icon */}
-        <div
-          style={{
-            position: 'absolute',
-            left: POSITIONS.rightLabelX - CANVAS.dividerX,
-            top: POSITIONS.iconY,
-            opacity: afterLabelOpacity,
-          }}
-        >
-          <CodeBracketIcon />
-        </div>
-
-        {/* Floating code tokens */}
-        <FloatingCodeTokens />
+        />
       </div>
+
+      {/* Vertical divider (on top of panels) */}
+      <DividerLine />
     </AbsoluteFill>
   );
 };

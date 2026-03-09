@@ -12,10 +12,13 @@ import {
   isDeterministicPipelineMode,
 } from '@/lib/deterministic-pipeline';
 import {
-  extractVeoMarker,
   normalizeSpecDir,
   selectCanonicalVeoPromptSpec,
 } from '@/lib/veo-spec-context';
+import {
+  resolveSectionHasVeoIntent,
+  resolveSectionVeoPromptFromScript,
+} from '@/app/api/pipeline/_lib/script-visual-intent';
 
 /**
  * API ROUTE: app/api/pipeline/veo/run/route.ts
@@ -24,9 +27,12 @@ import {
 export const runtime = 'nodejs';
 
 /** Resolve a Veo prompt from specs on disk */
-function resolveVeoPrompt(sectionId: string): string {
+function resolveVeoPrompt(
+  section: { id: string; label: string; specDir?: string | null },
+  mainScriptContent: string | null
+): string {
   const cwd = process.cwd();
-  const normalizedSpecDir = normalizeSpecDir(sectionId);
+  const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
 
   // 1. Check JSON and text candidates first
   const candidates = [
@@ -69,26 +75,16 @@ function resolveVeoPrompt(sectionId: string): string {
   }
 
   // 3. Check narrative/main_script.md for this section's [veo:] marker
-  const mainScript = path.join(cwd, 'narrative', 'main_script.md');
-  if (fs.existsSync(mainScript)) {
-    const content = fs.readFileSync(mainScript, 'utf-8');
-    // Find the section in the script and look for [veo:] marker within it
-    const sectionPattern = new RegExp(
-      `##\\s+.*${sectionId.replace(/_/g, '[\\s_]')}.*?\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
-      'i'
-    );
-    const sectionMatch = content.match(sectionPattern);
-    if (sectionMatch) {
-      const prompt = extractVeoMarker(sectionMatch[1]);
-      if (prompt) return prompt;
-    }
-    // Also try the whole file as a last resort
-    const prompt = extractVeoMarker(content);
+  if (mainScriptContent) {
+    const prompt = resolveSectionVeoPromptFromScript(mainScriptContent, {
+      id: section.id,
+      label: section.label,
+    });
     if (prompt) return prompt;
   }
 
   throw new Error(
-    `No Veo prompt found for section "${sectionId}". Checked JSON/txt candidates and markdown files in specs/${normalizedSpecDir}/.`
+    `No Veo prompt found for section "${section.id}". Checked JSON/txt candidates and markdown files in specs/${normalizedSpecDir}/.`
   );
 }
 
@@ -102,13 +98,30 @@ registerExecutor('veo', (params, send: SseSend) => {
   return async (onLog) => {
     const config = loadProject();
     const sections = config.sections;
+    const mainScriptPath = path.join(process.cwd(), 'narrative', 'main_script.md');
+    let mainScriptContent: string | null = null;
+
+    if (fs.existsSync(mainScriptPath)) {
+      try {
+        mainScriptContent = fs.readFileSync(mainScriptPath, 'utf-8');
+      } catch {
+        mainScriptContent = null;
+      }
+    }
 
     const requestedClips = Array.isArray(params.clips)
       ? new Set(params.clips.map(String))
       : null;
 
     const ordered = sections.filter(
-      (s) => !requestedClips || requestedClips.has(s.id)
+      (s) =>
+        (!requestedClips || requestedClips.has(s.id)) &&
+        (mainScriptContent
+          ? resolveSectionHasVeoIntent(mainScriptContent, {
+              id: s.id,
+              label: s.label,
+            }) !== false
+          : true)
     );
 
     const total = ordered.length;
@@ -141,7 +154,7 @@ registerExecutor('veo', (params, send: SseSend) => {
         send({ type: 'clip', clipId, status: 'generating' });
         emitClipEvent({ clipId, status: 'generating', message: 'Generating…' });
 
-        const prompt = resolveVeoPrompt(section.specDir ?? section.id);
+        const prompt = resolveVeoPrompt(section, mainScriptContent);
         onLog(`Generating Veo clip "${clipId}"`);
         onLog(`Prompt: ${prompt.substring(0, 120)}...`);
 

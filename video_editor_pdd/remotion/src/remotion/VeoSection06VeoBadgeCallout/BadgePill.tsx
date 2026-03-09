@@ -1,61 +1,99 @@
 import React from 'react';
-import { useCurrentFrame, spring, interpolate } from 'remotion';
-import { COLORS, TYPOGRAPHY, POSITIONS, DIMENSIONS, ANIMATION, BADGE_LABEL } from './constants';
-
-const PlayIcon: React.FC<{ rotation: number }> = ({ rotation }) => (
-  <svg
-    width={DIMENSIONS.playIconSize * 2}
-    height={DIMENSIONS.playIconSize * 2}
-    viewBox="0 0 16 16"
-    style={{
-      marginRight: 8,
-      transform: `rotate(${rotation}deg)`,
-      flexShrink: 0,
-    }}
-  >
-    <polygon points="4,2 14,8 4,14" fill={COLORS.badgeIcon} />
-  </svg>
-);
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import {
+  COLORS,
+  TYPOGRAPHY,
+  POSITIONS,
+  DIMENSIONS,
+  ANIMATION,
+  BADGE_TEXT,
+} from './constants';
+import { SparkleIcon } from './SparkleIcon';
 
 export const BadgePill: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Badge appears starting at frame 8
-  const badgeFrame = Math.max(0, frame - ANIMATION.badgeSlideStart);
+  // --- Slide in: frames 0-15, easeOutBack (slight overshoot) ---
+  const slideInX = interpolate(
+    frame,
+    [ANIMATION.slideInStart, ANIMATION.slideInEnd],
+    [POSITIONS.badgeOffscreenX, POSITIONS.badgeRestX],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.back(1.7)),
+    },
+  );
 
-  // Spring-based slide in
-  const slideProgress = spring({
-    frame: badgeFrame,
-    fps: 30,
-    config: { damping: 14, stiffness: 180 },
-  });
+  // --- Slide in opacity: 0→1 over same range ---
+  const slideInOpacity = interpolate(
+    frame,
+    [ANIMATION.slideInStart, ANIMATION.slideInEnd],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+  );
 
-  const translateX = interpolate(slideProgress, [0, 1], [-ANIMATION.badgeSlideDistance, 0]);
+  // --- Slide out: frames 75-90, easeInCubic ---
+  const slideOutX = interpolate(
+    frame,
+    [ANIMATION.slideOutStart, ANIMATION.slideOutEnd],
+    [POSITIONS.badgeRestX, POSITIONS.badgeOffscreenX],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.poly(3)),
+    },
+  );
 
-  // Play icon spin: 360° over the same spring
-  const iconRotation = interpolate(slideProgress, [0, 1], [0, 360]);
+  const slideOutOpacity = interpolate(
+    frame,
+    [ANIMATION.slideOutStart, ANIMATION.slideOutEnd],
+    [1, 0],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.poly(3)),
+    },
+  );
 
-  // Only render after badge slide starts
-  if (frame < ANIMATION.badgeSlideStart) return null;
+  // Composite X position: use slideIn before frame 75, slideOut after
+  const posX = frame < ANIMATION.slideOutStart ? slideInX : slideOutX;
+  const opacity = frame < ANIMATION.slideOutStart ? slideInOpacity : slideOutOpacity;
+
+  // --- Breathing scale: frames 20-75 ---
+  let scale = 1.0;
+  if (frame >= ANIMATION.breathingStart && frame < ANIMATION.breathingEnd) {
+    const breathFrame = frame - ANIMATION.breathingStart;
+    const cycleProgress = (breathFrame % ANIMATION.breathingCycleDuration) / ANIMATION.breathingCycleDuration;
+    // Sine wave: 0→1→0 maps to 1.0→1.03→1.0
+    const sineValue = Math.sin(cycleProgress * Math.PI * 2);
+    // Map sine [-1,1] to [1.0, 1.03] centered at 1.015
+    scale = ANIMATION.breathingScaleMin + ((sineValue + 1) / 2) * (ANIMATION.breathingScaleMax - ANIMATION.breathingScaleMin);
+  }
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: POSITIONS.badgeX,
+        left: posX,
         top: POSITIONS.badgeY,
         width: DIMENSIONS.badgeWidth,
         height: DIMENSIONS.badgeHeight,
         borderRadius: DIMENSIONS.badgeBorderRadius,
         backgroundColor: COLORS.badgeBg,
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
         border: `1px solid ${COLORS.badgeBorder}`,
+        boxShadow: COLORS.dropShadow,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        transform: `translateX(${translateX}px)`,
+        opacity,
+        transform: `scale(${scale})`,
+        transformOrigin: 'center center',
       }}
     >
-      <PlayIcon rotation={iconRotation} />
+      <SparkleIcon />
       <span
         style={{
           color: COLORS.badgeText,
@@ -63,11 +101,10 @@ export const BadgePill: React.FC = () => {
           fontFamily: TYPOGRAPHY.badge.fontFamily,
           fontWeight: TYPOGRAPHY.badge.fontWeight,
           letterSpacing: TYPOGRAPHY.badge.letterSpacing,
-          textTransform: TYPOGRAPHY.badge.textTransform,
           whiteSpace: 'nowrap',
         }}
       >
-        {BADGE_LABEL}
+        {BADGE_TEXT}
       </span>
     </div>
   );

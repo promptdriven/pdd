@@ -807,6 +807,66 @@ describe("veo executor factory — frame chaining", () => {
     const framePath = mockExtractLastFrame.mock.calls[0][1];
     expect(framePath).toMatch(/outputs[/\\]veo[/\\]intro_last_frame\.png$/);
   });
+
+  it("skips non-veo script sections and chains only across remaining veo clips", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+      },
+      {
+        ...config.sections[1],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+      },
+      {
+        ...config.sections[2],
+        id: "outro_section",
+        label: "Outro Section",
+        specDir: "outro_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("narrative/main_script.md")) return true;
+      if (p.includes("veo.json")) return false;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("narrative/main_script.md")) {
+        return `
+## Animation Section
+[Remotion] Animated chart only.
+
+## Veo Section
+[veo: Ocean wave at sunset]
+
+## Outro Section
+[veo: City skyline at dusk]
+        `.trim();
+      }
+      return "";
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(mockGenerateVeoClip.mock.calls[0][0]).toBe("Ocean wave at sunset");
+    expect(mockGenerateVeoClip.mock.calls[1][0]).toBe("City skyline at dusk");
+    expect(mockGenerateVeoClip.mock.calls[0][1]).toBeNull();
+    expect(mockGenerateVeoClip.mock.calls[1][1]).toMatch(/veo_section_last_frame\.png$/);
+    expect(mockExtractLastFrame).toHaveBeenCalledTimes(1);
+    expect(mockExtractLastFrame.mock.calls[0][0]).toMatch(/outputs[/\\]veo[/\\]veo_section\.mp4$/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -898,6 +958,64 @@ describe("GET_clips — response shape", () => {
     for (const clip of data.clips) {
       expect(clip.sectionId).toBe(clip.id);
     }
+  });
+});
+
+describe("GET_clips — script-derived Veo eligibility", () => {
+  it("filters out sections whose matched script block has no [veo:] markers", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+      },
+      {
+        ...config.sections[1],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+      },
+      {
+        ...config.sections[2],
+        id: "outro_section",
+        label: "Outro Section",
+        specDir: "outro_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p.includes("narrative/main_script.md");
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("narrative/main_script.md")) {
+        return `
+## Animation Section
+[Remotion] Animated chart only.
+
+## Veo Section
+[veo: Ocean wave at sunset]
+
+## Outro Section
+[veo: City skyline at dusk]
+        `.trim();
+      }
+      return "";
+    });
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips.map((clip: any) => clip.id)).toEqual([
+      "veo_section",
+      "outro_section",
+    ]);
+    expect(data.clips[0].frameChainDeps).toEqual([]);
+    expect(data.clips[1].frameChainDeps).toEqual(["veo_section"]);
   });
 });
 

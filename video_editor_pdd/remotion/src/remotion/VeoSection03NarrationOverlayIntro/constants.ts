@@ -6,53 +6,52 @@ export const CANVAS = {
 };
 
 export const COLORS = {
-  background: '#0A1628',
-  gradientFrom: 'transparent',
-  gradientTo: '#00000090',
+  background: 'transparent',
+  pillBackground: 'rgba(0, 0, 0, 0.55)',
+  pillBorder: 'rgba(255, 255, 255, 0.1)',
   text: '#FFFFFF',
-  accent: '#D4A574',
+  progress: '#F59E0B',
+  textShadow: 'rgba(0, 0, 0, 0.4)',
 };
 
 export const TYPOGRAPHY = {
-  subtitle: {
-    fontSize: 32,
+  narration: {
+    fontSize: 28,
     fontFamily: 'Inter',
-    fontWeight: 'normal' as const,
-    letterSpacing: '0.5px',
+    fontWeight: 500 as const,
+    letterSpacing: '0.3px',
   },
 };
 
 export const POSITIONS = {
-  textY: 920,
-  accentLineY: 885,
+  pillY: 780,
 };
 
 export const DIMENSIONS = {
-  gradientBarHeight: 160,
-  accentLineWidth: 60,
-  accentLineHeight: 3,
-  textMaxWidth: 1400,
-  textPadding: 20,
+  pillPaddingH: 48,
+  pillHeight: 64,
+  pillBorderRadius: 16,
+  blurRadius: 12,
+  progressBarHeight: 3,
 };
 
 export const ANIMATION_TIMING = {
-  // Gradient bar fade in
-  gradientFadeStart: 0,
-  gradientFadeEnd: 10,
+  // Pill fade in + slide up (frame 0-15)
+  pillFadeInStart: 0,
+  pillFadeInEnd: 15,
+  pillSlideFrom: 800,
+  pillSlideTo: 780,
 
-  // Accent line scale in + text begins
-  accentLineStart: 8,
-  accentLineEnd: 18,
+  // Text fade in (frame 10-20)
+  textFadeInStart: 10,
+  textFadeInEnd: 20,
 
-  // Text type-on
-  typeOnStart: 10,
-  typeOnEnd: 60,
+  // Progress bar fill (frame 15-75)
+  progressStart: 15,
+  progressEnd: 75,
 
-  // Hold
-  holdEnd: 80,
-
-  // Fade out
-  fadeOutStart: 80,
+  // Fade out (frame 75-90)
+  fadeOutStart: 75,
   fadeOutEnd: 90,
 
   totalDuration: 90,
@@ -60,5 +59,3 @@ export const ANIMATION_TIMING = {
 
 export const NARRATION_TEXT =
   'This is the second section of the integration test video.';
-
-export const TYPE_SPEED = 1.5; // chars per frame

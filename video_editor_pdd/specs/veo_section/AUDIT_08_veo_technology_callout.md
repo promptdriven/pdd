@@ -1,4 +1,0 @@
-## Verdict
-fail
-## Summary
-The spec file 08_veo_technology_callout.md is explicitly marked as DEPRECATED and superseded by 06_veo_badge_callout.md. The rendered frame shows a nearly empty dark (#0B1622) canvas with only a small amber/orange horizontal line near the bottom center and generic placeholder text reading 'This is the second section of the integration test video.' — none of the required elements from the superseding spec (06_veo_badge_callout.md) are present. Specifically missing: (1) the rounded pill badge reading 'VEO GENERATED' with green (#22C55E) text and glass-morphism backing, (2) the typed-on subtitle 'It uses Veo-generated clips with narration overlay.', (3) the green progress bar animating across the bottom, (4) the full-width gradient bar anchored to the bottom, and (5) the transparent overlay composited on forest canopy footage. The frame appears to be rendering a generic section placeholder rather than the actual Veo Badge Callout component.

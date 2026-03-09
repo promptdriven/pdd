@@ -1,14 +1,14 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, TYPOGRAPHY, POSITIONS, ANIMATION_TIMING, DIMENSIONS } from './constants';
+import { COLORS, TYPOGRAPHY, ANIMATION_TIMING } from './constants';
 
 export const TitleText: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const y = interpolate(
+  const opacity = interpolate(
     frame,
-    [ANIMATION_TIMING.titleSlideStart, ANIMATION_TIMING.titleSlideEnd],
-    [POSITIONS.titleStartY, POSITIONS.titleY],
+    [ANIMATION_TIMING.titleFadeStart, ANIMATION_TIMING.titleFadeEnd],
+    [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -16,10 +16,10 @@ export const TitleText: React.FC = () => {
     }
   );
 
-  const opacity = interpolate(
+  const translateY = interpolate(
     frame,
-    [ANIMATION_TIMING.titleSlideStart, ANIMATION_TIMING.titleSlideEnd],
-    [0, 1],
+    [ANIMATION_TIMING.titleFadeStart, ANIMATION_TIMING.titleFadeEnd],
+    [20, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -33,11 +33,13 @@ export const TitleText: React.FC = () => {
         position: 'absolute',
         left: 0,
         right: 0,
-        top: y,
+        top: 0,
+        bottom: 0,
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
         opacity,
+        transform: `translateY(${translateY}px)`,
       }}
     >
       <h1
@@ -48,7 +50,7 @@ export const TitleText: React.FC = () => {
           letterSpacing: TYPOGRAPHY.title.letterSpacing,
           color: COLORS.titleText,
           margin: 0,
-          textShadow: `0 0 ${DIMENSIONS.glowBlurRadius}px rgba(59, 130, 246, 0.5)`,
+          textTransform: 'uppercase',
         }}
       >
         Animation Section

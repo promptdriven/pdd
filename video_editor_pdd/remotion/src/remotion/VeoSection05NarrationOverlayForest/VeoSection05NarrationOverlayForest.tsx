@@ -1,8 +1,8 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { FrostedPill } from './FrostedPill';
-import { AccentBar } from './AccentBar';
 import { NarrationText } from './NarrationText';
+import { ProgressBar } from './ProgressBar';
 
 export const defaultVeoSection05NarrationOverlayForestProps = {};
 
@@ -16,8 +16,8 @@ export const VeoSection05NarrationOverlayForest: React.FC = () => {
       }}
     >
       <FrostedPill>
-        <AccentBar />
         <NarrationText />
+        <ProgressBar />
       </FrostedPill>
     </AbsoluteFill>
   );

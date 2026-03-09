@@ -1,18 +1,18 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
-import { COLORS, ANIMATION_TIMING } from './constants';
+import { COLORS, CANVAS, ANIMATION } from './constants';
 import { FilmGrainOverlay } from './FilmGrainOverlay';
-import { BokehField } from './BokehField';
-import { TitleText } from './TitleText';
-import { GoldenRule } from './GoldenRule';
+import { LightStreak } from './LightStreak';
+import { LetterRevealTitle } from './LetterRevealTitle';
+import { RadialGlowPulse } from './RadialGlowPulse';
 
 export const VeoSection01TitleCard: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Background gradient fades from black over frames 0-12
+  // Background fades in from black over frames 0-10
   const backgroundOpacity = interpolate(
     frame,
-    [ANIMATION_TIMING.backgroundFadeStart, ANIMATION_TIMING.backgroundFadeEnd],
+    [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -23,21 +23,45 @@ export const VeoSection01TitleCard: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
-        opacity: backgroundOpacity,
+        backgroundColor: '#000000',
       }}
     >
-      {/* Film grain texture overlay */}
-      <FilmGrainOverlay />
+      <AbsoluteFill
+        style={{
+          opacity: backgroundOpacity,
+        }}
+      >
+        {/* Dark charcoal background with warm radial center highlight */}
+        <AbsoluteFill
+          style={{
+            backgroundColor: COLORS.background,
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            top: CANVAS.height / 2 - 400,
+            left: CANVAS.width / 2 - 400,
+            width: 800,
+            height: 800,
+            borderRadius: '50%',
+            background: `radial-gradient(circle, ${COLORS.gradientCenter}90 0%, transparent 65%)`,
+            pointerEvents: 'none',
+          }}
+        />
 
-      {/* Warm bokeh circles drifting diagonally */}
-      <BokehField />
+        {/* Film grain texture overlay at 3% opacity */}
+        <FilmGrainOverlay />
 
-      {/* Title text: "Veo Section" with upward fade-in */}
-      <TitleText />
+        {/* Radial glow pulse behind title */}
+        <RadialGlowPulse />
 
-      {/* Golden horizontal rule drawing outward from center */}
-      <GoldenRule />
+        {/* Amber light streak sweeping left-to-right */}
+        <LightStreak />
+
+        {/* Letter-by-letter title reveal */}
+        <LetterRevealTitle />
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };

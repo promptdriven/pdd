@@ -1,4 +1,0 @@
-## Verdict
-fail
-## Summary
-The frame does not match the spec at all. The spec calls for a section outro card with: (1) a deep teal-black gradient background (#0A1A1F → #0F2027), (2) an emerald checkmark icon (#34D399) in a 60px circular container centered at (960, 460), (3) 'Section Complete' text in slate (#94A3B8) uppercase Inter 24px centered at (960, 540), (4) warm bokeh circles drifting in the background, and (5) a film grain overlay at 3% opacity. Instead, the frame shows a dark navy/blue-black background with a small orange/amber horizontal line near the bottom center and white text reading 'This is the second section of the integration test video.' — which appears to be placeholder/fallback content rather than the specified outro card. No checkmark icon, no 'Section Complete' text, no bokeh circles, and no film grain are present. The background gradient color also appears too blue/navy rather than the specified teal-black tone.

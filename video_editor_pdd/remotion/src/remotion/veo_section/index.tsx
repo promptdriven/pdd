@@ -4,38 +4,34 @@ import { VISUAL_SEQUENCE } from "./constants";
 import { VeoSection01TitleCard } from "../VeoSection01TitleCard";
 import { VeoSection03NarrationOverlayIntro } from "../VeoSection03NarrationOverlayIntro";
 import { VeoSection05NarrationOverlayForest } from "../VeoSection05NarrationOverlayForest";
-import { VeoSection05VeoBadgeCallout } from "../VeoSection05VeoBadgeCallout";
-import { VeoSection06SplitOceanForest } from "../VeoSection06SplitOceanForest";
 import { VeoSection06VeoBadgeCallout } from "../VeoSection06VeoBadgeCallout";
-import { VeoSection06VeoTechnologyCallout } from "../VeoSection06VeoTechnologyCallout";
-import { VeoSection07SplitComparison } from "../VeoSection07SplitComparison";
-import { VeoSection07VeoBadgeCallout } from "../VeoSection07VeoBadgeCallout";
-import { VeoSection07WaveformVisualizer } from "../VeoSection07WaveformVisualizer";
-import { VeoSection08SectionEndCard } from "../VeoSection08SectionEndCard";
-import { VeoSection08SplitOceanForest } from "../VeoSection08SplitOceanForest";
+import { VeoSection07SplitOceanForest } from "../VeoSection07SplitOceanForest";
 import { VeoSection08VeoTechnologyCallout } from "../VeoSection08VeoTechnologyCallout";
-import { VeoSection09SectionOutro } from "../VeoSection09SectionOutro";
+import { VeoSection09WaveformVisualizer } from "../VeoSection09WaveformVisualizer";
+import { VeoSection10SplitComparison } from "../VeoSection10SplitComparison";
+import { VeoSection11VeoBadgeReprise } from "../VeoSection11VeoBadgeReprise";
+import { VeoSection12SplitOceanForestReprise } from "../VeoSection12SplitOceanForestReprise";
+import { VeoSection13VeoTechnologyReprise } from "../VeoSection13VeoTechnologyReprise";
+import { VeoSection14SectionOutro } from "../VeoSection14SectionOutro";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "veo_section_01_title_card": VeoSection01TitleCard,
   "03_narration_overlay_intro": VeoSection03NarrationOverlayIntro,
   "05_narration_overlay_forest": VeoSection05NarrationOverlayForest,
-  "05_veo_badge_callout": VeoSection05VeoBadgeCallout,
-  "06_split_ocean_forest": VeoSection06SplitOceanForest,
   "06_veo_badge_callout": VeoSection06VeoBadgeCallout,
-  "06_veo_technology_callout": VeoSection06VeoTechnologyCallout,
-  "07_split_comparison": VeoSection07SplitComparison,
-  "07_veo_badge_callout": VeoSection07VeoBadgeCallout,
-  "07_waveform_visualizer": VeoSection07WaveformVisualizer,
-  "08_section_end_card": VeoSection08SectionEndCard,
-  "08_split_ocean_forest": VeoSection08SplitOceanForest,
+  "07_split_ocean_forest": VeoSection07SplitOceanForest,
   "08_veo_technology_callout": VeoSection08VeoTechnologyCallout,
-  "09_section_outro": VeoSection09SectionOutro,
+  "09_waveform_visualizer": VeoSection09WaveformVisualizer,
+  "10_split_comparison": VeoSection10SplitComparison,
+  "11_veo_badge_reprise": VeoSection11VeoBadgeReprise,
+  "12_split_ocean_forest_reprise": VeoSection12SplitOceanForestReprise,
+  "13_veo_technology_reprise": VeoSection13VeoTechnologyReprise,
+  "14_section_outro": VeoSection14SectionOutro,
 };
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 11.392;
+  const durationSeconds = 11.456;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
