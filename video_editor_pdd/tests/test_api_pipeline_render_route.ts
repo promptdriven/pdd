@@ -58,12 +58,14 @@ const mockMkdir = jest.fn();
 const mockAccess = jest.fn();
 const mockStat = jest.fn();
 const mockRm = jest.fn();
+const mockWriteFile = jest.fn();
 
 jest.mock("fs/promises", () => ({
   mkdir: (...args: unknown[]) => mockMkdir(...args),
   access: (...args: unknown[]) => mockAccess(...args),
   stat: (...args: unknown[]) => mockStat(...args),
   rm: (...args: unknown[]) => mockRm(...args),
+  writeFile: (...args: unknown[]) => mockWriteFile(...args),
 }));
 
 const mockSpawn = jest.fn();
@@ -217,10 +219,12 @@ beforeEach(() => {
   mockAccess.mockReset();
   mockStat.mockReset();
   mockRm.mockReset();
+  mockWriteFile.mockReset();
   mockSpawn.mockReset();
   mockExecSync.mockReset();
 
   mockRm.mockResolvedValue(undefined);
+  mockWriteFile.mockResolvedValue(undefined);
   mockSpawn.mockReturnValue({
     stdout: { on: jest.fn((event: string, cb: Function) => { if (event === 'data') cb(Buffer.from('ok')); }) },
     stderr: { on: jest.fn() },
@@ -882,5 +886,39 @@ describe("rebuildBundle — cache clearing", () => {
 
     expect(callOrder.indexOf("rm-build")).toBeLessThan(callOrder.indexOf("bundle"));
     expect(callOrder.indexOf("rm-cache")).toBeLessThan(callOrder.indexOf("bundle"));
+  });
+
+  it("rewrites section constants from the resolved spec timeline before bundling", async () => {
+    mockLoadProject.mockReturnValue({
+      ...mockProjectConfig(),
+      sections: [
+        {
+          id: "veo_section",
+          label: "Veo Section",
+          videoFile: "outputs/sections/veo_section.mp4",
+          specDir: "veo_section",
+          remotionDir: "remotion/veo_section",
+          compositionId: "VeoSection",
+          durationSeconds: 11.584,
+          offsetSeconds: 0,
+          compositions: [
+            "veo_section_01_title_card",
+            "03_narration_overlay_intro",
+            "05_narration_overlay_forest",
+          ],
+        },
+      ],
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const constantsCall = mockWriteFile.mock.calls.find((call: unknown[]) =>
+      String(call[0]).includes("remotion/src/remotion/veo_section/constants.ts")
+    );
+
+    expect(constantsCall).toBeDefined();
+    expect(String(constantsCall?.[1])).toContain('id: "02_ocean_wave_sunset"');
+    expect(String(constantsCall?.[1])).toContain('id: "04_forest_canopy_aerial"');
   });
 });

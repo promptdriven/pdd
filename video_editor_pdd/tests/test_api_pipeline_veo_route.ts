@@ -54,12 +54,22 @@ jest.mock("@/lib/project", () => ({
 const mockGenerateVeoClip = jest.fn();
 const mockExtractLastFrame = jest.fn();
 const mockGenerateReferenceImage = jest.fn();
+const mockExtractFrameAtTime = jest.fn();
+const mockRunClaudeAnalysis = jest.fn();
 
 jest.mock("@/lib/veo", () => ({
   generateVeoClip: (...args: unknown[]) => mockGenerateVeoClip(...args),
   extractLastFrame: (...args: unknown[]) => mockExtractLastFrame(...args),
   generateReferenceImage: (...args: unknown[]) =>
     mockGenerateReferenceImage(...args),
+}));
+
+jest.mock("@/lib/render", () => ({
+  extractFrameAtTime: (...args: unknown[]) => mockExtractFrameAtTime(...args),
+}));
+
+jest.mock("@/lib/claude", () => ({
+  runClaudeAnalysis: (...args: unknown[]) => mockRunClaudeAnalysis(...args),
 }));
 
 // Mock clip-events
@@ -228,6 +238,8 @@ beforeEach(() => {
   mockGenerateVeoClip.mockReset();
   mockExtractLastFrame.mockReset();
   mockGenerateReferenceImage.mockReset();
+  mockExtractFrameAtTime.mockReset();
+  mockRunClaudeAnalysis.mockReset();
   mockExistsSync.mockReset();
   mockReadFileSync.mockReset();
   mockMkdirSync.mockReset();
@@ -241,6 +253,14 @@ beforeEach(() => {
   mockGenerateVeoClip.mockResolvedValue(undefined);
   mockExtractLastFrame.mockResolvedValue(undefined);
   mockGenerateReferenceImage.mockResolvedValue(undefined);
+  mockExtractFrameAtTime.mockResolvedValue(undefined);
+  mockRunClaudeAnalysis.mockResolvedValue({
+    severity: "pass",
+    fixType: "none",
+    technicalAssessment: "Representative frame matches prompt",
+    suggestedFixes: [],
+    confidence: 0.95,
+  });
   mockCreateJob.mockReturnValue("test-job-ref-001");
   mockRunJob.mockResolvedValue(undefined);
 });
@@ -922,6 +942,80 @@ describe("veo executor factory — frame chaining", () => {
     expect(mockGenerateVeoClip.mock.calls[1][1]).toMatch(/veo_section_last_frame\.png$/);
     expect(mockExtractLastFrame).toHaveBeenCalledTimes(1);
     expect(mockExtractLastFrame.mock.calls[0][0]).toMatch(/outputs[/\\]veo[/\\]veo_section\.mp4$/);
+  });
+});
+
+describe("veo executor factory — clip validation", () => {
+  beforeEach(() => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("veo.json")) return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("veo.json")) {
+        return JSON.stringify({ prompt: "Forest canopy aerial shot" });
+      }
+      return "";
+    });
+  });
+
+  it("retries a clip once when representative-frame validation fails the first attempt", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockRunClaudeAnalysis
+      .mockResolvedValueOnce({
+        severity: "major",
+        fixType: "veo",
+        technicalAssessment: "Frame shows the wrong subject.",
+        suggestedFixes: ["Retry with the same prompt."],
+        confidence: 0.91,
+      })
+      .mockResolvedValueOnce({
+        severity: "pass",
+        fixType: "none",
+        technicalAssessment: "Frame matches prompt.",
+        suggestedFixes: [],
+        confidence: 0.96,
+      });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(2);
+    expect(mockSend).toHaveBeenCalledWith({
+      type: "clip",
+      clipId: "intro",
+      status: "done",
+    });
+  });
+
+  it("fails the clip after the final validation attempt still mismatches the prompt", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockRunClaudeAnalysis.mockResolvedValue({
+      severity: "major",
+      fixType: "veo",
+      technicalAssessment: "Frame still shows ocean footage instead of forest canopy.",
+      suggestedFixes: ["Retry with a more specific prompt."],
+      confidence: 0.93,
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+
+    await expect(executor(jest.fn())).rejects.toThrow(
+      /failed validation/i
+    );
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(mockSend).toHaveBeenCalledWith({
+      type: "clip",
+      clipId: "intro",
+      status: "error",
+    });
   });
 });
 
@@ -1753,6 +1847,13 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/@\/lib\/veo/);
     expect(sourceCode).toMatch(/generateVeoClip/);
     expect(sourceCode).toMatch(/extractLastFrame/);
+  });
+
+  it("imports extractFrameAtTime and runClaudeAnalysis for prompt validation", () => {
+    expect(sourceCode).toMatch(/@\/lib\/render/);
+    expect(sourceCode).toMatch(/extractFrameAtTime/);
+    expect(sourceCode).toMatch(/@\/lib\/claude/);
+    expect(sourceCode).toMatch(/runClaudeAnalysis/);
   });
 
   it("imports SseSend from @/lib/types", () => {

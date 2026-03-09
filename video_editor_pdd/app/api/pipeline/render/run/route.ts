@@ -6,6 +6,7 @@ import { spawn, execSync } from "child_process";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { renderSection, getSectionDuration } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
+import { buildSectionConstantsSource } from "@/lib/composition-timing";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
 const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
@@ -126,13 +127,49 @@ async function syncVeoOutputsToRemotionPublic(onLog: (msg: string) => void): Pro
   }
 }
 
+async function refreshSectionTimelineArtifacts(
+  sectionIds: string[] | undefined,
+  onLog: (msg: string) => void
+): Promise<void> {
+  const config = loadProject();
+  const sectionsToRefresh = sectionIds?.length
+    ? config.sections.filter((section) => sectionIds.includes(section.id))
+    : config.sections;
+
+  for (const section of sectionsToRefresh) {
+    const constantsDir = path.join(
+      process.cwd(),
+      "remotion",
+      "src",
+      "remotion",
+      section.id
+    );
+    const constantsPath = path.join(constantsDir, "constants.ts");
+    const constantsSource = buildSectionConstantsSource(
+      process.cwd(),
+      section,
+      []
+    );
+
+    await fs.mkdir(constantsDir, { recursive: true });
+    await fs.writeFile(constantsPath, constantsSource, "utf-8");
+    onLog(`Regenerated section constants for "${section.id}".`);
+  }
+}
+
 /**
  * Regenerate Root.tsx (to pick up Claude-generated flat section files)
  * and rebuild the Remotion bundle before rendering.
  */
-async function rebuildBundle(onLog: (msg: string) => void): Promise<void> {
+async function rebuildBundle(
+  sectionIds: string[] | undefined,
+  onLog: (msg: string) => void
+): Promise<void> {
   onLog("Syncing staged Veo assets...");
   await syncVeoOutputsToRemotionPublic(onLog);
+
+  onLog("Refreshing section timing artifacts...");
+  await refreshSectionTimelineArtifacts(sectionIds, onLog);
 
   // Regenerate section wrappers and Root.tsx from project.json
   onLog("Regenerating Root.tsx...");
@@ -180,7 +217,7 @@ registerExecutor("render", (params, send) => {
       ? (params.sections as string[])
       : undefined;
 
-    await rebuildBundle(onLog);
+    await rebuildBundle(sectionsParam, onLog);
     await renderSections(sectionsParam, send, onLog);
   };
 });

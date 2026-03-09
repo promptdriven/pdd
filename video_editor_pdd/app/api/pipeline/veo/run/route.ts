@@ -4,6 +4,8 @@ import path from 'path';
 import { createSseStream } from '@/lib/sse';
 import { loadProject } from '@/lib/project';
 import { generateVeoClip, extractLastFrame } from '@/lib/veo';
+import { extractFrameAtTime } from '@/lib/render';
+import { runClaudeAnalysis } from '@/lib/claude';
 import { registerExecutor, runPipelineStage } from '@/lib/jobs';
 import { emitClipEvent } from '@/lib/clip-events';
 import type { SseSend } from '@/lib/types';
@@ -26,6 +28,8 @@ import {
  */
 
 export const runtime = 'nodejs';
+const CLIP_VALIDATION_SAMPLE_SECONDS = 4;
+const MAX_CLIP_GENERATION_ATTEMPTS = 2;
 
 /** Resolve a Veo prompt from specs on disk */
 function resolveVeoPrompt(
@@ -92,6 +96,50 @@ function resolveVeoPrompt(
 /** Ensure output directory exists */
 function ensureDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+async function validateGeneratedClip(
+  clipId: string,
+  prompt: string,
+  outputPath: string,
+  onLog: (message: string) => void
+): Promise<void> {
+  const validationFramePath = path.join(
+    process.cwd(),
+    'outputs',
+    'veo',
+    `${clipId}_validation_frame.png`
+  );
+
+  await extractFrameAtTime(
+    outputPath,
+    CLIP_VALIDATION_SAMPLE_SECONDS,
+    validationFramePath
+  );
+
+  const analysis = await runClaudeAnalysis(
+    `
+You are validating whether a generated Veo clip matches the requested prompt.
+
+- Prompt: ${prompt}
+- Representative frame PNG: ${validationFramePath}
+
+Return JSON matching AnnotationAnalysis:
+{ severity, fixType, technicalAssessment, suggestedFixes, confidence }
+
+Use severity="pass" only if the frame clearly matches the intended prompt.
+Use a non-pass severity when the subject, setting, or visual concept is wrong.
+`.trim(),
+    onLog
+  );
+
+  if (analysis.severity === 'pass') {
+    return;
+  }
+
+  throw new Error(
+    `Generated Veo clip "${clipId}" failed validation: ${analysis.technicalAssessment}`
+  );
 }
 
 type ResolvedClipJob = {
@@ -215,15 +263,32 @@ registerExecutor('veo', (params, send: SseSend) => {
         onLog(`Generating Veo clip "${clipId}" for section "${clip.sectionId}"`);
         onLog(`Prompt: ${prompt.substring(0, 120)}...`);
 
-        if (isDeterministicPipelineMode()) {
-          generateDeterministicVeoClip(outputPath, onLog);
-        } else {
+        for (let attempt = 1; attempt <= MAX_CLIP_GENERATION_ATTEMPTS; attempt += 1) {
+          if (isDeterministicPipelineMode()) {
+            generateDeterministicVeoClip(outputPath, onLog);
+            break;
+          }
+
           await generateVeoClip(
             prompt,
             referenceImagePath,
             aspectRatio,
             outputPath
           );
+
+          try {
+            await validateGeneratedClip(clipId, prompt, outputPath, onLog);
+            break;
+          } catch (err) {
+            if (attempt >= MAX_CLIP_GENERATION_ATTEMPTS) {
+              throw err;
+            }
+
+            const msg = err instanceof Error ? err.message : String(err);
+            onLog(
+              `Validation mismatch for "${clipId}" on attempt ${attempt}; retrying once. ${msg}`
+            );
+          }
         }
 
         // Frame chaining for next clip

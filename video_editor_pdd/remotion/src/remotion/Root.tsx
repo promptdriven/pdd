@@ -1,5 +1,6 @@
 import React from "react";
 import { Composition } from "remotion";
+import "./_shared/load-inter-font";
 
 import { AnimationSectionSection } from "./animation_section";
 import { VeoSectionSection } from "./veo_section";
@@ -31,7 +32,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={323}
+        durationInFrames={327}
         fps={30}
         width={1920}
         height={1080}
@@ -39,7 +40,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={348}
+        durationInFrames={352}
         fps={30}
         width={1920}
         height={1080}

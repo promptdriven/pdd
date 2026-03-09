@@ -925,6 +925,7 @@ def generate_root_tsx(
 
     lines.append('import React from "react";')
     lines.append('import { Composition } from "remotion";')
+    lines.append('import "./_shared/load-inter-font";')
     lines.append('')
 
     # Import all section components (always from wrapper directory)
