@@ -1,4 +1,11 @@
-import { resolveAuditSampleWindow } from "../lib/audit-timing";
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+import {
+  resolveAuditSampleWindow,
+  resolveRenderedAuditSampleWindow,
+} from "../lib/audit-timing";
 
 describe("resolveAuditSampleWindow", () => {
   it("biases timestamp-only specs toward the later part of the window", () => {
@@ -140,5 +147,113 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.startSeconds).toBeCloseTo(8);
     expect(result.endSeconds).toBeCloseTo(9.999);
     expect(result.sampleSeconds).toBeCloseTo(9.49925);
+  });
+});
+
+describe("resolveRenderedAuditSampleWindow", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "audit-timing-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("uses the resolved rendered visual window for specs that map directly to a section composition", () => {
+    const specDir = path.join(tmpDir, "specs", "animation_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    const titleCardPath = path.join(specDir, "01_title_card.md");
+    fs.writeFileSync(
+      titleCardPath,
+      [
+        "**Timestamp:** 0:00 - 0:03",
+        "",
+        "## Animation Sequence",
+        "1. Frame 0-15: Fade in.",
+        "2. Frame 15-45: Title reveal.",
+        "3. Frame 45-65: Rule expansion.",
+        "4. Frame 65-90: Hold — all elements static at full opacity.",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_blue_circle_pulse.md"),
+      "**Timestamp:** 0:03 - 0:08\n"
+    );
+
+    const result = resolveRenderedAuditSampleWindow(
+      fs.readFileSync(titleCardPath, "utf-8"),
+      {
+        projectDir: tmpDir,
+        specPath: titleCardPath,
+        section: {
+          id: "animation_section",
+          specDir: "animation_section",
+          compositionId: "AnimationSection",
+          durationSeconds: 6,
+          offsetSeconds: 0,
+          videoFile: "animation_section.mp4",
+          remotionDir: "S00-AnimationSection",
+          compositions: [
+            "animation_section_01_title_card",
+            "02_blue_circle_pulse",
+          ],
+          label: "Animation Section",
+        },
+        fps: 30,
+      }
+    );
+
+    expect(result.source).toBe("frame-range");
+    expect(result.startSeconds).toBeCloseTo(1.625);
+    expect(result.endSeconds).toBeCloseTo(2.25);
+    expect(result.sampleSeconds).toBeCloseTo(1.9375);
+  });
+
+  it("falls back to a normalized spec timeline for specs not present in section.compositions", () => {
+    const specDir = path.join(tmpDir, "specs", "veo_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:03\n"
+    );
+    const oceanPath = path.join(specDir, "02_ocean_wave_sunset.md");
+    fs.writeFileSync(
+      oceanPath,
+      "**Timestamp:** 0:03 - 0:06\n"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "03_narration_overlay_intro.md"),
+      "**Timestamp:** 0:06 - 0:09\n"
+    );
+
+    const result = resolveRenderedAuditSampleWindow(
+      fs.readFileSync(oceanPath, "utf-8"),
+      {
+        projectDir: tmpDir,
+        specPath: oceanPath,
+        section: {
+          id: "veo_section",
+          specDir: "veo_section",
+          compositionId: "VeoSection",
+          durationSeconds: 6,
+          offsetSeconds: 0,
+          videoFile: "veo_section.mp4",
+          remotionDir: "S01-VeoSection",
+          compositions: [
+            "veo_section_01_title_card",
+            "03_narration_overlay_intro",
+          ],
+          label: "Veo Section",
+        },
+        fps: 30,
+      }
+    );
+
+    expect(result.source).toBe("timestamp");
+    expect(result.startSeconds).toBeCloseTo(2);
+    expect(result.endSeconds).toBeCloseTo(4);
+    expect(result.sampleSeconds).toBeCloseTo(3.5);
   });
 });

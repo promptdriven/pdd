@@ -985,6 +985,67 @@ describe("audit executor factory", () => {
 
     expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(4.5);
   });
+
+  it("uses the resolved section timeline when the rendered composition compresses a spec window", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        durationSeconds: 6,
+        videoFile: "output/sections/animation_section.mp4",
+        compositions: [
+          "animation_section_01_title_card",
+          "02_blue_circle_pulse",
+        ],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue([
+      "01_title_card.md",
+      "02_blue_circle_pulse.md",
+    ]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join(process.cwd(), "specs", "animation_section");
+    const titleCardPath = pathMod.join(specDir, "01_title_card.md");
+    const pulsePath = pathMod.join(specDir, "02_blue_circle_pulse.md");
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (filePath === titleCardPath) {
+        return [
+          "**Timestamp:** 0:00 - 0:03",
+          "",
+          "## Animation Sequence",
+          "1. Frame 0-15: Fade in.",
+          "2. Frame 15-45: Title reveal.",
+          "3. Frame 45-65: Rule expansion.",
+          "4. Frame 65-90: Hold — all elements static at full opacity.",
+        ].join("\n");
+      }
+      if (filePath === pulsePath) {
+        return "**Timestamp:** 0:03 - 0:08\n";
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === titleCardPath ||
+        candidate === pulsePath ||
+        candidate === pathMod.join(process.cwd(), "output", "sections", "animation_section.mp4")
+      );
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.9375);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1411,9 +1472,9 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).not.toMatch(/function\s+createSseStream\s*\(/);
   });
 
-  it("imports resolveAuditSampleWindow from @/lib/audit-timing", () => {
+  it("imports resolved audit timing helpers from @/lib/audit-timing", () => {
     expect(sourceCode).toMatch(/@\/lib\/audit-timing/);
-    expect(sourceCode).toMatch(/resolveAuditSampleWindow/);
+    expect(sourceCode).toMatch(/resolveRenderedAuditSampleWindow/);
   });
 
   it("imports runClaudeAnalysis from @/lib/claude", () => {
