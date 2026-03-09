@@ -2815,3 +2815,73 @@ def test_step3_needs_more_info_hard_stop_with_stop_condition_tag(mock_dependenci
     assert success is False
     assert "Stopped at Step 3" in msg
     assert mock_run.call_count == 3
+
+
+# -----------------------------------------------------------------------------
+# Tests for Issue #769 — STOP_CONDITION universal parsing
+# -----------------------------------------------------------------------------
+
+def test_hard_stop_step3_requires_stop_condition_tag(mock_dependencies, default_args):
+    """Step 3 requires STOP_CONDITION tag — casual 'needs more info' should not stop."""
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect_loose(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, "needs more info mentioned casually", 0.1, "model")
+        if label == "step9":
+            return (True, "Generated test.\nFILES_CREATED: test_app.py", 0.1, "model")
+        if label == "step10":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_loose
+
+    with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=["test_app.py"]):
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, "Casual 'needs more info' without STOP_CONDITION should not stop"
+
+
+def test_hard_stop_universal_stop_condition_any_step(mock_dependencies, default_args):
+    """Universal STOP_CONDITION check should work before step-specific checks."""
+    mock_run, _, _ = mock_dependencies
+
+    mock_run.side_effect = [
+        (True, "Step 1 ok", 0.1, "model"),
+        (True, "STOP_CONDITION: Custom stop reason", 0.1, "model"),
+    ]
+
+    success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at Step 2" in msg
+    assert "Custom stop reason" in msg
+    assert mock_run.call_count == 2
+
+
+def test_step3_clarification_saves_step_minus_one(mock_dependencies, default_args):
+    """When step 3 stops for clarification, last_completed_step should be 2 (step-1) for resume."""
+    mock_run, _, _ = mock_dependencies
+
+    mock_run.side_effect = [
+        (True, "Step 1 ok", 0.1, "model"),
+        (True, "Step 2 ok", 0.1, "model"),
+        (True, "STOP_CONDITION: Needs More Info", 0.1, "model"),
+    ]
+
+    saved_states = []
+    def capture_state(**kwargs):
+        saved_states.append(kwargs["state"].copy())
+        return None
+
+    with patch("pdd.agentic_bug_orchestrator.save_workflow_state", side_effect=capture_state):
+        success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at Step 3" in msg
+    # The clarification save should record step-1 so re-run re-evaluates step 3
+    clarification_save = saved_states[-1]
+    assert clarification_save["last_completed_step"] == 2, (
+        "Clarification stop at step 3 should save last_completed_step=2 for resume"
+    )

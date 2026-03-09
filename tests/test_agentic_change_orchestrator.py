@@ -467,7 +467,7 @@ def test_step7_stop_with_stop_condition_marker(mock_dependencies, temp_cwd):
 
     assert success is False, "Workflow should have stopped at step 7"
     assert "Stopped at step 7" in msg
-    assert "Architectural decision needed" in msg
+    assert "architectural decision needed" in msg.lower()
 
 
 def test_step7_prompt_has_stop_condition_marker():
@@ -2803,8 +2803,8 @@ def test_step4_clarification_hard_stop_with_stop_condition_tag(mock_dependencies
     assert "Stopped at step 4" in msg
     assert mock_run.call_count == 4
     mocks["save_state"].assert_called()
-    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 4
-    mocks["console"].print.assert_any_call("[yellow]Investigation stopped at Step 4: Clarification needed[/yellow]")
+    # Clarification steps save step_num - 1 for resume (Issue #769)
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 3
 
 
 def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
@@ -2857,7 +2857,8 @@ def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dep
     assert "Stopped at step 7" in msg
     assert mock_run.call_count == 7
     mocks["save_state"].assert_called()
-    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 7
+    # Clarification steps save step_num - 1 for resume (Issue #769)
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 6
 
 
 def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):
@@ -2883,7 +2884,8 @@ def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):
     assert "Stopped at step 4" in msg
     assert mock_run.call_count == 4
     mocks["save_state"].assert_called()
-    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 4
+    # Clarification steps save step_num - 1 for resume (Issue #769)
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 3
 
     for call in mocks["console"].print.mock_calls:
         assert "[yellow]Investigation stopped at step 4" not in str(call.args)
@@ -2932,4 +2934,130 @@ def test_check_hard_stop_step7_requires_stop_condition_tag():
     result = _check_hard_stop(7, "STOP_CONDITION: Architectural Decision Needed")
     assert result is not None, (
         "_check_hard_stop should trigger when STOP_CONDITION: Architectural Decision Needed is present"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Tests for Issue #769 — STOP_CONDITION universal parsing & resume
+# -----------------------------------------------------------------------------
+
+def test_check_hard_stop_stop_condition_universal():
+    """STOP_CONDITION: tag should trigger hard stop on any step."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(4, "STOP_CONDITION: Clarification needed") is not None
+    assert _check_hard_stop(7, "STOP_CONDITION: Architectural decision needed") is not None
+    # Works on steps that also have substring fallbacks
+    assert _check_hard_stop(1, "STOP_CONDITION: Duplicate found") is not None
+    assert _check_hard_stop(9, "STOP_CONDITION: Build failure") is not None
+
+
+def test_check_hard_stop_stop_condition_multiline():
+    """STOP_CONDITION: detected when preceded by other output lines."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    output = "I posted a comment to the issue.\nSTOP_CONDITION: Clarification needed"
+    result = _check_hard_stop(4, output)
+    assert result is not None
+    assert "Clarification needed" in result
+
+
+def test_check_hard_stop_stop_condition_embedded_in_line():
+    """STOP_CONDITION: works as substring match even mid-line (robust against LLM formatting)."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(4, "I posted the comment. STOP_CONDITION: Clarification needed")
+    assert result is not None
+    assert "Clarification needed" in result
+
+
+def test_check_hard_stop_empty_output():
+    """_check_hard_stop returns None for empty/None output."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(4, "") is None
+    assert _check_hard_stop(4, None) is None
+
+
+def test_check_hard_stop_case_insensitive_fallbacks():
+    """Substring fallbacks for steps 1, 2, 6, 8, 9 are case-insensitive."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(1, "DUPLICATE OF #42") is not None
+    assert _check_hard_stop(1, "duplicate of #42") is not None
+    assert _check_hard_stop(2, "ALREADY IMPLEMENTED") is not None
+    assert _check_hard_stop(6, "NO DEV UNITS FOUND") is not None
+    assert _check_hard_stop(8, "NO CHANGES REQUIRED") is not None
+    assert _check_hard_stop(9, "FAIL: build error") is not None
+
+
+def test_step4_prompt_has_stop_condition_instruction():
+    """Step 4 prompt must instruct LLM to output STOP_CONDITION line prefix."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_change_step4_clarify_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+    assert "STOP_CONDITION: Clarification needed" in prompt_content
+    assert "CRITICAL" in prompt_content
+
+
+def test_step4_stop_with_stop_condition_prefix(mock_dependencies, temp_cwd):
+    """Orchestrator should stop at step 4 when STOP_CONDITION line is in output."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step4":
+            return (True, "I posted clarification questions.\nSTOP_CONDITION: Clarification needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="https://github.com/o/r/issues/900",
+        issue_content="Vague feature request",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=900,
+        issue_author="user",
+        issue_title="Feature",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert mocks["run"].call_count == 4
+
+
+def test_step4_clarification_saves_step_minus_one(mock_dependencies, temp_cwd):
+    """When step 4 stops for clarification, last_completed_step should be 3 (step-1)."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    with patch("pdd.agentic_change_orchestrator._fetch_issue_updated_at", return_value="2025-01-01T00:00:00Z"):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="https://github.com/o/r/issues/900",
+            issue_content="Feature",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=900,
+            issue_author="user",
+            issue_title="Feature",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is False
+    # save_workflow_state(cwd, issue_number, workflow_type, state, ...)
+    final_state = mocks["save_state"].call_args[0][3]
+    assert final_state["last_completed_step"] == 3, (
+        "Clarification stop at step 4 should save last_completed_step=3 for resume"
     )

@@ -159,14 +159,14 @@ def test_hard_stop_duplicate(mock_deps, default_args):
 
 
 def test_hard_stop_needs_info(mock_deps, default_args):
-    """Step 3 'Needs More Info' stops the workflow."""
+    """Step 3 stops the workflow when STOP_CONDITION tag is present."""
     mocks = mock_deps
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
                     use_playwright=False):
         if label == "step3":
-            return (True, "Needs More Info from author", 0.1, "anthropic")
+            return (True, "Posted clarification.\nSTOP_CONDITION: Needs more info", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
 
     mocks["run"].side_effect = side_effect
@@ -666,3 +666,64 @@ def test_z3_step_execution_order():
     s.add(hard_stop[5])
 
     assert s.check() == z3.unsat, f"Counter-example: {s.model()}"
+
+
+# -----------------------------------------------------------------------------
+# Tests for Issue #769 — STOP_CONDITION universal parsing
+# -----------------------------------------------------------------------------
+
+def test_hard_stop_step3_stop_condition_prefix(mock_deps, default_args):
+    """Step 3 should detect STOP_CONDITION: Needs more info line prefix."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step3":
+            return (True, "Analysis complete.\nSTOP_CONDITION: Needs more info", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 3" in msg
+    assert mocks["run"].call_count == 3
+
+
+def test_check_hard_stop_stop_condition_universal_test_orch():
+    """STOP_CONDITION: tag should work on any step in test orchestrator."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(1, "STOP_CONDITION: Duplicate found") is not None
+    assert _check_hard_stop(3, "STOP_CONDITION: Needs more info") is not None
+    assert _check_hard_stop(5, "STOP_CONDITION: Blocked") is not None
+
+
+def test_check_hard_stop_empty_output_test_orch():
+    """_check_hard_stop returns None for empty/None output."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(3, "") is None
+    assert _check_hard_stop(3, None) is None
+
+
+def test_check_hard_stop_step3_no_substring_fallback():
+    """Step 3 clarification should NOT stop on casual 'needs more info' — requires STOP_CONDITION tag."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Casual mentions should NOT trigger stop (Issue #769)
+    assert _check_hard_stop(3, "needs more info") is None
+    assert _check_hard_stop(3, "NEEDS MORE INFO") is None
+    assert _check_hard_stop(3, "Needs More Info") is None
+    # STOP_CONDITION tag SHOULD trigger stop
+    assert _check_hard_stop(3, "STOP_CONDITION: Needs more info") is not None
+
+
+def test_step3_prompt_has_stop_condition_instruction():
+    """Step 3 prompt must instruct LLM to output STOP_CONDITION line prefix."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_test_step3_clarify_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+    assert "STOP_CONDITION: Needs more info" in prompt_content
+    assert "CRITICAL" in prompt_content

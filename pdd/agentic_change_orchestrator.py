@@ -312,20 +312,28 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
 
 def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     """Check output for hard stop conditions."""
-    if step_num == 1 and "Duplicate of #" in output:
+    if not output:
+        return None
+
+    # Primary: Check for explicit STOP_CONDITION tag anywhere in output (universal — any step)
+    match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: implicit substring matches (step-specific, case-insensitive)
+    # Note: Steps 4 and 7 intentionally have NO substring fallback (Issue #773) —
+    # they require explicit STOP_CONDITION tag to avoid false positives.
+    output_lower = output.lower()
+    if step_num == 1 and "duplicate of #" in output_lower:
         return "Issue is a duplicate"
-    if step_num == 2 and "Already Implemented" in output:
+    if step_num == 2 and "already implemented" in output_lower:
         return "Already implemented"
-    if step_num == 4 and "STOP_CONDITION: Clarification Needed" in output:
-        return "Clarification needed"
-    if step_num == 6 and "No Dev Units Found" in output:
+    if step_num == 6 and "no dev units found" in output_lower:
         return "No dev units found"
-    if step_num == 7 and "STOP_CONDITION: Architectural Decision Needed" in output:
-        return "Architectural decision needed"
-    if step_num == 8 and "No Changes Required" in output:
+    if step_num == 8 and "no changes required" in output_lower:
         return "No changes needed"
     if step_num == 9:
-        if "FAIL:" in output:
+        if "fail:" in output_lower:
             return "Implementation failed"
     return None
 
@@ -453,6 +461,35 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
         if not quiet:
             console.print(f"[yellow]Warning: Could not build dependency context: {e}[/yellow]")
         return ""
+
+
+def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
+    """Re-fetch issue updated_at from GitHub API.
+
+    Used after a clarification stop to capture the timestamp AFTER
+    the bot's own comment, so stale detection doesn't false-trigger.
+    """
+    console = Console(stderr=True)
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+             "--jq", ".updated_at"],
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        console.print(
+            f"[yellow]Warning: Failed to re-fetch issue updated_at "
+            f"(rc={result.returncode}): {result.stderr.strip()}[/yellow]"
+        )
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: Timed out re-fetching issue updated_at[/yellow]")
+    except OSError as e:
+        console.print(f"[yellow]Warning: OSError re-fetching issue updated_at: {e}[/yellow]")
+    return ""
+
+
+_CLARIFICATION_STEPS = {4, 7}
 
 
 def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
@@ -733,7 +770,15 @@ def run_agentic_change_orchestrator(
                 )
                 if not quiet:
                     console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-                state["last_completed_step"] = step_num
+                # Clarification steps: save as not-completed so re-run re-evaluates,
+                # and re-fetch updated_at so the bot's own comment doesn't trigger stale detection.
+                if step_num in _CLARIFICATION_STEPS:
+                    state["last_completed_step"] = step_num - 1
+                    fresh_ts = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                    if fresh_ts:
+                        state["issue_updated_at"] = fresh_ts
+                else:
+                    state["last_completed_step"] = step_num
                 state["step_outputs"][str(step_num)] = step_output
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
@@ -743,7 +788,15 @@ def run_agentic_change_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            state["last_completed_step"] = step_num
+            # Clarification steps: save as not-completed so re-run re-evaluates,
+            # and re-fetch updated_at so the bot's own comment doesn't trigger stale detection.
+            if step_num in _CLARIFICATION_STEPS:
+                state["last_completed_step"] = step_num - 1
+                fresh_ts = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                if fresh_ts:
+                    state["issue_updated_at"] = fresh_ts
+            else:
+                state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []

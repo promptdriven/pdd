@@ -236,11 +236,21 @@ def _format_prompt(template: str, context: Dict[str, Any]) -> str:
 
 
 def _check_hard_stop(step_num: Union[int, float], output: str) -> Optional[str]:
-    if step_num == 1 and "Duplicate of #" in output:
+    if not output:
+        return None
+
+    # Primary: Check for explicit STOP_CONDITION tag anywhere in output (universal — any step)
+    match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: implicit substring matches (case-insensitive)
+    # Note: Step 3 (clarification) has NO substring fallback — uses STOP_CONDITION only
+    # to avoid false positives from casual LLM mentions (Issue #769)
+    output_lower = output.lower()
+    if step_num == 1 and "duplicate of #" in output_lower:
         return "Issue is a duplicate"
-    if step_num == 3 and "Needs More Info" in output:
-        return "Needs more info from author"
-    if step_num == 5 and "PLAN_BLOCKED" in output:
+    if step_num == 5 and "plan_blocked" in output_lower:
         return "Test plan not achievable"
     if step_num == 12:
         files = _parse_changed_files(output)

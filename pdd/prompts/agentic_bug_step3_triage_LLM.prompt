@@ -86,6 +86,12 @@ To investigate this issue further, we need clarification on:
 *Investigation paused - awaiting additional information from issue author.*
 ```
 
+**IMPORTANT:** When the status is "Needs More Info", you MUST also include the following line on its own line in your final output (outside the GitHub comment):
+```
+STOP_CONDITION: Needs more info
+```
+This line is required for the orchestrator to detect the stop. Omit it when status is "Proceed".
+
 % Important
 
 - **STOP the workflow** if status is "Needs More Info"
