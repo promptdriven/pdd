@@ -162,3 +162,15 @@ Please reply with your preferred options (e.g., "1A, 2B"). Then run `pdd change 
 - Always tag the issue author (@{issue_author}) in clarification requests
 - This is a HARD STOP - if clarification is needed, the workflow terminates here
 - When `pdd change` is run again, this step will re-evaluate based on new comments
+
+% CRITICAL: Output Format for Stop Condition
+
+If clarification is needed, your final response MUST include this exact line:
+
+STOP_CONDITION: Clarification needed
+
+This line MUST:
+- Appear in your final output (not just in the GitHub comment)
+- Be on its own line for reliable parsing
+
+If requirements ARE clear (proceeding to Step 5), do NOT include this line.
