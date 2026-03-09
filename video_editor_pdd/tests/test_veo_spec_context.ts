@@ -1,5 +1,6 @@
 import {
   extractVeoMarker,
+  listResolvedVeoClipSpecs,
   isVeoMarkdownSpec,
   selectCanonicalVeoMarkdownSpec,
   selectCanonicalVeoPromptSpec,
@@ -72,5 +73,49 @@ describe("veo spec context helpers", () => {
       path: "specs/section/05_ocean.md",
       prompt: "Ocean wave at sunset",
     });
+  });
+
+  it("resolves one generated clip per Veo markdown spec when prompts and clip sources are declared in the spec JSON", () => {
+    const clips = listResolvedVeoClipSpecs([
+      {
+        path: "specs/veo_section/02_ocean_wave_sunset.md",
+        content: [
+          "[veo:]",
+          "```json",
+          '{',
+          '  "veoPrompt": "Ocean wave at sunset",',
+          '  "clipSource": "veo/ocean_wave_sunset.mp4"',
+          '}',
+          "```",
+        ].join("\n"),
+      },
+      {
+        path: "specs/veo_section/04_forest_canopy_aerial.md",
+        content: [
+          "[veo:]",
+          "```json",
+          '{',
+          '  "veoPrompt": "Forest canopy aerial",',
+          '  "clipSource": "veo/forest_canopy_aerial.mp4"',
+          '}',
+          "```",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(clips).toEqual([
+      {
+        id: "ocean_wave_sunset",
+        path: "specs/veo_section/02_ocean_wave_sunset.md",
+        prompt: "Ocean wave at sunset",
+        filename: "ocean_wave_sunset.mp4",
+      },
+      {
+        id: "forest_canopy_aerial",
+        path: "specs/veo_section/04_forest_canopy_aerial.md",
+        prompt: "Forest canopy aerial",
+        filename: "forest_canopy_aerial.mp4",
+      },
+    ]);
   });
 });

@@ -5,8 +5,12 @@ import { VideoPanel } from './VideoPanel';
 import { DividerLine } from './DividerLine';
 import { SplitLabel } from './SplitLabel';
 import { POSITIONS, LABELS } from './constants';
+import { useVisualMediaSrc } from '../_shared/visual-runtime';
 
 export const VeoSection07SplitOceanForest: React.FC = () => {
+  const leftSrc = useVisualMediaSrc('leftSrc', 'veo/veo_section.mp4');
+  const rightSrc = useVisualMediaSrc('rightSrc', leftSrc ?? 'veo/veo_section.mp4');
+
   return (
     <AbsoluteFill
       style={{
@@ -14,10 +18,10 @@ export const VeoSection07SplitOceanForest: React.FC = () => {
       }}
     >
       {/* Left panel: Ocean wave sunset */}
-      <VideoPanel src="veo/veo_section.mp4" side="left" />
+      {leftSrc ? <VideoPanel src={leftSrc} side="left" /> : null}
 
       {/* Right panel: Forest canopy aerial */}
-      <VideoPanel src="veo/veo_section.mp4" side="right" />
+      {rightSrc ? <VideoPanel src={rightSrc} side="right" /> : null}
 
       {/* Vertical divider with glow */}
       <DividerLine />

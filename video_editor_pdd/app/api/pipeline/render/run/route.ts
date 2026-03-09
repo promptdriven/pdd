@@ -8,6 +8,8 @@ import { renderSection, getSectionDuration } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
+const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+
 /**
  * Update project.json with duration and recalculated offsets
  */
@@ -93,11 +95,45 @@ async function renderSections(
   }
 }
 
+async function syncVeoOutputsToRemotionPublic(onLog: (msg: string) => void): Promise<void> {
+  const sourceDir = path.join(process.cwd(), "outputs", "veo");
+  const destDir = path.join(process.cwd(), "remotion", "public", "veo");
+
+  try {
+    const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+    await fs.mkdir(destDir, { recursive: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!VEO_MEDIA_EXTENSIONS.has(ext)) {
+        continue;
+      }
+
+      const src = path.join(sourceDir, entry.name);
+      const dest = path.join(destDir, entry.name);
+      await fs.copyFile(src, dest);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+
+    onLog(`Warning: failed to sync Veo assets: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /**
  * Regenerate Root.tsx (to pick up Claude-generated flat section files)
  * and rebuild the Remotion bundle before rendering.
  */
 async function rebuildBundle(onLog: (msg: string) => void): Promise<void> {
+  onLog("Syncing staged Veo assets...");
+  await syncVeoOutputsToRemotionPublic(onLog);
+
   // Regenerate section wrappers and Root.tsx from project.json
   onLog("Regenerating Root.tsx...");
   await new Promise<void>((resolve, reject) => {
@@ -171,4 +207,3 @@ export async function POST(request: NextRequest): Promise<Response> {
     );
   }
 }
-

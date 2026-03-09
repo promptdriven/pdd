@@ -11,9 +11,11 @@ import { CANVAS, COLORS, DIMENSIONS, ANIMATION } from './constants';
 import { PanelHeader } from './PanelHeader';
 import { TypewriterText } from './TypewriterText';
 import { ArrowDivider } from './ArrowDivider';
+import { useVisualMediaSrc } from '../_shared/visual-runtime';
 
 export const VeoSection10SplitComparison: React.FC = () => {
   const frame = useCurrentFrame();
+  const outputSrc = useVisualMediaSrc('outputSrc', 'veo/veo_section.mp4');
 
   // Left panel: slides in from -948 to 0, out to -948
   const leftSlideIn = interpolate(
@@ -101,15 +103,17 @@ export const VeoSection10SplitComparison: React.FC = () => {
         }}
       >
         <PanelHeader text="OUTPUT" align="right" />
-        <OffthreadVideo
-          src={staticFile('veo/veo_section.mp4')}
-          style={{
-            width: CANVAS.width,
-            height: CANVAS.height,
-            objectFit: 'cover',
-            marginLeft: -(CANVAS.width - DIMENSIONS.panelWidth),
-          }}
-        />
+        {outputSrc ? (
+          <OffthreadVideo
+            src={staticFile(outputSrc)}
+            style={{
+              width: CANVAS.width,
+              height: CANVAS.height,
+              objectFit: 'cover',
+              marginLeft: -(CANVAS.width - DIMENSIONS.panelWidth),
+            }}
+          />
+        ) : null}
       </div>
 
       {/* Divider with arrow */}

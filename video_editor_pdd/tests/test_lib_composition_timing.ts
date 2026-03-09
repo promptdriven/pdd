@@ -4,7 +4,9 @@ import path from "path";
 
 import {
   parseSpecTimestampRange,
+  listSectionVisualIds,
   resolveSectionVisualTimings,
+  buildSectionConstantsSource,
 } from "../lib/composition-timing";
 
 describe("lib/composition-timing", () => {
@@ -139,5 +141,54 @@ describe("lib/composition-timing", () => {
     expect(timings[2].endSeconds).toBeLessThanOrEqual(9);
     expect(timings[1].startSeconds).toBeLessThan(timings[1].endSeconds);
     expect(timings[2].startSeconds).toBeLessThan(timings[2].endSeconds);
+  });
+
+  it("builds a full section timeline from spec files, including pure Veo visuals", () => {
+    const specDir = path.join(tmpDir, "specs", "veo_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:03\n"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_ocean_wave_sunset.md"),
+      "**Timestamp:** 0:03 - 0:06\n"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "03_narration_overlay_intro.md"),
+      "**Timestamp:** 0:06 - 0:09\n"
+    );
+
+    const visualIds = listSectionVisualIds(
+      tmpDir,
+      {
+        id: "veo_section",
+        specDir: "veo_section",
+        durationSeconds: 6,
+        compositionId: "VeoSection",
+      },
+      ["veo_section_01_title_card", "03_narration_overlay_intro"]
+    );
+
+    expect(visualIds).toEqual([
+      "veo_section_01_title_card",
+      "02_ocean_wave_sunset",
+      "03_narration_overlay_intro",
+    ]);
+
+    const source = buildSectionConstantsSource(
+      tmpDir,
+      {
+        id: "veo_section",
+        specDir: "veo_section",
+        durationSeconds: 6,
+        compositionId: "VeoSection",
+      },
+      ["veo_section_01_title_card", "03_narration_overlay_intro"]
+    );
+
+    expect(source).toContain('id: "veo_section_01_title_card"');
+    expect(source).toContain('id: "02_ocean_wave_sunset"');
+    expect(source).toContain('id: "03_narration_overlay_intro"');
   });
 });

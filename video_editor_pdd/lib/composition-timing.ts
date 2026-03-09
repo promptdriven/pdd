@@ -7,6 +7,7 @@ const DEFAULT_FPS = 30;
 const DEFAULT_VISUAL_DURATION_SECONDS = 5;
 const DEFAULT_KEYWORD_LEAD_SECONDS = 1;
 const MIN_VISUAL_DURATION_SECONDS = 1 / DEFAULT_FPS;
+const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
 
 type SectionComposition = NonNullable<Section["compositions"]>[number];
 
@@ -66,6 +67,80 @@ function titleFromId(value: string): string {
 function componentBaseName(componentId: string, sectionId: string): string {
   const prefix = `${sectionId}_`;
   return componentId.startsWith(prefix) ? componentId.slice(prefix.length) : componentId;
+}
+
+function listSectionSpecBaseNames(
+  projectDir: string,
+  section: Pick<SectionTimingTarget, "id" | "specDir">
+): string[] {
+  if (!section.specDir) {
+    return [];
+  }
+
+  const specDir = resolveSectionSpecDir(projectDir, section.specDir);
+  if (!fs.existsSync(specDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(specDir)
+    .filter((entry) => entry.endsWith(".md") && !entry.startsWith("AUDIT_"))
+    .map((entry) => path.basename(entry, path.extname(entry)))
+    .filter((baseName) => !NON_COMPONENT_BASENAMES.has(baseName))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function listCompositionIds(section: SectionTimingTarget, componentIds: string[]): string[] {
+  const configuredIds = (section.compositions ?? [])
+    .map((composition) =>
+      typeof composition === "string" ? composition : composition?.id
+    )
+    .filter((compositionId): compositionId is string => Boolean(compositionId));
+
+  const merged = [...configuredIds, ...componentIds];
+  const seen = new Set<string>();
+
+  return merged.filter((compositionId) => {
+    if (seen.has(compositionId)) {
+      return false;
+    }
+
+    seen.add(compositionId);
+    return true;
+  });
+}
+
+export function listSectionVisualIds(
+  projectDir: string,
+  section: SectionTimingTarget,
+  componentIds: string[]
+): string[] {
+  const specBaseNames = listSectionSpecBaseNames(projectDir, section);
+  const configuredIds = listCompositionIds(section, componentIds);
+  const consumedCompositionIds = new Set<string>();
+  const resolvedVisualIds: string[] = [];
+
+  for (const specBaseName of specBaseNames) {
+    const matchingCompositionId = configuredIds.find((compositionId) => {
+      return componentBaseName(compositionId, section.id) === specBaseName;
+    });
+
+    if (matchingCompositionId) {
+      consumedCompositionIds.add(matchingCompositionId);
+      resolvedVisualIds.push(matchingCompositionId);
+      continue;
+    }
+
+    resolvedVisualIds.push(specBaseName);
+  }
+
+  for (const compositionId of configuredIds) {
+    if (!consumedCompositionIds.has(compositionId)) {
+      resolvedVisualIds.push(compositionId);
+    }
+  }
+
+  return resolvedVisualIds;
 }
 
 function readSpecContent(projectDir: string, section: SectionTimingTarget, componentId: string): {
@@ -520,16 +595,17 @@ export function resolveSectionVisualTimings(
   section: SectionTimingTarget,
   componentIds: string[]
 ): ResolvedVisualTiming[] {
+  const visualIds = listSectionVisualIds(projectDir, section, componentIds);
   const candidates = scaleSpecCandidatesToSectionDuration(
-    buildTimingCandidates(projectDir, section, componentIds),
+    buildTimingCandidates(projectDir, section, visualIds),
     section.durationSeconds
   );
   const durationSeconds = effectiveSectionDuration(
     section.durationSeconds,
     candidates,
-    componentIds.length
+    visualIds.length
   );
-  const seededTimings = buildFallbackTimings(componentIds, candidates, durationSeconds);
+  const seededTimings = buildFallbackTimings(visualIds, candidates, durationSeconds);
 
   return normalizeVisualTimings(seededTimings, durationSeconds);
 }

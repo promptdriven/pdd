@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { loadProject } from "@/lib/project";
 import {
+  listResolvedVeoClipSpecs,
   normalizeSpecDir,
   selectCanonicalVeoMarkdownSpec,
 } from "@/lib/veo-spec-context";
@@ -27,6 +28,12 @@ interface VeoClip {
   frameChainDeps: string[];
   specPath: string | null;
 }
+
+type ResolvedClipEntry = {
+  id: string;
+  sectionId: string;
+  specPath: string | null;
+};
 
 interface ReferencePortrait {
   id: string;
@@ -70,10 +77,58 @@ export async function GET(): Promise<NextResponse> {
       );
     });
 
-    const clips: VeoClip[] = eligibleSections.map((section, idx) => {
-      const clipId = section.id;
+    const resolvedClips: ResolvedClipEntry[] = eligibleSections.flatMap((section) => {
       const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
+      const specDir = path.join(process.cwd(), "specs", normalizedSpecDir);
 
+      if (fs.existsSync(specDir)) {
+        try {
+          const markdownEntries = fs
+            .readdirSync(specDir)
+            .filter((file) => file.endsWith(".md") && !file.startsWith("AUDIT_"))
+            .map((file) => ({
+              path: path.posix.join("specs", normalizedSpecDir, file),
+              content: fs.readFileSync(path.join(specDir, file), "utf-8"),
+            }));
+          const specClips = listResolvedVeoClipSpecs(markdownEntries);
+          if (specClips.length > 0) {
+            return specClips.map((clip) => ({
+              id: clip.id,
+              sectionId: section.id,
+              specPath: clip.path,
+            }));
+          }
+
+          const canonicalSpec = selectCanonicalVeoMarkdownSpec(markdownEntries);
+          return [
+            {
+              id: section.id,
+              sectionId: section.id,
+              specPath: canonicalSpec?.path ?? null,
+            },
+          ];
+        } catch {
+          return [
+            {
+              id: section.id,
+              sectionId: section.id,
+              specPath: null,
+            },
+          ];
+        }
+      }
+
+      return [
+        {
+          id: section.id,
+          sectionId: section.id,
+          specPath: null,
+        },
+      ];
+    });
+
+    const clips: VeoClip[] = resolvedClips.map((clip, idx) => {
+      const clipId = clip.id;
       const clipPath = path.join(
         process.cwd(),
         "outputs",
@@ -81,16 +136,16 @@ export async function GET(): Promise<NextResponse> {
         `${clipId}.mp4`
       );
 
-      const prevSection = eligibleSections[idx - 1];
+      const prevClip = resolvedClips[idx - 1];
       // frameChainDeps exposes clean clip IDs for the UI (e.g. "cold_open")
-      const frameChainDeps: string[] = prevSection ? [prevSection.id] : [];
+      const frameChainDeps: string[] = prevClip ? [prevClip.id] : [];
       // depFilePaths are used internally for staleness checking only
-      const depFilePaths: string[] = prevSection
+      const depFilePaths: string[] = prevClip
         ? [
             path.join(
               "outputs",
               "veo",
-              `${prevSection.id}_last_frame.png`
+              `${prevClip.id}_last_frame.png`
             ),
           ]
         : [];
@@ -111,32 +166,14 @@ export async function GET(): Promise<NextResponse> {
         }
       }
 
-      let specPath: string | null = null;
-      const specDir = path.join(process.cwd(), "specs", normalizedSpecDir);
-      if (fs.existsSync(specDir)) {
-        try {
-          const markdownEntries = fs
-            .readdirSync(specDir)
-            .filter((file) => file.endsWith(".md") && !file.startsWith("AUDIT_"))
-            .map((file) => ({
-              path: path.posix.join("specs", normalizedSpecDir, file),
-              content: fs.readFileSync(path.join(specDir, file), "utf-8"),
-          }));
-          const canonicalSpec = selectCanonicalVeoMarkdownSpec(markdownEntries);
-          specPath = canonicalSpec?.path ?? null;
-        } catch {
-          specPath = null;
-        }
-      }
-
       return {
         id: clipId,
-        sectionId: section.id,
+        sectionId: clip.sectionId,
         aspectRatio,
         status,
         stale,
         frameChainDeps,
-        specPath,
+        specPath: clip.specPath,
       };
     });
 

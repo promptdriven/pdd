@@ -10,11 +10,14 @@ import {
 import { CANVAS, COLORS, ANIMATION } from './constants';
 import { WipeEdge } from './WipeEdge';
 import { ProgressBar } from './ProgressBar';
+import { useVisualMediaSrc } from '../_shared/visual-runtime';
 
 export const defaultVeoSection12SplitOceanForestRepriseProps = {};
 
 export const VeoSection12SplitOceanForestReprise: React.FC = () => {
   const frame = useCurrentFrame();
+  const baseSrc = useVisualMediaSrc('baseSrc', 'veo/veo_section.mp4');
+  const revealSrc = useVisualMediaSrc('revealSrc', baseSrc ?? 'veo/veo_section.mp4');
 
   // Calculate wipe X position across three phases:
   // Phase 1 (0-30): easeOutQuad from 0 to 960
@@ -63,14 +66,16 @@ export const VeoSection12SplitOceanForestReprise: React.FC = () => {
           zIndex: 1,
         }}
       >
-        <OffthreadVideo
-          src={staticFile('veo/veo_section.mp4')}
-          style={{
-            width: CANVAS.width,
-            height: CANVAS.height,
-            objectFit: 'cover',
-          }}
-        />
+        {baseSrc ? (
+          <OffthreadVideo
+            src={staticFile(baseSrc)}
+            style={{
+              width: CANVAS.width,
+              height: CANVAS.height,
+              objectFit: 'cover',
+            }}
+          />
+        ) : null}
       </div>
 
       {/* Reveal layer: Forest canopy aerial, clipped by wipe position */}
@@ -85,16 +90,16 @@ export const VeoSection12SplitOceanForestReprise: React.FC = () => {
           zIndex: 2,
         }}
       >
-        <OffthreadVideo
-          src={staticFile('veo/veo_section.mp4')}
-          style={{
-            width: CANVAS.width,
-            height: CANVAS.height,
-            objectFit: 'cover',
-            // Slight color shift to differentiate "forest" from "ocean"
-            filter: 'hue-rotate(90deg) saturate(1.2)',
-          }}
-        />
+        {revealSrc ? (
+          <OffthreadVideo
+            src={staticFile(revealSrc)}
+            style={{
+              width: CANVAS.width,
+              height: CANVAS.height,
+              objectFit: 'cover',
+            }}
+          />
+        ) : null}
       </div>
 
       {/* Wipe edge with glow */}

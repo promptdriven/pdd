@@ -63,7 +63,7 @@ export const VeoSection08VeoTechnologyCallout: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.background,
+        backgroundColor: 'transparent',
       }}
     >
       {/* Card panel */}

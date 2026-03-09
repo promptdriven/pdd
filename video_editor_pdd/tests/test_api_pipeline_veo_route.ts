@@ -568,6 +568,62 @@ describe("veo executor factory — clip generation", () => {
     expect(outputPath).toContain("intro.mp4");
   });
 
+  it("generates one clip per Veo markdown spec when a section declares explicit clip sources", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p.includes("specs/veo_section");
+    });
+    mockReaddirSync.mockReturnValue([
+      "02_ocean_wave_sunset.md",
+      "04_forest_canopy_aerial.md",
+    ]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("02_ocean_wave_sunset.md")) {
+        return [
+          "[veo:]",
+          "```json",
+          '{',
+          '  "veoPrompt": "Ocean wave at sunset",',
+          '  "clipSource": "veo/ocean_wave_sunset.mp4"',
+          '}',
+          "```",
+        ].join("\n");
+      }
+      if (p.includes("04_forest_canopy_aerial.md")) {
+        return [
+          "[veo:]",
+          "```json",
+          '{',
+          '  "veoPrompt": "Forest canopy aerial",',
+          '  "clipSource": "veo/forest_canopy_aerial.mp4"',
+          '}',
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(mockGenerateVeoClip.mock.calls[0][0]).toBe("Ocean wave at sunset");
+    expect(mockGenerateVeoClip.mock.calls[0][3]).toContain("ocean_wave_sunset.mp4");
+    expect(mockGenerateVeoClip.mock.calls[1][0]).toBe("Forest canopy aerial");
+    expect(mockGenerateVeoClip.mock.calls[1][3]).toContain("forest_canopy_aerial.mp4");
+  });
+
   it("passes aspectRatio from project config to generateVeoClip", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]];
@@ -925,6 +981,70 @@ describe("GET_clips — response shape", () => {
     const data = await response.json();
 
     expect(data.clips[0].specPath).toBe("specs/intro/02_blank.md");
+  });
+
+  it("returns one clip per Veo markdown spec when explicit clip sources are declared", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("outputs/veo")) return false;
+      return p.includes("specs/veo_section");
+    });
+    mockReaddirSync.mockReturnValue([
+      "02_ocean_wave_sunset.md",
+      "04_forest_canopy_aerial.md",
+    ]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("02_ocean_wave_sunset.md")) {
+        return [
+          "[veo:]",
+          "```json",
+          '{',
+          '  "veoPrompt": "Ocean wave at sunset",',
+          '  "clipSource": "veo/ocean_wave_sunset.mp4"',
+          '}',
+          "```",
+        ].join("\n");
+      }
+      if (p.includes("04_forest_canopy_aerial.md")) {
+        return [
+          "[veo:]",
+          "```json",
+          '{',
+          '  "veoPrompt": "Forest canopy aerial",',
+          '  "clipSource": "veo/forest_canopy_aerial.mp4"',
+          '}',
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips.map((clip: any) => clip.id)).toEqual([
+      "ocean_wave_sunset",
+      "forest_canopy_aerial",
+    ]);
+    expect(data.clips.map((clip: any) => clip.sectionId)).toEqual([
+      "veo_section",
+      "veo_section",
+    ]);
+    expect(data.clips.map((clip: any) => clip.specPath)).toEqual([
+      "specs/veo_section/02_ocean_wave_sunset.md",
+      "specs/veo_section/04_forest_canopy_aerial.md",
+    ]);
   });
 
   it("sets aspectRatio from project config", async () => {

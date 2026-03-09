@@ -2,10 +2,25 @@ export type VeoMarkdownSpecSelection = {
   path: string;
 };
 
+export type ResolvedVeoClipSpec = {
+  id: string;
+  path: string;
+  prompt: string;
+  filename: string;
+};
+
 type MarkdownSpecEntry = {
   path: string;
   content: string;
 };
+
+const JSON_STRING_FIELD_RE = (
+  fieldNames: string[]
+): RegExp =>
+  new RegExp(
+    `"(${fieldNames.join("|")})"\\s*:\\s*"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"`,
+    "i"
+  );
 
 export function normalizeSpecDir(value: string): string {
   return value
@@ -19,6 +34,43 @@ export function extractVeoMarker(content: string): string | null {
   const match = content.match(/\[veo:\s*([^\]]+?)\]/i);
   const prompt = match?.[1]?.trim();
   return prompt ? prompt : null;
+}
+
+function extractJsonStringField(
+  content: string,
+  fieldNames: string[]
+): string | null {
+  const match = content.match(JSON_STRING_FIELD_RE(fieldNames));
+  const rawValue = match?.[2];
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(`"${rawValue}"`);
+  } catch {
+    return rawValue;
+  }
+}
+
+export function extractVeoPrompt(content: string): string | null {
+  return (
+    extractVeoMarker(content) ??
+    extractJsonStringField(content, ["veoPrompt", "prompt", "videoPrompt"])
+  );
+}
+
+export function extractVeoClipFilename(content: string, _specPath: string): string | null {
+  const clipSource =
+    extractJsonStringField(content, ["clipSource", "outputSrc", "filename"]) ??
+    null;
+
+  if (clipSource) {
+    const normalized = clipSource.replace(/\\/g, "/");
+    const basename = normalized.split("/").pop() ?? normalized;
+    return basename || null;
+  }
+  return null;
 }
 
 export function isVeoMarkdownSpec(content: string): boolean {
@@ -47,7 +99,7 @@ export function selectCanonicalVeoPromptSpec(
   const sortedEntries = [...entries].sort((left, right) => left.path.localeCompare(right.path));
 
   for (const entry of sortedEntries) {
-    const prompt = extractVeoMarker(entry.content);
+    const prompt = extractVeoPrompt(entry.content);
     if (prompt) {
       return {
         path: entry.path,
@@ -57,4 +109,29 @@ export function selectCanonicalVeoPromptSpec(
   }
 
   return null;
+}
+
+export function listResolvedVeoClipSpecs(
+  entries: MarkdownSpecEntry[]
+): ResolvedVeoClipSpec[] {
+  return [...entries]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .filter((entry) => isVeoMarkdownSpec(entry.content))
+    .map((entry) => {
+      const prompt = extractVeoPrompt(entry.content);
+      const filename = extractVeoClipFilename(entry.content, entry.path);
+
+      if (!prompt || !filename) {
+        return null;
+      }
+
+      const id = filename.replace(/\.[^.]+$/, "");
+      return {
+        id,
+        path: entry.path,
+        prompt,
+        filename,
+      };
+    })
+    .filter((entry): entry is ResolvedVeoClipSpec => entry !== null);
 }

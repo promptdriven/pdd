@@ -6,8 +6,11 @@ import { VeoWordmark } from './VeoWordmark';
 import { Tagline } from './Tagline';
 import { AccentLine } from './AccentLine';
 import { ParticleRing } from './ParticleRing';
+import { useVisualMediaSrc } from '../_shared/visual-runtime';
 
 export const VeoSection11VeoBadgeReprise: React.FC = () => {
+  const backgroundSrc = useVisualMediaSrc('backgroundSrc', 'veo/veo_section.mp4');
+
   return (
     <AbsoluteFill
       style={{
@@ -16,10 +19,12 @@ export const VeoSection11VeoBadgeReprise: React.FC = () => {
     >
       {/* Forest canopy footage background */}
       <AbsoluteFill>
-        <OffthreadVideo
-          src={staticFile('veo/veo_section.mp4')}
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        />
+        {backgroundSrc ? (
+          <OffthreadVideo
+            src={staticFile(backgroundSrc)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : null}
       </AbsoluteFill>
 
       {/* Dimming overlay fades in over frames 0-10 */}

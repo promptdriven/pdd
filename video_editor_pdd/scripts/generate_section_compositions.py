@@ -90,6 +90,11 @@ def load_project_json(project_dir: str) -> Dict[str, Any]:
 STATIC_FILE_RE = re.compile(r'staticFile\(\s*["\']([^"\']+)["\']\s*\)')
 AUDIO_EXTENSIONS = {'.wav', '.mp3', '.aac', '.m4a', '.ogg'}
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v'}
+NON_COMPONENT_BASENAMES = {'spec', 'veo'}
+VISUAL_MEDIA_KEY_RE = re.compile(
+    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
+    re.IGNORECASE,
+)
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -109,6 +114,235 @@ def _existing_static_path(remotion_public: str, candidates: List[str]) -> Option
     for rel_path in candidates:
         if os.path.isfile(os.path.join(remotion_public, rel_path)):
             return rel_path
+    return None
+
+
+def component_base_name(component_id: str, section_id: str) -> str:
+    """Normalize a composition id to the matching spec basename."""
+    prefix = f'{section_id}_'
+    return component_id[len(prefix):] if component_id.startswith(prefix) else component_id
+
+
+def _list_section_spec_basenames(project_dir: str, section: Dict[str, Any]) -> List[str]:
+    """List visual spec basenames for a section, excluding metadata specs."""
+    if not project_dir:
+        return []
+
+    spec_dir = section.get('specDir') or section['id']
+    if not os.path.isabs(spec_dir):
+        spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
+
+    if not os.path.isdir(spec_dir):
+        return []
+
+    basenames = []
+    for entry in sorted(os.listdir(spec_dir)):
+        if not entry.endswith('.md') or entry.startswith('AUDIT_'):
+            continue
+        base = os.path.splitext(entry)[0]
+        if base in NON_COMPONENT_BASENAMES:
+            continue
+        basenames.append(base)
+    return basenames
+
+
+def resolve_section_visual_ids(section: Dict[str, Any], project_dir: str) -> List[str]:
+    """Build the rendered visual order from spec files plus configured components."""
+    compositions: List[Any] = section.get('compositions', [])
+    composition_ids: List[str] = []
+    for composition in compositions:
+        comp_id = composition if isinstance(composition, str) else composition.get('id', '')
+        if comp_id and comp_id not in composition_ids:
+            composition_ids.append(comp_id)
+
+    spec_basenames = _list_section_spec_basenames(project_dir, section)
+    consumed: set[str] = set()
+    visual_ids: List[str] = []
+
+    for base in spec_basenames:
+        matching = next(
+            (
+                comp_id
+                for comp_id in composition_ids
+                if component_base_name(comp_id, section['id']) == base
+            ),
+            None,
+        )
+        if matching is not None:
+            visual_ids.append(matching)
+            consumed.add(matching)
+        else:
+            visual_ids.append(base)
+
+    for comp_id in composition_ids:
+        if comp_id not in consumed:
+            visual_ids.append(comp_id)
+
+    return visual_ids
+
+
+def _resolve_media_static_path(remotion_public: str, rel_path: str) -> Optional[str]:
+    """Return a media path only when the staged static asset exists."""
+    normalized = rel_path.replace('\\', '/').lstrip('/')
+    if not normalized:
+        return None
+    return normalized if os.path.isfile(os.path.join(remotion_public, normalized)) else None
+
+
+def _extract_visual_media_aliases(
+    spec_content: str,
+    remotion_public: str,
+    inherited_default: Optional[str],
+) -> tuple[Dict[str, str], Optional[str], bool]:
+    """Extract named Veo asset aliases from a spec file."""
+    explicit_sources: List[str] = []
+    aliases: Dict[str, str] = {}
+    explicit = False
+
+    alias_map = {
+        'clipsource': 'defaultSrc',
+        'leftclip': 'leftSrc',
+        'leftsrc': 'leftSrc',
+        'rightclip': 'rightSrc',
+        'rightsrc': 'rightSrc',
+        'outputsrc': 'outputSrc',
+        'backgroundclip': 'backgroundSrc',
+        'backgroundsrc': 'backgroundSrc',
+        'baseclip': 'baseSrc',
+        'basesrc': 'baseSrc',
+        'revealclip': 'revealSrc',
+        'revealsrc': 'revealSrc',
+    }
+
+    for key, rel_path in VISUAL_MEDIA_KEY_RE.findall(spec_content):
+        resolved = _resolve_media_static_path(remotion_public, rel_path)
+        if resolved is None:
+            continue
+        explicit = True
+        if resolved not in explicit_sources:
+            explicit_sources.append(resolved)
+        alias_name = alias_map.get(key.lower())
+        if alias_name:
+            aliases[alias_name] = resolved
+
+    for rel_path in STATIC_FILE_RE.findall(spec_content):
+        if Path(rel_path).suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        resolved = _resolve_media_static_path(remotion_public, rel_path)
+        if resolved is None:
+            continue
+        explicit = True
+        if resolved not in explicit_sources:
+            explicit_sources.append(resolved)
+
+    primary = aliases.get('defaultSrc')
+    if primary is None and explicit_sources:
+        primary = explicit_sources[0]
+        aliases['defaultSrc'] = primary
+    if primary is None:
+        primary = inherited_default
+
+    if primary is not None:
+        aliases.setdefault('defaultSrc', primary)
+        aliases.setdefault('backgroundSrc', primary)
+        aliases.setdefault('outputSrc', primary)
+        aliases.setdefault('baseSrc', primary)
+
+    if len(explicit_sources) >= 2:
+        aliases.setdefault('leftSrc', explicit_sources[0])
+        aliases.setdefault('rightSrc', explicit_sources[1])
+        aliases.setdefault('baseSrc', explicit_sources[0])
+        aliases.setdefault('revealSrc', explicit_sources[1])
+
+    return aliases, primary, explicit
+
+
+def build_visual_media_manifest(
+    section: Dict[str, Any],
+    project_dir: str,
+    remotion_public: str,
+    fallback_video_src: Optional[str] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Build per-visual media aliases for the section wrapper."""
+    visual_ids = resolve_section_visual_ids(section, project_dir)
+    if not visual_ids or not project_dir or not remotion_public:
+        return {}
+
+    spec_dir = section.get('specDir') or section['id']
+    if not os.path.isabs(spec_dir):
+        spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
+
+    manifest: Dict[str, Dict[str, str]] = {}
+    inherited_default: Optional[str] = None
+    saw_explicit_source = False
+
+    for visual_id in visual_ids:
+        spec_base = component_base_name(visual_id, section['id'])
+        spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+        aliases: Dict[str, str] = {}
+
+        if os.path.isfile(spec_path):
+            aliases, next_default, explicit = _extract_visual_media_aliases(
+                _read_text_if_exists(spec_path),
+                remotion_public,
+                inherited_default,
+            )
+            if explicit:
+                saw_explicit_source = True
+            if next_default is not None:
+                inherited_default = next_default
+        elif inherited_default is not None:
+            aliases = {
+                'defaultSrc': inherited_default,
+                'backgroundSrc': inherited_default,
+                'outputSrc': inherited_default,
+                'baseSrc': inherited_default,
+            }
+
+        if not aliases and not saw_explicit_source and fallback_video_src is not None:
+            aliases = {
+                'defaultSrc': fallback_video_src,
+                'backgroundSrc': fallback_video_src,
+                'outputSrc': fallback_video_src,
+                'baseSrc': fallback_video_src,
+            }
+
+        if aliases:
+            manifest[visual_id] = aliases
+
+    return manifest
+
+
+def resolve_component_intrinsic_duration_frames(
+    comp_id: str,
+    section_id: str,
+    remotion_src: str,
+) -> Optional[int]:
+    """Best-effort duration discovery from generated component constants.ts."""
+    if not remotion_src:
+        return None
+
+    _, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
+    constants_candidates = [
+        os.path.join(remotion_src, import_path, 'constants.ts'),
+        os.path.join(remotion_src, f'{import_path}.tsx'),
+    ]
+
+    duration_re = re.compile(r'totalDuration\s*[:=]\s*(\d+)', re.IGNORECASE)
+
+    for candidate in constants_candidates:
+        content = _read_text_if_exists(candidate)
+        if not content:
+            continue
+        match = duration_re.search(content)
+        if match:
+            try:
+                duration = int(match.group(1))
+            except ValueError:
+                continue
+            if duration > 0:
+                return duration
+
     return None
 
 
@@ -397,6 +631,8 @@ def generate_generated_timeline_wrapper(
     direct_audio_src: Optional[str],
     direct_video_src: Optional[str],
     remotion_src: str,
+    remotion_public: str,
+    project_dir: str,
 ) -> Optional[str]:
     """Generate a deterministic wrapper for Stage 8-generated section timelines.
 
@@ -417,27 +653,43 @@ def generate_generated_timeline_wrapper(
     component_name = f'{pascal_name}Section'
     duration_seconds = section.get('durationSeconds', 0)
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
+    visual_media_manifest = build_visual_media_manifest(
+        section,
+        project_dir,
+        remotion_public,
+        direct_video_src if needs_direct_video else None,
+    )
 
     resolved_components: List[tuple[str, str, str]] = []
+    component_durations: Dict[str, int] = {}
     for comp in compositions:
         comp_id = comp if isinstance(comp, str) else comp.get('id', '')
         if not comp_id or comp_id.startswith('veo:'):
             continue
         comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
         resolved_components.append((comp_id, comp_pascal, import_path))
+        intrinsic_duration = resolve_component_intrinsic_duration_frames(
+            comp_id,
+            section_id,
+            remotion_src,
+        )
+        if intrinsic_duration is not None:
+            component_durations[comp_id] = intrinsic_duration
 
     remotion_imports = ['Sequence', 'useCurrentFrame']
     if needs_direct_audio:
         remotion_imports.append('Audio')
-    if needs_direct_video:
+    has_visual_video = bool(visual_media_manifest) or needs_direct_video
+    if has_visual_video:
         remotion_imports.append('OffthreadVideo')
-    if needs_direct_audio or needs_direct_video:
+    if needs_direct_audio or has_visual_video:
         remotion_imports.append('staticFile')
 
     lines: List[str] = []
     lines.append('import React from "react";')
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('import { VISUAL_SEQUENCE } from "./constants";')
+    lines.append('import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";')
 
     for _, comp_pascal, import_path in resolved_components:
         lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
@@ -446,6 +698,20 @@ def generate_generated_timeline_wrapper(
     lines.append('const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {')
     for comp_id, comp_pascal, _ in resolved_components:
         lines.append(f'  "{comp_id}": {comp_pascal},')
+    lines.append('};')
+    lines.append('')
+    lines.append('const VISUAL_DURATIONS: Record<string, number> = {')
+    for comp_id, duration in component_durations.items():
+        lines.append(f'  "{comp_id}": {duration},')
+    lines.append('};')
+    lines.append('')
+    lines.append('const VISUAL_MEDIA: Record<string, Record<string, string>> = {')
+    for visual_id, aliases in visual_media_manifest.items():
+        alias_parts = ', '.join(
+            f'{alias_name}: "{alias_value}"'
+            for alias_name, alias_value in aliases.items()
+        )
+        lines.append(f'  "{visual_id}": {{ {alias_parts} }},')
     lines.append('};')
     lines.append('')
     lines.append(f'export const {component_name}: React.FC = () => {{')
@@ -460,19 +726,35 @@ def generate_generated_timeline_wrapper(
     lines.append('    }')
     lines.append('  }')
     lines.append('  const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;')
+    lines.append('  const activeVisualDuration = activeVisual ? Math.max(1, activeVisual.end - activeVisual.start) : 1;')
+    lines.append('  const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;')
+    lines.append('  const activeVisualMedia = activeVisual ? VISUAL_MEDIA[activeVisual.id] ?? null : null;')
     lines.append('')
     lines.append('  return (')
     lines.append('    <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>')
     if needs_direct_audio and direct_audio_src is not None:
         lines.append(f'      <Audio src={{staticFile("{direct_audio_src}")}} />')
-    if needs_direct_video and direct_video_src is not None:
-        lines.append(f'      <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} />')
+    if has_visual_video:
+        if direct_video_src is not None:
+            lines.append(f'      {{activeVisualMedia?.defaultSrc ? (')
+            lines.append('        <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
+            lines.append('      ) : (')
+            lines.append(f'        <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} />')
+            lines.append('      )}')
+        else:
+            lines.append('      {activeVisualMedia?.defaultSrc ? (')
+            lines.append('        <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
+            lines.append('      ) : null}')
     lines.append('      {ActiveComponent && activeVisual ? (')
     lines.append('        <Sequence')
     lines.append('          from={activeVisual.start}')
     lines.append('          durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}')
     lines.append('        >')
-    lines.append('          <ActiveComponent />')
+    lines.append('          <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
+    lines.append('            <VisualMediaProvider media={activeVisualMedia}>')
+    lines.append('              <ActiveComponent />')
+    lines.append('            </VisualMediaProvider>')
+    lines.append('          </SlotScaledSequence>')
     lines.append('        </Sequence>')
     lines.append('      ) : null}')
     lines.append('    </Sequence>')
@@ -546,6 +828,8 @@ def generate_section_component(
         direct_audio_src,
         direct_video_src,
         remotion_src,
+        remotion_public,
+        project_dir,
     )
     if generated_timeline_wrapper is not None:
         return generated_timeline_wrapper

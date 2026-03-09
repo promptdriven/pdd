@@ -12,6 +12,7 @@ import {
   isDeterministicPipelineMode,
 } from '@/lib/deterministic-pipeline';
 import {
+  listResolvedVeoClipSpecs,
   normalizeSpecDir,
   selectCanonicalVeoPromptSpec,
 } from '@/lib/veo-spec-context';
@@ -93,6 +94,55 @@ function ensureDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
+type ResolvedClipJob = {
+  id: string;
+  sectionId: string;
+  prompt: string;
+};
+
+function listSectionMarkdownEntries(
+  section: { id: string; specDir?: string | null }
+): { path: string; content: string }[] {
+  const cwd = process.cwd();
+  const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
+  const specDir = path.join(cwd, 'specs', normalizedSpecDir);
+
+  if (!fs.existsSync(specDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(specDir)
+    .filter((file) => file.endsWith('.md') && !file.startsWith('AUDIT_'))
+    .map((file) => ({
+      path: path.posix.join('specs', normalizedSpecDir, file),
+      content: fs.readFileSync(path.join(specDir, file), 'utf-8'),
+    }));
+}
+
+function resolveSectionClipJobs(
+  section: { id: string; label: string; specDir?: string | null },
+  mainScriptContent: string | null
+): ResolvedClipJob[] {
+  const markdownEntries = listSectionMarkdownEntries(section);
+  const resolvedSpecs = listResolvedVeoClipSpecs(markdownEntries);
+  if (resolvedSpecs.length > 0) {
+    return resolvedSpecs.map((clip) => ({
+      id: clip.id,
+      sectionId: section.id,
+      prompt: clip.prompt,
+    }));
+  }
+
+  return [
+    {
+      id: section.id,
+      sectionId: section.id,
+      prompt: resolveVeoPrompt(section, mainScriptContent),
+    },
+  ];
+}
+
 // Register the Veo executor once at module load
 registerExecutor('veo', (params, send: SseSend) => {
   return async (onLog) => {
@@ -113,15 +163,22 @@ registerExecutor('veo', (params, send: SseSend) => {
       ? new Set(params.clips.map(String))
       : null;
 
-    const ordered = sections.filter(
-      (s) =>
-        (!requestedClips || requestedClips.has(s.id)) &&
-        (mainScriptContent
-          ? resolveSectionHasVeoIntent(mainScriptContent, {
-              id: s.id,
-              label: s.label,
-            }) !== false
-          : true)
+    const orderedSections = sections.filter((s) =>
+      mainScriptContent
+        ? resolveSectionHasVeoIntent(mainScriptContent, {
+            id: s.id,
+            label: s.label,
+          }) !== false
+        : true
+    );
+
+    const ordered = orderedSections.flatMap((section) =>
+      resolveSectionClipJobs(section, mainScriptContent)
+    ).filter(
+      (clip) =>
+        !requestedClips ||
+        requestedClips.has(clip.id) ||
+        requestedClips.has(clip.sectionId)
     );
 
     const total = ordered.length;
@@ -131,8 +188,8 @@ registerExecutor('veo', (params, send: SseSend) => {
     let referenceImagePath: string | null = null;
 
     for (let i = 0; i < ordered.length; i++) {
-      const section = ordered[i];
-      const clipId = section.id;
+      const clip = ordered[i];
+      const clipId = clip.id;
       const aspectRatio = config.veo.defaultAspectRatio;
 
       const outputPath = path.join(
@@ -154,8 +211,8 @@ registerExecutor('veo', (params, send: SseSend) => {
         send({ type: 'clip', clipId, status: 'generating' });
         emitClipEvent({ clipId, status: 'generating', message: 'Generating…' });
 
-        const prompt = resolveVeoPrompt(section, mainScriptContent);
-        onLog(`Generating Veo clip "${clipId}"`);
+        const prompt = clip.prompt;
+        onLog(`Generating Veo clip "${clipId}" for section "${clip.sectionId}"`);
         onLog(`Prompt: ${prompt.substring(0, 120)}...`);
 
         if (isDeterministicPipelineMode()) {

@@ -152,6 +152,10 @@ CRITICAL RENDERING REQUIREMENTS:
 - Use only supported Remotion easing APIs. For quartic easing, use Easing.poly(4), NOT Easing.quart.
 - Do NOT import external data files (e.g., JSON word timestamps) that may not exist.
   If subtitles are needed, embed word data inline or skip subtitles.
+- If the component needs Veo media, import useVisualMediaSrc from ../_shared/visual-runtime
+  and resolve media via that hook instead of hardcoding staticFile("veo/<section>.mp4").
+  Wrapper code will provide per-visual media aliases like backgroundSrc, outputSrc,
+  leftSrc, rightSrc, baseSrc, and revealSrc.
 - Only import from "remotion" — do not import from other local files in the component directory.
 - Break complex visuals into sub-components (e.g., AnimatedLine.tsx, ChartAxes.tsx) for maintainability.
 

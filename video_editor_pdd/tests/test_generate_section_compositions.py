@@ -1446,6 +1446,7 @@ class TestGeneratedTimelineWrapper:
     def test_generated_timeline_uses_constants_and_exact_component_imports(self, tmp_path):
         remotion_src = tmp_path
         remotion_public = tmp_path / "public"
+        project_dir = tmp_path
         section_dir = remotion_src / "veo_section"
         component_dir = remotion_src / "VeoSection01OpeningTitleCard"
         section_dir.mkdir()
@@ -1476,6 +1477,7 @@ class TestGeneratedTimelineWrapper:
             30,
             remotion_public=str(remotion_public),
             remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
         )
 
         assert 'import { VISUAL_SEQUENCE } from "./constants";' in tsx
@@ -1483,10 +1485,112 @@ class TestGeneratedTimelineWrapper:
         assert 'const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {' in tsx
         assert 'const frame = useCurrentFrame();' in tsx
         assert 'const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;' in tsx
+        assert 'SlotScaledSequence' in tsx
+        assert 'VisualMediaProvider' in tsx
         assert '<ActiveComponent />' in tsx
         assert 'staticFile("veo_section/narration.wav")' in tsx
-        assert 'staticFile("veo/veo_section.mp4")' in tsx
         assert 'SectionBase' not in tsx
+
+    def test_generated_timeline_includes_pure_veo_visual_media_and_slot_scaling(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        title_dir = remotion_src / "VeoSection01TitleCard"
+        overlay_dir = remotion_src / "VeoSection03NarrationOverlayIntro"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        title_dir.mkdir()
+        overlay_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 30, id: "veo_section_01_title_card", desc: "Title" },',
+                    '  { start: 30, end: 60, id: "02_ocean_wave_sunset", desc: "Ocean" },',
+                    '  { start: 60, end: 90, id: "03_narration_overlay_intro", desc: "Overlay" },',
+                    "];",
+                ]
+            )
+        )
+        (title_dir / "index.ts").write_text(
+            'export const VeoSection01TitleCard = () => null;\n'
+            'export default VeoSection01TitleCard;'
+        )
+        (title_dir / "constants.ts").write_text(
+            "export const ANIMATION_TIMING = { totalDuration: 90 };\n"
+        )
+        (overlay_dir / "index.ts").write_text(
+            'export const VeoSection03NarrationOverlayIntro = () => null;\n'
+            'export default VeoSection03NarrationOverlayIntro;'
+        )
+        (overlay_dir / "constants.ts").write_text(
+            "export const ANIMATION_TIMING = { totalDuration: 120 };\n"
+        )
+
+        (specs_dir / "01_title_card.md").write_text(
+            "**Timestamp:** 0:00 - 0:03\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "02_ocean_wave_sunset.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "**Timestamp:** 0:03 - 0:06",
+                    "",
+                    "```json",
+                    '{ "clipSource": "veo/ocean_wave_sunset.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "03_narration_overlay_intro.md").write_text(
+            "\n".join(
+                [
+                    "**Timestamp:** 0:06 - 0:09",
+                    "",
+                    "Narration overlay over the continuing ocean footage.",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "ocean_wave_sunset.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 9,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": [
+                "veo_section_01_title_card",
+                "03_narration_overlay_intro",
+            ],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";' in tsx
+        assert '"02_ocean_wave_sunset": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
+        assert '"03_narration_overlay_intro": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
+        assert '"03_narration_overlay_intro": 120' in tsx
+        assert 'activeVisualMedia?.defaultSrc' in tsx
+        assert '<SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>' in tsx
+        assert '<VisualMediaProvider media={activeVisualMedia}>' in tsx
 
     def test_generated_timeline_falls_back_when_constants_are_missing(self, tmp_path):
         remotion_src = tmp_path
