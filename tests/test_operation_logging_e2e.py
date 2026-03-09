@@ -287,12 +287,21 @@ class TestOperationLoggingE2E:
             "print(double(21))  # Should print 42\n"
         )
 
-        # Run verify (longer timeout for verification loop)
-        result = self.run_pdd_command(
-            ["verify", str(prompt_file), str(code_file), str(example_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for verification loop
-        )
+        # Run verify (longer timeout for verification loop, retry on timeout)
+        last_err = None
+        for attempt in range(2):
+            try:
+                result = self.run_pdd_command(
+                    ["verify", str(prompt_file), str(code_file), str(example_file)],
+                    cwd=project_dir,
+                    timeout=300  # 5 minutes for verification loop
+                )
+                break
+            except subprocess.TimeoutExpired as e:
+                last_err = e
+                if attempt == 0:
+                    continue
+                raise last_err
 
         # Verify log entry exists (verify may fail but should still log)
         entry = self.get_latest_entry(project_dir, "doubler")

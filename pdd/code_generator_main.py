@@ -965,6 +965,12 @@ def code_generator_main(
             cloud_only = _env_flag_enabled("PDD_CLOUD_ONLY") or _env_flag_enabled("PDD_NO_LOCAL_FALLBACK")
             current_execution_is_local = is_local_execution_preferred and not cloud_only
             
+            # Cloud auth cannot succeed in headless worker environments (no JWT
+            # cache, no interactive device flow). Skip directly to local execution
+            # to avoid warning messages that cause LLM agent bailout (issue #596).
+            if not current_execution_is_local and CloudConfig.is_running_in_cloud():
+                current_execution_is_local = True
+
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
                 # Expand includes, substitute vars, then double

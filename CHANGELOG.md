@@ -1,20 +1,51 @@
+## v0.0.171 (2026-03-08)
+
+### Feat
+
+- Add new Remotion components for various video sections and animations, update existing components, and refine related code generation and testing infrastructure.
+- add Stage 7 veo spec comparison
+- Integrate script context panel in Stage 6, displaying parsed script sections and highlighting lines based on narration sync quotes.
+- Implement inline spec file editor with auto-scrolling, content clearing, and robust spec directory path resolution.
+- Implement video player progress bar seeking by click and drag with associated state, refs, and tests.
+- Add new audit specifications for animation and VEO sections, updating the audit pipeline and related tests.
+- Implement new Remotion video sections and components, update related specifications, API, UI, and E2E tests, and remove build artifacts.
+
+### Fix
+
+- stop workflow on clarification and support resume (#784)
+- Add retry on timeout for verify E2E test in cloud CI
+- **b50cbb25-464d-4094-b54e-964eb3157650**: Change the main background color of this section t
+- **test-batch-ann-1772962375510**: Change the primary background accent in Animation
+- **test-batch-ann-1772961825160**: Subtitle font size 96px causes text to clip the ri
+- **8e58e83c-b48c-4f6c-a024-a0211966ffad**: Change the main background color of this section t
+- **9dd469e8-6ce5-4c7f-9695-6d82e3cc81d0**: Change the main background color of this section t
+- **d1669973-d633-4b63-bdd5-78694f017427**: Change the main background color of this section t
+- **844c735f-d540-45d9-aadf-0202d6d80abc**: Change the main background color of this section t
+
 ## v0.0.170 (2026-03-07)
 
 ### Feat
 
-- update TTS script for integration testing and commit Playwright integration test results.
-- Add independent test verification for agentic orchestrator's ALL_TESTS_PASS claims and update related tests.
-- implement independent verification for agent's ALL_TESTS_PASS claims in the e2e fix orchestrator.
+- **Independent test verification for ALL_TESTS_PASS**: the e2e fix orchestrator no longer trusts the LLM's claim that all tests pass — it runs `pytest` independently via subprocess on extracted test files and rejects false positives, continuing the fix loop when verification fails
+- **Intermediate file filtering in `_commit_and_push`**: `*_fixed.*`, `*.bak`, `*.backup`, `*.orig`, `*.tmp`, and `error_output*.txt` files created during `pdd fix` are now filtered out before committing (fixes issue #383 where debug files like `auth_test_commands_auth_fixed.py` leaked into PRs)
+- **`git push -u origin HEAD`**: push commands in the e2e fix orchestrator now set upstream tracking, fixing failures on branches without a remote tracking ref
+- **Hello world E2E agentic sync tests**: new regression test cases 11 (multi-session) and 12 (one-session) verify the full `pdd sync --agentic` pipeline end-to-end on a minimal "hello world" prompt
 
 ### Fix
 
-- **test-batch-ann-1772952765768**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772952338234**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772950126527**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772933408546**: Subtitle font size 96px causes text to clip the ri
-- push upstream tracking and junk file filter (#787)
-- increase timeout for test_test_logs_manual_invocation (300s → 600s)
+- **Workflow state cleared only after successful commit**: `clear_workflow_state` now runs after `_commit_and_push` succeeds (not before), and the orchestrator returns early on commit failure — prevents losing workflow state when the commit step fails
+- **E2E test stability**: `test_e2e_issue_296_custom_csv` patches `unfinished_prompt` to avoid Cloud Batch failures on empty mock LLM content; sets `PDD_SUPPRESS_SETUP_REMINDER` env var
+- increase timeout for `test_test_logs_manual_invocation` (300s → 600s)
 - make hello world test file checks non-fatal in CI
+
+### Build
+
+- CI cloud-batch task ranges updated: sync regression slots expanded from 54–63 to 54–65, downstream ranges shifted accordingly to accommodate new hello world tests
+
+### Test
+
+- **E2E test for issue #383**: new `test_e2e_issue_383_commit_intermediate_files.py` sets up a real git repo and verifies `_commit_and_push` filters out intermediate `*_fixed.py` and backup files
+- comprehensive unit tests for `_is_intermediate_file`, `_extract_test_files`, and `_verify_tests_independently` added to `test_agentic_e2e_fix_orchestrator.py`
 
 ## v0.0.169 (2026-03-07)
 

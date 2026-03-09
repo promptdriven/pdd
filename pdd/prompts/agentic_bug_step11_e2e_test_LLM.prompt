@@ -74,6 +74,13 @@ E2E tests differ from unit tests:
 - **Unit tests** mock dependencies and test individual functions in isolation
 - **E2E tests** exercise the full system path that a user or API consumer would take
 
+% Runtime Environment
+
+Playwright browsers (chromium) may or may not be pre-installed. If you write a Playwright test:
+1. First try to run it. If browsers are missing, try `npx playwright install chromium --with-deps`
+2. If installation fails or the dev server isn't running, still output `E2E_FILES_CREATED` with the test path
+3. Prefer self-contained Playwright tests that use `page.route()` to mock API responses rather than requiring a live backend
+
 % CRITICAL: Discover E2E Test Environment First
 
 Before writing any E2E test, you MUST understand the existing test infrastructure. First, identify the primary language of the repository, then search for language-appropriate configuration files.
@@ -222,6 +229,12 @@ If the test doesn't fail or fails for the wrong reason:
 - Re-run until it correctly catches the bug
 - Output `E2E_FAIL: Test does not catch bug correctly` if you cannot make the test work
 
+If you wrote a valid test file but cannot run it (e.g., Playwright browsers not installed,
+dev server not running, emulators not available):
+- Still output `E2E_FILES_CREATED: <path>` so the test file is included in the PR
+- Then output `E2E_SKIP: <reason>` explaining why verification was not possible
+- The test file will still be committed — it just wasn't verified at runtime
+
 % Output
 
 After generating and running the test, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -296,4 +309,5 @@ E2E_FILES_MODIFIED: <comma-separated list of file paths you modified>
 - Run the test and include the actual output in your comment
 - Always post your findings as a GitHub comment before completing
 - If the test cannot be made to work, output `E2E_FAIL: Test does not catch bug correctly`
-- If no E2E test is applicable (e.g., the bug is purely internal with no user-facing impact), output `E2E_SKIP: No E2E test applicable for this bug type` and explain why
+- If no E2E test is applicable (purely internal bug with no integration path), output `E2E_SKIP: No E2E test applicable` and explain why
+- If you wrote a test but cannot verify it (missing browsers, dev server, emulators), output BOTH `E2E_FILES_CREATED: <path>` AND `E2E_SKIP: <reason>` — the file will still be included in the PR

@@ -1626,6 +1626,63 @@ def test_fix_main_local_flag_skips_cloud(
 
 
 @patch('pdd.fix_main.fix_errors_from_unit_tests')
+@patch('pdd.fix_main.CloudConfig.get_jwt_token')
+@patch('pdd.fix_main.Path')
+@patch('pdd.fix_main.construct_paths')
+def test_fix_main_k_service_skips_cloud(
+    mock_construct_paths,
+    mock_path,
+    mock_get_jwt,
+    mock_fix_errors,
+    mock_ctx,
+    monkeypatch
+):
+    """
+    Test that K_SERVICE env var (Cloud Run worker) skips cloud auth entirely
+    and goes straight to local execution without printing a warning.
+
+    Regression test for issue #596: when the agentic fix orchestrator runs
+    inside a Cloud Run Job (K_SERVICE set), pdd fix --manual was attempting
+    cloud auth, failing, printing a warning that confused the LLM agent,
+    and the agent bailed out instead of letting local fallback run.
+    """
+    mock_path.return_value.exists.return_value = True
+    mock_ctx.obj['local'] = False  # Not forcing local — cloud would normally be tried
+
+    monkeypatch.setenv("K_SERVICE", "pdd-executor-job")
+
+    mock_construct_paths.return_value = (
+        {},
+        {'prompt_file': 'prompt', 'code_file': 'code', 'unit_test_file': 'test', 'error_file': 'error'},
+        {'output_test': 'output/test.py', 'output_code': 'output/code.py', 'output_results': 'results/fix.log'},
+        'python'
+    )
+
+    mock_fix_errors.return_value = (False, False, "", "", "analysis", 0.5, "local-model")
+
+    fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_file="errors.log",
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=5.0,
+        auto_submit=False
+    )
+
+    # Cloud auth should NOT be attempted when K_SERVICE is set
+    mock_get_jwt.assert_not_called()
+    # Local fix should be used directly
+    mock_fix_errors.assert_called_once()
+
+
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
 @patch('pdd.fix_main.requests.post')
 @patch('pdd.fix_main.CloudConfig.get_jwt_token')
 @patch('pdd.fix_main.Path')
