@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
-import { renderStill } from "@/lib/render";
+import { extractFrameAtTime, renderStill } from "@/lib/render";
 import { runClaudeAnalysis } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
+import { createSseStream } from "@/lib/sse";
+import { resolveAuditSampleWindow } from "@/lib/audit-timing";
 import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
@@ -15,24 +17,29 @@ import type { AnnotationAnalysis, Section, SseSend } from "@/lib/types";
 
 type AuditSectionStatus = "running" | "done" | "error";
 
-function createSseStream() {
-  const stream = new TransformStream();
-  const writer = stream.writable.getWriter();
+function resolveSectionRenderedVideoPath(section: Section): string | null {
+  const candidates = new Set<string>();
 
-  const send = (data: object) => {
-    writer.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
+  if (section.videoFile) {
+    if (path.isAbsolute(section.videoFile)) {
+      candidates.add(section.videoFile);
+    } else {
+      candidates.add(path.join(process.cwd(), section.videoFile));
+      candidates.add(
+        path.join(process.cwd(), "outputs", "sections", path.basename(section.videoFile))
+      );
+    }
+  }
 
-  const done = () => {
-    writer.close();
-  };
+  candidates.add(path.join(process.cwd(), "outputs", "sections", `${section.id}.mp4`));
 
-  const error = (message: string) => {
-    send({ type: "error", message });
-    writer.close();
-  };
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
 
-  return { stream: stream.readable, send, done, error };
+  return null;
 }
 
 async function auditSection(
@@ -54,6 +61,12 @@ async function auditSection(
   for (const specFile of specFiles) {
     const specPath = path.join(specDir, specFile);
     const specName = path.basename(specFile, ".md");
+    const specContent = fs.readFileSync(specPath, "utf-8");
+    const sampleWindow = resolveAuditSampleWindow(specContent, {
+      sectionDurationSeconds: section.durationSeconds,
+      fps,
+    });
+    const renderedVideoPath = resolveSectionRenderedVideoPath(section);
 
     const outputStill = path.join(
       "outputs",
@@ -63,12 +76,26 @@ async function auditSection(
     );
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
 
-    // Render midpoint still
-    const midpointFrame = Math.floor((section.durationSeconds / 2) * fps);
-    onLog(
-      `[audit] Rendering still for ${section.id} (${specName}) at frame ${midpointFrame}`
-    );
-    await renderStill(section.compositionId, midpointFrame, outputStill);
+    if (renderedVideoPath) {
+      onLog(
+        `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleWindow.sampleSeconds.toFixed(3)}s from rendered video`
+      );
+      await extractFrameAtTime(
+        renderedVideoPath,
+        sampleWindow.sampleSeconds,
+        outputStill
+      );
+    } else {
+      const sectionFrameCount = Math.max(1, Math.floor(section.durationSeconds * fps));
+      const sampleFrame = Math.min(
+        sectionFrameCount - 1,
+        Math.max(0, Math.floor(sampleWindow.sampleSeconds * fps))
+      );
+      onLog(
+        `[audit] Rendering still for ${section.id} (${specName}) at frame ${sampleFrame} (${sampleWindow.source})`
+      );
+      await renderStill(section.compositionId, sampleFrame, outputStill);
+    }
 
     // Claude analysis prompt
     const prompt = `

@@ -236,27 +236,36 @@ def _format_prompt(template: str, context: Dict[str, Any]) -> str:
 
 
 def _check_hard_stop(step_num: Union[int, float], output: str) -> Optional[str]:
+    """Check output for hard stop conditions.
+
+    Clarification step (3) requires the explicit STOP_CONDITION: tag.
+    A universal STOP_CONDITION: tag is recognized on any step.
+    """
     if not output:
         return None
-
-    # Primary: Check for explicit STOP_CONDITION tag anywhere in output (universal — any step)
-    match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-
-    # Fallback: implicit substring matches (case-insensitive)
-    # Note: Step 3 (clarification) has NO substring fallback — uses STOP_CONDITION only
-    # to avoid false positives from casual LLM mentions (Issue #769)
+    stop_match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
     output_lower = output.lower()
+
     if step_num == 1 and "duplicate of #" in output_lower:
         return "Issue is a duplicate"
+    if step_num == 3:
+        if stop_match and "needs more info" in stop_match.group(1).lower():
+            return "Needs more info from author"
+        return None
     if step_num == 5 and "plan_blocked" in output_lower:
         return "Test plan not achievable"
     if step_num == 12:
         files = _parse_changed_files(output)
         if not files:
             return "No test file generated"
+    # Universal fallback: any STOP_CONDITION tag on an unhandled step
+    if stop_match:
+        return stop_match.group(1).strip()
     return None
+
+
+# Steps where a hard stop is a "clarification" request (step should re-run on resume)
+_CLARIFICATION_STEPS = {3}
 
 
 def _poll_parallel_results(results_path: Path, timeout: float) -> Optional[str]:
@@ -419,12 +428,13 @@ def run_agentic_test_orchestrator(
         )
         return step_success, step_output, step_cost, step_model
 
-    def save_state(step_num: Union[int, float], step_output: str, success: bool) -> None:
+    def save_state(step_num: Union[int, float], step_output: str, success: bool,
+                   *, completed_step_override: Optional[Union[int, float]] = None) -> None:
         nonlocal github_comment_id
         context[f"step{step_num}_output"] = step_output
         if success:
             state["step_outputs"][str(step_num)] = step_output
-            state["last_completed_step"] = step_num
+            state["last_completed_step"] = completed_step_override if completed_step_override is not None else step_num
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
         state["total_cost"] = total_cost
@@ -447,7 +457,14 @@ def run_agentic_test_orchestrator(
     def finish_hard_stop(step_num: Union[int, float], reason: str) -> Tuple[bool, str, float, str, List[str]]:
         if not quiet:
             console.print(f"[yellow]Investigation stopped at Step {step_num}: {reason}[/yellow]")
-        save_state(step_num, context.get(f"step{step_num}_output", ""), True)
+        # Clarification steps save previous step as completed so they re-run on resume
+        if step_num in _CLARIFICATION_STEPS:
+            prev_idx = step_order.index(step_num) - 1
+            override = step_order[prev_idx] if prev_idx >= 0 else 0
+        else:
+            override = None
+        save_state(step_num, context.get(f"step{step_num}_output", ""), True,
+                   completed_step_override=override)
         return False, f"Stopped at step {step_num}: {reason}", total_cost, model_used, changed_files
 
     # Steps 1-5.5

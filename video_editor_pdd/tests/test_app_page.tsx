@@ -345,9 +345,9 @@ describe("review tab layout", () => {
     expect(sourceCode).toMatch(/activeTab\s*===\s*['"]review['"]/);
   });
 
-  it("renders VideoPlayer with src pointing to full video", () => {
+  it("renders VideoPlayer with a derived reviewVideoSrc value", () => {
     expect(sourceCode).toMatch(/<VideoPlayer/);
-    expect(sourceCode).toMatch(/src=["']\/?api\/video\/outputs\/full_video\.mp4["']/);
+    expect(sourceCode).toMatch(/src=\{reviewVideoSrc\}/);
   });
 
   it("passes annotations to VideoPlayer", () => {
@@ -530,8 +530,17 @@ describe("no polling in page component", () => {
 // ---------------------------------------------------------------------------
 
 describe("full video path", () => {
-  it("uses /api/video/outputs/full_video.mp4 as src for VideoPlayer", () => {
+  it("defines the canonical full video source path", () => {
     expect(sourceCode).toContain("/api/video/outputs/full_video.mp4");
+  });
+
+  it("defines a per-section review video path under outputs/sections", () => {
+    expect(sourceCode).toContain("/api/video/outputs/sections/");
+  });
+
+  it("switches Review to section video when fullVideo is stale", () => {
+    expect(sourceCode).toMatch(/fullVideo\?\.stale/);
+    expect(sourceCode).toMatch(/reviewVideoSrc/);
   });
 });
 

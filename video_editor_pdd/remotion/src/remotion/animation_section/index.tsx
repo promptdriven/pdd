@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { AnimationSection01TitleCard } from "../AnimationSection01TitleCard";
 import { AnimationSection02BlueCirclePulse } from "../AnimationSection02BlueCirclePulse";
@@ -21,7 +21,7 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 10.624;
+  const durationSeconds = 10.688;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
@@ -35,7 +35,6 @@ export const AnimationSectionSection: React.FC = () => {
   return (
     <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
       <Audio src={staticFile("animation_section/narration.wav")} />
-      <OffthreadVideo src={staticFile("veo/animation_section.mp4")} style={{ width: "100%", height: "100%" }} />
       {ActiveComponent && activeVisual ? (
         <Sequence
           from={activeVisual.start}

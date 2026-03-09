@@ -34,6 +34,14 @@ interface Stage8CompositionGenProps {
   onAdvance: () => void;
 }
 
+interface PreviewResponse {
+  url?: string | null;
+  path?: string | null;
+  previewUrl?: string | null;
+  specPath?: string | null;
+  specContent?: string | null;
+}
+
 const COLLAPSE_STORAGE_KEY = 'stage8-collapsed-sections';
 
 /**
@@ -79,6 +87,8 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewName, setPreviewName] = useState<string | null>(null);
+  const [previewSpecPath, setPreviewSpecPath] = useState<string | null>(null);
+  const [previewSpecContent, setPreviewSpecContent] = useState<string | null>(null);
   const previewDialogRef = useRef<HTMLDialogElement | null>(null);
 
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({});
@@ -232,14 +242,18 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
   const openPreview = async (componentName: string, sectionId?: string) => {
     setPreviewName(componentName);
     setPreviewUrl(null);
+    setPreviewSpecPath(null);
+    setPreviewSpecContent(null);
     try {
       const sectionParam = sectionId ? `&section=${encodeURIComponent(sectionId)}` : '';
       const res = await fetch(`/api/pipeline/compositions/preview?component=${encodeURIComponent(componentName)}${sectionParam}`);
       if (!res.ok) throw new Error(`Preview unavailable (${res.status})`);
       let url: string | null = null;
       if (res.headers.get('content-type')?.includes('application/json')) {
-        const data = await res.json();
+        const data = (await res.json()) as PreviewResponse;
         url = data.url || data.path || data.previewUrl || null;
+        setPreviewSpecPath(data.specPath ?? null);
+        setPreviewSpecContent(data.specContent ?? null);
       } else {
         const text = (await res.text()).trim();
         url = (text.startsWith('http') || text.startsWith('/')) ? text : null;
@@ -248,6 +262,8 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       setPreviewUrl(url);
     } catch (err) {
       setPreviewUrl(null);
+      setPreviewSpecPath(null);
+      setPreviewSpecContent(null);
     } finally {
       previewDialogRef.current?.showModal();
     }
@@ -257,6 +273,8 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     previewDialogRef.current?.close();
     setPreviewUrl(null);
     setPreviewName(null);
+    setPreviewSpecPath(null);
+    setPreviewSpecContent(null);
   };
 
   const missingFiles = useMemo(
@@ -549,7 +567,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       {/* Preview modal */}
       <dialog
         ref={previewDialogRef}
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-slate-700 p-0 shadow-xl backdrop:bg-black/40"
+        className="fixed left-1/2 top-1/2 w-[min(92vw,1120px)] max-w-[1120px] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-slate-700 bg-slate-900 p-0 text-white shadow-xl backdrop:bg-black/40"
       >
         <div className="flex items-center justify-between border-b border-slate-700 px-4 py-2">
           <div className="text-sm font-semibold text-slate-200">
@@ -562,12 +580,30 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             Close
           </button>
         </div>
-        <div className="p-4">
-          {previewUrl ? (
-            <img src={previewUrl} alt="Preview still" className="max-h-[60vh] w-auto" />
-          ) : (
-            <p className="text-sm text-slate-500">Preview not available.</p>
-          )}
+        <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+          <div className="rounded border border-slate-700 bg-slate-950/60 p-3">
+            <div className="mb-3 text-sm font-semibold text-slate-200">Frame Preview</div>
+            {previewUrl ? (
+              <img src={previewUrl} alt="Preview still" className="max-h-[60vh] w-auto rounded border border-slate-700" />
+            ) : (
+              <p className="text-sm text-slate-500">Preview not available.</p>
+            )}
+          </div>
+          <div className="rounded border border-slate-700 bg-slate-950/60 p-3">
+            <div className="mb-1 text-sm font-semibold text-slate-200">Associated Spec</div>
+            {previewSpecPath ? (
+              <p className="mb-3 text-xs text-slate-400">{previewSpecPath}</p>
+            ) : (
+              <p className="mb-3 text-xs text-slate-500">No associated spec file found for this preview.</p>
+            )}
+            {previewSpecContent ? (
+              <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded border border-slate-700 bg-slate-900 p-3 text-xs leading-6 text-slate-200">
+                {previewSpecContent}
+              </pre>
+            ) : (
+              <p className="text-sm text-slate-500">Spec content not available.</p>
+            )}
+          </div>
         </div>
       </dialog>
     </div>

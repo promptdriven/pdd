@@ -621,20 +621,21 @@ def run_agentic_bug_orchestrator(
         # Step 11: E2E Test — handle skip, failure, and file extraction
         if step_num == 11:
             if "E2E_SKIP:" in output:
-                # Simple bug — no E2E needed, treat as successful completion
                 if not quiet:
                     for line in output.splitlines():
                         if line.strip().startswith("E2E_SKIP:"):
                             reason = line.split(":", 1)[1].strip()
                             console.print(f"  → E2E test skipped: {reason}")
                             break
-                # Skip E2E file parsing, continue to step 10
+                # Fall through to file parsing (don't skip)
             elif "E2E_FAIL: Test does not catch bug correctly" in output:
                 msg = "Stopped at Step 11: E2E test does not catch bug correctly."
                 if not quiet: console.print(f"⏹️  {msg}")
                 return False, msg, total_cost, last_model_used, changed_files
-            else:
-                # Parse output for E2E_FILES_CREATED to extend changed_files
+
+            # Always parse E2E_FILES_CREATED (even on E2E_SKIP — test may have
+            # been written but not verified due to missing runtime deps)
+            if "E2E_FAIL:" not in output:
                 e2e_files = []
                 for line in output.splitlines():
                     if line.startswith("E2E_FILES_CREATED:"):

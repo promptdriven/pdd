@@ -201,6 +201,24 @@ export const getSectionDuration = async (mp4Path: string): Promise<number> => {
 };
 
 /**
+ * Extract a single frame from a rendered video at a specific timestamp.
+ */
+export const extractFrameAtTime = async (
+  videoPath: string,
+  timeSeconds: number,
+  outputPath: string
+): Promise<void> => {
+  await ensureDir(outputPath);
+
+  const safeTimeSeconds = Math.max(0, timeSeconds);
+  const cmd =
+    `ffmpeg -y -ss ${safeTimeSeconds.toFixed(3)} -i "${videoPath}" ` +
+    `-vframes 1 -q:v 2 "${outputPath}"`;
+
+  await execAsync(cmd);
+};
+
+/**
  * Render a single frame as PNG for audit screenshots.
  *
  * Spawns a child process to avoid bufferUtil / module-resolution

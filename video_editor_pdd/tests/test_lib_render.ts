@@ -10,13 +10,14 @@
  *   2. Export stitchFullVideo(sectionPaths, outputPath, onProgress) → Promise<void>
  *   3. Export getSectionDuration(mp4Path) → Promise<number>
  *   4. Export renderStill(compositionId, frame, outputPath) → Promise<void>
- *   5. renderMedia uses codec 'h264', outputLocation, onProgress mapping 0–1 → 0–100
- *   6. Bundle path defaults to path.join(process.cwd(), 'remotion')
- *   7. import 'server-only' guard
- *   8. Ensure output directories exist before rendering
- *   9. stitchFullVideo writes ffmpeg concat file and runs ffmpeg -f concat -safe 0
- *  10. getSectionDuration runs ffprobe and parses float duration
- *  11. renderStill uses selectComposition + remotion renderStill
+ *   5. Export extractFrameAtTime(videoPath, timeSeconds, outputPath) → Promise<void>
+ *   6. renderMedia uses codec 'h264', outputLocation, onProgress mapping 0–1 → 0–100
+ *   7. Bundle path defaults to path.join(process.cwd(), 'remotion')
+ *   8. import 'server-only' guard
+ *   9. Ensure output directories exist before rendering
+ *  10. stitchFullVideo writes ffmpeg concat file and runs ffmpeg -f concat -safe 0
+ *  11. getSectionDuration runs ffprobe and parses float duration
+ *  12. renderStill uses selectComposition + remotion renderStill
  */
 
 import fs from "fs";
@@ -117,6 +118,7 @@ import {
   renderSection,
   stitchFullVideo,
   getSectionDuration,
+  extractFrameAtTime,
   renderStill,
 } from "../lib/render";
 
@@ -184,6 +186,10 @@ describe("module exports", () => {
     expect(typeof renderStill).toBe("function");
   });
 
+  it("exports extractFrameAtTime as a function", () => {
+    expect(typeof extractFrameAtTime).toBe("function");
+  });
+
   it("renderSection accepts 3 parameters", () => {
     expect(renderSection.length).toBe(3);
   });
@@ -200,10 +206,15 @@ describe("module exports", () => {
     expect(renderStill.length).toBe(3);
   });
 
+  it("extractFrameAtTime accepts 3 parameters", () => {
+    expect(extractFrameAtTime.length).toBe(3);
+  });
+
   it("all exports are async functions", () => {
     expect(renderSection.constructor.name).toBe("AsyncFunction");
     expect(stitchFullVideo.constructor.name).toBe("AsyncFunction");
     expect(getSectionDuration.constructor.name).toBe("AsyncFunction");
+    expect(extractFrameAtTime.constructor.name).toBe("AsyncFunction");
     expect(renderStill.constructor.name).toBe("AsyncFunction");
   });
 });
@@ -540,7 +551,45 @@ describe("getSectionDuration — ffprobe", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. renderStill — Remotion renderStill integration
+// 6. extractFrameAtTime — ffmpeg still extraction
+// ---------------------------------------------------------------------------
+
+describe("extractFrameAtTime — ffmpeg still extraction", () => {
+  beforeEach(() => {
+    setupFsMocks();
+    setupExecAsync();
+  });
+
+  it("runs ffmpeg with -ss, -vframes 1, and -q:v 2", async () => {
+    await extractFrameAtTime("/sections/intro.mp4", 1.5, "/frames/frame.png");
+
+    const execCall = mockExecPromisified.mock.calls[0][0];
+    expect(execCall).toContain("ffmpeg");
+    expect(execCall).toContain("-ss 1.500");
+    expect(execCall).toContain('/sections/intro.mp4');
+    expect(execCall).toContain("-vframes 1");
+    expect(execCall).toContain("-q:v 2");
+    expect(execCall).toContain("/frames/frame.png");
+  });
+
+  it("creates the output directory before extracting the frame", async () => {
+    await extractFrameAtTime("/sections/intro.mp4", 1.5, "/output/frames/frame.png");
+
+    expect(fs.promises.mkdir).toHaveBeenCalledWith("/output/frames", {
+      recursive: true,
+    });
+  });
+
+  it("clamps negative timestamps to zero", async () => {
+    await extractFrameAtTime("/sections/intro.mp4", -2, "/frames/frame.png");
+
+    const execCall = mockExecPromisified.mock.calls[0][0];
+    expect(execCall).toContain("-ss 0.000");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. renderStill — Remotion renderStill integration
 // ---------------------------------------------------------------------------
 
 describe("renderStill — subprocess", () => {
@@ -605,7 +654,7 @@ describe("renderStill — subprocess", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Source file structure checks
+// 8. Source file structure checks
 // ---------------------------------------------------------------------------
 
 describe("lib/render.ts source structure", () => {
@@ -718,8 +767,18 @@ describe("lib/render.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+(const|async\s+function)\s+renderStill/);
   });
 
+  it("exports extractFrameAtTime", () => {
+    expect(sourceCode).toMatch(/export\s+(const|async\s+function)\s+extractFrameAtTime/);
+  });
+
   it("resolves bundle path from env var or convention", () => {
     expect(sourceCode).toMatch(/REMOTION_BUNDLE_PATH/);
     expect(sourceCode).toMatch(/remotion/);
+  });
+
+  it("uses ffmpeg -ss for extracting specific audit frames", () => {
+    expect(sourceCode).toMatch(/ffmpeg\s+-y\s+-ss/);
+    expect(sourceCode).toMatch(/-vframes 1/);
+    expect(sourceCode).toMatch(/-q:v 2/);
   });
 });

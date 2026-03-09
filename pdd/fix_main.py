@@ -138,6 +138,13 @@ def fix_main(
         cloud_execution_succeeded = False
 
         if not loop and not current_execution_is_local:
+            # Cloud auth cannot succeed in headless worker environments (no JWT
+            # cache, no interactive device flow). Skip directly to local execution
+            # to avoid warning messages that cause LLM agent bailout (issue #596).
+            if CloudConfig.is_running_in_cloud():
+                current_execution_is_local = True
+
+        if not loop and not current_execution_is_local:
             if verbose:
                 console.print(Panel("Attempting cloud fix execution...", title="[blue]Mode[/blue]", expand=False))
 

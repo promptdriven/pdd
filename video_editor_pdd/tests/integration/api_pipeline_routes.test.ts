@@ -608,6 +608,47 @@ describe("GET /api/pipeline/render/status", () => {
     expect(ids).toContain("main");
     expect(ids).toHaveLength(2);
   });
+
+  it("marks fullVideo as stale when a section render is newer than the stitched file", async () => {
+    fs.mkdirSync(REAL_SECTIONS_DIR, { recursive: true });
+    const introPath = path.join(REAL_SECTIONS_DIR, "intro.mp4");
+    const hadIntro = fs.existsSync(introPath);
+    const introBackup = introPath + ".testbak";
+    const hadFull = fs.existsSync(REAL_FULL_VIDEO_PATH);
+    const fullBackup = REAL_FULL_VIDEO_PATH + ".testbak";
+
+    if (hadIntro) {
+      fs.renameSync(introPath, introBackup);
+    }
+    if (hadFull) {
+      fs.renameSync(REAL_FULL_VIDEO_PATH, fullBackup);
+    }
+
+    fs.writeFileSync(introPath, "newer-section-data");
+    fs.writeFileSync(REAL_FULL_VIDEO_PATH, "older-full-video-data");
+
+    const now = new Date();
+    const older = new Date(now.getTime() - 60_000);
+    fs.utimesSync(REAL_FULL_VIDEO_PATH, older, older);
+    fs.utimesSync(introPath, now, now);
+
+    try {
+      const response = await GET_renderStatus();
+      const body = await response.json();
+
+      expect(body.fullVideo.exists).toBe(true);
+      expect(body.fullVideo.stale).toBe(true);
+    } finally {
+      fs.unlinkSync(introPath);
+      fs.unlinkSync(REAL_FULL_VIDEO_PATH);
+      if (hadIntro) {
+        fs.renameSync(introBackup, introPath);
+      }
+      if (hadFull) {
+        fs.renameSync(fullBackup, REAL_FULL_VIDEO_PATH);
+      }
+    }
+  });
 });
 
 // =========================================================================

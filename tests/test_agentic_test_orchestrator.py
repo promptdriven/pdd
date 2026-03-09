@@ -159,14 +159,14 @@ def test_hard_stop_duplicate(mock_deps, default_args):
 
 
 def test_hard_stop_needs_info(mock_deps, default_args):
-    """Step 3 stops the workflow when STOP_CONDITION tag is present."""
+    """Step 3 'Needs More Info' requires STOP_CONDITION tag (Bug #784)."""
     mocks = mock_deps
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
                     use_playwright=False):
         if label == "step3":
-            return (True, "Posted clarification.\nSTOP_CONDITION: Needs more info", 0.1, "anthropic")
+            return (True, "STOP_CONDITION: Needs More Info from author", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
 
     mocks["run"].side_effect = side_effect
@@ -176,6 +176,14 @@ def test_hard_stop_needs_info(mock_deps, default_args):
     assert success is False
     assert "Stopped at step 3" in msg
     assert mocks["run"].call_count == 3
+    save_calls = mocks["save"].call_args_list
+    assert len(save_calls) > 0
+    last_save = save_calls[-1]
+    saved_state = last_save[0][3]  # 4th positional arg is the state dict
+    assert saved_state["last_completed_step"] == 2, (
+        "Bug #784: Clarification step 3 should save last_completed_step=2 "
+        "so step 3 re-runs on resume"
+    )
 
 
 def test_hard_stop_plan_blocked(mock_deps, default_args):
@@ -668,19 +676,55 @@ def test_z3_step_execution_order():
     assert s.check() == z3.unsat, f"Counter-example: {s.model()}"
 
 
-# -----------------------------------------------------------------------------
-# Tests for Issue #769 — STOP_CONDITION universal parsing
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Bug #784: _check_hard_stop improvements
+# ---------------------------------------------------------------------------
 
-def test_hard_stop_step3_stop_condition_prefix(mock_deps, default_args):
-    """Step 3 should detect STOP_CONDITION: Needs more info line prefix."""
+def test_check_hard_stop_step3_requires_stop_condition_tag():
+    """Bug #784: Step 3 'Needs More Info' requires STOP_CONDITION tag, no substring fallback."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Casual mention should NOT trigger hard stop
+    result = _check_hard_stop(3, "Needs More Info mentioned casually in reasoning.")
+    assert result is None, (
+        "Bug #784: _check_hard_stop falsely triggers on casual 'Needs More Info' "
+        "without STOP_CONDITION tag"
+    )
+
+    # STOP_CONDITION tag SHOULD trigger hard stop
+    result = _check_hard_stop(3, "STOP_CONDITION: Needs More Info from author")
+    assert result is not None
+    assert "needs more info" in result.lower()
+
+
+def test_check_hard_stop_empty_and_none_output():
+    """_check_hard_stop handles empty and None output without error."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(1, "") is None
+    assert _check_hard_stop(1, None) is None
+    assert _check_hard_stop(3, "") is None
+    assert _check_hard_stop(3, None) is None
+
+
+def test_check_hard_stop_universal_stop_condition_tag():
+    """Any step can trigger via STOP_CONDITION: tag as a universal fallback."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Step 2 has no specific handler — universal fallback should catch it
+    result = _check_hard_stop(2, "STOP_CONDITION: Custom reason for stopping")
+    assert result == "Custom reason for stopping"
+
+
+def test_clarification_step3_saves_previous_step(mock_deps, default_args):
+    """Bug #784: Step 3 clarification stop saves last_completed_step = previous step."""
     mocks = mock_deps
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
                     use_playwright=False):
         if label == "step3":
-            return (True, "Analysis complete.\nSTOP_CONDITION: Needs more info", 0.1, "anthropic")
+            return (True, "STOP_CONDITION: Needs More Info", 0.1, "anthropic")
         return (True, "ok", 0.1, "anthropic")
 
     mocks["run"].side_effect = side_effect
@@ -727,3 +771,27 @@ def test_step3_prompt_has_stop_condition_instruction():
     prompt_content = prompt_path.read_text()
     assert "STOP_CONDITION: Needs more info" in prompt_content
     assert "CRITICAL" in prompt_content
+
+
+def test_no_false_positive_casual_needs_more_info(mock_deps, default_args):
+    """Bug #784: Casual mention of 'Needs More Info' should NOT stop workflow."""
+    mocks = mock_deps
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step3":
+            # Casual mention without STOP_CONDITION tag
+            return (True, "The issue already has enough info. Needs More Info is not required.", 0.1, "anthropic")
+        if label == "step12":
+            return (True, "FILES_CREATED: tests/test_new.py", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+    # Should NOT have stopped at step 3
+    assert "Stopped at step 3" not in msg, (
+        "Bug #784: Casual 'Needs More Info' mention should not trigger hard stop"
+    )

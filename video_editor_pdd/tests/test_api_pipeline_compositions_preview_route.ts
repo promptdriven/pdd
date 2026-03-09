@@ -11,6 +11,8 @@
  *   7. Returns 500 when renderStill fails
  */
 
+import path from "path";
+
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
@@ -30,17 +32,20 @@ jest.mock("@/lib/render", () => ({
 const mockExistsSync = jest.fn();
 const mockStatSync = jest.fn();
 const mockCreateReadStream = jest.fn();
+const mockReadFileSync = jest.fn();
 
 jest.mock("fs", () => ({
   __esModule: true,
   default: {
+      existsSync: (...args: unknown[]) => mockExistsSync(...args),
+      statSync: (...args: unknown[]) => mockStatSync(...args),
+      createReadStream: (...args: unknown[]) => mockCreateReadStream(...args),
+      readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+    },
     existsSync: (...args: unknown[]) => mockExistsSync(...args),
     statSync: (...args: unknown[]) => mockStatSync(...args),
     createReadStream: (...args: unknown[]) => mockCreateReadStream(...args),
-  },
-  existsSync: (...args: unknown[]) => mockExistsSync(...args),
-  statSync: (...args: unknown[]) => mockStatSync(...args),
-  createReadStream: (...args: unknown[]) => mockCreateReadStream(...args),
+    readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 // Mock stream.Readable.toWeb
@@ -98,6 +103,7 @@ beforeEach(() => {
   mockLoadProject.mockReturnValue(DEFAULT_PROJECT);
   mockRenderStill.mockResolvedValue(undefined);
   mockExistsSync.mockReturnValue(false);
+  mockReadFileSync.mockImplementation((filePath: string) => `spec for ${filePath}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -136,6 +142,20 @@ describe("GET — render still", () => {
     const body = await res.json();
     expect(body.url).toContain("component=title_card");
     expect(body.url).toContain("raw=1");
+  });
+
+  it("returns the associated spec path and content when a matching spec exists", async () => {
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate.endsWith(path.join("specs", "cold_open", "title_card.md"))
+    );
+
+    const res = await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")
+    );
+    const body = await res.json();
+
+    expect(body.specPath).toContain(path.join("specs", "cold_open", "title_card.md"));
+    expect(body.specContent).toContain("title_card.md");
   });
 
   it("renders different compositions for different components in the same section", async () => {
@@ -296,5 +316,15 @@ describe("GET — error cases", () => {
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toBe("Bundle not found");
+  });
+
+  it("returns null spec metadata when no matching spec file exists", async () => {
+    const res = await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=ColdOpenSectionWrapper")
+    );
+    const body = await res.json();
+
+    expect(body.specPath ?? null).toBeNull();
+    expect(body.specContent ?? null).toBeNull();
   });
 });

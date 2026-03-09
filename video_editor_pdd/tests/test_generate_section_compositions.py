@@ -1516,6 +1516,60 @@ class TestGeneratedTimelineWrapper:
         assert 'import { ColdOpenSection as ColdOpenSectionBase } from "./ColdOpenSection"' in tsx
         assert '<ColdOpenSectionBase />' in tsx
 
+    def test_generated_timeline_ignores_stale_veo_asset_when_script_has_no_veo(self, tmp_path):
+        """A stale staged Veo asset must not contaminate a Remotion-only section render."""
+        project_dir = tmp_path
+        narrative_dir = project_dir / "narrative"
+        narrative_dir.mkdir()
+        (narrative_dir / "main_script.md").write_text(
+            "# Integration Test Script\n\n"
+            "## ANIMATION SECTION\n\n"
+            "**[VISUAL: [Remotion] Blue circle pulse]**\n\n"
+            "## VEO SECTION\n\n"
+            "**[VISUAL: [veo: Ocean wave at sunset]]**\n",
+            encoding="utf-8",
+        )
+
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "animation_section"
+        component_dir = remotion_src / "AnimationSection01TitleCard"
+        section_dir.mkdir()
+        component_dir.mkdir()
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "01_title_card", desc: "Intro" }];'
+        )
+        (component_dir / "index.ts").write_text(
+            'export const AnimationSection01TitleCard = () => null;\n'
+            'export default AnimationSection01TitleCard;'
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "animation_section.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "animation_section" / "narration.wav").parent.mkdir(parents=True)
+        (remotion_public / "animation_section" / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 32)
+
+        section = {
+            "id": "animation_section",
+            "label": "Animation Section",
+            "compositionId": "AnimationSection",
+            "durationSeconds": 12,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "compositions": ["01_title_card"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'staticFile("animation_section/narration.wav")' in tsx
+        assert 'staticFile("veo/animation_section.mp4")' not in tsx
+        assert "OffthreadVideo" not in tsx
+
 
 class TestSectionAssetAliases:
     """Compatibility aliases should be created for common Claude staticFile drift."""

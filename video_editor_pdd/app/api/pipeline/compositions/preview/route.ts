@@ -9,6 +9,13 @@ import { renderStill } from "@/lib/render";
 const PREVIEWS_DIR = path.join(process.cwd(), "outputs", "previews");
 const FPS = 30;
 
+type PreviewSection = {
+  id: string;
+  compositionId: string;
+  specDir?: string;
+  compositions?: Array<string | Record<string, unknown>>;
+};
+
 function toPascalCase(s: string): string {
   return s.replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
 }
@@ -37,10 +44,10 @@ function compToRemotionId(compId: string, sectionId: string): string {
  * When sectionId is provided, only that section is checked — this disambiguates
  * components like "title_card" that appear in multiple sections.
  */
-function resolveCompositionId(
+function resolvePreviewTarget(
   componentName: string,
   sectionId?: string
-): string | null {
+): { compositionId: string; section: PreviewSection } | null {
   const config = loadProject();
   const sections = sectionId
     ? config.sections.filter(
@@ -48,7 +55,7 @@ function resolveCompositionId(
       )
     : config.sections;
 
-  for (const section of sections) {
+  for (const section of sections as PreviewSection[]) {
     const comps: string[] = (section.compositions ?? []).map(
       (comp: string | Record<string, unknown>) =>
         typeof comp === "string" ? comp : (comp as Record<string, unknown>).id as string
@@ -57,25 +64,70 @@ function resolveCompositionId(
     // Remotion composition ID (PascalCase → kebab-case to match Root.tsx).
     const scopedName = `${section.id}_${componentName}`;
     if (comps.includes(scopedName)) {
-      return compToRemotionId(scopedName, section.id);
+      return {
+        compositionId: compToRemotionId(scopedName, section.id),
+        section,
+      };
     }
     // Check if the component name is already section-scoped in the list
     if (comps.includes(componentName)) {
-      return compToRemotionId(componentName, section.id);
+      return {
+        compositionId: compToRemotionId(componentName, section.id),
+        section,
+      };
     }
     // Fallback _main components → section wrapper
     if (componentName === `${section.id}_main`) {
-      return section.compositionId;
+      return { compositionId: section.compositionId, section };
     }
     // Wrapper names → section wrapper
     if (
       componentName === `${section.compositionId}Wrapper` ||
       componentName === `${section.id}Wrapper`
     ) {
-      return section.compositionId;
+      return { compositionId: section.compositionId, section };
     }
   }
   return null;
+}
+
+function resolvePreviewSpec(
+  componentName: string,
+  section: PreviewSection
+): { specPath: string | null; specContent: string | null } {
+  if (!section.specDir) {
+    return { specPath: null, specContent: null };
+  }
+
+  const specDir = path.join(process.cwd(), "specs", section.specDir);
+  const candidateNames = new Set<string>();
+  candidateNames.add(`${componentName}.md`);
+
+  if (componentName.startsWith(`${section.id}_`)) {
+    candidateNames.add(`${componentName.slice(section.id.length + 1)}.md`);
+  }
+
+  if (
+    componentName === `${section.id}_main` ||
+    componentName === `${section.compositionId}Wrapper` ||
+    componentName === `${section.id}Wrapper`
+  ) {
+    candidateNames.add("spec.md");
+  }
+
+  for (const fileName of candidateNames) {
+    const candidatePath = path.join(specDir, fileName);
+    if (!fs.existsSync(candidatePath)) {
+      continue;
+    }
+
+    return {
+      specPath: path.relative(process.cwd(), candidatePath),
+      specContent: fs.readFileSync(candidatePath, "utf-8"),
+    };
+  }
+
+  return { specPath: null, specContent: null };
 }
 
 /**
@@ -129,8 +181,8 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   // Render a new still
-  const compositionId = resolveCompositionId(componentName, sectionId);
-  if (!compositionId) {
+  const previewTarget = resolvePreviewTarget(componentName, sectionId);
+  if (!previewTarget) {
     return NextResponse.json(
       { error: `Cannot resolve compositionId for "${componentName}"` },
       { status: 404 }
@@ -138,11 +190,15 @@ export async function GET(request: NextRequest): Promise<Response> {
   }
 
   try {
-    await renderStill(compositionId, FPS, pngPath);
+    await renderStill(previewTarget.compositionId, FPS, pngPath);
     const qs = new URLSearchParams({ component: componentName, raw: "1" });
     if (sectionId) qs.set("section", sectionId);
     const url = `/api/pipeline/compositions/preview?${qs}`;
-    return NextResponse.json({ url });
+    const { specPath, specContent } = resolvePreviewSpec(
+      componentName,
+      previewTarget.section
+    );
+    return NextResponse.json({ url, specPath, specContent });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Render failed";
     return NextResponse.json({ error: message }, { status: 500 });

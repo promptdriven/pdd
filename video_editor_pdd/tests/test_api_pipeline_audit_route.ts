@@ -8,8 +8,10 @@
  * Spec requirements verified:
  *   1. POST /api/pipeline/audit/run — accepts { sections?: string[] }, defaults to all.
  *      Launches one agent per section concurrently. Returns SSE stream with { jobId }.
- *   2. Each per-section agent: calls renderStill() for segment midpoints → calls
- *      runClaudeAnalysis() comparing the still PNG against the spec file → writes
+ *   2. Each per-section agent: resolves a spec-local audit timestamp → extracts
+ *      a frame from the rendered section video when available (or falls back to
+ *      renderStill()) → calls runClaudeAnalysis() comparing the still PNG against
+ *      the spec file → writes
  *      specs/{specDir}/AUDIT_{specName}.md with pass/fail verdict and details.
  *   3. GET /api/pipeline/audit/results — returns { sections: AuditSectionResult[] }
  *      with passCount, failCount, status ('done'|'pending'|'error'), and specs array.
@@ -36,9 +38,11 @@ jest.mock("@/lib/jobs", () => ({
 }));
 
 const mockRenderStill = jest.fn();
+const mockExtractFrameAtTime = jest.fn();
 
 jest.mock("@/lib/render", () => ({
   renderStill: (...args: unknown[]) => mockRenderStill(...args),
+  extractFrameAtTime: (...args: unknown[]) => mockExtractFrameAtTime(...args),
 }));
 
 const mockRunClaudeAnalysis = jest.fn();
@@ -130,7 +134,11 @@ async function readSseEvents(
       const parts = buffer.split("\n\n");
       buffer = parts.pop() ?? "";
       for (const part of parts) {
-        const dataLine = part.replace(/^data:\s*/, "");
+        const dataLine =
+          part
+            .split("\n")
+            .find((line) => line.startsWith("data:"))
+            ?.replace(/^data:\s*/, "") ?? "";
         if (dataLine) {
           try {
             events.push(JSON.parse(dataLine));
@@ -208,6 +216,7 @@ function mockProjectConfig() {
 beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockRenderStill.mockReset();
+  mockExtractFrameAtTime.mockReset();
   mockRunClaudeAnalysis.mockReset();
   mockLoadProject.mockReset();
   mockReaddirSync.mockReset();
@@ -218,6 +227,7 @@ beforeEach(() => {
 
   mockRunPipelineStage.mockResolvedValue("test-job-audit-001");
   mockRenderStill.mockResolvedValue(undefined);
+  mockExtractFrameAtTime.mockResolvedValue(undefined);
   mockRunClaudeAnalysis.mockResolvedValue({
     severity: "pass",
     fixType: "none",
@@ -227,6 +237,7 @@ beforeEach(() => {
   });
   mockLoadProject.mockReturnValue(mockProjectConfig());
   mockReaddirSync.mockReturnValue([]);
+  mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
   mockExistsSync.mockReturnValue(true);
   mockMkdirSync.mockReturnValue(undefined);
   mockWriteFileSync.mockReturnValue(undefined);
@@ -328,6 +339,24 @@ describe("POST — success flow", () => {
     expect(jobEvent).toBeDefined();
     expect(jobEvent.jobId).toBe("test-job-audit-42");
   });
+
+  it("does not crash if the client disconnects before the audit job finishes", async () => {
+    let resolveStage: ((jobId: string) => void) | null = null;
+    mockRunPipelineStage.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveStage = resolve;
+        })
+    );
+
+    const response = await POST(makeRequest() as any);
+    await response.body!.cancel();
+
+    resolveStage?.("test-job-after-cancel");
+    await flushPromises();
+
+    expect(mockRunPipelineStage).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -372,7 +401,7 @@ describe("POST — error handling", () => {
     await flushPromises();
 
     const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
+    const errorEvent = events.find((e: any) => e.message === "Audit failed") as any;
     expect(errorEvent).toBeDefined();
     expect(errorEvent.message).toBe("Audit failed");
   });
@@ -384,7 +413,7 @@ describe("POST — error handling", () => {
     await flushPromises();
 
     const events = await readSseEvents(response.body!);
-    const errorEvent = events.find((e: any) => e.type === "error") as any;
+    const errorEvent = events.find((e: any) => e.message === "Unknown error") as any;
     expect(errorEvent).toBeDefined();
     expect(errorEvent.message).toBe("Unknown error");
   });
@@ -556,7 +585,7 @@ describe("audit executor factory", () => {
     let maxConcurrent = 0;
 
     mockReaddirSync.mockReturnValue(["visual.md"]);
-    mockRenderStill.mockImplementation(async () => {
+    mockExtractFrameAtTime.mockImplementation(async () => {
       concurrentCount++;
       maxConcurrent = Math.max(maxConcurrent, concurrentCount);
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -571,7 +600,7 @@ describe("audit executor factory", () => {
     expect(maxConcurrent).toBeGreaterThan(1);
   });
 
-  it("calls renderStill with correct arguments for each spec", async () => {
+  it("extracts audit frames from the rendered section video when available", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro
     mockLoadProject.mockReturnValue(config);
@@ -583,13 +612,37 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockRenderStill).toHaveBeenCalledTimes(1);
-    // compositionId
-    expect(mockRenderStill.mock.calls[0][0]).toBe("IntroComposition");
-    // midpoint frame: Math.floor((12.5 / 2) * 30) = Math.floor(187.5) = 187
-    expect(mockRenderStill.mock.calls[0][1]).toBe(187);
-    // output path: outputs/audit/intro/visual_frame.png
+    expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(1);
+    expect(mockRenderStill).not.toHaveBeenCalled();
     const pathMod = require("path");
+    expect(mockExtractFrameAtTime.mock.calls[0][0]).toBe(
+      pathMod.join(process.cwd(), "output", "sections", "intro.mp4")
+    );
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(2.25);
+    expect(mockExtractFrameAtTime.mock.calls[0][2]).toBe(
+      pathMod.join("outputs", "audit", "intro", "visual_frame.png")
+    );
+  });
+
+  it("falls back to renderStill when the rendered section video is unavailable", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]]; // just intro
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    const pathMod = require("path");
+    const specDir = pathMod.join(process.cwd(), "specs", "intro");
+    mockExistsSync.mockImplementation((candidate: string) => candidate === specDir);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+    expect(mockRenderStill).toHaveBeenCalledTimes(1);
+    expect(mockRenderStill.mock.calls[0][0]).toBe("IntroComposition");
+    expect(mockRenderStill.mock.calls[0][1]).toBe(67);
     expect(mockRenderStill.mock.calls[0][2]).toBe(
       pathMod.join("outputs", "audit", "intro", "visual_frame.png")
     );
@@ -703,7 +756,7 @@ describe("audit executor factory", () => {
     await executor(jest.fn());
 
     // Should only process visual.md and overlay.md, not AUDIT_ files
-    expect(mockRenderStill).toHaveBeenCalledTimes(2);
+    expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(2);
     expect(mockRunClaudeAnalysis).toHaveBeenCalledTimes(2);
   });
 
@@ -720,7 +773,7 @@ describe("audit executor factory", () => {
     await executor(jest.fn());
 
     // Should only process visual.md
-    expect(mockRenderStill).toHaveBeenCalledTimes(1);
+    expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(1);
   });
 
   it("uses onLog to report rendering progress", async () => {
@@ -780,7 +833,7 @@ describe("audit executor factory", () => {
     await executor(jest.fn());
 
     const pathMod = require("path");
-    expect(mockRenderStill.mock.calls[0][2]).toBe(
+    expect(mockExtractFrameAtTime.mock.calls[0][2]).toBe(
       pathMod.join("outputs", "audit", "main", "transition_frame.png")
     );
   });
@@ -827,13 +880,12 @@ describe("audit executor factory", () => {
     );
   });
 
-  it("calculates midpoint frame correctly using fps and durationSeconds", async () => {
+  it("uses a late-window timestamp sample rather than the section midpoint", async () => {
     const config = mockProjectConfig();
-    // main section: durationSeconds = 45.0, fps = 30
-    // midpoint = Math.floor((45.0 / 2) * 30) = Math.floor(675) = 675
     config.sections = [config.sections[1]]; // main
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue("**Timestamp:** 0:12 - 0:18\n");
 
     const executor = registerCallArgs.factory(
       { sections: ["main"] },
@@ -841,7 +893,97 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockRenderStill.mock.calls[0][1]).toBe(675);
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(16.5);
+  });
+
+  it("falls back to animation-sequence frame ranges when timestamp metadata is missing", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]]; // intro
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue(`
+## Animation Sequence
+1. Frame 30-90: Intro.
+2. Frame 90-150: Hold.
+`);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(4);
+  });
+
+  it("prefers a hold frame range when the spec provides both timestamps and animation ranges", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]]; // intro
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue(`
+**Timestamp:** 0:00 - 0:03
+
+## Animation Sequence
+1. Frame 0-15: Fade in.
+2. Frame 15-45: Title reveal.
+3. Frame 45-65: Rule expansion.
+4. Frame 65-90: Hold — all elements static at full opacity.
+`);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(77.5 / 30);
+  });
+
+  it("offsets animation-sequence frame ranges by the spec timestamp window", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]]; // intro
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue(`
+**Timestamp:** 0:03 - 0:08
+
+## Animation Sequence
+1. Frame 0-20: Circle appears.
+2. Frame 20-40: Hold at full size.
+3. Frame 40-60: Pulse.
+4. Frame 60-90: Circle holds steady.
+5. Frame 90-150: Circle remains on screen.
+`);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(7);
+  });
+
+  it("clamps animation-sequence offsets to the end of the timestamp window", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[1]]; // main
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue(`
+**Timestamp:** 0:03 - 0:06
+
+## Animation Sequence
+1. Frame 0-120: Long clip that overruns the timestamp window.
+`);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["main"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(4.5);
   });
 });
 
@@ -1174,7 +1316,7 @@ describe("GET — error handling", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST — SSE event format", () => {
-  it("formats events as 'data: <JSON>\\n\\n'", async () => {
+  it("formats events as SSE blocks ending in a JSON data payload", async () => {
     const response = await POST(makeRequest() as any);
     await flushPromises();
 
@@ -1197,7 +1339,7 @@ describe("POST — SSE event format", () => {
 
     const eventBlocks = raw.split("\n\n").filter((b) => b.trim().length > 0);
     for (const block of eventBlocks) {
-      expect(block).toMatch(/^data:\s*\{/);
+      expect(block).toMatch(/data:\s*\{/);
     }
   });
 });
@@ -1256,9 +1398,22 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/runPipelineStage/);
   });
 
-  it("imports renderStill from @/lib/render", () => {
+  it("imports frame extraction helpers from @/lib/render", () => {
     expect(sourceCode).toMatch(/@\/lib\/render/);
     expect(sourceCode).toMatch(/renderStill/);
+    expect(sourceCode).toMatch(/extractFrameAtTime/);
+  });
+
+  it("imports createSseStream from @/lib/sse instead of defining a local stream helper", () => {
+    expect(sourceCode).toMatch(
+      /import\s+\{\s*createSseStream\s*\}\s+from\s+["']@\/lib\/sse["']/
+    );
+    expect(sourceCode).not.toMatch(/function\s+createSseStream\s*\(/);
+  });
+
+  it("imports resolveAuditSampleWindow from @/lib/audit-timing", () => {
+    expect(sourceCode).toMatch(/@\/lib\/audit-timing/);
+    expect(sourceCode).toMatch(/resolveAuditSampleWindow/);
   });
 
   it("imports runClaudeAnalysis from @/lib/claude", () => {
@@ -1318,8 +1473,8 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/keep-alive/);
   });
 
-  it("creates SSE stream with TransformStream", () => {
-    expect(sourceCode).toMatch(/TransformStream/);
+  it("creates SSE stream with the shared helper", () => {
+    expect(sourceCode).toMatch(/createSseStream\(\)/);
   });
 
   it("parses ## Verdict heading from audit markdown", () => {
@@ -1330,7 +1485,11 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/## Summary/);
   });
 
-  it("uses renderStill for midpoint stills", () => {
+  it("uses extractFrameAtTime for rendered video audits", () => {
+    expect(sourceCode).toMatch(/extractFrameAtTime/);
+  });
+
+  it("keeps renderStill as a fallback when rendered video is unavailable", () => {
     expect(sourceCode).toMatch(/renderStill/);
   });
 

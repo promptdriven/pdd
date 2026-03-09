@@ -124,6 +124,17 @@ describe("Left Panel: Component List", () => {
     expect(sourceCode).toMatch(/setPreviewUrl/);
   });
 
+  it("tracks associated spec metadata for the preview modal", () => {
+    expect(sourceCode).toMatch(/setPreviewSpecContent/);
+    expect(sourceCode).toMatch(/setPreviewSpecPath/);
+  });
+
+  it("renders an Associated Spec pane beside the preview", () => {
+    expect(sourceCode).toContain("Associated Spec");
+    expect(sourceCode).toMatch(/previewSpecContent/);
+    expect(sourceCode).toMatch(/previewSpecPath/);
+  });
+
   it("renders Regenerate button (symbol or text)", () => {
     expect(sourceCode).toMatch(/↺/); // The code uses the symbol
   });

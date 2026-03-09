@@ -31,7 +31,7 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 11.456;
+  const durationSeconds = 11.52;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {

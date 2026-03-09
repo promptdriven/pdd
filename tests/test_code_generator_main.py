@@ -802,6 +802,41 @@ def test_full_gen_cloud_missing_env_vars_fallback_to_local(
     assert any("falling back to local" in str(call_args[0][0]).lower() for call_args in mock_rich_console_fixture.call_args_list if call_args[0])
 
 
+def test_full_gen_k_service_skips_cloud(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_pdd_preprocess_fixture,
+    mock_local_generator_fixture, mock_get_jwt_token_fixture, monkeypatch
+):
+    """
+    Test that K_SERVICE env var (Cloud Run worker) skips cloud auth entirely
+    and goes straight to local execution.
+
+    Regression test for issue #596: inside a Cloud Run Job, cloud auth always
+    fails (no JWT cache, no device flow). The warning message confused the LLM
+    agent into bailing out instead of letting local fallback run.
+    """
+    mock_ctx.obj['local'] = False  # Not forcing local — cloud would normally be tried
+    monkeypatch.setenv("K_SERVICE", "pdd-executor-job")
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "k_service_prompt_python.prompt"
+    create_file(prompt_file_path, "K_SERVICE test prompt")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "k_service_output.py")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "K_SERVICE test prompt"},
+        {"output": output_file_path_str},
+        "python"
+    )
+
+    code_generator_main(mock_ctx, str(prompt_file_path), output_file_path_str, None, False)
+
+    # Cloud auth should NOT be attempted when K_SERVICE is set
+    mock_get_jwt_token_fixture.assert_not_called()
+    # Local generator should be used directly
+    mock_local_generator_fixture.assert_called_once()
+
+
 # C. Incremental Generation
 def test_incremental_gen_with_original_prompt_file(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_incremental_generator_fixture, mock_env_vars

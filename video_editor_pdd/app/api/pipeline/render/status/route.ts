@@ -23,6 +23,7 @@ interface FullVideoInfo {
   exists: boolean;
   sizeBytes?: number;
   durationSeconds?: number;
+  stale?: boolean;
 }
 
 const SECTIONS_DIR = path.join(process.cwd(), "outputs", "sections");
@@ -31,10 +32,21 @@ const FULL_VIDEO_PATH = path.join(process.cwd(), "outputs", "full_video.mp4");
 export async function GET(): Promise<NextResponse> {
   try {
     const config = loadProject();
+    let newestSectionMtime = 0;
 
     const sections: SectionRenderStatus[] = config.sections.map((section) => {
       const outputPath = path.join(SECTIONS_DIR, `${section.id}.mp4`);
       const exists = fs.existsSync(outputPath);
+      if (exists) {
+        try {
+          newestSectionMtime = Math.max(
+            newestSectionMtime,
+            fs.statSync(outputPath).mtimeMs
+          );
+        } catch {
+          // Ignore stat errors for stale detection.
+        }
+      }
 
       return {
         id: section.id,
@@ -58,6 +70,7 @@ export async function GET(): Promise<NextResponse> {
           exists: true,
           sizeBytes: stat.size,
           durationSeconds,
+          stale: newestSectionMtime > stat.mtimeMs,
         };
       } catch {
         // Ignore stat errors

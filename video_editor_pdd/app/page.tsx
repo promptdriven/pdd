@@ -27,6 +27,22 @@ import Stage10Audit from '@/components/stages/Stage10Audit';
 
 type TabKey = 'pipeline' | 'review';
 
+type ReviewRenderStatus = {
+  sections: Array<{
+    id: string;
+    status: 'missing' | 'rendering' | 'done' | 'error';
+  }>;
+  fullVideo: {
+    exists: boolean;
+    stale?: boolean;
+  };
+};
+
+const FULL_VIDEO_SRC = '/api/video/outputs/full_video.mp4';
+
+const buildSectionVideoSrc = (sectionId: string) =>
+  `/api/video/outputs/sections/${sectionId}.mp4`;
+
 const STAGE_ORDER: PipelineStage[] = [
   'setup',
   'script',
@@ -69,6 +85,8 @@ export default function Page() {
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
   const [loadingProject, setLoadingProject] = useState<boolean>(false);
   const [loadingAnnotations, setLoadingAnnotations] = useState<boolean>(false);
+  const [reviewRenderStatus, setReviewRenderStatus] =
+    useState<ReviewRenderStatus | null>(null);
 
   // Load project config on mount
   useEffect(() => {
@@ -124,6 +142,31 @@ export default function Page() {
     return projectConfig.sections.find((s) => s.id === selectedSectionId);
   }, [projectConfig, selectedSectionId]);
 
+  const reviewVideoSrc = useMemo(() => {
+    if (!selectedSectionId) {
+      return FULL_VIDEO_SRC;
+    }
+
+    const sectionVideoSrc = buildSectionVideoSrc(selectedSectionId);
+    const sectionStatus = reviewRenderStatus?.sections?.find(
+      (section) => section.id === selectedSectionId
+    );
+
+    if (reviewRenderStatus?.fullVideo?.exists && !reviewRenderStatus?.fullVideo?.stale) {
+      return FULL_VIDEO_SRC;
+    }
+
+    if (sectionStatus?.status === 'done') {
+      return sectionVideoSrc;
+    }
+
+    if (reviewRenderStatus?.fullVideo?.exists) {
+      return FULL_VIDEO_SRC;
+    }
+
+    return sectionVideoSrc;
+  }, [reviewRenderStatus, selectedSectionId]);
+
   const loadAnnotations = useCallback(async () => {
     if (!selectedSectionId) return;
     setLoadingAnnotations(true);
@@ -140,12 +183,25 @@ export default function Page() {
     }
   }, [selectedSectionId]);
 
+  const loadReviewRenderStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pipeline/render/status');
+      if (!res.ok) throw new Error('Failed to load render status');
+      const data = (await res.json()) as ReviewRenderStatus;
+      setReviewRenderStatus(data);
+    } catch (err) {
+      console.error(err);
+      setReviewRenderStatus(null);
+    }
+  }, []);
+
   // Load annotations when switching to Review tab or when section changes
   useEffect(() => {
     if (activeTab === 'review') {
       loadAnnotations();
+      loadReviewRenderStatus();
     }
-  }, [activeTab, loadAnnotations]);
+  }, [activeTab, loadAnnotations, loadReviewRenderStatus]);
 
   const handleAdvanceStage = useCallback(() => {
     // Stage 9 "Open in Review →" should switch to the Review tab
@@ -245,7 +301,7 @@ export default function Page() {
           <>
             <div className="w-2/3 border-r border-border">
               <VideoPlayer
-                src="/api/video/outputs/full_video.mp4"
+                src={reviewVideoSrc}
                 annotations={annotations}
                 onAnnotationCapture={handleAnnotationCapture}
                 // @ts-expect-error optional prop for prefill is supported by UI layer

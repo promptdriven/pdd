@@ -2803,8 +2803,8 @@ def test_step4_clarification_hard_stop_with_stop_condition_tag(mock_dependencies
     assert "Stopped at step 4" in msg
     assert mock_run.call_count == 4
     mocks["save_state"].assert_called()
-    # Clarification steps save step_num - 1 for resume (Issue #769)
     assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 3
+    mocks["console"].print.assert_any_call("[yellow]Investigation stopped at Step 4: Clarification needed[/yellow]")
 
 
 def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
@@ -2857,7 +2857,6 @@ def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dep
     assert "Stopped at step 7" in msg
     assert mock_run.call_count == 7
     mocks["save_state"].assert_called()
-    # Clarification steps save step_num - 1 for resume (Issue #769)
     assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 6
 
 
@@ -2884,7 +2883,6 @@ def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):
     assert "Stopped at step 4" in msg
     assert mock_run.call_count == 4
     mocks["save_state"].assert_called()
-    # Clarification steps save step_num - 1 for resume (Issue #769)
     assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 3
 
     for call in mocks["console"].print.mock_calls:
@@ -2938,43 +2936,46 @@ def test_check_hard_stop_step7_requires_stop_condition_tag():
 
 
 # -----------------------------------------------------------------------------
-# Tests for Issue #769 — STOP_CONDITION universal parsing & resume
+# Bug #784: _check_hard_stop improvements
 # -----------------------------------------------------------------------------
 
-def test_check_hard_stop_stop_condition_universal():
-    """STOP_CONDITION: tag should trigger hard stop on any step."""
+def test_check_hard_stop_case_insensitive_substring_matching():
+    """Non-clarification steps use case-insensitive substring matching."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
-    assert _check_hard_stop(4, "STOP_CONDITION: Clarification needed") is not None
-    assert _check_hard_stop(7, "STOP_CONDITION: Architectural decision needed") is not None
-    # Works on steps that also have substring fallbacks
-    assert _check_hard_stop(1, "STOP_CONDITION: Duplicate found") is not None
-    assert _check_hard_stop(9, "STOP_CONDITION: Build failure") is not None
+    # Step 2: "Already Implemented" (case-insensitive)
+    assert _check_hard_stop(2, "already implemented") is not None
+    assert _check_hard_stop(2, "ALREADY IMPLEMENTED") is not None
+    assert _check_hard_stop(2, "Already Implemented") is not None
+
+    # Step 6: "No Dev Units Found" (case-insensitive)
+    assert _check_hard_stop(6, "no dev units found") is not None
+    assert _check_hard_stop(6, "NO DEV UNITS FOUND") is not None
+
+    # Step 8: "No Changes Required" (case-insensitive)
+    assert _check_hard_stop(8, "no changes required") is not None
+    assert _check_hard_stop(8, "NO CHANGES REQUIRED") is not None
 
 
-def test_check_hard_stop_stop_condition_multiline():
-    """STOP_CONDITION: detected when preceded by other output lines."""
+def test_check_hard_stop_universal_stop_condition_tag():
+    """Any step can trigger via STOP_CONDITION: tag as a universal fallback."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
-    output = "I posted a comment to the issue.\nSTOP_CONDITION: Clarification needed"
-    result = _check_hard_stop(4, output)
-    assert result is not None
-    assert "Clarification needed" in result
+    # Step 3 has no specific handler — universal fallback should catch it
+    result = _check_hard_stop(3, "STOP_CONDITION: Custom reason for stopping")
+    assert result == "Custom reason for stopping"
+
+    # Step 5 has no specific handler either
+    result = _check_hard_stop(5, "STOP_CONDITION: Unexpected issue found")
+    assert result == "Unexpected issue found"
 
 
-def test_check_hard_stop_stop_condition_embedded_in_line():
-    """STOP_CONDITION: works as substring match even mid-line (robust against LLM formatting)."""
+def test_check_hard_stop_empty_and_none_output():
+    """_check_hard_stop handles empty and None output without error."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
-    result = _check_hard_stop(4, "I posted the comment. STOP_CONDITION: Clarification needed")
-    assert result is not None
-    assert "Clarification needed" in result
-
-
-def test_check_hard_stop_empty_output():
-    """_check_hard_stop returns None for empty/None output."""
-    from pdd.agentic_change_orchestrator import _check_hard_stop
-
+    assert _check_hard_stop(1, "") is None
+    assert _check_hard_stop(1, None) is None
     assert _check_hard_stop(4, "") is None
     assert _check_hard_stop(4, None) is None
 
@@ -3061,3 +3062,32 @@ def test_step4_clarification_saves_step_minus_one(mock_dependencies, temp_cwd):
     assert final_state["last_completed_step"] == 3, (
         "Clarification stop at step 4 should save last_completed_step=3 for resume"
     )
+
+
+def test_fetch_issue_updated_at_called_on_clarification(mock_dependencies, temp_cwd):
+    """Bug #784: issue_updated_at is refreshed after clarification stops."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    with patch("pdd.agentic_change_orchestrator._fetch_issue_updated_at",
+               return_value="2026-03-08T12:00:00Z") as mock_fetch:
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+            issue_number=784, issue_author="me", issue_title="title",
+            issue_updated_at="2026-03-08T10:00:00Z",
+            cwd=temp_cwd, verbose=False
+        )
+        assert success is False
+        mock_fetch.assert_called_once_with("owner", "repo", 784)
+        saved_state = mocks["save_state"].call_args[0][3]
+        assert saved_state["issue_updated_at"] == "2026-03-08T12:00:00Z", (
+            "Bug #784: issue_updated_at should be refreshed after clarification"
+        )

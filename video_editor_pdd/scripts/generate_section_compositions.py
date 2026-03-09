@@ -250,6 +250,145 @@ def resolve_section_base_component(
     return None
 
 
+def _collapse_whitespace(value: str) -> str:
+    """Normalize whitespace to simplify loose section matching."""
+    return re.sub(r'\s+', ' ', value).strip()
+
+
+def normalize_section_intent_key(value: str) -> str:
+    """Normalize section text for script-heading matching."""
+    return _collapse_whitespace(
+        re.sub(
+            r'[^a-z0-9\s]',
+            ' ',
+            re.sub(
+                r'([0-9])([a-z])',
+                r'\1 \2',
+                re.sub(
+                    r'([a-z])([0-9])',
+                    r'\1 \2',
+                    re.sub(r'[_\-]+', ' ', value.lower()),
+                ),
+            ),
+        )
+    )
+
+
+def parse_script_section_visual_intent(content: str) -> List[Dict[str, Any]]:
+    """Parse main_script.md into section blocks and capture [veo:] markers."""
+    sections: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if re.match(r'^##\s+', line):
+            if current is not None:
+                sections.append(current)
+            heading = re.sub(r'^##\s+', '', line).strip()
+            current = {
+                'heading': heading,
+                'normalized_heading': normalize_section_intent_key(heading),
+                'veo_markers': [],
+            }
+            continue
+
+        if current is None:
+            continue
+
+        for match in re.finditer(r'\[veo:\s*([^\]]*?)\]', line, re.IGNORECASE):
+            current['veo_markers'].append((match.group(1) or '').strip())
+
+    if current is not None:
+        sections.append(current)
+
+    return [section for section in sections if section['heading']]
+
+
+def _build_section_intent_candidates(section: Dict[str, Any]) -> List[str]:
+    """Build normalized candidate names for a project section."""
+    label = str(section.get('label') or '')
+    section_id = str(section.get('id') or '')
+    variants = [
+        label,
+        section_id,
+        re.sub(r'^part\s+\d+\s*:\s*', '', label, flags=re.IGNORECASE),
+        re.sub(r'^part[_\-]?(\d+)[_\-]?', r'part \1 ', section_id, flags=re.IGNORECASE),
+    ]
+    normalized = [normalize_section_intent_key(variant) for variant in variants if variant]
+    seen = set()
+    unique: List[str] = []
+    for variant in normalized:
+        if variant and variant not in seen:
+            seen.add(variant)
+            unique.append(variant)
+    return unique
+
+
+def _token_overlap_score(left: str, right: str) -> float:
+    """Score loose heading matches by overlapping normalized tokens."""
+    left_tokens = [token for token in left.split(' ') if token]
+    right_tokens = [token for token in right.split(' ') if token]
+    if not left_tokens or not right_tokens:
+        return 0.0
+    right_set = set(right_tokens)
+    overlap = sum(1 for token in left_tokens if token in right_set)
+    return overlap / max(len(left_tokens), len(right_tokens))
+
+
+def find_matching_script_section_visual_intent(
+    script_sections: List[Dict[str, Any]],
+    section: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Find the best-matching script heading for a project section."""
+    candidates = _build_section_intent_candidates(section)
+    best_section: Optional[Dict[str, Any]] = None
+    best_score = 0
+
+    for script_section in script_sections:
+        for candidate in candidates:
+            normalized_heading = script_section['normalized_heading']
+            condensed_heading = re.sub(r'\s+', '', normalized_heading)
+            condensed_candidate = re.sub(r'\s+', '', candidate)
+
+            if normalized_heading == candidate:
+                score = 100
+            elif condensed_heading == condensed_candidate:
+                score = 95
+            elif normalized_heading in candidate or candidate in normalized_heading:
+                score = 80
+            else:
+                score = round(_token_overlap_score(normalized_heading, candidate) * 70)
+
+            if score > best_score:
+                best_score = score
+                best_section = script_section
+
+    return best_section if best_score >= 60 else None
+
+
+def resolve_section_has_veo_intent(
+    section: Dict[str, Any],
+    project_dir: str,
+) -> Optional[bool]:
+    """Return whether the matched script section explicitly uses [veo:]."""
+    if not project_dir:
+        return None
+
+    main_script_path = os.path.join(project_dir, 'narrative', 'main_script.md')
+    script_content = _read_text_if_exists(main_script_path)
+    if not script_content:
+        return None
+
+    matching_section = find_matching_script_section_visual_intent(
+        parse_script_section_visual_intent(script_content),
+        section,
+    )
+    if matching_section is None:
+        return None
+
+    return any(marker for marker in matching_section['veo_markers'])
+
+
 def generate_generated_timeline_wrapper(
     section: Dict[str, Any],
     fps: int,
@@ -357,6 +496,7 @@ def generate_section_component(
     fps: int,
     remotion_public: str = '',
     remotion_src: str = '',
+    project_dir: str = '',
 ) -> str:
     """Generate the TSX source code for a section wrapper component.
 
@@ -390,8 +530,13 @@ def generate_section_component(
     # Detect available assets in remotion/public/ (only when NOT delegating)
     direct_audio_src = resolve_direct_audio_src(section_id, remotion_public)
     direct_video_src = resolve_direct_video_src(section_id, remotion_public)
+    has_veo_intent = resolve_section_has_veo_intent(section, project_dir)
     needs_direct_audio = bool(direct_audio_src) and (not has_base_component or not component_has_audio)
-    needs_direct_video = bool(direct_video_src) and (not has_base_component or not component_has_video)
+    needs_direct_video = (
+        bool(direct_video_src)
+        and (not has_base_component or not component_has_video)
+        and has_veo_intent is not False
+    )
 
     generated_timeline_wrapper = generate_generated_timeline_wrapper(
         section,
@@ -856,7 +1001,13 @@ def main() -> None:
         # Generate component source
         remotion_public = os.path.join(remotion_dir, 'public')
         remotion_src = os.path.join(remotion_dir, 'src', 'remotion')
-        tsx_content = generate_section_component(section, fps, remotion_public, remotion_src=remotion_src)
+        tsx_content = generate_section_component(
+            section,
+            fps,
+            remotion_public,
+            remotion_src=remotion_src,
+            project_dir=project_dir,
+        )
 
         # Write file
         with open(output_path, 'w', encoding='utf-8') as f:

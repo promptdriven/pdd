@@ -311,31 +311,60 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
         return []
 
 def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
-    """Check output for hard stop conditions."""
+    """Check output for hard stop conditions.
+
+    Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
+    Other steps use case-insensitive substring matching as a fallback.
+    A universal STOP_CONDITION: tag is recognized on any step.
+    """
     if not output:
         return None
-
-    # Primary: Check for explicit STOP_CONDITION tag anywhere in output (universal — any step)
-    match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-
-    # Fallback: implicit substring matches (step-specific, case-insensitive)
-    # Note: Steps 4 and 7 intentionally have NO substring fallback (Issue #773) —
-    # they require explicit STOP_CONDITION tag to avoid false positives.
+    stop_match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
     output_lower = output.lower()
+
     if step_num == 1 and "duplicate of #" in output_lower:
         return "Issue is a duplicate"
     if step_num == 2 and "already implemented" in output_lower:
         return "Already implemented"
+    if step_num == 4:
+        if stop_match and "clarification" in stop_match.group(1).lower():
+            return "Clarification needed"
+        return None
     if step_num == 6 and "no dev units found" in output_lower:
         return "No dev units found"
+    if step_num == 7:
+        if stop_match and "architectural" in stop_match.group(1).lower():
+            return "Architectural decision needed"
+        return None
     if step_num == 8 and "no changes required" in output_lower:
         return "No changes needed"
     if step_num == 9:
         if "fail:" in output_lower:
             return "Implementation failed"
+    # Universal fallback: any STOP_CONDITION tag on an unhandled step
+    if stop_match:
+        return stop_match.group(1).strip()
     return None
+
+
+# Steps where a hard stop is a "clarification" request (user may respond, step should re-run)
+_CLARIFICATION_STEPS = {4, 7}
+
+
+def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
+    """Fetch the current updated_at timestamp for a GitHub issue."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+             "--jq", ".updated_at"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        return result.stdout.strip() or None
+    except Exception:
+        return None
 
 def _get_state_dir(cwd: Path) -> Path:
     """Get the state directory relative to git root."""
@@ -770,16 +799,14 @@ def run_agentic_change_orchestrator(
                 )
                 if not quiet:
                     console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-                # Clarification steps: save as not-completed so re-run re-evaluates,
-                # and re-fetch updated_at so the bot's own comment doesn't trigger stale detection.
-                if step_num in _CLARIFICATION_STEPS:
-                    state["last_completed_step"] = step_num - 1
-                    fresh_ts = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
-                    if fresh_ts:
-                        state["issue_updated_at"] = fresh_ts
-                else:
-                    state["last_completed_step"] = step_num
+                # Clarification steps save step_num - 1 so the step re-runs on resume
+                state["last_completed_step"] = step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
                 state["step_outputs"][str(step_num)] = step_output
+                # Refresh issue_updated_at after clarification (bot comment changes the timestamp)
+                if step_num in _CLARIFICATION_STEPS:
+                    refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                    if refreshed:
+                        state["issue_updated_at"] = refreshed
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
@@ -788,16 +815,14 @@ def run_agentic_change_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            # Clarification steps: save as not-completed so re-run re-evaluates,
-            # and re-fetch updated_at so the bot's own comment doesn't trigger stale detection.
-            if step_num in _CLARIFICATION_STEPS:
-                state["last_completed_step"] = step_num - 1
-                fresh_ts = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
-                if fresh_ts:
-                    state["issue_updated_at"] = fresh_ts
-            else:
-                state["last_completed_step"] = step_num
+            # Clarification steps save step_num - 1 so the step re-runs on resume
+            state["last_completed_step"] = step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
             state["step_outputs"][str(step_num)] = step_output
+            # Refresh issue_updated_at after clarification (bot comment changes the timestamp)
+            if step_num in _CLARIFICATION_STEPS:
+                refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                if refreshed:
+                    state["issue_updated_at"] = refreshed
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
 
