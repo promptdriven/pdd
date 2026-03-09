@@ -166,7 +166,7 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
         console.print(Panel(traceback.format_exc(), title="Error Details", style="red"))
         _dbg(f"Exception: {str(e)}")
         _write_debug_report()
-        return prompt
+        raise  # Re-raise the exception
 
 def get_file_path(file_name: str) -> str:
     resolver = get_default_resolver()
@@ -343,13 +343,32 @@ def process_shell_tags(text: str, recursive: bool) -> str:
         console.print(f"Executing shell command: [cyan]{escape(command)}[/cyan]")
         _dbg(f"Shell tag command: {command}")
         try:
-            result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+            try:
+                shell_timeout = int(os.environ.get("PDD_SHELL_TIMEOUT", "30"))
+            except Exception:
+                shell_timeout = 30
+            timeout_arg = None if shell_timeout <= 0 else shell_timeout
+            result = subprocess.run(
+                command,
+                shell=True,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout_arg,
+            )
             return result.stdout
         except subprocess.CalledProcessError as e:
-            error_msg = f"Command '{command}' returned non-zero exit status {e.returncode}."
+            error_msg = f"Command '{command}' returned non-zero exit status {e.returncode}. Output: {e.stdout.strip()} {e.stderr.strip()}"
             console.print(f"[bold red]Error:[/bold red] {error_msg}")
             _dbg(f"Shell command error: {error_msg}")
-            return f"Error: {error_msg}"
+            raise  # Re-raise the exception
+        except subprocess.TimeoutExpired as e:
+            # Do not raise: replace <shell> tag with a visible error marker so preprocessing
+            # can complete without hanging indefinitely.
+            error_msg = f"Command '{e.cmd}' timed out after {e.timeout} seconds."
+            console.print(f"[bold red]Error:[/bold red] {error_msg}")
+            _dbg(f"Shell command timeout: {error_msg}")
+            return error_msg
         except Exception as e:
             console.print(f"[bold red]Error executing shell command:[/bold red] {str(e)}")
             _dbg(f"Shell execution exception: {e}")
