@@ -2,25 +2,25 @@
 
 ### Feat
 
-- Add new Remotion components for various video sections and animations, update existing components, and refine related code generation and testing infrastructure.
-- add Stage 7 veo spec comparison
-- Integrate script context panel in Stage 6, displaying parsed script sections and highlighting lines based on narration sync quotes.
-- Implement inline spec file editor with auto-scrolling, content clearing, and robust spec directory path resolution.
-- Implement video player progress bar seeking by click and drag with associated state, refs, and tests.
-- Add new audit specifications for animation and VEO sections, updating the audit pipeline and related tests.
-- Implement new Remotion video sections and components, update related specifications, API, UI, and E2E tests, and remove build artifacts.
+- **Universal `STOP_CONDITION:` tag support**: all three orchestrators (change, bug, test) now recognize a universal `STOP_CONDITION:` tag on any step, with clarification steps requiring the explicit tag instead of substring matching to prevent false positives from casual LLM mentions
+- **Clarification step resume**: clarification steps (change steps 4/7, bug step 3, test step 3) save `last_completed_step` as the previous step so the clarification step re-runs on resume; `issue_updated_at` is refreshed after the bot's comment to prevent stale detection false triggers
+- **E2E test file capture on skip**: bug orchestrator step 11 now always parses `E2E_FILES_CREATED` even when the test is skipped (e.g., missing Playwright browsers), so unverified test files are still included in PRs
 
 ### Fix
 
-- stop workflow on clarification and support resume (#784)
+- **Skip cloud auth in headless worker environments**: `code_generator_main` and `fix_main` detect `CloudConfig.is_running_in_cloud()` and bypass cloud execution to avoid warning messages that cause LLM agent bailout
+- **Case-insensitive hard stop detection**: `_check_hard_stop` in change and test orchestrators now uses case-insensitive matching, fixing missed stops when LLM output varies in casing
 - Add retry on timeout for verify E2E test in cloud CI
-- **b50cbb25-464d-4094-b54e-964eb3157650**: Change the main background color of this section t
-- **test-batch-ann-1772962375510**: Change the primary background accent in Animation
-- **test-batch-ann-1772961825160**: Subtitle font size 96px causes text to clip the ri
-- **8e58e83c-b48c-4f6c-a024-a0211966ffad**: Change the main background color of this section t
-- **9dd469e8-6ce5-4c7f-9695-6d82e3cc81d0**: Change the main background color of this section t
-- **d1669973-d633-4b63-bdd5-78694f017427**: Change the main background color of this section t
-- **844c735f-d540-45d9-aadf-0202d6d80abc**: Change the main background color of this section t
+
+### Refactor
+
+- Clarification prompts (change step 4, test step 3, bug step 3) updated to require explicit `STOP_CONDITION:` tag in output for reliable orchestrator parsing
+- Bug step 11 E2E prompt adds runtime environment guidance for Playwright browser availability and self-contained test preference
+
+### Test
+
+- Add unit tests for universal `STOP_CONDITION:` detection and clarification resume behavior across all three orchestrators
+- Add tests for cloud auth skip in `code_generator_main` and `fix_main`
 
 ## v0.0.170 (2026-03-07)
 
