@@ -47,19 +47,19 @@ const VISUAL_DURATIONS: Record<string, number> = {
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "veo_section_01_title_card": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "02_ocean_wave_sunset": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "03_narration_overlay_intro": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "04_forest_canopy_aerial": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "05_narration_overlay_forest": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "06_veo_badge_callout": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "07_split_ocean_forest": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "08_veo_technology_callout": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "09_waveform_visualizer": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "10_split_comparison": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "11_veo_badge_reprise": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "12_split_ocean_forest_reprise": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "13_veo_technology_reprise": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "14_section_outro": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
+  "02_ocean_wave_sunset": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "03_narration_overlay_intro": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "04_forest_canopy_aerial": { defaultSrc: "veo/forest_canopy_aerial.mp4", backgroundSrc: "veo/forest_canopy_aerial.mp4", outputSrc: "veo/forest_canopy_aerial.mp4", baseSrc: "veo/forest_canopy_aerial.mp4" },
+  "05_narration_overlay_forest": { defaultSrc: "veo/forest_canopy_aerial.mp4", backgroundSrc: "veo/forest_canopy_aerial.mp4", outputSrc: "veo/forest_canopy_aerial.mp4", baseSrc: "veo/forest_canopy_aerial.mp4" },
+  "06_veo_badge_callout": { defaultSrc: "veo/forest_canopy_aerial.mp4", backgroundSrc: "veo/forest_canopy_aerial.mp4", outputSrc: "veo/forest_canopy_aerial.mp4", baseSrc: "veo/forest_canopy_aerial.mp4" },
+  "07_split_ocean_forest": { leftSrc: "veo/ocean_wave_sunset.mp4", rightSrc: "veo/forest_canopy_aerial.mp4", defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4", revealSrc: "veo/forest_canopy_aerial.mp4" },
+  "08_veo_technology_callout": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "09_waveform_visualizer": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "10_split_comparison": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "11_veo_badge_reprise": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "12_split_ocean_forest_reprise": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4", leftSrc: "veo/ocean_wave_sunset.mp4", rightSrc: "veo/forest_canopy_aerial.mp4", revealSrc: "veo/forest_canopy_aerial.mp4" },
+  "13_veo_technology_reprise": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "14_section_outro": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
 };
 
 export const VeoSectionSection: React.FC = () => {
