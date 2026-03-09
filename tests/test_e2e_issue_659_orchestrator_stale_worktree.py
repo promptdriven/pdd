@@ -161,8 +161,11 @@ class TestIssue659OrchestratorStaleWorktreeE2E:
 
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(*args, **kwargs):
+            label = kwargs.get("label", args[5] if len(args) > 5 else "unknown")
             step_calls.append(label)
+            if label == "step12":
+                return (True, "FILES_CREATED: tests/test_something.py\nFILES_MODIFIED: none", 0.001, "mock-model")
             return (True, f"Mock success for {label}", 0.001, "mock-model")
 
         with patch('pdd.agentic_test_orchestrator.load_workflow_state', side_effect=mock_load_state):

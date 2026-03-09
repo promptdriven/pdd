@@ -158,6 +158,13 @@ def _setup_worktree(
     worktree_rel_path = Path(".pdd") / "worktrees" / f"test-issue-{issue_number}"
     worktree_path = git_root / worktree_rel_path
 
+    # Prune stale worktree references (e.g. from crashed Cloud Run containers)
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        cwd=git_root,
+        capture_output=True,
+    )
+
     if worktree_path.exists():
         if _worktree_exists(cwd, worktree_path):
             success, _err = _remove_worktree(cwd, worktree_path)
@@ -169,19 +176,49 @@ def _setup_worktree(
         else:
             shutil.rmtree(worktree_path)
 
-    if _branch_exists(cwd, branch_name):
+    branch_exists = _branch_exists(cwd, branch_name)
+    reset_after_attach = False
+
+    if branch_exists:
         del_ok, del_err = _delete_branch(cwd, branch_name)
-        if not del_ok:
-            return None, f"Failed to delete existing branch {branch_name}: {del_err}"
+        if del_ok:
+            branch_exists = False
+        else:
+            # Branch couldn't be deleted (e.g. stale worktree ref) —
+            # will reuse with --force, then reset to HEAD.
+            reset_after_attach = True
 
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
-            cwd=git_root,
-            capture_output=True,
-            check=True,
-        )
+
+        if branch_exists:
+            # Branch couldn't be deleted — use --force to attach worktree
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+            if reset_after_attach:
+                main_head = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=git_root,
+                    capture_output=True,
+                    check=True,
+                ).stdout.decode().strip()
+                subprocess.run(
+                    ["git", "reset", "--hard", main_head],
+                    cwd=worktree_path,
+                    capture_output=True,
+                    check=True,
+                )
+        else:
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
         if not quiet:
             console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
         return worktree_path, None

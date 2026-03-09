@@ -247,6 +247,13 @@ def _setup_worktree(
     worktree_path = git_root / worktree_rel_path
     branch_name = f"checkup/issue-{issue_number}"
 
+    # Prune stale worktree references (e.g. from crashed Cloud Run containers)
+    subprocess.run(
+        ["git", "worktree", "prune"],
+        cwd=git_root,
+        capture_output=True,
+    )
+
     # 1. Clean up existing worktree at path
     if worktree_path.exists():
         if _worktree_exists(git_root, worktree_path):
@@ -254,7 +261,15 @@ def _setup_worktree(
                 console.print(f"[yellow]Removing existing worktree at {worktree_path}[/yellow]")
             success, err = _remove_worktree(git_root, worktree_path)
             if not success:
-                return None, f"Failed to remove existing worktree: {err}"
+                try:
+                    shutil.rmtree(worktree_path)
+                    subprocess.run(
+                        ["git", "worktree", "prune"],
+                        cwd=git_root,
+                        capture_output=True,
+                    )
+                except OSError:
+                    return None, f"Failed to remove existing worktree: {err}"
         else:
             if not quiet:
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
@@ -262,6 +277,8 @@ def _setup_worktree(
 
     # 2. Handle existing branch
     has_branch = _branch_exists(git_root, branch_name)
+    reset_after_attach = False
+
     if has_branch:
         if resume_existing:
             if not quiet:
@@ -269,20 +286,41 @@ def _setup_worktree(
         else:
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            _delete_branch(git_root, branch_name)
-            has_branch = False
+            success, _err = _delete_branch(git_root, branch_name)
+            if success:
+                has_branch = False
+            else:
+                # Branch couldn't be deleted (e.g. stale worktree ref) —
+                # will reuse with --force, then reset to HEAD.
+                reset_after_attach = True
 
     # 3. Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if has_branch and resume_existing:
+        if has_branch:
+            # Branch couldn't be deleted or resuming — use --force to attach worktree
             subprocess.run(
-                ["git", "worktree", "add", str(worktree_path), branch_name],
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root,
                 capture_output=True,
                 check=True,
             )
+            if reset_after_attach:
+                main_head = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=git_root,
+                    capture_output=True,
+                    check=True,
+                ).stdout.decode().strip()
+                if not quiet:
+                    console.print(f"[yellow]Resetting branch to {main_head[:8]} for clean re-run[/yellow]")
+                subprocess.run(
+                    ["git", "reset", "--hard", main_head],
+                    cwd=worktree_path,
+                    capture_output=True,
+                    check=True,
+                )
         else:
             subprocess.run(
                 ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
