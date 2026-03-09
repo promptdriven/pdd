@@ -243,12 +243,14 @@ describe("GET /api/pipeline/tts-render/segments", () => {
     );
     expect(introSeg).toBeDefined();
     expect(introSeg.status).toBe("missing");
+    expect(introSeg.text).toMatch(/Hello world/);
 
     const mainSeg = body.segments.find(
       (s: { id: string }) => s.id === "main_001"
     );
     expect(mainSeg).toBeDefined();
     expect(mainSeg.status).toBe("missing");
+    expect(mainSeg.text).toMatch(/Some content/);
 
     // Cleanup
     fs.unlinkSync(scriptPath);
@@ -296,8 +298,34 @@ describe("GET /api/pipeline/tts-render/segments", () => {
       const seg = body.segments[0];
       expect(seg).toHaveProperty("id");
       expect(seg).toHaveProperty("status");
+      expect(seg).toHaveProperty("text");
     } finally {
       fs.unlinkSync(scriptPath);
+    }
+  });
+
+  it("preserves script text even when matching WAV files exist", async () => {
+    const scriptPath = path.join(tmpDir, "narrative", "tts_script.md");
+    fs.writeFileSync(
+      scriptPath,
+      "## Introduction\nThis is a greeting that is long enough to pass the threshold.\n"
+    );
+
+    const wavPath = path.join(tmpDir, "outputs", "tts", "intro_001.wav");
+    fs.writeFileSync(wavPath, Buffer.alloc(44));
+
+    try {
+      const response = await GET_ttsSegments();
+      expect(response.status).toBe(200);
+
+      const body = await response.json();
+      const seg = body.segments.find((s: { id: string }) => s.id === "intro_001");
+      expect(seg).toBeDefined();
+      expect(seg.status).toBe("done");
+      expect(seg.text).toMatch(/greeting/);
+    } finally {
+      fs.unlinkSync(scriptPath);
+      fs.unlinkSync(wavPath);
     }
   });
 });

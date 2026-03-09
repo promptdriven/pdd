@@ -1217,6 +1217,9 @@ describe("GET — audit markdown parsing", () => {
       if (candidate === auditPath) {
         return "## Verdict\npass\n## Summary\nFrame matches spec\n";
       }
+      if (candidate === specPath) {
+        return "**Timestamp:** 0:00 - 0:03\n";
+      }
       throw new Error(`Unexpected file read: ${candidate}`);
     });
 
@@ -1335,6 +1338,49 @@ describe("GET — specPath must start with specs/ for specs/file route compatibi
     expect(section.specs[0].specPath).toMatch(/^specs\//);
     // Should NOT double-prefix: "specs/specs/intro/..."
     expect(section.specs[0].specPath).not.toMatch(/^specs\/specs\//);
+  });
+
+  it("returns a spec-local playbackWindow derived from the spec timing metadata", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        specDir: "cold_open",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const specPath = pathMod.join(specDir, "title_card.md");
+    const auditPath = pathMod.join(specDir, "AUDIT_title_card.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir || candidate === specPath
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) return ["AUDIT_title_card.md", "title_card.md"];
+      throw new Error(`Unexpected directory read: ${candidate}`);
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === auditPath) {
+        return "## Verdict\nfail\n## Summary\nColors wrong\n";
+      }
+      if (candidate === specPath) {
+        return "**Timestamp:** 0:03 - 0:08\n";
+      }
+      throw new Error(`Unexpected file read: ${candidate}`);
+    });
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    const playbackWindow = body.sections[0].specs[0].playbackWindow;
+    expect(playbackWindow).toBeDefined();
+    expect(playbackWindow.startSeconds).toBeCloseTo(3);
+    expect(playbackWindow.endSeconds).toBeCloseTo(8);
+    expect(playbackWindow.sampleSeconds).toBeCloseTo(6.75);
+    expect(playbackWindow.source).toBe("timestamp");
   });
 });
 

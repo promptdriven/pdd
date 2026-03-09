@@ -60,7 +60,12 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
       const res = await fetch('/api/pipeline/tts-render/segments');
       if (!res.ok) throw new Error('Failed to load TTS segments.');
       const data = await res.json();
-      const list: TtsSegment[] = Array.isArray(data) ? data : (data.segments ?? []);
+      const rawList = Array.isArray(data) ? data : (data.segments ?? []);
+      const list: TtsSegment[] = rawList.map((segment: any) => ({
+        id: String(segment.id ?? ''),
+        status: segment.status as SegmentStatus,
+        text: typeof segment.text === 'string' ? segment.text : '',
+      }));
       setSegments(list);
     } catch (err: any) {
       setError(err.message || 'Failed to load TTS segments.');
@@ -285,9 +290,10 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
       {/* Table */}
       <div className="bg-slate-800 rounded-lg shadow border border-slate-700 overflow-hidden">
-        <div className="grid grid-cols-6 px-4 py-2 bg-slate-700 text-xs font-semibold text-slate-300">
+        <div className="grid grid-cols-7 px-4 py-2 bg-slate-700 text-xs font-semibold text-slate-300">
           <div>#</div>
           <div>Segment ID</div>
+          <div>TTS Script</div>
           <div>Status</div>
           <div>Play</div>
           <div>Re-render</div>
@@ -304,14 +310,18 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
         {segments.map((seg, idx) => {
           const isExpanded = expandedId === seg.id;
+          const segmentScript = seg.text.trim() ? seg.text : 'No TTS script found.';
           return (
             <div key={`${seg.id}-${idx}`} className="border-t border-slate-700">
               <div
-                className="grid grid-cols-6 px-4 py-3 items-center hover:bg-slate-700/50 cursor-pointer"
+                className="grid grid-cols-7 px-4 py-3 items-center gap-3 hover:bg-slate-700/50 cursor-pointer"
                 onClick={() => handleRowToggle(seg.id)}
               >
                 <div className="text-sm text-slate-200">{idx + 1}</div>
                 <div className="text-sm font-mono text-slate-200">{seg.id}</div>
+                <div className="max-h-12 overflow-hidden text-xs leading-5 text-slate-300">
+                  {segmentScript}
+                </div>
                 <div>{renderStatusBadge(seg.status)}</div>
                 <div>
                   <button
@@ -342,12 +352,25 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
               {isExpanded && (
                 <div className="px-4 pb-4">
-                  <div
-                    className="w-full rounded bg-slate-900 p-2"
-                    ref={(el) => { waveformRefs.current.set(seg.id, el); }}
-                  />
-                  <div className="mt-2 text-sm text-slate-300 whitespace-pre-line">
-                    {seg.text}
+                  <div className="grid gap-3 pt-3 lg:grid-cols-2">
+                    <div className="rounded border border-slate-700 bg-slate-900 p-3">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        Waveform
+                      </div>
+                      <div
+                        className="w-full rounded bg-slate-950 p-2"
+                        ref={(el) => { waveformRefs.current.set(seg.id, el); }}
+                      />
+                    </div>
+
+                    <div className="rounded border border-slate-700 bg-slate-900 p-3">
+                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                        TTS Script
+                      </div>
+                      <div className="text-sm text-slate-300 whitespace-pre-line">
+                        {seg.text.trim() ? seg.text : 'No TTS script found.'}
+                      </div>
+                    </div>
                   </div>
 
                   {rowJobIds[seg.id] && (

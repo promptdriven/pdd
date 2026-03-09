@@ -6,12 +6,20 @@ type AuditStatus = 'pending' | 'running' | 'done' | 'error';
 
 type Verdict = 'PASS' | 'FAIL';
 
+type PlaybackWindow = {
+  startSeconds: number;
+  endSeconds: number;
+  sampleSeconds: number;
+  source: 'timestamp' | 'frame-range' | 'fallback';
+};
+
 interface SpecVerdict {
   specName: string;
   verdict: Verdict;
   summary: string;
   finding?: string;
   specPath?: string;
+  playbackWindow?: PlaybackWindow;
 }
 
 interface SectionAudit {
@@ -409,6 +417,23 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                                       poster={frame}
                                       controls
                                       autoPlay
+                                      preload="metadata"
+                                      onLoadedMetadata={(event) => {
+                                        if (!spec.playbackWindow) {
+                                          return;
+                                        }
+                                        event.currentTarget.currentTime = spec.playbackWindow.startSeconds;
+                                        void event.currentTarget.play().catch(() => {});
+                                      }}
+                                      onTimeUpdate={(event) => {
+                                        if (!spec.playbackWindow) {
+                                          return;
+                                        }
+                                        if (event.currentTarget.currentTime >= spec.playbackWindow.endSeconds) {
+                                          event.currentTarget.currentTime = spec.playbackWindow.endSeconds;
+                                          event.currentTarget.pause();
+                                        }
+                                      }}
                                       className="w-full bg-black/40"
                                     />
                                   ) : (

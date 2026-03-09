@@ -307,6 +307,14 @@ describe("Inline video preview", () => {
     expect(sourceCode).toMatch(/<video[\s\S]*src=\{sectionVideo\}/);
   });
 
+  it("seeks the player to the spec playbackWindow startSeconds on metadata load", () => {
+    expect(sourceCode).toMatch(/currentTime\s*=\s*spec\.playbackWindow\.startSeconds/);
+  });
+
+  it("pauses the player when currentTime reaches the spec playbackWindow endSeconds", () => {
+    expect(sourceCode).toMatch(/currentTime\s*>=\s*spec\.playbackWindow\.endSeconds[\s\S]*pause\(\)/);
+  });
+
   it("video element has controls enabled", () => {
     expect(sourceCode).toMatch(/<video[\s\S]*controls/);
   });
@@ -557,6 +565,10 @@ describe("Type definitions", () => {
 
   it("SpecVerdict includes optional specPath field", () => {
     expect(sourceCode).toMatch(/specPath\?:\s*string/);
+  });
+
+  it("SpecVerdict includes optional playbackWindow field", () => {
+    expect(sourceCode).toMatch(/playbackWindow\?:\s*PlaybackWindow/);
   });
 
   it("defines SectionAudit interface", () => {

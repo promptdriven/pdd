@@ -218,18 +218,21 @@ describe("parseSegmentsFromScript", () => {
     expect(result).toEqual([]);
   });
 
-  it("returns segments from WAV files when outputs/tts/ exists", () => {
+  it("parses segment text from tts_script.md even when outputs/tts/ exists", () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (p.includes("outputs") && p.includes("tts")) return true;
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
       return false;
     });
     mockReaddirSync.mockReturnValue(["intro_001.wav", "main_001.wav"]);
+    mockReadFileSync.mockReturnValue(
+      "## Intro\nWelcome to the show.\n\n## Chapter One\nThis is chapter one.\n"
+    );
 
     const result = parseSegmentsFromScript();
-    expect(result).toEqual([
-      { id: "intro_001" },
-      { id: "main_001" },
-    ]);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0]).toHaveProperty("text");
   });
 
   it("falls back to tts_script.md when no WAV files exist", () => {
@@ -323,40 +326,56 @@ describe("parseSegmentsFromScript", () => {
     expect(result).toEqual([]);
   });
 
-  it("prioritizes WAV files over script parsing", () => {
+  it("does not let existing WAV files suppress script parsing", () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (p.includes("outputs") && p.includes("tts")) return true;
       if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
       return false;
     });
     mockReaddirSync.mockReturnValue(["custom_001.wav"]);
-    mockReadFileSync.mockReturnValue("## Intro\nSome text.\n");
+    mockReadFileSync.mockReturnValue(
+      "## Intro\nSome text that is definitely long enough.\n"
+    );
 
     const result = parseSegmentsFromScript();
-    expect(result).toEqual([{ id: "custom_001" }]);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].id).toMatch(/intro/i);
+    expect(result[0].text).toContain("Some text");
   });
 
-  it("sorts WAV files alphabetically", () => {
+  it("preserves script order rather than WAV filename order", () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (p.includes("outputs") && p.includes("tts")) return true;
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
       return false;
     });
     mockReaddirSync.mockReturnValue(["outro_001.wav", "intro_001.wav"]);
+    mockReadFileSync.mockReturnValue(
+      "## Intro\nFirst segment text is long enough.\n\n## Outro\nSecond segment text is also long enough.\n"
+    );
 
     const result = parseSegmentsFromScript();
     expect(result[0].id).toBe("intro_001");
     expect(result[1].id).toBe("outro_001");
   });
 
-  it("filters only .wav files from directory listing", () => {
+  it("ignores WAV filenames when the script provides the segment text", () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (p.includes("outputs") && p.includes("tts")) return true;
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return false;
       return false;
     });
     mockReaddirSync.mockReturnValue(["seg.wav", "readme.txt", "data.json"]);
+    mockReadFileSync.mockReturnValue(
+      "## Introduction\nThis is a segment with enough text to parse.\n"
+    );
 
     const result = parseSegmentsFromScript();
-    expect(result).toEqual([{ id: "seg" }]);
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toContain("enough text");
   });
 });
 
@@ -811,6 +830,9 @@ describe("executor — per-segment status events", () => {
       return false;
     });
     mockReaddirSync.mockReturnValue(["s1_001.wav", "s2_001.wav", "s3_001.wav"]);
+    mockReadFileSync.mockReturnValue(
+      "## S1\nThis is the first script segment and it is long enough.\n\n## S2\nThis is the second script segment and it is also long enough.\n\n## S3\nThis is the third script segment and it is also long enough.\n"
+    );
 
     const executor = registerCallArgs.factory({}, mockSend);
     await executor(jest.fn());
@@ -993,6 +1015,9 @@ describe("tts-render executor factory", () => {
       return false;
     });
     mockReaddirSync.mockReturnValue(["auto1_001.wav", "auto2_001.wav"]);
+    mockReadFileSync.mockReturnValue(
+      "## Auto1\nThis script segment is long enough to parse correctly.\n\n## Auto2\nThis script segment is also long enough to parse correctly.\n"
+    );
 
     const executor = registerCallArgs.factory({}, mockSend);
     await executor(jest.fn());

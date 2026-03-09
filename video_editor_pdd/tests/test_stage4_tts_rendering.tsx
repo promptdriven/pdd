@@ -8,8 +8,8 @@
  * Spec requirements verified:
  *   1. Props: onAdvance: () => void.
  *   2. Toolbar: [Render All] and [Render Missing] buttons triggering POST /api/pipeline/tts-render/run.
- *   3. Segment table columns: #, segment ID, status badge (done/missing/error), [▶] play, [↺] re-render.
- *   4. Row expansion on click: WaveSurfer.js waveform and raw TTS text.
+ *   3. Segment table columns: #, segment ID, TTS script preview, status badge (done/missing/error), [▶] play, [↺] re-render.
+ *   4. Row expansion on click: WaveSurfer.js waveform and labeled full TTS script.
  *   5. Batch progress bar: current segment ID and overall percent.
  *   6. Per-row [↺] re-render: POST with { segments: [segmentId] }, inline SseLogPanel.
  *   7. Load segments: GET /api/pipeline/tts-render/segments on mount and after each render.
@@ -117,8 +117,8 @@ describe("import structure", () => {
 // ---------------------------------------------------------------------------
 
 describe("type definitions", () => {
-  it("defines SegmentStatus type as union of done | missing | error", () => {
-    expect(sourceCode).toMatch(/type\s+SegmentStatus\s*=\s*['"]done['"]\s*\|\s*['"]missing['"]\s*\|\s*['"]error['"]/);
+  it("defines SegmentStatus type as union of done | missing | error | generating", () => {
+    expect(sourceCode).toMatch(/type\s+SegmentStatus\s*=\s*['"]done['"]\s*\|\s*['"]missing['"]\s*\|\s*['"]error['"]\s*\|\s*['"]generating['"]/);
   });
 
   it("defines TtsSegment interface", () => {
@@ -626,8 +626,8 @@ describe("batch progress bar", () => {
 // ---------------------------------------------------------------------------
 
 describe("segment table structure", () => {
-  it("uses grid-cols-6 for table header", () => {
-    expect(sourceCode).toMatch(/grid\s+grid-cols-6/);
+  it("uses grid-cols-7 for table header", () => {
+    expect(sourceCode).toMatch(/grid\s+grid-cols-7/);
   });
 
   it("includes # column header", () => {
@@ -636,6 +636,10 @@ describe("segment table structure", () => {
 
   it("includes Segment ID column header", () => {
     expect(sourceCode).toMatch(/Segment ID/);
+  });
+
+  it("includes TTS Script column header", () => {
+    expect(sourceCode).toMatch(/TTS Script/);
   });
 
   it("includes Status column header", () => {
@@ -660,6 +664,14 @@ describe("segment table structure", () => {
 
   it("displays segment ID in monospace font", () => {
     expect(sourceCode).toMatch(/font-mono[\s\S]*?seg\.id/);
+  });
+
+  it("shows a per-row script preview in the table", () => {
+    expect(sourceCode).toMatch(/seg\.text\.trim\(\)\s*\?\s*seg\.text/);
+  });
+
+  it("falls back when a segment has no associated TTS script text", () => {
+    expect(sourceCode).toMatch(/No TTS script found\./);
   });
 
   it("shows loading message when loading", () => {
@@ -728,8 +740,12 @@ describe("row expansion", () => {
     expect(sourceCode).toMatch(/ref=\{\(el\)\s*=>\s*\{\s*waveformRefs\.current\.set\s*\(\s*seg\.id\s*,\s*el\s*\)\s*;\s*\}\s*\}/);
   });
 
-  it("displays segment text below waveform", () => {
-    expect(sourceCode).toMatch(/seg\.text/);
+  it("labels the expanded script panel as TTS Script", () => {
+    expect(sourceCode).toMatch(/TTS Script/);
+  });
+
+  it("displays full segment text in the expanded row", () => {
+    expect(sourceCode).toMatch(/seg\.text\.trim\(\)\s*\?\s*seg\.text\s*:\s*['"]No TTS script found\./);
   });
 
   it("uses whitespace-pre-line for text display", () => {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
+import { resolveRenderedAuditSampleWindow } from "@/lib/audit-timing";
 import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
@@ -14,6 +15,12 @@ type SpecAuditResult = {
   summary: string;
   finding?: string;
   specPath?: string;
+  playbackWindow?: {
+    startSeconds: number;
+    endSeconds: number;
+    sampleSeconds: number;
+    source: "timestamp" | "frame-range" | "fallback";
+  };
 };
 
 type AuditSectionResult = {
@@ -56,6 +63,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
       const specFiles = files.filter(
         (f) => f.endsWith(".md") && !f.startsWith("AUDIT_")
       );
+      const fps = config.render?.fps ?? 30;
 
       const specs: SpecAuditResult[] = [];
       let passCount = 0;
@@ -79,13 +87,28 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
             `${specName}.md`
           );
           const safeSpecPath = toSectionSpecPath(section.specDir, `${specName}.md`);
+          const specExists = fs.existsSync(specSourcePath);
+          const playbackWindow = specExists
+            ? resolveRenderedAuditSampleWindow(
+                fs.readFileSync(specSourcePath, "utf-8"),
+                {
+                  projectDir: process.cwd(),
+                  specPath: specSourcePath,
+                  section,
+                  sectionSpecFiles: specFiles,
+                  sectionDurationSeconds: section.durationSeconds,
+                  fps,
+                }
+              )
+            : undefined;
 
           specs.push({
             specName,
             verdict,
             summary,
             finding: verdict === "FAIL" ? summary : undefined,
-            specPath: fs.existsSync(specSourcePath) ? safeSpecPath : undefined,
+            specPath: specExists ? safeSpecPath : undefined,
+            playbackWindow,
           });
         } catch {
           const specName = auditFile
