@@ -25,6 +25,8 @@
 // Mocks — must be declared before importing the module under test
 // ---------------------------------------------------------------------------
 
+import path from "path";
+
 const mockRegisterExecutor = jest.fn();
 const mockRunPipelineStage = jest.fn();
 
@@ -2561,7 +2563,7 @@ describe("compositions executor — generateSectionConstants", () => {
     });
   }
 
-  it("calls runClaudeFix with prompt mentioning BEATS and VISUAL_SEQUENCE", async () => {
+  it("writes a constants.ts file containing BEATS and VISUAL_SEQUENCE", async () => {
     const config = mockProjectConfig();
     config.sections[0].specDir = "specs/intro";
     mockLoadProject.mockReturnValue(config);
@@ -2579,18 +2581,17 @@ describe("compositions executor — generateSectionConstants", () => {
     );
     await executor(jest.fn());
 
-    // After component generation, generateSectionConstants should have been called
-    // which invokes runClaudeFix with BEATS/VISUAL_SEQUENCE instructions
-    const allCalls = mockRunClaudeFix.mock.calls;
-    const constantsCall = allCalls.find(
-      (call: any[]) =>
+    const constantsWrite = mockWriteFileSync.mock.calls.find(
+      (call: unknown[]) =>
         typeof call[0] === "string" &&
-        (call[0].includes("BEATS") || call[0].includes("VISUAL_SEQUENCE"))
+        (call[0] as string).endsWith(path.join("remotion/src/remotion", "intro", "constants.ts"))
     );
-    expect(constantsCall).toBeDefined();
+    expect(constantsWrite).toBeDefined();
+    expect(String(constantsWrite?.[1])).toContain("export const BEATS");
+    expect(String(constantsWrite?.[1])).toContain("export const VISUAL_SEQUENCE");
   });
 
-  it("includes s2f helper reference in constants prompt", async () => {
+  it("uses s2f helper and the real audio sync timestamps path in generated constants flow", async () => {
     const config = mockProjectConfig();
     config.sections[0].specDir = "specs/intro";
     mockLoadProject.mockReturnValue(config);
@@ -2604,12 +2605,46 @@ describe("compositions executor — generateSectionConstants", () => {
     );
     await executor(jest.fn());
 
-    const allCalls = mockRunClaudeFix.mock.calls;
-    const constantsCall = allCalls.find(
-      (call: any[]) =>
-        typeof call[0] === "string" && call[0].includes("s2f")
+    const constantsWrite = mockWriteFileSync.mock.calls.find(
+      (call: unknown[]) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).endsWith(path.join("remotion/src/remotion", "intro", "constants.ts"))
     );
-    expect(constantsCall).toBeDefined();
+    expect(String(constantsWrite?.[1])).toContain("const s2f");
+    expect(mockExistsSync).toHaveBeenCalledWith(
+      path.join(process.cwd(), "outputs", "tts", "intro", "word_timestamps.json")
+    );
+  });
+});
+
+describe("compositions route timing source", () => {
+  let compositionsSourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    compositionsSourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "compositions",
+        "run",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+  });
+
+  it("delegates section timing generation to the shared deterministic helper", () => {
+    expect(compositionsSourceCode).toMatch(/buildSectionConstantsSource/);
+  });
+
+  it("does not rely on the stale data/{section}_words.json path", () => {
+    expect(compositionsSourceCode).not.toMatch(/_words\.json/);
+    expect(compositionsSourceCode).not.toMatch(/const\s+DATA_DIR/);
   });
 });
 

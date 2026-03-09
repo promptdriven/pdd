@@ -12,6 +12,7 @@
  *   4. Each spec row shows: visual type badge [Remotion]/[veo:]/[title:]/[split:], status (exists/missing), [✎] open in editor, [↺] regenerate that file.
  *   5. Clicking [✎]: opens an inline CodeMirror Markdown editor below the table. Auto-saves via PUT /api/pipeline/specs/file on blur + 1s debounce.
  *   5b. The inline editor shows script context side by side with the selected spec, aligned by section heading and Narration Sync quotes.
+ *   5c. The inline editor also shows Audio Sync timing data for the selected section alongside Script Context and Visual Spec.
  *   6. SSE log in an expandable drawer at the bottom.
  *   7. 'use client' directive.
  *   8. Visual type badge colors: Remotion=blue, veo=purple, title=teal, split=orange.
@@ -126,6 +127,12 @@ describe("import structure", () => {
     expect(sourceCode).toMatch(/findMatchingScriptSection/);
     expect(sourceCode).toMatch(/extractNarrationSyncQuotes/);
     expect(sourceCode).toMatch(/scriptLineMatchesNarration/);
+  });
+
+  it("imports spec timing helpers", () => {
+    expect(sourceCode).toMatch(/from\s+['"]@\/lib\/spec-timing-context['"]/);
+    expect(sourceCode).toMatch(/parseSpecTimingWindow/);
+    expect(sourceCode).toMatch(/filterWordsForSpecTimingWindow/);
   });
 });
 
@@ -555,6 +562,14 @@ describe("inline editor placement", () => {
     expect(sourceCode).toMatch(/No matching script section found/);
     expect(sourceCode).toMatch(/scriptLineMatchesNarration/);
   });
+
+  it("renders an Audio Sync Timing panel beside the script context and spec editor", () => {
+    expect(sourceCode).toContain("Audio Sync Timing");
+    expect(sourceCode).toMatch(/No Audio Sync timing data found for this section/);
+    expect(sourceCode).toMatch(/Loading audio sync timing/);
+    expect(sourceCode).toMatch(/Spec Window/);
+    expect(sourceCode).toMatch(/No Audio Sync words fall inside this spec/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -756,6 +771,15 @@ describe("inline CodeMirror editor", () => {
   it("shows Saving indicator when saving", () => {
     expect(sourceCode).toMatch(/saving\s*&&/);
     expect(sourceCode).toMatch(/Saving/);
+  });
+
+  it("fetches section timing data from the audio sync timestamps API", () => {
+    expect(sourceCode).toMatch(/\/api\/pipeline\/audio-sync\/timestamps\?section=/);
+  });
+
+  it("filters the timing panel by the selected spec timestamp window", () => {
+    expect(sourceCode).toMatch(/selectedSpecTimingWindow/);
+    expect(sourceCode).toMatch(/filterWordsForSpecTimingWindow/);
   });
 
   it("shows Loading file indicator when editorLoading", () => {

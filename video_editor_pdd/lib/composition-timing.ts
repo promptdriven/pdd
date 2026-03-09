@@ -1,0 +1,593 @@
+import fs from "fs";
+import path from "path";
+
+import type { Section } from "./types";
+
+const DEFAULT_FPS = 30;
+const DEFAULT_VISUAL_DURATION_SECONDS = 5;
+const DEFAULT_KEYWORD_LEAD_SECONDS = 1;
+const MIN_VISUAL_DURATION_SECONDS = 1 / DEFAULT_FPS;
+
+type SectionComposition = NonNullable<Section["compositions"]>[number];
+
+export type WordTimestamp = {
+  word: string;
+  start: number;
+  end: number;
+  segmentId?: string;
+};
+
+export type TimingSource = "project" | "spec" | "audio-sync" | "fallback";
+
+export type ResolvedVisualTiming = {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  source: TimingSource;
+  desc: string;
+  specPath?: string;
+};
+
+type SectionTimingTarget = Pick<Section, "id" | "specDir" | "durationSeconds" | "compositionId"> & {
+  compositions?: Section["compositions"];
+};
+
+type TimingCandidate = {
+  startSeconds: number;
+  endSeconds?: number;
+  source: Exclude<TimingSource, "fallback">;
+  desc: string;
+  specPath?: string;
+};
+
+function stripSpecsPrefix(specDir: string): string {
+  return specDir.replace(/^specs[\\/]/, "").replace(/^[\\/]+/, "");
+}
+
+function resolveSectionSpecDir(projectDir: string, specDir: string): string {
+  return path.isAbsolute(specDir)
+    ? specDir
+    : path.join(projectDir, "specs", stripSpecsPrefix(specDir));
+}
+
+function escapeDescription(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function titleFromId(value: string): string {
+  return value
+    .replace(/^\d+[_-]?/, "")
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function componentBaseName(componentId: string, sectionId: string): string {
+  const prefix = `${sectionId}_`;
+  return componentId.startsWith(prefix) ? componentId.slice(prefix.length) : componentId;
+}
+
+function readSpecContent(projectDir: string, section: SectionTimingTarget, componentId: string): {
+  path?: string;
+  content?: string;
+} {
+  if (!section.specDir) {
+    return {};
+  }
+
+  const specDir = resolveSectionSpecDir(projectDir, section.specDir);
+  const baseName = componentBaseName(componentId, section.id);
+
+  for (const extension of [".md", ".txt"]) {
+    const candidate = path.join(specDir, `${baseName}${extension}`);
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+
+    try {
+      return {
+        path: candidate,
+        content: fs.readFileSync(candidate, "utf-8"),
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+function parseClockTime(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const parts = trimmed.split(":").map((part) => Number(part));
+  if (parts.some((part) => Number.isNaN(part))) {
+    return null;
+  }
+
+  if (parts.length === 1) {
+    return parts[0] ?? null;
+  }
+
+  if (parts.length === 2) {
+    return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
+  }
+
+  if (parts.length === 3) {
+    return (parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0);
+  }
+
+  return null;
+}
+
+export function parseSpecTimestampRange(content: string): {
+  startSeconds: number;
+  endSeconds: number;
+} | null {
+  const match = content.match(
+    /\*\*Timestamp:\*\*\s*([0-9:.]+)\s*-\s*([0-9:.]+)/i
+  );
+  if (!match) {
+    return null;
+  }
+
+  const startSeconds = parseClockTime(match[1] ?? "");
+  const endSeconds = parseClockTime(match[2] ?? "");
+
+  if (
+    startSeconds === null ||
+    endSeconds === null ||
+    endSeconds <= startSeconds
+  ) {
+    return null;
+  }
+
+  return { startSeconds, endSeconds };
+}
+
+function parseSpecHeading(content: string, componentId: string): string {
+  const match = content.match(/^#\s+(.+)$/m);
+  return match?.[1]?.trim() || titleFromId(componentId);
+}
+
+function loadWordTimestamps(projectDir: string, sectionId: string): WordTimestamp[] {
+  const timestampsPath = path.join(
+    projectDir,
+    "outputs",
+    "tts",
+    sectionId,
+    "word_timestamps.json"
+  );
+
+  if (!fs.existsSync(timestampsPath)) {
+    return [];
+  }
+
+  try {
+    const raw = fs.readFileSync(timestampsPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    const words = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.words) ? parsed.words : [];
+    return words.filter((word: unknown): word is WordTimestamp => {
+      return (
+        typeof (word as WordTimestamp | undefined)?.word === "string" &&
+        typeof (word as WordTimestamp | undefined)?.start === "number" &&
+        typeof (word as WordTimestamp | undefined)?.end === "number"
+      );
+    });
+  } catch {
+    return [];
+  }
+}
+
+function extractKeyword(componentId: string, sectionId: string): {
+  keyword: string;
+  type: "stat_callout" | "split" | "title_card" | "main" | "other";
+} {
+  const suffix = componentId.startsWith(`${sectionId}_`)
+    ? componentId.slice(sectionId.length + 1)
+    : componentId;
+
+  if (suffix === "title_card" || suffix === "main") {
+    return { keyword: "", type: suffix };
+  }
+
+  if (suffix.startsWith("stat_callout_")) {
+    return {
+      keyword: suffix.replace(/^stat_callout_/, ""),
+      type: "stat_callout",
+    };
+  }
+
+  if (suffix.startsWith("split_")) {
+    const pieces = suffix.replace(/^split_/, "").split("_vs_");
+    const keyword = (pieces.length > 1 ? pieces[pieces.length - 1] : pieces[0] || "")
+      .replace(/_/g, " ");
+    return { keyword, type: "split" };
+  }
+
+  return { keyword: suffix, type: "other" };
+}
+
+function normalizeWord(value: string): string {
+  return value.replace(/[.,!?;:'"()]+/g, "").toLowerCase();
+}
+
+function findKeywordTimestamp(keyword: string, words: WordTimestamp[]): number | null {
+  const keywordLower = keyword.toLowerCase();
+  const condensedKeyword = keywordLower.replace(/_/g, "");
+
+  for (const word of words) {
+    if (normalizeWord(word.word) === condensedKeyword) {
+      return word.start;
+    }
+  }
+
+  if (condensedKeyword.length >= 4) {
+    for (const word of words) {
+      if (normalizeWord(word.word).includes(condensedKeyword)) {
+        return word.start;
+      }
+    }
+  }
+
+  if (keywordLower.includes("_")) {
+    const parts = keywordLower.split("_").filter((part) => part.length >= 4);
+    for (const part of parts) {
+      for (const word of words) {
+        if (normalizeWord(word.word) === part) {
+          return word.start;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveProjectCompositionTiming(
+  section: SectionTimingTarget,
+  componentId: string
+): TimingCandidate | null {
+  const composition = (section.compositions ?? []).find((entry) => {
+    if (typeof entry === "string") {
+      return entry === componentId;
+    }
+
+    return entry?.id === componentId;
+  });
+
+  if (
+    !composition ||
+    typeof composition === "string" ||
+    typeof composition.startSeconds !== "number"
+  ) {
+    return null;
+  }
+
+  const durationSeconds =
+    typeof composition.durationSeconds === "number" && composition.durationSeconds > 0
+      ? composition.durationSeconds
+      : undefined;
+
+  return {
+    startSeconds: composition.startSeconds,
+    endSeconds:
+      durationSeconds !== undefined ? composition.startSeconds + durationSeconds : undefined,
+    source: "project",
+    desc: titleFromId(componentId),
+  };
+}
+
+function resolveAudioTimingCandidate(
+  words: WordTimestamp[],
+  section: SectionTimingTarget,
+  componentId: string
+): TimingCandidate | null {
+  const { keyword, type } = extractKeyword(componentId, section.id);
+
+  if (type === "title_card") {
+    return {
+      startSeconds: 0,
+      endSeconds: DEFAULT_VISUAL_DURATION_SECONDS,
+      source: "audio-sync",
+      desc: titleFromId(componentId),
+    };
+  }
+
+  if (type === "main") {
+    return {
+      startSeconds: 0,
+      endSeconds: section.durationSeconds,
+      source: "audio-sync",
+      desc: titleFromId(componentId),
+    };
+  }
+
+  if (!keyword || words.length === 0) {
+    return null;
+  }
+
+  const match = findKeywordTimestamp(keyword, words);
+  if (match === null) {
+    return null;
+  }
+
+  const startSeconds = Math.max(0, match - DEFAULT_KEYWORD_LEAD_SECONDS);
+  return {
+    startSeconds,
+    endSeconds: startSeconds + DEFAULT_VISUAL_DURATION_SECONDS,
+    source: "audio-sync",
+    desc: titleFromId(componentId),
+  };
+}
+
+function buildTimingCandidates(
+  projectDir: string,
+  section: SectionTimingTarget,
+  componentIds: string[]
+): Array<TimingCandidate | null> {
+  const words = loadWordTimestamps(projectDir, section.id);
+
+  return componentIds.map((componentId) => {
+    const projectTiming = resolveProjectCompositionTiming(section, componentId);
+    if (projectTiming) {
+      return projectTiming;
+    }
+
+    const { path: specPath, content: specContent } = readSpecContent(projectDir, section, componentId);
+    if (specContent) {
+      const range = parseSpecTimestampRange(specContent);
+      if (range) {
+        return {
+          startSeconds: range.startSeconds,
+          endSeconds: range.endSeconds,
+          source: "spec",
+          desc: parseSpecHeading(specContent, componentId),
+          specPath,
+        };
+      }
+    }
+
+    return resolveAudioTimingCandidate(words, section, componentId);
+  });
+}
+
+function scaleSpecCandidatesToSectionDuration(
+  candidates: Array<TimingCandidate | null>,
+  sectionDurationSeconds: number
+): Array<TimingCandidate | null> {
+  if (sectionDurationSeconds <= 0) {
+    return candidates;
+  }
+
+  const maxSpecEnd = candidates.reduce((maxValue, candidate) => {
+    if (!candidate || candidate.source !== "spec") {
+      return maxValue;
+    }
+
+    return Math.max(maxValue, candidate.endSeconds ?? candidate.startSeconds);
+  }, 0);
+
+  if (maxSpecEnd <= sectionDurationSeconds || maxSpecEnd <= 0) {
+    return candidates;
+  }
+
+  const scale = sectionDurationSeconds / maxSpecEnd;
+  return candidates.map((candidate) => {
+    if (!candidate || candidate.source !== "spec") {
+      return candidate;
+    }
+
+    return {
+      ...candidate,
+      startSeconds: candidate.startSeconds * scale,
+      endSeconds:
+        (candidate.endSeconds ?? candidate.startSeconds + MIN_VISUAL_DURATION_SECONDS) * scale,
+    };
+  });
+}
+
+function effectiveSectionDuration(
+  sectionDurationSeconds: number,
+  candidates: Array<TimingCandidate | null>,
+  componentCount: number
+): number {
+  if (sectionDurationSeconds > 0) {
+    return sectionDurationSeconds;
+  }
+
+  const fromCandidates = candidates.reduce((maxValue, candidate) => {
+    return Math.max(
+      maxValue,
+      candidate?.endSeconds ?? candidate?.startSeconds ?? 0
+    );
+  }, 0);
+
+  return Math.max(
+    fromCandidates,
+    componentCount * MIN_VISUAL_DURATION_SECONDS
+  );
+}
+
+function buildFallbackTimings(
+  componentIds: string[],
+  candidates: Array<TimingCandidate | null>,
+  sectionDurationSeconds: number
+): ResolvedVisualTiming[] {
+  const resolved: ResolvedVisualTiming[] = [];
+  let previousEnd = 0;
+  let index = 0;
+
+  while (index < componentIds.length) {
+    const candidate = candidates[index];
+    if (candidate) {
+      resolved.push({
+        id: componentIds[index],
+        startSeconds: candidate.startSeconds,
+        endSeconds: candidate.endSeconds ?? candidate.startSeconds + DEFAULT_VISUAL_DURATION_SECONDS,
+        source: candidate.source,
+        desc: candidate.desc,
+        specPath: candidate.specPath,
+      });
+      previousEnd = candidate.endSeconds ?? candidate.startSeconds;
+      index += 1;
+      continue;
+    }
+
+    let blockEnd = index;
+    while (blockEnd < componentIds.length && !candidates[blockEnd]) {
+      blockEnd += 1;
+    }
+
+    const nextCandidateStart =
+      blockEnd < componentIds.length
+        ? candidates[blockEnd]?.startSeconds ?? sectionDurationSeconds
+        : sectionDurationSeconds;
+
+    const untimedCount = blockEnd - index;
+    const windowStart = Math.min(previousEnd, sectionDurationSeconds);
+    const available = Math.max(
+      untimedCount * MIN_VISUAL_DURATION_SECONDS,
+      nextCandidateStart - windowStart
+    );
+    const slice = available / Math.max(untimedCount, 1);
+
+    for (let offset = 0; offset < untimedCount; offset += 1) {
+      const startSeconds = windowStart + slice * offset;
+      const endSeconds = windowStart + slice * (offset + 1);
+      resolved.push({
+        id: componentIds[index + offset],
+        startSeconds,
+        endSeconds,
+        source: "fallback",
+        desc: titleFromId(componentIds[index + offset]),
+      });
+    }
+
+    previousEnd = windowStart + available;
+    index = blockEnd;
+  }
+
+  return resolved;
+}
+
+function normalizeVisualTimings(
+  timings: ResolvedVisualTiming[],
+  sectionDurationSeconds: number
+): ResolvedVisualTiming[] {
+  if (timings.length === 0) {
+    return [];
+  }
+
+  const normalizedStarts: number[] = [];
+
+  timings.forEach((timing, index) => {
+    const remainingItems = timings.length - index - 1;
+    const latestStart = Math.max(
+      0,
+      sectionDurationSeconds - MIN_VISUAL_DURATION_SECONDS * (remainingItems + 1)
+    );
+    const minimumStart =
+      index === 0 ? 0 : normalizedStarts[index - 1] + MIN_VISUAL_DURATION_SECONDS;
+    const clampedStart = Math.min(
+      Math.max(timing.startSeconds, minimumStart),
+      latestStart
+    );
+    normalizedStarts.push(clampedStart);
+  });
+
+  return timings.map((timing, index) => {
+    const startSeconds = normalizedStarts[index];
+    const endSeconds =
+      index === timings.length - 1
+        ? sectionDurationSeconds
+        : normalizedStarts[index + 1];
+
+    return {
+      ...timing,
+      startSeconds,
+      endSeconds: Math.max(endSeconds, startSeconds + MIN_VISUAL_DURATION_SECONDS),
+    };
+  });
+}
+
+export function resolveSectionVisualTimings(
+  projectDir: string,
+  section: SectionTimingTarget,
+  componentIds: string[]
+): ResolvedVisualTiming[] {
+  const candidates = scaleSpecCandidatesToSectionDuration(
+    buildTimingCandidates(projectDir, section, componentIds),
+    section.durationSeconds
+  );
+  const durationSeconds = effectiveSectionDuration(
+    section.durationSeconds,
+    candidates,
+    componentIds.length
+  );
+  const seededTimings = buildFallbackTimings(componentIds, candidates, durationSeconds);
+
+  return normalizeVisualTimings(seededTimings, durationSeconds);
+}
+
+export function buildSectionConstantsSource(
+  projectDir: string,
+  section: SectionTimingTarget,
+  componentIds: string[],
+  fps = DEFAULT_FPS
+): string {
+  const timings = resolveSectionVisualTimings(projectDir, section, componentIds);
+  const durationSeconds =
+    timings[timings.length - 1]?.endSeconds ??
+    Math.max(section.durationSeconds || 0, componentIds.length * MIN_VISUAL_DURATION_SECONDS);
+  const exportName = section.compositionId
+    ? section.compositionId
+        .split(/[_-]+/)
+        .filter(Boolean)
+        .map((part) => part[0]?.toUpperCase() + part.slice(1))
+        .join("")
+    : titleFromId(section.id).replace(/\s+/g, "");
+
+  const beatLines: string[] = [];
+  const visualLines: string[] = [];
+
+  timings.forEach((timing, index) => {
+    const key = String(index).padStart(2, "0");
+    beatLines.push(`  VISUAL_${key}_START: s2f(${timing.startSeconds.toFixed(3)}),`);
+    beatLines.push(`  VISUAL_${key}_END: s2f(${timing.endSeconds.toFixed(3)}),`);
+    visualLines.push(
+      `  { start: BEATS.VISUAL_${key}_START, end: BEATS.VISUAL_${key}_END, id: "${timing.id}", desc: "${escapeDescription(timing.desc)}" },`
+    );
+  });
+
+  return `import { z } from "zod";
+
+export const SECTION_FPS = ${fps};
+export const SECTION_DURATION_SECONDS = ${durationSeconds.toFixed(3)};
+export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
+
+const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
+
+export const BEATS = {
+${beatLines.join("\n")}
+};
+
+export const VISUAL_SEQUENCE = [
+${visualLines.join("\n")}
+];
+
+export const ${exportName}Props = z.object({
+  showTitle: z.boolean().default(true),
+});
+
+export const default${exportName}Props: z.infer<typeof ${exportName}Props> = {
+  showTitle: true,
+};
+
+export type ${exportName}PropsType = z.infer<typeof ${exportName}Props>;
+`;
+}

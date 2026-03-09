@@ -7,6 +7,7 @@ import { spawn, execSync } from "child_process";
 import { runPipelineStage, registerExecutor } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
+import { buildSectionConstantsSource } from "@/lib/composition-timing";
 import { loadProject, saveProject } from "@/lib/project";
 import { renderStill } from "@/lib/render";
 import type { Section, SseSend } from "@/lib/types";
@@ -167,77 +168,18 @@ Return valid TypeScript/React code.
 // ---------------------------------------------------------------------------
 // Generate section constants.ts with BEATS / VISUAL_SEQUENCE
 // ---------------------------------------------------------------------------
-const DATA_DIR = path.join(process.cwd(), "data");
-
 async function generateSectionConstants(
-  sectionId: string,
-  compositionId: string,
+  section: Pick<Section, "id" | "specDir" | "durationSeconds" | "compositionId" | "compositions">,
   componentIds: string[],
   remotionDir: string,
   onLog: (msg: string) => void,
 ): Promise<void> {
-  // Read word timestamps for timing data
-  const wordsPath = path.join(DATA_DIR, `${sectionId}_words.json`);
-  let wordTimestamps = "[]";
-  if (fs.existsSync(wordsPath)) {
-    try { wordTimestamps = fs.readFileSync(wordsPath, "utf-8"); } catch { /* ignore */ }
-  }
-
-  const pascalCompositionId = toPascalCase(compositionId);
-
-  const prompt = `
-You are Claude Code. Generate a constants.ts file for a Remotion section composition.
-
-Output file: ${remotionDir}/constants.ts
-
-This file provides frame-accurate timing for the section's visual sequence.
-
-REQUIRED STRUCTURE:
-1. Import { z } from "zod"
-2. Export FPS, DURATION_SECONDS, DURATION_FRAMES constants
-3. Define s2f() helper: const s2f = (seconds: number) => Math.round(seconds * FPS)
-4. Export BEATS object with VISUAL_NN_START / VISUAL_NN_END pairs for each component
-5. Export VISUAL_SEQUENCE array: { start, end, id, desc }[] mapping BEATS to component IDs
-6. Export Zod props schema and defaults for ${pascalCompositionId}
-
-Component IDs to include in VISUAL_SEQUENCE:
-${componentIds.map((id, i) => `- Visual ${String(i).padStart(2, "0")}: ${id}`).join("\n")}
-
-Word timestamps (JSON) for timing:
-${wordTimestamps}
-
-REFERENCE FORMAT:
-\`\`\`typescript
-import { z } from "zod";
-
-export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = N;
-export const SECTION_DURATION_FRAMES = SECTION_FPS * SECTION_DURATION_SECONDS;
-
-const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
-
-export const BEATS = {
-  VISUAL_00_START: s2f(0.0),
-  VISUAL_00_END: s2f(X.XX),
-  // ... one pair per visual
-};
-
-export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "ComponentName", desc: "narration summary" },
-];
-
-export const ${pascalCompositionId}Props = z.object({
-  showTitle: z.boolean().default(true),
-});
-export const default${pascalCompositionId}Props: z.infer<typeof ${pascalCompositionId}Props> = { showTitle: true };
-export type ${pascalCompositionId}PropsType = z.infer<typeof ${pascalCompositionId}Props>;
-\`\`\`
-
-Generate the complete constants.ts file.
-`.trim();
-
   onLog(`[compositions] Generating section constants: ${remotionDir}/constants.ts`);
-  await runClaudeFix(prompt, path.join(process.cwd(), "remotion/src/remotion"), onLog);
+  fs.mkdirSync(remotionDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(remotionDir, "constants.ts"),
+    buildSectionConstantsSource(process.cwd(), section, componentIds)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -759,8 +701,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
             writeDeterministicSectionConstants(process.cwd(), section, componentIds, onLog);
           } else {
             await generateSectionConstants(
-              section.id,
-              section.compositionId,
+              section,
               componentIds,
               sectionRemotionDir,
               onLog,

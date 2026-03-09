@@ -9,6 +9,10 @@ import {
   parseScriptSections,
   scriptLineMatchesNarration,
 } from '@/lib/spec-script-context';
+import {
+  filterWordsForSpecTimingWindow,
+  parseSpecTimingWindow,
+} from '@/lib/spec-timing-context';
 import { readSseStartResult } from '../../lib/client/sse-utils';
 import { SseLogPanel } from '../SseLogPanel';
 
@@ -35,6 +39,13 @@ type SpecListResponse = {
 
 type ScriptResponse = {
   content?: string;
+};
+
+type WordTimestamp = {
+  word: string;
+  start: number;
+  end: number;
+  segmentId?: string;
 };
 
 type BadgeInfo = {
@@ -70,6 +81,16 @@ const scriptKindClasses: Record<string, string> = {
   text: 'border-slate-700 bg-slate-800 text-slate-300',
 };
 
+const normalizeTimingText = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const formatTimingSeconds = (value: number): string => {
+  if (!Number.isFinite(value)) return '0:00.00';
+  const minutes = Math.floor(value / 60);
+  const seconds = (value % 60).toFixed(2).padStart(5, '0');
+  return `${minutes}:${seconds}`;
+};
+
 export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAdvance }) => {
   const [sections, setSections] = useState<SpecSection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +98,9 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   const [scriptContent, setScriptContent] = useState('');
   const [scriptLoading, setScriptLoading] = useState(true);
   const [scriptError, setScriptError] = useState<string | null>(null);
+  const [timingWords, setTimingWords] = useState<WordTimestamp[]>([]);
+  const [timingLoading, setTimingLoading] = useState(false);
+  const [timingError, setTimingError] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     if (typeof window === 'undefined') return {};
@@ -158,6 +182,57 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!selectedSectionId) {
+      setTimingWords([]);
+      setTimingError(null);
+      setTimingLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchTiming = async () => {
+      try {
+        setTimingLoading(true);
+        const res = await fetch(
+          `/api/pipeline/audio-sync/timestamps?section=${encodeURIComponent(selectedSectionId)}`
+        );
+
+        if (!res.ok) {
+          if (!isMounted) return;
+          setTimingWords([]);
+          setTimingError(res.status === 404 ? null : `Failed to fetch audio sync timing: ${res.status}`);
+          return;
+        }
+
+        const data = await res.json();
+        if (!isMounted) return;
+        const words = Array.isArray(data?.words)
+          ? data.words
+          : Array.isArray(data)
+            ? data
+            : [];
+        setTimingWords(words);
+        setTimingError(null);
+      } catch (err) {
+        if (!isMounted) return;
+        setTimingWords([]);
+        setTimingError((err as Error).message);
+      } finally {
+        if (isMounted) {
+          setTimingLoading(false);
+        }
+      }
+    };
+
+    fetchTiming();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedSectionId]);
 
   // Persist expanded state
   useEffect(() => {
@@ -273,6 +348,10 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
     return extractNarrationSyncQuotes(editorValue);
   }, [editorValue]);
 
+  const selectedSpecTimingWindow = useMemo(() => {
+    return parseSpecTimingWindow(editorValue);
+  }, [editorValue]);
+
   const selectedScriptHeading = useMemo(() => {
     if (selectedScriptSection) return selectedScriptSection.heading;
     if (selectedSection) return selectedSection.label;
@@ -291,6 +370,48 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
     },
     [narrationSyncQuotes, selectedScriptSection]
   );
+
+  const highlightedTimingTokens = useMemo(() => {
+    const tokens = narrationSyncQuotes
+      .flatMap((quote) => normalizeTimingText(quote).split(' '))
+      .filter((token) => token.length >= 3);
+    return new Set(tokens);
+  }, [narrationSyncQuotes]);
+
+  const visibleTimingWords = useMemo(() => {
+    return filterWordsForSpecTimingWindow(timingWords, selectedSpecTimingWindow);
+  }, [selectedSpecTimingWindow, timingWords]);
+
+  const isHighlightedTimingWord = useCallback(
+    (word: WordTimestamp) => {
+      const normalizedWord = normalizeTimingText(word.word);
+      if (!normalizedWord) return false;
+      return normalizedWord
+        .split(' ')
+        .some((token) => highlightedTimingTokens.has(token));
+    },
+    [highlightedTimingTokens]
+  );
+
+  const timingSummary = useMemo(() => {
+    if (visibleTimingWords.length > 0) {
+      const first = visibleTimingWords[0];
+      const last = visibleTimingWords[visibleTimingWords.length - 1];
+      return {
+        wordCount: visibleTimingWords.length,
+        start: first ? formatTimingSeconds(first.start) : '0:00.00',
+        end: last ? formatTimingSeconds(last.end) : '0:00.00',
+      };
+    }
+
+    if (!selectedSpecTimingWindow) return null;
+
+    return {
+      wordCount: 0,
+      start: formatTimingSeconds(selectedSpecTimingWindow.startSeconds),
+      end: formatTimingSeconds(selectedSpecTimingWindow.endSeconds),
+    };
+  }, [selectedSpecTimingWindow, visibleTimingWords]);
 
   return (
     <div className="w-full space-y-6">
@@ -409,7 +530,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                     <div className="text-sm font-medium">{editorTitle}</div>
                                     {saving && <div className="text-xs text-slate-400">Saving…</div>}
                                   </div>
-                                  <div className="grid gap-3 lg:grid-cols-2">
+                                  <div className="grid gap-3 xl:grid-cols-3">
                                     <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60">
                                       <div className="border-b border-slate-700 px-3 py-2">
                                         <div className="text-sm font-medium text-slate-100">Script Context</div>
@@ -476,6 +597,94 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                                   </span>
                                                   <span className="min-w-0 whitespace-pre-wrap font-mono text-xs text-slate-200">
                                                     {line.text}
+                                                  </span>
+                                                </div>
+                                              );
+                                            })}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60">
+                                      <div className="border-b border-slate-700 px-3 py-2">
+                                        <div className="text-sm font-medium text-slate-100">Audio Sync Timing</div>
+                                        <div className="text-xs text-slate-400">
+                                          {selectedSection?.label ?? 'No section selected'}
+                                        </div>
+                                      </div>
+                                      <div className="space-y-3 p-3">
+                                        <div className="text-xs text-slate-400">
+                                          Stage 5 word timestamps for this section. Words matching the current Narration Sync quote are highlighted.
+                                        </div>
+
+                                        <div className="rounded border border-slate-700 bg-slate-800/50 px-2 py-1 text-[11px] text-slate-300">
+                                          <span className="text-slate-500">Spec Window</span>{' '}
+                                          {selectedSpecTimingWindow
+                                            ? `${formatTimingSeconds(selectedSpecTimingWindow.startSeconds)} - ${formatTimingSeconds(selectedSpecTimingWindow.endSeconds)}`
+                                            : 'Full section timeline'}
+                                        </div>
+
+                                        {timingSummary ? (
+                                          <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-300">
+                                            <div className="rounded border border-slate-700 bg-slate-800/70 px-2 py-1">
+                                              <div className="text-slate-500">Words</div>
+                                              <div className="font-mono text-slate-100">{timingSummary.wordCount}</div>
+                                            </div>
+                                            <div className="rounded border border-slate-700 bg-slate-800/70 px-2 py-1">
+                                              <div className="text-slate-500">Start</div>
+                                              <div className="font-mono text-slate-100">{timingSummary.start}</div>
+                                            </div>
+                                            <div className="rounded border border-slate-700 bg-slate-800/70 px-2 py-1">
+                                              <div className="text-slate-500">End</div>
+                                              <div className="font-mono text-slate-100">{timingSummary.end}</div>
+                                            </div>
+                                          </div>
+                                        ) : null}
+
+                                        <div className="max-h-[320px] space-y-1 overflow-y-auto">
+                                          {timingLoading && (
+                                            <div className="text-sm text-slate-400">Loading audio sync timing…</div>
+                                          )}
+                                          {!timingLoading && timingError && (
+                                            <div className="text-sm text-red-400">
+                                              Audio sync timing unavailable: {timingError}
+                                            </div>
+                                          )}
+                                          {!timingLoading && !timingError && timingWords.length === 0 && (
+                                            <div className="text-sm text-slate-400">
+                                              No Audio Sync timing data found for this section.
+                                            </div>
+                                          )}
+                                          {!timingLoading &&
+                                            !timingError &&
+                                            timingWords.length > 0 &&
+                                            visibleTimingWords.length === 0 &&
+                                            selectedSpecTimingWindow && (
+                                              <div className="text-sm text-slate-400">
+                                                No Audio Sync words fall inside this spec&apos;s timestamp window.
+                                              </div>
+                                            )}
+                                          {!timingLoading &&
+                                            !timingError &&
+                                            visibleTimingWords.map((word, wordIndex) => {
+                                              const isHighlighted = isHighlightedTimingWord(word);
+                                              return (
+                                                <div
+                                                  key={`${word.segmentId ?? 'segment'}-${wordIndex}-${word.start}`}
+                                                  className={`grid grid-cols-[auto_auto_1fr] gap-3 rounded px-2 py-1 ${
+                                                    isHighlighted
+                                                      ? 'bg-emerald-500/10 ring-1 ring-emerald-500/40'
+                                                      : 'bg-transparent'
+                                                  }`}
+                                                >
+                                                  <span className="w-20 text-right font-mono text-[11px] text-slate-500">
+                                                    {formatTimingSeconds(word.start)}
+                                                  </span>
+                                                  <span className="w-20 text-right font-mono text-[11px] text-slate-600">
+                                                    {formatTimingSeconds(word.end)}
+                                                  </span>
+                                                  <span className="min-w-0 whitespace-pre-wrap font-mono text-xs text-slate-200">
+                                                    {word.word}
                                                   </span>
                                                 </div>
                                               );

@@ -92,6 +92,7 @@ describe("lib/deterministic-pipeline", () => {
       tmpDir,
       {
         id: "animation_section",
+        specDir: "animation_section",
         compositionId: "AnimationSection",
         durationSeconds: 12,
       },
