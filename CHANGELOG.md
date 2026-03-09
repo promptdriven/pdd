@@ -1,3 +1,27 @@
+## v0.0.171 (2026-03-08)
+
+### Feat
+
+- Add new Remotion components for various video sections and animations, update existing components, and refine related code generation and testing infrastructure.
+- add Stage 7 veo spec comparison
+- Integrate script context panel in Stage 6, displaying parsed script sections and highlighting lines based on narration sync quotes.
+- Implement inline spec file editor with auto-scrolling, content clearing, and robust spec directory path resolution.
+- Implement video player progress bar seeking by click and drag with associated state, refs, and tests.
+- Add new audit specifications for animation and VEO sections, updating the audit pipeline and related tests.
+- Implement new Remotion video sections and components, update related specifications, API, UI, and E2E tests, and remove build artifacts.
+
+### Fix
+
+- stop workflow on clarification and support resume (#784)
+- Add retry on timeout for verify E2E test in cloud CI
+- **b50cbb25-464d-4094-b54e-964eb3157650**: Change the main background color of this section t
+- **test-batch-ann-1772962375510**: Change the primary background accent in Animation
+- **test-batch-ann-1772961825160**: Subtitle font size 96px causes text to clip the ri
+- **8e58e83c-b48c-4f6c-a024-a0211966ffad**: Change the main background color of this section t
+- **9dd469e8-6ce5-4c7f-9695-6d82e3cc81d0**: Change the main background color of this section t
+- **d1669973-d633-4b63-bdd5-78694f017427**: Change the main background color of this section t
+- **844c735f-d540-45d9-aadf-0202d6d80abc**: Change the main background color of this section t
+
 ## v0.0.170 (2026-03-07)
 
 ### Feat
