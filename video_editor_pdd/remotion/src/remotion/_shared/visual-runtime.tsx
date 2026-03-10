@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useMemo } from "react";
 import { Internals, useCurrentFrame, useVideoConfig } from "remotion";
+import {
+  buildSlotScaledSequenceContext,
+  computeSlotScaledFrame,
+} from "../../../../lib/visual-runtime";
 
 export type VisualMedia = {
   defaultSrc?: string;
@@ -45,43 +49,31 @@ export const SlotScaledSequence: React.FC<{
     1,
     sequenceContext?.durationInFrames ?? videoConfig.durationInFrames
   );
-  const targetDurationInFrames = Math.max(
-    1,
-    Math.floor(intrinsicDurationInFrames)
-  );
-  const sequenceOffset =
-    sequenceContext?.cumulatedFrom !== undefined
-      ? sequenceContext.cumulatedFrom + sequenceContext.relativeFrom
-      : 0;
-
-  const scaledFrame =
-    slotDurationInFrames <= 1 || targetDurationInFrames <= 1
-      ? 0
-      : Math.round(
-          (localFrame / Math.max(1, slotDurationInFrames - 1)) *
-            Math.max(0, targetDurationInFrames - 1)
-        );
+  const targetDurationInFrames = Math.max(1, Math.floor(intrinsicDurationInFrames));
+  const scaledFrame = computeSlotScaledFrame({
+    localFrame,
+    slotDurationInFrames,
+    intrinsicDurationInFrames: targetDurationInFrames,
+  });
 
   const scaledTimelineContext = useMemo(() => {
     return {
       ...timelineContext,
       frame: {
         ...timelineContext.frame,
-        [videoConfig.id]: sequenceOffset + scaledFrame,
+        [videoConfig.id]: scaledFrame,
       },
     };
-  }, [scaledFrame, sequenceOffset, timelineContext, videoConfig.id]);
+  }, [scaledFrame, timelineContext, videoConfig.id]);
 
-  const scaledSequenceContext = useMemo(() => {
-    if (!sequenceContext) {
-      return sequenceContext;
-    }
-
-    return {
-      ...sequenceContext,
-      durationInFrames: targetDurationInFrames,
-    };
-  }, [sequenceContext, targetDurationInFrames]);
+  const scaledSequenceContext = useMemo(
+    () =>
+      buildSlotScaledSequenceContext(
+        sequenceContext as Parameters<typeof buildSlotScaledSequenceContext>[0],
+        targetDurationInFrames
+      ),
+    [sequenceContext, targetDurationInFrames]
+  );
 
   const content = scaledSequenceContext ? (
     <Internals.SequenceContext.Provider value={scaledSequenceContext}>

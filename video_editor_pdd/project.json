@@ -20,7 +20,7 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 10.88,
+      "durationSeconds": 11.029333,
       "offsetSeconds": 0,
       "timelineSource": "generated",
       "compositions": [
@@ -40,8 +40,8 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 11.712,
-      "offsetSeconds": 10.88,
+      "durationSeconds": 11.861333,
+      "offsetSeconds": 11.029333,
       "timelineSource": "generated",
       "compositions": [
         "veo_section_01_title_card",

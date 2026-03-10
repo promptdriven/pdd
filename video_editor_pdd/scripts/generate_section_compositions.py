@@ -92,9 +92,62 @@ AUDIO_EXTENSIONS = {'.wav', '.mp3', '.aac', '.m4a', '.ogg'}
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v'}
 NON_COMPONENT_BASENAMES = {'spec', 'veo'}
 VISUAL_MEDIA_KEY_RE = re.compile(
-    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
+    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc|fromClip|fromSrc|toClip|toSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
     re.IGNORECASE,
 )
+MEDIA_TOKEN_RE = re.compile(r'[a-z0-9]+')
+GENERIC_MEDIA_TOKENS = {
+    'section',
+    'frame',
+    'frames',
+    'duration',
+    'timestamp',
+    'resolution',
+    'tool',
+    'visual',
+    'visuals',
+    'video',
+    'clip',
+    'clips',
+    'footage',
+    'background',
+    'foreground',
+    'narration',
+    'overlay',
+    'title',
+    'card',
+    'split',
+    'screen',
+    'reprise',
+    'callout',
+    'generated',
+    'remotion',
+    'veo',
+    'code',
+    'structure',
+    'technical',
+    'specifications',
+    'canvas',
+    'chart',
+    'elements',
+    'typography',
+    'easing',
+    'data',
+    'points',
+    'color',
+    'colors',
+    'text',
+    'centered',
+    'appears',
+    'appears',
+    'returns',
+    'large',
+    'small',
+    'full',
+    'frame',
+    'edge',
+    'transition',
+}
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -189,6 +242,75 @@ def _resolve_media_static_path(remotion_public: str, rel_path: str) -> Optional[
     return normalized if os.path.isfile(os.path.join(remotion_public, normalized)) else None
 
 
+def _tokenize_media_intent(text: str) -> set[str]:
+    """Extract stable intent tokens from spec prose and filenames."""
+    normalized = text.lower().replace('_', ' ').replace('-', ' ')
+    tokens = {
+        token
+        for token in MEDIA_TOKEN_RE.findall(normalized)
+        if len(token) > 2 and token not in GENERIC_MEDIA_TOKENS and not token.isdigit()
+    }
+    return tokens
+
+
+def _build_semantic_media_aliases(
+    primary: str,
+    source_aliases: Dict[str, str],
+) -> Dict[str, str]:
+    """Project a resolved clip source into the wrapper's expected alias fields."""
+    aliases = {
+        'defaultSrc': primary,
+        'backgroundSrc': source_aliases.get('backgroundSrc', primary),
+        'outputSrc': source_aliases.get('outputSrc', primary),
+        'baseSrc': source_aliases.get('baseSrc', primary),
+    }
+
+    if 'leftSrc' in source_aliases:
+        aliases['leftSrc'] = source_aliases['leftSrc']
+    if 'rightSrc' in source_aliases:
+        aliases['rightSrc'] = source_aliases['rightSrc']
+    if 'revealSrc' in source_aliases:
+        aliases['revealSrc'] = source_aliases['revealSrc']
+
+    return aliases
+
+
+def _infer_semantic_media_aliases(
+    spec_base: str,
+    spec_content: str,
+    explicit_candidates: List[Dict[str, Any]],
+) -> Optional[Dict[str, str]]:
+    """Infer the most likely clip source when the spec only names footage in prose."""
+    spec_tokens = _tokenize_media_intent(spec_base)
+    spec_tokens.update(_tokenize_media_intent(spec_content))
+    if not spec_tokens or not explicit_candidates:
+        return None
+
+    scored_candidates = []
+    for candidate in explicit_candidates:
+        overlap = spec_tokens & candidate['tokens']
+        if not overlap:
+            continue
+        scored_candidates.append((len(overlap), candidate))
+
+    if not scored_candidates:
+        return None
+
+    scored_candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_candidate = scored_candidates[0]
+    if best_score <= 0:
+        return None
+
+    tied_best = [candidate for score, candidate in scored_candidates if score == best_score]
+    if len(tied_best) > 1:
+        return None
+
+    return _build_semantic_media_aliases(
+        best_candidate['primary'],
+        best_candidate['aliases'],
+    )
+
+
 def _extract_visual_media_aliases(
     spec_content: str,
     remotion_public: str,
@@ -205,6 +327,10 @@ def _extract_visual_media_aliases(
         'leftsrc': 'leftSrc',
         'rightclip': 'rightSrc',
         'rightsrc': 'rightSrc',
+        'fromclip': 'baseSrc',
+        'fromsrc': 'baseSrc',
+        'toclip': 'revealSrc',
+        'tosrc': 'revealSrc',
         'outputsrc': 'outputSrc',
         'backgroundclip': 'backgroundSrc',
         'backgroundsrc': 'backgroundSrc',
@@ -248,6 +374,10 @@ def _extract_visual_media_aliases(
         aliases.setdefault('outputSrc', primary)
         aliases.setdefault('baseSrc', primary)
 
+    if 'baseSrc' in aliases and 'revealSrc' in aliases:
+        aliases.setdefault('leftSrc', aliases['baseSrc'])
+        aliases.setdefault('rightSrc', aliases['revealSrc'])
+
     if len(explicit_sources) >= 2:
         aliases.setdefault('leftSrc', explicit_sources[0])
         aliases.setdefault('rightSrc', explicit_sources[1])
@@ -272,21 +402,60 @@ def build_visual_media_manifest(
     if not os.path.isabs(spec_dir):
         spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
 
+    spec_contents: Dict[str, str] = {}
+    explicit_candidates: List[Dict[str, Any]] = []
+    for visual_id in visual_ids:
+        spec_base = component_base_name(visual_id, section['id'])
+        spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+        if not os.path.isfile(spec_path):
+            continue
+
+        spec_content = _read_text_if_exists(spec_path)
+        spec_contents[visual_id] = spec_content
+        source_aliases, primary, explicit = _extract_visual_media_aliases(
+            spec_content,
+            remotion_public,
+            None,
+        )
+        candidate_sources = {value for value in source_aliases.values() if value}
+        if explicit and primary is not None and len(candidate_sources) == 1:
+            candidate_tokens = _tokenize_media_intent(spec_base)
+            candidate_tokens.update(_tokenize_media_intent(primary))
+            title_match = re.search(r'^\s*#\s+(.+)$', spec_content, re.MULTILINE)
+            if title_match:
+                candidate_tokens.update(_tokenize_media_intent(title_match.group(1)))
+            explicit_candidates.append(
+                {
+                    'primary': primary,
+                    'aliases': source_aliases,
+                    'tokens': candidate_tokens,
+                }
+            )
+
     manifest: Dict[str, Dict[str, str]] = {}
     inherited_default: Optional[str] = None
     saw_explicit_source = False
 
     for visual_id in visual_ids:
         spec_base = component_base_name(visual_id, section['id'])
-        spec_path = os.path.join(spec_dir, f'{spec_base}.md')
         aliases: Dict[str, str] = {}
+        spec_content = spec_contents.get(visual_id, '')
 
-        if os.path.isfile(spec_path):
+        if spec_content:
             aliases, next_default, explicit = _extract_visual_media_aliases(
-                _read_text_if_exists(spec_path),
+                spec_content,
                 remotion_public,
                 inherited_default,
             )
+            if not explicit:
+                inferred_aliases = _infer_semantic_media_aliases(
+                    spec_base,
+                    spec_content,
+                    explicit_candidates,
+                )
+                if inferred_aliases is not None:
+                    aliases = inferred_aliases
+                    next_default = inferred_aliases.get('defaultSrc')
             if explicit:
                 saw_explicit_source = True
             if next_default is not None:

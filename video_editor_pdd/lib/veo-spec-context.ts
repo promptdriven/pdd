@@ -7,6 +7,7 @@ export type ResolvedVeoClipSpec = {
   path: string;
   prompt: string;
   filename: string;
+  chainFromPrevious: boolean;
 };
 
 type MarkdownSpecEntry = {
@@ -51,6 +52,24 @@ function extractJsonStringField(
   } catch {
     return rawValue;
   }
+}
+
+function extractJsonBooleanField(
+  content: string,
+  fieldNames: string[]
+): boolean | null {
+  for (const fieldName of fieldNames) {
+    const match = content.match(
+      new RegExp(`"${fieldName}"\\s*:\\s*(true|false)`, "i")
+    );
+    if (!match) {
+      continue;
+    }
+
+    return match[1].toLowerCase() === "true";
+  }
+
+  return null;
 }
 
 export function extractVeoPrompt(content: string): string | null {
@@ -126,11 +145,17 @@ export function listResolvedVeoClipSpecs(
       }
 
       const id = filename.replace(/\.[^.]+$/, "");
+      const chainFromPrevious =
+        extractJsonBooleanField(entry.content, [
+          "chainFromPrevious",
+          "referenceFromPrevious",
+        ]) ?? false;
       return {
         id,
         path: entry.path,
         prompt,
         filename,
+        chainFromPrevious,
       };
     })
     .filter((entry): entry is ResolvedVeoClipSpec => entry !== null);
