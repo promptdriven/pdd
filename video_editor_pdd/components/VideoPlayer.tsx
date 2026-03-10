@@ -315,10 +315,14 @@ export default function VideoPlayer({
     startSpeechRecognition();
   }, [startSpeechRecognition]);
 
-  const stopRecordingMode = useCallback(() => {
+  const stopRecordingMode = useCallback(async () => {
     setIsRecording(false);
     stopSpeechRecognition();
-    handleCapture();
+    await handleCapture();
+    const videoEl = videoRef.current;
+    if (videoEl) {
+      void videoEl.play().catch(() => {});
+    }
   }, [stopSpeechRecognition, handleCapture]);
 
   const togglePlayPause = useCallback(() => {

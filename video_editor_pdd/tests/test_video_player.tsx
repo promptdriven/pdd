@@ -339,6 +339,12 @@ describe("keyboard shortcut — Space annotation workflow", () => {
   it("startRecordingMode pauses video", () => {
     expect(sourceCode).toMatch(/const\s+startRecordingMode\s*=\s*useCallback\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?videoEl\)?\s*videoEl\.pause\(\)/);
   });
+
+  it("stopRecordingMode resumes video playback after capture", () => {
+    expect(sourceCode).toMatch(/const\s+stopRecordingMode\s*=\s*useCallback\s*\(\s*async\s*\(\)\s*=>/);
+    expect(sourceCode).toMatch(/await\s+handleCapture\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/videoEl\.play\s*\(\s*\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
