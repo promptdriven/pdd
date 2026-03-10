@@ -64,4 +64,18 @@ describe("resolveAnnotationTarget", () => {
     expect(target.normalized).toBe(true);
     expect(target.timestamp).toBeCloseTo(1.470667, 5);
   });
+
+  it("prefers explicit global and section timestamps over heuristic inference", () => {
+    const target = resolveAnnotationTarget(project, {
+      sectionId: "animation_section",
+      timestamp: 5.5,
+      globalTimestamp: 16.8,
+      sectionTimestamp: 5.770667,
+      videoFile: "/api/video/outputs/full_video.mp4?v=456",
+    });
+
+    expect(target.sectionId).toBe("veo_section");
+    expect(target.normalized).toBe(true);
+    expect(target.timestamp).toBeCloseTo(5.770667, 5);
+  });
 });

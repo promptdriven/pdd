@@ -52,10 +52,12 @@ jest.mock("@/lib/claude", () => ({
 const MOCK_JOB_ID = "job-resolve-batch-001";
 const mockCreateJob = jest.fn(() => MOCK_JOB_ID);
 const mockRunJob = jest.fn();
+const mockRunPipelineStage = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   createJob: (...args: unknown[]) => mockCreateJob(...args),
   runJob: (...args: unknown[]) => mockRunJob(...args),
+  runPipelineStage: (...args: unknown[]) => mockRunPipelineStage(...args),
 }));
 
 const mockRenderSection = jest.fn();
@@ -154,6 +156,8 @@ beforeEach(() => {
   mockCreateJob.mockReturnValue(MOCK_JOB_ID);
   mockRunJob.mockReset();
   mockRunJob.mockResolvedValue(undefined);
+  mockRunPipelineStage.mockReset();
+  mockRunPipelineStage.mockResolvedValue("job-veo-001");
   mockRunClaudeFix.mockReset();
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockRenderSection.mockReset();
@@ -499,7 +503,7 @@ describe("POST — runJob executor: fixType grouping", () => {
     expect(logFn).toBe(onLog);
   });
 
-  it("logs veo annotations as pending (placeholder)", async () => {
+  it("runs veo regeneration for affected sections", async () => {
     mockAll.mockReturnValue([
       makeDbRow({
         id: "ann-v1",
@@ -516,8 +520,10 @@ describe("POST — runJob executor: fixType grouping", () => {
     expect(onLog).toHaveBeenCalledWith(
       expect.stringContaining("Veo regeneration")
     );
-    expect(onLog).toHaveBeenCalledWith(
-      expect.stringContaining("ann-v1")
+    expect(mockRunPipelineStage).toHaveBeenCalledWith(
+      "veo",
+      { clips: ["section-1"] },
+      expect.any(Function)
     );
   });
 
@@ -663,6 +669,12 @@ describe("POST — runJob executor: section rendering after fixes", () => {
 
   it("falls back to a PascalCase Section composition when project metadata is missing", async () => {
     mockGetSection.mockReturnValue(null);
+    mockAll.mockReturnValue([
+      makeDbRow({
+        sectionId: "cold_open",
+        analysis: JSON.stringify({ fixType: "remotion", severity: "major", technicalAssessment: "", suggestedFixes: [], confidence: 0.9 }),
+      }),
+    ]);
 
     await POST(makeRequest(), makeParams("cold_open"));
 
@@ -754,6 +766,84 @@ describe("POST — runJob executor: section rendering after fixes", () => {
       expect.any(Function)
     );
     expect(mockRun).toHaveBeenCalledWith("section-2", 5.800000000000001, "ann-global");
+  });
+
+  it("queries explicit annotationIds across sections instead of filtering to the route section", async () => {
+    const request = new Request("http://localhost/api/sections/section-1/resolve-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ annotationIds: ["ann-a", "ann-b"] }),
+    });
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-a",
+        sectionId: "section-1",
+        analysis: JSON.stringify({ fixType: "remotion", severity: "major", technicalAssessment: "", suggestedFixes: [], confidence: 0.9 }),
+      }),
+    ]);
+
+    await POST(request, makeParams("section-1"));
+
+    const sql = mockPrepare.mock.calls[0][0] as string;
+    expect(sql).toContain("WHERE id IN");
+    expect(sql).not.toContain("sectionId = ?");
+    expect(mockAll).toHaveBeenCalledWith("ann-a", "ann-b");
+  });
+
+  it("runs the veo stage for normalized veo annotations and renders the normalized section", async () => {
+    const project = {
+      sections: [
+        {
+          id: "section-1",
+          label: "Section One",
+          compositionId: "SectionOneComposition",
+          durationSeconds: 11,
+          offsetSeconds: 0,
+        },
+        {
+          id: "section-2",
+          label: "Section Two",
+          compositionId: "SectionTwoComposition",
+          durationSeconds: 12,
+          offsetSeconds: 11,
+        },
+      ],
+    };
+    mockLoadProject.mockReturnValue(project);
+    mockGetSection.mockImplementation((targetSectionId: string) =>
+      project.sections.find((section) => section.id === targetSectionId) ?? null
+    );
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-veo",
+        sectionId: "section-1",
+        timestamp: 16.5,
+        videoFile: "/api/video/outputs/full_video.mp4?v=123",
+        analysis: JSON.stringify({
+          fixType: "veo",
+          severity: "major",
+          technicalAssessment: "",
+          suggestedFixes: [],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    await executorFn(jest.fn());
+
+    expect(mockRunPipelineStage).toHaveBeenCalledWith(
+      "veo",
+      { clips: ["section-2"] },
+      expect.any(Function)
+    );
+    expect(mockRenderSection).toHaveBeenCalledWith(
+      "SectionTwoComposition",
+      "outputs/sections/section-2.mp4",
+      expect.any(Function)
+    );
   });
 });
 

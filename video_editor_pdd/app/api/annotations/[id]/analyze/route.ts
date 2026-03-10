@@ -109,6 +109,10 @@ If an overlay markup PNG is present, treat the orange markup as the user's exact
 - Freehand markup indicates the exact area under discussion
 Prioritize the marked region over the rest of the scene when deciding what "this" refers to.
 
+Use fixType="remotion" for layout, compositing, timing, labeling, side-swaps, overlays, or other changes that can be made by editing the Remotion composition around existing footage.
+Use fixType="veo" only when the underlying footage itself must be regenerated because the clip content is wrong.
+When a Veo-backed scene is arranged inside a Remotion split-screen or overlay, prefer fixType="remotion" if the request is about placement or swapping existing footage.
+
 Return JSON only matching AnnotationAnalysis:
 {
   "severity": "critical" | "major" | "minor" | "pass",

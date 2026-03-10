@@ -5,7 +5,7 @@ import path from "path";
 import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
 import { runClaudeFix } from "@/lib/claude";
-import { createJob, runJob } from "@/lib/jobs";
+import { createJob, runJob, runPipelineStage } from "@/lib/jobs";
 import { renderSection, stitchFullVideo } from "@/lib/render";
 import { loadProject, getSection } from "@/lib/project";
 import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
@@ -79,9 +79,9 @@ export async function POST(_request: Request, { params }: RouteParams) {
       const placeholders = annotationIds.map(() => '?').join(',');
       rows = db
         .prepare(
-          `SELECT * FROM annotations WHERE sectionId = ? AND id IN (${placeholders}) AND resolved = 0 ORDER BY timestamp ASC`
+          `SELECT * FROM annotations WHERE id IN (${placeholders}) AND resolved = 0 ORDER BY timestamp ASC`
         )
-        .all(sectionId, ...annotationIds) as Array<Record<string, unknown>>;
+        .all(...annotationIds) as Array<Record<string, unknown>>;
     } else {
       rows = db
         .prepare(
@@ -198,8 +198,12 @@ export async function POST(_request: Request, { params }: RouteParams) {
       }
 
       // Veo fixes (placeholder)
-      for (const ann of byFixType.veo) {
-        onLog(`Queued Veo regeneration for annotation ${ann.id} (pending)`);
+      if (byFixType.veo.length > 0) {
+        const veoSectionIds = Array.from(
+          new Set(byFixType.veo.map((annotation) => annotation.sectionId))
+        );
+        onLog(`Running Veo regeneration for sections: ${veoSectionIds.join(", ")}`);
+        await runPipelineStage("veo", { clips: veoSectionIds }, () => {});
       }
 
       // TTS fixes (placeholder)
@@ -235,7 +239,10 @@ export async function POST(_request: Request, { params }: RouteParams) {
       const affectedSections = Array.from(
         new Set(
           normalizedAnnotations
-            .filter((annotation) => annotation.analysis?.fixType === "remotion")
+            .filter((annotation) => {
+              const fixType = annotation.analysis?.fixType ?? "manual";
+              return fixType !== "manual" && fixType !== "none";
+            })
             .map((annotation) => annotation.sectionId)
         )
       );

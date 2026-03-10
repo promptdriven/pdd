@@ -68,6 +68,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const {
       sectionId,
       timestamp,
+      globalTimestamp,
+      sectionTimestamp,
       text,
       drawingDataUrl,
       compositeDataUrl,
@@ -86,6 +88,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const target = resolveAnnotationTarget(project, {
       sectionId,
       timestamp: timestamp ?? null,
+      globalTimestamp: globalTimestamp ?? null,
+      sectionTimestamp: sectionTimestamp ?? null,
       videoFile: videoFile ?? null,
     });
 

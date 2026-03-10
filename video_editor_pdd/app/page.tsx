@@ -198,6 +198,14 @@ export default function Page() {
     return projectConfig.sections.find((section) => section.id === annotationScopeSectionId);
   }, [annotationScopeSectionId, projectConfig]);
 
+  const sectionOffsetsById = useMemo(() => {
+    const offsets = new Map<string, number>();
+    for (const section of projectConfig?.sections ?? []) {
+      offsets.set(section.id, section.offsetSeconds ?? 0);
+    }
+    return offsets;
+  }, [projectConfig]);
+
   const reviewVideoSrc = useMemo(() => {
     if (!selectedSectionId) {
       return FULL_VIDEO_SRC;
@@ -224,24 +232,27 @@ export default function Page() {
   }, [reviewRenderStatus, selectedSectionId]);
 
   const reviewAnnotations = useMemo(() => {
-    if (!reviewUsesFreshFullVideo || !annotationScopeSection) {
+    if (!reviewUsesFreshFullVideo) {
       return annotations;
     }
 
-    const sectionOffset = annotationScopeSection.offsetSeconds ?? 0;
     return annotations.map((annotation) => ({
       ...annotation,
       timestamp:
-        annotation.timestamp == null ? annotation.timestamp : annotation.timestamp + sectionOffset,
+        annotation.timestamp == null
+          ? annotation.timestamp
+          : annotation.timestamp + (sectionOffsetsById.get(annotation.sectionId) ?? 0),
     }));
-  }, [annotationScopeSection, annotations, reviewUsesFreshFullVideo]);
+  }, [annotations, reviewUsesFreshFullVideo, sectionOffsetsById]);
 
   const loadAnnotations = useCallback(async (sectionIdOverride?: string) => {
     const targetSectionId = sectionIdOverride ?? annotationScopeSectionId;
-    if (!targetSectionId) return;
+    if (!reviewUsesFreshFullVideo && !targetSectionId) return;
     setLoadingAnnotations(true);
     try {
-      const url = `/api/annotations?section=${targetSectionId}`;
+      const url = reviewUsesFreshFullVideo
+        ? '/api/annotations'
+        : `/api/annotations?section=${targetSectionId}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to load annotations');
       const data = await res.json();
@@ -251,7 +262,7 @@ export default function Page() {
     } finally {
       setLoadingAnnotations(false);
     }
-  }, [annotationScopeSectionId]);
+  }, [annotationScopeSectionId, reviewUsesFreshFullVideo]);
 
   const loadReviewRenderStatus = useCallback(async () => {
     try {
@@ -272,9 +283,10 @@ export default function Page() {
   }, [activeTab, loadReviewRenderStatus]);
 
   useEffect(() => {
-    if (activeTab !== 'review' || !annotationScopeSectionId) return;
-    loadAnnotations(annotationScopeSectionId);
-  }, [activeTab, annotationScopeSectionId, loadAnnotations]);
+    if (activeTab !== 'review') return;
+    if (!reviewUsesFreshFullVideo && !annotationScopeSectionId) return;
+    loadAnnotations(annotationScopeSectionId ?? undefined);
+  }, [activeTab, annotationScopeSectionId, loadAnnotations, reviewUsesFreshFullVideo]);
 
   const handleAdvanceStage = useCallback(() => {
     // Stage 9 "Open in Review →" should switch to the Review tab
@@ -299,13 +311,28 @@ export default function Page() {
     async (data: AnnotationCaptureData) => {
       const captureSectionId = annotationScopeSectionId ?? selectedSectionId;
       if (!captureSectionId) return;
+      const globalTimestamp = reviewUsesFreshFullVideo
+        ? reviewCurrentTime ?? data.timestamp
+        : undefined;
+      const effectiveSectionId =
+        reviewUsesFreshFullVideo && globalTimestamp != null
+          ? resolveSectionIdForGlobalTime(projectConfig, globalTimestamp) ?? captureSectionId
+          : captureSectionId;
+      const effectiveSection =
+        projectConfig?.sections?.find((section) => section.id === effectiveSectionId) ?? null;
+      const sectionTimestamp =
+        reviewUsesFreshFullVideo && globalTimestamp != null && effectiveSection
+          ? Math.max(0, globalTimestamp - (effectiveSection.offsetSeconds ?? 0))
+          : data.timestamp;
       try {
         const createResponse = await fetch('/api/annotations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sectionId: captureSectionId,
-            timestamp: data.timestamp,
+            sectionId: effectiveSectionId,
+            timestamp: sectionTimestamp,
+            globalTimestamp,
+            sectionTimestamp,
             text: data.text,
             drawingDataUrl: data.drawingDataUrl,
             compositeDataUrl: data.compositeDataUrl,
@@ -319,9 +346,9 @@ export default function Page() {
         }
 
         const createdAnnotation = await createResponse.json();
-        const targetSectionId = createdAnnotation?.sectionId ?? captureSectionId;
+        const targetSectionId = createdAnnotation?.sectionId ?? effectiveSectionId;
 
-        if (targetSectionId !== captureSectionId) {
+        if (!reviewUsesFreshFullVideo && targetSectionId !== captureSectionId) {
           setSelectedSectionId(targetSectionId);
           setAnnotations([createdAnnotation]);
         } else {
@@ -342,16 +369,23 @@ export default function Page() {
             } catch (analysisErr) {
               console.error(analysisErr);
             }
-            await loadAnnotations(targetSectionId);
+            await loadAnnotations(reviewUsesFreshFullVideo ? undefined : targetSectionId);
           })();
         } else {
-          await loadAnnotations(targetSectionId);
+          await loadAnnotations(reviewUsesFreshFullVideo ? undefined : targetSectionId);
         }
       } catch (err) {
         console.error(err);
       }
     },
-    [annotationScopeSectionId, selectedSectionId, loadAnnotations]
+    [
+      annotationScopeSectionId,
+      loadAnnotations,
+      projectConfig,
+      reviewCurrentTime,
+      reviewUsesFreshFullVideo,
+      selectedSectionId,
+    ]
   );
 
   const handleBatchResolve = useCallback(async (_jobId: string) => {

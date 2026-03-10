@@ -505,6 +505,27 @@ describe("POST /api/annotations — create annotation", () => {
     expect(runArgs[2]).toBeCloseTo(5.8, 5);
   });
 
+  it("uses explicit globalTimestamp and sectionTimestamp when provided", async () => {
+    const body = {
+      ...validPostBody(),
+      sectionId: "section-1",
+      timestamp: 5.5,
+      globalTimestamp: 16.5,
+      sectionTimestamp: 5.5,
+      videoFile: "/api/video/outputs/full_video.mp4?v=999",
+    };
+
+    const response = await POST(makePostRequest(body));
+    const result = await response.json();
+
+    expect(result.sectionId).toBe("section-2");
+    expect(result.timestamp).toBeCloseTo(5.5, 5);
+
+    const runArgs = mockRun.mock.calls[0];
+    expect(runArgs[1]).toBe("section-2");
+    expect(runArgs[2]).toBeCloseTo(5.5, 5);
+  });
+
   it("stores NULL for analysis in the INSERT", async () => {
     await POST(makePostRequest(validPostBody()));
 

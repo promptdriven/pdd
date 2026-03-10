@@ -228,6 +228,14 @@ describe("POST — prompt building", () => {
     expect(promptArg).toContain("Color is wrong");
   });
 
+  it("tells Claude to prefer remotion for layout/compositing changes over existing footage", async () => {
+    await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    const promptArg = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    expect(promptArg).toContain("Use fixType=\"remotion\" for layout");
+    expect(promptArg).toContain("existing footage");
+  });
+
   it("passes a prompt referencing spec files path", async () => {
     await POST(makeRequest("ann-123"), makeParams("ann-123"));
 

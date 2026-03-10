@@ -19,6 +19,7 @@ import type {
   FixType,
   AnnotationAnalysis,
   Annotation,
+  CreateAnnotationInput,
   AnnotationCaptureData,
   ClaudeFixResult,
   Section,
@@ -483,6 +484,22 @@ describe('AnnotationCaptureData', () => {
 
   it('videoFile is a string', () => {
     expect(typeof validCapture.videoFile).toBe('string');
+  });
+});
+
+describe('CreateAnnotationInput', () => {
+  const validInput: CreateAnnotationInput = {
+    sectionId: 'section-1',
+    timestamp: 5.4,
+    globalTimestamp: 16.2,
+    sectionTimestamp: 5.2,
+    text: 'Swap these clips',
+    videoFile: '/api/video/outputs/full_video.mp4',
+  };
+
+  it('supports optional globalTimestamp and sectionTimestamp fields', () => {
+    expect(validInput.globalTimestamp).toBe(16.2);
+    expect(validInput.sectionTimestamp).toBe(5.2);
   });
 });
 

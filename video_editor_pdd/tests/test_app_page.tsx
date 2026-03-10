@@ -433,9 +433,13 @@ describe("annotations loading", () => {
     expect(sourceCode).toMatch(/const\s+targetSectionId\s*=\s*sectionIdOverride\s*\?\?\s*annotationScopeSectionId/);
   });
 
+  it("loads all annotations when stitched full-video review is active", () => {
+    expect(sourceCode).toMatch(/const\s+url\s*=\s*reviewUsesFreshFullVideo\s*\?\s*['"]\/api\/annotations['"]\s*:/);
+  });
+
   it("reloads annotations when annotationScopeSectionId changes in Review", () => {
     expect(sourceCode).toMatch(/annotationScopeSectionId/);
-    expect(sourceCode).toMatch(/loadAnnotations\s*\(\s*annotationScopeSectionId\s*\)/);
+    expect(sourceCode).toMatch(/loadAnnotations\s*\(/);
   });
 });
 
@@ -510,11 +514,13 @@ describe("handleAnnotationCapture", () => {
 
   it("uses annotationScopeSectionId before selectedSectionId when creating annotations", () => {
     expect(sourceCode).toMatch(/const\s+captureSectionId\s*=\s*annotationScopeSectionId\s*\?\?\s*selectedSectionId/);
-    expect(sourceCode).toMatch(/sectionId\s*:\s*captureSectionId/);
+    expect(sourceCode).toMatch(/sectionId\s*:\s*effectiveSectionId/);
   });
 
   it("includes timestamp in request body", () => {
-    expect(sourceCode).toMatch(/timestamp\s*:\s*data\.timestamp/);
+    expect(sourceCode).toMatch(/timestamp\s*:\s*sectionTimestamp/);
+    expect(sourceCode).toMatch(/globalTimestamp/);
+    expect(sourceCode).toMatch(/sectionTimestamp/);
   });
 
   it("includes text in request body", () => {
@@ -550,7 +556,7 @@ describe("handleAnnotationCapture", () => {
   });
 
   it("refreshes annotations after saving", () => {
-    expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*targetSectionId\s*\)/);
+    expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*reviewUsesFreshFullVideo\s*\?\s*undefined\s*:\s*targetSectionId\s*\)/);
   });
 });
 
@@ -586,7 +592,7 @@ describe("full video path", () => {
   });
 
   it("adds annotationScopeSection.offsetSeconds back to annotation timestamps when Review shows the stitched video", () => {
-    expect(sourceCode).toMatch(/annotation\.timestamp\s*\+\s*sectionOffset/);
+    expect(sourceCode).toMatch(/sectionOffsetsById\.get\(annotation\.sectionId\)/);
   });
 
   it("switches Review to section video when fullVideo is stale", () => {
