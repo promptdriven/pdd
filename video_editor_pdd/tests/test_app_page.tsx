@@ -693,6 +693,10 @@ describe("batch resolve handler", () => {
   it("passes onBatchResolve to AnnotationPanel", () => {
     expect(sourceCode).toMatch(/onBatchResolve=\{handleBatchResolve\}/);
   });
+
+  it("passes an annotation-delete callback to AnnotationPanel", () => {
+    expect(sourceCode).toMatch(/onAnnotationDeleted=\{handleAnnotationDeleted\}/);
+  });
 });
 
 // ---------------------------------------------------------------------------

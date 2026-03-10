@@ -477,6 +477,10 @@ describe("failed annotation retry", () => {
 // ---------------------------------------------------------------------------
 
 describe("delete annotation action", () => {
+  it("declares an onAnnotationDeleted callback prop", () => {
+    expect(sourceCode).toMatch(/onAnnotationDeleted\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
+  });
+
   it("tracks locally deleted annotation ids", () => {
     expect(sourceCode).toMatch(/locallyDeletedIds/);
     expect(sourceCode).toMatch(/handleDeleteAnnotation/);
@@ -488,6 +492,10 @@ describe("delete annotation action", () => {
 
   it("filters locally deleted annotations out of the rendered list", () => {
     expect(sourceCode).toMatch(/!locallyDeletedIds\.has\(a\.id\)/);
+  });
+
+  it("notifies the parent when an annotation is deleted", () => {
+    expect(sourceCode).toMatch(/onAnnotationDeleted\s*\(\s*annotationId\s*\)/);
   });
 });
 

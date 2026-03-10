@@ -9,6 +9,7 @@ type Props = {
   annotations: Annotation[];
   sectionId: string;
   onBatchResolve: (jobId: string) => void;
+  onAnnotationDeleted: (annotationId: string) => void;
 };
 
 const severityColors: Record<
@@ -439,7 +440,12 @@ function AnnotationCard({
   );
 }
 
-export default function AnnotationPanel({ annotations, sectionId, onBatchResolve }: Props) {
+export default function AnnotationPanel({
+  annotations,
+  sectionId,
+  onBatchResolve,
+  onAnnotationDeleted,
+}: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [batchJobId, setBatchJobId] = useState<string | null>(null);
   const [batchPosting, setBatchPosting] = useState(false);
@@ -515,6 +521,7 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
       next.add(annotationId);
       return next;
     });
+    onAnnotationDeleted(annotationId);
   };
 
   return (

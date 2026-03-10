@@ -407,6 +407,10 @@ export default function Page() {
     await Promise.all([loadAnnotations(), loadReviewRenderStatus()]);
   }, [loadAnnotations, loadReviewRenderStatus]);
 
+  const handleAnnotationDeleted = useCallback((annotationId: string) => {
+    setAnnotations((prev) => prev.filter((annotation) => annotation.id !== annotationId));
+  }, []);
+
   const StagePanel = STAGE_PANELS[activeStage];
 
   return (
@@ -473,6 +477,7 @@ export default function Page() {
                 annotations={annotations}
                 sectionId={annotationScopeSection?.id ?? annotationScopeSectionId ?? ''}
                 onBatchResolve={handleBatchResolve}
+                onAnnotationDeleted={handleAnnotationDeleted}
               />
             </div>
           </>
