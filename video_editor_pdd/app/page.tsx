@@ -31,22 +31,17 @@ type ReviewRenderStatus = {
   sections: Array<{
     id: string;
     status: 'missing' | 'rendering' | 'done' | 'error';
-    updatedAtMs?: number;
   }>;
   fullVideo: {
     exists: boolean;
     stale?: boolean;
-    updatedAtMs?: number;
   };
 };
 
 const FULL_VIDEO_SRC = '/api/video/outputs/full_video.mp4';
 
-const withVersion = (src: string, updatedAtMs?: number) =>
-  updatedAtMs ? `${src}?v=${Math.floor(updatedAtMs)}` : src;
-
-const buildSectionVideoSrc = (sectionId: string, updatedAtMs?: number) =>
-  withVersion(`/api/video/outputs/sections/${sectionId}.mp4`, updatedAtMs);
+const buildSectionVideoSrc = (sectionId: string) =>
+  `/api/video/outputs/sections/${sectionId}.mp4`;
 
 const STAGE_ORDER: PipelineStage[] = [
   'setup',
@@ -149,19 +144,16 @@ export default function Page() {
 
   const reviewVideoSrc = useMemo(() => {
     if (!selectedSectionId) {
-      return withVersion(FULL_VIDEO_SRC, reviewRenderStatus?.fullVideo?.updatedAtMs);
+      return FULL_VIDEO_SRC;
     }
 
+    const sectionVideoSrc = buildSectionVideoSrc(selectedSectionId);
     const sectionStatus = reviewRenderStatus?.sections?.find(
       (section) => section.id === selectedSectionId
     );
-    const sectionVideoSrc = buildSectionVideoSrc(
-      selectedSectionId,
-      sectionStatus?.updatedAtMs
-    );
 
     if (reviewRenderStatus?.fullVideo?.exists && !reviewRenderStatus?.fullVideo?.stale) {
-      return withVersion(FULL_VIDEO_SRC, reviewRenderStatus.fullVideo.updatedAtMs);
+      return FULL_VIDEO_SRC;
     }
 
     if (sectionStatus?.status === 'done') {
@@ -169,7 +161,7 @@ export default function Page() {
     }
 
     if (reviewRenderStatus?.fullVideo?.exists) {
-      return withVersion(FULL_VIDEO_SRC, reviewRenderStatus.fullVideo.updatedAtMs);
+      return FULL_VIDEO_SRC;
     }
 
     return sectionVideoSrc;
@@ -234,7 +226,7 @@ export default function Page() {
     async (data: AnnotationCaptureData) => {
       if (!selectedSectionId) return;
       try {
-        const createResponse = await fetch('/api/annotations', {
+        await fetch('/api/annotations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -244,36 +236,9 @@ export default function Page() {
             drawingDataUrl: data.drawingDataUrl,
             compositeDataUrl: data.compositeDataUrl,
             videoFile: data.videoFile,
-            inputMethod: data.inputMethod,
           }),
         });
-
-        if (!createResponse.ok) {
-          throw new Error('Failed to create annotation');
-        }
-
-        const createdAnnotation = await createResponse.json();
-        setAnnotations((prev) => [...prev, createdAnnotation]);
-
-        if (createdAnnotation?.id) {
-          void (async () => {
-            try {
-              const analyzeResponse = await fetch(
-                `/api/annotations/${createdAnnotation.id}/analyze`,
-                { method: 'POST' }
-              );
-
-              if (!analyzeResponse.ok) {
-                console.error('Failed to analyze annotation', createdAnnotation.id);
-              }
-            } catch (analysisErr) {
-              console.error(analysisErr);
-            }
-            await loadAnnotations();
-          })();
-        } else {
-          await loadAnnotations();
-        }
+        await loadAnnotations();
       } catch (err) {
         console.error(err);
       }
@@ -283,8 +248,8 @@ export default function Page() {
 
   const handleBatchResolve = useCallback(async (_jobId: string) => {
     // After batch resolve completes, refresh annotations
-    await Promise.all([loadAnnotations(), loadReviewRenderStatus()]);
-  }, [loadAnnotations, loadReviewRenderStatus]);
+    await loadAnnotations();
+  }, [loadAnnotations]);
 
   const StagePanel = STAGE_PANELS[activeStage];
 

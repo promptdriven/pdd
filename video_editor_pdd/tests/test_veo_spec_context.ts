@@ -109,42 +109,12 @@ describe("veo spec context helpers", () => {
         path: "specs/veo_section/02_ocean_wave_sunset.md",
         prompt: "Ocean wave at sunset",
         filename: "ocean_wave_sunset.mp4",
-        chainFromPrevious: false,
       },
       {
         id: "forest_canopy_aerial",
         path: "specs/veo_section/04_forest_canopy_aerial.md",
         prompt: "Forest canopy aerial",
         filename: "forest_canopy_aerial.mp4",
-        chainFromPrevious: false,
-      },
-    ]);
-  });
-
-  it("allows an explicit Veo spec to opt into frame chaining", () => {
-    const clips = listResolvedVeoClipSpecs([
-      {
-        path: "specs/veo_section/04_forest_canopy_aerial.md",
-        content: [
-          "[veo:]",
-          "```json",
-          '{',
-          '  "veoPrompt": "Forest canopy aerial",',
-          '  "clipSource": "veo/forest_canopy_aerial.mp4",',
-          '  "chainFromPrevious": true',
-          '}',
-          "```",
-        ].join("\n"),
-      },
-    ]);
-
-    expect(clips).toEqual([
-      {
-        id: "forest_canopy_aerial",
-        path: "specs/veo_section/04_forest_canopy_aerial.md",
-        prompt: "Forest canopy aerial",
-        filename: "forest_canopy_aerial.mp4",
-        chainFromPrevious: true,
       },
     ]);
   });

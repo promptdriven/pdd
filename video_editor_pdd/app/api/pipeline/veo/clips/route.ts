@@ -33,7 +33,6 @@ type ResolvedClipEntry = {
   id: string;
   sectionId: string;
   specPath: string | null;
-  chainFromPrevious: boolean;
 };
 
 interface ReferencePortrait {
@@ -78,8 +77,7 @@ export async function GET(): Promise<NextResponse> {
       );
     });
 
-    const resolvedClips: ResolvedClipEntry[] = eligibleSections.flatMap(
-      (section): ResolvedClipEntry[] => {
+    const resolvedClips: ResolvedClipEntry[] = eligibleSections.flatMap((section) => {
       const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
       const specDir = path.join(process.cwd(), "specs", normalizedSpecDir);
 
@@ -98,7 +96,6 @@ export async function GET(): Promise<NextResponse> {
               id: clip.id,
               sectionId: section.id,
               specPath: clip.path,
-              chainFromPrevious: clip.chainFromPrevious,
             }));
           }
 
@@ -108,7 +105,6 @@ export async function GET(): Promise<NextResponse> {
               id: section.id,
               sectionId: section.id,
               specPath: canonicalSpec?.path ?? null,
-              chainFromPrevious: true,
             },
           ];
         } catch {
@@ -117,7 +113,6 @@ export async function GET(): Promise<NextResponse> {
               id: section.id,
               sectionId: section.id,
               specPath: null,
-              chainFromPrevious: true,
             },
           ];
         }
@@ -128,7 +123,6 @@ export async function GET(): Promise<NextResponse> {
           id: section.id,
           sectionId: section.id,
           specPath: null,
-          chainFromPrevious: true,
         },
       ];
     });
@@ -144,10 +138,9 @@ export async function GET(): Promise<NextResponse> {
 
       const prevClip = resolvedClips[idx - 1];
       // frameChainDeps exposes clean clip IDs for the UI (e.g. "cold_open")
-      const frameChainDeps: string[] =
-        prevClip && clip.chainFromPrevious ? [prevClip.id] : [];
+      const frameChainDeps: string[] = prevClip ? [prevClip.id] : [];
       // depFilePaths are used internally for staleness checking only
-      const depFilePaths: string[] = prevClip && clip.chainFromPrevious
+      const depFilePaths: string[] = prevClip
         ? [
             path.join(
               "outputs",

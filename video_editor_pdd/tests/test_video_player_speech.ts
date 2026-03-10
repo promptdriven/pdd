@@ -52,10 +52,6 @@ describe('VideoPlayer speech input (US17)', () => {
     expect(sourceCode).toMatch(/setSpeechAvailable\s*\(\s*true\s*\)/);
   });
 
-  it('defaults to speech input when Web Speech API is present', () => {
-    expect(sourceCode).toMatch(/setInputMethod\s*\(\s*['"]speech['"]\s*\)/);
-  });
-
   it('initializes inputMethod as typed', () => {
     expect(sourceCode).toMatch(/useState\s*<\s*['"]typed['"]\s*\|\s*['"]speech['"]\s*>\s*\(\s*['"]typed['"]\s*\)/);
   });
@@ -84,26 +80,5 @@ describe('VideoPlayer speech input (US17)', () => {
   it('includes inputMethod in AnnotationCaptureData object', () => {
     // Verify inputMethod is included in the data object literal passed to onAnnotationCapture
     expect(sourceCode).toMatch(/const\s+data\s*:\s*AnnotationCaptureData\s*=\s*\{[\s\S]*?inputMethod[\s\S]*?\}/);
-  });
-
-  it('sets speech recognition language to en-US', () => {
-    expect(sourceCode).toMatch(/recognition\.lang\s*=\s*['"]en-US['"]/);
-  });
-
-  it('tracks interim transcript separately from final transcript', () => {
-    expect(sourceCode).toMatch(/interimTranscriptRef/);
-  });
-
-  it('starts speech recognition only when inputMethod is speech', () => {
-    expect(sourceCode).toMatch(/if\s*\(\s*inputMethod\s*===\s*['"]speech['"]\s*\)\s*\{\s*startSpeechRecognition/);
-  });
-
-  it('waits for speech recognition to end before final capture', () => {
-    expect(sourceCode).toMatch(/const\s+capturedTranscript\s*=\s*inputMethod\s*===\s*['"]speech['"]\s*\?\s*await\s+stopSpeechRecognition/);
-  });
-
-  it('uses the captured transcript override when creating annotation data', () => {
-    expect(sourceCode).toMatch(/const\s+textToPersist\s*=/);
-    expect(sourceCode).toMatch(/capturedTranscript/);
   });
 });

@@ -594,7 +594,6 @@ describe("GET /api/pipeline/render/status", () => {
       expect(introSection).toBeDefined();
       expect(introSection.status).toBe("done");
       expect(introSection.progress).toBe(100);
-      expect(typeof introSection.updatedAtMs).toBe("number");
 
       const mainSection = body.sections.find(
         (s: { id: string }) => s.id === "main"
@@ -674,30 +673,6 @@ describe("GET /api/pipeline/render/status", () => {
         fs.renameSync(introBackup, introPath);
       }
       if (hadFull) {
-        fs.renameSync(fullBackup, REAL_FULL_VIDEO_PATH);
-      }
-    }
-  });
-
-  it("includes fullVideo.updatedAtMs when the stitched artifact exists", async () => {
-    const hasFull = fs.existsSync(REAL_FULL_VIDEO_PATH);
-    const fullBackup = REAL_FULL_VIDEO_PATH + ".testbak";
-
-    if (hasFull) {
-      fs.renameSync(REAL_FULL_VIDEO_PATH, fullBackup);
-    }
-
-    fs.writeFileSync(REAL_FULL_VIDEO_PATH, "full-video-data");
-
-    try {
-      const response = await GET_renderStatus();
-      const body = await response.json();
-
-      expect(body.fullVideo.exists).toBe(true);
-      expect(typeof body.fullVideo.updatedAtMs).toBe("number");
-    } finally {
-      fs.unlinkSync(REAL_FULL_VIDEO_PATH);
-      if (hasFull) {
         fs.renameSync(fullBackup, REAL_FULL_VIDEO_PATH);
       }
     }

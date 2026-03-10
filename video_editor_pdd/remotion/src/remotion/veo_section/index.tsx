@@ -56,15 +56,15 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "08_veo_technology_callout": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
   "09_waveform_visualizer": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
   "10_split_comparison": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
-  "11_veo_badge_reprise": { defaultSrc: "veo/forest_canopy_aerial.mp4", backgroundSrc: "veo/forest_canopy_aerial.mp4", outputSrc: "veo/forest_canopy_aerial.mp4", baseSrc: "veo/forest_canopy_aerial.mp4" },
-  "12_split_ocean_forest_reprise": { baseSrc: "veo/ocean_wave_sunset.mp4", revealSrc: "veo/forest_canopy_aerial.mp4", defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", leftSrc: "veo/ocean_wave_sunset.mp4", rightSrc: "veo/forest_canopy_aerial.mp4" },
+  "11_veo_badge_reprise": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
+  "12_split_ocean_forest_reprise": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4", leftSrc: "veo/ocean_wave_sunset.mp4", rightSrc: "veo/forest_canopy_aerial.mp4", revealSrc: "veo/forest_canopy_aerial.mp4" },
   "13_veo_technology_reprise": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
   "14_section_outro": { defaultSrc: "veo/ocean_wave_sunset.mp4", backgroundSrc: "veo/ocean_wave_sunset.mp4", outputSrc: "veo/ocean_wave_sunset.mp4", baseSrc: "veo/ocean_wave_sunset.mp4" },
 };
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 11.797333;
+  const durationSeconds = 11.712;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {

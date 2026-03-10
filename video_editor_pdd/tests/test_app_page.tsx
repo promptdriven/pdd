@@ -505,26 +505,6 @@ describe("handleAnnotationCapture", () => {
     expect(sourceCode).toMatch(/videoFile\s*:\s*data\.videoFile/);
   });
 
-  it("includes inputMethod in request body", () => {
-    expect(sourceCode).toMatch(/inputMethod\s*:\s*data\.inputMethod/);
-  });
-
-  it("re-reads the created annotation response body", () => {
-    expect(sourceCode).toMatch(/const\s+createdAnnotation\s*=\s*await\s+createResponse\.json\s*\(\s*\)/);
-  });
-
-  it("triggers annotation analysis after create when an annotation id is returned", () => {
-    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{createdAnnotation\.id\}\/analyze`\s*,\s*\{\s*method\s*:\s*['"]POST['"]/);
-  });
-
-  it("optimistically inserts the created annotation before background analysis", () => {
-    expect(sourceCode).toMatch(/setAnnotations\s*\(\s*\(prev\)\s*=>\s*\[\s*\.\.\.prev\s*,\s*createdAnnotation\s*\]\s*\)/);
-  });
-
-  it("runs annotation analysis in a background async task", () => {
-    expect(sourceCode).toMatch(/void\s*\(\s*async\s*\(\)\s*=>\s*\{/);
-  });
-
   it("refreshes annotations after saving", () => {
     // After POST, loadAnnotations is called
     expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*\)/);
@@ -556,11 +536,6 @@ describe("full video path", () => {
 
   it("defines a per-section review video path under outputs/sections", () => {
     expect(sourceCode).toContain("/api/video/outputs/sections/");
-  });
-
-  it("appends a cache-busting version query to section review video URLs", () => {
-    expect(sourceCode).toMatch(/\?v=\$\{/);
-    expect(sourceCode).toMatch(/updatedAtMs/);
   });
 
   it("switches Review to section video when fullVideo is stale", () => {
@@ -631,10 +606,6 @@ describe("batch resolve handler", () => {
   it("refreshes annotations after batch resolve", () => {
     // handleBatchResolve calls loadAnnotations
     expect(sourceCode).toContain("loadAnnotations");
-  });
-
-  it("refreshes render status after batch resolve so Review can reload the new section video", () => {
-    expect(sourceCode).toContain("loadReviewRenderStatus");
   });
 
   it("passes onBatchResolve to AnnotationPanel", () => {

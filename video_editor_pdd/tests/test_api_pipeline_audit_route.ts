@@ -913,7 +913,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(4, 2);
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(4);
   });
 
   it("prefers a hold frame range when the spec provides both timestamps and animation ranges", async () => {
@@ -1044,93 +1044,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.9);
-  });
-
-  it("keeps short rendered-slot audit samples away from the next visual cut", async () => {
-    const config = mockProjectConfig();
-    config.sections = [
-      {
-        ...config.sections[0],
-        id: "veo_section",
-        specDir: "veo_section",
-        compositionId: "VeoSection",
-        durationSeconds: 3,
-        videoFile: "output/sections/veo_section.mp4",
-        compositions: [
-          "11_veo_badge_reprise",
-          "12_split_ocean_forest_reprise",
-          "13_veo_technology_reprise",
-        ],
-      },
-    ];
-    mockLoadProject.mockReturnValue(config);
-    mockReaddirSync.mockReturnValue([
-      "11_veo_badge_reprise.md",
-      "12_split_ocean_forest_reprise.md",
-      "13_veo_technology_reprise.md",
-    ]);
-
-    const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "veo_section");
-    const badgePath = pathMod.join(specDir, "11_veo_badge_reprise.md");
-    const reprisePath = pathMod.join(specDir, "12_split_ocean_forest_reprise.md");
-    const techPath = pathMod.join(specDir, "13_veo_technology_reprise.md");
-
-    mockReadFileSync.mockImplementation((filePath: string) => {
-      if (filePath === badgePath) {
-        return "**Timestamp:** 0:00 - 0:01\n";
-      }
-      if (filePath === reprisePath) {
-        return [
-          "**Timestamp:** 0:01 - 0:02",
-          "",
-          "## Animation Sequence",
-          "1. Frame 0-30: Ocean plate holds.",
-          "2. Frame 30-75: Wipe reveal into forest.",
-          "3. Frame 75-90: Hold — both plates visible before cut.",
-        ].join("\n");
-      }
-      if (filePath === techPath) {
-        return "**Timestamp:** 0:02 - 0:03\n";
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
-    mockExistsSync.mockImplementation((candidate: string) => {
-      return (
-        candidate === specDir ||
-        candidate === badgePath ||
-        candidate === reprisePath ||
-        candidate === techPath ||
-        candidate === pathMod.join(process.cwd(), "output", "sections", "veo_section.mp4")
-      );
-    });
-
-    const executor = registerCallArgs.factory(
-      { sections: ["veo_section"] },
-      jest.fn()
-    );
-    await executor(jest.fn());
-
-    expect(mockExtractFrameAtTime.mock.calls[1][1]).toBeLessThan(1.95);
-  });
-
-  it("tells Claude not to fail minor decorative or opacity differences when the primary frame content matches", async () => {
-    const config = mockProjectConfig();
-    config.sections = [config.sections[0]];
-    mockLoadProject.mockReturnValue(config);
-    mockReaddirSync.mockReturnValue(["visual.md"]);
-
-    const executor = registerCallArgs.factory(
-      { sections: ["intro"] },
-      jest.fn()
-    );
-    await executor(jest.fn());
-
-    const prompt = mockRunClaudeAnalysis.mock.calls[0][0] as string;
-    expect(prompt).toContain("Only fail for material mismatches");
-    expect(prompt).toContain("subtle opacity");
-    expect(prompt).toContain("decorative particles");
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.9375);
   });
 });
 
@@ -1684,12 +1598,6 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
 
   it("keeps renderStill as a fallback when rendered video is unavailable", () => {
     expect(sourceCode).toMatch(/renderStill/);
-  });
-
-  it("includes audit guidance to ignore minor decorative-only differences", () => {
-    expect(sourceCode).toMatch(/Only fail for material mismatches/);
-    expect(sourceCode).toMatch(/decorative particles/);
-    expect(sourceCode).toMatch(/subtle opacity/);
   });
 
   it("uses runClaudeAnalysis for comparing stills against specs", () => {

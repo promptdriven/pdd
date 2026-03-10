@@ -28,37 +28,21 @@ export const PulseRing: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
-  const size = ringRadius * 2;
-  const cx = size / 2;
-  const cy = size / 2;
-
-  // Equilateral triangle points centered in the SVG
-  const topX = cx;
-  const topY = cy - ringRadius;
-  const bottomLeftX = cx - ringRadius;
-  const bottomLeftY = cy + ringRadius;
-  const bottomRightX = cx + ringRadius;
-  const bottomRightY = cy + ringRadius;
+  const diameter = ringRadius * 2;
 
   return (
-    <svg
+    <div
       style={{
         position: 'absolute',
         left: CANVAS.centerX - ringRadius,
         top: CANVAS.centerY - ringRadius,
-        width: size,
-        height: size,
+        width: diameter,
+        height: diameter,
+        borderRadius: '50%',
+        border: `2px solid ${COLORS.pulseRingColor}`,
+        opacity,
         pointerEvents: 'none',
-        overflow: 'visible',
       }}
-    >
-      <polygon
-        points={`${topX},${topY} ${bottomLeftX},${bottomLeftY} ${bottomRightX},${bottomRightY}`}
-        fill="none"
-        stroke={COLORS.pulseRingColor}
-        strokeWidth={2}
-        opacity={opacity}
-      />
-    </svg>
+    />
   );
 };

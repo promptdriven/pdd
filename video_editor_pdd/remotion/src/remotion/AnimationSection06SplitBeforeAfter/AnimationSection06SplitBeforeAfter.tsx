@@ -32,7 +32,7 @@ export const AnimationSection06SplitBeforeAfter: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.backgroundLeft }}>
-      {/* Left panel: Before (beach) */}
+      {/* Left panel: Before */}
       <div
         style={{
           position: 'absolute',
@@ -45,7 +45,7 @@ export const AnimationSection06SplitBeforeAfter: React.FC = () => {
           overflow: 'hidden',
         }}
       >
-        <AfterSquare />
+        <BeforeCircle />
         <PanelLabel
           text="BEFORE"
           fadeStart={ANIMATION_TIMING.leftPanelStart}
@@ -62,7 +62,7 @@ export const AnimationSection06SplitBeforeAfter: React.FC = () => {
         />
       </div>
 
-      {/* Right panel: After (forest) */}
+      {/* Right panel: After */}
       <div
         style={{
           position: 'absolute',
@@ -75,7 +75,7 @@ export const AnimationSection06SplitBeforeAfter: React.FC = () => {
           overflow: 'hidden',
         }}
       >
-        <BeforeCircle />
+        <AfterSquare />
         <PanelLabel
           text="AFTER"
           fadeStart={ANIMATION_TIMING.rightPanelStart}

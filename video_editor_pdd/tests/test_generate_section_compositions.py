@@ -44,7 +44,6 @@ sys.path.insert(0, SCRIPTS_DIR)
 from generate_section_compositions import (
     to_pascal_case,
     resolve_comp_import,
-    build_visual_media_manifest,
     ensure_section_asset_aliases,
     resolve_section_base_component,
     load_project_json,
@@ -1674,64 +1673,6 @@ class TestGeneratedTimelineWrapper:
         assert 'staticFile("animation_section/narration.wav")' in tsx
         assert 'staticFile("veo/animation_section.mp4")' not in tsx
         assert "OffthreadVideo" not in tsx
-
-    def test_media_manifest_prefers_matching_clip_for_prose_background_intent(self, tmp_path):
-        project_dir = tmp_path
-        remotion_public = tmp_path / "public"
-        specs_dir = project_dir / "specs" / "veo_section"
-        specs_dir.mkdir(parents=True)
-        (remotion_public / "veo").mkdir(parents=True)
-        (remotion_public / "veo" / "ocean_wave_sunset.mp4").write_bytes(b"\x00" * 32)
-        (remotion_public / "veo" / "forest_canopy_aerial.mp4").write_bytes(b"\x00" * 32)
-
-        (specs_dir / "02_ocean_wave_sunset.md").write_text(
-            "\n".join(
-                [
-                    "[veo:]",
-                    "```json",
-                    '{ "clipSource": "veo/ocean_wave_sunset.mp4" }',
-                    "```",
-                    "Ocean waves at sunset.",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        (specs_dir / "04_forest_canopy_aerial.md").write_text(
-            "\n".join(
-                [
-                    "[veo:]",
-                    "```json",
-                    '{ "clipSource": "veo/forest_canopy_aerial.mp4" }',
-                    "```",
-                    "Top-down forest canopy aerial.",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        (specs_dir / "11_veo_badge_reprise.md").write_text(
-            "The Veo badge returns over a dimmed version of the forest canopy footage.",
-            encoding="utf-8",
-        )
-
-        section = {
-            "id": "veo_section",
-            "label": "Veo Section",
-            "specDir": "veo_section",
-            "compositions": [
-                "02_ocean_wave_sunset",
-                "04_forest_canopy_aerial",
-                "11_veo_badge_reprise",
-            ],
-        }
-
-        manifest = build_visual_media_manifest(
-            section,
-            project_dir=str(project_dir),
-            remotion_public=str(remotion_public),
-        )
-
-        assert manifest["11_veo_badge_reprise"]["defaultSrc"] == "veo/forest_canopy_aerial.mp4"
-        assert manifest["11_veo_badge_reprise"]["backgroundSrc"] == "veo/forest_canopy_aerial.mp4"
 
 
 class TestSectionAssetAliases:

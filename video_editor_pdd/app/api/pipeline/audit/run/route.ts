@@ -112,8 +112,6 @@ Read both files and return JSON matching AnnotationAnalysis:
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
 
 Use severity="pass" if the frame fully satisfies the spec.
-Only fail for material mismatches: wrong primary subject, wrong text, missing major layout, or clearly incorrect media/content.
-Do not fail solely for subtle opacity, slightly soft decorative particles, or minor intensity/color-variation differences when the intended element is clearly present.
 `;
 
     const analysis = (await runClaudeAnalysis(

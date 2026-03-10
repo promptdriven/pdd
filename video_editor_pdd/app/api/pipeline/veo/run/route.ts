@@ -28,7 +28,7 @@ import {
  */
 
 export const runtime = 'nodejs';
-const CLIP_VALIDATION_SAMPLE_SECONDS = [1, 4, 7] as const;
+const CLIP_VALIDATION_SAMPLE_SECONDS = 4;
 const MAX_CLIP_GENERATION_ATTEMPTS = 2;
 
 /** Resolve a Veo prompt from specs on disk */
@@ -104,32 +104,31 @@ async function validateGeneratedClip(
   outputPath: string,
   onLog: (message: string) => void
 ): Promise<void> {
-  const validationFramePaths: string[] = [];
+  const validationFramePath = path.join(
+    process.cwd(),
+    'outputs',
+    'veo',
+    `${clipId}_validation_frame.png`
+  );
 
-  for (const [index, sampleSeconds] of CLIP_VALIDATION_SAMPLE_SECONDS.entries()) {
-    const validationFramePath = path.join(
-      process.cwd(),
-      'outputs',
-      'veo',
-      `${clipId}_validation_frame_${index + 1}.png`
-    );
-    await extractFrameAtTime(outputPath, sampleSeconds, validationFramePath);
-    validationFramePaths.push(validationFramePath);
-  }
+  await extractFrameAtTime(
+    outputPath,
+    CLIP_VALIDATION_SAMPLE_SECONDS,
+    validationFramePath
+  );
 
   const analysis = await runClaudeAnalysis(
     `
 You are validating whether a generated Veo clip matches the requested prompt.
 
 - Prompt: ${prompt}
-- Representative frame PNGs:
-${validationFramePaths.map((framePath, index) => `  ${index + 1}. ${framePath}`).join('\n')}
+- Representative frame PNG: ${validationFramePath}
 
 Return JSON matching AnnotationAnalysis:
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
 
-Use severity="pass" only if the frames collectively match the intended prompt.
-Use a non-pass severity when the subject, setting, or visual concept is wrong in any sampled frame.
+Use severity="pass" only if the frame clearly matches the intended prompt.
+Use a non-pass severity when the subject, setting, or visual concept is wrong.
 `.trim(),
     onLog
   );
@@ -147,7 +146,6 @@ type ResolvedClipJob = {
   id: string;
   sectionId: string;
   prompt: string;
-  chainFromPrevious: boolean;
 };
 
 function listSectionMarkdownEntries(
@@ -181,7 +179,6 @@ function resolveSectionClipJobs(
       id: clip.id,
       sectionId: section.id,
       prompt: clip.prompt,
-      chainFromPrevious: clip.chainFromPrevious,
     }));
   }
 
@@ -190,7 +187,6 @@ function resolveSectionClipJobs(
       id: section.id,
       sectionId: section.id,
       prompt: resolveVeoPrompt(section, mainScriptContent),
-      chainFromPrevious: true,
     },
   ];
 }
@@ -275,7 +271,7 @@ registerExecutor('veo', (params, send: SseSend) => {
 
           await generateVeoClip(
             prompt,
-            clip.chainFromPrevious ? referenceImagePath : null,
+            referenceImagePath,
             aspectRatio,
             outputPath
           );

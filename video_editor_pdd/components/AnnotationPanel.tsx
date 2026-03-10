@@ -47,23 +47,14 @@ function useJob(jobId: string | null) {
   const [job, setJob] = useState<Job | null>(null);
   const [connected, setConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const pollingRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setJob(null);
     setConnected(false);
 
-    const stopPolling = () => {
-      if (pollingRef.current !== null) {
-        window.clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
-    };
-
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
-    stopPolling();
 
     if (!jobId) return;
 
@@ -74,23 +65,8 @@ function useJob(jobId: string | null) {
       if (!cancelled) setJob(data);
     };
 
-    const startPolling = (id: string) => {
-      if (pollingRef.current !== null) return;
-      pollingRef.current = window.setInterval(() => {
-        fetchJob(id).catch(() => {});
-      }, 2000);
-    };
-
     // Start with one fetch so UI isn't empty if SSE is slow.
     fetchJob(jobId).catch(() => {});
-
-    if (typeof EventSource === 'undefined') {
-      startPolling(jobId);
-      return () => {
-        cancelled = true;
-        stopPolling();
-      };
-    }
 
     // SSE: same stream used by SseLogPanel
     try {
@@ -98,76 +74,26 @@ function useJob(jobId: string | null) {
       eventSourceRef.current = es;
 
       es.onopen = () => {
-        if (!cancelled) {
-          setConnected(true);
-        }
-        stopPolling();
+        if (!cancelled) setConnected(true);
       };
 
-      es.onmessage = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data?.type === 'progress' && typeof data.percent === 'number') {
-            setJob((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    progress: data.percent,
-                    status: isTerminal(prev.status) ? prev.status : 'running',
-                  }
-                : prev
-            );
-          }
-        } catch {
-          // Ignore log-only SSE payloads for the lightweight job snapshot.
-        }
-      };
-
-      es.addEventListener('done', () => {
-        setJob((prev) =>
-          prev
-            ? {
-                ...prev,
-                status: 'done',
-                progress: 100,
-              }
-            : prev
-        );
-        fetchJob(jobId).catch(() => {});
-      });
-
-      es.addEventListener('error', (evt: Event) => {
-        const message = (evt as MessageEvent).data;
-        if (message) {
-          setJob((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  status: 'error',
-                  error: message,
-                }
-              : prev
-          );
-          return;
-        }
-
-        es.close();
-        startPolling(jobId);
-      });
+      const refresh = () => fetchJob(jobId).catch(() => {});
+      // Any streamed message implies progress; we refresh job snapshot.
+      es.onmessage = () => refresh();
+      es.addEventListener('done', () => refresh());
+      es.addEventListener('error', () => refresh());
     } catch {
-      startPolling(jobId);
+      // ignore; polling fallback below will handle.
     }
-    const es = eventSourceRef.current;
-    if (es) {
-      es.onerror = () => {
-        es.close();
-        startPolling(jobId);
-      };
-    }
+
+    // Polling fallback every 2s
+    const interval = window.setInterval(() => {
+      fetchJob(jobId).catch(() => {});
+    }, 2000);
 
     return () => {
       cancelled = true;
-      stopPolling();
+      window.clearInterval(interval);
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     };
@@ -189,21 +115,17 @@ function Spinner({ className = '' }: { className?: string }) {
 function AnnotationCard({
   annotation: a,
   isLocallyResolved,
-  isDeleting,
   defaultExpanded,
   onToggle,
   onRetryJob,
   onMarkResolved,
-  onDelete,
 }: {
   annotation: Annotation;
   isLocallyResolved: boolean;
-  isDeleting: boolean;
   defaultExpanded: boolean;
   onToggle: () => void;
   onRetryJob: (jobId: string) => void;
   onMarkResolved: (annotationId: string) => void;
-  onDelete: (annotationId: string) => void;
 }) {
   const [showDiff, setShowDiff] = useState(false);
   const [diffText, setDiffText] = useState<string | null>(null);
@@ -406,14 +328,6 @@ function AnnotationCard({
                   Mark Resolved
                 </button>
               ) : null}
-
-              <button
-                onClick={() => onDelete(a.id)}
-                disabled={isDeleting}
-                className="rounded bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-50"
-              >
-                {isDeleting ? 'Deleting…' : 'Delete'}
-              </button>
             </div>
 
             {showDiff && diffText ? (
@@ -441,14 +355,11 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
 
   // Local-only resolve state (to support "Mark Resolved" without assuming an API exists).
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<Set<string>>(() => new Set());
-  const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(() => new Set());
-  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
 
   const sorted = useMemo(() => {
     // @ts-ignore TS18047 - timestamps are numeric at sort time; nulls sort as 0
-    const sortedAnnotations = [...annotations].sort((a, b) => a.timestamp - b.timestamp);
-    return sortedAnnotations.filter((a) => !locallyDeletedIds.has(a.id));
-  }, [annotations, locallyDeletedIds]);
+    return [...annotations].sort((a, b) => a.timestamp - b.timestamp);
+  }, [annotations]);
 
   const unresolvedWithAnalysisCount = useMemo(() => {
     return sorted.filter(
@@ -502,45 +413,6 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
       next.add(annotationId);
       return next;
     });
-  };
-
-  const handleDeleteAnnotation = async (annotationId: string) => {
-    if (!window.confirm('Delete this annotation?')) return;
-
-    setDeletingIds((prev) => {
-      const next = new Set(prev);
-      next.add(annotationId);
-      return next;
-    });
-
-    try {
-      const res = await fetch(`/api/annotations/${annotationId}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        throw new Error(`Delete failed (${res.status})`);
-      }
-
-      setLocallyDeletedIds((prev) => {
-        const next = new Set(prev);
-        next.add(annotationId);
-        return next;
-      });
-      setExpanded((prev) => {
-        if (!(annotationId in prev)) return prev;
-        const next = { ...prev };
-        delete next[annotationId];
-        return next;
-      });
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setDeletingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(annotationId);
-        return next;
-      });
-    }
   };
 
   return (
@@ -616,12 +488,10 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
                   key={a.id}
                   annotation={a}
                   isLocallyResolved={isLocallyResolved}
-                  isDeleting={deletingIds.has(a.id)}
                   defaultExpanded={isExpanded}
                   onToggle={() => handleToggle(a.id)}
                   onRetryJob={handleRetryJob}
                   onMarkResolved={handleMarkResolved}
-                  onDelete={handleDeleteAnnotation}
                 />
               );
             })
