@@ -7,7 +7,7 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#0F172A',
-  shapeStart: '#3B82F6',
+  shapeStart: '#EC4899',
   shapeEnd: '#22C55E',
 };
 

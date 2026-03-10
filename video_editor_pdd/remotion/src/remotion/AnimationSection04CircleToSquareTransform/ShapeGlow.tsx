@@ -25,9 +25,9 @@ export const ShapeGlow: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
-  const r = Math.round(59 + (34 - 59) * colorProgress);
-  const g = Math.round(130 + (197 - 130) * colorProgress);
-  const b = Math.round(246 + (94 - 246) * colorProgress);
+  const r = Math.round(236 + (34 - 236) * colorProgress);
+  const g = Math.round(72 + (197 - 72) * colorProgress);
+  const b = Math.round(153 + (94 - 153) * colorProgress);
   const currentColor = `rgb(${r}, ${g}, ${b})`;
 
   // Border-radius (same as main shape)

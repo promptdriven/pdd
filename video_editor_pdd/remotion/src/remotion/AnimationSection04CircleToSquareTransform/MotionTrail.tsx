@@ -33,10 +33,10 @@ export const MotionTrail: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
-  // Interpolate RGB channels: #3B82F6 → #22C55E
-  const r = Math.round(59 + (34 - 59) * colorProgress);
-  const g = Math.round(130 + (197 - 130) * colorProgress);
-  const b = Math.round(246 + (94 - 246) * colorProgress);
+  // Interpolate RGB channels: #EC4899 → #22C55E
+  const r = Math.round(236 + (34 - 236) * colorProgress);
+  const g = Math.round(72 + (197 - 72) * colorProgress);
+  const b = Math.round(153 + (94 - 153) * colorProgress);
   const currentColor = `rgb(${r}, ${g}, ${b})`;
 
   // Trail only visible during and after slide

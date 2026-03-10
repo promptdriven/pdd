@@ -25,10 +25,10 @@ export const MorphingShape: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
-  // Interpolate RGB: #3B82F6 (59,130,246) → #22C55E (34,197,94)
-  const r = Math.round(59 + (34 - 59) * colorProgress);
-  const g = Math.round(130 + (197 - 130) * colorProgress);
-  const b = Math.round(246 + (94 - 246) * colorProgress);
+  // Interpolate RGB: #EC4899 (236,72,153) → #22C55E (34,197,94)
+  const r = Math.round(236 + (34 - 236) * colorProgress);
+  const g = Math.round(72 + (197 - 72) * colorProgress);
+  const b = Math.round(153 + (94 - 153) * colorProgress);
   const fillColor = `rgb(${r}, ${g}, ${b})`;
 
   // 3. Horizontal slide
