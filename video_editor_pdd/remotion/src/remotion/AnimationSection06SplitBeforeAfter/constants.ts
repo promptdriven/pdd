@@ -10,7 +10,7 @@ export const COLORS = {
   backgroundLeft: '#0F172A',
   backgroundRight: '#111827',
   divider: '#F8FAFC',
-  circle: '#3B82F6',
+  circle: '#EC4899',
   square: '#22C55E',
   label: '#F8FAFC',
 };

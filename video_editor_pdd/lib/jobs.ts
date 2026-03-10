@@ -14,11 +14,14 @@ export type ExecutorFactory = (
 const _g = globalThis as typeof globalThis & {
   __pipelineExecutors?: Map<PipelineStage, ExecutorFactory>;
   __jobSendMap?: Map<string, SseSend>;
+  __pipelineExecutorLoads?: Map<PipelineStage, Promise<void>>;
 };
 if (!_g.__pipelineExecutors) _g.__pipelineExecutors = new Map();
 if (!_g.__jobSendMap) _g.__jobSendMap = new Map();
+if (!_g.__pipelineExecutorLoads) _g.__pipelineExecutorLoads = new Map();
 
 const EXECUTORS: Map<PipelineStage, ExecutorFactory> = _g.__pipelineExecutors;
+const EXECUTOR_LOADS: Map<PipelineStage, Promise<void>> = _g.__pipelineExecutorLoads;
 
 export function registerExecutor(stage: PipelineStage, factory: ExecutorFactory): void {
   EXECUTORS.set(stage, factory);
@@ -27,6 +30,41 @@ export function registerExecutor(stage: PipelineStage, factory: ExecutorFactory)
 /** Remove all registered executors (test helper). */
 export function clearExecutors(): void {
   EXECUTORS.clear();
+  EXECUTOR_LOADS.clear();
+}
+
+const EXECUTOR_IMPORTERS: Partial<Record<PipelineStage, () => Promise<unknown>>> = {
+  'tts-script': () => import('../app/api/pipeline/tts-script/run/route'),
+  'tts-render': () => import('../app/api/pipeline/tts-render/run/route'),
+  'audio-sync': () => import('../app/api/pipeline/audio-sync/run/route'),
+  specs: () => import('../app/api/pipeline/specs/run/route'),
+  veo: () => import('../app/api/pipeline/veo/run/route'),
+  compositions: () => import('../app/api/pipeline/compositions/run/route'),
+  render: () => import('../app/api/pipeline/render/run/route'),
+  audit: () => import('../app/api/pipeline/audit/run/route'),
+};
+
+async function ensureExecutorRegistered(stage: PipelineStage): Promise<void> {
+  if (EXECUTORS.has(stage)) {
+    return;
+  }
+
+  const importer = EXECUTOR_IMPORTERS[stage];
+  if (!importer) {
+    return;
+  }
+
+  let loadPromise = EXECUTOR_LOADS.get(stage);
+  if (!loadPromise) {
+    loadPromise = importer()
+      .then(() => undefined)
+      .finally(() => {
+        EXECUTOR_LOADS.delete(stage);
+      });
+    EXECUTOR_LOADS.set(stage, loadPromise);
+  }
+
+  await loadPromise;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +323,7 @@ export async function retryJob(jobId: string): Promise<string> {
 
   const params = parseJobParams(row.params);
 
+  await ensureExecutorRegistered(row.stage);
   const factory = EXECUTORS.get(row.stage);
   if (!factory) {
     throw new Error(`No executor registered for stage "${row.stage}"`);
@@ -364,6 +403,7 @@ export async function runPipelineStage(
         }
       }
 
+      await ensureExecutorRegistered(current);
       const factory = EXECUTORS.get(current);
       if (!factory) {
         if (!forceRun) {

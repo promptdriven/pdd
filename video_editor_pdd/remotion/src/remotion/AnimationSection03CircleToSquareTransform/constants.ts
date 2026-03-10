@@ -7,7 +7,7 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#111827',
-  circleBlue: '#3B82F6',
+  circleBlue: '#EC4899',
   squareGreen: '#22C55E',
 };
 

@@ -9,9 +9,9 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#111827',
-  circleFill: '#3B82F6',
-  glowColor: 'rgba(59, 130, 246, 0.5)',
-  pulseRingColor: '#3B82F6',
+  circleFill: '#EC4899',
+  glowColor: 'rgba(236, 72, 153, 0.5)',
+  pulseRingColor: '#EC4899',
 };
 
 export const CIRCLE = {

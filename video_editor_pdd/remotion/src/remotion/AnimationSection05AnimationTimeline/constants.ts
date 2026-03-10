@@ -12,7 +12,7 @@ export const COLORS = {
   labelText: '#CBD5E1',
   playhead: '#FFFFFF',
   milestoneViolet: '#A78BFA',
-  milestoneBlue: '#3B82F6',
+  milestoneBlue: '#EC4899',
   milestoneAmber: '#F59E0B',
   milestoneGreen: '#22C55E',
   milestonePink: '#EC4899',

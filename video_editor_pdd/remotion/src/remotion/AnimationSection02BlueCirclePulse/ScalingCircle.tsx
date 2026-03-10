@@ -76,7 +76,7 @@ export const ScalingCircle: React.FC = () => {
         backgroundColor: COLORS.circleFill,
         opacity,
         transform: `scale(${scale})`,
-        boxShadow: `0 4px 24px rgba(59, 130, 246, ${0.5 * shadowOpacity})`,
+        boxShadow: `0 4px 24px rgba(236, 72, 153, ${0.5 * shadowOpacity})`,
       }}
     />
   );

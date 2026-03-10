@@ -9,8 +9,8 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#0F172A',
-  circleFill: '#3B82F6',
-  rippleStroke: '#60A5FA',
+  circleFill: '#EC4899',
+  rippleStroke: '#F472B6',
   vignette: 'rgba(0,0,0,0.3)',
 };
 

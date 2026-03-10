@@ -1076,6 +1076,19 @@ describe("lib/jobs.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+const\s+PIPELINE_DAG/);
   });
 
+  it("defines ensureExecutorRegistered helper for built-in pipeline stages", () => {
+    expect(sourceCode).toMatch(/async\s+function\s+ensureExecutorRegistered/);
+    expect(sourceCode).toMatch(/veo\/run\/route/);
+  });
+
+  it("ensures executors before retrying a job", () => {
+    expect(sourceCode).toMatch(/await\s+ensureExecutorRegistered\s*\(\s*row\.stage\s*\)/);
+  });
+
+  it("ensures executors before running an explicit pipeline stage", () => {
+    expect(sourceCode).toMatch(/await\s+ensureExecutorRegistered\s*\(\s*current\s*\)/);
+  });
+
   it("imports PipelineStage type", () => {
     expect(sourceCode).toMatch(/PipelineStage/);
   });
