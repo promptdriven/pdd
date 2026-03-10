@@ -7,8 +7,8 @@ export const CANVAS = {
 };
 
 export const COLORS = {
-  backgroundLeft: '#111827',
-  backgroundRight: '#0F172A',
+  backgroundLeft: '#0F172A',
+  backgroundRight: '#111827',
   divider: '#F8FAFC',
   circle: '#3B82F6',
   square: '#22C55E',

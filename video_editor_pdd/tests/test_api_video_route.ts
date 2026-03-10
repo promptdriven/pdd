@@ -507,8 +507,11 @@ describe("app/api/video/[...path]/route.ts source structure", () => {
     );
   });
 
-  it("uses Readable.toWeb() for stream conversion", () => {
-    expect(sourceCode).toMatch(/Readable\.toWeb\(/);
+  it("wraps node streams in a guarded ReadableStream bridge", () => {
+    expect(sourceCode).toMatch(/new\s+ReadableStream/);
+    expect(sourceCode).toMatch(/nodeStreamToReadableStream/);
+    expect(sourceCode).toMatch(/controller\.enqueue/);
+    expect(sourceCode).toMatch(/nodeStream\.destroy\(\)/);
   });
 
   it("uses fs.createReadStream for file reading", () => {

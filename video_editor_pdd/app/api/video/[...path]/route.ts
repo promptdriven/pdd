@@ -3,6 +3,56 @@ import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
 
+function nodeStreamToReadableStream(nodeStream: Readable): ReadableStream<Uint8Array> {
+  let closed = false;
+
+  const safeClose = (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (closed) return;
+    closed = true;
+    try {
+      controller.close();
+    } catch {
+      // Browser/client may have already cancelled the stream.
+    }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      nodeStream.on("data", (chunk) => {
+        if (closed) return;
+        try {
+          controller.enqueue(chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk));
+        } catch {
+          closed = true;
+          nodeStream.destroy();
+        }
+      });
+
+      nodeStream.on("end", () => {
+        safeClose(controller);
+      });
+
+      nodeStream.on("close", () => {
+        safeClose(controller);
+      });
+
+      nodeStream.on("error", (error) => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.error(error);
+        } catch {
+          nodeStream.destroy();
+        }
+      });
+    },
+    cancel() {
+      closed = true;
+      nodeStream.destroy();
+    },
+  });
+}
+
 /**
  * GET handler for /api/video/[...path]
  * Serves MP4 video files from allowed directories with HTTP range request support.
@@ -123,7 +173,7 @@ export async function GET(
 
       // Create a readable stream for the byte range
       const nodeStream = fs.createReadStream(resolved, { start, end });
-      const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+      const webStream = nodeStreamToReadableStream(nodeStream);
 
       return new NextResponse(webStream, {
         status: 206,
@@ -137,7 +187,7 @@ export async function GET(
 
     // No Range header — serve the full file with 200
     const nodeStream = fs.createReadStream(resolved);
-    const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+    const webStream = nodeStreamToReadableStream(nodeStream);
 
     return new NextResponse(webStream, {
       status: 200,

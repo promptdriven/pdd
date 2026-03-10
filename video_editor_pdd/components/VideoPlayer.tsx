@@ -15,6 +15,7 @@ interface VideoPlayerProps {
   src: string;
   annotations: Annotation[];
   onAnnotationCapture: (data: AnnotationCaptureData) => void;
+  onTimeChange?: (seconds: number) => void;
 }
 
 const CANVAS_WIDTH = 1920;
@@ -34,6 +35,7 @@ export default function VideoPlayer({
   src,
   annotations,
   onAnnotationCapture,
+  onTimeChange,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -334,7 +336,8 @@ export default function VideoPlayer({
       0,
       duration || videoEl.duration || 0
     );
-  }, [duration]);
+    onTimeChange?.(videoEl.currentTime);
+  }, [duration, onTimeChange]);
 
   const seekToClientX = useCallback((clientX: number) => {
     const videoEl = videoRef.current;
@@ -351,7 +354,8 @@ export default function VideoPlayer({
     const nextTime = percent * effectiveDuration;
     videoEl.currentTime = nextTime;
     setCurrentTime(nextTime);
-  }, [duration]);
+    onTimeChange?.(nextTime);
+  }, [duration, onTimeChange]);
 
   const handleProgressPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -453,7 +457,10 @@ export default function VideoPlayer({
     if (!videoEl) return;
 
     const onLoaded = () => setDuration(videoEl.duration);
-    const onTime = () => setCurrentTime(videoEl.currentTime);
+    const onTime = () => {
+      setCurrentTime(videoEl.currentTime);
+      onTimeChange?.(videoEl.currentTime);
+    };
 
     videoEl.addEventListener('loadedmetadata', onLoaded);
     videoEl.addEventListener('timeupdate', onTime);
@@ -461,7 +468,7 @@ export default function VideoPlayer({
       videoEl.removeEventListener('loadedmetadata', onLoaded);
       videoEl.removeEventListener('timeupdate', onTime);
     };
-  }, [src]);
+  }, [onTimeChange, src]);
 
   const progressPercent = useMemo(() => {
     if (!duration) return 0;
@@ -560,6 +567,7 @@ export default function VideoPlayer({
               if (videoEl && a.timestamp != null) {
                 videoEl.currentTime = a.timestamp;
                 setCurrentTime(a.timestamp);
+                onTimeChange?.(a.timestamp);
               }
             }}
             className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0 -translate-y-1"

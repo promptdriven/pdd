@@ -75,6 +75,10 @@ describe("VideoPlayer props", () => {
   it("declares onAnnotationCapture callback prop", () => {
     expect(sourceCode).toMatch(/onAnnotationCapture\s*:\s*\(data\s*:\s*AnnotationCaptureData\)\s*=>\s*void/);
   });
+
+  it("declares optional onTimeChange callback prop", () => {
+    expect(sourceCode).toMatch(/onTimeChange\?\s*:\s*\(seconds\s*:\s*number\)\s*=>\s*void/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -583,6 +587,10 @@ describe("progress bar", () => {
     expect(sourceCode).toMatch(/setCurrentTime\(nextTime\)/);
   });
 
+  it("notifies onTimeChange immediately after seeking with the mouse", () => {
+    expect(sourceCode).toMatch(/onTimeChange\?\.\(\s*nextTime\s*\)/);
+  });
+
   it("provides aria-label for annotation markers", () => {
     expect(sourceCode).toMatch(/aria-label/);
   });
@@ -671,6 +679,10 @@ describe("video time sync", () => {
 
   it("sets currentTime from video", () => {
     expect(sourceCode).toMatch(/setCurrentTime\s*\(\s*videoEl\.currentTime\s*\)/);
+  });
+
+  it("notifies onTimeChange when the video time updates", () => {
+    expect(sourceCode).toMatch(/onTimeChange\?\.\(\s*videoEl\.currentTime\s*\)/);
   });
 
   it("cleans up event listeners on unmount", () => {

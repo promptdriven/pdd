@@ -87,6 +87,11 @@ describe("state management", () => {
   it("manages annotations state as Annotation[]", () => {
     expect(sourceCode).toMatch(/useState\s*<\s*Annotation\[\]\s*>/);
   });
+
+  it("tracks the current review playhead time", () => {
+    expect(sourceCode).toMatch(/useState\s*<\s*number\s*\|\s*null\s*>\s*\(\s*null\s*\)/);
+    expect(sourceCode).toContain("reviewCurrentTime");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -358,6 +363,10 @@ describe("review tab layout", () => {
     expect(sourceCode).toMatch(/onAnnotationCapture=\{handleAnnotationCapture\}/);
   });
 
+  it("passes onTimeChange to VideoPlayer so Review can derive annotation scope from the playhead", () => {
+    expect(sourceCode).toMatch(/onTimeChange=\{setReviewCurrentTime\}/);
+  });
+
   it("renders AnnotationPanel with annotations and sectionId", () => {
     expect(sourceCode).toMatch(/<AnnotationPanel/);
     expect(sourceCode).toMatch(/annotations=\{annotations\}/);
@@ -413,6 +422,20 @@ describe("annotations loading", () => {
   it("loads annotations when switching to Review tab", () => {
     expect(sourceCode).toMatch(/activeTab\s*===\s*['"]review['"]/);
     expect(sourceCode).toMatch(/loadAnnotations\s*\(\s*\)/);
+  });
+
+  it("derives an annotationScopeSectionId from the full-video playhead", () => {
+    expect(sourceCode).toContain("annotationScopeSectionId");
+    expect(sourceCode).toContain("resolveSectionIdForGlobalTime");
+  });
+
+  it("defaults loadAnnotations to annotationScopeSectionId", () => {
+    expect(sourceCode).toMatch(/const\s+targetSectionId\s*=\s*sectionIdOverride\s*\?\?\s*annotationScopeSectionId/);
+  });
+
+  it("reloads annotations when annotationScopeSectionId changes in Review", () => {
+    expect(sourceCode).toMatch(/annotationScopeSectionId/);
+    expect(sourceCode).toMatch(/loadAnnotations\s*\(\s*annotationScopeSectionId\s*\)/);
   });
 });
 
@@ -483,6 +506,11 @@ describe("handleAnnotationCapture", () => {
 
   it("includes sectionId in request body", () => {
     expect(sourceCode).toMatch(/sectionId/);
+  });
+
+  it("uses annotationScopeSectionId before selectedSectionId when creating annotations", () => {
+    expect(sourceCode).toMatch(/const\s+captureSectionId\s*=\s*annotationScopeSectionId\s*\?\?\s*selectedSectionId/);
+    expect(sourceCode).toMatch(/sectionId\s*:\s*captureSectionId/);
   });
 
   it("includes timestamp in request body", () => {
@@ -557,7 +585,7 @@ describe("full video path", () => {
     expect(sourceCode).toMatch(/const\s+reviewAnnotations\s*=\s*useMemo/);
   });
 
-  it("adds selectedSection.offsetSeconds back to annotation timestamps when Review shows the stitched video", () => {
+  it("adds annotationScopeSection.offsetSeconds back to annotation timestamps when Review shows the stitched video", () => {
     expect(sourceCode).toMatch(/annotation\.timestamp\s*\+\s*sectionOffset/);
   });
 
@@ -568,7 +596,23 @@ describe("full video path", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 20. React hooks usage
+// 20. Review scope persistence
+// ---------------------------------------------------------------------------
+
+describe("review scope persistence", () => {
+  it("restores the last selected review section from localStorage when the project loads", () => {
+    expect(sourceCode).toContain("window.localStorage.getItem");
+    expect(sourceCode).toContain("video-editor-review-section");
+  });
+
+  it("persists selectedSectionId to localStorage", () => {
+    expect(sourceCode).toContain("window.localStorage.setItem");
+    expect(sourceCode).toContain("video-editor-review-section");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21. React hooks usage
 // ---------------------------------------------------------------------------
 
 describe("React hooks usage", () => {
@@ -590,7 +634,7 @@ describe("React hooks usage", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 21. StagePanelProps type
+// 22. StagePanelProps type
 // ---------------------------------------------------------------------------
 
 describe("StagePanelProps type", () => {
@@ -608,7 +652,7 @@ describe("StagePanelProps type", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 22. annotationPreFill flow
+// 23. annotationPreFill flow
 // ---------------------------------------------------------------------------
 
 describe("annotationPreFill flow", () => {
@@ -618,7 +662,7 @@ describe("annotationPreFill flow", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 23. Batch resolve handler
+// 24. Batch resolve handler
 // ---------------------------------------------------------------------------
 
 describe("batch resolve handler", () => {
@@ -641,7 +685,7 @@ describe("batch resolve handler", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 24. Error handling
+// 25. Error handling
 // ---------------------------------------------------------------------------
 
 describe("error handling", () => {
@@ -661,7 +705,7 @@ describe("error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 25. Loading states
+// 26. Loading states
 // ---------------------------------------------------------------------------
 
 describe("loading states", () => {
@@ -682,7 +726,7 @@ describe("loading states", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 26. Graceful error handling for API failures (items 14.1, 14.2)
+// 27. Graceful error handling for API failures (items 14.1, 14.2)
 // ---------------------------------------------------------------------------
 
 describe("graceful error handling for API failures (14.1, 14.2)", () => {
@@ -697,7 +741,7 @@ describe("graceful error handling for API failures (14.1, 14.2)", () => {
     const reviewCondIdx = sourceCode.indexOf("activeTab === 'review'");
     expect(annotationPanelIdx).toBeGreaterThan(reviewCondIdx);
     // The sectionId falls back to '' safely when projectConfig is null
-    expect(sourceCode).toMatch(/selectedSectionId\s*\?\?\s*['"]{2}/);
+    expect(sourceCode).toMatch(/annotationScopeSection\?\.id\s*\?\?\s*annotationScopeSectionId\s*\?\?\s*['"]{2}/);
   });
 
   it("14.2: loadAnnotations uses try/catch so annotation errors don't crash the page", () => {
