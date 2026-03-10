@@ -31,10 +31,12 @@ type ReviewRenderStatus = {
   sections: Array<{
     id: string;
     status: 'missing' | 'rendering' | 'done' | 'error';
+    updatedAtMs?: number;
   }>;
   fullVideo: {
     exists: boolean;
     stale?: boolean;
+    updatedAtMs?: number;
   };
 };
 
@@ -43,6 +45,18 @@ const REVIEW_SECTION_STORAGE_KEY = 'video-editor-review-section';
 
 const buildSectionVideoSrc = (sectionId: string) =>
   `/api/video/outputs/sections/${sectionId}.mp4`;
+
+const appendVersion = (src: string, updatedAtMs?: number) => {
+  if (!updatedAtMs) {
+    return src;
+  }
+
+  if (src.includes('?')) {
+    return `${src}&v=${updatedAtMs}`;
+  }
+
+  return `${src}?v=${updatedAtMs}`;
+};
 
 const resolveSectionIdForGlobalTime = (
   projectConfig: ProjectConfig | null,
@@ -208,7 +222,7 @@ export default function Page() {
 
   const reviewVideoSrc = useMemo(() => {
     if (!selectedSectionId) {
-      return FULL_VIDEO_SRC;
+      return appendVersion(FULL_VIDEO_SRC, reviewRenderStatus?.fullVideo?.updatedAtMs);
     }
 
     const sectionVideoSrc = buildSectionVideoSrc(selectedSectionId);
@@ -217,18 +231,18 @@ export default function Page() {
     );
 
     if (reviewRenderStatus?.fullVideo?.exists && !reviewRenderStatus?.fullVideo?.stale) {
-      return FULL_VIDEO_SRC;
+      return appendVersion(FULL_VIDEO_SRC, reviewRenderStatus?.fullVideo?.updatedAtMs);
     }
 
     if (sectionStatus?.status === 'done') {
-      return sectionVideoSrc;
+      return appendVersion(sectionVideoSrc, sectionStatus.updatedAtMs);
     }
 
     if (reviewRenderStatus?.fullVideo?.exists) {
-      return FULL_VIDEO_SRC;
+      return appendVersion(FULL_VIDEO_SRC, reviewRenderStatus?.fullVideo?.updatedAtMs);
     }
 
-    return sectionVideoSrc;
+    return appendVersion(sectionVideoSrc, sectionStatus?.updatedAtMs);
   }, [reviewRenderStatus, selectedSectionId]);
 
   const reviewAnnotations = useMemo(() => {

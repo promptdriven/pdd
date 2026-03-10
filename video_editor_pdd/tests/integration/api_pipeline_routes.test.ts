@@ -666,6 +666,7 @@ describe("GET /api/pipeline/render/status", () => {
 
       expect(body.fullVideo.exists).toBe(true);
       expect(body.fullVideo.stale).toBe(true);
+      expect(typeof body.fullVideo.updatedAtMs).toBe("number");
     } finally {
       fs.unlinkSync(introPath);
       fs.unlinkSync(REAL_FULL_VIDEO_PATH);
@@ -674,6 +675,33 @@ describe("GET /api/pipeline/render/status", () => {
       }
       if (hadFull) {
         fs.renameSync(fullBackup, REAL_FULL_VIDEO_PATH);
+      }
+    }
+  });
+
+  it("returns updatedAtMs for rendered section outputs", async () => {
+    fs.mkdirSync(REAL_SECTIONS_DIR, { recursive: true });
+    const introPath = path.join(REAL_SECTIONS_DIR, "intro.mp4");
+    const hadIntro = fs.existsSync(introPath);
+    const introBackup = introPath + ".testbak";
+
+    if (hadIntro) {
+      fs.renameSync(introPath, introBackup);
+    }
+
+    fs.writeFileSync(introPath, "section-data");
+
+    try {
+      const response = await GET_renderStatus();
+      const body = await response.json();
+      const introSection = body.sections.find((s: { id: string }) => s.id === "intro");
+
+      expect(introSection).toBeDefined();
+      expect(typeof introSection.updatedAtMs).toBe("number");
+    } finally {
+      fs.unlinkSync(introPath);
+      if (hadIntro) {
+        fs.renameSync(introBackup, introPath);
       }
     }
   });

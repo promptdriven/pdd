@@ -587,6 +587,11 @@ describe("full video path", () => {
     expect(sourceCode).toContain("/api/video/outputs/sections/");
   });
 
+  it("appends a cache-busting version query to review video sources", () => {
+    expect(sourceCode).toContain("?v=");
+    expect(sourceCode).toContain("updatedAtMs");
+  });
+
   it("defines reviewAnnotations for displaying section-local annotations on the stitched video", () => {
     expect(sourceCode).toMatch(/const\s+reviewAnnotations\s*=\s*useMemo/);
   });
