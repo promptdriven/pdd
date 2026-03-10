@@ -226,7 +226,7 @@ export default function Page() {
     async (data: AnnotationCaptureData) => {
       if (!selectedSectionId) return;
       try {
-        await fetch('/api/annotations', {
+        const createResponse = await fetch('/api/annotations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -236,8 +236,26 @@ export default function Page() {
             drawingDataUrl: data.drawingDataUrl,
             compositeDataUrl: data.compositeDataUrl,
             videoFile: data.videoFile,
+            inputMethod: data.inputMethod,
           }),
         });
+
+        if (!createResponse.ok) {
+          throw new Error('Failed to create annotation');
+        }
+
+        const createdAnnotation = await createResponse.json();
+        if (createdAnnotation?.id) {
+          const analyzeResponse = await fetch(
+            `/api/annotations/${createdAnnotation.id}/analyze`,
+            { method: 'POST' }
+          );
+
+          if (!analyzeResponse.ok) {
+            console.error('Failed to analyze annotation', createdAnnotation.id);
+          }
+        }
+
         await loadAnnotations();
       } catch (err) {
         console.error(err);

@@ -43,6 +43,9 @@ export default function VideoPlayer({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const finalTranscriptRef = useRef<string>('');
+  const interimTranscriptRef = useRef<string>('');
+  const speechStopResolverRef = useRef<((text: string) => void) | null>(null);
+  const speechStopTimeoutRef = useRef<number | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [selectedTool, setSelectedTool] = useState<DrawTool>('freehand');
@@ -69,6 +72,19 @@ export default function VideoPlayer({
     const recognition: any = new SpeechRecognitionImpl();
     recognition.continuous = true;
     recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    const resolveSpeechStop = (text: string) => {
+      if (speechStopTimeoutRef.current !== null) {
+        window.clearTimeout(speechStopTimeoutRef.current);
+        speechStopTimeoutRef.current = null;
+      }
+      const resolver = speechStopResolverRef.current;
+      speechStopResolverRef.current = null;
+      if (resolver) {
+        resolver(text);
+      }
+    };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     recognition.onresult = (event: any) => {
@@ -81,16 +97,39 @@ export default function VideoPlayer({
           interim += result[0].transcript;
         }
       }
-      setTranscript(`${finalTranscriptRef.current}${interim}`.trim());
+      interimTranscriptRef.current = interim.trim();
+      setTranscript(
+        `${finalTranscriptRef.current}${interimTranscriptRef.current ? ` ${interimTranscriptRef.current}` : ''}`.trim()
+      );
+    };
+
+    recognition.onend = () => {
+      const combinedTranscript = `${finalTranscriptRef.current}${interimTranscriptRef.current ? ` ${interimTranscriptRef.current}` : ''}`.trim();
+      setTranscript(combinedTranscript);
+      resolveSpeechStop(combinedTranscript);
     };
 
     recognitionRef.current = recognition;
     setSpeechAvailable(true);
+
+    return () => {
+      if (speechStopTimeoutRef.current !== null) {
+        window.clearTimeout(speechStopTimeoutRef.current);
+        speechStopTimeoutRef.current = null;
+      }
+      speechStopResolverRef.current = null;
+      try {
+        recognition.stop();
+      } catch {
+        // ignore cleanup errors
+      }
+    };
   }, []);
 
   const startSpeechRecognition = useCallback(() => {
     if (!recognitionRef.current) return;
     finalTranscriptRef.current = '';
+    interimTranscriptRef.current = '';
     setTranscript('');
     try {
       recognitionRef.current.start();
@@ -100,12 +139,37 @@ export default function VideoPlayer({
   }, []);
 
   const stopSpeechRecognition = useCallback(() => {
-    if (!recognitionRef.current) return;
-    try {
-      recognitionRef.current.stop();
-    } catch {
-      // ignore
+    if (!recognitionRef.current) {
+      return Promise.resolve(
+        `${finalTranscriptRef.current}${interimTranscriptRef.current ? ` ${interimTranscriptRef.current}` : ''}`.trim()
+      );
     }
+
+    return new Promise<string>((resolve) => {
+      const finalize = (text: string) => {
+        if (speechStopTimeoutRef.current !== null) {
+          window.clearTimeout(speechStopTimeoutRef.current);
+          speechStopTimeoutRef.current = null;
+        }
+        speechStopResolverRef.current = null;
+        resolve(text);
+      };
+
+      speechStopResolverRef.current = finalize;
+      speechStopTimeoutRef.current = window.setTimeout(() => {
+        finalize(
+          `${finalTranscriptRef.current}${interimTranscriptRef.current ? ` ${interimTranscriptRef.current}` : ''}`.trim()
+        );
+      }, 400);
+
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        finalize(
+          `${finalTranscriptRef.current}${interimTranscriptRef.current ? ` ${interimTranscriptRef.current}` : ''}`.trim()
+        );
+      }
+    });
   }, []);
 
   // Draw stroke on canvas
@@ -283,16 +347,22 @@ export default function VideoPlayer({
     return canvasEl.toDataURL('image/png');
   }, [strokes]);
 
-  const handleCapture = useCallback(async () => {
+  const handleCapture = useCallback(async (capturedTranscript?: string) => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
 
     const compositeDataUrl = await captureComposite();
     const drawingDataUrl = captureDrawing();
+    const textToPersist = (
+      capturedTranscript ??
+      (inputMethod === 'speech'
+        ? `${finalTranscriptRef.current}${interimTranscriptRef.current ? ` ${interimTranscriptRef.current}` : ''}`
+        : transcript)
+    ).trim();
 
     const data: AnnotationCaptureData = {
       timestamp: videoEl.currentTime,
-      text: transcript.trim(),
+      text: textToPersist,
       drawingDataUrl: drawingDataUrl ?? null,
       compositeDataUrl: compositeDataUrl ?? null,
       videoFile: src,
@@ -302,6 +372,7 @@ export default function VideoPlayer({
     onAnnotationCapture(data);
     setStrokes([]);
     setCurrentStroke(null);
+    setTranscript('');
   }, [captureComposite, captureDrawing, transcript, src, onAnnotationCapture, inputMethod]);
 
   const startRecordingMode = useCallback(() => {
@@ -310,14 +381,18 @@ export default function VideoPlayer({
     setIsRecording(true);
     setStrokes([]);
     setCurrentStroke(null);
-    startSpeechRecognition();
-  }, [startSpeechRecognition]);
+    if (inputMethod === 'speech') {
+      startSpeechRecognition();
+    }
+  }, [inputMethod, startSpeechRecognition]);
 
-  const stopRecordingMode = useCallback(() => {
+  const stopRecordingMode = useCallback(async () => {
     setIsRecording(false);
-    stopSpeechRecognition();
-    handleCapture();
-  }, [stopSpeechRecognition, handleCapture]);
+    const capturedTranscript = inputMethod === 'speech'
+      ? await stopSpeechRecognition()
+      : transcript.trim();
+    await handleCapture(capturedTranscript);
+  }, [handleCapture, inputMethod, stopSpeechRecognition, transcript]);
 
   const togglePlayPause = useCallback(() => {
     const videoEl = videoRef.current;

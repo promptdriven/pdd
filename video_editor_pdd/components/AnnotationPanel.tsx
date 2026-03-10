@@ -115,17 +115,21 @@ function Spinner({ className = '' }: { className?: string }) {
 function AnnotationCard({
   annotation: a,
   isLocallyResolved,
+  isDeleting,
   defaultExpanded,
   onToggle,
   onRetryJob,
   onMarkResolved,
+  onDelete,
 }: {
   annotation: Annotation;
   isLocallyResolved: boolean;
+  isDeleting: boolean;
   defaultExpanded: boolean;
   onToggle: () => void;
   onRetryJob: (jobId: string) => void;
   onMarkResolved: (annotationId: string) => void;
+  onDelete: (annotationId: string) => void;
 }) {
   const [showDiff, setShowDiff] = useState(false);
   const [diffText, setDiffText] = useState<string | null>(null);
@@ -328,6 +332,14 @@ function AnnotationCard({
                   Mark Resolved
                 </button>
               ) : null}
+
+              <button
+                onClick={() => onDelete(a.id)}
+                disabled={isDeleting}
+                className="rounded bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-50"
+              >
+                {isDeleting ? 'Deleting…' : 'Delete'}
+              </button>
             </div>
 
             {showDiff && diffText ? (
@@ -355,11 +367,14 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
 
   // Local-only resolve state (to support "Mark Resolved" without assuming an API exists).
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<Set<string>>(() => new Set());
+  const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(() => new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
 
   const sorted = useMemo(() => {
     // @ts-ignore TS18047 - timestamps are numeric at sort time; nulls sort as 0
-    return [...annotations].sort((a, b) => a.timestamp - b.timestamp);
-  }, [annotations]);
+    const sortedAnnotations = [...annotations].sort((a, b) => a.timestamp - b.timestamp);
+    return sortedAnnotations.filter((a) => !locallyDeletedIds.has(a.id));
+  }, [annotations, locallyDeletedIds]);
 
   const unresolvedWithAnalysisCount = useMemo(() => {
     return sorted.filter(
@@ -413,6 +428,45 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
       next.add(annotationId);
       return next;
     });
+  };
+
+  const handleDeleteAnnotation = async (annotationId: string) => {
+    if (!window.confirm('Delete this annotation?')) return;
+
+    setDeletingIds((prev) => {
+      const next = new Set(prev);
+      next.add(annotationId);
+      return next;
+    });
+
+    try {
+      const res = await fetch(`/api/annotations/${annotationId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        throw new Error(`Delete failed (${res.status})`);
+      }
+
+      setLocallyDeletedIds((prev) => {
+        const next = new Set(prev);
+        next.add(annotationId);
+        return next;
+      });
+      setExpanded((prev) => {
+        if (!(annotationId in prev)) return prev;
+        const next = { ...prev };
+        delete next[annotationId];
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(annotationId);
+        return next;
+      });
+    }
   };
 
   return (
@@ -488,10 +542,12 @@ export default function AnnotationPanel({ annotations, sectionId, onBatchResolve
                   key={a.id}
                   annotation={a}
                   isLocallyResolved={isLocallyResolved}
+                  isDeleting={deletingIds.has(a.id)}
                   defaultExpanded={isExpanded}
                   onToggle={() => handleToggle(a.id)}
                   onRetryJob={handleRetryJob}
                   onMarkResolved={handleMarkResolved}
+                  onDelete={handleDeleteAnnotation}
                 />
               );
             })

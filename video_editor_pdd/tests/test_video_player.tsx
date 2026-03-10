@@ -507,8 +507,9 @@ describe("onAnnotationCapture emission", () => {
     expect(sourceCode).toMatch(/timestamp\s*:\s*videoEl\.currentTime/);
   });
 
-  it("AnnotationCaptureData includes transcript text", () => {
-    expect(sourceCode).toMatch(/text\s*:\s*transcript\.trim\(\)/);
+  it("AnnotationCaptureData includes the finalized persisted transcript text", () => {
+    expect(sourceCode).toMatch(/const\s+textToPersist\s*=/);
+    expect(sourceCode).toMatch(/text\s*:\s*textToPersist/);
   });
 
   it("AnnotationCaptureData includes drawingDataUrl", () => {

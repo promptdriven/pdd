@@ -505,6 +505,18 @@ describe("handleAnnotationCapture", () => {
     expect(sourceCode).toMatch(/videoFile\s*:\s*data\.videoFile/);
   });
 
+  it("includes inputMethod in request body", () => {
+    expect(sourceCode).toMatch(/inputMethod\s*:\s*data\.inputMethod/);
+  });
+
+  it("re-reads the created annotation response body", () => {
+    expect(sourceCode).toMatch(/const\s+createdAnnotation\s*=\s*await\s+createResponse\.json\s*\(\s*\)/);
+  });
+
+  it("triggers annotation analysis after create when an annotation id is returned", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{createdAnnotation\.id\}\/analyze`\s*,\s*\{\s*method\s*:\s*['"]POST['"]/);
+  });
+
   it("refreshes annotations after saving", () => {
     // After POST, loadAnnotations is called
     expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*\)/);

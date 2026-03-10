@@ -9,7 +9,7 @@
  *   1. Props: annotations: Annotation[], sectionId: string, onBatchResolve: (jobId: string) => void
  *   2. Renders a scrollable list of annotation cards sorted by timestamp ascending.
  *   3. Each card shows: timestamp (MM:SS.ms), thumbnail (80×45px), text (2-line truncate), severity badge, fix type badge, analysis summary (1 line).
- *   4. Cards expand on click to show technicalAssessment, suggestedFixes list, [Retry] / [Mark Resolved] actions.
+ *   4. Cards expand on click to show technicalAssessment, suggestedFixes list, [Retry] / [Mark Resolved] / [Delete] actions.
  *   5. [Apply N Fixes] button — N = unresolved annotations with non-null analysis. POSTs to /api/sections/${sectionId}/resolve-batch. Shows SseLogPanel.
  *   6. Resolving annotations (resolveJobId set): inline progress spinner with job status from SSE.
  *   7. Resolved annotations: green ✓ Resolved badge. Collapsed by default.
@@ -255,6 +255,10 @@ describe("card expand/collapse", () => {
     expect(sourceCode).toMatch(/Mark Resolved/);
   });
 
+  it("shows Delete button in expanded actions", () => {
+    expect(sourceCode).toMatch(/Delete/);
+  });
+
   it("conditionally renders expanded content", () => {
     expect(sourceCode).toMatch(/\{isExpanded\s*\?/);
   });
@@ -355,6 +359,11 @@ describe("resolved annotations", () => {
     expect(sourceCode).toMatch(/handleMarkResolved/);
   });
 
+  it("tracks locally deleted annotations", () => {
+    expect(sourceCode).toMatch(/locallyDeletedIds/);
+    expect(sourceCode).toMatch(/handleDeleteAnnotation/);
+  });
+
   it("isResolved checks both a.resolved and isLocallyResolved", () => {
     expect(sourceCode).toMatch(/a\.resolved\s*\|\|\s*isLocallyResolved/);
   });
@@ -447,7 +456,34 @@ describe("failed annotation retry", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 17. Empty state
+// 17. Delete annotation
+// ---------------------------------------------------------------------------
+
+describe("delete annotation", () => {
+  it("defines handleDeleteAnnotation as an async function", () => {
+    expect(sourceCode).toMatch(/handleDeleteAnnotation\s*=\s*async/);
+  });
+
+  it("POSTs a DELETE request to /api/annotations/${annotationId}", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{annotationId\}`\s*,\s*\{\s*method\s*:\s*['"]DELETE['"]/);
+  });
+
+  it("confirms deletion before removing the annotation", () => {
+    expect(sourceCode).toMatch(/window\.confirm/);
+  });
+
+  it("optimistically removes deleted annotations from the rendered list", () => {
+    expect(sourceCode).toMatch(/sorted\s*=\s*useMemo/);
+    expect(sourceCode).toMatch(/!locallyDeletedIds\.has\(a\.id\)/);
+  });
+
+  it("shows deleting state on the Delete button", () => {
+    expect(sourceCode).toMatch(/Deleting\.\.\.|Deleting…/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. Empty state
 // ---------------------------------------------------------------------------
 
 describe("empty state", () => {
@@ -461,7 +497,7 @@ describe("empty state", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 18. Scrollable container (Req 2)
+// 19. Scrollable container (Req 2)
 // ---------------------------------------------------------------------------
 
 describe("scrollable list container", () => {
@@ -475,7 +511,7 @@ describe("scrollable list container", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 19. AnnotationCard sub-component
+// 20. AnnotationCard sub-component
 // ---------------------------------------------------------------------------
 
 describe("AnnotationCard sub-component", () => {
@@ -506,10 +542,14 @@ describe("AnnotationCard sub-component", () => {
   it("receives onMarkResolved callback", () => {
     expect(sourceCode).toMatch(/onMarkResolved\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
   });
+
+  it("receives onDelete callback", () => {
+    expect(sourceCode).toMatch(/onDelete\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// 20. Analysis summary display
+// 21. Analysis summary display
 // ---------------------------------------------------------------------------
 
 describe("analysis summary", () => {
@@ -531,7 +571,7 @@ describe("analysis summary", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 21. Batch resolve error handling
+// 22. Batch resolve error handling
 // ---------------------------------------------------------------------------
 
 describe("batch resolve error handling", () => {
@@ -549,7 +589,7 @@ describe("batch resolve error handling", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 22. Thumbnail alt text
+// 23. Thumbnail alt text
 // ---------------------------------------------------------------------------
 
 describe("thumbnail alt text", () => {
@@ -559,7 +599,7 @@ describe("thumbnail alt text", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 23. Annotations header
+// 24. Annotations header
 // ---------------------------------------------------------------------------
 
 describe("header section", () => {
@@ -574,7 +614,7 @@ describe("header section", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 24. Card key prop
+// 25. Card key prop
 // ---------------------------------------------------------------------------
 
 describe("card rendering", () => {
@@ -588,7 +628,7 @@ describe("card rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 25. View Diff / Revert Fix when fixCommitSha exists (items 10.8, 10.11)
+// 26. View Diff / Revert Fix when fixCommitSha exists (items 10.8, 10.11)
 // ---------------------------------------------------------------------------
 
 describe("View Diff and Revert Fix buttons (10.8, 10.11)", () => {
@@ -617,7 +657,7 @@ describe("View Diff and Revert Fix buttons (10.8, 10.11)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 26. Diff panel display (items 10.9, 10.10)
+// 27. Diff panel display (items 10.9, 10.10)
 // ---------------------------------------------------------------------------
 
 describe("diff panel display (10.9, 10.10)", () => {
@@ -643,7 +683,7 @@ describe("diff panel display (10.9, 10.10)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 27. SSE onDone triggers annotation refresh (item 13.5) — EXPECTED TO FAIL BEFORE FIX
+// 28. SSE onDone triggers annotation refresh (item 13.5) — EXPECTED TO FAIL BEFORE FIX
 // ---------------------------------------------------------------------------
 
 describe("SseLogPanel onDone triggers annotation refresh (13.5)", () => {
