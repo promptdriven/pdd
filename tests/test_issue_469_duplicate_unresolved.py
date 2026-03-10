@@ -137,7 +137,7 @@ def test_bug_orchestrator_unresolved_duplicate_continues(
         label = kwargs.get("label", "")
         if label == "step1":
             return (True, unresolved_output, 0.1, "gpt-4")
-        if label == "step7":
+        if label == "step9":
             return (True, "Generated test\nFILES_CREATED: test_fix.py", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -147,12 +147,12 @@ def test_bug_orchestrator_unresolved_duplicate_continues(
         **bug_default_args
     )
 
-    # Workflow should continue past Step 1 and complete all 11 steps
+    # Workflow should continue past Step 1 and complete all 12 steps
     assert success is True, (
         f"Workflow should have continued when original was unresolved, "
         f"but got: {msg}"
     )
-    assert mock_run.call_count == 11  # All 11 steps executed
+    assert mock_run.call_count == 12  # All 12 steps executed
     assert "Investigation complete" in msg
 
 

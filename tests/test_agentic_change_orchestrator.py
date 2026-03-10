@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -56,7 +56,8 @@ def mock_dependencies(temp_cwd):
          patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
          patch("pdd.agentic_change_orchestrator.post_step_comment") as mock_post_comment, \
          patch("pdd.agentic_change_orchestrator.console") as mock_console, \
-         patch("pdd.agentic_change_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_preprocess:
+         patch("pdd.agentic_change_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_preprocess, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
 
         # Default mock behaviors
         mock_run.return_value = (True, "Default Agent Output", 0.1, "gpt-4")
@@ -83,7 +84,8 @@ def mock_dependencies(temp_cwd):
             "clear_state": mock_clear_state,
             "subprocess": mock_subprocess,
             "post_comment": mock_post_comment,
-            "console": mock_console
+            "console": mock_console,
+            "check_pr": mock_check_pr,
         }
 
 # -----------------------------------------------------------------------------
@@ -447,7 +449,7 @@ def test_step7_stop_with_stop_condition_marker(mock_dependencies, temp_cwd):
     def side_effect(**kwargs):
         label = kwargs.get("label", "")
         if label == "step7":
-            return (True, "Posted to GitHub.\nArchitectural Decision Needed", 0.1, "gpt-4")
+            return (True, "Posted to GitHub.\nSTOP_CONDITION: Architectural Decision Needed", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect
@@ -465,7 +467,7 @@ def test_step7_stop_with_stop_condition_marker(mock_dependencies, temp_cwd):
 
     assert success is False, "Workflow should have stopped at step 7"
     assert "Stopped at step 7" in msg
-    assert "Architectural decision needed" in msg
+    assert "architectural decision needed" in msg.lower()
 
 
 def test_step7_prompt_has_stop_condition_marker():
@@ -940,8 +942,9 @@ def mock_dependencies_dict():
          patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
-         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
-        
+         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+
         mock_load.return_value = (None, None)
         mock_save.return_value = 12345
         mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
@@ -950,7 +953,7 @@ def mock_dependencies_dict():
         mock_subprocess.return_value.returncode = 0
         mock_topo_sort.return_value = ([], [])
         mock_get_affected.return_value = []
-        
+
         yield {
             "run": mock_run,
             "load": mock_load,
@@ -961,7 +964,8 @@ def mock_dependencies_dict():
             "build_graph": mock_build_graph,
             "topo_sort": mock_topo_sort,
             "get_affected": mock_get_affected,
-            "gen_script": mock_gen_script
+            "gen_script": mock_gen_script,
+            "check_pr": mock_check_pr,
         }
 
 def test_happy_path_full_execution(mock_dependencies_dict, tmp_path):
@@ -1351,18 +1355,19 @@ def mock_dependencies_v2():
          patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_affected, \
-         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
-        
+         patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+
         # Default behaviors
         mock_load.return_value = (None, None) # No existing state
         mock_save.return_value = 12345 # Mock comment ID
         mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
         mock_worktree.return_value = (Path("/tmp/worktree"), None)
-        
+
         # Default run_agentic_task behavior: success
         # Returns (success, output, cost, model)
         mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
-        
+
         yield {
             "run": mock_run,
             "load": mock_load,
@@ -1371,7 +1376,8 @@ def mock_dependencies_v2():
             "template": mock_template,
             "worktree": mock_worktree,
             "subprocess": mock_subprocess,
-            "build_graph": mock_build_graph
+            "build_graph": mock_build_graph,
+            "check_pr": mock_check_pr,
         }
 
 def test_happy_path_full_run(mock_dependencies_v2, tmp_path):
@@ -2241,8 +2247,8 @@ def test_setup_worktree_branch_checked_out_fails_without_fallback(tmp_path):
 
 def test_fallback_comment_on_step_failure(mock_dependencies, temp_cwd):
     """
-    When a step fails, post_step_comment is called for the failed step.
-    When a step succeeds, post_step_comment is NOT called.
+    Soft failures (single provider failure) do NOT trigger post_step_comment.
+    Only hard stops and consecutive provider aborts post comments.
     """
     mocks = mock_dependencies
     mock_run = mocks["run"]
@@ -2276,12 +2282,8 @@ def test_fallback_comment_on_step_failure(mock_dependencies, temp_cwd):
         quiet=True,
     )
 
-    # post_step_comment should be called exactly once (for step 1 failure)
-    assert mock_post_comment.call_count == 1
-    call_kwargs = mock_post_comment.call_args
-    # Verify step_num=1 was passed
-    assert call_kwargs[1].get("step_num", call_kwargs[0][3] if len(call_kwargs[0]) > 3 else None) == 1 or \
-           1 in call_kwargs[0]
+    # Soft failures no longer trigger post_step_comment (prevents GitHub App re-trigger loops)
+    assert mock_post_comment.call_count == 0
 
 
 def test_abort_after_consecutive_provider_failures(mock_dependencies, temp_cwd):
@@ -2311,8 +2313,8 @@ def test_abort_after_consecutive_provider_failures(mock_dependencies, temp_cwd):
     assert success is False
     assert "Aborting" in msg
     assert "consecutive" in msg.lower() or "3" in msg
-    # Should have been called 3 times (once per failed step before abort)
-    assert mock_post_comment.call_count == 3
+    # post_step_comment called once (on the 3rd consecutive failure that triggers abort)
+    assert mock_post_comment.call_count == 1
     # Only 3 steps should have been attempted
     assert mock_run.call_count == 3
 
@@ -2358,8 +2360,8 @@ def test_consecutive_failure_counter_resets(mock_dependencies, temp_cwd):
 
     # Should NOT have aborted (counter reset at step 3 success)
     assert "Aborting" not in msg
-    # post_step_comment called for steps 1, 2, 4, 5 = 4 times
-    assert mock_post_comment.call_count == 4
+    # Soft failures no longer trigger post_step_comment (prevents re-trigger loops)
+    assert mock_post_comment.call_count == 0
 
 
 def test_state_preserved_when_steps_failed(mock_dependencies, temp_cwd):
@@ -2585,4 +2587,507 @@ def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, tem
         # which happens to be the same value but for the right reason (step 8 succeeded)
         assert last["last_completed_step"] == 8, (
             f"last_completed_step should be 8 (last success), got {last['last_completed_step']}"
+        )
+
+
+# =============================================================================
+# Issue #756: Existing-PR Guard + post_step_comment Restriction
+# =============================================================================
+
+def test_check_existing_pr_returns_url_when_pr_exists():
+    """_check_existing_pr returns the PR URL when an open PR exists."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        mock_sub.return_value.stdout = json.dumps([
+            {"url": "https://github.com/owner/repo/pull/42"}
+        ])
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result == "https://github.com/owner/repo/pull/42"
+
+
+def test_check_existing_pr_returns_none_when_no_pr():
+    """_check_existing_pr returns None when no open PR exists."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        mock_sub.return_value.stdout = "[]"
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
+
+
+def test_check_existing_pr_returns_none_on_subprocess_error():
+    """_check_existing_pr returns None when gh CLI fails."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 1
+        mock_sub.return_value.stdout = ""
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
+
+
+def test_check_existing_pr_returns_none_on_timeout():
+    """_check_existing_pr returns None on subprocess timeout."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.side_effect = subprocess.TimeoutExpired("gh", 30)
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
+
+
+def test_orchestrator_returns_early_when_pr_exists(mock_dependencies, temp_cwd):
+    """Orchestrator returns early without running any steps when PR already exists."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_check_pr = mocks["check_pr"]
+
+    mock_check_pr.return_value = "https://github.com/owner/repo/pull/99"
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Existing PR",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    assert "PR already exists" in msg
+    assert "https://github.com/owner/repo/pull/99" in msg
+    assert cost == 0.0
+    # No steps should have been executed
+    mock_run.assert_not_called()
+
+
+def test_post_step_comment_called_on_hard_stop(mock_dependencies, temp_cwd):
+    """post_step_comment IS called when a hard stop condition is triggered."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    # Step 1 triggers a hard stop (duplicate)
+    mock_run.return_value = (False, "This is a Duplicate of #42", 0.1, "gpt-4")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Hard stop test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "duplicate" in msg.lower()
+    # Hard stop should trigger a comment
+    assert mock_post_comment.call_count == 1
+
+
+def test_post_step_comment_not_called_on_soft_failure(mock_dependencies, temp_cwd):
+    """post_step_comment is NOT called on soft failures (prevents GitHub App re-trigger)."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (False, "Some transient failure", 0.0, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Soft failure test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    # Soft failure should NOT post a comment
+    assert mock_post_comment.call_count == 0
+
+
+def test_post_step_comment_called_on_provider_abort(mock_dependencies, temp_cwd):
+    """post_step_comment IS called when consecutive provider failures trigger abort."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_post_comment = mocks["post_comment"]
+
+    mock_run.return_value = (False, "All agent providers failed: timeout", 0.0, "")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=756,
+        issue_author="me",
+        issue_title="Provider abort test",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Aborting" in msg
+    # Comment posted once (on the 3rd consecutive failure)
+    assert mock_post_comment.call_count == 1
+
+
+def test_step4_clarification_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
+    """
+    Test that Step 4 hard stop uses STOP_CONDITION tag, not loose string matching.
+    A casual mention of 'Clarification Needed' without the tag should NOT stop the workflow.
+    The strict 'STOP_CONDITION: Clarification Needed' tag SHOULD stop it.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # 1. Test casual mention (should NOT stop)
+    def side_effect_run_loose(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "Just mentioning Clarification Needed casually.", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "Implementation done. FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Architecture updated. ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_loose
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+    assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+
+    # 2. Test strict tag (should STOP)
+    mocks["save_state"].reset_mock()
+    mocks["console"].print.reset_mock()
+    mocks["post_comment"].reset_mock()
+    mock_run.reset_mock()
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert mock_run.call_count == 4
+    mocks["save_state"].assert_called()
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 3
+    mocks["console"].print.assert_any_call("[yellow]Investigation stopped at Step 4: Clarification needed[/yellow]")
+
+
+def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dependencies, temp_cwd):
+    """
+    Test that Step 7 hard stop uses STOP_CONDITION tag, not loose string matching.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # 1. Test casual mention (should NOT stop)
+    def side_effect_run_loose(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            return (True, "Mentioning Architectural Decision Needed casually.", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "Implementation done. FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Architecture updated. ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_loose
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+    assert success is True, "Failed: Workflow improperly stopped on casual mention without STOP_CONDITION tag"
+
+    # 2. Test strict tag
+    mocks["save_state"].reset_mock()
+    mock_run.reset_mock()
+    mocks["console"].print.reset_mock()
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step7":
+            return (True, "STOP_CONDITION: Architectural Decision Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, verbose=False
+    )
+
+    assert success is False
+    assert "Stopped at step 7" in msg
+    assert mock_run.call_count == 7
+    mocks["save_state"].assert_called()
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 6
+
+
+def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):
+    """
+    Test that hard stop works correctly in quiet mode (no console output).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect_run_strict(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run_strict
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+        issue_number=773, issue_author="me", issue_title="title", cwd=temp_cwd, quiet=True
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert mock_run.call_count == 4
+    mocks["save_state"].assert_called()
+    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 3
+
+    for call in mocks["console"].print.mock_calls:
+        assert "[yellow]Investigation stopped at step 4" not in str(call.args)
+
+
+# -----------------------------------------------------------------------------
+# Unit Tests for _check_hard_stop (Issue #773)
+# -----------------------------------------------------------------------------
+
+def test_check_hard_stop_step4_requires_stop_condition_tag():
+    """
+    _check_hard_stop should only trigger for Step 4 when the output contains
+    'STOP_CONDITION: Clarification Needed', not a casual mention.
+    """
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    # Casual mention should NOT trigger hard stop
+    result = _check_hard_stop(4, "Just mentioning Clarification Needed casually.")
+    assert result is None, (
+        "Bug #773: _check_hard_stop falsely triggers on casual mention of "
+        "'Clarification Needed' without STOP_CONDITION tag"
+    )
+
+    # Strict tag SHOULD trigger hard stop
+    result = _check_hard_stop(4, "I posted the comment. STOP_CONDITION: Clarification Needed")
+    assert result is not None, (
+        "_check_hard_stop should trigger when STOP_CONDITION: Clarification Needed is present"
+    )
+
+
+def test_check_hard_stop_step7_requires_stop_condition_tag():
+    """
+    _check_hard_stop should only trigger for Step 7 when the output contains
+    'STOP_CONDITION: Architectural Decision Needed', not a casual mention.
+    """
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    # Casual mention should NOT trigger hard stop
+    result = _check_hard_stop(7, "Mentioning Architectural Decision Needed in passing.")
+    assert result is None, (
+        "Bug #773: _check_hard_stop falsely triggers on casual mention of "
+        "'Architectural Decision Needed' without STOP_CONDITION tag"
+    )
+
+    # Strict tag SHOULD trigger hard stop
+    result = _check_hard_stop(7, "STOP_CONDITION: Architectural Decision Needed")
+    assert result is not None, (
+        "_check_hard_stop should trigger when STOP_CONDITION: Architectural Decision Needed is present"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Bug #784: _check_hard_stop improvements
+# -----------------------------------------------------------------------------
+
+def test_check_hard_stop_case_insensitive_substring_matching():
+    """Non-clarification steps use case-insensitive substring matching."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    # Step 2: "Already Implemented" (case-insensitive)
+    assert _check_hard_stop(2, "already implemented") is not None
+    assert _check_hard_stop(2, "ALREADY IMPLEMENTED") is not None
+    assert _check_hard_stop(2, "Already Implemented") is not None
+
+    # Step 6: "No Dev Units Found" (case-insensitive)
+    assert _check_hard_stop(6, "no dev units found") is not None
+    assert _check_hard_stop(6, "NO DEV UNITS FOUND") is not None
+
+    # Step 8: "No Changes Required" (case-insensitive)
+    assert _check_hard_stop(8, "no changes required") is not None
+    assert _check_hard_stop(8, "NO CHANGES REQUIRED") is not None
+
+
+def test_check_hard_stop_universal_stop_condition_tag():
+    """Any step can trigger via STOP_CONDITION: tag as a universal fallback."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    # Step 3 has no specific handler — universal fallback should catch it
+    result = _check_hard_stop(3, "STOP_CONDITION: Custom reason for stopping")
+    assert result == "Custom reason for stopping"
+
+    # Step 5 has no specific handler either
+    result = _check_hard_stop(5, "STOP_CONDITION: Unexpected issue found")
+    assert result == "Unexpected issue found"
+
+
+def test_check_hard_stop_empty_and_none_output():
+    """_check_hard_stop handles empty and None output without error."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(1, "") is None
+    assert _check_hard_stop(1, None) is None
+    assert _check_hard_stop(4, "") is None
+    assert _check_hard_stop(4, None) is None
+
+
+def test_check_hard_stop_case_insensitive_fallbacks():
+    """Substring fallbacks for steps 1, 2, 6, 8, 9 are case-insensitive."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(1, "DUPLICATE OF #42") is not None
+    assert _check_hard_stop(1, "duplicate of #42") is not None
+    assert _check_hard_stop(2, "ALREADY IMPLEMENTED") is not None
+    assert _check_hard_stop(6, "NO DEV UNITS FOUND") is not None
+    assert _check_hard_stop(8, "NO CHANGES REQUIRED") is not None
+    assert _check_hard_stop(9, "FAIL: build error") is not None
+
+
+def test_step4_prompt_has_stop_condition_instruction():
+    """Step 4 prompt must instruct LLM to output STOP_CONDITION line prefix."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_change_step4_clarify_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+    assert "STOP_CONDITION: Clarification needed" in prompt_content
+    assert "CRITICAL" in prompt_content
+
+
+def test_step4_stop_with_stop_condition_prefix(mock_dependencies, temp_cwd):
+    """Orchestrator should stop at step 4 when STOP_CONDITION line is in output."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step4":
+            return (True, "I posted clarification questions.\nSTOP_CONDITION: Clarification needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="https://github.com/o/r/issues/900",
+        issue_content="Vague feature request",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=900,
+        issue_author="user",
+        issue_title="Feature",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert mocks["run"].call_count == 4
+
+
+def test_step4_clarification_saves_step_minus_one(mock_dependencies, temp_cwd):
+    """When step 4 stops for clarification, last_completed_step should be 3 (step-1)."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    with patch("pdd.agentic_change_orchestrator._fetch_issue_updated_at", return_value="2025-01-01T00:00:00Z"):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="https://github.com/o/r/issues/900",
+            issue_content="Feature",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=900,
+            issue_author="user",
+            issue_title="Feature",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is False
+    # save_workflow_state(cwd, issue_number, workflow_type, state, ...)
+    final_state = mocks["save_state"].call_args[0][3]
+    assert final_state["last_completed_step"] == 3, (
+        "Clarification stop at step 4 should save last_completed_step=3 for resume"
+    )
+
+
+def test_fetch_issue_updated_at_called_on_clarification(mock_dependencies, temp_cwd):
+    """Bug #784: issue_updated_at is refreshed after clarification stops."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    with patch("pdd.agentic_change_orchestrator._fetch_issue_updated_at",
+               return_value="2026-03-08T12:00:00Z") as mock_fetch:
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="content", repo_owner="owner", repo_name="repo",
+            issue_number=784, issue_author="me", issue_title="title",
+            issue_updated_at="2026-03-08T10:00:00Z",
+            cwd=temp_cwd, verbose=False
+        )
+        assert success is False
+        mock_fetch.assert_called_once_with("owner", "repo", 784)
+        saved_state = mocks["save_state"].call_args[0][3]
+        assert saved_state["issue_updated_at"] == "2026-03-08T12:00:00Z", (
+            "Bug #784: issue_updated_at should be refreshed after clarification"
         )

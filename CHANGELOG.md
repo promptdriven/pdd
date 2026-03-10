@@ -1,65 +1,230 @@
+## v0.0.172 (2026-03-09)
+
+### Feat
+
+- Implement full video stitching in the batch resolve API and enhance AnnotationPanel job status updates with EventSource fallback.
+- Implement cache-busting for video URLs using `updatedAtMs` and refresh render status after batch resolution.
+- inline audit video playback
+
+### Fix
+
+- PDD fix for #797 (#798)
+- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
+- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
+- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
+- **8eda0194-78c7-475d-a453-778d30114986**: I want this to be Bunny not morph
+- **90c4a24f-485f-42f6-b8fe-4273f341bf1f**: I want this to be a triangle
+- improve review annotation analysis
+- improve review annotation handling
+- stabilize audit rendering and veo validation
+- sync render timelines and validate veo clips
+- align render graph with resolved visual clips
+- scope audit playback and preserve tts text
+- Test: Model Selection Debug - Hello World Python
+- align composition timing with audio sync
+
+## v0.0.171 (2026-03-08)
+
+### Feat
+
+- **Universal `STOP_CONDITION:` tag support**: all three orchestrators (change, bug, test) now recognize a universal `STOP_CONDITION:` tag on any step, with clarification steps requiring the explicit tag instead of substring matching to prevent false positives from casual LLM mentions
+- **Clarification step resume**: clarification steps (change steps 4/7, bug step 3, test step 3) save `last_completed_step` as the previous step so the clarification step re-runs on resume; `issue_updated_at` is refreshed after the bot's comment to prevent stale detection false triggers
+- **E2E test file capture on skip**: bug orchestrator step 11 now always parses `E2E_FILES_CREATED` even when the test is skipped (e.g., missing Playwright browsers), so unverified test files are still included in PRs
+
+### Fix
+
+- **Skip cloud auth in headless worker environments**: `code_generator_main` and `fix_main` detect `CloudConfig.is_running_in_cloud()` and bypass cloud execution to avoid warning messages that cause LLM agent bailout
+- **Case-insensitive hard stop detection**: `_check_hard_stop` in change and test orchestrators now uses case-insensitive matching, fixing missed stops when LLM output varies in casing
+- Add retry on timeout for verify E2E test in cloud CI
+
+### Refactor
+
+- Clarification prompts (change step 4, test step 3, bug step 3) updated to require explicit `STOP_CONDITION:` tag in output for reliable orchestrator parsing
+- Bug step 11 E2E prompt adds runtime environment guidance for Playwright browser availability and self-contained test preference
+
+### Test
+
+- Add unit tests for universal `STOP_CONDITION:` detection and clarification resume behavior across all three orchestrators
+- Add tests for cloud auth skip in `code_generator_main` and `fix_main`
+
+## v0.0.170 (2026-03-07)
+
+### Feat
+
+- **Independent test verification for ALL_TESTS_PASS**: the e2e fix orchestrator no longer trusts the LLM's claim that all tests pass — it runs `pytest` independently via subprocess on extracted test files and rejects false positives, continuing the fix loop when verification fails
+- **Intermediate file filtering in `_commit_and_push`**: `*_fixed.*`, `*.bak`, `*.backup`, `*.orig`, `*.tmp`, and `error_output*.txt` files created during `pdd fix` are now filtered out before committing (fixes issue #383 where debug files like `auth_test_commands_auth_fixed.py` leaked into PRs)
+- **`git push -u origin HEAD`**: push commands in the e2e fix orchestrator now set upstream tracking, fixing failures on branches without a remote tracking ref
+- **Hello world E2E agentic sync tests**: new regression test cases 11 (multi-session) and 12 (one-session) verify the full `pdd sync --agentic` pipeline end-to-end on a minimal "hello world" prompt
+
+### Fix
+
+- **Workflow state cleared only after successful commit**: `clear_workflow_state` now runs after `_commit_and_push` succeeds (not before), and the orchestrator returns early on commit failure — prevents losing workflow state when the commit step fails
+- **E2E test stability**: `test_e2e_issue_296_custom_csv` patches `unfinished_prompt` to avoid Cloud Batch failures on empty mock LLM content; sets `PDD_SUPPRESS_SETUP_REMINDER` env var
+- increase timeout for `test_test_logs_manual_invocation` (300s → 600s)
+- make hello world test file checks non-fatal in CI
+
+### Build
+
+- CI cloud-batch task ranges updated: sync regression slots expanded from 54–63 to 54–65, downstream ranges shifted accordingly to accommodate new hello world tests
+
+### Test
+
+- **E2E test for issue #383**: new `test_e2e_issue_383_commit_intermediate_files.py` sets up a real git repo and verifies `_commit_and_push` filters out intermediate `*_fixed.py` and backup files
+- comprehensive unit tests for `_is_intermediate_file`, `_extract_test_files`, and `_verify_tests_independently` added to `test_agentic_e2e_fix_orchestrator.py`
+
+## v0.0.169 (2026-03-07)
+
+### Feat
+
+- **12-step agentic bug workflow**: new step 4 (API Research) identifies external API dependencies and auth-type-specific limitations before reproduction; all subsequent steps renumbered (old 4→5, 5→6, etc.)
+- **Cross-step consistency validation in bug prompts**: steps 8, 9, 10 now validate that generated test mocks don't contradict investigation findings from earlier steps, preventing false-positive tests that pass with wrong mocks
+- **Existing PR guard for `pdd change`**: change orchestrator checks for an existing open PR on the issue branch and returns early if found
+- **Robust JSON extraction from provider output**: new `_extract_json_from_output()` handles non-JSON text (npm warnings, upgrade prompts) mixed with provider JSON via line-by-line parsing and brace-depth matching fallback
+- **Python-specific agentic test generation**: `pdd test --agentic` applies `_inject_sys_path_preamble` for Python tests; test generation prompt adds pytest conventions, sys.path setup, and coverage targeting rules
+- **`pdd sync` test_extend enabled for Python in agentic mode**: previously skipped for all agentic languages, now only non-Python languages skip since Python has reliable coverage tooling
+- **Coverage config auto-injection**: `pdd sync` generates a temporary `.coveragerc` excluding `if __name__ == "__main__"` blocks when no project-level coverage config exists
+
+### Fix
+
+- `pdd sync --agentic` Python coverage failures (7 bugs): coverage regex avoids matching ANSI escape codes, temp `.coveragerc` auto-injection, test_extend enabled for Python agentic, real test execution for Python agentic
+- step 8.5 merges existing context docs instead of regenerating from scratch — reads existing `prompts/_context/*.yaml` and injects into LLM context for incremental updates
+- `pdd change` doesn't stop workflow when step asks user for clarification — hard stop detection now requires `STOP_CONDITION:` prefix
+- set explicit `width=120` in `Console()` / `_echo_rich` to prevent empty output in headless CI
+- prevent `pdd change` infinite loop when triggered by GitHub App
+- `sync_determine_operation` returns `generate` when code file is missing with stale metadata, preventing test-only loops on missing code
+- architecture step 7b review scoped to current issue's modules only via `origin.issue_number` filtering — prevents overwriting sibling sub-issue modules in shared `architecture.json`
+- architecture step 7 passes full merged architecture to downstream steps (not just new/updated modules), fixing missing context for steps 8–13
+- change orchestrator only posts GitHub issue comments on hard stops and 3x provider abort (not on every failed step)
+
+### Refactor
+
+- architecture step 2 prompt simplified — removed inline naming registry tables and cross-cutting concern scan (deferred to step 2b codebase scan), focusing on PRD-based module decomposition
+- architecture step 8.5 prompt refactored for merge-first approach with existing context docs
+- architecture step 7b review prompt scoped by `origin.issue_number` with explicit instructions to leave other issues' modules untouched
+- architecture step 10 completeness prompt removed entry point wiring check section (moved to step 7b)
+
+### Docs
+
+- add `PDD_GAP_ANALYSIS.md` — comprehensive gap analysis of PDD prompt quality
+- add `PDD_PROMPT_IMPROVEMENT_GUIDE.md` — guide for improving PDD prompts
+
+## v0.0.168 (2026-03-05)
+
+### Feat
+
+- **Architecture step 8.5 — shared context documents**: new orchestrator step generates `data_dictionary.yaml`, `api_contracts.yaml`, and `integration_points.yaml` in `prompts/_context/`, providing a single source of truth for field names, types, and enums across all module prompts via `<include>` tags.
+- **Architecture conformance checking**: `pdd generate` now verifies generated code exports against `architecture.json` interface declarations, failing on missing symbols or Python naming-convention violations. Disable with `PDD_SKIP_CONFORMANCE=1`.
+- **Cross-sub-issue reconciliation (step 9.7)**: new `cross_issue_reconcile_LLM.prompt` audits shared types, API contracts, and enum values across related sub-issues for consistency.
+- **Post-generation verification prompt**: new `post_gen_verify_LLM.prompt` for checking generated code against architecture interface declarations.
+- **Entry point wiring check in completeness validation**: step 10 now detects orphan modules (API routes, pages) that export callable functionality but have no `entryPoints` and are unreferenced by other modules.
+- **Generated test syntax validation**: architecture orchestrator scans prompt files for embedded code blocks and validates Python syntax (via `ast.parse`) and TypeScript/JS bracket balance.
+- **Prompt template context injection**: `generate_prompt.prompt` template now includes a `Shared Context` section with `<include>` tags for context YAMLs, with deduplication rules preventing inline field tables when context files exist.
+- **Share sibling context documents across sub-issues**: `_fetch_sibling_architectures` now reads and includes `data_dictionary.yaml` and `api_contracts.yaml` from sibling project directories, with full interface details for cross-project dependency resolution.
+- **Detect include dependency changes in `pdd update`**: repo-wide mode now checks stored include dependency hashes (e.g., shared preambles, examples) and marks modules as changed when any dependency file is modified, deleted, or unreadable.
+- **Expand sync language support**: `SUPPORTED_SYNC_LANGUAGES` list expanded from 7 hardcoded languages to 50+ (all languages from `language_format.csv`), enabling prompt discovery for Svelte, Vue, Zig, Mojo, and many more.
+- **`language` parameter for `code_generator_main`**: new optional parameter passes language context through to conformance checking and command options.
+- **Enforce enum fidelity, context doc includes, and prompt deduplication**: step 9 prompt generation now requires context YAML `<include>` tags in every prompt, forbids inline duplication of data model content, and adds mandatory verification commands.
+- **Step 13 fix prompt expanded**: added fix strategies for missing context document includes, enum value drift, and inline duplication of context YAML content in prompts.
+
+### Fix
+
+- escape `<include>` tag examples in LLM prompts to survive preprocessing (switched to `&lt;include&gt;` entities throughout prompt templates)
+- add stdout fallback in `_run_with_provider` error capture when stderr is empty
+- abort e2e fix orchestrator after 3 consecutive provider failures instead of looping indefinitely
+- treat unreadable include dependencies as changed to trigger re-sync
+- expand language discovery to all supported languages and harden one-session completion gate — `STEP_COMPLETE:done` is now only emitted after a final passing test run (exit code 0)
+- replace nonexistent `playwright-cli` with `npx playwright` in test prompts
+- improve language detection warning message with actionable guidance (pass `--language` or use `_<language>.prompt` suffix)
+- sync `context/python_preamble.prompt` to public repo for Issue #594 tests
+- add `pdd/templates/` to `.sync-config.yml` to fix CI on promptdriven/pdd
+
+### Refactor
+
+- replace inline `languages_to_try` lists in `sync_main.py` with module-level `SUPPORTED_SYNC_LANGUAGES` constant
+- add `_is_known_language()` helper for language suffix detection in sync discovery
+- remove `# Dummy` comments from `construct_paths.py` placeholder values
+
+## v0.0.167 (2026-03-04)
+
+### Feat
+
+- **Architecture registry** — new `architecture_registry.py` module tracks multi-issue generation provenance in `.pdd/architecture_registry.json`, recording which modules came from which GitHub issue with merge logic for combining new entries with existing ones.
+- **Expanded architecture orchestrator** — add 5 new half-steps (1b complexity assessment, 2b codebase scan, 5b completeness gate, 7b architecture self-review, 9b cross-file consistency audit) for quality gates throughout the architecture workflow.
+- **Cross-sub-issue architecture awareness** — multi-project generation now loads and combines architecture files from subdirectories, enabling modules from different issues to coexist.
+- **Naming registry and codebase scan** — architecture generation scans existing code for naming conventions and validates consistency across generated modules.
+- **Expanded test orchestrator (9 → 18 steps)** — add plan enhancement, coverage assessment, manual testing checklist, regression test creation, test plan validation, and dedicated test execution steps.
+- **Auth-aware pipeline detection** — detect OAuth/JWT/session auth in PRDs and auto-tag modules, inject testability requirements (dependency injection, mock fixtures), and generate specialized test patterns.
+- **Contract-aware test generation** — one-session sync prompt now includes OpenAPI/Swagger contract validation when specs are found.
+- **`--verification-program` for fix prompts** — add CLI option and dynamic path discovery so `pdd fix` can validate fixes against a user-specified program.
+- **`.pddignore` support** — new ignore file (searched upward to git root) filters files from `pdd update` scanning, with glob-pattern matching against basenames, relative paths, and directory prefixes.
+- **Hardened `pdd update` scanning** — expanded skip lists for config files (jest, vitest, playwright, postcss, babel, eslint configs), test/story files (`.test`, `.spec`, `.stories` suffixes), and data formats (`.csv`, `.txt`). Skip empty/comment-only files instead of blanket-skipping `__init__.py`.
+- **Auto-generate `.pddrc` from scan** — `pdd update --directory` now auto-generates `.pddrc` by majority-vote language detection from file extensions, with best-effort scope and empty-prompt handling.
+- **Rust language support** — add Rust project detection (`Cargo.toml`) and default paths (`src/`, `tests/`, `examples/`) to `.pddrc` initializer.
+- **Frontend framework extension mappings** — add `typescriptreact` (`.tsx`), `javascriptreact` (`.jsx`), `svelte` (`.svelte`), and `vue` (`.vue`) to the built-in extension map.
+- **Nearest `.pddrc` discovery** — `detect_context_for_file` now prefers a `.pddrc` closer to the file over one at the repo root, supporting monorepo layouts.
+- **Case-insensitive prompt lookup** — `sync_main` falls back to case-insensitive filename matching when the exact-case prompt path doesn't exist.
+- **Directory-aware module identity** — `infer_module_identity` now reconstructs subdirectory prefixes from the prompt path (e.g., `frontend/page` instead of just `page`) to avoid fingerprint collisions.
+- **One-session sync fingerprint skip** — skip one-session sync for modules whose fingerprint shows they're already fully synced, saving unnecessary LLM calls.
+
+### Fix
+
+- Skip one-session sync for already-synced modules and fix TSX/JSX misclassification
+- escape JSON braces in `pdd-interface` blocks to prevent `.format()` errors with code containing `{uid}` or similar patterns
+- Deduplicate modules after language suffix stripping
+- Prevent prompt path duplication when prompts_dir is already absolute
+- Prevent `_find_prompt_in_contexts` from returning wrong prompt for unrelated basenames by guarding templates without `{name}`
+- check path overlap before adding `.pddrc` contexts
+- respect `--quiet` flag for step failure warnings
+- address PR review — `validate_cached_state` crash, missing state persist, regex edge case
+
+### Build
+
+- Update cloud batch test durations.
+- increase pdd crash E2E test timeout from 300s to 600s.
+- Add `.infisical.json` and `test-durations.json` to `.gitignore`.
+
+### Docs
+
+- Update `TUTORIALS.md` to reflect expanded 18-step test workflow, contract validation, accessibility audits, and manual testing prerequisites.
+- Add auth/OAuth FAQ entry explaining auth-aware detection, scaffolding, and remediation steps.
+
 ## v0.0.166 (2026-03-03)
 
 ### Feat
 
-- Add video element specifications and narration audio for multiple video parts.
-- Implement "Detect Segments" functionality in Stage 5 Audio Sync, add a guard for missing segments in Stage 4 TTS rendering, and document staging environments.
-- add Gemini 3.1 Flash Lite to model catalog and update base model references
-- merge sync-code into update + add post-update architecture/PRD sync
-- add `pdd sync-code` command for reverse-syncing code changes to prompts
+- **Change-detection in `pdd update --repo`** — repo-wide update now compares fingerprint hashes and git diffs against `--base-branch` (default `main`) to skip unchanged files, replacing the previous "update everything" approach. New helpers `get_git_changed_files`, `is_code_changed`, and `derive_basename_and_language` power the detection; fingerprints are saved after each successful update so the next run is incremental.
+- **Post-update architecture & PRD sync** — after repo-wide update, automatically refresh `architecture.json` entries for updated prompts and, if entries changed, run an LLM pass to keep `PRD.md` in sync.
+- **Template-based prompt resolution from `.pddrc`** — `_resolve_prompt_from_pddrc` reverse-matches code paths against `.pddrc` output templates to locate or create the correct prompt file, eliminating manual path wiring for template-based projects.
+- **Merge `sync-code` into `update`** — the standalone `pdd sync-code` reverse-sync command is now the default behaviour of `pdd update --repo`; the `sync-code` entry point remains as an alias. Added `--base-branch` CLI option.
+- **Gemini 3.1 Flash Lite** — add `gemini-3.1-flash-lite-preview` (Vertex AI + Gemini API) to the model catalog and frontend model resolver as a low-cost base model option.
 
 ### Fix
 
-- Clean up stale pdd.cli attribute in test_cli.py teardown
-- spec executor uses section ID instead of specDir for directory paths
-- Stage 6 spec list not refreshing after regeneration completes
-- Stage 5 "Save Config" silently fails — section groups lost on refresh
-- subtract cache_creation from new_input to prevent double-counting (#686)
-- address Copilot review — reuse expand_template, fix {ext} dot
-- use git ls-files to respect .gitignore in repo scan
-- exclude .next and other build directories from repo scan
-- resolve prompt discovery bugs in `pdd update --repo`
-- ensure scaffolded .gitignore tracks .pdd/meta/ fingerprints
-- store relative paths in fingerprint include_deps for portability
-- accept PDD_CODEX_AUTH_AVAILABLE sentinel for Codex agent discovery
-- **test**: use patch.object to target real generate module in error tests
-- patch update_main at correct import location in CLI test
-- catch-all pddrc pattern skipping and SYNC_CMD dry-run fix
-- **test-batch-ann-1772530285220**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772530067058**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772529895950**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772529653837**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772529265712**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528693765**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528552660**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528383877**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772528125988**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527990694**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527823452**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527699472**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527367189**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527157529**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772527010958**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526870445**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526740123**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526643851**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526519257**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526399758**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526263551**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526156841**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772526058700**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525974230**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525892652**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525786581**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525706650**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525606120**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525497271**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525403413**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772525290523**: Subtitle font size 96px causes text to clip the ri
-- **test-batch-ann-1772523271731**: Subtitle font size 96px causes text to clip the ri
-- handle None return from update_main in repo mode
-- convert architecture_sync and operation_log imports to lazy imports
-- save fingerprint after successful repo-mode update
+- **Anthropic cost double-counting** — subtract `cache_creation` tokens from `new_input` before pricing so cache-write tokens aren't billed at both the 1.25× write rate and the regular input rate.
+- **Repo scan respects `.gitignore`** — `find_and_resolve_all_pairs` now uses `git ls-files` instead of `os.walk`, and filters out config/data extensions (`.json`, `.yaml`, `.md`, etc.) and known non-code filenames (`package-lock.json`, `tsconfig.json`, etc.).
+- **Catch-all `.pddrc` pattern skipping** — subdirectory `.pddrc` files with only wildcard patterns (`**`, `*`) no longer claim ownership of unrelated modules during `_resolve_module_cwd`.
+- **SYNC_CMD dry-run execution** — LLM-suggested fix commands are now executed via shell subprocess instead of parsed as directory paths, correctly handling chained `cd` + `pdd sync` commands.
+- **Fingerprint portability** — `include_deps` paths are stored as relative paths instead of absolute, preventing cross-machine mismatches.
+- **Codex agent discovery** — accept `PDD_CODEX_AUTH_AVAILABLE` env var as an alternative to `OPENAI_API_KEY` for detecting the Codex CLI.
+- **Stage 5 "Save Config"** — fix silent failure where section groups were lost on refresh.
+- **Stage 6 spec list** — refresh the spec list after regeneration completes.
+- **Spec executor paths** — use section ID instead of `specDir` for directory paths.
+- **Stale CLI attribute** — clean up `pdd.cli` attribute in `test_cli.py` teardown to prevent cross-test leakage.
+- **Prompt discovery** — resolve multiple bugs in `pdd update --repo` prompt path resolution; reuse `expand_template` and fix `{ext}` dot handling.
+- **Repo-mode robustness** — handle `None` return from `update_main`, lazy-import `architecture_sync` and `operation_log` to avoid circular imports, save fingerprint after successful update.
+
+### Refactor
+
+- **Prompts refresh** — bulk update 19 prompt files via `pdd update` to reflect current code (net −132 lines across prompts). Remove unused `one_session_agent_LLM.prompt`.
+
+### Build
+
+- Update cloud-batch test durations from latest run.
+
+### Docs
+
+- Document staging environments (`staging` vs `staging2`) and their purposes in `ONBOARDING_INTERNAL.md`.
+- Add `context/sync_code_main_example.py` demonstrating change-detection functions.
 
 ## v0.0.165 (2026-03-02)
 
@@ -86,7 +251,6 @@
 
 - new prompt files: `one_session_agent_LLM.prompt` (375-line mega-prompt template), `one_session_sync_python.prompt` (module spec)
 - update `sync_main_python.prompt`, `agentic_sync_python.prompt`, `agentic_sync_runner_python.prompt`, `code_generator_python.prompt`, and `maintenance_python.prompt` to document `one_session` parameter and corrected model name semantics
-
 
 ## v0.0.164 (2026-03-01)
 

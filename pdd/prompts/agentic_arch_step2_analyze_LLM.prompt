@@ -14,7 +14,7 @@
 
 % Context
 
-You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extracted the PRD summary. Now you need to decompose features into potential modules.
+You are working on step 2 of 13 in an agentic architecture workflow. Step 1 extracted the PRD summary. Now you need to decompose features into potential modules.
 
 % Inputs
 
@@ -31,6 +31,12 @@ You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extr
 <step1_output>
 {step1_output}
 </step1_output>
+
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When analyzing modules, consider what already exists in sibling projects. Note existing modules as available dependencies rather than re-designing them.
 
 % Your Task
 
@@ -55,6 +61,10 @@ You are working on step 2 of 11 in an agentic architecture workflow. Step 1 extr
    - List potential modules with responsibilities
    - Identify which modules are foundational (no deps) vs. dependent
    - Note interfaces between modules
+
+5. **Cross-cutting concern awareness:**
+   - Note: Step 2b will scan the actual codebase for existing patterns. This step focuses on PRD analysis only.
+   - From the PRD, identify cross-cutting concerns (auth, error handling, logging, validation) and note which modules will need them.
 
 % Output
 
@@ -90,6 +100,15 @@ Your comment should follow this format:
 
 ### Inter-Module Interfaces
 - [module A] -> [module B]: [interface description]
+
+### Cross-Cutting Concerns (from PRD)
+- [Auth, error handling, logging, validation — note which modules need each]
+
+### Identified Shared Identifiers
+- Database collections/tables: [list names mentioned in PRD]
+- API endpoints: [list paths mentioned in PRD]
+- Shared types: [list type names implied by PRD]
+- Environment variables: [list any env vars mentioned in PRD]
 
 ---
 *Proceeding to Step 3: Research*

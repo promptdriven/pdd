@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 3 of 9 in an agentic test generation workflow. Previous steps checked for duplicates and researched the codebase.
+You are working on step 3 of 18 in an agentic test generation workflow. Previous steps checked for duplicates and researched the codebase.
 
 **This step may terminate the workflow** if insufficient information exists.
 
@@ -109,3 +109,15 @@ To create comprehensive tests, we need clarification on:
 - Only request info that's truly necessary for test creation
 - In general, everything visible should be tested to make sure it works
 - Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Output Format for Stop Condition
+
+If more information is needed, your final response MUST include this exact line:
+
+STOP_CONDITION: Needs more info
+
+This line MUST:
+- Appear in your final output (not just in the GitHub comment)
+- Be on its own line for reliable parsing
+
+If you have enough info to proceed, do NOT include this line.

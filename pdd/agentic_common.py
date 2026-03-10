@@ -486,6 +486,7 @@ def run_agentic_task(
     max_retries: int = 1,
     retry_delay: float = DEFAULT_RETRY_DELAY,
     deadline: Optional[float] = None,
+    use_playwright: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -499,6 +500,8 @@ def run_agentic_task(
         timeout: Optional timeout override
         max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
+        deadline: Optional Unix timestamp for job-level time budgeting
+        use_playwright: Enable constrained tool access mode for browser-based testing
 
     Returns:
         (success, output_text, cost_usd, provider_used)
@@ -573,7 +576,8 @@ def run_agentic_task(
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
                 success, output, cost = _run_with_provider(
-                    provider, prompt_path, cwd, attempt_timeout, verbose, quiet
+                    provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
+                    use_playwright=use_playwright,
                 )
                 last_output = output
 
@@ -660,6 +664,7 @@ def _run_with_provider(
     quiet: bool = False,
     cli_path: Optional[str] = None,
     label: str = "",
+    use_playwright: bool = False,
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -674,6 +679,7 @@ def _run_with_provider(
         quiet: Suppress output
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
         label: Task label for heartbeat messages
+        use_playwright: Enable constrained tool access for browser testing
     """
 
     # Prepare Environment
@@ -704,12 +710,22 @@ def _run_with_provider(
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
-        cmd = [
-            cli_path,
-            "-p", "-",
-            "--dangerously-skip-permissions",
-            "--output-format", "json",
-        ]
+        if use_playwright:
+            # Playwright mode: constrained tool access with cost ceiling
+            cmd = [
+                cli_path,
+                "-p", "-",
+                "--allowedTools", "Bash", "Read", "Write",
+                "--max-turns", "30",
+                "--output-format", "json",
+            ]
+        else:
+            cmd = [
+                cli_path,
+                "-p", "-",
+                "--dangerously-skip-permissions",
+                "--output-format", "json",
+            ]
         # Allow model override via CLAUDE_MODEL env var (Issue #318)
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
@@ -768,7 +784,8 @@ def _run_with_provider(
         return False, str(e), 0.0
 
     if result.returncode != 0:
-        return False, f"Exit code {result.returncode}: {result.stderr}", 0.0
+        error_detail = result.stderr or result.stdout[:500]
+        return False, f"Exit code {result.returncode}: {error_detail}", 0.0
 
     # Parse JSON Output
     try:
@@ -814,12 +831,83 @@ def _run_with_provider(
                     except:
                         pass
         else:
-            data = json.loads(output_str)
-            
-        return _parse_provider_json(provider, data)
+            # Claude Code may emit non-JSON text to stdout (npm warnings,
+            # upgrade prompts) alongside the JSON result.  Try parsing as
+            # single JSON first, then fall back to line-by-line extraction.
+            try:
+                data = json.loads(output_str)
+            except json.JSONDecodeError:
+                data = _extract_json_from_output(output_str)
+
+        success, text, cost = _parse_provider_json(provider, data)
+        if cost == 0.0 and verbose and isinstance(data, dict):
+            console.print(
+                f"[dim]Warning: {provider} returned $0 cost. "
+                f"JSON keys: {sorted(data.keys())}[/dim]"
+            )
+        return success, text, cost
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
         return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
+
+
+def _extract_json_from_output(output_str: str) -> dict:
+    """Extract a JSON object from output that may contain non-JSON text.
+
+    Claude Code may emit non-JSON text to stdout (npm warnings, upgrade
+    prompts) alongside the JSON result.  Try line-by-line extraction first,
+    then fall back to brace-depth matching on the full string.
+
+    Raises ``json.JSONDecodeError`` if no valid JSON object can be found.
+    """
+    # Try each line individually
+    for line in output_str.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+    # Fallback: brace-depth matching to find the first complete JSON object
+    depth = 0
+    start_index: Optional[int] = None
+    in_string = False
+    escape = False
+
+    for i, ch in enumerate(output_str):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+
+        if ch == "{":
+            if depth == 0:
+                start_index = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start_index is not None:
+                candidate = output_str[start_index : i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    start_index = None
+                    continue
+
+    raise json.JSONDecodeError(
+        "No valid JSON object found in output", output_str[:200], 0
+    )
+
 
 def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
     """
@@ -1049,7 +1137,17 @@ def validate_cached_state(
 
     if step_order is None:
         # Derive order from keys, sorted numerically
-        step_order = sorted(step_outputs.keys(), key=lambda k: float(k))
+        # Filter out non-numeric keys (e.g. "1b", "2b", "7b", "9b") that
+        # are informational intermediate-step outputs — only numeric keys
+        # (e.g. "1", "1.5", "2", "7.5") participate in validation ordering.
+        numeric_keys = []
+        for k in step_outputs.keys():
+            try:
+                float(k)
+                numeric_keys.append(k)
+            except ValueError:
+                continue
+        step_order = sorted(numeric_keys, key=lambda k: float(k))
     else:
         # Convert to string keys for lookup
         step_order = [str(s) if not isinstance(s, str) else s for s in step_order]

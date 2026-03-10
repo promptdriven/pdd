@@ -1,0 +1,144 @@
+<pdd-reason>Cross-file consistency audit of all generated prompt files, catching and fixing naming inconsistencies across prompts before validation.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "cross_audit_prompts", "signature": "(step2_output: str, step7_output: str)", "returns": "str ('AUDIT_RESULT: CONSISTENT' or 'AUDIT_RESULT: INCONSISTENT' with fixes applied)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+<pdd-dependency>agentic_arch_step9_prompts_LLM.prompt</pdd-dependency>
+% You are an expert code reviewer performing a CROSS-FILE CONSISTENCY AUDIT of all generated prompt files. Your job is to catch cases where the same concept is referenced differently across files.
+
+% Context
+
+You are working on step 9b of the agentic architecture workflow. Step 9 just generated prompt files for all modules. Before validation (Steps 10-12), you must cross-reference ALL prompt files against each other and the data dictionary and context YAMLs to catch inconsistencies.
+
+This is the #1 source of bugs in generated code: one file calls a collection "users" while another calls it "user_accounts", or one file imports `useAuth` while another imports `useAuthentication`.
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+
+% Step 2: Deep Analysis
+<step2_output>
+{step2_output}
+</step2_output>
+
+% Architecture
+<architecture_json>
+{step7_output}
+</architecture_json>
+
+% PDD Configuration
+<pddrc>
+{pddrc_content}
+</pddrc>
+
+% Your Task
+
+**Phase 1: Read ALL Prompt Files**
+
+Read every `.prompt` file from the prompts directory (check `.pddrc` for `prompts_dir` location). Use `find` or `ls` to discover all prompt files, then read each one.
+
+**Phase 2: Extract Cross-File Identifiers**
+
+From each prompt file, extract:
+
+1. **Collection/table name references** — Any database collection or table mentioned (e.g., "users", "tasks", "orders")
+2. **API endpoint path references** — Any URL path mentioned (e.g., `/api/users`, `/api/auth/login`)
+3. **Import statements and paths** — Any `import`, `from`, `require` statement (e.g., `from src.auth import verify_token`)
+4. **Shared type/interface references** — Any type, class, or interface used across files (e.g., `User`, `AuthResult`, `Task`)
+5. **Environment variable references** — Any env var name (e.g., `DATABASE_URL`, `JWT_SECRET`)
+6. **Hook/utility function names** — Any shared hook or utility function (e.g., `useAuth`, `fetchApi`, `handleError`)
+
+**Phase 3: Build Cross-Reference Matrix**
+
+Build a matrix showing every identifier, where it appears, and what the canonical name should be:
+
+```
+| Identifier | Type | Referenced In | Canonical Name (from context documents) | Match? |
+|------------|------|---------------|-----------------------------------------------|--------|
+| users | collection | auth_service.prompt, user_api.prompt | users | YES |
+| user_accounts | collection | user_settings.prompt | users | NO — should be "users" |
+| useAuth | hook | dashboard.prompt, profile.prompt | useAuth | YES |
+| useAuthentication | hook | settings.prompt | useAuth | NO — should be "useAuth" |
+```
+
+**Phase 4: Flag Inconsistencies**
+
+Flag ANY of the following as inconsistencies:
+- Different names for the SAME concept across files (e.g., "users" vs "user_accounts")
+- Import paths that differ for the SAME module across files
+- Function signatures that differ for the SAME function across files
+- Env var names that don't match the context documents
+- Type/class names with different casing or spelling across files
+
+**Phase 4b: Context Document Consistency**
+
+If `prompts/_context/data_dictionary.yaml` exists:
+1. Verify field names in prompts match the data dictionary
+2. Verify enum values in prompts match the data dictionary
+3. Verify collection names in prompts match the data dictionary
+4. If mismatches found, fix the PROMPT to match the data dictionary (not vice versa)
+
+**Phase 4c: Sibling Context Consistency**
+
+{sibling_architectures}
+
+Sibling context documents are CANONICAL. You MUST use the EXACT field names, types, enum values, and serialization conventions from sibling data_dictionary.yaml and api_contracts.yaml. If your output differs from siblings, fix yours.
+
+Perform cross-sub-issue consistency checks:
+1. Verify field names, types, enum values, and required/optional status match sibling data dictionaries
+2. Verify API endpoint paths, methods, and request/response schemas match sibling api_contracts
+3. Verify prompt files use the EXACT names from sibling context (not variations)
+4. If mismatches found: fix YOUR context documents and prompt files to match the sibling
+
+**Phase 5: Fix Inconsistencies**
+
+If ANY inconsistencies are found:
+1. Determine the canonical form (from the data dictionary and context YAMLs, or the most common usage if not in context documents)
+2. Fix each affected prompt file IN-PLACE on disk:
+   - Replace the inconsistent identifier with the canonical form
+   - Ensure the fix doesn't break the prompt's structure
+3. Report what was fixed
+
+% Output
+
+**If ALL identifiers are consistent:**
+
+```
+AUDIT_RESULT: CONSISTENT
+
+Cross-file audit complete. All [N] prompt files use consistent identifiers.
+Checked: [X] collection names, [Y] endpoints, [Z] imports, [W] types, [V] env vars
+```
+
+**If ANY inconsistencies were found and fixed:**
+
+```
+AUDIT_RESULT: INCONSISTENT
+
+Found [N] inconsistencies across [M] prompt files. All fixed in-place.
+
+Fixes applied:
+1. [file]: Changed "[old_name]" → "[canonical_name]" (collection name)
+2. [file]: Changed "[old_import]" → "[canonical_import]" (import path)
+...
+
+FILES_MODIFIED: prompts/file1.prompt, prompts/file2.prompt, ...
+```
+
+% Important
+
+- Read ALL prompt files from disk — do not skip any
+- The data dictionary and context YAMLs are the source of truth for canonical names
+- Fix files IN-PLACE — do not just report issues, actually fix them
+- Preserve each prompt file's overall structure — only change the inconsistent identifiers
+- If a name isn't in the context documents, use the most common form across files as canonical
+- Always output `AUDIT_RESULT: CONSISTENT` or `AUDIT_RESULT: INCONSISTENT`
+- Include `FILES_MODIFIED:` marker if any files were changed (needed for orchestrator tracking)

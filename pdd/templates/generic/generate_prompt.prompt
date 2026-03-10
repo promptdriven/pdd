@@ -70,9 +70,15 @@ variables:
   DEP_EXAMPLE_EXT:
     required: false
     type: string
-    description: File extension for dependency examples under context/ (for non-Python stacks).
+    description: File extension for dependency examples (for non-Python stacks).
     examples: [py, ts, tsx, go, java]
     default: py
+  PDDRC_FILE:
+    required: false
+    type: path
+    description: Project .pddrc configuration file that defines example_output_path and other path conventions.
+    example_paths: [.pddrc]
+    default: .pddrc
 usage:
   generate:
     - name: Minimal (architecture only)
@@ -105,6 +111,7 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 <architecture><include>${ARCHITECTURE_FILE}</include></architecture>
 <tech_stack><include>${TECH_STACK_FILE}</include></tech_stack>
 <generate_code_cli_example><include>${CODE_GENERATOR_PROMPT}</include></generate_code_cli_example>
+<pddrc><include>${PDDRC_FILE}</include></pddrc>
 
 % Existing prompt references (optional):
 <existing_backend_prompts><include-many>${EXISTING_PROMPTS}</include-many></existing_backend_prompts>
@@ -112,29 +119,55 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 % Do the following:
 - Explain concisely what you are going to do (create a prompt for the ${MODULE} module/component for the specified layer and stack).
 - Analyze any difficulties this prompt might encounter for ${MODULE} (e.g., data modeling, API or UI contracts, transactions, idempotency, auth, state management, error handling) and briefly state mitigation strategies tailored to the given LAYER and LANG_OR_FRAMEWORK.
-- Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item’s `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
+- Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item's `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
+- If the matched architecture item has an "auth" tag, inject the following additional requirements into the prompt:
+  1. Testability: Use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations without calling real identity services.
+  2. Token lifecycle: Handle the full token lifecycle — issuance, validation, refresh, revocation, and expiry.
+  3. Error handling: Handle auth-specific errors — expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures during token exchange.
+  4. Security: Never log secrets or tokens at INFO level or above. Use CSRF state parameters for OAuth flows.
+  5. Test fixtures note: "Tests for this module should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14)."
 - Then create the prompt content for ${MODULE} inside XML tags named prompt, ensuring conventions fit the stack and layer.
 - Ensure the final response consists solely of the `<prompt>...</prompt>` block; nothing else (including whitespace) may appear before `<prompt>` or after `</prompt>`.
 
 % The prompt you generate must follow this structure:
 1) First paragraph: describe the role and responsibility of the ${MODULE} module/component within the system (consider the LAYER if provided).
+1b) A "Shared Context" section with &lt;include&gt; tags for context YAML files (see output format below). This provides the canonical data model — do NOT duplicate its content elsewhere in the prompt.
 2) A "Requirements" section with numbered points covering functionality, contracts, error handling, validation, logging, performance, and security.
 3) A "Dependencies" section using XML include tags for each dependency (see format below).
 4) An "Instructions" section with precise implementation guidance (clarify inputs/outputs, function/class responsibilities, edge cases, and testing notes).
 5) A clear "Deliverable" section describing the expected code artifacts and entry points.
 
+% Deduplication rule (CRITICAL — keep prompts compact):
+- If `prompts/_context/data_dictionary.yaml` exists, the Shared Context &lt;include&gt; tag already provides all entity field tables, enum values, and Pydantic schema definitions at pdd sync time.
+- Do NOT hardcode entity field tables (e.g., `| Field | Type | Constraints |`) in the prompt body. Instead, reference entities briefly: "This module operates on the `User` entity (see data dictionary). Key fields used: id, email, password_hash."
+- Do NOT list all enum values inline. Instead: "Uses `UploadJobStatus` enum from data dictionary."
+- Do NOT repeat API endpoint request/response schemas if `api_contracts.yaml` is included. Instead: "Implements the `auth_login` endpoint (see API contracts)."
+- The prompt body should contain ONLY implementation logic, dependency signatures, and behavior that is NOT in the context YAMLs.
+
 % Dependencies format and conventions:
-- Represent each dependency using an XML tag with the dependency name, and put the file path inside an <include> tag, e.g.:
-  <orders_service>
-    <include>context/orders_service_example.${DEP_EXAMPLE_EXT}</include>
-  </orders_service>
-- Prefer real example files available in the provided context (use <include-many> when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
+- Read the `example_output_path` from the PDDRC_FILE (`.pddrc`) to determine where example files are located. This path is defined under each context's `defaults.example_output_path` setting.
+- Represent each dependency using an XML tag with the dependency name, and put the file path inside an &lt;include&gt; tag. Use the example_output_path from .pddrc, e.g. if .pddrc says `example_output_path: "examples/shared/"`:
+  &lt;orders_service&gt;
+    &lt;include&gt;examples/shared/orders_service_example.${DEP_EXAMPLE_EXT}&lt;/include&gt;
+  &lt;/orders_service&gt;
+- Prefer real example files available in the provided context (use &lt;include-many&gt; when listing multiple). If examples are not provided, use the example_output_path from .pddrc with the pattern [example_output_path]/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
 - Include all necessary dependencies for the module/component (based on the provided context and references).
 - The ARCHITECTURE_FILE lists `dependencies` referencing other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
+- If the matched architecture entry has a `context_urls` array, emit a &lt;web&gt; tag for each URL in the Dependencies section. Derive the XML tag name from the `purpose` field (lowercased, non-alphanumeric characters replaced with underscores). Example:
+  ```
+  &lt;fastapi_routing_patterns&gt;
+    &lt;web&gt;https://fastapi.tiangolo.com/tutorial/first-steps/&lt;/web&gt;
+  &lt;/fastapi_routing_patterns&gt;
+  ```
 
 % Architecture awareness (ARCHITECTURE_FILE is required):
-- Align the "Requirements" and "Instructions" with the selected item’s `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).
+- Align the "Requirements" and "Instructions" with the selected item's `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).
 - For `api`, outline endpoints (method, path, auth) consistent with the architecture description; for `page`/`component`, describe route/props/data sources; for `job`, include trigger and retry policy; for `config`, list keys and sources.
+- For Next.js App Router `page` items, enforce the rendering model based on `interface.page.renderingModel`:
+  - "server" (or absent): Generate as React Server Component. The component may be `async`. MUST NOT use `'use client'` directive or React hooks (`useState`, `useEffect`, `useRouter`, etc.). Include these constraints explicitly in the Requirements and Instructions sections.
+  - "client": Generate with `'use client'` directive at the top. May use React hooks. MUST NOT be `async` or use `await` at the component level. Include these constraints explicitly in the Requirements and Instructions sections.
+  - "hybrid": Generate a server component `page.tsx` that fetches data and passes it as props to a child `'use client'` component (defined in a separate file, e.g., `{module}-client.tsx`). The Requirements section must instruct the LLM to create both the server wrapper and the client child component, and must state that the `page.tsx` file MUST NOT have `'use client'` while the child component MUST have `'use client'`.
+  - When renderingModel is missing for a Next.js page, default to "server" behavior.
 
 % Style and quality requirements:
 - The generated prompt must be detailed enough to yield production-ready code.
@@ -147,28 +180,48 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 - Within the tags, include the sections described above as plain text.
 - OUTPUT FORMAT (authoritative – copy/paste and replace the bracketed placeholders, keeping every literal token):
   ```text
-  <prompt>
-  {ROLE_PARAGRAPH}
+  &lt;prompt&gt;
+  [ROLE_PARAGRAPH]
+
+  Shared Context (canonical data model — use ONLY these fields and types)
+
+  &lt;context_data_dictionary&gt;
+  &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+  &lt;/context_data_dictionary&gt;
+
+  [IF API/ROUTER MODULE, ALSO ADD:]
+  &lt;context_api_contracts&gt;
+  &lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+  &lt;/context_api_contracts&gt;
+
+  [IF ENTRY POINT/MAIN MODULE, ALSO ADD:]
+  &lt;context_integration_points&gt;
+  &lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+  &lt;/context_integration_points&gt;
+
+  CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
   Requirements
-  1. {REQ_ITEM_1}
-  2. {REQ_ITEM_2}
+  1. [REQ_ITEM_1]
+  2. [REQ_ITEM_2]
   Dependencies
-  <{DEPENDENCY_TAG_1}>
-    <include>{DEPENDENCY_INCLUDE_1}</include>
-  </{DEPENDENCY_TAG_1}>
-  {OPTIONAL_ADDITIONAL_DEPENDENCY_TAGS}
+  &lt;[DEPENDENCY_TAG_1]&gt;
+    &lt;include&gt;[DEPENDENCY_INCLUDE_1]&lt;/include&gt;
+  &lt;/[DEPENDENCY_TAG_1]&gt;
+  [OPTIONAL_ADDITIONAL_DEPENDENCY_TAGS]
   Prompt Dependencies:
-  {PROMPT_DEPENDENCIES_SECTION}
+  [PROMPT_DEPENDENCIES_SECTION]
   Instructions
-  - {INSTRUCTION_1}
-  - {INSTRUCTION_2}
+  - [INSTRUCTION_1]
+  - [INSTRUCTION_2]
   Deliverable
-  - {DELIVERABLE_1}
-  - {DELIVERABLE_2}
+  - [DELIVERABLE_1]
+  - [DELIVERABLE_2]
   Implementation assumptions (explicit)
-  - {ASSUMPTION_1}
-  - {ASSUMPTION_2}
+  - [ASSUMPTION_1]
+  - [ASSUMPTION_2]
   Please produce production-ready prompt content that will generate the module consistent with the above.
-  </prompt>
+  &lt;/prompt&gt;
   ```
-  Replace each `{PLACEHOLDER}` with concrete content while preserving the surrounding structure and literal `<prompt>` / `<include>` tags.
+  Replace each `[PLACEHOLDER]` with concrete content while preserving the surrounding structure and literal &lt;include&gt; tags.
+  IMPORTANT: When `prompts/_context/data_dictionary.yaml` exists, the Shared Context section with &lt;include&gt; tags for data_dictionary.yaml is MANDATORY. If that file does not exist, omit this section.

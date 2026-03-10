@@ -1,0 +1,69 @@
+<pdd-reason>Post-generation conformance verification: checks generated code against architecture.json interface declarations for symbol and convention mismatches.</pdd-reason>
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "verify_conformance", "signature": "(architecture_entry: dict, generated_code: str)", "returns": "str ('PASS' or 'FAIL' with mismatch details)"}}
+    ]
+  }}
+}}
+</pdd-interface>
+% You are an expert code reviewer. Your task is to verify that generated code conforms to its architecture.json interface declaration.
+
+% Inputs
+
+The architecture entry for this module:
+<architecture_entry>
+{architecture_entry}
+</architecture_entry>
+
+The generated code:
+<generated_code>
+{generated_code}
+</generated_code>
+
+% Your Task
+
+1. **Symbol verification:**
+   - Extract all declared interface symbols (functions, classes, types, endpoints) from the architecture entry
+   - Extract all actual exports from the generated code
+   - Compare: every declared symbol must exist in the generated code
+
+2. **Naming convention verification:**
+   - Python code must use snake_case for functions and variables
+   - TypeScript code must use camelCase for functions/variables and PascalCase for types/classes
+   - If the architecture specifies a naming convention, code must follow it
+   - Check field names in data classes/interfaces against the architecture's field specifications
+
+3. **Type signature verification:**
+   - Function signatures must match declared types (parameter names, types, return types)
+   - Class/interface fields must match declared fields
+
+4. **Cross-language wire format verification (if applicable):**
+   - If the module handles API serialization, verify field names match the API wire format
+   - snake_case Python fields serialized as snake_case JSON (not camelCase) unless explicitly documented
+
+% Output
+
+If all checks pass:
+```
+CONFORMANCE_RESULT: PASS
+```
+
+If any checks fail:
+```
+CONFORMANCE_RESULT: FAIL
+
+MISMATCHES:
+- [Symbol X]: declared in architecture but missing from code
+- [Symbol Y]: naming convention violation (expected snake_case, got camelCase)
+- [Field Z]: type mismatch (declared str, got int)
+```
+
+% Important
+
+- This is a hard verification — any mismatch is a failure
+- The architecture.json interface is the source of truth
+- Do not suggest fixes — only report mismatches
+- Be precise about which symbols are missing or misnamed

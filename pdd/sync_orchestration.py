@@ -371,6 +371,27 @@ def _python_cov_target_for_test_and_code(test_file: Path, code_file: Path, fallb
     return stem or fallback
 
 
+def _has_coverage_config(project_root: Path) -> bool:
+    """Check whether the project already provides coverage.py configuration.
+
+    coverage.py discovers config from (in order): .coveragerc, pyproject.toml
+    [tool.coverage], setup.cfg [coverage:*], tox.ini [coverage:*].  If any of
+    these exist we leave the project's settings alone.
+    """
+    if (project_root / ".coveragerc").is_file():
+        return True
+    for cfg_name in ("pyproject.toml", "setup.cfg", "tox.ini"):
+        cfg = project_root / cfg_name
+        if cfg.is_file():
+            try:
+                text = cfg.read_text(encoding="utf-8", errors="ignore")
+                if "tool.coverage" in text or "[coverage:" in text:
+                    return True
+            except OSError:
+                pass
+    return False
+
+
 def _parse_test_output(output: str, language: str) -> tuple[int, int, float]:
     """
     Parse test output to extract passed/failed/coverage.
@@ -406,7 +427,7 @@ def _parse_test_output(output: str, language: str) -> tuple[int, int, float]:
         if not coverage_match:
             coverage_match = re.search(r'(\d+)%\s*$', output, re.MULTILINE)
         if not coverage_match:
-            coverage_match = re.search(r'(\d+(?:\.\d+)?)%', output)
+            coverage_match = re.search(r'(\d+(?:\.\d+)?)%(?!\])', output)
         if coverage_match:
             coverage = float(coverage_match.group(1))
 
@@ -1278,19 +1299,45 @@ def _execute_tests_and_create_run_report(
                 pytest_args.extend([f'--rootdir={project_root}', '-c', '/dev/null'])
                 subprocess_cwd = str(project_root)
 
-            # Build subprocess kwargs - only include cwd if project root was found
-            subprocess_kwargs = {
-                'capture_output': True,
-                'text': True,
-                'timeout': 300,
-                'stdin': subprocess.DEVNULL,
-                'env': clean_env,
-                'start_new_session': True,
-            }
-            if subprocess_cwd is not None:
-                subprocess_kwargs['cwd'] = subprocess_cwd
+            # Add --cov-config with __main__ exclusion only if the project
+            # has no coverage config of its own. Coverage.py discovers config
+            # independently of pytest's -c flag, so projects with .coveragerc
+            # or [tool.coverage] in pyproject.toml are left alone.
+            _cov_rc_path = None
+            if project_root is not None and not _has_coverage_config(project_root):
+                _cov_rc_file = tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.coveragerc', delete=False, prefix='pdd_cov_'
+                )
+                _cov_rc_file.write(
+                    "[report]\n"
+                    "exclude_lines =\n"
+                    "    if __name__ == .__main__.\n"
+                    "    pragma: no cover\n"
+                )
+                _cov_rc_file.close()
+                _cov_rc_path = _cov_rc_file.name
+                pytest_args.append(f'--cov-config={_cov_rc_path}')
 
-            result = subprocess.run(pytest_args, **subprocess_kwargs)
+            try:
+                # Build subprocess kwargs - only include cwd if project root was found
+                subprocess_kwargs = {
+                    'capture_output': True,
+                    'text': True,
+                    'timeout': 300,
+                    'stdin': subprocess.DEVNULL,
+                    'env': clean_env,
+                    'start_new_session': True,
+                }
+                if subprocess_cwd is not None:
+                    subprocess_kwargs['cwd'] = subprocess_cwd
+
+                result = subprocess.run(pytest_args, **subprocess_kwargs)
+            finally:
+                if _cov_rc_path is not None:
+                    try:
+                        os.unlink(_cov_rc_path)
+                    except OSError:
+                        pass
 
             exit_code = result.returncode
             stdout = result.stdout + (result.stderr or '')
@@ -1771,9 +1818,9 @@ def sync_orchestration(
                             break
 
                     if operation == 'test_extend':
-                        # Skip test_extend for non-Python languages (or agentic mode) - code coverage tooling is Python-specific
-                        # This is a safety check in case sync_determine_operation doesn't catch it
-                        if _use_agentic_path(language, agentic_mode):
+                        # Skip test_extend for non-Python languages - code coverage tooling is Python-specific.
+                        # Python always has working coverage tools, so test_extend runs even in agentic mode.
+                        if language.lower() != 'python':
                             # Bug #573: Check coverage before accepting — don't declare success
                             # if coverage is below target (e.g. 0.0 from sys.modules stubs)
                             current_rr = read_run_report(basename, language)
@@ -2104,30 +2151,18 @@ def sync_orchestration(
                                 if isinstance(result, tuple) and len(result) >= 4:
                                     agentic_success = result[3]
 
-                                # For agentic test generation: if the agent reports success, trust its tests.
-                                # Python/TypeScript still execute tests to measure real coverage; other languages skip
-                                # execution and create a synthetic RunReport instead (tests already ran in agentic mode).
-                                if agentic_success is True:
-                                    if language.lower() in ('python', 'typescript'):
-                                        # Python/TS have coverage tooling — measure actual coverage instead of synthetic 0%
-                                        _execute_tests_and_create_run_report(
-                                            pdd_files['test'],
-                                            basename,
-                                            language,
-                                            target_coverage,
-                                            code_file=pdd_files.get("code"),
-                                            atomic_state=atomic_state,
-                                            test_files=pdd_files.get('test_files'),
-                                        )
-                                    else:
-                                        # Create synthetic run report - trust the agent's success report
-                                        # even if the test file is at a different path than expected
-                                        _create_synthetic_run_report_for_agentic_success(
-                                            pdd_files['test'],
-                                            basename,
-                                            language,
-                                            atomic_state=atomic_state,
-                                        )
+                                # For agentic test generation (non-Python): if agent succeeded, skip execution
+                                # and create synthetic RunReport instead (tests already ran in agentic mode).
+                                # Python always needs real test execution to get actual coverage numbers.
+                                if agentic_success is True and language.lower() != 'python':
+                                    # Create synthetic run report - trust the agent's success report
+                                    # even if the test file is at a different path than expected
+                                    _create_synthetic_run_report_for_agentic_success(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        atomic_state=atomic_state,
+                                    )
                                 elif pdd_files['test'].exists():
                                     _execute_tests_and_create_run_report(
                                         pdd_files['test'],

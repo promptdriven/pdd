@@ -7,9 +7,9 @@ language: json
 output: architecture.json
 post_process_python: ./pdd/render_mermaid.py
 post_process_args:
-  - "{INPUT_FILE}"
-  - "{APP_NAME}"
-  - "{OUTPUT_HTML}"
+  - "{{INPUT_FILE}}"
+  - "{{APP_NAME}}"
+  - "{{OUTPUT_HTML}}"
 variables:
   APP_NAME:
     required: false
@@ -80,6 +80,19 @@ output_schema:
       filename: { type: string }
       filepath: { type: string }
       tags: { type: array, items: { type: string } }
+      position:
+        type: object
+        properties:
+          x: { type: integer }
+          y: { type: integer }
+      context_urls:
+        type: array
+        items:
+          type: object
+          required: [url, purpose]
+          properties:
+            url: { type: string }
+            purpose: { type: string }
       interface:
         type: object
         properties:
@@ -89,6 +102,7 @@ output_schema:
             type: object
             properties:
               route: { type: string }
+              renderingModel: { type: string, enum: [server, client, hybrid] }
               params:
                 type: array
                 items:
@@ -138,62 +152,58 @@ INSTRUCTIONS:
   - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
   - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
+- context_urls (optional): An array of {{url, purpose}} objects associating web documentation references with this module. These URLs provide reference documentation for the module's implementation. Populate with official docs, tutorials, or code examples relevant to the module.
 - Valid JSON only. No comments or trailing commas.
 
-OUTPUT FORMAT (authoritative):
+OUTPUT FORMAT - CRITICAL: Return a raw JSON array, NOT an object with "items" or "data" wrapper:
 ```json
-{
-  "type": "array",
-  "items": {
-    "type": "object",
-    "required": ["reason", "description", "dependencies", "priority", "filename", "filepath"],
-    "properties": {
-      "reason": {"type": "string"},
-      "description": {"type": "string"},
-      "dependencies": {"type": "array", "items": {"type": "string"}},
-      "priority": {"type": "integer", "minimum": 1},
-      "filename": {"type": "string"},
-      "filepath": {"type": "string"},
-      "tags": {"type": "array", "items": {"type": "string"}},
-      "interface": {
-        "type": "object",
-        "properties": {
-          "type": {"type": "string", "enum": ["component", "page", "module", "api", "graphql", "cli", "job", "message", "config"]},
-          "component": {"type": "object"},
-          "page": {
-            "type": "object",
-            "properties": {
-              "route": {"type": "string"},
-              "params": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "required": ["name", "type"],
-                  "properties": {
-                    "name": {"type": "string"},
-                    "type": {"type": "string"},
-                    "description": {"type": "string"}
-                  }
-                }
-              }
-            }
-          },
-          "module": {"type": "object"},
-          "api": {"type": "object"},
-          "graphql": {"type": "object"},
-          "cli": {"type": "object"},
-          "job": {"type": "object"},
-          "message": {"type": "object"},
-          "config": {"type": "object"}
-        }
+[
+  {
+    "reason": "Core data models needed by all other modules",
+    "description": "Defines Order, User, and Item data models with validation",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "models_Python.prompt",
+    "filepath": "src/models.py",
+    "tags": ["backend", "data"],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {"name": "Order", "signature": "class Order(BaseModel)", "returns": "Order instance"}
+        ]
+      }
+    }
+  },
+  {
+    "reason": "API endpoints for order management",
+    "description": "REST API for creating, reading, updating orders",
+    "dependencies": ["models_Python.prompt"],
+    "priority": 2,
+    "filename": "orders_api_Python.prompt",
+    "filepath": "src/api/orders.py",
+    "tags": ["backend", "api"],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {"method": "POST", "path": "/orders", "auth": "jwt"},
+          {"method": "GET", "path": "/orders/{id}", "auth": "jwt"}
+        ]
       }
     }
   }
-}
+]
+```
+WRONG (do NOT do this):
+```json
+{"items": [...]}  // WRONG - no wrapper objects!
+{"data": [...]}   // WRONG - no wrapper objects!
+{"type": "array", "items": [...]}  // WRONG - this is schema, not output!
 ```
 
 INTERFACE TYPES (emit only applicable):
-- page: route (string), params? (array of {name, type, description?}), dataSources? (array), layout? (object)
+- page: route (string), renderingModel? (enum: "server" | "client" | "hybrid"), params? (array of {name, type, description?}), dataSources? (array), layout? (object)
 - component: props (array of {name, type, required?}), emits? (array), context? (array)
 - module: functions (array of {name, signature, returns?, errors?, sideEffects?})
 - api: endpoints (array of {method, path, auth?, requestSchema?, responseSchema?, errors?})
@@ -203,24 +213,95 @@ INTERFACE TYPES (emit only applicable):
 - message: topics (array of {name, direction: "publish"|"subscribe", schema?, qos?})
 - config: keys (array of {name, type, default?, required?, source: "env"|"file"|"secret"})
 
+FRAMEWORK DETECTION (do this first):
+Before generating architecture, detect the framework from PRD/tech stack:
+- Next.js App Router: Look for "app router", "app/", "Next.js 13+", "Next.js 14", "Next.js 15"
+- Next.js Pages Router: Look for "pages router", "pages/", "Next.js 12" or older
+- Nuxt 3: Look for "Nuxt", "nuxt.config", "Vue"
+- SvelteKit: Look for "SvelteKit", "+page.svelte", "Svelte"
+- Standard (Python, Go, Rust, etc.): No special file naming requirements
+
+For frameworks with strict file naming conventions (Next.js, Nuxt, SvelteKit), you MUST follow their required filenames.
+
 FILENAME CONVENTIONS:
-- The "filename" field is the prompt filename to generate (not the code file). Use PDD convention: <base>_<LangOrFramework>.prompt where <LangOrFramework> matches the tech stack.
-- Examples (adapt to your stack):
-  - Next.js (TypeScript React): page_TypeScriptReact.prompt -> generates page.tsx; layout_TypeScriptReact.prompt -> layout.tsx
-  - Python backend: api_Python.prompt -> api.py; orders_Python.prompt -> orders.py
-- Choose descriptive <base> names (e.g., orders_page, orders_api) and keep names consistent across dependencies.
+- The "filename" field is the prompt filename: <base>_<Language>.prompt
+- Use DESCRIPTIVE basenames that capture the module's purpose and context
+- The basename should be unique and meaningful so prompts are self-documenting
+- CRITICAL: The filename field must NOT contain slashes (/). Use underscores (_) to separate path components.
+  - WRONG: "api/courses/route_TypeScript.prompt" (slashes create nested directories)
+  - CORRECT: "api_courses_route_TypeScript.prompt" (underscores keep prompt flat)
+
+**VALID LANGUAGE SUFFIXES** (MUST use exactly one of these - case-sensitive PascalCase):
+- **TypeScript projects**: `TypeScript` (.ts) or `TypeScriptReact` (.tsx)
+- **JavaScript projects**: `JavaScript` (.js) or `JavaScriptReact` (.jsx)
+- **Python projects**: `Python` (.py)
+- **Go projects**: `Go` (.go)
+- **Rust projects**: `Rust` (.rs)
+- **Prisma schemas**: `Prisma` (.prisma)
+- **Other**: `Java`, `C#`, `Ruby`, `PHP`, `Swift`, `Kotlin`, `Scala`, `SQL`, `Shell`, `YAML`, `JSON`, `HTML`, `CSS`, `SCSS`, `Svelte`, `Vue`
+
+**WRONG language suffixes** (DO NOT use these invented names):
+- ❌ `NextJS`, `Next`, `Nextjs` - Use `TypeScript` or `TypeScriptReact` instead
+- ❌ `React`, `ReactJS` - Use `TypeScriptReact` or `JavaScriptReact` instead
+- ❌ `Node`, `NodeJS` - Use `TypeScript` or `JavaScript` instead
+- ❌ `FastAPI`, `Flask`, `Django` - Use `Python` instead
+- ❌ `Express`, `NestJS` - Use `TypeScript` or `JavaScript` instead
+
+Examples for Next.js App Router (use descriptive names with path context):
+  ✓ "api_courses_route_TypeScript.prompt" - API route for courses endpoint
+  ✓ "api_lessons_id_route_TypeScript.prompt" - API route for lessons with dynamic [id]
+  ✓ "dashboard_page_TypeScriptReact.prompt" - Dashboard page component
+  ✓ "app_layout_TypeScriptReact.prompt" - Root app layout
+  ✓ "auth_middleware_TypeScript.prompt" - Authentication middleware
+
+Examples for standard projects (Python, Go, etc.):
+  ✓ "orders_Python.prompt" - Orders module
+  ✓ "api_routes_Python.prompt" - API routes module
+  ✓ "models_Python.prompt" - Data models
+
+Keep names consistent across dependencies - if module A depends on B, use the same naming style.
 
 FILEPATH CONVENTIONS:
-- The "filepath" field specifies the path of the output source file from the source tree root, using conventions appropriate for the language and framework.
-- Examples (adapt to your stack):
-  - Next.js app router: app/orders/page.tsx, app/layout.tsx, app/api/orders/route.ts
-  - Next.js pages router: pages/orders.tsx, pages/api/orders.ts
-  - Python FastAPI: src/api.py, src/orders.py, src/models/order.py
-  - React components: src/components/OrderList.tsx, src/hooks/useOrders.ts
-  - Config files: .env.example, pyproject.toml, package.json
-- Use forward slashes (/) for path separators regardless of OS.
-- Include the appropriate file extension for the target language (.tsx, .py, .rs, .go, etc.).
-- Follow standard directory structures for the framework (e.g., app/ for Next.js 13+, src/ for typical React/Python projects).
+- The "filepath" field specifies the FULL output path including filename
+- Use framework-appropriate paths and filenames
+
+For Next.js App Router (STRICT naming - file MUST be route.ts, page.tsx, layout.tsx):
+- API routes: app/api/{path}/route.ts
+  Example: filepath="app/api/courses/route.ts", filepath="app/api/lessons/[id]/route.ts"
+- Pages: app/{path}/page.tsx
+  Example: filepath="app/dashboard/page.tsx", filepath="app/orders/[id]/page.tsx"
+- Layouts: app/{path}/layout.tsx
+  Example: filepath="app/layout.tsx", filepath="app/dashboard/layout.tsx"
+- Middleware: middleware.ts (at project root)
+  Example: filepath="middleware.ts"
+
+For standard projects:
+- Use descriptive filenames matching the prompt basename
+  Example: filename="orders_Python.prompt" → filepath="src/orders.py"
+  Example: filename="api_routes_Python.prompt" → filepath="src/api/routes.py"
+
+PATH-FILENAME RELATIONSHIP:
+- For Next.js/Nuxt/SvelteKit: The filepath uses framework-required filenames (route.ts, page.tsx)
+  while the prompt filename remains descriptive for context
+- For standard projects: The filepath filename should match the prompt basename
+  (e.g., orders_Python.prompt → orders.py)
+
+Use forward slashes (/) for path separators regardless of OS.
+Follow standard directory structures for the framework (e.g., app/ for Next.js 13+, src/ for typical Python projects).
+
+NEXT.JS APP ROUTER RENDERING MODEL:
+For Next.js App Router pages, set `interface.page.renderingModel` to one of the following values:
+- "server" (default): React Server Component. May be `async` and use `await`. MUST NOT use `'use client'` directive or React hooks (`useState`, `useEffect`, `useRouter`, etc.). Use for pages that only need server-side data fetching with no client interactivity.
+- "client": React Client Component. MUST start with `'use client'` directive. May use hooks. MUST NOT be `async` or use `await` at the component level. Use for pages that only need client-side interactivity (forms, modals, live updates) with no server-side data fetching.
+- "hybrid": Server Component wrapper + Client Component child. The page file (`page.tsx`) is a server component that fetches data and passes it as props to a `'use client'` child component. Use when the page needs BOTH server-side data fetching AND client-side interactivity (hooks/state).
+
+CRITICAL RULES (Next.js App Router):
+- A component with `'use client'` CANNOT be `async` — async client components cause a Next.js runtime error.
+- A server component (no directive) CANNOT use hooks (`useState`, `useEffect`, `useRouter`) — hooks require a client component boundary.
+- `redirect()` from `next/navigation` is a server-side function and MUST NOT be called inside a client component.
+- When a page needs both hooks AND data fetching, ALWAYS use "hybrid" (server wrapper passes data to client child).
+
+Default to "server" unless the page explicitly requires hooks or browser APIs.
 
 DEPENDENCY RULES:
 - The "dependencies" array must list other items by their prompt filenames (the "filename" values), not code filenames.
@@ -233,6 +314,19 @@ PRIORITY AND ORDERING:
 
 TAGS (optional):
 - Use short, lower-case tags for slicing (e.g., ["frontend","nextjs"], ["backend","api"], ["config"]).
+- Use "auth" tag for any module handling authentication, authorization, or token management.
+
+AUTH DETECTION:
+- Scan the PRD and tech stack for auth-related technologies: OAuth 2.0, OIDC, JWT, session-based auth, API keys, Firebase Auth, SAML, Auth0, Okta, Clerk, Supabase Auth, Passport.js.
+- If auth is detected:
+  1. Separate auth concerns into dedicated modules: auth middleware, token management, OAuth callbacks, session handling, provider configuration.
+  2. Tag all auth modules with "auth" in the tags array.
+  3. Include `context_urls` for the auth provider's official documentation (e.g., OAuth provider docs, JWT libraries).
+  4. Design auth modules for testability: use dependency injection for auth providers so tests can substitute mock providers.
+  5. Cover the full token lifecycle: issuance, validation, refresh, revocation, expiry handling.
+  6. Specify error handling requirements: expired tokens, invalid tokens, missing scopes, state mismatch, network failures.
+  7. Auth modules should have low priority numbers (generated early) since other modules depend on them.
+  8. Business logic modules should depend on auth modules, not the reverse — no circular dependencies.
 
 CONTENT GUIDANCE:
 - Descriptions must be architectural and actionable: responsibilities, interfaces, error handling, cross-cutting concerns.

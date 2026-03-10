@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 7 of 9 in an agentic test generation workflow. Previous step generated test files.
+You are working on step 13 of 18 in an agentic test generation workflow. Previous step generated test files.
 
 % Inputs
 
@@ -37,9 +37,13 @@ You are working on step 7 of 9 in an agentic test generation workflow. Previous 
 {step5_output}
 </step5_output>
 
-<step6_output>
-{step6_output}
-</step6_output>
+<step5b_output>
+{step5b_output}
+</step5b_output>
+
+<step12_output>
+{step12_output}
+</step12_output>
 
 % Test Files
 {test_files}
@@ -87,7 +91,7 @@ Your comment should follow this format:
 
 **If all tests pass:**
 ```markdown
-## Step 7: Run Tests
+## Step 13: Run Tests
 
 **Status:** All Tests Passing
 
@@ -104,12 +108,12 @@ Your comment should follow this format:
 All generated tests pass successfully.
 
 ---
-*Proceeding to Step 9: Submit PR*
+*Proceeding to Step 15: Validate Tests Against Plan*
 ```
 
 **If some tests fail:**
 ```markdown
-## Step 7: Run Tests
+## Step 13: Run Tests
 
 **Status:** Tests Failing
 
@@ -136,7 +140,7 @@ All generated tests pass successfully.
 [Brief analysis of why tests are failing - is it the test or the application?]
 
 ---
-*Proceeding to Step 8: Fix & Iterate*
+*Proceeding to Step 14: Fix & Iterate*
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -160,5 +164,5 @@ Examples:
 - Actually run the tests - don't just report expected results
 - Capture full error messages for failing tests
 - Note if failures are due to test issues vs application issues
-- If tests pass, Step 8 will be skipped
+- If tests pass, Step 14 will be skipped
 - Always post your findings as a GitHub comment before completing

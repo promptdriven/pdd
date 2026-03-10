@@ -23,6 +23,11 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
 - Issue Number: {issue_number}
 
 % Architecture
+
+The architecture below is already scoped to only the modules being generated in this run.
+Generate prompt files ONLY for the modules shown below — do NOT generate prompts for
+modules from previous issues that are not listed here.
+
 <architecture_json>
 {step7_output}
 </architecture_json>
@@ -38,6 +43,188 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
 <include>pdd/templates/generic/generate_prompt.prompt</include>
 </prompt_template>
 
+% Shared Context Document Includes (CRITICAL — every generated prompt MUST have these)
+
+Step 8.5 generated shared context documents in `prompts/_context/`. Every prompt
+you generate MUST include relevant context documents using &lt;include&gt; tags. These
+ensure pdd sync injects the canonical data model into code generation.
+
+Step 8.5 generated these files. You MUST include them. The `ls` check below is a safety
+net in case Step 8.5 failed — if a file truly doesn't exist, skip only that file.
+```bash
+ls prompts/_context/data_dictionary.yaml prompts/_context/api_contracts.yaml prompts/_context/integration_points.yaml 2>/dev/null
+```
+
+For files that DO exist, EVERY prompt MUST contain a "Shared Context" section placed
+AFTER the role paragraph and BEFORE the Requirements section. The section MUST use
+this EXACT format (copy-paste, do not paraphrase):
+
+```
+Shared Context (canonical data model — use ONLY these fields and types)
+
+&lt;context_data_dictionary&gt;
+&lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+&lt;/context_data_dictionary&gt;
+```
+
+API endpoint prompts (modules with interface.type == "api" or router/route in filename)
+MUST ALSO include:
+```
+&lt;context_api_contracts&gt;
+&lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+&lt;/context_api_contracts&gt;
+```
+
+Entry point / main / wiring prompts MUST ALSO include:
+```
+&lt;context_integration_points&gt;
+&lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+&lt;/context_integration_points&gt;
+```
+
+After the includes, add this constraint line:
+```
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+```
+
+**VERIFICATION (MANDATORY):** After generating ALL prompt files, run:
+```bash
+find prompts -name "*.prompt" -print0 | xargs -0 grep -L "data_dictionary.yaml"
+```
+If ANY prompt files are listed (missing the include), you MUST go back and add the
+Shared Context section to each one. This check is non-negotiable.
+
+% Cross-File Consistency Rules (CRITICAL)
+
+When generating prompt files, you MUST enforce cross-file consistency:
+
+1. **Use the canonical names from the data dictionary and context documents (Step 8.5 output):**
+   - Every prompt must use the EXACT canonical names for collections, endpoints, types, env vars
+   - If two prompts reference the same database collection, they must use identical names
+   - If two prompts import the same hook/utility, they must use identical import paths
+
+2. **Shared patterns must be identical across prompts:**
+   - Auth pattern: ALL prompts that use authentication must reference the SAME auth module with the SAME hook/function name
+   - Error handling: ALL prompts must use the SAME error handling utility
+   - API client: ALL prompts that make API calls must use the SAME client/fetch utility
+   - Toast/notification: ALL prompts must use the SAME notification pattern
+
+3. **Include explicit import instructions:**
+   - Each prompt must specify EXACT import paths for its dependencies
+   - Use relative imports consistently (always `@/lib/...` or always `../../lib/...`, not mixed)
+   - Import path format must match the project's tsconfig/path aliases
+
+4. **Environment variable documentation:**
+   - If a module needs env vars, the prompt must list them in a "Required Environment" section
+   - Use the exact variable names from the context documents
+
+5. **Testing strategy documentation:**
+   - If a module depends on external services (auth, databases, third-party APIs),
+     the prompt MUST include a "Testing Strategy" section listing:
+     - The EXACT functions/methods that should be mocked in unit tests (from the Interface Contract Table)
+     - The EXACT return shapes the mocks should produce (from the interface definitions)
+     - Error scenarios that tests should cover
+
+% Interface Contract Table (Auto-Extracted from architecture.json) — CRITICAL
+
+This table is a working artifact you build in your reasoning — it is NOT saved to disk. Step 9b will independently verify cross-file consistency.
+
+Before writing ANY prompt file, you MUST build a flat Interface Contract Table from the architecture.json `interface` fields:
+
+**Step A: Build the table**
+
+Scan every module in architecture.json and extract its exported symbols:
+
+```
+| Module Filename | Exported Symbol | Signature/Type | Import Path |
+|-----------------|-----------------|----------------|-------------|
+| auth_service_Python.prompt | authenticate | (username: str, password: str) -> AuthResult | from src.auth.service import authenticate |
+| auth_service_Python.prompt | verify_token | (token: str) -> Optional[User] | from src.auth.service import verify_token |
+| user_models_Python.prompt | User | class(id, username, email, password_hash, created_at) | from src.models.user import User |
+| task_api_TypeScript.prompt | createTask | (data: CreateTaskInput) => Promise<Task> | import { createTask } from '@/lib/api/tasks' |
+```
+
+Derive the import path from the module's `filepath` field in architecture.json, using the project's import conventions (e.g., `@/` aliases for TypeScript/Next.js, `from src.` for Python).
+
+**Step B: Enforce the table in every prompt**
+
+For EVERY prompt that references another module:
+1. Look up the dependency in the Interface Contract Table
+2. Use the EXACT symbol name, signature, and import path from the table — no variations
+3. Add a `## Required Imports (from Interface Contract Table)` section to the prompt listing every cross-module import with its exact path and signature
+4. If a prompt calls a function from module X, include the EXACT import statement from the table
+5. If a prompt uses a type/class from module X, include the EXACT class definition reference from the table
+
+**Step C: Consistency check**
+
+After building all prompts, verify:
+- Every import path in every prompt matches the Interface Contract Table
+- No prompt invents a new function name or signature not in the table
+- If two prompts import the same symbol, they use identical import statements
+
+% Data Model Reference Strategy (CRITICAL — avoid duplication)
+
+When `prompts/_context/data_dictionary.yaml` exists, the data model is injected via
+&lt;include&gt; tags at pdd sync time. This means prompts MUST NOT duplicate that content inline.
+
+**DO NOT** add inline entity field tables (e.g., `## Data Model Reference` with
+`| Field | Type | Constraints |` tables) to prompts. The data dictionary &lt;include&gt;
+already provides this. Inline duplication causes synchronization drift when the YAML is
+updated but the hardcoded table in the prompt is not.
+
+**What prompts SHOULD contain instead:**
+1. The `Shared Context` section with &lt;include&gt; tags (see above) — this is the single
+   source of truth for entity fields, enum values, and API contracts
+2. A `## Dependency API Reference` section with function signatures from the Interface
+   Contract Table — these are NOT in the YAML files and MUST be in the prompt:
+     ```
+     ## Dependency API Reference
+
+     ### auth_service
+     - `authenticate(username: str, password: str) -> AuthResult` — Returns AuthResult with token and user fields
+     - `verify_token(token: str) -> Optional[User]` — Returns None if token is invalid
+
+     **IMPORTANT: Call with EXACTLY these arguments. Do NOT pass additional parameters.**
+     ```
+3. Implementation-specific instructions (flow logic, error handling, business rules)
+4. Which SPECIFIC entities/fields from the data dictionary this module uses — as a brief
+   reference list (not a full field table), e.g.:
+     ```
+     This module operates on the `User` entity (see data dictionary for full schema).
+     Key fields used: id, email, password_hash, deleted_at, email_verified.
+     ```
+
+**When context YAMLs do NOT exist** (Step 8.5 was skipped or failed):
+Only in this case, fall back to injecting inline entity field tables from Step 4 output.
+Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
+
+**Schema source priority:**
+   - `prompts/_context/data_dictionary.yaml` is authoritative when it exists
+   - architecture.json `interface` fields are authoritative for function signatures
+
+% Cross-Language Field Name Mapping (for multi-language projects)
+   - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
+     - Include a "Field Name Mapping" table showing the exact field names in each language:
+       ```
+       ## Field Name Mapping (Python ↔ TypeScript)
+       | Python (snake_case) | TypeScript (camelCase) | API Wire Format |
+       |--------------------|-----------------------|-----------------|
+       | user_id            | userId                | user_id         |
+       | created_at         | createdAt             | created_at      |
+       ```
+     - Specify the API serialization convention: does the REST API use snake_case (Python default) or camelCase (TypeScript default)?
+     - The prompt MUST include: "When serializing/deserializing, use the EXACT field names from the API Wire Format column. Do NOT let language-specific conventions override the wire format."
+   - For enum types shared across languages: ensure enum string values are IDENTICAL in both language prompts (e.g., `"pending"`, not `"PENDING"` in one and `"pending"` in another)
+
+% Auth-Aware Prompt Generation
+   - If a module is tagged "auth" in architecture.json:
+     - Inject testability requirements: use dependency injection for auth providers (OAuth clients, token verifiers) so tests can substitute mock implementations
+     - Inject error handling requirements: handle expired tokens, invalid tokens, missing scopes, CSRF state mismatch, and network failures
+     - Add a "Testing Strategy" note: "Tests should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14)"
+   - If a module depends on an auth-tagged module:
+     - Reference the auth module's interface contract (token types, verification functions)
+     - Include token usage patterns in the prompt's "Dependency API Reference" section
+
 % Key Rules
 
 1. **Prompt file location:**
@@ -52,15 +239,38 @@ You are working on step 9 of the agentic architecture workflow. Step 7 generated
    ```
    [Role paragraph - module's responsibility]
 
+   Shared Context (canonical data model — use ONLY these fields and types)
+
+   &lt;context_data_dictionary&gt;
+   &lt;include&gt;prompts/_context/data_dictionary.yaml&lt;/include&gt;
+   &lt;/context_data_dictionary&gt;
+
+   [If API module, also include:]
+   &lt;context_api_contracts&gt;
+   &lt;include&gt;prompts/_context/api_contracts.yaml&lt;/include&gt;
+   &lt;/context_api_contracts&gt;
+
+   [If entry point module, also include:]
+   &lt;context_integration_points&gt;
+   &lt;include&gt;prompts/_context/integration_points.yaml&lt;/include&gt;
+   &lt;/context_integration_points&gt;
+
+   CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
    Requirements
    1. [Functional requirement]
    2. [Interface requirement]
    ...
 
    Dependencies
-   <dependency_name>
-     <include>examples/BASENAME_example.EXT</include>
-   </dependency_name>
+   &lt;dependency_name&gt;
+     &lt;include&gt;examples/BASENAME_example.EXT&lt;/include&gt;
+   &lt;/dependency_name&gt;
+
+   Testing Strategy (for modules with external dependencies)
+   - External services used: [list from architecture.json interface]
+   - Mock boundaries: [exact functions to mock, derived from the interface contract table]
+   - Expected mock return shapes: [from the module's interface.functions[].returns or interface.api.endpoints[].responseSchema]
 
    Instructions
    - [Implementation guidance]
@@ -101,6 +311,38 @@ This example shows the correct prompt file structure and naming.
 <include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
 </verified_working_example>
 
+% Existing Codebase Profile (from Step 2b)
+
+<step2b_output>
+{step2b_output}
+</step2b_output>
+
+% Context Documents Output (from Step 8.5)
+<step8_5_output>
+{step8_5_output}
+</step8_5_output>
+
+When generating prompts, you MUST reference real import paths from the codebase scan.
+You MUST use existing packages — do NOT introduce packages not in package.json/requirements.txt.
+You MUST follow existing patterns for auth, data fetching, error handling.
+You MUST reuse existing modules where applicable — reference their actual export signatures.
+
+% Existing Sibling Architectures
+
+{sibling_architectures}
+
+When generating prompts for modules that depend on sibling project modules:
+1. Add a "Cross-Project Dependencies" section in the prompt body
+2. Include the sibling module's API contract (endpoints, function signatures) from the table above
+3. Only use `<pdd-dependency>` tags for modules within THIS project — cross-project deps go in the prompt body
+4. **If sibling Shared Context Documents are shown above** (data_dictionary.yaml, api_contracts.yaml):
+   - For modules that consume sibling APIs: inject the EXACT endpoint schemas from the
+     sibling's api_contracts.yaml into the prompt's "Cross-Project Dependencies" section
+   - For modules that use shared data types: inject the EXACT field definitions from the
+     sibling's data_dictionary.yaml into the prompt's "Data Model Reference" section
+   - Include a note: "These types are defined in sibling project `<dir>/` — use EXACTLY
+     as specified. Do NOT modify field names or types."
+
 % Your Task
 
 Generate prompt files for ALL modules in architecture.json.
@@ -113,11 +355,9 @@ For each module:
 1. Determine the correct directory from `.pddrc` (flat `prompts/` or subdirectory like `prompts/backend/`)
 2. Create file at the correct path (e.g., `prompts/{filename}` or `prompts/backend/{filename}`)
 3. Include rich context from reason, description, interface fields
-4. Add <include> tags for dependencies
+4. Add &lt;include&gt; tags for dependencies
 
 Remember:
 - Check `.pddrc` for the correct prompt directory before creating files
 - Filename comes directly from architecture.json
-- Filenames MUST use valid language suffixes: `TypeScript`, `TypeScriptReact`, `Python`, etc.
-  - ❌ WRONG: `_NextJS.prompt`, `_React.prompt`, `_Node.prompt`
-  - ✅ CORRECT: `_TypeScript.prompt`, `_TypeScriptReact.prompt`, `_Python.prompt`
+- Filenames MUST use valid language suffixes (see architecture schema for full list). Common: `_TypeScript.prompt`, `_TypeScriptReact.prompt`, `_Python.prompt`. Never use framework names like `_NextJS` or `_React`.

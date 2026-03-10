@@ -1474,7 +1474,8 @@ class TestGenerateClearsStaleRunReport:
              patch('pdd.sync_orchestration.code_generator_main') as mock_code_gen, \
              patch('pdd.sync_orchestration.get_pdd_file_paths') as mock_get_paths, \
              patch('pdd.sync_orchestration._save_fingerprint_atomic') as mock_save_fp, \
-             patch('pdd.sync_orchestration.META_DIR', meta_dir):
+             patch('pdd.sync_orchestration.META_DIR', meta_dir), \
+             patch('pdd.operation_log.META_DIR', str(meta_dir)):
 
             # Configure lock mock
             mock_lock.return_value.__enter__.return_value = mock_lock
@@ -2169,6 +2170,34 @@ class TestLanguageTestCommandResolution:
         assert "pytest" in result
 
 
+class TestHasCoverageConfig:
+    """Tests for _has_coverage_config helper."""
+
+    def test_no_config(self, tmp_path):
+        from pdd.sync_orchestration import _has_coverage_config
+        assert _has_coverage_config(tmp_path) is False
+
+    def test_coveragerc(self, tmp_path):
+        from pdd.sync_orchestration import _has_coverage_config
+        (tmp_path / ".coveragerc").write_text("[report]\n")
+        assert _has_coverage_config(tmp_path) is True
+
+    def test_pyproject_toml_with_coverage(self, tmp_path):
+        from pdd.sync_orchestration import _has_coverage_config
+        (tmp_path / "pyproject.toml").write_text("[tool.coverage.run]\nsource = ['src']\n")
+        assert _has_coverage_config(tmp_path) is True
+
+    def test_pyproject_toml_without_coverage(self, tmp_path):
+        from pdd.sync_orchestration import _has_coverage_config
+        (tmp_path / "pyproject.toml").write_text("[tool.pytest]\n")
+        assert _has_coverage_config(tmp_path) is False
+
+    def test_setup_cfg_with_coverage(self, tmp_path):
+        from pdd.sync_orchestration import _has_coverage_config
+        (tmp_path / "setup.cfg").write_text("[coverage:run]\nsource = src\n")
+        assert _has_coverage_config(tmp_path) is True
+
+
 class TestOutputParsing:
     """Tests for test output parsing across languages."""
 
@@ -2202,6 +2231,32 @@ class TestOutputParsing:
         passed, failed, coverage = _parse_test_output(go_output, "go")
         assert passed >= 1
         assert coverage == 85.7
+
+    def test_parse_python_output_with_progress_but_no_coverage(self):
+        """Bug fix: pytest progress indicators like [ 33%] must not be mistaken for coverage.
+
+        When agentic test generation produces tests with incompatible imports,
+        pytest-cov collects 0% coverage and omits the TOTAL line. But pytest
+        still prints progress like '[ 33%]' and '[100%]'. The fallback regex
+        was matching '[ 33%]' and falsely reporting 33% coverage.
+        """
+        from pdd.sync_orchestration import _parse_test_output
+
+        # Realistic pytest output with progress bars but NO coverage TOTAL line
+        pytest_output = """
+tests/test_hello.py::test_hello_returns_greeting [ 33%]
+tests/test_hello.py::test_hello_with_name [ 66%]
+tests/test_hello.py::test_hello_edge_case [100%]
+
+============================== 3 passed in 0.42s ===============================
+"""
+        passed, failed, coverage = _parse_test_output(pytest_output, "python")
+        assert passed == 3
+        assert failed == 0
+        assert coverage == 0.0, (
+            f"Expected 0.0% coverage (no TOTAL line), got {coverage}%. "
+            "The regex must not match pytest progress indicators like '[ 33%]'."
+        )
 
 
 # --- Parameter Name Regression Tests ---
@@ -4308,6 +4363,140 @@ def test_greet():
             f"Got args: {captured_args['value']}"
         )
 
+    def test_execute_tests_excludes_main_guard_from_coverage(self, tmp_path, monkeypatch):
+        """
+        Verify that `if __name__ == "__main__"` is excluded from coverage.
+
+        Small modules with __main__ guards can never reach 90%+ coverage
+        because the guard is unreachable during imports. The coveragerc
+        exclusion should bump coverage from 75% to 100% for a 4-line module.
+        """
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".pddrc").write_text("")
+
+        src_dir = project / "src"
+        src_dir.mkdir()
+        code_file = src_dir / "hello.py"
+        code_file.write_text(
+            'def hello() -> None:\n'
+            '    print("hello")\n\n'
+            'if __name__ == "__main__":\n'
+            '    hello()\n'
+        )
+
+        tests_dir = project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text(
+            'import sys\n'
+            'from pathlib import Path\n'
+            'project_root = Path(__file__).resolve().parents[1]\n'
+            'sys.path.insert(0, str(project_root / "src"))\n\n'
+            'from hello import hello\n\n'
+            'def test_hello(capsys):\n'
+            '    hello()\n'
+            '    assert capsys.readouterr().out == "hello\\n"\n'
+        )
+
+        (project / ".pdd" / "meta").mkdir(parents=True)
+        monkeypatch.chdir(project)
+
+        report = _execute_tests_and_create_run_report(
+            test_file=test_file,
+            basename="hello_python",
+            language="python",
+            target_coverage=90.0,
+            code_file=code_file,
+        )
+
+        assert report.exit_code == 0, f"Tests should pass, got exit_code={report.exit_code}"
+        assert report.tests_passed >= 1
+        assert report.coverage == 100.0, (
+            f"Expected 100% coverage (with __main__ excluded), got {report.coverage}%. "
+            f"The __main__ guard should be excluded via --cov-config."
+        )
+
+    def test_execute_tests_respects_existing_coveragerc(self, tmp_path, monkeypatch):
+        """
+        When the project has its own .coveragerc, don't override it with
+        --cov-config. The project's config should be used as-is.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / ".pddrc").write_text("")
+
+        # Project has its own .coveragerc (with __main__ exclusion)
+        (project / ".coveragerc").write_text(
+            "[report]\n"
+            "exclude_lines =\n"
+            "    if __name__ == .__main__.\n"
+            "    pragma: no cover\n"
+        )
+
+        src_dir = project / "src"
+        src_dir.mkdir()
+        code_file = src_dir / "hello.py"
+        code_file.write_text(
+            'def hello() -> None:\n'
+            '    print("hello")\n\n'
+            'if __name__ == "__main__":\n'
+            '    hello()\n'
+        )
+
+        tests_dir = project / "tests"
+        tests_dir.mkdir()
+        test_file = tests_dir / "test_hello.py"
+        test_file.write_text(
+            'import sys\n'
+            'from pathlib import Path\n'
+            'project_root = Path(__file__).resolve().parents[1]\n'
+            'sys.path.insert(0, str(project_root / "src"))\n\n'
+            'from hello import hello\n\n'
+            'def test_hello(capsys):\n'
+            '    hello()\n'
+            '    assert capsys.readouterr().out == "hello\\n"\n'
+        )
+
+        (project / ".pdd" / "meta").mkdir(parents=True)
+        monkeypatch.chdir(project)
+
+        # Capture the actual pytest args
+        captured_args = {"value": None}
+        original_run = subprocess.run
+
+        def capture_run(cmd, **kwargs):
+            if '-m' in [str(c) for c in cmd] and 'pytest' in [str(c) for c in cmd]:
+                captured_args["value"] = [str(c) for c in cmd]
+            return original_run(cmd, **kwargs)
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="hello_python",
+                language="python",
+                target_coverage=90.0,
+                code_file=code_file,
+            )
+
+        # Should NOT have --cov-config (project has its own .coveragerc)
+        assert captured_args["value"] is not None
+        cov_config_args = [a for a in captured_args["value"] if '--cov-config' in a]
+        assert len(cov_config_args) == 0, (
+            f"Should not override project's .coveragerc with --cov-config. "
+            f"Got: {cov_config_args}"
+        )
+
+        # Coverage.py should still pick up the project's .coveragerc and exclude __main__
+        assert report.coverage == 100.0, (
+            f"Project's .coveragerc should exclude __main__. Got {report.coverage}%"
+        )
+
 
 class TestFixOperationProjectRootConfig:
     """
@@ -5316,6 +5505,47 @@ def test_issue572_wrong_module_name_hackathon_volunteer(orchestration_fixture):
 # --- Bug #573: test_extend accepts coverage=0.0 as success ---
 
 
+def test_test_extend_python_agentic_does_not_skip(orchestration_fixture):
+    """
+    Python+agentic should NOT skip test_extend. The skip was designed only for
+    non-Python languages where coverage tools don't exist. For Python, test_extend
+    should run (call cmd_test_main with merge=True) to improve coverage.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_test = orchestration_fixture['cmd_test_main']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Pre-create test file so test_extend takes the merge=True path
+    (tmp_path / "tests" / "test_calculator.py").write_text("# Existing tests")
+
+    # generate → test_extend → all_synced (test_extend improves coverage enough)
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='test_extend', reason='Coverage 75.0 below target 90.0'),
+        SyncDecision(operation='all_synced', reason='Coverage reached 92.0'),
+    ]
+
+    # cmd_test_main returns success
+    mock_test.side_effect = None
+    mock_test.return_value = {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'), \
+         patch('pdd.sync_orchestration.maybe_steer_operation') as mock_steer:
+        mock_steer.side_effect = lambda op, reason, app, quiet, skip_tests, skip_verify, timeout_s=None: (op, False)
+
+        result = sync_orchestration(basename="calculator", language="python", agentic_mode=True)
+
+    # test_extend must NOT be skipped for Python — cmd_test_main should be called
+    # with merge=True at least once (the test_extend call)
+    merge_calls = [c for c in mock_test.call_args_list if c.kwargs.get('merge') is True]
+    assert len(merge_calls) >= 1, (
+        "test_extend should NOT be skipped for Python in agentic mode. "
+        "cmd_test_main(merge=True) should have been called."
+    )
+    assert result['success'] is True
+
+
 def test_test_extend_agentic_skip_rejects_zero_coverage(orchestration_fixture):
     """
     Bug #573: When test_extend is skipped in agentic mode (non-Python language),
@@ -5473,6 +5703,50 @@ def test_test_extend_max_retries_with_adequate_coverage_succeeds(orchestration_f
         "Regression guard: test_extend followed by all_synced should succeed. "
         "Bug #573 fix must not break the case where test_extend improves coverage."
     )
+
+
+def test_python_agentic_test_runs_real_tests_not_synthetic(orchestration_fixture):
+    """
+    Regression: For Python in agentic mode, after agentic_success=True from
+    cmd_test_main, sync should run _execute_tests_and_create_run_report (to get
+    real coverage) instead of _create_synthetic_run_report_for_agentic_success
+    (which creates coverage=0.0 and causes the pipeline to fail).
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_get_paths = mocks['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Ensure Python files exist
+    (tmp_path / "src" / "calculator.py").write_text("def add(a, b): return a + b")
+    (tmp_path / "tests" / "test_calculator.py").write_text("def test_add(): assert add(1,2)==3")
+
+    # cmd_test_main returns agentic_success=True (4th element) for Python
+    def mock_test_agentic(*args, **kwargs):
+        test_file = tmp_path / "tests" / "test_calculator.py"
+        test_file.write_text("def test_add(): assert add(1,2)==3")
+        return ("test_code", 0.06, "mock-model", True)  # 4th element = agentic_success
+
+    mock_test.side_effect = mock_test_agentic
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='example', reason='Generate example'),
+        SyncDecision(operation='verify', reason='Verify example'),
+        SyncDecision(operation='test', reason='Generate tests'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests, \
+         patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic:
+        result = sync_orchestration(
+            basename="calculator", language="python", no_steer=True,
+        )
+
+        # For Python: should run real tests, NOT create synthetic report
+        mock_exec_tests.assert_called_once()
+        mock_synthetic.assert_not_called()
 
 
 # --- Bug #624: pdd generate calls functions it never defines or imports (TypeScript/JS) ---
@@ -6388,11 +6662,16 @@ def test_agentic_python_sync_measures_real_coverage(orchestration_fixture):
         SyncDecision(operation='test', reason='Need tests'),
         SyncDecision(operation='all_synced', reason='Done'),
     ]
+    # Ensure test file exists so the elif pdd_files['test'].exists() branch triggers
+    # (main's fix lets Python fall through from the agentic block to real test execution)
+    (Path.cwd() / 'tests' / 'test_calculator.py').write_text("# agentic test")
     mock_test.side_effect = None
     mock_test.return_value = (True, 0.1, "agentic-model", True)
 
     with patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic, \
-         patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_execute:
+         patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_execute, \
+         patch('pdd.sync_orchestration.maybe_steer_operation') as mock_steer:
+        mock_steer.side_effect = lambda op, reason, app, quiet, skip_tests, skip_verify, timeout_s=None: (op, False)
 
         sync_orchestration(basename="calculator", language="python", agentic_mode=True)
 
@@ -6420,7 +6699,9 @@ def test_agentic_non_python_sync_uses_synthetic_report(orchestration_fixture):
     mock_test.return_value = (True, 0.1, "agentic-model", True)
 
     with patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic, \
-         patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_execute:
+         patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_execute, \
+         patch('pdd.sync_orchestration.maybe_steer_operation') as mock_steer:
+        mock_steer.side_effect = lambda op, reason, app, quiet, skip_tests, skip_verify, timeout_s=None: (op, False)
 
         sync_orchestration(basename="calculator", language="go", agentic_mode=True)
 

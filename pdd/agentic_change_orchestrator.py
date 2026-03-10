@@ -311,23 +311,60 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
         return []
 
 def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
-    """Check output for hard stop conditions."""
-    if step_num == 1 and "Duplicate of #" in output:
+    """Check output for hard stop conditions.
+
+    Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
+    Other steps use case-insensitive substring matching as a fallback.
+    A universal STOP_CONDITION: tag is recognized on any step.
+    """
+    if not output:
+        return None
+    stop_match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
+    output_lower = output.lower()
+
+    if step_num == 1 and "duplicate of #" in output_lower:
         return "Issue is a duplicate"
-    if step_num == 2 and "Already Implemented" in output:
+    if step_num == 2 and "already implemented" in output_lower:
         return "Already implemented"
-    if step_num == 4 and "Clarification Needed" in output:
-        return "Clarification needed"
-    if step_num == 6 and "No Dev Units Found" in output:
+    if step_num == 4:
+        if stop_match and "clarification" in stop_match.group(1).lower():
+            return "Clarification needed"
+        return None
+    if step_num == 6 and "no dev units found" in output_lower:
         return "No dev units found"
-    if step_num == 7 and "Architectural Decision Needed" in output:
-        return "Architectural decision needed"
-    if step_num == 8 and "No Changes Required" in output:
+    if step_num == 7:
+        if stop_match and "architectural" in stop_match.group(1).lower():
+            return "Architectural decision needed"
+        return None
+    if step_num == 8 and "no changes required" in output_lower:
         return "No changes needed"
     if step_num == 9:
-        if "FAIL:" in output:
+        if "fail:" in output_lower:
             return "Implementation failed"
+    # Universal fallback: any STOP_CONDITION tag on an unhandled step
+    if stop_match:
+        return stop_match.group(1).strip()
     return None
+
+
+# Steps where a hard stop is a "clarification" request (user may respond, step should re-run)
+_CLARIFICATION_STEPS = {4, 7}
+
+
+def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
+    """Fetch the current updated_at timestamp for a GitHub issue."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+             "--jq", ".updated_at"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        )
+        return result.stdout.strip() or None
+    except Exception:
+        return None
 
 def _get_state_dir(cwd: Path) -> Path:
     """Get the state directory relative to git root."""
@@ -455,6 +492,58 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
         return ""
 
 
+def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
+    """Re-fetch issue updated_at from GitHub API.
+
+    Used after a clarification stop to capture the timestamp AFTER
+    the bot's own comment, so stale detection doesn't false-trigger.
+    """
+    console = Console(stderr=True)
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+             "--jq", ".updated_at"],
+            capture_output=True, text=True, check=False, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        console.print(
+            f"[yellow]Warning: Failed to re-fetch issue updated_at "
+            f"(rc={result.returncode}): {result.stderr.strip()}[/yellow]"
+        )
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: Timed out re-fetching issue updated_at[/yellow]")
+    except OSError as e:
+        console.print(f"[yellow]Warning: OSError re-fetching issue updated_at: {e}[/yellow]")
+    return ""
+
+
+_CLARIFICATION_STEPS = {4, 7}
+
+
+def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
+    """Check if an open PR already exists for this issue's branch.
+
+    Returns the PR URL if found, None otherwise.
+    """
+    branch = f"change/issue-{issue_number}"
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--repo", f"{repo_owner}/{repo_name}",
+             "--search", f"head:{branch}", "--state", "open",
+             "--json", "url", "--limit", "1"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        if data and isinstance(data, list) and data[0].get("url"):
+            return data[0]["url"]
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        pass
+    return None
+
+
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -487,6 +576,13 @@ def run_agentic_change_orchestrator(
     state, loaded_gh_id = load_workflow_state(
         cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
     )
+
+    # Guard: if an open PR already exists for this issue, return early
+    existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
+    if existing_pr:
+        if not quiet:
+            console.print(f"[yellow]PR already exists for issue #{issue_number}: {existing_pr}[/yellow]")
+        return True, f"PR already exists: {existing_pr}", 0.0, "unknown", []
 
     # Check for stale state: if issue was updated since state was saved, start fresh
     if state is not None and issue_updated_at:
@@ -677,22 +773,16 @@ def run_agentic_change_orchestrator(
         state["model_used"] = model_used
 
         if not step_success:
-            # Post a fallback comment on the issue for the failed step
-            post_step_comment(
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                issue_number=issue_number,
-                step_num=step_num,
-                total_steps=13,
-                description=description,
-                output=step_output,
-                cwd=cwd,
-            )
-
             # Track consecutive provider failures for early abort
             if "All agent providers failed" in step_output:
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
+                    post_step_comment(
+                        repo_owner=repo_owner, repo_name=repo_name,
+                        issue_number=issue_number, step_num=step_num,
+                        total_steps=13, description=description,
+                        output=step_output, cwd=cwd,
+                    )
                     state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
                     save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                     return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, []
@@ -701,10 +791,22 @@ def run_agentic_change_orchestrator(
 
             stop_reason = _check_hard_stop(step_num, step_output)
             if stop_reason:
+                post_step_comment(
+                    repo_owner=repo_owner, repo_name=repo_name,
+                    issue_number=issue_number, step_num=step_num,
+                    total_steps=13, description=description,
+                    output=step_output, cwd=cwd,
+                )
                 if not quiet:
                     console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-                state["last_completed_step"] = step_num
+                # Clarification steps save step_num - 1 so the step re-runs on resume
+                state["last_completed_step"] = step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
                 state["step_outputs"][str(step_num)] = step_output
+                # Refresh issue_updated_at after clarification (bot comment changes the timestamp)
+                if step_num in _CLARIFICATION_STEPS:
+                    refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                    if refreshed:
+                        state["issue_updated_at"] = refreshed
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
@@ -713,8 +815,14 @@ def run_agentic_change_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            state["last_completed_step"] = step_num
+            # Clarification steps save step_num - 1 so the step re-runs on resume
+            state["last_completed_step"] = step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
             state["step_outputs"][str(step_num)] = step_output
+            # Refresh issue_updated_at after clarification (bot comment changes the timestamp)
+            if step_num in _CLARIFICATION_STEPS:
+                refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                if refreshed:
+                    state["issue_updated_at"] = refreshed
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
 
@@ -776,6 +884,8 @@ def run_agentic_change_orchestrator(
             brief = lines[-1] if lines else "Done"
             if len(brief) > 80: brief = brief[:77] + "..."
             console.print(f"   -> {escape(brief)}")
+            if step_success:
+                console.print(f"  \u2192 Step {step_num} complete.")
 
     if "files_to_stage" not in context:
         s9_out = context.get("step9_output", "")
@@ -809,8 +919,6 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
-            if not s11_success:
-                post_step_comment(repo_owner, repo_name, issue_number, 11, 13, "Identify issues", s11_output, cwd)
             if "No Issues Found" in s11_output:
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
@@ -831,8 +939,6 @@ def run_agentic_change_orchestrator(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
-            if not s12_success:
-                post_step_comment(repo_owner, repo_name, issue_number, 12, 13, "Fix issues", s12_output, cwd)
             previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
             state["previous_fixes"] = previous_fixes
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)

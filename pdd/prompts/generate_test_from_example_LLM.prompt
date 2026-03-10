@@ -32,7 +32,12 @@
     - NEVER access internal implementation details (variables/functions starting with underscore) in your tests.
     - Setup and teardown methods should only use public APIs and environment variables, never reset internal module state directly.
     - Design tests to be independent of implementation details.
-    - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state. In general minimize the amount of mocking needed so that the tests are more robust to changes in the code under test and more code is tested.
+    - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state.
+    - MOCKING RULE: Mock at external boundaries, test internal logic directly.
+      - ALWAYS mock: HTTP clients, database connections, auth providers, third-party SDKs, message queues, file storage
+      - NEVER mock: The function under test, pure computation, data validation, business logic
+      - Mock return values MUST match the real return type from the source code — do not invent response shapes
+    - The goal: test as much of YOUR code as possible while isolating external services that need credentials.
 <include>./context/test.prompt</include>
 
 <instructions>

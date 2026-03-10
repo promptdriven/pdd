@@ -7,6 +7,10 @@ and validating the architecture.json dependency graph.
 ## Architecture (architecture.json)
 {architecture_json}
 
+Each module may have an "origin" field indicating which GitHub issue generated it.
+Use this to prioritize modules that are relevant to the current issue.
+Focus on modules whose origin matches the current issue, plus their transitive dependencies.
+
 ## Task 1: Identify Modules
 Based on the issue description, identify which modules (by basename) need `pdd sync`.
 A basename is the module name without the language suffix (e.g., "llm_invoke" for "llm_invoke_python.prompt").

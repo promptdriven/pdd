@@ -40,6 +40,15 @@ The PROMPT FILE is the source of truth. Tests verify that code conforms to the s
      - Edge cases
      - Error handling
    - Use appropriate assertions for the test framework
+   - MOCKING RULE: Mock at external boundaries, test internal logic directly.
+     - ALWAYS mock: HTTP clients, database connections, auth providers, third-party SDKs,
+       message queues, file storage, external service SDKs (firebase-admin, stripe, boto3, etc.)
+     - NEVER mock: The function under test, pure computation, data validation, business logic
+     - Mock return values MUST match the real return type from the source code — do not invent response shapes
+   - If the code depends on environment variables for API keys/credentials:
+     - Mock the external service boundary, not just the env var
+     - Use clearly fake values (e.g., "test-api-key-not-real") so tests never hit real services
+   - The goal: test as much of YOUR code as possible while isolating external services that need credentials
 
 4. **Run Tests**
    - Execute the tests using the appropriate test runner discovered in step 1
@@ -64,4 +73,18 @@ The PROMPT FILE is the source of truth. Tests verify that code conforms to the s
 - Use the CORRECT file extension for the test file based on the language
 - IMPORTANT: Read actual source files before assuming what functions/classes exist
 - You MUST run the generated test file and ensure it passes before completing
+
+## Python-Specific Rules
+When the language is Python:
+- Use `pytest` as the test framework
+- CRITICAL IMPORT RULE: Import the module by its filename stem, NOT via directory path.
+  - CORRECT: `from hello import hello` (with sys.path setup)
+  - WRONG:  `from src.hello import hello`
+- Add sys.path setup at the top of the test file so pytest can find the code:
+  ```python
+  import sys, os
+  sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+  ```
+- Target 90%+ code coverage
+- Use pytest fixtures, parametrize, and mock patterns
 

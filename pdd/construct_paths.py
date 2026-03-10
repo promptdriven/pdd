@@ -32,6 +32,9 @@ BUILTIN_EXT_MAP = {
     'scala': '.scala', 'r': '.r', 'lua': '.lua', 'perl': '.pl', 'bash': '.sh',
     'shell': '.sh', 'powershell': '.ps1', 'sql': '.sql', 'html': '.html', 'css': '.css',
     'prompt': '.prompt', 'makefile': '',
+    # Frontend framework variants
+    'typescriptreact': '.tsx', 'javascriptreact': '.jsx',
+    'svelte': '.svelte', 'vue': '.vue',
     # Common data/config formats
     'json': '.json', 'jsonl': '.jsonl', 'yaml': '.yaml', 'yml': '.yml', 'toml': '.toml', 'ini': '.ini',
 }
@@ -41,13 +44,34 @@ def _find_pddrc_file(start_path: Optional[Path] = None) -> Optional[Path]:
     """Find .pddrc file by searching upward from the given path."""
     if start_path is None:
         start_path = Path.cwd()
-    
+
     # Search upward through parent directories
     for path in [start_path] + list(start_path.parents):
         pddrc_file = path / ".pddrc"
         if pddrc_file.is_file():
             return pddrc_file
     return None
+
+
+def _find_nearest_pddrc_for_file(
+    file_path: Path,
+    stop_at: Optional[Path] = None,
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """Find the nearest .pddrc to a file, searching upward from its directory.
+
+    Returns (pddrc_path, effective_root) where effective_root is the
+    directory containing the .pddrc. Returns (None, None) if not found.
+    """
+    start = file_path.parent if file_path.is_file() else file_path
+    stop_at_resolved = stop_at.resolve() if stop_at else None
+
+    for path in [start] + list(start.parents):
+        pddrc_file = path / ".pddrc"
+        if pddrc_file.is_file():
+            return pddrc_file, path
+        if stop_at_resolved and path.resolve() == stop_at_resolved:
+            break
+    return None, None
 
 def _load_pddrc_config(pddrc_path: Path) -> Dict[str, Any]:
     """Load and parse .pddrc configuration file."""
@@ -275,8 +299,19 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     else:
         relative_path = file_path
 
-    # Find and load .pddrc
-    pddrc_path = _find_pddrc_file(Path(repo_root))
+    # Find and load .pddrc — prefer one closer to the file over repo_root
+    pddrc_path = _find_pddrc_file(Path(file_path).parent)
+    if not pddrc_path:
+        pddrc_path = _find_pddrc_file(Path(repo_root))
+
+    # If the nearest .pddrc is in a nested directory, recalculate
+    # repo_root_abs and relative_path so context matching works correctly
+    if pddrc_path:
+        pddrc_root_abs = os.path.abspath(str(pddrc_path.parent))
+        if file_path_abs.startswith(pddrc_root_abs + os.sep) or file_path_abs == pddrc_root_abs:
+            repo_root_abs = pddrc_root_abs
+            relative_path = os.path.relpath(file_path_abs, repo_root_abs)
+
     if not pddrc_path:
         return None, {}
 
@@ -930,14 +965,15 @@ def construct_paths(
         if not basename:
             raise ValueError("Basename must be provided in command_options for sync discovery mode.")
         
-        # For discovery, we only need directory paths. Call generate_output_paths with dummy values.
+        # For discovery, we only need directory paths (via .parent) — the language
+        # and extension values here are irrelevant and never used for file output.
         try:
             output_paths_str = generate_output_paths(
                 command="sync",
                 output_locations={},
                 basename=basename,
-                language="python", # Dummy language
-                file_extension=".py", # Dummy extension
+                language="python",
+                file_extension=".py",
                 context_config=context_config,
                 config_base_dir=str(pddrc_path.parent) if pddrc_path else None,
                 path_resolution_mode="cwd",  # Sync resolves paths relative to CWD
@@ -1110,18 +1146,28 @@ def construct_paths(
         
         # Add validation to ensure language is never None
         if language is None:
-            # Set a default language based on command, defaulting to 'python' for most commands
-            if command == 'bug':
-                # The bug command typically defaults to python in bug_main.py
+            # Try to extract language from the prompt filename suffix before
+            # falling back to Python.  This prevents TypeScript/TSX modules
+            # (e.g. *_typescriptreact.prompt) from being mis-classified as
+            # Python when _determine_language fails to detect the language.
+            prompt_path = _candidate_prompt_path(input_paths)
+            if prompt_path and prompt_path.suffix == ".prompt":
+                stem = prompt_path.stem
+                if "_" in stem:
+                    suffix_token = stem.rsplit("_", 1)[-1]
+                    if _is_known_language(suffix_token):
+                        language = suffix_token.lower()
+
+            # Final default when no prompt suffix could be extracted
+            if language is None:
                 language = 'python'
-            else:
-                # General fallback for other commands
-                language = 'python'
-            
+
             # Log the issue for debugging
             if not quiet:
                 console.print(
-                    f"[warning]Warning: Could not determine language for '{command}' command. Using default: {language}[/warning]",
+                    f"[warning]Warning: Could not determine language for '{command}' command. "
+                    f"Defaulting to '{language}'. Pass --language explicitly or ensure prompt "
+                    f"filename ends with _<language>.prompt[/warning]",
                     style="warning"
                 )
     except ValueError as e:

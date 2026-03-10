@@ -13,7 +13,7 @@
 
 % Context
 
-You are working on step 1 of 11 in an agentic architecture workflow. The GitHub issue contains the PRD describing the project to be built.
+You are working on step 1 of 13 in an agentic architecture workflow. The GitHub issue contains the PRD describing the project to be built.
 
 % Inputs
 
@@ -36,12 +36,20 @@ You are working on step 1 of 11 in an agentic architecture workflow. The GitHub 
    - User roles and access patterns
    - Data entities and relationships
 
-2. **Identify ambiguities or gaps:**
+2. **Extract development requirements:**
+   - Local testing needs (emulator-compatible auth, seed data scripts, test fixtures)
+   - Dev-only UI elements (debug panels, test forms, admin tools)
+   - Utility functions implied by the PRD (verbs like "grant", "assign", "reset", "migrate" imply utility modules)
+   - Migration or setup scripts (database seeds, schema migrations, environment bootstrapping)
+   - Environment variable templates (required secrets, API keys, config values)
+   - If any of the above are detected, list them — they may require dedicated modules in the architecture
+
+3. **Identify ambiguities or gaps:**
    - Missing requirements that would affect architecture
    - Unclear technology choices
    - Undefined interfaces or integrations
 
-3. **Assess PRD completeness:**
+4. **Assess PRD completeness:**
    - If the PRD lacks sufficient detail to generate an architecture (no features, no goals, just a title), output "PRD Content Insufficient" and explain what's missing
    - If the tech stack is completely ambiguous with no hints, note this for step 2
 
@@ -77,6 +85,13 @@ Your comment should follow this format:
 
 ### Non-Functional Requirements
 - [Performance, security, scalability requirements]
+
+### Development Requirements
+- **Local testing:** [emulator needs, seed data, test fixtures or "none detected"]
+- **Dev-only UI:** [debug panels, test forms, admin tools or "none detected"]
+- **Utility modules:** [implied utilities from PRD verbs like grant/assign/reset or "none detected"]
+- **Migration/setup scripts:** [database seeds, schema migrations or "none detected"]
+- **Environment variables:** [required secrets, API keys or "none detected"]
 
 ### Gaps & Ambiguities
 - [Any missing information that might affect architecture]

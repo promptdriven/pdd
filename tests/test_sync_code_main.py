@@ -19,6 +19,7 @@ import click
 from click.testing import CliRunner
 
 from pdd.update_main import (
+    _check_include_deps_changed,
     derive_basename_and_language,
     get_git_changed_files,
     is_code_changed,
@@ -36,17 +37,17 @@ class TestDeriveBasenameAndLanguage:
 
     @patch("pdd.update_main.get_language", return_value="Python")
     def test_python_file(self, mock_lang):
-        """Extracts basename and lowercased language for a .py file."""
+        """Extracts relative-path basename and lowercased language for a .py file."""
         basename, lang = derive_basename_and_language("/repo/src/my_module.py", "/repo")
-        assert basename == "my_module"
+        assert basename == "src/my_module"
         assert lang == "python"
         mock_lang.assert_called_once_with(".py")
 
     @patch("pdd.update_main.get_language", return_value="JavaScript")
     def test_javascript_file(self, mock_lang):
-        """Extracts basename and lowercased language for a .js file."""
+        """Extracts relative-path basename and lowercased language for a .js file."""
         basename, lang = derive_basename_and_language("/repo/app/index.js", "/repo")
-        assert basename == "index"
+        assert basename == "app/index"
         assert lang == "javascript"
 
     @patch("pdd.update_main.get_language", return_value="")
@@ -65,12 +66,33 @@ class TestDeriveBasenameAndLanguage:
 
     @patch("pdd.update_main.get_language", return_value="Python")
     def test_nested_path(self, mock_lang):
-        """Extracts only the filename stem, not the directory structure."""
+        """Extracts the full relative path stem, including directory structure."""
         basename, lang = derive_basename_and_language(
             "/repo/a/b/c/deep_module.py", "/repo"
         )
-        assert basename == "deep_module"
+        assert basename == "a/b/c/deep_module"
         assert lang == "python"
+
+    @patch("pdd.update_main.get_language", return_value="Python")
+    def test_file_at_repo_root(self, mock_lang):
+        """File at repo root has no directory prefix in basename."""
+        basename, lang = derive_basename_and_language("/repo/module.py", "/repo")
+        assert basename == "module"
+        assert lang == "python"
+
+    @patch("pdd.update_main.get_language", return_value="TypescriptReact")
+    def test_same_name_different_dirs_no_collision(self, mock_lang):
+        """Same filename in different directories produces different basenames."""
+        b1, l1 = derive_basename_and_language(
+            "/repo/frontend/src/app/settings/page.tsx", "/repo"
+        )
+        b2, l2 = derive_basename_and_language(
+            "/repo/frontend/src/app/dashboard/page.tsx", "/repo"
+        )
+        assert b1 != b2
+        assert b1 == "frontend/src/app/settings/page"
+        assert b2 == "frontend/src/app/dashboard/page"
+        assert l1 == l2 == "typescriptreact"
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +178,151 @@ class TestIsCodeChanged:
         changed, reason = is_code_changed("/repo/mod.py", "/repo", git_set)
         assert changed is False
         assert "not in git changed set" in reason
+
+
+# ---------------------------------------------------------------------------
+# Include dependency change detection
+# ---------------------------------------------------------------------------
+
+
+class TestIncludeDepChangeDetection:
+    """Tests for is_code_changed with include dependency checking."""
+
+    @patch("pdd.update_main.calculate_sha256")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
+    def test_include_dep_changed_triggers_update(self, mock_derive, mock_fp, mock_sha, tmp_path):
+        """Code hash matches but include dep hash differs -> changed."""
+        dep_file = tmp_path / "context" / "preamble.prompt"
+        dep_file.parent.mkdir()
+        dep_file.write_text("new content")
+
+        fp = MagicMock()
+        fp.code_hash = "aaa111"
+        fp.include_deps = {str(dep_file): "old_hash_abc"}
+        mock_fp.return_value = fp
+
+        # First call: code hash check returns matching hash
+        # Second call: include dep hash returns different hash
+        mock_sha.side_effect = ["aaa111", "new_hash_xyz"]
+
+        changed, reason = is_code_changed("/repo/mod.py", "/repo", set())
+        assert changed is True
+        assert "include dependency changed" in reason
+
+    @patch("pdd.update_main.calculate_sha256")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
+    def test_include_deps_unchanged_no_trigger(self, mock_derive, mock_fp, mock_sha, tmp_path):
+        """Code hash and all include deps match -> not changed."""
+        dep_file = tmp_path / "context" / "preamble.prompt"
+        dep_file.parent.mkdir()
+        dep_file.write_text("content")
+
+        fp = MagicMock()
+        fp.code_hash = "aaa111"
+        fp.include_deps = {str(dep_file): "same_hash"}
+        mock_fp.return_value = fp
+
+        mock_sha.side_effect = ["aaa111", "same_hash"]
+
+        changed, reason = is_code_changed("/repo/mod.py", "/repo", set())
+        assert changed is False
+        assert "matches fingerprint" in reason
+
+    @patch("pdd.update_main.calculate_sha256", return_value="aaa111")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
+    def test_include_dep_deleted_triggers_update(self, mock_derive, mock_fp, mock_sha):
+        """Stored include dep file missing -> changed."""
+        fp = MagicMock()
+        fp.code_hash = "aaa111"
+        fp.include_deps = {"/nonexistent/path/preamble.prompt": "some_hash"}
+        mock_fp.return_value = fp
+
+        changed, reason = is_code_changed("/repo/mod.py", "/repo", set())
+        assert changed is True
+        assert "include dependency deleted" in reason
+
+    @patch("pdd.update_main.calculate_sha256", return_value="aaa111")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
+    def test_no_include_deps_in_fingerprint(self, mock_derive, mock_fp, mock_sha):
+        """include_deps=None -> behaves as before (not changed when code matches)."""
+        fp = MagicMock()
+        fp.code_hash = "aaa111"
+        fp.include_deps = None
+        mock_fp.return_value = fp
+
+        changed, reason = is_code_changed("/repo/mod.py", "/repo", set())
+        assert changed is False
+        assert "matches fingerprint" in reason
+
+    @patch("pdd.update_main.calculate_sha256", return_value="aaa111")
+    @patch("pdd.update_main.read_fingerprint")
+    @patch("pdd.update_main.derive_basename_and_language", return_value=("mod", "python"))
+    def test_empty_include_deps_in_fingerprint(self, mock_derive, mock_fp, mock_sha):
+        """include_deps={} -> not changed."""
+        fp = MagicMock()
+        fp.code_hash = "aaa111"
+        fp.include_deps = {}
+        mock_fp.return_value = fp
+
+        changed, reason = is_code_changed("/repo/mod.py", "/repo", set())
+        assert changed is False
+        assert "matches fingerprint" in reason
+
+
+class TestCheckIncludeDepsChangedDirect:
+    """Direct tests for the _check_include_deps_changed helper."""
+
+    def test_none_include_deps(self):
+        """include_deps=None -> (False, ...)."""
+        fp = MagicMock()
+        fp.include_deps = None
+        changed, reason = _check_include_deps_changed(fp)
+        assert changed is False
+        assert "no include deps" in reason
+
+    def test_empty_include_deps(self):
+        """include_deps={} -> (False, ...)."""
+        fp = MagicMock()
+        fp.include_deps = {}
+        changed, reason = _check_include_deps_changed(fp)
+        assert changed is False
+        assert "no include deps" in reason
+
+    @patch("pdd.update_main.calculate_sha256", return_value="new_hash")
+    def test_dep_file_changed(self, mock_sha, tmp_path):
+        """Hash mismatch -> (True, ...)."""
+        dep_file = tmp_path / "dep.prompt"
+        dep_file.write_text("changed content")
+
+        fp = MagicMock()
+        fp.include_deps = {str(dep_file): "old_hash"}
+        changed, reason = _check_include_deps_changed(fp)
+        assert changed is True
+        assert "include dependency changed" in reason
+
+    def test_dep_file_deleted(self):
+        """Nonexistent path -> (True, ...)."""
+        fp = MagicMock()
+        fp.include_deps = {"/nonexistent/dep.prompt": "some_hash"}
+        changed, reason = _check_include_deps_changed(fp)
+        assert changed is True
+        assert "include dependency deleted" in reason
+
+    @patch("pdd.update_main.calculate_sha256", return_value="same_hash")
+    def test_dep_file_unchanged(self, mock_sha, tmp_path):
+        """Hash matches -> (False, ...)."""
+        dep_file = tmp_path / "dep.prompt"
+        dep_file.write_text("same content")
+
+        fp = MagicMock()
+        fp.include_deps = {str(dep_file): "same_hash"}
+        changed, reason = _check_include_deps_changed(fp)
+        assert changed is False
+        assert "include deps unchanged" in reason
 
 
 # ---------------------------------------------------------------------------

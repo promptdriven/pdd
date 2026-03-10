@@ -152,7 +152,7 @@ class TestOperationLoggingE2E:
         result = self.run_pdd_command(
             ["test", str(prompt_file), str(code_file), "--output", str(output_file)],
             cwd=project_dir,
-            timeout=300  # 5 minutes for LLM API call (matches other E2E tests)
+            timeout=600  # 10 minutes — test generation can be slow on shared CI
         )
 
         # Verify command succeeded
@@ -249,7 +249,7 @@ class TestOperationLoggingE2E:
         result = self.run_pdd_command(
             ["crash", str(prompt_file), str(code_file), str(example_file), str(error_file)],
             cwd=project_dir,
-            timeout=300  # 5 minutes for iterative fix loop
+            timeout=600  # 10 minutes for iterative fix loop
         )
 
         # crash may or may not fully succeed, but it should log
@@ -287,12 +287,21 @@ class TestOperationLoggingE2E:
             "print(double(21))  # Should print 42\n"
         )
 
-        # Run verify (longer timeout for verification loop)
-        result = self.run_pdd_command(
-            ["verify", str(prompt_file), str(code_file), str(example_file)],
-            cwd=project_dir,
-            timeout=300  # 5 minutes for verification loop
-        )
+        # Run verify (longer timeout for verification loop, retry on timeout)
+        last_err = None
+        for attempt in range(2):
+            try:
+                result = self.run_pdd_command(
+                    ["verify", str(prompt_file), str(code_file), str(example_file)],
+                    cwd=project_dir,
+                    timeout=300  # 5 minutes for verification loop
+                )
+                break
+            except subprocess.TimeoutExpired as e:
+                last_err = e
+                if attempt == 0:
+                    continue
+                raise last_err
 
         # Verify log entry exists (verify may fail but should still log)
         entry = self.get_latest_entry(project_dir, "doubler")

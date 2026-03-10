@@ -1,3 +1,4 @@
+import fnmatch
 import re
 import subprocess
 import sys
@@ -33,11 +34,111 @@ _SKIP_EXTENSIONS = {
     '.json', '.jsonl', '.yaml', '.yml', '.md', '.toml', '.ini',
     '.css', '.html', '.lock', '.svg', '.png', '.jpg', '.gif',
     '.ico', '.woff', '.woff2', '.ttf', '.eot', '.map',
+    '.csv', '.txt',
 }
 _SKIP_FILENAMES = {
     'package-lock.json', '.prettierrc', '.eslintrc', '.gitignore',
     'tsconfig.json', 'next-env.d.ts',
+    'jest.config.js', 'jest.config.ts', 'jest.setup.js', 'jest.setup.ts',
+    'next.config.js', 'next.config.ts', 'next.config.mjs',
+    'tailwind.config.js', 'tailwind.config.ts',
+    'playwright.config.ts', 'playwright.config.js',
+    'vitest.config.ts', 'vitest.config.js', 'vitest.config.unit.ts',
+    'postcss.config.js', 'postcss.config.mjs', 'postcss.config.cjs',
+    'babel.config.js', 'babel.config.json',
+    '.eslintrc.js', '.eslintrc.json', '.eslintrc.cjs',
+    '.prettierrc.js', '.prettierrc.json', '.prettierrc.cjs',
+    'setupTests.ts', 'setupTests.js',
+    'mockServiceWorker.js',
 }
+
+_SKIP_BASENAME_SUFFIXES = {
+    '.config', '.setup',
+    '.stories', '.story',
+    '.test', '.spec',
+    '.e2e.test', '.e2e.spec',
+    '.d',
+}
+
+
+def _has_skip_suffix(filepath: str) -> bool:
+    """Check if file stem has a skip suffix like .test, .stories, .config."""
+    stem = os.path.splitext(os.path.basename(filepath))[0]
+    for suffix in _SKIP_BASENAME_SUFFIXES:
+        if stem.endswith(suffix):
+            return True
+    return False
+
+
+def _load_pddignore(scan_root: str) -> Tuple[List[str], str]:
+    """Load .pddignore patterns, searching upward from *scan_root* to git root.
+
+    Returns (patterns, pddignore_dir) where *pddignore_dir* is the directory
+    containing the .pddignore file (used as the base for relative-path matching).
+    If no file is found, returns ([], scan_root).
+    """
+    # Walk upward from scan_root to find .pddignore
+    current = os.path.abspath(scan_root)
+    while True:
+        candidate = os.path.join(current, '.pddignore')
+        if os.path.isfile(candidate):
+            patterns: List[str] = []
+            with open(candidate, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    patterns.append(line)
+            return patterns, current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        # Stop at git root (don't escape the repo)
+        if os.path.isdir(os.path.join(current, '.git')):
+            break
+        current = parent
+    return [], scan_root
+
+
+def _has_meaningful_code(filepath: str) -> bool:
+    """Return True if a file contains at least one non-blank, non-comment line."""
+    try:
+        with open(filepath, 'r', errors='replace') as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith('#'):
+                    return True
+    except (OSError, IOError):
+        return False
+    return False
+
+
+def _is_pddignored(filepath: str, pddignore_root: str, patterns: List[str]) -> bool:
+    """Check if a file matches any .pddignore pattern.
+
+    Matches against:
+    - Relative path from *pddignore_root* (for patterns like ``frontend/src/components/ui/*``)
+    - Basename (for patterns like ``*.stories.tsx``)
+    - Directory prefix (for patterns ending with ``/`` like ``ui/``)
+    """
+    try:
+        rel_path = os.path.relpath(filepath, pddignore_root).replace('\\', '/')
+    except ValueError:
+        return False
+    basename = os.path.basename(filepath)
+    for pat in patterns:
+        if pat.endswith('/'):
+            # Directory prefix pattern: match if any path component equals the dir name
+            dir_name = pat.rstrip('/')
+            parts = rel_path.split('/')
+            if dir_name in parts[:-1]:
+                return True
+        else:
+            if fnmatch.fnmatch(rel_path, pat):
+                return True
+            if fnmatch.fnmatch(basename, pat):
+                return True
+    return False
 
 custom_theme = Theme({
     "info": "cyan",
@@ -99,7 +200,10 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     from .construct_paths import _find_pddrc_file, _load_pddrc_config, detect_context_for_file, BUILTIN_EXT_MAP
     from .template_expander import expand_template
 
-    pddrc_path = _find_pddrc_file(Path(repo_root))
+    # Prefer .pddrc closest to the code file, fall back to repo_root
+    pddrc_path = _find_pddrc_file(Path(code_file_path).parent)
+    if not pddrc_path:
+        pddrc_path = _find_pddrc_file(Path(repo_root))
     if not pddrc_path:
         return None
 
@@ -110,8 +214,8 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
 
     pddrc_parent = pddrc_path.parent
 
-    # Find matching context
-    context_name, _ = detect_context_for_file(code_file_path, repo_root)
+    # Find matching context — use pddrc_parent as the effective root
+    context_name, _ = detect_context_for_file(code_file_path, str(pddrc_parent))
     if not context_name:
         return None
 
@@ -185,14 +289,23 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
 
     # Find the repository root (where the code file is located)
     # This is needed for relative path calculation to preserve structure
-    repo_root = code_dir
+    # First find the git root as fallback and search boundary
+    git_root = code_dir
     try:
         import git
         repo = git.Repo(code_dir, search_parent_directories=True)
-        repo_root = repo.working_tree_dir
+        git_root = repo.working_tree_dir
     except:
         # If not a git repo, use the directory containing the code file
         pass
+
+    # Find the nearest .pddrc starting from the code file — its parent
+    # directory becomes the effective repo_root for path calculations.
+    from .construct_paths import _find_nearest_pddrc_for_file
+    nearest_pddrc, effective_root = _find_nearest_pddrc_for_file(
+        Path(code_file_abs_path), stop_at=Path(git_root)
+    )
+    repo_root = str(effective_root) if effective_root else git_root
 
     # Try template-based resolution from .pddrc first (when no explicit output_dir)
     if not output_dir:
@@ -238,7 +351,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
             # If context has a code root (generate_output_path), strip that prefix
             # E.g., for pdd/commands/file.py with generate_output_path="pdd",
             # strip "pdd/" to get "commands/"
-            code_root = context_config.get("generate_output_path", "")
+            code_root = context_config.get("generate_output_path", "").rstrip(os.sep + "/")
             if code_root and rel_dir.startswith(code_root + os.sep):
                 # Strip the code root prefix
                 rel_dir = rel_dir[len(code_root) + len(os.sep):]
@@ -253,7 +366,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     final_prompts_dir = os.path.join(base_prompts_dir, rel_dir)
 
     # Construct the prompt filename in the determined directory
-    prompt_filename = f"{base_name}_{language}.prompt"
+    prompt_filename = f"{base_name}_{language.lower()}.prompt"
     prompt_path_str = os.path.join(final_prompts_dir, prompt_filename)
     prompt_path = Path(prompt_path_str)
 
@@ -316,6 +429,8 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             for file in files:
                 all_files.append(os.path.join(root, file))
 
+    pddignore_patterns, pddignore_root = _load_pddignore(repo_root)
+
     code_files = [
         f for f in all_files
         if (
@@ -324,7 +439,10 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
             not os.path.splitext(os.path.basename(f))[0].endswith('_example') and
             os.path.splitext(f)[1].lower() not in _SKIP_EXTENSIONS and
-            os.path.basename(f) not in _SKIP_FILENAMES
+            os.path.basename(f) not in _SKIP_FILENAMES and
+            not _has_skip_suffix(f) and
+            not _is_pddignored(f, pddignore_root, pddignore_patterns) and
+            _has_meaningful_code(f)
         )
     ]
 
@@ -406,7 +524,11 @@ def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]
 def derive_basename_and_language(
     code_file_path: str, repo_root: str
 ) -> Tuple[Optional[str], Optional[str]]:
-    """Extract basename (file stem) and language from a code file path.
+    """Extract basename (relative path stem) and language from a code file path.
+
+    Uses the path relative to repo_root (without extension) as the basename
+    to avoid fingerprint collisions when multiple files share the same filename
+    (e.g., settings/page.tsx vs dashboard/page.tsx).
 
     Args:
         code_file_path: Absolute path to the code file.
@@ -420,30 +542,68 @@ def derive_basename_and_language(
     if not language:
         return None, None
 
-    basename = os.path.splitext(os.path.basename(code_file_path))[0]
+    try:
+        rel_path = os.path.relpath(code_file_path, repo_root)
+    except ValueError:
+        rel_path = os.path.basename(code_file_path)
+    basename = os.path.splitext(rel_path)[0]
     return basename, language.lower()
+
+
+def _check_include_deps_changed(fingerprint) -> Tuple[bool, str]:
+    """Check if any stored include dependencies have changed on disk."""
+    if not isinstance(fingerprint.include_deps, dict) or not fingerprint.include_deps:
+        return False, "no include deps in fingerprint"
+    for dep_path_str, stored_hash in fingerprint.include_deps.items():
+        dep_path = Path(dep_path_str)
+        if not dep_path.exists():
+            return True, f"include dependency deleted: {dep_path_str}"
+        current_hash = calculate_sha256(dep_path)
+        if current_hash is None:
+            # Treat unreadable dependencies as changed so they can be re-synced.
+            return True, f"include dependency unreadable: {dep_path_str}"
+        if current_hash != stored_hash:
+            return True, f"include dependency changed: {dep_path_str}"
+    return False, "include deps unchanged"
 
 
 def is_code_changed(
     code_file_path: str,
     repo_root: str,
     git_changed_files: Set[str],
+    prompt_file_path: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """Determine whether a code file has changed since last sync.
 
     Strategy:
     1. If a fingerprint exists, compare current SHA256 vs stored code_hash.
-    2. If no fingerprint, fall back to git changed-files set.
+    2. If code hash matches, check stored include dependency hashes.
+    3. If no fingerprint, fall back to git changed-files set.
+
+    When *prompt_file_path* is provided, uses ``infer_module_identity`` to
+    derive the fingerprint key (matching the write path in update_main).
+    Falls back to ``derive_basename_and_language`` otherwise.
 
     Args:
         code_file_path: Absolute path to the code file.
         repo_root: Absolute path to the repository root.
         git_changed_files: Set of absolute paths from get_git_changed_files().
+        prompt_file_path: Optional prompt path for accurate fingerprint lookup.
 
     Returns:
         (is_changed, reason) tuple.
     """
-    basename, language = derive_basename_and_language(code_file_path, repo_root)
+    basename, language = None, None
+
+    # Prefer prompt-path-based identity (matches the write path)
+    if prompt_file_path:
+        from .operation_log import infer_module_identity
+        basename, language = infer_module_identity(prompt_file_path)
+
+    # Fallback to code-path-based identity
+    if basename is None or language is None:
+        basename, language = derive_basename_and_language(code_file_path, repo_root)
+
     if basename is None or language is None:
         return False, "unknown extension"
 
@@ -460,6 +620,12 @@ def is_code_changed(
 
         if current_hash != stored_hash:
             return True, "code hash differs from fingerprint"
+
+        # Check include dependencies (shared files like preambles, examples)
+        include_changed, include_reason = _check_include_deps_changed(fingerprint)
+        if include_changed:
+            return True, include_reason
+
         return False, "code hash matches fingerprint"
 
     # No fingerprint — fall back to git
@@ -644,16 +810,26 @@ def update_main(
             scan_dir = repo_root
         pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
 
+        if pairs:
+            from .pddrc_initializer import ensure_pddrc_for_scan
+            code_files_for_pddrc = [code_path for _, code_path in pairs]
+            ensure_pddrc_for_scan(scan_dir, repo_root, code_files_for_pddrc, quiet=quiet)
+
         if not pairs:
             rprint("[info]No scannable code files found in the repository.[/info]")
             return None
 
-        # Change-detection: filter to only changed code files
+        # Change-detection: filter to changed code files OR empty prompts
         git_changed_files = get_git_changed_files(repo_root, base_branch)
 
         changed_pairs = []
         for prompt_path, code_path in pairs:
-            changed, reason = is_code_changed(code_path, repo_root, git_changed_files)
+            # Empty prompts always need generation, regardless of code changes
+            prompt_p = Path(prompt_path)
+            if prompt_p.exists() and prompt_p.stat().st_size == 0:
+                changed_pairs.append((prompt_path, code_path))
+                continue
+            changed, reason = is_code_changed(code_path, repo_root, git_changed_files, prompt_file_path=prompt_path)
             if changed:
                 changed_pairs.append((prompt_path, code_path))
 
@@ -728,7 +904,9 @@ def update_main(
 
         # Determine prompts directory and architecture path
         prompts_dir = Path(repo_root) / "prompts"
-        architecture_path = Path(repo_root) / "architecture.json"
+        from .architecture_registry import find_architecture_for_project
+        arch_files = find_architecture_for_project(Path(repo_root))
+        architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
 
         successful_prompts = [
             res["prompt_file"] for res in results

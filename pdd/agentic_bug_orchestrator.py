@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any, Union
+from typing import List, Tuple, Optional, Dict, Any
 
 from rich.console import Console
 
@@ -40,20 +41,21 @@ def _get_modified_and_untracked(cwd: Path) -> List[str]:
     return files
 
 
-# Per-step timeouts for the 11-step agentic bug workflow (Issue #256)
+# Per-step timeouts for the 12-step agentic bug workflow (Issue #256, #538)
 # Complex steps (reproduce, root cause, prompt classification, generate, e2e) get more time.
-BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
     1: 240.0,    # Duplicate Check
     2: 400.0,    # Docs Check
     3: 400.0,    # Triage
-    4: 600.0,    # Reproduce (Complex)
-    5: 600.0,    # Root Cause (Complex)
-    5.5: 600.0,  # Prompt Classification (may auto-fix prompts)
-    6: 340.0,    # Test Plan
-    7: 1000.0,   # Generate Unit Test (Most Complex)
-    8: 600.0,    # Verify Unit Test
-    9: 2000.0,   # E2E Test (Complex - needs to discover env & run tests)
-    10: 240.0,   # Create PR
+    4: 500.0,    # API Research (NEW - Issue #538)
+    5: 600.0,    # Reproduce (Complex)
+    6: 600.0,    # Root Cause (Complex)
+    7: 600.0,    # Prompt Classification (may auto-fix prompts)
+    8: 340.0,    # Test Plan
+    9: 1000.0,   # Generate Unit Test (Most Complex)
+    10: 600.0,   # Verify Unit Test
+    11: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
+    12: 240.0,   # Create PR
 }
 
 
@@ -262,7 +264,7 @@ def run_agentic_bug_orchestrator(
     use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 11-step agentic bug investigation workflow.
+    Orchestrates the 12-step agentic bug investigation workflow.
 
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
@@ -308,14 +310,38 @@ def run_agentic_bug_orchestrator(
         last_completed_step = state.get("last_completed_step", 0)
         cached_outputs = state.get("step_outputs", {})
 
+        # State migration: map old step numbers (including "5.5") to new 12-step numbering
+        # This handles in-progress workflows saved with the old 11-step scheme.
+        OLD_TO_NEW_STEP = {
+            "1": "1", "2": "2", "3": "3",
+            "4": "5", "5": "6", "5.5": "7",
+            "6": "8", "7": "9", "8": "10", "9": "11", "10": "12",
+        }
+        OLD_TO_NEW_LAST = {
+            1: 1, 2: 2, 3: 3,
+            4: 5, 5: 6, 5.5: 7,
+            6: 8, 7: 9, 8: 10, 9: 11, 10: 12,
+        }
+        # Detect old-format state: presence of key "5.5" or last_completed_step being a float
+        is_old_format = ("5.5" in cached_outputs) or isinstance(last_completed_step, float)
+        if is_old_format:
+            migrated_outputs: Dict[str, str] = {}
+            for old_key, val in cached_outputs.items():
+                new_key = OLD_TO_NEW_STEP.get(old_key, old_key)
+                migrated_outputs[new_key] = val
+            cached_outputs = migrated_outputs
+            last_completed_step = OLD_TO_NEW_LAST.get(last_completed_step, last_completed_step)
+            if not quiet:
+                console.print(f"[yellow]Migrated saved state from old 11-step to new 12-step numbering[/yellow]")
+
         # Issue #467: Validate cached state — find actual last successful step
         # by scanning step_outputs for entries without "FAILED:" prefix.
         # This prevents resuming past failed steps when the state was corrupted
         # by the ratchet effect (now fixed) or by other state corruption.
         if cached_outputs:
             # Step order for validation
-            step_order = [1, 2, 3, 4, 5, 5.5, 6, 7, 8, 9, 10]
-            actual_last_success: Union[int, float] = 0
+            step_order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            actual_last_success: int = 0
             for sn in step_order:
                 output_val = cached_outputs.get(str(sn), "")
                 # Stop at the first missing/empty entry to avoid skipping gaps
@@ -331,13 +357,7 @@ def run_agentic_bug_orchestrator(
                     console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last_success} (found FAILED steps in cache)[/yellow]")
                 last_completed_step = actual_last_success
 
-        # Calculate actual start step before printing resume message (handle step 5.5)
-        if last_completed_step == 5:
-            resume_start_step: Union[int, float] = 5.5
-        elif last_completed_step == 5.5:
-            resume_start_step = 6
-        else:
-            resume_start_step = last_completed_step + 1
+        resume_start_step: int = last_completed_step + 1
         if not quiet:
             console.print(f"[yellow]Resuming from step {resume_start_step} (steps 1-{last_completed_step} cached)[/yellow]")
 
@@ -364,42 +384,35 @@ def run_agentic_bug_orchestrator(
 
         # Restore context from step outputs
         # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
-        # Transform step keys: "5.5" -> "5_5" to match template placeholders (Issue #279)
         for step_key, output in step_outputs.items():
-            fixed_key = str(step_key).replace(".", "_")  # "5.5" -> "5_5"
-            context[f"step{fixed_key}_output"] = output
+            context[f"step{step_key}_output"] = output
 
         # Restore files_to_stage if available
         if changed_files:
             context["files_to_stage"] = ", ".join(changed_files)
 
-    # Step Definitions (11 steps with 5.5 for prompt classification)
-    steps: List[Tuple[Union[int, float], str, str]] = [
+    # Step Definitions (12 steps — Issue #538 added step 4: API Research)
+    steps: List[Tuple[int, str, str]] = [
         (1, "duplicate", "Searching for duplicate issues"),
         (2, "docs", "Checking documentation for user error"),
         (3, "triage", "Assessing information completeness"),
-        (4, "reproduce", "Attempting to reproduce the bug"),
-        (5, "root_cause", "Analyzing root cause"),
-        (5.5, "prompt_classification", "Classifying defect: code bug vs prompt defect"),
-        (6, "test_plan", "Designing test strategy"),
-        (7, "generate", "Generating failing unit test"),
-        (8, "verify", "Verifying test catches the bug"),
-        (9, "e2e_test", "Generating and running E2E tests"),
-        (10, "pr", "Creating draft PR"),
+        (4, "api_research", "Researching external API dependencies and constraints"),
+        (5, "reproduce", "Attempting to reproduce the bug"),
+        (6, "root_cause", "Analyzing root cause"),
+        (7, "prompt_classification", "Classifying defect: code bug vs prompt defect"),
+        (8, "test_plan", "Designing test strategy"),
+        (9, "generate", "Generating failing unit test"),
+        (10, "verify", "Verifying test catches the bug"),
+        (11, "e2e_test", "Generating and running E2E tests"),
+        (12, "pr", "Creating draft PR"),
     ]
 
-    # Determine correct start step (handle step 5.5)
-    if last_completed_step == 5:
-        start_step: Union[int, float] = 5.5
-    elif last_completed_step == 5.5:
-        start_step = 6
-    else:
-        start_step = last_completed_step + 1
+    start_step: int = last_completed_step + 1
 
     # Track the actual last successfully completed step for state saving.
     # Issue #467: This prevents the "ratchet effect" where consecutive failures
     # advance last_completed_step via the step_num - 1 formula.
-    last_completed_step_to_save: Union[int, float] = last_completed_step
+    last_completed_step_to_save: int = last_completed_step
     consecutive_provider_failures = 0
 
     for step_num, name, description in steps:
@@ -409,8 +422,8 @@ def run_agentic_bug_orchestrator(
             continue
 
         # --- Pre-Step Logic: Worktree Creation ---
-        # Issue #352: Create worktree before Step 5.5 so prompt fixes are isolated
-        if step_num == 5.5:
+        # Issue #352: Create worktree before Step 7 (prompt classification) so prompt fixes are isolated
+        if step_num == 7:
             # Only create worktree if not already set (from resume)
             if worktree_path is None:
                 # Check current branch before creating worktree
@@ -441,17 +454,15 @@ def run_agentic_bug_orchestrator(
                     console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
 
         # --- Step Execution ---
-        # Format step label for display and template name (5.5 -> "5.5" for display, "5_5" for template)
-        step_display = f"{step_num}" if isinstance(step_num, int) else f"{step_num}"
-        step_suffix = str(step_num).replace(".", "_")  # 5.5 -> "5_5"
+        step_suffix = str(step_num)
 
-        # Snapshot filesystem before Step 7 for fallback detection
-        pre_step7_files = None
-        if step_num == 7:
-            pre_step7_files = set(_get_modified_and_untracked(current_cwd))
+        # Snapshot filesystem before Step 9 (generate) for fallback detection
+        pre_step9_files = None
+        if step_num == 9:
+            pre_step9_files = set(_get_modified_and_untracked(current_cwd))
 
         if not quiet:
-            console.print(f"[bold][Step {step_display}/11][/bold] {description}...")
+            console.print(f"[bold][Step {step_num}/12][/bold] {description}...")
 
         template_name = f"agentic_bug_step{step_suffix}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
@@ -491,6 +502,37 @@ def run_agentic_bug_orchestrator(
 
         # --- Post-Step Logic: Hard Stops & Parsing ---
 
+        # Universal STOP_CONDITION check (before step-specific hard stops)
+        stop_match = re.search(r'STOP_CONDITION:\s*(.+)', output or '', re.IGNORECASE)
+        if stop_match:
+            reason = stop_match.group(1).strip()
+            msg = f"Stopped at Step {step_num}: {reason}"
+            if not quiet:
+                console.print(f"\u23f9\ufe0f  {msg}")
+            # Clarification step (step 3): save as not-completed so re-run
+            # re-evaluates after new comments are added (Issue #769)
+            if step_num == 3:
+                step_outputs[str(step_num)] = output
+                save_state = {
+                    "workflow": "bug",
+                    "issue_number": issue_number,
+                    "issue_url": issue_url,
+                    "last_completed_step": step_num - 1,
+                    "step_outputs": step_outputs.copy(),
+                    "total_cost": total_cost,
+                    "model_used": last_model_used,
+                    "changed_files": changed_files.copy(),
+                    "worktree_path": str(worktree_path) if worktree_path else None,
+                    "github_comment_id": github_comment_id,
+                }
+                save_workflow_state(
+                    cwd=cwd, issue_number=issue_number, workflow_type="bug",
+                    state=save_state, state_dir=state_dir,
+                    repo_owner=repo_owner, repo_name=repo_name,
+                    use_github_state=use_github_state, github_comment_id=github_comment_id,
+                )
+            return False, msg, total_cost, last_model_used, changed_files
+
         # Step 1: Duplicate Check
         if step_num == 1 and "Duplicate of #" in output:
             msg = f"Stopped at Step 1: Issue is a duplicate. {output.strip()}"
@@ -509,14 +551,12 @@ def run_agentic_bug_orchestrator(
                 if not quiet: console.print(f"⏹️  {msg}")
                 return False, msg, total_cost, last_model_used, changed_files
 
-        # Step 3: Needs Info
-        if step_num == 3 and "Needs More Info" in output:
-            msg = "Stopped at Step 3: Insufficient information provided."
-            if not quiet: console.print(f"⏹️  {msg}")
-            return False, msg, total_cost, last_model_used, changed_files
+        # Step 3: Needs Info — requires STOP_CONDITION tag (caught by universal check above)
+        # No substring fallback — clarification steps use STOP_CONDITION only to avoid
+        # false positives from casual LLM mentions (Issue #769)
 
-        # Step 5.5: Prompt Classification - Hard stop if needs human review
-        if step_num == 5.5 and "PROMPT_REVIEW:" in output:
+        # Step 7: Prompt Classification - Hard stop if needs human review
+        if step_num == 7 and "PROMPT_REVIEW:" in output:
             # Extract reason if available
             for line in output.splitlines():
                 if line.startswith("PROMPT_REVIEW:"):
@@ -524,12 +564,12 @@ def run_agentic_bug_orchestrator(
                     break
             else:
                 reason = "Prompt defect needs human review"
-            msg = f"Stopped at Step 5.5: {reason}"
+            msg = f"Stopped at Step 7: {reason}"
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
 
-        # Step 5.5: Parse PROMPT_FIXED to track changed prompt files
-        if step_num == 5.5:
+        # Step 7: Parse PROMPT_FIXED to track changed prompt files
+        if step_num == 7:
             for line in output.splitlines():
                 if line.startswith("PROMPT_FIXED:"):
                     fixed_file = line.split(":", 1)[1].strip()
@@ -538,8 +578,8 @@ def run_agentic_bug_orchestrator(
                         context["files_to_stage"] = ", ".join(changed_files)
                     break
 
-        # Step 7: File Extraction
-        if step_num == 7:
+        # Step 9: File Extraction
+        if step_num == 9:
             # Parse output for FILES_CREATED or FILES_MODIFIED
             extracted_files = []
             for line in output.splitlines():
@@ -549,9 +589,9 @@ def run_agentic_bug_orchestrator(
 
             # Filesystem fallback: if no markers found, detect files created on disk
             # (some providers like Codex write files without emitting markers)
-            if not extracted_files and pre_step7_files is not None:
+            if not extracted_files and pre_step9_files is not None:
                 post_files = set(_get_modified_and_untracked(current_cwd))
-                new_files = sorted(post_files - pre_step7_files)
+                new_files = sorted(post_files - pre_step9_files)
                 if new_files:
                     extracted_files = new_files
                     if not quiet:
@@ -564,37 +604,38 @@ def run_agentic_bug_orchestrator(
             changed_files.extend(extracted_files)
             # Deduplicate while preserving insertion order for consistent git staging
             changed_files = list(dict.fromkeys(changed_files))
-            # Pass explicit file list to Step 9 and 10 for precise git staging
+            # Pass explicit file list to Step 11 and 12 for precise git staging
             context["files_to_stage"] = ", ".join(changed_files)
 
             if not changed_files:
-                msg = "Stopped at Step 7: No test file generated."
+                msg = "Stopped at Step 9: No test file generated."
                 if not quiet: console.print(f"⏹️  {msg}")
                 return False, msg, total_cost, last_model_used, changed_files
 
-        # Step 8: Verification Failure
-        if step_num == 8 and "FAIL: Test does not work as expected" in output:
-            msg = "Stopped at Step 8: Generated test does not fail correctly (verification failed)."
+        # Step 10: Verification Failure
+        if step_num == 10 and "FAIL: Test does not work as expected" in output:
+            msg = "Stopped at Step 10: Generated test does not fail correctly (verification failed)."
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
 
-        # Step 9: E2E Test — handle skip, failure, and file extraction
-        if step_num == 9:
+        # Step 11: E2E Test — handle skip, failure, and file extraction
+        if step_num == 11:
             if "E2E_SKIP:" in output:
-                # Simple bug — no E2E needed, treat as successful completion
                 if not quiet:
                     for line in output.splitlines():
                         if line.strip().startswith("E2E_SKIP:"):
                             reason = line.split(":", 1)[1].strip()
                             console.print(f"  → E2E test skipped: {reason}")
                             break
-                # Skip E2E file parsing, continue to step 10
+                # Fall through to file parsing (don't skip)
             elif "E2E_FAIL: Test does not catch bug correctly" in output:
-                msg = "Stopped at Step 9: E2E test does not catch bug correctly."
+                msg = "Stopped at Step 11: E2E test does not catch bug correctly."
                 if not quiet: console.print(f"⏹️  {msg}")
                 return False, msg, total_cost, last_model_used, changed_files
-            else:
-                # Parse output for E2E_FILES_CREATED to extend changed_files
+
+            # Always parse E2E_FILES_CREATED (even on E2E_SKIP — test may have
+            # been written but not verified due to missing runtime deps)
+            if "E2E_FAIL:" not in output:
                 e2e_files = []
                 for line in output.splitlines():
                     if line.startswith("E2E_FILES_CREATED:"):
@@ -605,7 +646,7 @@ def run_agentic_bug_orchestrator(
                     changed_files.extend(e2e_files)
                     # Deduplicate while preserving insertion order
                     changed_files = list(dict.fromkeys(changed_files))
-                    # Update files_to_stage so Step 10 (PR) includes E2E files
+                    # Update files_to_stage so Step 12 (PR) includes E2E files
                     context["files_to_stage"] = ", ".join(changed_files)
 
         # Soft Failure Logging (if not a hard stop)
