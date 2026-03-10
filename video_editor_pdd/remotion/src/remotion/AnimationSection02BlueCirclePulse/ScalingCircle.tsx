@@ -72,11 +72,11 @@ export const ScalingCircle: React.FC = () => {
         top: CANVAS.centerY - CIRCLE.radius,
         width: CIRCLE.diameter,
         height: CIRCLE.diameter,
-        borderRadius: '50%',
         backgroundColor: COLORS.circleFill,
+        clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)',
         opacity,
         transform: `scale(${scale})`,
-        boxShadow: `0 4px 24px rgba(59, 130, 246, ${0.5 * shadowOpacity})`,
+        filter: `drop-shadow(0 4px 24px rgba(59, 130, 246, ${0.5 * shadowOpacity}))`,
       }}
     />
   );
