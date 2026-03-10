@@ -55,7 +55,7 @@ export const VeoSection12SplitOceanForestReprise: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
-      {/* Base layer: Ocean wave sunset (full frame, behind) */}
+      {/* Base layer: Forest canopy aerial (full frame, behind) */}
       <div
         style={{
           position: 'absolute',
@@ -78,7 +78,7 @@ export const VeoSection12SplitOceanForestReprise: React.FC = () => {
         ) : null}
       </div>
 
-      {/* Reveal layer: Forest canopy aerial, clipped by wipe position */}
+      {/* Reveal layer: Ocean wave sunset, clipped by wipe position */}
       <div
         style={{
           position: 'absolute',

@@ -17,10 +17,10 @@ export const VeoSection07SplitOceanForest: React.FC = () => {
         backgroundColor: COLORS.background,
       }}
     >
-      {/* Left panel: Ocean wave sunset */}
+      {/* Left panel: Forest canopy aerial */}
       {leftSrc ? <VideoPanel src={leftSrc} side="left" /> : null}
 
-      {/* Right panel: Forest canopy aerial */}
+      {/* Right panel: Ocean wave sunset */}
       {rightSrc ? <VideoPanel src={rightSrc} side="right" /> : null}
 
       {/* Vertical divider with glow */}

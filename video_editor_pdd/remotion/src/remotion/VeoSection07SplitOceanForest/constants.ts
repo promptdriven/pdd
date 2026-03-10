@@ -61,6 +61,6 @@ export const ANIMATION = {
 };
 
 export const LABELS = {
-  left: 'OCEAN — SUNSET',
-  right: 'FOREST — AERIAL',
+  left: 'FOREST — AERIAL',
+  right: 'OCEAN — SUNSET',
 };
