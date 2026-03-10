@@ -245,18 +245,27 @@ export default function Page() {
         }
 
         const createdAnnotation = await createResponse.json();
+        setAnnotations((prev) => [...prev, createdAnnotation]);
+
         if (createdAnnotation?.id) {
-          const analyzeResponse = await fetch(
-            `/api/annotations/${createdAnnotation.id}/analyze`,
-            { method: 'POST' }
-          );
+          void (async () => {
+            try {
+              const analyzeResponse = await fetch(
+                `/api/annotations/${createdAnnotation.id}/analyze`,
+                { method: 'POST' }
+              );
 
-          if (!analyzeResponse.ok) {
-            console.error('Failed to analyze annotation', createdAnnotation.id);
-          }
+              if (!analyzeResponse.ok) {
+                console.error('Failed to analyze annotation', createdAnnotation.id);
+              }
+            } catch (analysisErr) {
+              console.error(analysisErr);
+            }
+            await loadAnnotations();
+          })();
+        } else {
+          await loadAnnotations();
         }
-
-        await loadAnnotations();
       } catch (err) {
         console.error(err);
       }

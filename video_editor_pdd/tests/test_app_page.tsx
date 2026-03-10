@@ -517,6 +517,14 @@ describe("handleAnnotationCapture", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{createdAnnotation\.id\}\/analyze`\s*,\s*\{\s*method\s*:\s*['"]POST['"]/);
   });
 
+  it("optimistically inserts the created annotation before background analysis", () => {
+    expect(sourceCode).toMatch(/setAnnotations\s*\(\s*\(prev\)\s*=>\s*\[\s*\.\.\.prev\s*,\s*createdAnnotation\s*\]\s*\)/);
+  });
+
+  it("runs annotation analysis in a background async task", () => {
+    expect(sourceCode).toMatch(/void\s*\(\s*async\s*\(\)\s*=>\s*\{/);
+  });
+
   it("refreshes annotations after saving", () => {
     // After POST, loadAnnotations is called
     expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*\)/);

@@ -111,6 +111,7 @@ export default function VideoPlayer({
 
     recognitionRef.current = recognition;
     setSpeechAvailable(true);
+    setInputMethod('speech');
 
     return () => {
       if (speechStopTimeoutRef.current !== null) {
@@ -387,11 +388,15 @@ export default function VideoPlayer({
   }, [inputMethod, startSpeechRecognition]);
 
   const stopRecordingMode = useCallback(async () => {
+    const videoEl = videoRef.current;
     setIsRecording(false);
     const capturedTranscript = inputMethod === 'speech'
       ? await stopSpeechRecognition()
       : transcript.trim();
     await handleCapture(capturedTranscript);
+    if (videoEl) {
+      videoEl.play().catch(() => {});
+    }
   }, [handleCapture, inputMethod, stopSpeechRecognition, transcript]);
 
   const togglePlayPause = useCallback(() => {
@@ -472,6 +477,7 @@ export default function VideoPlayer({
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
       if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) return;
+      if (event.code === 'Space' && event.repeat) return;
 
       if (event.code === 'Space') {
         event.preventDefault();

@@ -52,6 +52,10 @@ describe('VideoPlayer speech input (US17)', () => {
     expect(sourceCode).toMatch(/setSpeechAvailable\s*\(\s*true\s*\)/);
   });
 
+  it('defaults to speech input when Web Speech API is present', () => {
+    expect(sourceCode).toMatch(/setInputMethod\s*\(\s*['"]speech['"]\s*\)/);
+  });
+
   it('initializes inputMethod as typed', () => {
     expect(sourceCode).toMatch(/useState\s*<\s*['"]typed['"]\s*\|\s*['"]speech['"]\s*>\s*\(\s*['"]typed['"]\s*\)/);
   });
