@@ -7,7 +7,7 @@ export const BeforeCircle: React.FC = () => {
 
   const scale = interpolate(
     frame,
-    [ANIMATION_TIMING.leftPanelStart, ANIMATION_TIMING.leftPanelEnd],
+    [ANIMATION_TIMING.rightPanelStart, ANIMATION_TIMING.rightPanelEnd],
     [0.8, 1.0],
     {
       extrapolateLeft: 'clamp',

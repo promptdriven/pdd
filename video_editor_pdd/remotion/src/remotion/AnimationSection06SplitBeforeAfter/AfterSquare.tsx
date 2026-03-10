@@ -7,7 +7,7 @@ export const AfterSquare: React.FC = () => {
 
   const scale = interpolate(
     frame,
-    [ANIMATION_TIMING.rightPanelStart, ANIMATION_TIMING.rightPanelEnd],
+    [ANIMATION_TIMING.leftPanelStart, ANIMATION_TIMING.leftPanelEnd],
     [0.8, 1.0],
     {
       extrapolateLeft: 'clamp',
