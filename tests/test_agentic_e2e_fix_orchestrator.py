@@ -1920,3 +1920,231 @@ class TestIndependentTestVerification:
 
         assert "tests/test_issue_588_regression.py" in result
         assert "src/webhook.py" not in result
+
+
+class TestIssue797TypeScriptTestFiles:
+    """Tests for issue #797: _extract_test_files and _verify_tests_independently
+    are Python-only, silently skipping TypeScript/Jest/Playwright tests.
+
+    Bug: All 5 filtering locations in _extract_test_files only accept .py files,
+    and _verify_tests_independently only runs pytest. This means TypeScript test
+    files (.test.tsx, .test.ts, .spec.ts, .spec.tsx) are invisible to the
+    independent verification safety net.
+    """
+
+    # ── _extract_test_files: changed_files scan (line 193) ──
+
+    def test_extract_test_files_accepts_jest_tsx_from_changed_files(self, tmp_path):
+        """changed_files containing .test.tsx should be extracted (Jest convention)."""
+        test_dir = tmp_path / "frontend" / "src" / "components" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "WaitlistPending.test.tsx").touch()
+
+        result = _extract_test_files(
+            "No markers",
+            ["frontend/src/components/__test__/WaitlistPending.test.tsx"],
+            tmp_path,
+        )
+
+        assert "frontend/src/components/__test__/WaitlistPending.test.tsx" in result
+
+    def test_extract_test_files_accepts_jest_ts_from_changed_files(self, tmp_path):
+        """changed_files containing .test.ts should be extracted (Jest convention)."""
+        test_dir = tmp_path / "frontend" / "src"
+        test_dir.mkdir(parents=True)
+        (test_dir / "utils.test.ts").touch()
+
+        result = _extract_test_files(
+            "No markers",
+            ["frontend/src/utils.test.ts"],
+            tmp_path,
+        )
+
+        assert "frontend/src/utils.test.ts" in result
+
+    def test_extract_test_files_accepts_playwright_spec_ts_from_changed_files(self, tmp_path):
+        """changed_files containing .spec.ts should be extracted (Playwright convention)."""
+        test_dir = tmp_path / "frontend" / "e2e" / "tests"
+        test_dir.mkdir(parents=True)
+        (test_dir / "auto-refresh.spec.ts").touch()
+
+        result = _extract_test_files(
+            "No markers",
+            ["frontend/e2e/tests/auto-refresh.spec.ts"],
+            tmp_path,
+        )
+
+        assert "frontend/e2e/tests/auto-refresh.spec.ts" in result
+
+    def test_extract_test_files_accepts_spec_tsx_from_changed_files(self, tmp_path):
+        """changed_files containing .spec.tsx should be extracted."""
+        test_dir = tmp_path / "src"
+        test_dir.mkdir(parents=True)
+        (test_dir / "App.spec.tsx").touch()
+
+        result = _extract_test_files(
+            "No markers",
+            ["src/App.spec.tsx"],
+            tmp_path,
+        )
+
+        assert "src/App.spec.tsx" in result
+
+    # ── _extract_test_files: E2E_FILES_CREATED marker (line 187) ──
+
+    def test_extract_test_files_accepts_tsx_from_markers(self, tmp_path):
+        """E2E_FILES_CREATED markers with .test.tsx files should be extracted."""
+        test_dir = tmp_path / "frontend" / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "WaitlistPending.test.tsx").touch()
+
+        issue_content = "E2E_FILES_CREATED: frontend/src/__test__/WaitlistPending.test.tsx\n"
+
+        result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert "frontend/src/__test__/WaitlistPending.test.tsx" in result
+
+    def test_extract_test_files_accepts_spec_ts_from_markers(self, tmp_path):
+        """E2E_FILES_CREATED markers with .spec.ts files should be extracted."""
+        test_dir = tmp_path / "frontend" / "e2e"
+        test_dir.mkdir(parents=True)
+        (test_dir / "auto-refresh.spec.ts").touch()
+
+        issue_content = "E2E_FILES_CREATED: frontend/e2e/auto-refresh.spec.ts\n"
+
+        result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert "frontend/e2e/auto-refresh.spec.ts" in result
+
+    # ── _extract_test_files: disk-change detection (line 205) ──
+
+    def test_extract_test_files_detects_tsx_from_disk_changes(self, tmp_path):
+        """TypeScript test files created on disk should be detected via hash comparison."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        test_dir = tmp_path / "frontend" / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "Component.test.tsx").write_text("test('renders', () => {});")
+
+        initial_hashes: Dict[str, Optional[str]] = {}
+
+        result = _extract_test_files(
+            "Generic bug description",
+            [],
+            tmp_path,
+            initial_hashes,
+        )
+
+        assert "frontend/src/__test__/Component.test.tsx" in result
+
+    def test_extract_test_files_detects_spec_ts_from_disk_changes(self, tmp_path):
+        """Playwright spec files created on disk should be detected via hash comparison."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        test_dir = tmp_path / "e2e" / "tests"
+        test_dir.mkdir(parents=True)
+        (test_dir / "login.spec.ts").write_text("test('login works', async () => {});")
+
+        initial_hashes: Dict[str, Optional[str]] = {}
+
+        result = _extract_test_files(
+            "Generic bug description",
+            [],
+            tmp_path,
+            initial_hashes,
+        )
+
+        assert "e2e/tests/login.spec.ts" in result
+
+    # ── _extract_test_files: inline regex (line 197) ──
+
+    def test_extract_test_files_inline_regex_matches_tsx_test_files(self, tmp_path):
+        """Inline references to .test.tsx files in issue content should be found."""
+        test_dir = tmp_path / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "Button.test.tsx").touch()
+
+        issue_content = "The test is at src/__test__/Button.test.tsx and it fails."
+
+        result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert "src/__test__/Button.test.tsx" in result
+
+    # ── _verify_tests_independently: runner dispatch ──
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
+    def test_verify_independently_uses_pytest_for_py(self, mock_pytest, tmp_path):
+        """Python test files should still use pytest (regression guard)."""
+        mock_pytest.return_value = {
+            "test_results": [{"passed": 1, "failures": 0, "errors": 0, "standard_output": ""}]
+        }
+
+        passed, output = _verify_tests_independently(["tests/test_foo.py"], tmp_path)
+
+        assert passed is True
+        mock_pytest.assert_called_once()
+
+    @patch("subprocess.run")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest src/__test__/Widget.test.tsx")
+    @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
+    def test_verify_independently_does_not_use_pytest_for_tsx(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
+        """Jest .test.tsx files should NOT be run through pytest.
+
+        The current buggy code calls run_pytest_and_capture_output for ALL files,
+        which fails silently for TypeScript. The fix should use an appropriate
+        runner (e.g., npx jest) for .test.tsx files.
+        """
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+        test_dir = tmp_path / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "Widget.test.tsx").write_text("test('renders', () => {});")
+
+        passed, output = _verify_tests_independently(
+            ["src/__test__/Widget.test.tsx"], tmp_path
+        )
+
+        mock_pytest.assert_not_called()
+        mock_subproc.assert_called_once()
+        # Verify shell=False (no command injection)
+        _, kwargs = mock_subproc.call_args
+        assert kwargs.get("shell") is False
+
+    @patch("subprocess.run")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx playwright test e2e/login.spec.ts")
+    @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
+    def test_verify_independently_does_not_use_pytest_for_spec_ts(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
+        """Playwright .spec.ts files should NOT be run through pytest."""
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+        test_dir = tmp_path / "e2e"
+        test_dir.mkdir(parents=True)
+        (test_dir / "login.spec.ts").write_text("test('login', async () => {});")
+
+        passed, output = _verify_tests_independently(
+            ["e2e/login.spec.ts"], tmp_path
+        )
+
+        mock_pytest.assert_not_called()
+        mock_subproc.assert_called_once()
+        _, kwargs = mock_subproc.call_args
+        assert kwargs.get("shell") is False
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value=None)
+    @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
+    def test_verify_independently_fails_when_no_runner_available(self, mock_pytest, mock_get_cmd, tmp_path):
+        """When no test runner is available for a non-Python file, verification should fail."""
+        test_dir = tmp_path / "src"
+        test_dir.mkdir(parents=True)
+        (test_dir / "app.test.tsx").write_text("test('x', () => {});")
+
+        passed, output = _verify_tests_independently(
+            ["src/app.test.tsx"], tmp_path
+        )
+
+        assert passed is False
+        assert "no test runner available" in output.lower()
