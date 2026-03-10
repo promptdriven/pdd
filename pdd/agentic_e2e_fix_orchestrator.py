@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -22,6 +23,7 @@ from .agentic_common import (
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
+from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
@@ -152,6 +154,29 @@ def _is_intermediate_file(filepath: str) -> bool:
     return False
 
 
+# TypeScript/JavaScript test file extensions
+_TS_TEST_EXTENSIONS = (".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")
+
+
+def _is_test_file(filename: str) -> bool:
+    """Check if a filename matches test file conventions for any supported language.
+
+    Recognizes:
+    - Python: test_*.py
+    - Jest: *.test.ts, *.test.tsx (including files in __test__/ directories)
+    - Playwright: *.spec.ts, *.spec.tsx
+    """
+    basename = Path(filename).name
+    # Python convention
+    if basename.startswith("test_") and basename.endswith(".py"):
+        return True
+    # TypeScript/JavaScript conventions (Jest + Playwright)
+    for ext in _TS_TEST_EXTENSIONS:
+        if basename.endswith(ext):
+            return True
+    return False
+
+
 def _extract_test_files(
     issue_content: str,
     changed_files: List[str],
@@ -163,7 +188,8 @@ def _extract_test_files(
     Looks for:
     - E2E_FILES_CREATED: markers from pdd bug output
     - FILES_CREATED: markers
-    - File paths matching test_*.py in changed_files
+    - File paths matching test conventions (Python test_*.py, Jest *.test.ts/tsx,
+      Playwright *.spec.ts/tsx) in changed_files
     - Test files actually created/modified on disk (hash comparison)
 
     Returns only paths that exist on disk, deduplicated.
@@ -184,57 +210,92 @@ def _extract_test_files(
                 content = line.split(":", 1)[1].strip()
                 for p in content.split(","):
                     p = p.strip()
-                    if p.endswith(".py") and ("test_" in p or p.startswith("test_")):
+                    if _is_test_file(p):
                         _add(p)
 
     # Include test files from changed_files list
     for f in changed_files:
-        basename = Path(f).name
-        if basename.startswith("test_") and basename.endswith(".py"):
+        if _is_test_file(f):
             _add(f)
 
     # Scan issue content for inline test file references
-    for match in _re.finditer(r'((?:[\w/.-]+/)?test_[\w.-]+\.py)', issue_content):
+    # Match Python test files (test_*.py) and TypeScript test files (*.test.ts/tsx, *.spec.ts/tsx)
+    for match in _re.finditer(
+        r'((?:[\w/._-]+/)*(?:test_[\w.-]+\.py|[\w.-]+\.(?:test|spec)\.(?:tsx|ts)))',
+        issue_content,
+    ):
         _add(match.group(1))
 
     # Detect test files actually created/modified on disk during workflow
     if initial_file_hashes is not None:
         actual_changes = _detect_changed_files(cwd, initial_file_hashes)
         for f in actual_changes:
-            basename = Path(f).name
-            if basename.startswith("test_") and basename.endswith(".py"):
+            if _is_test_file(f):
                 _add(f)
 
     return test_files
 
 
 def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]:
-    """Run pytest on test files via subprocess. Returns (all_passed, output).
+    """Run appropriate test runner on test files via subprocess. Returns (all_passed, output).
 
-    Uses run_pytest_and_capture_output from pytest_output.py for subprocess-based
-    pytest execution — the same function used by fix_error_loop.
+    Dispatches the correct runner based on file extension:
+    - .py → pytest via run_pytest_and_capture_output
+    - Non-Python → resolved via get_test_command_for_file (e.g. npx jest, npx playwright)
     """
     all_outputs: List[str] = []
     all_passed = True
 
     for test_file in test_files:
         abs_path = str(cwd / test_file)
-        result = run_pytest_and_capture_output(abs_path)
-        if not result or not result.get("test_results"):
-            all_passed = False
-            all_outputs.append(f"{test_file}: no results (pytest error)")
-            continue
 
-        tr = result["test_results"][0]
-        failures = tr.get("failures", 0) + tr.get("errors", 0)
-        passed = tr.get("passed", 0)
-        stdout = tr.get("standard_output", "")
+        if test_file.endswith(".py"):
+            # Python: use existing pytest runner
+            result = run_pytest_and_capture_output(abs_path)
+            if not result or not result.get("test_results"):
+                all_passed = False
+                all_outputs.append(f"{test_file}: no results (pytest error)")
+                continue
 
-        if failures > 0:
-            all_passed = False
-            all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+            tr = result["test_results"][0]
+            failures = tr.get("failures", 0) + tr.get("errors", 0)
+            passed = tr.get("passed", 0)
+            stdout = tr.get("standard_output", "")
+
+            if failures > 0:
+                all_passed = False
+                all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+            else:
+                all_outputs.append(f"{test_file}: {passed} passed")
         else:
-            all_outputs.append(f"{test_file}: {passed} passed")
+            # Non-Python: resolve test command via get_test_command_for_file
+            test_cmd = get_test_command_for_file(abs_path)
+            if not test_cmd:
+                all_passed = False
+                all_outputs.append(f"{test_file}: FAILED (no test runner available)")
+                continue
+
+            try:
+                proc = subprocess.run(
+                    shlex.split(test_cmd),
+                    shell=False,
+                    cwd=str(cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if proc.returncode != 0:
+                    all_passed = False
+                    output = proc.stdout + proc.stderr
+                    all_outputs.append(f"{test_file}: FAILED (exit code {proc.returncode})\n{output}")
+                else:
+                    all_outputs.append(f"{test_file}: passed")
+            except subprocess.TimeoutExpired:
+                all_passed = False
+                all_outputs.append(f"{test_file}: FAILED (timeout)")
+            except Exception as e:
+                all_passed = False
+                all_outputs.append(f"{test_file}: FAILED ({e})")
 
     return all_passed, "\n".join(all_outputs)
 
