@@ -34,7 +34,7 @@ export const GhostTrail: React.FC = () => {
               position: 'absolute',
               width: DIMENSIONS.shapeSize,
               height: DIMENSIONS.shapeSize,
-              backgroundColor: COLORS.squareGreen,
+              backgroundColor: COLORS.squareYellow,
               borderRadius: '0%',
               opacity,
               left: ghostX - DIMENSIONS.shapeSize / 2,

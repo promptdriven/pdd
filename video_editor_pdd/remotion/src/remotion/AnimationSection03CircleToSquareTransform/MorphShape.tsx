@@ -17,11 +17,11 @@ export const MorphShape: React.FC = () => {
     }
   );
 
-  // Color: blue → green during morph phase (linear)
+  // Color: blue → yellow during morph phase (linear)
   const fillColor = interpolateColors(
     frame,
     [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
-    [COLORS.circleBlue, COLORS.squareGreen]
+    [COLORS.circleBlue, COLORS.squareYellow]
   );
 
   // X position across phases
