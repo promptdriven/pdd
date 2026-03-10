@@ -558,6 +558,11 @@ describe("full video path", () => {
     expect(sourceCode).toContain("/api/video/outputs/sections/");
   });
 
+  it("appends a cache-busting version query to section review video URLs", () => {
+    expect(sourceCode).toMatch(/\?v=\$\{/);
+    expect(sourceCode).toMatch(/updatedAtMs/);
+  });
+
   it("switches Review to section video when fullVideo is stale", () => {
     expect(sourceCode).toMatch(/fullVideo\?\.stale/);
     expect(sourceCode).toMatch(/reviewVideoSrc/);
@@ -626,6 +631,10 @@ describe("batch resolve handler", () => {
   it("refreshes annotations after batch resolve", () => {
     // handleBatchResolve calls loadAnnotations
     expect(sourceCode).toContain("loadAnnotations");
+  });
+
+  it("refreshes render status after batch resolve so Review can reload the new section video", () => {
+    expect(sourceCode).toContain("loadReviewRenderStatus");
   });
 
   it("passes onBatchResolve to AnnotationPanel", () => {

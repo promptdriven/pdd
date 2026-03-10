@@ -31,17 +31,22 @@ type ReviewRenderStatus = {
   sections: Array<{
     id: string;
     status: 'missing' | 'rendering' | 'done' | 'error';
+    updatedAtMs?: number;
   }>;
   fullVideo: {
     exists: boolean;
     stale?: boolean;
+    updatedAtMs?: number;
   };
 };
 
 const FULL_VIDEO_SRC = '/api/video/outputs/full_video.mp4';
 
-const buildSectionVideoSrc = (sectionId: string) =>
-  `/api/video/outputs/sections/${sectionId}.mp4`;
+const withVersion = (src: string, updatedAtMs?: number) =>
+  updatedAtMs ? `${src}?v=${Math.floor(updatedAtMs)}` : src;
+
+const buildSectionVideoSrc = (sectionId: string, updatedAtMs?: number) =>
+  withVersion(`/api/video/outputs/sections/${sectionId}.mp4`, updatedAtMs);
 
 const STAGE_ORDER: PipelineStage[] = [
   'setup',
@@ -144,16 +149,19 @@ export default function Page() {
 
   const reviewVideoSrc = useMemo(() => {
     if (!selectedSectionId) {
-      return FULL_VIDEO_SRC;
+      return withVersion(FULL_VIDEO_SRC, reviewRenderStatus?.fullVideo?.updatedAtMs);
     }
 
-    const sectionVideoSrc = buildSectionVideoSrc(selectedSectionId);
     const sectionStatus = reviewRenderStatus?.sections?.find(
       (section) => section.id === selectedSectionId
     );
+    const sectionVideoSrc = buildSectionVideoSrc(
+      selectedSectionId,
+      sectionStatus?.updatedAtMs
+    );
 
     if (reviewRenderStatus?.fullVideo?.exists && !reviewRenderStatus?.fullVideo?.stale) {
-      return FULL_VIDEO_SRC;
+      return withVersion(FULL_VIDEO_SRC, reviewRenderStatus.fullVideo.updatedAtMs);
     }
 
     if (sectionStatus?.status === 'done') {
@@ -161,7 +169,7 @@ export default function Page() {
     }
 
     if (reviewRenderStatus?.fullVideo?.exists) {
-      return FULL_VIDEO_SRC;
+      return withVersion(FULL_VIDEO_SRC, reviewRenderStatus.fullVideo.updatedAtMs);
     }
 
     return sectionVideoSrc;
@@ -275,8 +283,8 @@ export default function Page() {
 
   const handleBatchResolve = useCallback(async (_jobId: string) => {
     // After batch resolve completes, refresh annotations
-    await loadAnnotations();
-  }, [loadAnnotations]);
+    await Promise.all([loadAnnotations(), loadReviewRenderStatus()]);
+  }, [loadAnnotations, loadReviewRenderStatus]);
 
   const StagePanel = STAGE_PANELS[activeStage];
 

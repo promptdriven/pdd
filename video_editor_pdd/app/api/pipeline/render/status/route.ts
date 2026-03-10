@@ -17,6 +17,7 @@ interface SectionRenderStatus {
   durationSeconds: number;
   status: "missing" | "rendering" | "done" | "error";
   progress: number;
+  updatedAtMs?: number;
 }
 
 interface FullVideoInfo {
@@ -24,6 +25,7 @@ interface FullVideoInfo {
   sizeBytes?: number;
   durationSeconds?: number;
   stale?: boolean;
+  updatedAtMs?: number;
 }
 
 const SECTIONS_DIR = path.join(process.cwd(), "outputs", "sections");
@@ -37,12 +39,11 @@ export async function GET(): Promise<NextResponse> {
     const sections: SectionRenderStatus[] = config.sections.map((section) => {
       const outputPath = path.join(SECTIONS_DIR, `${section.id}.mp4`);
       const exists = fs.existsSync(outputPath);
+      let updatedAtMs: number | undefined;
       if (exists) {
         try {
-          newestSectionMtime = Math.max(
-            newestSectionMtime,
-            fs.statSync(outputPath).mtimeMs
-          );
+          updatedAtMs = fs.statSync(outputPath).mtimeMs;
+          newestSectionMtime = Math.max(newestSectionMtime, updatedAtMs);
         } catch {
           // Ignore stat errors for stale detection.
         }
@@ -53,6 +54,7 @@ export async function GET(): Promise<NextResponse> {
         durationSeconds: section.durationSeconds ?? 0,
         status: exists ? "done" : "missing",
         progress: exists ? 100 : 0,
+        updatedAtMs,
       };
     });
 
@@ -71,6 +73,7 @@ export async function GET(): Promise<NextResponse> {
           sizeBytes: stat.size,
           durationSeconds,
           stale: newestSectionMtime > stat.mtimeMs,
+          updatedAtMs: stat.mtimeMs,
         };
       } catch {
         // Ignore stat errors
