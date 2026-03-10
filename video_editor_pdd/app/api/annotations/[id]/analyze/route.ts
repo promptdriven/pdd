@@ -5,6 +5,8 @@ import path from "path";
 
 import { getDb } from "@/lib/db";
 import { runClaudeAnalysis } from "@/lib/claude";
+import { loadProject } from "@/lib/project";
+import { resolveAnnotationTarget } from "@/lib/annotation-target";
 import type { Annotation, AnnotationAnalysis } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -58,11 +60,32 @@ export async function POST(
   }
 
   const annotation = mapAnnotationRow(row);
+  const project = loadProject();
+  const target = resolveAnnotationTarget(project, {
+    sectionId: annotation.sectionId,
+    timestamp: annotation.timestamp,
+    videoFile: annotation.videoFile,
+  });
+  const normalizedAnnotation = target.normalized
+    ? {
+        ...annotation,
+        sectionId: target.sectionId,
+        timestamp: target.timestamp,
+      }
+    : annotation;
+
+  if (target.normalized) {
+    db.prepare("UPDATE annotations SET sectionId = ?, timestamp = ? WHERE id = ?").run(
+      target.sectionId,
+      target.timestamp,
+      id
+    );
+  }
 
   let tmpPath: string | null = null;
 
   try {
-    if (!annotation.compositeDataUrl) {
+    if (!normalizedAnnotation.compositeDataUrl) {
       throw new Error("Annotation has no compositeDataUrl");
     }
 
@@ -73,11 +96,11 @@ export async function POST(
     );
     fs.writeFileSync(
       tmpPath,
-      Buffer.from(annotation.compositeDataUrl.split(",")[1], "base64")
+      Buffer.from(normalizedAnnotation.compositeDataUrl.split(",")[1], "base64")
     );
 
     // Build prompt for Claude
-    const prompt = `Analyze this annotation for section ${annotation.sectionId}. Annotation text: ${annotation.text}. Review the spec files in specs/${annotation.sectionId}/ and the composite frame image provided.`;
+    const prompt = `Analyze this annotation for section ${normalizedAnnotation.sectionId}. Annotation text: ${normalizedAnnotation.text}. Review the spec files in specs/${normalizedAnnotation.sectionId}/ and the composite frame image provided.`;
 
     const analysis = await runClaudeAnalysis(prompt, (line) => {
       console.log(`[Claude] ${line}`);

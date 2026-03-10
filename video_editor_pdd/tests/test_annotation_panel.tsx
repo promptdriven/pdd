@@ -407,22 +407,44 @@ describe("useJob hook", () => {
     expect(sourceCode).toMatch(/new\s+EventSource\s*\(\s*`\/api\/jobs\/\$\{jobId\}\/stream`\s*\)/);
   });
 
-  it("uses polling fallback every 2 seconds", () => {
-    expect(sourceCode).toMatch(/setInterval\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*,\s*2000\s*\)/);
+  it("stores polling fallback timer in a ref", () => {
+    expect(sourceCode).toMatch(/pollingRef\s*=\s*useRef/);
+  });
+
+  it("uses polling only as a fallback every 2 seconds", () => {
+    expect(sourceCode).toMatch(/startPolling\s*=\s*\(id:\s*string\)\s*=>/);
+    expect(sourceCode).toMatch(/setInterval\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?fetchJob\(id\)\.catch\(\(\)\s*=>\s*\{\}\);[\s\S]*?\}\s*,\s*2000\s*\)/);
+    expect(sourceCode).toMatch(/typeof\s+EventSource\s*===\s*['"]undefined['"]/);
+    expect(sourceCode).toMatch(/startPolling\(jobId\)/);
   });
 
   it("cleans up EventSource on unmount", () => {
     expect(sourceCode).toMatch(/eventSourceRef\.current\?\.close\(\)/);
   });
 
-  it("cleans up interval on unmount", () => {
-    expect(sourceCode).toMatch(/clearInterval\s*\(\s*interval\s*\)/);
+  it("stops polling on unmount", () => {
+    expect(sourceCode).toMatch(/stopPolling\(\)/);
   });
 
   it("defines isTerminal helper for done/error status", () => {
     expect(sourceCode).toMatch(/function\s+isTerminal/);
     expect(sourceCode).toMatch(/status\s*===\s*['"]done['"]/);
     expect(sourceCode).toMatch(/status\s*===\s*['"]error['"]/);
+  });
+
+  it("updates progress directly from SSE messages", () => {
+    expect(sourceCode).toMatch(/es\.onmessage\s*=\s*\(event/);
+    expect(sourceCode).toMatch(/data\?\.type\s*===\s*['"]progress['"]/);
+    expect(sourceCode).toMatch(/data\.percent/);
+  });
+
+  it("does not refetch the full job snapshot on every SSE message", () => {
+    expect(sourceCode).not.toMatch(/es\.onmessage\s*=\s*\(\)\s*=>\s*refresh\(\)/);
+  });
+
+  it("falls back to polling when the SSE connection errors", () => {
+    expect(sourceCode).toMatch(/es\.onerror\s*=\s*\(\)\s*=>/);
+    expect(sourceCode).toMatch(/startPolling\(jobId\)/);
   });
 });
 

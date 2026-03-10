@@ -41,6 +41,11 @@ jest.mock("@/lib/claude", () => ({
   runClaudeAnalysis: (...args: any[]) => mockRunClaudeAnalysis(...args),
 }));
 
+const mockLoadProject = jest.fn();
+jest.mock("@/lib/project", () => ({
+  loadProject: (...args: unknown[]) => mockLoadProject(...args),
+}));
+
 // Mock fs for temp file operations
 const mockWriteFileSync = jest.fn();
 const mockExistsSync = jest.fn();
@@ -117,6 +122,13 @@ beforeEach(() => {
   mockGet.mockReset();
   mockRun.mockReset();
   mockRunClaudeAnalysis.mockReset();
+  mockLoadProject.mockReset();
+  mockLoadProject.mockReturnValue({
+    sections: [
+      { id: "section-1", durationSeconds: 11, offsetSeconds: 0 },
+      { id: "section-2", durationSeconds: 12, offsetSeconds: 11 },
+    ],
+  });
   mockWriteFileSync.mockReset();
   mockExistsSync.mockReset();
   mockUnlinkSync.mockReset();
@@ -230,6 +242,31 @@ describe("POST — prompt building", () => {
     expect(promptArg).toBe(
       "Analyze this annotation for section intro. Annotation text: Color is wrong. Review the spec files in specs/intro/ and the composite frame image provided."
     );
+  });
+
+  it("normalizes stale full-video annotations to the effective later section before prompting Claude", async () => {
+    const row = makeDbRow({
+      sectionId: "section-1",
+      timestamp: 16.8,
+      videoFile: "/api/video/outputs/full_video.mp4?v=123",
+      text: "Swap the beach and forest",
+    });
+    const updatedRow = makeDbRow({
+      sectionId: "section-2",
+      timestamp: 5.8,
+      videoFile: "/api/video/outputs/full_video.mp4?v=123",
+      text: "Swap the beach and forest",
+      analysis: JSON.stringify(SAMPLE_ANALYSIS),
+    });
+    mockGet.mockReset();
+    mockGet.mockReturnValueOnce(row).mockReturnValueOnce(updatedRow);
+
+    await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    const promptArg = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    expect(promptArg).toContain("section section-2");
+    expect(promptArg).toContain("specs/section-2/");
+    expect(mockRun).toHaveBeenCalledWith("section-2", 5.800000000000001, "ann-123");
   });
 });
 

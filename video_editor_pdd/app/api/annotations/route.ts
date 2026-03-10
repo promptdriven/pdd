@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getDb } from "@/lib/db";
+import { loadProject } from "@/lib/project";
+import { resolveAnnotationTarget } from "@/lib/annotation-target";
 import type { Annotation, CreateAnnotationInput } from "@/lib/types";
 
 /**
@@ -79,6 +81,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    const project = loadProject();
+    const target = resolveAnnotationTarget(project, {
+      sectionId,
+      timestamp: timestamp ?? null,
+      videoFile: videoFile ?? null,
+    });
+
     const id = randomUUID();
     const createdAt = new Date().toISOString();
 
@@ -99,8 +108,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, ?, ?)`
     ).run(
       id,
-      sectionId,
-      timestamp ?? null,
+      target.sectionId,
+      target.timestamp,
       text,
       videoFile ?? null,
       drawingDataUrl ?? null,
@@ -111,8 +120,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
     const annotation: Annotation = {
       id,
-      sectionId,
-      timestamp: timestamp ?? null,
+      sectionId: target.sectionId,
+      timestamp: target.timestamp,
       text,
       videoFile: videoFile ?? null,
       drawingDataUrl: drawingDataUrl ?? null,

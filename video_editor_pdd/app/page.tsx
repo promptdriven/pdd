@@ -142,6 +142,10 @@ export default function Page() {
     return projectConfig.sections.find((s) => s.id === selectedSectionId);
   }, [projectConfig, selectedSectionId]);
 
+  const reviewUsesFreshFullVideo = Boolean(
+    reviewRenderStatus?.fullVideo?.exists && !reviewRenderStatus?.fullVideo?.stale
+  );
+
   const reviewVideoSrc = useMemo(() => {
     if (!selectedSectionId) {
       return FULL_VIDEO_SRC;
@@ -167,11 +171,25 @@ export default function Page() {
     return sectionVideoSrc;
   }, [reviewRenderStatus, selectedSectionId]);
 
-  const loadAnnotations = useCallback(async () => {
-    if (!selectedSectionId) return;
+  const reviewAnnotations = useMemo(() => {
+    if (!reviewUsesFreshFullVideo || !selectedSection) {
+      return annotations;
+    }
+
+    const sectionOffset = selectedSection.offsetSeconds ?? 0;
+    return annotations.map((annotation) => ({
+      ...annotation,
+      timestamp:
+        annotation.timestamp == null ? annotation.timestamp : annotation.timestamp + sectionOffset,
+    }));
+  }, [annotations, reviewUsesFreshFullVideo, selectedSection]);
+
+  const loadAnnotations = useCallback(async (sectionIdOverride?: string) => {
+    const targetSectionId = sectionIdOverride ?? selectedSectionId;
+    if (!targetSectionId) return;
     setLoadingAnnotations(true);
     try {
-      const url = `/api/annotations?section=${selectedSectionId}`;
+      const url = `/api/annotations?section=${targetSectionId}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to load annotations');
       const data = await res.json();
@@ -226,7 +244,7 @@ export default function Page() {
     async (data: AnnotationCaptureData) => {
       if (!selectedSectionId) return;
       try {
-        await fetch('/api/annotations', {
+        const createResponse = await fetch('/api/annotations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -236,9 +254,43 @@ export default function Page() {
             drawingDataUrl: data.drawingDataUrl,
             compositeDataUrl: data.compositeDataUrl,
             videoFile: data.videoFile,
+            inputMethod: data.inputMethod,
           }),
         });
-        await loadAnnotations();
+
+        if (!createResponse.ok) {
+          throw new Error('Failed to create annotation');
+        }
+
+        const createdAnnotation = await createResponse.json();
+        const targetSectionId = createdAnnotation?.sectionId ?? selectedSectionId;
+
+        if (targetSectionId !== selectedSectionId) {
+          setSelectedSectionId(targetSectionId);
+          setAnnotations([createdAnnotation]);
+        } else {
+          setAnnotations((prev) => [...prev, createdAnnotation]);
+        }
+
+        if (createdAnnotation?.id) {
+          void (async () => {
+            try {
+              const analyzeResponse = await fetch(
+                `/api/annotations/${createdAnnotation.id}/analyze`,
+                { method: 'POST' }
+              );
+
+              if (!analyzeResponse.ok) {
+                console.error('Failed to analyze annotation', createdAnnotation.id);
+              }
+            } catch (analysisErr) {
+              console.error(analysisErr);
+            }
+            await loadAnnotations(targetSectionId);
+          })();
+        } else {
+          await loadAnnotations(targetSectionId);
+        }
       } catch (err) {
         console.error(err);
       }
@@ -248,8 +300,8 @@ export default function Page() {
 
   const handleBatchResolve = useCallback(async (_jobId: string) => {
     // After batch resolve completes, refresh annotations
-    await loadAnnotations();
-  }, [loadAnnotations]);
+    await Promise.all([loadAnnotations(), loadReviewRenderStatus()]);
+  }, [loadAnnotations, loadReviewRenderStatus]);
 
   const StagePanel = STAGE_PANELS[activeStage];
 
@@ -302,7 +354,7 @@ export default function Page() {
             <div className="w-2/3 border-r border-border">
               <VideoPlayer
                 src={reviewVideoSrc}
-                annotations={annotations}
+                annotations={reviewAnnotations}
                 onAnnotationCapture={handleAnnotationCapture}
                 // @ts-expect-error optional prop for prefill is supported by UI layer
                 annotationPreFill={annotationPreFill ?? undefined}

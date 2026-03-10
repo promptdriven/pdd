@@ -6,10 +6,11 @@ import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
 import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob } from "@/lib/jobs";
-import { renderSection } from "@/lib/render";
+import { renderSection, stitchFullVideo } from "@/lib/render";
 import { loadProject, getSection } from "@/lib/project";
 import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
+import { resolveAnnotationTarget } from "@/lib/annotation-target";
 import {
   applyDeterministicRemotionFix,
   applyDeterministicVideoOverlay,
@@ -130,6 +131,29 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
     // 5. Fire-and-forget execution
     void runJob(jobId, async (onLog) => {
+      const project = loadProject();
+      const normalizedAnnotations = annotations.map((annotation) => {
+        const target = resolveAnnotationTarget(project, {
+          sectionId: annotation.sectionId,
+          timestamp: annotation.timestamp,
+          videoFile: annotation.videoFile,
+        });
+
+        if (target.normalized) {
+          db.prepare("UPDATE annotations SET sectionId = ?, timestamp = ? WHERE id = ?").run(
+            target.sectionId,
+            target.timestamp,
+            annotation.id
+          );
+        }
+
+        return {
+          ...annotation,
+          sectionId: target.sectionId,
+          timestamp: target.timestamp,
+        };
+      });
+
       const byFixType: Record<string, Annotation[]> = {
         remotion: [],
         veo: [],
@@ -138,7 +162,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
         none: [],
       };
 
-      for (const ann of annotations) {
+      for (const ann of normalizedAnnotations) {
         const fixType = ann.analysis?.fixType ?? "manual";
         if (byFixType[fixType]) byFixType[fixType].push(ann);
       }
@@ -208,18 +232,50 @@ export async function POST(_request: Request, { params }: RouteParams) {
       });
       onLog("Bundle rebuilt.");
 
-      // Render the affected section
-      const project = loadProject();
-      const section = getSection(sectionId, project);
-      const compositionId = section?.compositionId ?? `${toPascalCase(sectionId)}Section`;
-      const outputPath = path.join("outputs", "sections", `${sectionId}.mp4`);
-      onLog(`Rendering section ${sectionId} (${compositionId}) → ${outputPath}`);
-      await renderSection(compositionId, outputPath, (progress) => {
-        onLog.progress?.(progress.percent);
-        onLog(progress.message);
-      });
+      const affectedSections = Array.from(
+        new Set(
+          normalizedAnnotations
+            .filter((annotation) => annotation.analysis?.fixType === "remotion")
+            .map((annotation) => annotation.sectionId)
+        )
+      );
+
+      const sectionsToRender = affectedSections.length > 0 ? affectedSections : [sectionId];
+
+      for (const targetSectionId of sectionsToRender) {
+        const section = getSection(targetSectionId, project);
+        const compositionId = section?.compositionId ?? `${toPascalCase(targetSectionId)}Section`;
+        const outputPath = path.join("outputs", "sections", `${targetSectionId}.mp4`);
+        onLog(`Rendering section ${targetSectionId} (${compositionId}) → ${outputPath}`);
+        await renderSection(compositionId, outputPath, (progress) => {
+          onLog.progress?.(progress.percent);
+          onLog(progress.message);
+        });
+      }
+
+      const stitchedSectionPaths: string[] = [];
+      for (const projectSection of project.sections ?? []) {
+        const sectionVideoPath = path.join("outputs", "sections", `${projectSection.id}.mp4`);
+        try {
+          await fs.access(sectionVideoPath);
+          stitchedSectionPaths.push(sectionVideoPath);
+        } catch {
+          // Skip sections that do not have a rendered output yet.
+        }
+      }
+
+      if (stitchedSectionPaths.length > 0) {
+        const fullVideoOutputPath = path.join("outputs", "full_video.mp4");
+        onLog(`Stitching full video → ${fullVideoOutputPath}`);
+        await stitchFullVideo(stitchedSectionPaths, fullVideoOutputPath, (progress) => {
+          onLog.progress?.(progress.percent);
+          onLog(progress.message);
+        });
+      }
 
       if (isDeterministicPipelineMode() && byFixType.remotion.length > 0) {
+        const firstRemotionSectionId = byFixType.remotion[0].sectionId;
+        const outputPath = path.join("outputs", "sections", `${firstRemotionSectionId}.mp4`);
         applyDeterministicVideoOverlay(
           outputPath,
           extractRequestedHexColor(byFixType.remotion[0].text),

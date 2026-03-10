@@ -44,6 +44,11 @@ jest.mock("crypto", () => ({
   randomUUID: () => MOCK_UUID,
 }));
 
+const mockLoadProject = jest.fn();
+jest.mock("@/lib/project", () => ({
+  loadProject: (...args: unknown[]) => mockLoadProject(...args),
+}));
+
 // Import after mock setup
 import { GET, POST } from "../app/api/annotations/route";
 import { NextRequest } from "next/server";
@@ -120,6 +125,13 @@ beforeEach(() => {
   mockPrepare.mockReturnValue({ all: mockAll, run: mockRun });
   mockAll.mockReset();
   mockRun.mockReset();
+  mockLoadProject.mockReset();
+  mockLoadProject.mockReturnValue({
+    sections: [
+      { id: "section-1", durationSeconds: 11, offsetSeconds: 0 },
+      { id: "section-2", durationSeconds: 12, offsetSeconds: 11 },
+    ],
+  });
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -456,6 +468,25 @@ describe("POST /api/annotations — create annotation", () => {
     expect(runArgs[6]).toBe(body.compositeDataUrl);
     // runArgs[7] is createdAt
     expect(typeof runArgs[7]).toBe("string");
+  });
+
+  it("normalizes stitched full-video timestamps into the correct later section before insert", async () => {
+    const body = {
+      ...validPostBody(),
+      sectionId: "section-1",
+      timestamp: 16.8,
+      videoFile: "/api/video/outputs/full_video.mp4?v=123",
+    };
+
+    const response = await POST(makePostRequest(body));
+    const result = await response.json();
+
+    expect(result.sectionId).toBe("section-2");
+    expect(result.timestamp).toBeCloseTo(5.8, 5);
+
+    const runArgs = mockRun.mock.calls[0];
+    expect(runArgs[1]).toBe("section-2");
+    expect(runArgs[2]).toBeCloseTo(5.8, 5);
   });
 
   it("stores NULL for analysis in the INSERT", async () => {

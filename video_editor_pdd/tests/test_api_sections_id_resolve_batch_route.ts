@@ -59,9 +59,11 @@ jest.mock("@/lib/jobs", () => ({
 }));
 
 const mockRenderSection = jest.fn();
+const mockStitchFullVideo = jest.fn();
 
 jest.mock("@/lib/render", () => ({
   renderSection: (...args: unknown[]) => mockRenderSection(...args),
+  stitchFullVideo: (...args: unknown[]) => mockStitchFullVideo(...args),
 }));
 
 const mockLoadProject = jest.fn();
@@ -75,6 +77,7 @@ jest.mock("@/lib/project", () => ({
 // Import after mock setup
 import { POST, dynamic } from "../app/api/sections/[id]/resolve-batch/route";
 import fs from "fs";
+import fsPromises from "fs/promises";
 import path from "path";
 
 // ---------------------------------------------------------------------------
@@ -155,10 +158,13 @@ beforeEach(() => {
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockRenderSection.mockReset();
   mockRenderSection.mockResolvedValue(undefined);
+  mockStitchFullVideo.mockReset();
+  mockStitchFullVideo.mockResolvedValue(undefined);
   mockLoadProject.mockReset();
   mockLoadProject.mockReturnValue({ sections: [mockSection()] });
   mockGetSection.mockReset();
   mockGetSection.mockReturnValue(mockSection());
+  jest.spyOn(fsPromises, "access").mockResolvedValue(undefined);
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -685,13 +691,69 @@ describe("POST — runJob executor: section rendering after fixes", () => {
     mockRenderSection.mockImplementation(async () => {
       callOrder.push("renderSection");
     });
+    mockStitchFullVideo.mockImplementation(async () => {
+      callOrder.push("stitchFullVideo");
+    });
 
     await POST(makeRequest(), makeParams("section-1"));
 
     const executorFn = mockRunJob.mock.calls[0][1];
     await executorFn(jest.fn());
 
-    expect(callOrder).toEqual(["claudeFix", "renderSection"]);
+    expect(callOrder).toEqual(["claudeFix", "renderSection", "stitchFullVideo"]);
+  });
+
+  it("normalizes stale full-video annotations to the effective section before rendering", async () => {
+    const project = {
+      sections: [
+        {
+          id: "section-1",
+          label: "Section One",
+          compositionId: "SectionOneComposition",
+          durationSeconds: 11,
+          offsetSeconds: 0,
+        },
+        {
+          id: "section-2",
+          label: "Section Two",
+          compositionId: "SectionTwoComposition",
+          durationSeconds: 12,
+          offsetSeconds: 11,
+        },
+      ],
+    };
+    mockLoadProject.mockReturnValue(project);
+    mockGetSection.mockImplementation((targetSectionId: string) =>
+      project.sections.find((section) => section.id === targetSectionId) ?? null
+    );
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-global",
+        sectionId: "section-1",
+        timestamp: 16.8,
+        videoFile: "/api/video/outputs/full_video.mp4?v=123",
+        analysis: JSON.stringify({
+          fixType: "remotion",
+          severity: "major",
+          technicalAssessment: "",
+          suggestedFixes: [],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    await executorFn(jest.fn());
+
+    expect(mockRunClaudeFix.mock.calls[0][0]).toContain('"section-2" section');
+    expect(mockRenderSection).toHaveBeenCalledWith(
+      "SectionTwoComposition",
+      "outputs/sections/section-2.mp4",
+      expect.any(Function)
+    );
+    expect(mockRun).toHaveBeenCalledWith("section-2", 5.800000000000001, "ann-global");
   });
 });
 

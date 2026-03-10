@@ -350,8 +350,8 @@ describe("review tab layout", () => {
     expect(sourceCode).toMatch(/src=\{reviewVideoSrc\}/);
   });
 
-  it("passes annotations to VideoPlayer", () => {
-    expect(sourceCode).toMatch(/annotations=\{annotations\}/);
+  it("passes reviewAnnotations to VideoPlayer", () => {
+    expect(sourceCode).toMatch(/annotations=\{reviewAnnotations\}/);
   });
 
   it("passes onAnnotationCapture to VideoPlayer", () => {
@@ -505,9 +505,24 @@ describe("handleAnnotationCapture", () => {
     expect(sourceCode).toMatch(/videoFile\s*:\s*data\.videoFile/);
   });
 
+  it("includes inputMethod in request body", () => {
+    expect(sourceCode).toMatch(/inputMethod\s*:\s*data\.inputMethod/);
+  });
+
+  it("re-reads the created annotation response body", () => {
+    expect(sourceCode).toMatch(/const\s+createdAnnotation\s*=\s*await\s+createResponse\.json\s*\(\s*\)/);
+  });
+
+  it("switches Review to the returned section when the server remaps a full-video annotation", () => {
+    expect(sourceCode).toMatch(/setSelectedSectionId\s*\(\s*targetSectionId\s*\)/);
+  });
+
+  it("triggers annotation analysis after create when an annotation id is returned", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{createdAnnotation\.id\}\/analyze`\s*,\s*\{\s*method\s*:\s*['"]POST['"]/);
+  });
+
   it("refreshes annotations after saving", () => {
-    // After POST, loadAnnotations is called
-    expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*targetSectionId\s*\)/);
   });
 });
 
@@ -536,6 +551,14 @@ describe("full video path", () => {
 
   it("defines a per-section review video path under outputs/sections", () => {
     expect(sourceCode).toContain("/api/video/outputs/sections/");
+  });
+
+  it("defines reviewAnnotations for displaying section-local annotations on the stitched video", () => {
+    expect(sourceCode).toMatch(/const\s+reviewAnnotations\s*=\s*useMemo/);
+  });
+
+  it("adds selectedSection.offsetSeconds back to annotation timestamps when Review shows the stitched video", () => {
+    expect(sourceCode).toMatch(/annotation\.timestamp\s*\+\s*sectionOffset/);
   });
 
   it("switches Review to section video when fullVideo is stale", () => {
@@ -606,6 +629,10 @@ describe("batch resolve handler", () => {
   it("refreshes annotations after batch resolve", () => {
     // handleBatchResolve calls loadAnnotations
     expect(sourceCode).toContain("loadAnnotations");
+  });
+
+  it("refreshes render status after batch resolve", () => {
+    expect(sourceCode).toContain("loadReviewRenderStatus");
   });
 
   it("passes onBatchResolve to AnnotationPanel", () => {

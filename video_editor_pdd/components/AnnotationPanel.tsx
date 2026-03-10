@@ -47,14 +47,23 @@ function useJob(jobId: string | null) {
   const [job, setJob] = useState<Job | null>(null);
   const [connected, setConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const pollingRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setJob(null);
     setConnected(false);
 
+    const stopPolling = () => {
+      if (pollingRef.current !== null) {
+        window.clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
+    stopPolling();
 
     if (!jobId) return;
 
@@ -65,8 +74,26 @@ function useJob(jobId: string | null) {
       if (!cancelled) setJob(data);
     };
 
+    const startPolling = (id: string) => {
+      if (pollingRef.current !== null) return;
+
+      pollingRef.current = window.setInterval(() => {
+        fetchJob(id).catch(() => {});
+      }, 2000);
+    };
+
     // Start with one fetch so UI isn't empty if SSE is slow.
     fetchJob(jobId).catch(() => {});
+
+    if (typeof EventSource === 'undefined') {
+      startPolling(jobId);
+      return () => {
+        cancelled = true;
+        stopPolling();
+        eventSourceRef.current?.close();
+        eventSourceRef.current = null;
+      };
+    }
 
     // SSE: same stream used by SseLogPanel
     try {
@@ -74,26 +101,66 @@ function useJob(jobId: string | null) {
       eventSourceRef.current = es;
 
       es.onopen = () => {
-        if (!cancelled) setConnected(true);
+        if (!cancelled) {
+          setConnected(true);
+          stopPolling();
+        }
       };
 
-      const refresh = () => fetchJob(jobId).catch(() => {});
-      // Any streamed message implies progress; we refresh job snapshot.
-      es.onmessage = () => refresh();
-      es.addEventListener('done', () => refresh());
-      es.addEventListener('error', () => refresh());
-    } catch {
-      // ignore; polling fallback below will handle.
-    }
+      es.onmessage = (event) => {
+        if (cancelled) return;
 
-    // Polling fallback every 2s
-    const interval = window.setInterval(() => {
-      fetchJob(jobId).catch(() => {});
-    }, 2000);
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data?.type === 'progress' && typeof data.percent === 'number') {
+            setJob((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                progress: data.percent,
+                status: isTerminal(prev.status) ? prev.status : 'running',
+              };
+            });
+          }
+        } catch {
+          // Ignore malformed SSE payloads and keep the existing snapshot.
+        }
+      };
+
+      es.addEventListener('done', () => {
+        if (cancelled) return;
+        setConnected(false);
+        stopPolling();
+        fetchJob(jobId).catch(() => {});
+      });
+
+      es.addEventListener('error', (event) => {
+        if (cancelled) return;
+        const messageEvent = event as MessageEvent;
+        if (typeof messageEvent.data === 'string' && messageEvent.data.length > 0) {
+          setConnected(false);
+          stopPolling();
+          fetchJob(jobId).catch(() => {});
+        }
+      });
+
+      es.onerror = () => {
+        if (cancelled) return;
+        setConnected(false);
+        es.close();
+        if (eventSourceRef.current === es) {
+          eventSourceRef.current = null;
+        }
+        startPolling(jobId);
+      };
+    } catch {
+      startPolling(jobId);
+    }
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      stopPolling();
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     };
