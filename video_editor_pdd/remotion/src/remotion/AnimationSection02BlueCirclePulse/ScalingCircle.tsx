@@ -72,7 +72,7 @@ export const ScalingCircle: React.FC = () => {
         top: CANVAS.centerY - CIRCLE.radius,
         width: CIRCLE.diameter,
         height: CIRCLE.diameter,
-        borderRadius: '50%',
+        borderRadius: 0,
         backgroundColor: COLORS.circleFill,
         opacity,
         transform: `scale(${scale})`,

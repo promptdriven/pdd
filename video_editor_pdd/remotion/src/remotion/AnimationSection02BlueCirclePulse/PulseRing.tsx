@@ -38,7 +38,7 @@ export const PulseRing: React.FC = () => {
         top: CANVAS.centerY - ringRadius,
         width: diameter,
         height: diameter,
-        borderRadius: '50%',
+        borderRadius: 0,
         border: `2px solid ${COLORS.pulseRingColor}`,
         opacity,
         pointerEvents: 'none',
