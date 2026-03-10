@@ -6,7 +6,7 @@ import { execSync } from "child_process";
 import { getDb } from "@/lib/db";
 import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob } from "@/lib/jobs";
-import { renderSection } from "@/lib/render";
+import { renderSection, stitchFullVideo } from "@/lib/render";
 import { loadProject, getSection } from "@/lib/project";
 import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
@@ -218,6 +218,28 @@ export async function POST(_request: Request, { params }: RouteParams) {
         onLog.progress?.(progress.percent);
         onLog(progress.message);
       });
+
+      const stitchedSectionPaths: string[] = [];
+      for (const projectSection of project.sections ?? []) {
+        const sectionVideoPath = path.join("outputs", "sections", `${projectSection.id}.mp4`);
+        try {
+          await fs.access(sectionVideoPath);
+          stitchedSectionPaths.push(sectionVideoPath);
+        } catch {
+          // Skip sections that have not been rendered yet.
+        }
+      }
+
+      if (stitchedSectionPaths.length > 0) {
+        const fullVideoOutputPath = path.join("outputs", "full_video.mp4");
+        onLog(`Stitching full video → ${fullVideoOutputPath}`);
+        await stitchFullVideo(stitchedSectionPaths, fullVideoOutputPath, (progress) => {
+          onLog.progress?.(progress.percent);
+          onLog(progress.message);
+        });
+      } else {
+        onLog("Skipping full-video stitch because no rendered sections were found.");
+      }
 
       if (isDeterministicPipelineMode() && byFixType.remotion.length > 0) {
         applyDeterministicVideoOverlay(

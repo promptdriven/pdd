@@ -420,12 +420,24 @@ describe("useJob hook", () => {
     expect(sourceCode).toMatch(/setInterval\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*,\s*2000\s*\)/);
   });
 
+  it("starts polling only as a fallback when EventSource is unavailable or errors", () => {
+    expect(sourceCode).toMatch(/typeof\s+EventSource\s*===\s*['"]undefined['"]/);
+    expect(sourceCode).toMatch(/startPolling/);
+    expect(sourceCode).toMatch(/es\.onerror\s*=\s*\(\)\s*=>\s*\{[\s\S]*?startPolling/);
+  });
+
+  it("does not refetch /api/jobs/${id} on every SSE message", () => {
+    expect(sourceCode).not.toMatch(/es\.onmessage\s*=\s*\(\)\s*=>\s*refresh/);
+    expect(sourceCode).toMatch(/data\?\.type\s*===\s*['"]progress['"]/);
+  });
+
   it("cleans up EventSource on unmount", () => {
     expect(sourceCode).toMatch(/eventSourceRef\.current\?\.close\(\)/);
   });
 
   it("cleans up interval on unmount", () => {
-    expect(sourceCode).toMatch(/clearInterval\s*\(\s*interval\s*\)/);
+    expect(sourceCode).toMatch(/stopPolling\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/clearInterval\s*\(\s*pollingRef\.current\s*\)/);
   });
 
   it("defines isTerminal helper for done/error status", () => {
