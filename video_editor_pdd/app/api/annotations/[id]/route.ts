@@ -1,5 +1,6 @@
 // app/api/annotations/[id]/route.ts
 import { NextResponse } from "next/server";
+import { parseAnnotationAnalysis } from "@/lib/annotation-analysis";
 import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,7 @@ export async function GET(
       videoFile: row.videoFile ?? null,
       drawingDataUrl: row.drawingDataUrl ?? null,
       compositeDataUrl: row.compositeDataUrl ?? null,
-      analysis: row.analysis ? JSON.parse(row.analysis) : null,
+      analysis: parseAnnotationAnalysis(row.analysis),
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
       inputMethod: row.inputMethod ?? "typed",
@@ -98,7 +99,7 @@ export async function PUT(
       videoFile: row.videoFile ?? null,
       drawingDataUrl: row.drawingDataUrl ?? null,
       compositeDataUrl: row.compositeDataUrl ?? null,
-      analysis: row.analysis ? JSON.parse(row.analysis) : null,
+      analysis: parseAnnotationAnalysis(row.analysis),
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
       inputMethod: row.inputMethod ?? "typed",

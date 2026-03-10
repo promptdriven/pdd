@@ -235,13 +235,36 @@ describe("POST — prompt building", () => {
     expect(promptArg).toContain("specs/intro/");
   });
 
-  it("matches the exact prompt format from the spec", async () => {
+  it("includes the composite frame path in the prompt", async () => {
     await POST(makeRequest("ann-123"), makeParams("ann-123"));
 
     const promptArg = mockRunClaudeAnalysis.mock.calls[0][0] as string;
-    expect(promptArg).toBe(
-      "Analyze this annotation for section intro. Annotation text: Color is wrong. Review the spec files in specs/intro/ and the composite frame image provided."
-    );
+    expect(promptArg).toContain("Composite frame PNG:");
+    expect(promptArg).toContain("annotation_ann-123_composite.png");
+  });
+
+  it("includes the overlay markup path in the prompt when drawing markup exists", async () => {
+    await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    const promptArg = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    expect(promptArg).toContain("Overlay markup PNG:");
+    expect(promptArg).toContain("annotation_ann-123_overlay.png");
+  });
+
+  it("requires JSON-only AnnotationAnalysis output in the prompt", async () => {
+    await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    const promptArg = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    expect(promptArg).toContain("Return JSON only matching AnnotationAnalysis");
+    expect(promptArg).toContain('"technicalAssessment": string');
+    expect(promptArg).toContain("Do not return markdown");
+  });
+
+  it("tells Claude to prioritize the orange markup target region", async () => {
+    await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    const promptArg = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    expect(promptArg).toContain("treat the orange markup as the user's exact target region");
   });
 
   it("normalizes stale full-video annotations to the effective later section before prompting Claude", async () => {
@@ -288,10 +311,18 @@ describe("POST — temp file handling", () => {
   it("writes compositeDataUrl to a temp PNG file", async () => {
     await POST(makeRequest("ann-123"), makeParams("ann-123"));
 
-    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
     const [filePath] = mockWriteFileSync.mock.calls[0];
     expect(filePath).toContain("annotation_ann-123_composite.png");
     expect(filePath).toContain(os.tmpdir());
+  });
+
+  it("writes drawingDataUrl to a separate overlay PNG file when present", async () => {
+    await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    const [overlayPath] = mockWriteFileSync.mock.calls[1];
+    expect(overlayPath).toContain("annotation_ann-123_overlay.png");
+    expect(overlayPath).toContain(os.tmpdir());
   });
 
   it("decodes base64 data from compositeDataUrl before writing", async () => {
@@ -305,7 +336,7 @@ describe("POST — temp file handling", () => {
     await POST(makeRequest("ann-123"), makeParams("ann-123"));
 
     expect(mockExistsSync).toHaveBeenCalled();
-    expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
+    expect(mockUnlinkSync).toHaveBeenCalledTimes(2);
   });
 
   it("cleans up temp file even when analysis fails", async () => {
@@ -316,7 +347,7 @@ describe("POST — temp file handling", () => {
     await POST(makeRequest("ann-123"), makeParams("ann-123"));
 
     expect(mockExistsSync).toHaveBeenCalled();
-    expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
+    expect(mockUnlinkSync).toHaveBeenCalledTimes(2);
   });
 
   it("does not attempt to delete if temp file does not exist", async () => {
@@ -488,6 +519,19 @@ describe("POST — error handling (500)", () => {
 
   it("returns 500 when annotation has no compositeDataUrl", async () => {
     mockGet.mockReturnValue(makeDbRow({ compositeDataUrl: null }));
+
+    const response = await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    expect(response.status).toBe(500);
+  });
+
+  it("returns 500 when Claude returns a result envelope instead of AnnotationAnalysis JSON", async () => {
+    mockGet.mockReturnValue(makeDbRow());
+    mockRunClaudeAnalysis.mockResolvedValue({
+      type: "result",
+      result: "free-form prose",
+    });
+    mockExistsSync.mockReturnValue(true);
 
     const response = await POST(makeRequest("ann-123"), makeParams("ann-123"));
 
@@ -687,6 +731,10 @@ describe("app/api/annotations/[id]/analyze/route.ts source structure", () => {
     expect(sourceCode).toMatch(/annotation_.*_composite\.png/);
   });
 
+  it("writes drawingDataUrl to a separate overlay temp file", () => {
+    expect(sourceCode).toMatch(/annotation_.*_overlay\.png/);
+  });
+
   it("handles 404 not found case", () => {
     expect(sourceCode).toMatch(/404/);
     expect(sourceCode).toMatch(/Annotation not found/);
@@ -705,5 +753,10 @@ describe("app/api/annotations/[id]/analyze/route.ts source structure", () => {
   it("splits base64 data from data URL prefix", () => {
     expect(sourceCode).toMatch(/split\(.*,.*\)\[1\]/);
     expect(sourceCode).toMatch(/base64/);
+  });
+
+  it("validates Claude output against AnnotationAnalysis shape", () => {
+    expect(sourceCode).toMatch(/parseAnnotationAnalysis/);
+    expect(sourceCode).toMatch(/Claude returned invalid AnnotationAnalysis payload/);
   });
 });

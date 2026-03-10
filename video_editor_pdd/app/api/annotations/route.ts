@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import { parseAnnotationAnalysis } from "@/lib/annotation-analysis";
 import { getDb } from "@/lib/db";
 import { loadProject } from "@/lib/project";
 import { resolveAnnotationTarget } from "@/lib/annotation-target";
@@ -38,7 +39,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       videoFile: row.videoFile ?? null,
       drawingDataUrl: row.drawingDataUrl ?? null,
       compositeDataUrl: row.compositeDataUrl ?? null,
-      analysis: row.analysis ? JSON.parse(row.analysis) : null,
+      analysis: parseAnnotationAnalysis(row.analysis),
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
       inputMethod: row.inputMethod ?? "typed",

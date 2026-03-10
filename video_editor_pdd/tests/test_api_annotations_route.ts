@@ -80,7 +80,7 @@ function makePostRequest(body: Record<string, unknown>): NextRequest {
 function validPostBody() {
   return {
     sectionId: "section-1",
-    timestamp: 12.5,
+    timestamp: 5.5,
     text: "Fix the color grading here",
     drawingDataUrl: "data:image/png;base64,abc123",
     compositeDataUrl: "data:image/png;base64,xyz789",
@@ -308,6 +308,22 @@ describe("GET — Annotation shape mapping", () => {
     const body = await response.json();
 
     expect(body.annotations[0].analysis).toEqual(analysisData);
+  });
+
+  it("returns null for analysis when DB value is a non-AnnotationAnalysis JSON envelope", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({
+        analysis: JSON.stringify({
+          type: "result",
+          result: "free-form prose",
+        }),
+      }),
+    ]);
+
+    const response = await GET(makeGetRequest());
+    const body = await response.json();
+
+    expect(body.annotations[0].analysis).toBeNull();
   });
 
   it("returns null for analysis when DB value is null", async () => {

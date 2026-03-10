@@ -243,6 +243,22 @@ describe("GET — Annotation shape mapping", () => {
     expect(body.analysis).toEqual(analysisData);
   });
 
+  it("returns null for analysis when DB value is a non-AnnotationAnalysis JSON envelope", async () => {
+    mockGet.mockReturnValue(
+      makeDbRow({
+        analysis: JSON.stringify({
+          type: "result",
+          result: "free-form prose",
+        }),
+      })
+    );
+
+    const response = await GET(makeRequest("ann-123"), makeParams("ann-123"));
+    const body = await response.json();
+
+    expect(body.analysis).toBeNull();
+  });
+
   it("returns null for analysis when DB value is null", async () => {
     mockGet.mockReturnValue(makeDbRow({ analysis: null }));
 
@@ -317,12 +333,14 @@ describe("GET — internal server error", () => {
     expect(response.status).toBe(500);
   });
 
-  it("returns 500 when analysis JSON is malformed", async () => {
+  it("returns null when analysis JSON is malformed", async () => {
     mockGet.mockReturnValue(makeDbRow({ analysis: "not-valid-json{{{" }));
 
     const response = await GET(makeRequest("ann-123"), makeParams("ann-123"));
+    const body = await response.json();
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(200);
+    expect(body.analysis).toBeNull();
   });
 
   it("logs error to console.error on failure", async () => {
@@ -422,7 +440,7 @@ describe("app/api/annotations/[id]/route.ts source structure", () => {
   });
 
   it("parses analysis JSON from the database row", () => {
-    expect(sourceCode).toMatch(/JSON\.parse/);
+    expect(sourceCode).toMatch(/parseAnnotationAnalysis/);
     expect(sourceCode).toMatch(/analysis/);
   });
 

@@ -176,7 +176,7 @@ describe("formatTs helper", () => {
 
 describe("annotation sorting", () => {
   it("sorts annotations by timestamp ascending", () => {
-    expect(sourceCode).toMatch(/\.sort\s*\(\s*\(a\s*,\s*b\)\s*=>\s*a\.timestamp\s*-\s*b\.timestamp\s*\)/);
+    expect(sourceCode).toMatch(/\.sort\s*\(\s*\(a\s*,\s*b\)\s*=>\s*\(a\.timestamp\s*\?\?\s*0\)\s*-\s*\(b\.timestamp\s*\?\?\s*0\)\s*\)/);
   });
 
   it("uses useMemo for sorted annotations", () => {
@@ -184,7 +184,7 @@ describe("annotation sorting", () => {
   });
 
   it("creates a new array copy before sorting (immutable)", () => {
-    expect(sourceCode).toMatch(/\[\.\.\.annotations\]\.sort/);
+    expect(sourceCode).toMatch(/\[\.\.\.annotations\]/);
   });
 });
 
@@ -253,6 +253,10 @@ describe("card expand/collapse", () => {
 
   it("shows Mark Resolved button when not resolved", () => {
     expect(sourceCode).toMatch(/Mark Resolved/);
+  });
+
+  it("shows Delete button in the expanded action row", () => {
+    expect(sourceCode).toMatch(/Deleting\.\.\.'\s*:\s*'Delete'/);
   });
 
   it("conditionally renders expanded content", () => {
@@ -469,7 +473,26 @@ describe("failed annotation retry", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 17. Empty state
+// 17. Delete annotation action
+// ---------------------------------------------------------------------------
+
+describe("delete annotation action", () => {
+  it("tracks locally deleted annotation ids", () => {
+    expect(sourceCode).toMatch(/locallyDeletedIds/);
+    expect(sourceCode).toMatch(/handleDeleteAnnotation/);
+  });
+
+  it("DELETEs /api/annotations/${annotationId}", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{a\.id\}`\s*,\s*\{\s*method\s*:\s*['"]DELETE['"]\s*\}/);
+  });
+
+  it("filters locally deleted annotations out of the rendered list", () => {
+    expect(sourceCode).toMatch(/!locallyDeletedIds\.has\(a\.id\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. Empty state
 // ---------------------------------------------------------------------------
 
 describe("empty state", () => {
@@ -483,7 +506,7 @@ describe("empty state", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 18. Scrollable container (Req 2)
+// 19. Scrollable container (Req 2)
 // ---------------------------------------------------------------------------
 
 describe("scrollable list container", () => {
@@ -497,7 +520,7 @@ describe("scrollable list container", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 19. AnnotationCard sub-component
+// 20. AnnotationCard sub-component
 // ---------------------------------------------------------------------------
 
 describe("AnnotationCard sub-component", () => {
@@ -531,7 +554,7 @@ describe("AnnotationCard sub-component", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 20. Analysis summary display
+// 21. Analysis summary display
 // ---------------------------------------------------------------------------
 
 describe("analysis summary", () => {
