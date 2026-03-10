@@ -28,7 +28,7 @@ export const TRACK = {
 export const MILESTONES = [
   { x: 260, color: COLORS.milestoneViolet, label: 'Title Card' },
   { x: 560, color: COLORS.milestoneBlue, label: 'Circle Pulse' },
-  { x: 860, color: COLORS.milestoneAmber, label: 'Morph' },
+  { x: 860, color: COLORS.milestoneAmber, label: 'Bunny' },
   { x: 1160, color: COLORS.milestoneGreen, label: 'Slide Right' },
   { x: 1460, color: COLORS.milestonePink, label: 'Showcase' },
 ] as const;
