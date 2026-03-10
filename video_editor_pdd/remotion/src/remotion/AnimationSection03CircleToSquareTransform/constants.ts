@@ -8,11 +8,12 @@ export const CANVAS = {
 export const COLORS = {
   background: '#111827',
   circleBlue: '#3B82F6',
-  squareYellow: '#EAB308',
+  squareGreen: '#22C55E',
 };
 
 export const DIMENSIONS = {
-  shapeSize: 200,
+  shapeWidth: 280,
+  shapeHeight: 180,
   centerX: 960,
   centerY: 540,
   finalX: 1280,

@@ -32,13 +32,13 @@ export const GhostTrail: React.FC = () => {
             key={i}
             style={{
               position: 'absolute',
-              width: DIMENSIONS.shapeSize,
-              height: DIMENSIONS.shapeSize,
-              backgroundColor: COLORS.squareYellow,
+              width: DIMENSIONS.shapeWidth,
+              height: DIMENSIONS.shapeHeight,
+              backgroundColor: COLORS.squareGreen,
               borderRadius: '0%',
               opacity,
-              left: ghostX - DIMENSIONS.shapeSize / 2,
-              top: DIMENSIONS.centerY - DIMENSIONS.shapeSize / 2,
+              left: ghostX - DIMENSIONS.shapeWidth / 2,
+              top: DIMENSIONS.centerY - DIMENSIONS.shapeHeight / 2,
             }}
           />
         );

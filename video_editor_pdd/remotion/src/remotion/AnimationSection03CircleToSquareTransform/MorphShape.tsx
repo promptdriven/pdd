@@ -17,11 +17,11 @@ export const MorphShape: React.FC = () => {
     }
   );
 
-  // Color: blue → yellow during morph phase (linear)
+  // Color: blue → green during morph phase (linear)
   const fillColor = interpolateColors(
     frame,
     [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
-    [COLORS.circleBlue, COLORS.squareYellow]
+    [COLORS.circleBlue, COLORS.squareGreen]
   );
 
   // X position across phases
@@ -83,16 +83,31 @@ export const MorphShape: React.FC = () => {
 
   const posX = getPositionX();
 
+  // Width/height: circle starts as a square bounding box (280x280), morphs to rectangle (280x180)
+  const circleSize = DIMENSIONS.shapeWidth; // circle uses the larger dimension for uniform size
+  const currentWidth = interpolate(
+    frame,
+    [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
+    [circleSize, DIMENSIONS.shapeWidth],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
+  );
+  const currentHeight = interpolate(
+    frame,
+    [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
+    [circleSize, DIMENSIONS.shapeHeight],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
+  );
+
   return (
     <div
       style={{
         position: 'absolute',
-        width: DIMENSIONS.shapeSize,
-        height: DIMENSIONS.shapeSize,
+        width: currentWidth,
+        height: currentHeight,
         backgroundColor: fillColor,
         borderRadius: `${borderRadiusPercent}%`,
-        left: posX - DIMENSIONS.shapeSize / 2,
-        top: DIMENSIONS.centerY - DIMENSIONS.shapeSize / 2,
+        left: posX - currentWidth / 2,
+        top: DIMENSIONS.centerY - currentHeight / 2,
       }}
     />
   );
