@@ -11,6 +11,7 @@ import { loadProject, getSection } from "@/lib/project";
 import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
 import { resolveAnnotationTarget } from "@/lib/annotation-target";
+import { applyVeoPromptFixForAnnotation } from "@/lib/veo-prompt-fix";
 import {
   applyDeterministicRemotionFix,
   applyDeterministicVideoOverlay,
@@ -19,6 +20,8 @@ import {
 } from "@/lib/deterministic-pipeline";
 
 export const dynamic = "force-dynamic";
+
+const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 
 type RouteParams = { params: Promise<{ id: string }> };
 
@@ -55,6 +58,40 @@ Instructions:
 
 Apply the fix NOW — do not just describe it. Edit the actual file(s).
 `.trim();
+}
+
+async function syncVeoOutputsToRemotionPublic(onLog: (message: string) => void) {
+  const sourceDir = path.join(process.cwd(), "outputs", "veo");
+  const destDir = path.join(process.cwd(), "remotion", "public", "veo");
+
+  try {
+    const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+    await fs.mkdir(destDir, { recursive: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!VEO_MEDIA_EXTENSIONS.has(ext)) {
+        continue;
+      }
+
+      await fs.copyFile(
+        path.join(sourceDir, entry.name),
+        path.join(destDir, entry.name)
+      );
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+
+    onLog(
+      `Warning: failed to sync staged Veo assets: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
 }
 
 export async function POST(_request: Request, { params }: RouteParams) {
@@ -197,13 +234,42 @@ export async function POST(_request: Request, { params }: RouteParams) {
         }
       }
 
-      // Veo fixes (placeholder)
+      // Veo fixes
       if (byFixType.veo.length > 0) {
-        const veoSectionIds = Array.from(
-          new Set(byFixType.veo.map((annotation) => annotation.sectionId))
-        );
-        onLog(`Running Veo regeneration for sections: ${veoSectionIds.join(", ")}`);
-        await runPipelineStage("veo", { clips: veoSectionIds }, () => {});
+        const veoClipTargets = new Set<string>();
+
+        for (const ann of byFixType.veo) {
+          const targetSection = project.sections.find(
+            (section) => section.id === ann.sectionId
+          );
+
+          if (!targetSection) {
+            veoClipTargets.add(ann.sectionId);
+            continue;
+          }
+
+          const patch = applyVeoPromptFixForAnnotation(
+            process.cwd(),
+            targetSection,
+            ann
+          );
+
+          if (patch) {
+            onLog(
+              `Updated Veo prompt for ${patch.clipId} in ${path.relative(process.cwd(), patch.specPath)}`
+            );
+            veoClipTargets.add(patch.clipId);
+          } else {
+            onLog(
+              `No Veo prompt rewrite derived for annotation ${ann.id}; regenerating ${ann.sectionId} with existing prompt sources`
+            );
+            veoClipTargets.add(ann.sectionId);
+          }
+        }
+
+        const veoTargets = Array.from(veoClipTargets);
+        onLog(`Running Veo regeneration for targets: ${veoTargets.join(", ")}`);
+        await runPipelineStage("veo", { clips: veoTargets }, () => {});
       }
 
       // TTS fixes (placeholder)
@@ -225,6 +291,10 @@ export async function POST(_request: Request, { params }: RouteParams) {
         ".cache",
         "webpack",
       );
+      if (byFixType.veo.length > 0) {
+        onLog("Syncing staged Veo assets...");
+        await syncVeoOutputsToRemotionPublic(onLog);
+      }
       onLog("Clearing stale bundle and webpack cache...");
       await fs.rm(buildDir, { recursive: true, force: true });
       await fs.rm(webpackCacheDir, { recursive: true, force: true });

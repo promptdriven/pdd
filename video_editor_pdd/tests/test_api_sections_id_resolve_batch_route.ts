@@ -53,6 +53,7 @@ const MOCK_JOB_ID = "job-resolve-batch-001";
 const mockCreateJob = jest.fn(() => MOCK_JOB_ID);
 const mockRunJob = jest.fn();
 const mockRunPipelineStage = jest.fn();
+const mockApplyVeoPromptFixForAnnotation = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   createJob: (...args: unknown[]) => mockCreateJob(...args),
@@ -74,6 +75,11 @@ const mockGetSection = jest.fn();
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
   getSection: (...args: unknown[]) => mockGetSection(...args),
+}));
+
+jest.mock("@/lib/veo-prompt-fix", () => ({
+  applyVeoPromptFixForAnnotation: (...args: unknown[]) =>
+    mockApplyVeoPromptFixForAnnotation(...args),
 }));
 
 // Import after mock setup
@@ -158,6 +164,8 @@ beforeEach(() => {
   mockRunJob.mockResolvedValue(undefined);
   mockRunPipelineStage.mockReset();
   mockRunPipelineStage.mockResolvedValue("job-veo-001");
+  mockApplyVeoPromptFixForAnnotation.mockReset();
+  mockApplyVeoPromptFixForAnnotation.mockReturnValue(null);
   mockRunClaudeFix.mockReset();
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockRenderSection.mockReset();
@@ -169,6 +177,9 @@ beforeEach(() => {
   mockGetSection.mockReset();
   mockGetSection.mockReturnValue(mockSection());
   jest.spyOn(fsPromises, "access").mockResolvedValue(undefined);
+  jest.spyOn(fsPromises, "readdir").mockResolvedValue([]);
+  jest.spyOn(fsPromises, "mkdir").mockResolvedValue(undefined);
+  jest.spyOn(fsPromises, "copyFile").mockResolvedValue(undefined);
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -527,6 +538,50 @@ describe("POST — runJob executor: fixType grouping", () => {
     );
   });
 
+  it("rewrites the targeted Veo prompt before regenerating the resolved clip", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-v1",
+        sectionId: "section-1",
+        timestamp: 1.3,
+        analysis: JSON.stringify({
+          fixType: "veo",
+          severity: "major",
+          technicalAssessment: "add birds",
+          suggestedFixes: [
+            'Update the Veo prompt to: "Ocean wave at sunset with birds in the sky"',
+          ],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+    mockApplyVeoPromptFixForAnnotation.mockReturnValue({
+      clipId: "ocean_wave_sunset",
+      specPath: path.join(process.cwd(), "specs", "section-1", "02_ocean_wave_sunset.md"),
+      prompt: "Ocean wave at sunset with birds in the sky",
+    });
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    const onLog = jest.fn();
+    await executorFn(onLog);
+
+    expect(mockApplyVeoPromptFixForAnnotation).toHaveBeenCalledWith(
+      process.cwd(),
+      expect.objectContaining({ id: "section-1" }),
+      expect.objectContaining({ id: "ann-v1", timestamp: 1.3 })
+    );
+    expect(mockRunPipelineStage).toHaveBeenCalledWith(
+      "veo",
+      { clips: ["ocean_wave_sunset"] },
+      expect.any(Function)
+    );
+    expect(onLog).toHaveBeenCalledWith(
+      expect.stringContaining("Updated Veo prompt for ocean_wave_sunset")
+    );
+  });
+
   it("logs tts annotations as pending (placeholder)", async () => {
     mockAll.mockReturnValue([
       makeDbRow({
@@ -844,6 +899,72 @@ describe("POST — runJob executor: section rendering after fixes", () => {
       "outputs/sections/section-2.mp4",
       expect.any(Function)
     );
+  });
+
+  it("syncs regenerated Veo outputs into remotion/public before rerendering", async () => {
+    const project = {
+      sections: [
+        {
+          id: "veo_section",
+          label: "Veo Section",
+          compositionId: "VeoSection",
+          durationSeconds: 12,
+          offsetSeconds: 0,
+          specDir: "veo_section",
+        },
+      ],
+    };
+    mockLoadProject.mockReturnValue(project);
+    mockGetSection.mockImplementation((targetSectionId: string) =>
+      project.sections.find((section) => section.id === targetSectionId) ?? null
+    );
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-veo-sync",
+        sectionId: "veo_section",
+        timestamp: 1.3,
+        analysis: JSON.stringify({
+          fixType: "veo",
+          severity: "major",
+          technicalAssessment: "add birds",
+          suggestedFixes: [
+            'Update the Veo prompt to: "Ocean wave at sunset with birds in the sky"',
+          ],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+    mockApplyVeoPromptFixForAnnotation.mockReturnValue({
+      clipId: "ocean_wave_sunset",
+      specPath: path.join(process.cwd(), "specs", "veo_section", "02_ocean_wave_sunset.md"),
+      prompt: "Ocean wave at sunset with birds in the sky",
+    });
+    (fsPromises.readdir as jest.Mock).mockResolvedValue([
+      {
+        name: "ocean_wave_sunset.mp4",
+        isFile: () => true,
+      },
+      {
+        name: "ocean_wave_sunset_validation_frame.png",
+        isFile: () => true,
+      },
+    ]);
+
+    await POST(makeRequest(), makeParams("veo_section"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    const onLog = jest.fn();
+    await executorFn(onLog);
+
+    expect(fsPromises.copyFile).toHaveBeenCalledWith(
+      path.join(process.cwd(), "outputs", "veo", "ocean_wave_sunset.mp4"),
+      path.join(process.cwd(), "remotion", "public", "veo", "ocean_wave_sunset.mp4")
+    );
+    expect(fsPromises.copyFile).not.toHaveBeenCalledWith(
+      expect.stringContaining("validation_frame"),
+      expect.any(String)
+    );
+    expect(onLog).toHaveBeenCalledWith("Syncing staged Veo assets...");
   });
 });
 
