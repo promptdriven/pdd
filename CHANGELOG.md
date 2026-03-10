@@ -2,26 +2,12 @@
 
 ### Feat
 
-- Implement full video stitching in the batch resolve API and enhance AnnotationPanel job status updates with EventSource fallback.
-- Implement cache-busting for video URLs using `updatedAtMs` and refresh render status after batch resolution.
-- inline audit video playback
+- **TypeScript test file support in e2e fix orchestrator**: `_extract_test_files` and `_verify_tests_independently` now recognize `.test.ts`, `.test.tsx`, `.spec.ts`, `.spec.tsx` files (not just `test_*.py`), dispatching non-Python tests to their correct runners via `get_test_command_for_file` — fixes issue where TypeScript test files were invisible to independent verification
 
-### Fix
+### Test
 
-- PDD fix for #797 (#798)
-- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
-- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
-- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
-- **8eda0194-78c7-475d-a453-778d30114986**: I want this to be Bunny not morph
-- **90c4a24f-485f-42f6-b8fe-4273f341bf1f**: I want this to be a triangle
-- improve review annotation analysis
-- improve review annotation handling
-- stabilize audit rendering and veo validation
-- sync render timelines and validate veo clips
-- align render graph with resolved visual clips
-- scope audit playback and preserve tts text
-- Test: Model Selection Debug - Hello World Python
-- align composition timing with audio sync
+- New `TestIssue797TypeScriptTestFiles` unit tests for TypeScript test file extraction from changed files, `E2E_FILES_CREATED` markers, inline references, and disk-change detection
+- New `test_e2e_issue_797_typescript_verification.py` E2E tests exercising the full orchestrator flow with TypeScript-only test files (no mocking of `_extract_test_files` or `_verify_tests_independently`)
 
 ## v0.0.171 (2026-03-08)
 
