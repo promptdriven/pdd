@@ -1,27 +1,35 @@
+## v0.0.173 (2026-03-10)
+
+### Feat
+
+- Introduce an `onAnnotationDeleted` callback prop to `AnnotationPanel` for parent components to handle annotation deletions.
+- Implement precise global and section timestamps for annotations, enhance batch resolution with VEO regeneration, and update annotation loading logic for full-video review.
+- Add annotation deletion functionality and improve AI analysis by including drawing markup and enforcing JSON output.
+
+### Fix
+
+- PDD fix for #796 (#799)
+- apply veo prompt updates before rerender
+- **bc7d6358-62ad-48b5-bc7c-6de8d77dba1f**: make this pink
+- **bc7d6358-62ad-48b5-bc7c-6de8d77dba1f**: make this pink
+- **05c2649f-1288-4eb7-be63-cdca9990cf0a**: breakfast a rectangle
+- bust stale review video caches
+- **945c56d8-21c7-4c19-9a00-f48967b1b32d**: I want to switch the ocean in the forest  see on t
+- **124a8259-bbcb-4bf0-a6b7-eba7f0e0cbe8**: practice yellow  I wanted to be yellow
+- **58155437-afea-451d-aaba-d2abf78fc673**: swap the beach in the forest
+- **1e88f647-89d0-4671-9233-7819e8b71888**: make this a square
+- Add TypeScript test file support to the e2e orchestrator, include new unit and E2E tests, and create `data.sqlite`.
+
 ## v0.0.172 (2026-03-09)
 
 ### Feat
 
-- Implement full video stitching in the batch resolve API and enhance AnnotationPanel job status updates with EventSource fallback.
-- Implement cache-busting for video URLs using `updatedAtMs` and refresh render status after batch resolution.
-- inline audit video playback
+- **TypeScript test file support in e2e fix orchestrator**: `_extract_test_files` and `_verify_tests_independently` now recognize `.test.ts`, `.test.tsx`, `.spec.ts`, `.spec.tsx` files (not just `test_*.py`), dispatching non-Python tests to their correct runners via `get_test_command_for_file` — fixes issue where TypeScript test files were invisible to independent verification
 
-### Fix
+### Test
 
-- PDD fix for #797 (#798)
-- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
-- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
-- **0bbba07f-4a2f-4bf5-9c96-aa2ca2c0fa46**: I want to swap both sides I want the beach to be o
-- **8eda0194-78c7-475d-a453-778d30114986**: I want this to be Bunny not morph
-- **90c4a24f-485f-42f6-b8fe-4273f341bf1f**: I want this to be a triangle
-- improve review annotation analysis
-- improve review annotation handling
-- stabilize audit rendering and veo validation
-- sync render timelines and validate veo clips
-- align render graph with resolved visual clips
-- scope audit playback and preserve tts text
-- Test: Model Selection Debug - Hello World Python
-- align composition timing with audio sync
+- New `TestIssue797TypeScriptTestFiles` unit tests for TypeScript test file extraction from changed files, `E2E_FILES_CREATED` markers, inline references, and disk-change detection
+- New `test_e2e_issue_797_typescript_verification.py` E2E tests exercising the full orchestrator flow with TypeScript-only test files (no mocking of `_extract_test_files` or `_verify_tests_independently`)
 
 ## v0.0.171 (2026-03-08)
 

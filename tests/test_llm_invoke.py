@@ -5083,3 +5083,71 @@ class TestContextWindowValidation:
                         )
                         assert result["result"] == "hello"
                         mock_comp.assert_called_once()
+
+
+# =============================================================================
+# Issue #796: TypeScript code validated as Python syntax
+# Tests that _looks_like_python_code and _has_invalid_python_code correctly
+# flag TypeScript as "Python-looking" and "invalid Python", proving why the
+# language guard in llm_invoke is needed.
+# =============================================================================
+
+class TestIssue796TypeScriptPythonValidation:
+    """Tests proving the underlying heuristic issue: TypeScript triggers Python validation."""
+
+    TYPESCRIPT_REACT_CODE = (
+        "import React from 'react';\n"
+        "\n"
+        "interface WaitlistPendingProps {\n"
+        "  email: string;\n"
+        "  position: number;\n"
+        "}\n"
+        "\n"
+        "export const WaitlistPending: React.FC<WaitlistPendingProps> = ({ email, position }) => {\n"
+        "  return (\n"
+        "    <div className='waitlist-container'>\n"
+        "      <h2>You're on the waitlist!</h2>\n"
+        "      <p>Email: {email}</p>\n"
+        "      <p>Position: {position}</p>\n"
+        "    </div>\n"
+        "  );\n"
+        "};\n"
+    )
+
+    def test_typescript_code_detected_as_python_by_heuristic(self):
+        """Issue #796: _looks_like_python_code() matches TypeScript keywords like 'import' and 'return'.
+
+        This proves that without the language guard, TypeScript WILL trigger
+        Python validation because the heuristic can't distinguish the languages.
+        """
+        from pdd.llm_invoke import _looks_like_python_code
+
+        # TypeScript contains 'import ' and 'return ' which match the heuristic
+        result = _looks_like_python_code(self.TYPESCRIPT_REACT_CODE)
+        assert result is True, (
+            "_looks_like_python_code() should return True for TypeScript code "
+            "containing 'import' and 'return' keywords"
+        )
+
+    def test_has_invalid_python_code_on_typescript(self):
+        """Issue #796: _has_invalid_python_code() flags valid TypeScript as invalid Python.
+
+        This proves the full failure chain: TypeScript passes the heuristic check
+        AND fails ast.parse(), causing _has_invalid_python_code to return True.
+        """
+        from pdd.llm_invoke import _has_invalid_python_code
+        from pdd.fix_errors_from_unit_tests import CodeFix
+
+        # Create a CodeFix with valid TypeScript in fixed_code
+        code_fix = CodeFix(
+            update_unit_test=False,
+            update_code=True,
+            fixed_unit_test="",
+            fixed_code=self.TYPESCRIPT_REACT_CODE
+        )
+
+        result = _has_invalid_python_code(code_fix)
+        assert result is True, (
+            "_has_invalid_python_code() should return True for a CodeFix containing "
+            "TypeScript code, because TypeScript looks like Python but fails ast.parse()"
+        )
