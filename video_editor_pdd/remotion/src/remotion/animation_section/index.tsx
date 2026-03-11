@@ -7,7 +7,7 @@ export const AnimationSectionSection: React.FC = () => {
   const durationSeconds = 12;
 
   return (
-    <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
+    <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
       <Audio src={staticFile("animation_section/narration.wav")} />
       {/* Sub-compositions will be added here */}
     </Sequence>
