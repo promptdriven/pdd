@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame deviates significantly from the spec in multiple ways. (1) Background: The spec requires a solid #0A1628 (dark navy) background, but the frame displays a rainbow/color-bar test pattern with vertical stripes of red, green, yellow, blue, magenta, and cyan. (2) Content: The spec calls for a 'simple animated chart' with data series A=1, B=2 showing 'strong contrast and visible motion.' Instead, the frame shows a debug/test-card pattern with a diagonal rainbow line, a checkerboard region in the lower-right area, and a small gray square—none of which resemble a chart. (3) Resolution appears to be approximately 1920x1080 based on the aspect ratio, and the timestamp overlay reads frame 119 (~3.97s) which is within the expected 150-frame duration, so timing is plausible. However, the visual content is completely wrong—this looks like a GPU test pattern or color calibration card rather than the intended chart visualization.
