@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame satisfies the spec requirements. It shows a balanced split-screen comparison layout consistent with the 'Veo Section Split Summary' spec. The background color is a dark navy (#0A1628 or very close). The composition is 16:9 with a clear vertical divider line (cyan/light blue) separating 'Before' and 'After' panels. The 'Split Summary' heading is displayed in the top-left. The layout is established and held clearly, matching the spec's visual description of 'a balanced split-screen comparison' and the animation sequence final hold state.
+The frame shows a split-screen layout with a vertical cyan divider, 'Split Summary' title in the upper-left, and 'Before'/'After' labels centered in each half. This matches the spec's requirement for a 'balanced split-screen comparison.' The background color appears consistent with the spec's #0A1628 dark blue. However, the split panels are empty placeholders — the spec's data points (series A=1, B=2) are not visualized, and there is no meaningful content in either the Before or After panels beyond labels. The layout structure and composition are correct but the data-driven content is missing.

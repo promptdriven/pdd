@@ -24,7 +24,7 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 12.309333;
+  const durationSeconds = 7.344;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
