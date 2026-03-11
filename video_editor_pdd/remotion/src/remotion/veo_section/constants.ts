@@ -1,18 +1,18 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 12.117;
+export const SECTION_DURATION_SECONDS = 3.740;
 export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.000),
-  VISUAL_00_END: s2f(4.039),
-  VISUAL_01_START: s2f(4.039),
-  VISUAL_01_END: s2f(8.078),
-  VISUAL_02_START: s2f(8.078),
-  VISUAL_02_END: s2f(12.117),
+  VISUAL_00_END: s2f(1.247),
+  VISUAL_01_START: s2f(1.247),
+  VISUAL_01_END: s2f(2.493),
+  VISUAL_02_START: s2f(2.493),
+  VISUAL_02_END: s2f(3.740),
 };
 
 export const VISUAL_SEQUENCE = [
