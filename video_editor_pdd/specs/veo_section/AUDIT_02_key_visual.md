@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame deviates significantly from the spec in multiple ways. (1) Background: The spec requires a solid #0A1628 (dark navy) background, but the frame shows vivid vertical color bars (red, green, yellow, blue, magenta, cyan) resembling a TV test pattern — no trace of the specified background color. (2) Content: The spec calls for 'a simple animated chart' with two data series (A=1, B=2) rendered with 'strong contrast and visible motion.' Instead, the frame displays a diagonal rainbow-gradient line, scattered pixel artifacts, and a checkerboard pattern in the lower-right area — none of which constitute a chart. (3) Resolution appears correct at 1920x1080 based on the aspect ratio, and the timestamp overlay (frame 119 at ~3.967s) places it within the expected 150-frame/5s window. However, the visual content is entirely wrong.
