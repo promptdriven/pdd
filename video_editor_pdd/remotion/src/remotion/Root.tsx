@@ -19,7 +19,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={368}
+        durationInFrames={220}
         fps={30}
         width={1920}
         height={1080}
@@ -27,7 +27,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={368}
+        durationInFrames={221}
         fps={30}
         width={1920}
         height={1080}
