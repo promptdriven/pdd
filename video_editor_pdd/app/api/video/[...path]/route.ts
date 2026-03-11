@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
-import { getProjectDir } from "@/lib/projects";
+import { getAppDir, getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 
 function nodeStreamToReadableStream(nodeStream: Readable): ReadableStream<Uint8Array> {
   let closed = false;
@@ -85,13 +85,16 @@ export async function GET(
 
     // Reconstruct the file path from the catch-all segments
     const projectDir = getProjectDir();
-    const filePath = path.join(projectDir, ...pathSegments);
+    const requestedPath = path.join(...pathSegments);
+    const filePath = requestedPath.startsWith(path.join("remotion", "public"))
+      ? path.join(getAppDir(), requestedPath)
+      : path.join(projectDir, requestedPath);
     const resolved = path.resolve(filePath);
 
     // Define allowed root directories
     const allowed = [
       path.resolve(projectDir, "outputs"),
-      path.resolve(projectDir, "remotion/public"),
+      path.resolve(getAppRemotionPublicDir()),
     ];
 
     // Verify the resolved path is within an allowed directory

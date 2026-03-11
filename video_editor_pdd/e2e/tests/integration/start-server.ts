@@ -1,5 +1,4 @@
 import { spawn, spawnSync } from 'child_process';
-import path from 'path';
 
 import globalSetup from './global-setup';
 
@@ -7,7 +6,7 @@ const INTEGRATION_PORT = '3101';
 
 globalSetup();
 
-const activeProjectId = path.basename(process.cwd());
+const activeProjectId = 'integration-test';
 
 const commonEnv = {
   ...process.env,

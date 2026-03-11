@@ -24,16 +24,18 @@
  *  13. offsetSeconds recalculation: cumulative durations in section order
  */
 
+import path from "path";
+
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
 // ---------------------------------------------------------------------------
 
 const mockRegisterExecutor = jest.fn();
-const mockRunPipelineStage = jest.fn();
+const mockStartJobInBackground = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   registerExecutor: (...args: unknown[]) => mockRegisterExecutor(...args),
-  runPipelineStage: (...args: unknown[]) => mockRunPipelineStage(...args),
+  startJobInBackground: (...args: unknown[]) => mockStartJobInBackground(...args),
 }));
 
 const mockRenderSection = jest.fn();
@@ -58,6 +60,9 @@ const mockBuildSectionConstantsSource = jest.fn();
 
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
+  getAppRemotionDir: () => path.join(process.cwd(), "remotion"),
+  getAppRemotionPublicDir: () => path.join(process.cwd(), "remotion", "public"),
+  getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
 }));
 
 jest.mock("@/lib/composition-timing", () => ({
@@ -220,7 +225,7 @@ function mockProjectConfig() {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  mockRunPipelineStage.mockReset();
+  mockStartJobInBackground.mockReset();
   mockRenderSection.mockReset();
   mockGetSectionDuration.mockReset();
   mockStitchFullVideo.mockReset();
@@ -247,7 +252,7 @@ beforeEach(() => {
       `// constants for ${section.id}\nexport const VISUAL_SEQUENCE = [];\n`
   );
 
-  mockRunPipelineStage.mockResolvedValue("test-job-render-001");
+  mockStartJobInBackground.mockReturnValue("test-job-render-001");
   mockRenderSection.mockResolvedValue(undefined);
   mockGetSectionDuration.mockResolvedValue(10.0);
   mockStitchFullVideo.mockResolvedValue(undefined);
@@ -307,28 +312,26 @@ describe("POST response shape", () => {
 
 describe("POST — success flow", () => {
   beforeEach(() => {
-    mockRunPipelineStage.mockResolvedValue("test-job-render-42");
+    mockStartJobInBackground.mockReturnValue("test-job-render-42");
   });
 
-  it("calls runPipelineStage with 'render' stage", async () => {
+  it("starts a background render job", async () => {
     await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
-    await flushPromises();
 
-    expect(mockRunPipelineStage).toHaveBeenCalledTimes(1);
-    expect(mockRunPipelineStage.mock.calls[0][0]).toBe("render");
+    expect(mockStartJobInBackground).toHaveBeenCalledTimes(1);
+    expect(mockStartJobInBackground.mock.calls[0][0]).toBe("render");
   });
 
-  it("passes sections param from body to runPipelineStage", async () => {
+  it("passes sections param from body to the background render job", async () => {
     await POST(
       makeRequest("http://localhost/api/pipeline/render/run", {
         sections: ["intro", "outro"],
       }) as any
     );
-    await flushPromises();
 
-    const params = mockRunPipelineStage.mock.calls[0][1];
+    const params = mockStartJobInBackground.mock.calls[0][1];
     expect(params.sections).toEqual(["intro", "outro"]);
   });
 
@@ -336,22 +339,12 @@ describe("POST — success flow", () => {
     await POST(
       makeRequest("http://localhost/api/pipeline/render/run", {}) as any
     );
-    await flushPromises();
 
-    const params = mockRunPipelineStage.mock.calls[0][1];
+    const params = mockStartJobInBackground.mock.calls[0][1];
     expect(params.sections).toBeUndefined();
   });
 
-  it("passes a send function to runPipelineStage", async () => {
-    await POST(
-      makeRequest("http://localhost/api/pipeline/render/run") as any
-    );
-    await flushPromises();
-
-    expect(typeof mockRunPipelineStage.mock.calls[0][2]).toBe("function");
-  });
-
-  it("returns jobId in JSON response after runPipelineStage resolves", async () => {
+  it("returns jobId in JSON response immediately after job creation", async () => {
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
     );
@@ -402,9 +395,8 @@ describe("POST — body parameter handling", () => {
         sections: "not-an-array",
       }) as any
     );
-    await flushPromises();
 
-    const params = mockRunPipelineStage.mock.calls[0][1];
+    const params = mockStartJobInBackground.mock.calls[0][1];
     expect(params.sections).toBeUndefined();
   });
 });
@@ -414,8 +406,10 @@ describe("POST — body parameter handling", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST — error handling", () => {
-  it("returns JSON error when runPipelineStage rejects with Error", async () => {
-    mockRunPipelineStage.mockRejectedValue(new Error("Render failed"));
+  it("returns JSON error when background job creation throws Error", async () => {
+    mockStartJobInBackground.mockImplementation(() => {
+      throw new Error("Render failed");
+    });
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
@@ -427,7 +421,9 @@ describe("POST — error handling", () => {
   });
 
   it("returns generic error for non-Error throws", async () => {
-    mockRunPipelineStage.mockRejectedValue("string error");
+    mockStartJobInBackground.mockImplementation(() => {
+      throw "string error";
+    });
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
@@ -439,7 +435,9 @@ describe("POST — error handling", () => {
   });
 
   it("returns a Response even when pipeline errors", async () => {
-    mockRunPipelineStage.mockRejectedValue(new Error("will fail"));
+    mockStartJobInBackground.mockImplementation(() => {
+      throw new Error("will fail");
+    });
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
@@ -738,7 +736,9 @@ describe("POST — JSON response format", () => {
   });
 
   it("returns JSON with error on failure", async () => {
-    mockRunPipelineStage.mockRejectedValue(new Error("Pipeline broke"));
+    mockStartJobInBackground.mockImplementation(() => {
+      throw new Error("Pipeline broke");
+    });
 
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/render/run") as any
@@ -787,10 +787,10 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/async\s+function\s+updateProjectDurations/);
   });
 
-  it("imports registerExecutor and runPipelineStage from @/lib/jobs", () => {
+  it("imports registerExecutor and startJobInBackground from @/lib/jobs", () => {
     expect(sourceCode).toMatch(/@\/lib\/jobs/);
     expect(sourceCode).toMatch(/registerExecutor/);
-    expect(sourceCode).toMatch(/runPipelineStage/);
+    expect(sourceCode).toMatch(/startJobInBackground/);
   });
 
   it("imports renderSection and getSectionDuration from @/lib/render", () => {
@@ -815,9 +815,9 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/registerExecutor\s*\(\s*["']render["']/);
   });
 
-  it("calls runPipelineStage('render', ...)", () => {
+  it("calls startJobInBackground('render', ...)", () => {
     expect(sourceCode).toMatch(
-      /runPipelineStage\s*\(\s*["']render["']/
+      /startJobInBackground\s*\(\s*["']render["']/
     );
   });
 
@@ -827,10 +827,6 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
 
   it("uses Response.json for JSON responses", () => {
     expect(sourceCode).toMatch(/Response\.json/);
-  });
-
-  it("uses a noop SseSend function", () => {
-    expect(sourceCode).toMatch(/noop/);
   });
 
   it("returns 500 status on error", () => {

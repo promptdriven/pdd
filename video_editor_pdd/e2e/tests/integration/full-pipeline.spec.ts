@@ -4,7 +4,8 @@ import path from 'path';
 import { execSync } from 'child_process';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
-const OUTPUTS_DIR = path.join(PROJECT_ROOT, 'outputs');
+const ACTIVE_PROJECT_DIR = path.join(PROJECT_ROOT, 'projects', 'integration-test');
+const OUTPUTS_DIR = path.join(ACTIVE_PROJECT_DIR, 'outputs');
 const ANIMATION_VIDEO = path.join(OUTPUTS_DIR, 'sections', 'animation_section.mp4');
 const REMOTION_SRC_DIR = path.join(PROJECT_ROOT, 'remotion', 'src', 'remotion');
 

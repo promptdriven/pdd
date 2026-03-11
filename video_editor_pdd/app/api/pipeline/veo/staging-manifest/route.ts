@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { getProjectDir } from "@/lib/projects";
+import { getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/veo/staging-manifest
@@ -54,7 +54,7 @@ function loadManifest(veoOutputDir: string): string[] {
 export async function GET(): Promise<NextResponse> {
   try {
     const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
-    const remotionPublicDir = path.join(getProjectDir(), "remotion", "public");
+    const remotionPublicDir = getAppRemotionPublicDir();
     const filenames = loadManifest(veoOutputDir);
 
     const entries: StagingManifestEntry[] = filenames.map((filename) => {

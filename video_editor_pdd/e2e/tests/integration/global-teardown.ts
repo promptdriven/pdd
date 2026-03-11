@@ -2,12 +2,14 @@ import fs from 'fs';
 import path from 'path';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
+const ACTIVE_PROJECT_DIR = path.join(PROJECT_ROOT, 'projects', 'integration-test');
 
-const PROJECT_JSON = path.join(PROJECT_ROOT, 'project.json');
-const MAIN_SCRIPT = path.join(PROJECT_ROOT, 'narrative', 'main_script.md');
-const PIPELINE_DB = path.join(PROJECT_ROOT, 'pipeline.db');
-const SPECS_DIR = path.join(PROJECT_ROOT, 'specs');
+const PROJECT_JSON = path.join(ACTIVE_PROJECT_DIR, 'project.json');
+const MAIN_SCRIPT = path.join(ACTIVE_PROJECT_DIR, 'narrative', 'main_script.md');
+const PIPELINE_DB = path.join(ACTIVE_PROJECT_DIR, 'pipeline.db');
+const SPECS_DIR = path.join(ACTIVE_PROJECT_DIR, 'specs');
 const SPECS_BACKUP = SPECS_DIR + '.integration-backup';
+const ACTIVE_PROJECT_REMOTION = path.join(ACTIVE_PROJECT_DIR, 'remotion');
 
 const REMOTION_DIR = path.join(PROJECT_ROOT, 'remotion');
 const REMOTION_SRC = path.join(REMOTION_DIR, 'src', 'remotion');
@@ -71,6 +73,10 @@ export default function globalTeardown(): void {
   }
   if (fs.existsSync(SPECS_BACKUP)) {
     fs.renameSync(SPECS_BACKUP, SPECS_DIR);
+  }
+
+  if (fs.existsSync(ACTIVE_PROJECT_REMOTION)) {
+    fs.rmSync(ACTIVE_PROJECT_REMOTION, { recursive: true, force: true });
   }
 
   // Clean up generated composition files in remotion/src/remotion/

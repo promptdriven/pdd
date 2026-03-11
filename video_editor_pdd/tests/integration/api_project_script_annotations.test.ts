@@ -39,6 +39,7 @@ import fs from "fs";
 // Temp directory + fixture setup (runs once before the whole file)
 // ---------------------------------------------------------------------------
 const tmpDir = path.join(os.tmpdir(), `video-editor-integration-${Date.now()}`);
+const originalProjectIdEnv = process.env.VIDEO_EDITOR_PROJECT_ID;
 
 /** Minimal valid project.json fixture matching the Zod schema. */
 function makeProjectFixture() {
@@ -92,6 +93,7 @@ beforeAll(() => {
 
   // Point DB to a file inside the temp dir
   process.env.DB_PATH = path.join(tmpDir, "test-pipeline.db");
+  delete process.env.VIDEO_EDITOR_PROJECT_ID;
 
   // Override process.cwd() so every route handler resolves paths inside tmpDir
   jest.spyOn(process, "cwd").mockReturnValue(tmpDir);
@@ -101,6 +103,11 @@ afterAll(() => {
   jest.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
   delete process.env.DB_PATH;
+  if (originalProjectIdEnv) {
+    process.env.VIDEO_EDITOR_PROJECT_ID = originalProjectIdEnv;
+  } else {
+    delete process.env.VIDEO_EDITOR_PROJECT_ID;
+  }
 });
 
 // Suppress console.error noise from intentional error-path tests

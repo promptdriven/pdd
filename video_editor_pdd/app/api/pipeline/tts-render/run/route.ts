@@ -7,7 +7,7 @@ import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
 import type { SseSend } from "@/lib/types";
-import { getProjectDir } from "@/lib/projects";
+import { getAppScriptsDir, getProjectDir } from "@/lib/projects";
 
 /**
  * Spawn render_tts.py and stream stdout/stderr via onLog.
@@ -17,7 +17,7 @@ async function runRenderProcess(
   onLog: (line: string) => void
 ): Promise<void> {
   const args = [
-    path.join("scripts", "render_tts.py"),
+    path.join(getAppScriptsDir(), "render_tts.py"),
     ...(segments ?? []).flatMap((s) => ["--segment", s]),
   ];
 

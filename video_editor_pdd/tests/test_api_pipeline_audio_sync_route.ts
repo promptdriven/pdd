@@ -19,6 +19,8 @@
  *  10. Word timestamp format: { words: [{ word, start, end, segmentId }] }
  */
 
+import path from "path";
+
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
 // ---------------------------------------------------------------------------
@@ -54,6 +56,8 @@ jest.mock("@/lib/project", () => ({
 
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
+  getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
+  getAppRemotionPublicDir: () => path.join(process.cwd(), "remotion", "public"),
 }));
 
 // Mock fs/promises for timestamps route
@@ -372,9 +376,14 @@ describe("audio-sync executor factory", () => {
 
     expect(mockSpawn).toHaveBeenCalled();
     const [cmd, args] = mockSpawn.mock.calls[0];
-    const path = require("path");
     expect(cmd).toBe("python3");
-    expect(args).toEqual([path.join("scripts", "sync_audio_pipeline.py")]);
+    expect(args).toEqual([
+      path.join(process.cwd(), "scripts", "sync_audio_pipeline.py"),
+      "--project-dir",
+      process.cwd(),
+      "--remotion-public",
+      path.join(process.cwd(), "remotion", "public"),
+    ]);
   });
 
   it("spawns with cwd set to the active project directory", async () => {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
-import { getProjectDir } from "@/lib/projects";
+import { getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 
 /**
  * POST /api/pipeline/asset-staging/run
@@ -18,7 +18,7 @@ interface AssetStagingBody {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
-    const remotionPublicDir = path.join(getProjectDir(), "remotion", "public");
+    const remotionPublicDir = getAppRemotionPublicDir();
     const body = (await request.json().catch(() => ({}))) as AssetStagingBody;
     const files = body.files ?? [];
 

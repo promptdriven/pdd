@@ -103,4 +103,23 @@ describe("lib/projects", () => {
       expect.arrayContaining(["video_editor_pdd", "video_editor", "pipeline"])
     );
   });
+
+  it("falls back to the current temp workspace when not running from the app root", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "video-editor-fallback-workspace-"));
+    const scratch = path.join(root, "scratch_workspace");
+    const sibling = path.join(root, "other_project");
+
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.mkdirSync(sibling, { recursive: true });
+    fs.writeFileSync(path.join(sibling, "project.json"), "{}");
+
+    process.chdir(scratch);
+
+    const { getCurrentProjectWorkspace } = await import("../lib/projects");
+
+    expect(fs.realpathSync(getCurrentProjectWorkspace().dir)).toBe(
+      fs.realpathSync(path.resolve(scratch))
+    );
+    expect(getCurrentProjectWorkspace().name).toBe("scratch_workspace");
+  });
 });

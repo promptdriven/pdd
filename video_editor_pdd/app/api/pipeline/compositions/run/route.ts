@@ -9,7 +9,13 @@ import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
 import { buildSectionConstantsSource } from "@/lib/composition-timing";
 import { loadProject, saveProject } from "@/lib/project";
-import { getProjectDir } from "@/lib/projects";
+import {
+  getAppRemotionDir,
+  getAppRemotionPublicDir,
+  getAppRemotionSrcDir,
+  getAppScriptsDir,
+  getProjectDir,
+} from "@/lib/projects";
 import { renderStill } from "@/lib/render";
 import type { Section, SseSend } from "@/lib/types";
 import {
@@ -32,7 +38,7 @@ type RunBody = {
 
 type SectionComposition = NonNullable<Section["compositions"]>[number];
 
-const getRemotionScopeDir = () => path.join(getProjectDir(), "remotion/src/remotion");
+const getRemotionScopeDir = () => getAppRemotionSrcDir();
 const getSpecsDir = () => path.join(getProjectDir(), "specs");
 
 /** Names that are section-level metadata, not visual components. */
@@ -41,7 +47,7 @@ const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
 function hasAuthoredSectionTimeline(section: Pick<Section, "id" | "compositionId">): boolean {
   const sectionPascal = toPascalCase(section.id);
   const componentName = `${sectionPascal}Section`;
-  const remotionSrc = path.join(getProjectDir(), "remotion", "src", "remotion");
+  const remotionSrc = getAppRemotionSrcDir();
   const candidates = [
     path.join(remotionSrc, section.id, `${section.compositionId}.tsx`),
     path.join(remotionSrc, section.id, `${componentName}.tsx`),
@@ -111,7 +117,7 @@ function findSpecForComponent(componentName: string, sectionSpecDir?: string): s
 // Claude prompt factory
 // ---------------------------------------------------------------------------
 function listVeoAssets(): string[] {
-  const veoPublicDir = path.join(getProjectDir(), "remotion", "public", "veo");
+  const veoPublicDir = path.join(getAppRemotionPublicDir(), "veo");
   if (!fs.existsSync(veoPublicDir)) return [];
   return fs.readdirSync(veoPublicDir).filter((f) => f.endsWith(".mp4") || f.endsWith(".webm"));
 }
@@ -267,7 +273,7 @@ Generate the complete section composition file. Include ALL visuals from VISUAL_
 `.trim();
 
   onLog(`[compositions] Generating section composition: ${remotionDir}/${pascalCompositionId}.tsx`);
-  await runClaudeFix(prompt, path.join(getProjectDir(), "remotion/src/remotion"), onLog);
+  await runClaudeFix(prompt, getRemotionScopeDir(), onLog);
 }
 
 // ---------------------------------------------------------------------------
@@ -436,11 +442,11 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
     // Resolve section specDir for scoped spec lookup
     const sectionSpecDir = sectionId
-      ? (() => {
-          const cfg = loadProject();
-          const sec = cfg.sections.find((s: { id: string }) => s.id === sectionId);
-          return sec ? path.join("specs", sec.specDir) : undefined;
-        })()
+        ? (() => {
+            const cfg = loadProject();
+            const sec = cfg.sections.find((s: { id: string }) => s.id === sectionId);
+            return sec ? path.join("specs", sec.specDir) : undefined;
+          })()
       : undefined;
 
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
@@ -486,7 +492,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
     // video files are available and uses correct staticFile() paths.
     // Clean the target directory first to remove stale files from previous runs.
     const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
-    const veoPublicDir = path.join(getProjectDir(), "remotion", "public", "veo");
+    const veoPublicDir = path.join(getAppRemotionPublicDir(), "veo");
     if (fs.existsSync(veoPublicDir)) {
       fs.rmSync(veoPublicDir, { recursive: true, force: true });
     }
@@ -701,7 +707,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
           continue;
         }
 
-        const sectionRemotionDir = path.join("remotion/src/remotion", section.id);
+        const sectionRemotionDir = path.join(getAppRemotionSrcDir(), section.id);
         // Extract string IDs from compositions (which may contain timing objects)
         const componentIds = (section.compositions as SectionComposition[]).map(
           (comp) => typeof comp === "string" ? comp : (comp.id as string)
@@ -741,7 +747,14 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
     onLog("[compositions] Generating section compositions and Root.tsx...");
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("python3", ["scripts/generate_section_compositions.py", "--force"], {
+      const proc = spawn("python3", [
+        path.join(getAppScriptsDir(), "generate_section_compositions.py"),
+        "--project-dir",
+        getProjectDir(),
+        "--remotion-dir",
+        getAppRemotionDir(),
+        "--force",
+      ], {
         cwd: getProjectDir(),
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -772,7 +785,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
     onLog("[compositions] Rebuilding Remotion bundle...");
     send({ type: "bundle", status: "building" });
 
-    const remotionDir = path.join(getProjectDir(), "remotion");
+    const remotionDir = getAppRemotionDir();
     execSync("npx remotion bundle src/index.ts --out build", {
       cwd: remotionDir,
       stdio: "pipe",

@@ -21,6 +21,8 @@
  *  12. Segment status 'done' when file exists + render success, 'error' otherwise
  */
 
+import path from "path";
+
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
 // ---------------------------------------------------------------------------
@@ -75,6 +77,7 @@ jest.mock("crypto", () => ({
 
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
+  getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
 }));
 
 // Import after mocking

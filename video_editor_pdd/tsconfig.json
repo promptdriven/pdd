@@ -27,6 +27,7 @@
     "node_modules",
     "e2e",
     "examples",
+    "projects",
     "remotion",
     "tests"
   ]

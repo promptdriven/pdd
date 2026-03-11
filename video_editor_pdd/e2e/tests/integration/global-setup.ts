@@ -4,13 +4,15 @@ import BetterSqlite3 from 'better-sqlite3';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
 const FIXTURE_DIR = path.join(PROJECT_ROOT, 'e2e', 'fixtures', 'integration');
+const ACTIVE_PROJECT_DIR = path.join(PROJECT_ROOT, 'projects', 'integration-test');
 
-const PROJECT_JSON = path.join(PROJECT_ROOT, 'project.json');
-const MAIN_SCRIPT = path.join(PROJECT_ROOT, 'narrative', 'main_script.md');
-const PIPELINE_DB = path.join(PROJECT_ROOT, 'pipeline.db');
-const OUTPUTS_DIR = path.join(PROJECT_ROOT, 'outputs');
-const SPECS_DIR = path.join(PROJECT_ROOT, 'specs');
+const PROJECT_JSON = path.join(ACTIVE_PROJECT_DIR, 'project.json');
+const MAIN_SCRIPT = path.join(ACTIVE_PROJECT_DIR, 'narrative', 'main_script.md');
+const PIPELINE_DB = path.join(ACTIVE_PROJECT_DIR, 'pipeline.db');
+const OUTPUTS_DIR = path.join(ACTIVE_PROJECT_DIR, 'outputs');
+const SPECS_DIR = path.join(ACTIVE_PROJECT_DIR, 'specs');
 const SPECS_BACKUP = SPECS_DIR + '.integration-backup';
+const ACTIVE_PROJECT_REMOTION = path.join(ACTIVE_PROJECT_DIR, 'remotion');
 
 const REMOTION_DIR = path.join(PROJECT_ROOT, 'remotion');
 const REMOTION_SRC = path.join(REMOTION_DIR, 'src', 'remotion');
@@ -29,6 +31,8 @@ function backupIfExists(filePath: string): void {
 }
 
 export default function globalSetup(): void {
+  fs.mkdirSync(ACTIVE_PROJECT_DIR, { recursive: true });
+
   // Back up existing files
   backupIfExists(PROJECT_JSON);
   backupIfExists(MAIN_SCRIPT);
@@ -128,6 +132,11 @@ export default function globalSetup(): void {
   // Clean outputs directory
   if (fs.existsSync(OUTPUTS_DIR)) {
     fs.rmSync(OUTPUTS_DIR, { recursive: true, force: true });
+  }
+
+  // Remove any stale project-local remotion tree from earlier buggy runs.
+  if (fs.existsSync(ACTIVE_PROJECT_REMOTION)) {
+    fs.rmSync(ACTIVE_PROJECT_REMOTION, { recursive: true, force: true });
   }
 
   // Back up and clean specs directory so Claude CLI doesn't waste time

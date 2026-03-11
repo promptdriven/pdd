@@ -33,7 +33,15 @@ interface ProjectFixture {
 type RenderStatus = 'missing' | 'rendering' | 'done' | 'error';
 type AuditStatus = 'pending' | 'running' | 'done' | 'error';
 
-const PROJECT_JSON_PATH = path.join(__dirname, '..', '..', '..', 'project.json');
+const PROJECT_JSON_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'projects',
+  'integration-test',
+  'project.json',
+);
 
 export function loadActiveProjectFixture(): ProjectFixture {
   return JSON.parse(fs.readFileSync(PROJECT_JSON_PATH, 'utf8')) as ProjectFixture;

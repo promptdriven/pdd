@@ -12,11 +12,20 @@ import {
   writeDeterministicSpecsForSection,
 } from "../lib/deterministic-pipeline";
 
+jest.mock("../lib/projects", () => ({
+  getAppRemotionSrcDir: jest.fn(() => ""),
+}));
+
+import { getAppRemotionSrcDir } from "../lib/projects";
+
 describe("lib/deterministic-pipeline", () => {
   let tmpDir: string;
+  const mockGetAppRemotionSrcDir = getAppRemotionSrcDir as jest.MockedFunction<typeof getAppRemotionSrcDir>;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "deterministic-pipeline-"));
+    mockGetAppRemotionSrcDir.mockReset();
+    mockGetAppRemotionSrcDir.mockReturnValue("");
   });
 
   afterEach(() => {
@@ -160,6 +169,27 @@ describe("lib/deterministic-pipeline", () => {
     expect(modified).toContain(targetFile);
     const updated = fs.readFileSync(targetFile, "utf-8");
     expect(updated).toContain('backgroundColor: "#00FF00"');
+  });
+
+  it("applyDeterministicRemotionFix falls back to the app remotion source when the project workspace has no remotion tree", () => {
+    const appRemotionDir = path.join(tmpDir, "app-remotion");
+    const componentDir = path.join(appRemotionDir, "animation_section");
+    fs.mkdirSync(componentDir, { recursive: true });
+    const targetFile = path.join(componentDir, "Card.tsx");
+    fs.writeFileSync(
+      targetFile,
+      'export const Demo = () => <div style={{ backgroundColor: "#0A1628" }} />;',
+    );
+    mockGetAppRemotionSrcDir.mockReturnValue(appRemotionDir);
+
+    const modified = applyDeterministicRemotionFix(
+      path.join(tmpDir, "project-only"),
+      "animation_section",
+      "Change the background color to bright yellow (#FFFF00).",
+    );
+
+    expect(modified).toContain(targetFile);
+    expect(fs.readFileSync(targetFile, "utf-8")).toContain('backgroundColor: "#FFFF00"');
   });
 
   it("applyDeterministicVideoOverlay rewrites the mp4 with a visible video filter", () => {

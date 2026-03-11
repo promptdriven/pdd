@@ -7,7 +7,11 @@ import { revertFix } from "@/lib/git";
 import { runPipelineStage } from "@/lib/jobs";
 import { loadProject, getSection } from "@/lib/project";
 import { renderSection, stitchFullVideo } from "@/lib/render";
-import { getProjectDir } from "@/lib/projects";
+import {
+  getAppRemotionDir,
+  getAppRemotionPublicDir,
+  getProjectDir,
+} from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +21,7 @@ const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 
 async function syncVeoOutputsToRemotionPublic() {
   const sourceDir = path.join(getProjectDir(), "outputs", "veo");
-  const destDir = path.join(getProjectDir(), "remotion", "public", "veo");
+  const destDir = path.join(getAppRemotionPublicDir(), "veo");
 
   try {
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
@@ -74,7 +78,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
       await syncVeoOutputsToRemotionPublic();
     }
 
-    const remotionDir = path.join(getProjectDir(), "remotion");
+    const remotionDir = getAppRemotionDir();
     const buildDir = path.join(remotionDir, "build");
     const webpackCacheDir = path.join(
       remotionDir,

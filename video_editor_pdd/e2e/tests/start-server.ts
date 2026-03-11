@@ -1,9 +1,8 @@
 import { spawn, spawnSync } from 'child_process';
-import path from 'path';
 
 const E2E_PORT = '3201';
 
-const activeProjectId = path.basename(process.cwd());
+const activeProjectId = 'integration-test';
 
 const commonEnv = {
   ...process.env,

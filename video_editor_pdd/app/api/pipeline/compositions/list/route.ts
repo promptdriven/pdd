@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 
 import { loadProject } from "@/lib/project";
-import { getProjectDir } from "@/lib/projects";
+import { getAppRemotionSrcDir, getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/compositions/list
@@ -27,7 +27,7 @@ interface CompositionSection {
   wrappers: CompositionComponent[];
 }
 
-const getRemotionDir = () => path.join(getProjectDir(), "remotion", "src", "remotion");
+const getRemotionDir = () => getAppRemotionSrcDir();
 
 /** Check if a spec file is a Veo generation prompt (not a Remotion component). */
 function isVeoPromptSpec(filePath: string): boolean {

@@ -3,6 +3,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 
 import { buildSectionConstantsSource } from "./composition-timing";
+import { getAppRemotionSrcDir } from "./projects";
 import type { Section } from "./types";
 
 const DEFAULT_FPS = 30;
@@ -447,7 +448,11 @@ export function applyDeterministicRemotionFix(
   onLog?: (message: string) => void,
 ): string[] {
   const requestedColor = extractRequestedHexColor(instructionText);
-  const remotionDir = path.join(projectDir, "remotion", "src", "remotion");
+  const projectScopedRemotionDir = path.join(projectDir, "remotion", "src", "remotion");
+  const appScopedRemotionDir = getAppRemotionSrcDir();
+  const remotionDir = fs.existsSync(projectScopedRemotionDir)
+    ? projectScopedRemotionDir
+    : appScopedRemotionDir;
   const modifiedFiles: string[] = [];
   const sectionPascal = toPascalCase(sectionId);
 

@@ -13,7 +13,12 @@ import type { Annotation } from "@/lib/types";
 import { resolveAnnotationTarget } from "@/lib/annotation-target";
 import { applyRemotionSpecFixForAnnotation } from "@/lib/remotion-spec-fix";
 import { applyVeoPromptFixForAnnotation } from "@/lib/veo-prompt-fix";
-import { getProjectDir } from "@/lib/projects";
+import {
+  getAppRemotionDir,
+  getAppRemotionPublicDir,
+  getAppScriptsDir,
+  getProjectDir,
+} from "@/lib/projects";
 import {
   applyDeterministicRemotionFix,
   applyDeterministicVideoOverlay,
@@ -64,7 +69,7 @@ Apply the fix NOW — do not just describe it. Edit the actual file(s).
 
 async function syncVeoOutputsToRemotionPublic(onLog: (message: string) => void) {
   const sourceDir = path.join(getProjectDir(), "outputs", "veo");
-  const destDir = path.join(getProjectDir(), "remotion", "public", "veo");
+  const destDir = path.join(getAppRemotionPublicDir(), "veo");
 
   try {
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
@@ -212,7 +217,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
       const gitAvail = isGitAvailable();
       if (gitAvail) {
         const preSha = preFixCommitWithPaths(sectionId, jobId, [
-          path.join(projectDir, "remotion", "src", "remotion"),
+          path.join(getAppRemotionDir(), "src", "remotion"),
           path.join(projectDir, "specs"),
         ]);
         if (preSha) onLog(`Pre-fix snapshot committed: ${preSha.slice(0, 8)}`);
@@ -225,6 +230,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
           (section) => section.id === ann.sectionId
         );
         const stagedPaths = ["remotion/src/remotion/"];
+        const remotionSourceDir = path.join(getAppRemotionDir(), "src", "remotion");
         if (targetSection) {
           const patch = applyRemotionSpecFixForAnnotation(
             projectDir,
@@ -238,7 +244,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
             stagedPaths.push(patch.specPath);
           }
         }
-        stagedPaths[0] = path.join(projectDir, "remotion", "src", "remotion");
+        stagedPaths[0] = remotionSourceDir;
         if (isDeterministicPipelineMode()) {
           applyDeterministicRemotionFix(projectDir, ann.sectionId, ann.text, onLog);
         } else {
@@ -327,7 +333,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
       }
 
       // Rebuild Remotion bundle so renders pick up the edited TSX
-      const remotionDir = path.join(getProjectDir(), "remotion");
+      const remotionDir = getAppRemotionDir();
       const buildDir = path.join(remotionDir, "build");
       const webpackCacheDir = path.join(
         remotionDir,
@@ -343,11 +349,14 @@ export async function POST(_request: Request, { params }: RouteParams) {
       await fs.rm(buildDir, { recursive: true, force: true });
       await fs.rm(webpackCacheDir, { recursive: true, force: true });
       onLog("Regenerating Root.tsx...");
-      execSync("python3 scripts/generate_section_compositions.py --force", {
+      execSync(
+        `python3 "${path.join(getAppScriptsDir(), "generate_section_compositions.py")}" --project-dir "${getProjectDir()}" --remotion-dir "${getAppRemotionDir()}" --force`,
+        {
         cwd: getProjectDir(),
         stdio: "pipe",
         timeout: 120_000,
-      });
+        }
+      );
       onLog("Rebuilding Remotion bundle...");
       execSync("npx remotion bundle src/index.ts --out build", {
         cwd: remotionDir,
@@ -372,7 +381,12 @@ export async function POST(_request: Request, { params }: RouteParams) {
       for (const targetSectionId of sectionsToRender) {
         const section = getSection(targetSectionId, project);
         const compositionId = section?.compositionId ?? `${toPascalCase(targetSectionId)}Section`;
-        const outputPath = path.join("outputs", "sections", `${targetSectionId}.mp4`);
+        const outputPath = path.join(
+          projectDir,
+          "outputs",
+          "sections",
+          `${targetSectionId}.mp4`
+        );
         onLog(`Rendering section ${targetSectionId} (${compositionId}) → ${outputPath}`);
         await renderSection(compositionId, outputPath, (progress) => {
           onLog.progress?.(progress.percent);
@@ -382,7 +396,12 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
       const stitchedSectionPaths: string[] = [];
       for (const projectSection of project.sections ?? []) {
-        const sectionVideoPath = path.join("outputs", "sections", `${projectSection.id}.mp4`);
+        const sectionVideoPath = path.join(
+          projectDir,
+          "outputs",
+          "sections",
+          `${projectSection.id}.mp4`
+        );
         try {
           await fs.access(sectionVideoPath);
           stitchedSectionPaths.push(sectionVideoPath);
@@ -392,7 +411,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
       }
 
       if (stitchedSectionPaths.length > 0) {
-        const fullVideoOutputPath = path.join("outputs", "full_video.mp4");
+        const fullVideoOutputPath = path.join(projectDir, "outputs", "full_video.mp4");
         onLog(`Stitching full video → ${fullVideoOutputPath}`);
         await stitchFullVideo(stitchedSectionPaths, fullVideoOutputPath, (progress) => {
           onLog.progress?.(progress.percent);
@@ -402,7 +421,12 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
       if (isDeterministicPipelineMode() && byFixType.remotion.length > 0) {
         const firstRemotionSectionId = byFixType.remotion[0].sectionId;
-        const outputPath = path.join("outputs", "sections", `${firstRemotionSectionId}.mp4`);
+        const outputPath = path.join(
+          projectDir,
+          "outputs",
+          "sections",
+          `${firstRemotionSectionId}.mp4`
+        );
         applyDeterministicVideoOverlay(
           outputPath,
           extractRequestedHexColor(byFixType.remotion[0].text),

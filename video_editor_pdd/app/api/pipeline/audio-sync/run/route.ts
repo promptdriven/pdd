@@ -1,9 +1,10 @@
 import { NextRequest } from "next/server";
+import path from "path";
 import { spawn } from "child_process";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { loadProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
-import { getProjectDir } from "@/lib/projects";
+import { getAppRemotionPublicDir, getAppScriptsDir, getProjectDir } from "@/lib/projects";
 
 /**
  * Simple SSE stream helper for Next.js Route Handlers.
@@ -48,13 +49,23 @@ registerExecutor("audio-sync", (_params, send: SseSend) => {
     onLog(`[audio-sync] Loaded sectionGroups: ${JSON.stringify(sectionGroups)}`);
 
     // Spawn the Python script
-    const proc = spawn("python3", ["scripts/sync_audio_pipeline.py"], {
-      cwd: getProjectDir(),
-      env: {
-        ...process.env,
-        SECTION_GROUPS: JSON.stringify(sectionGroups),
-      },
-    });
+    const proc = spawn(
+      "python3",
+      [
+        path.join(getAppScriptsDir(), "sync_audio_pipeline.py"),
+        "--project-dir",
+        getProjectDir(),
+        "--remotion-public",
+        getAppRemotionPublicDir(),
+      ],
+      {
+        cwd: getProjectDir(),
+        env: {
+          ...process.env,
+          SECTION_GROUPS: JSON.stringify(sectionGroups),
+        },
+      }
+    );
 
     let stdoutBuffer = "";
 

@@ -3,10 +3,15 @@ import path from "path";
 import fs from "fs/promises";
 import { spawn, execSync } from "child_process";
 
-import { registerExecutor, runPipelineStage } from "@/lib/jobs";
+import { registerExecutor, startJobInBackground } from "@/lib/jobs";
 import { renderSection, getSectionDuration } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
-import { getProjectDir } from "@/lib/projects";
+import {
+  getAppRemotionDir,
+  getAppRemotionPublicDir,
+  getAppScriptsDir,
+  getProjectDir,
+} from "@/lib/projects";
 import { buildSectionConstantsSource } from "@/lib/composition-timing";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
@@ -102,7 +107,7 @@ async function renderSections(
 async function syncVeoOutputsToRemotionPublic(onLog: (msg: string) => void): Promise<void> {
   const projectDir = getProjectDir();
   const sourceDir = path.join(projectDir, "outputs", "veo");
-  const destDir = path.join(projectDir, "remotion", "public", "veo");
+  const destDir = path.join(getAppRemotionPublicDir(), "veo");
 
   try {
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
@@ -143,8 +148,7 @@ async function refreshSectionTimelineArtifacts(
 
   for (const section of sectionsToRefresh) {
     const constantsDir = path.join(
-      projectDir,
-      "remotion",
+      getAppRemotionDir(),
       "src",
       "remotion",
       section.id
@@ -182,7 +186,7 @@ async function rebuildBundle(
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       "python3",
-      ["scripts/generate_section_compositions.py", "--force"],
+      [path.join(getAppScriptsDir(), "generate_section_compositions.py"), "--force"],
       { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"] }
     );
     proc.stdout.on("data", (d) => onLog(d.toString()));
@@ -193,7 +197,7 @@ async function rebuildBundle(
     });
   });
 
-  const remotionDir = path.join(projectDir, "remotion");
+  const remotionDir = getAppRemotionDir();
   const buildDir = path.join(remotionDir, "build");
   const webpackCacheDir = path.join(
     remotionDir, "node_modules", ".cache", "webpack"
@@ -230,7 +234,7 @@ registerExecutor("render", (params, send) => {
 
 /**
  * POST /api/pipeline/render/run
- * Starts the render job and returns JSON { jobId }.
+ * Starts the render job in the background and returns JSON { jobId } immediately.
  * Progress is streamed separately via GET /api/pipeline/render/stream?jobId=...
  */
 export async function POST(request: NextRequest): Promise<Response> {
@@ -240,8 +244,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     : undefined;
 
   try {
-    const noop: SseSend = () => {};
-    const jobId = await runPipelineStage("render", { sections }, noop);
+    const jobId = startJobInBackground("render", { sections });
     return Response.json({ jobId });
   } catch (err) {
     return Response.json(

@@ -105,6 +105,9 @@ jest.mock("child_process", () => ({
 
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
+  getAppRemotionDir: () => path.join(process.cwd(), "remotion"),
+  getAppRemotionPublicDir: () => path.join(process.cwd(), "remotion", "public"),
+  getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
 }));
 
 // Import after mock setup
@@ -862,7 +865,9 @@ describe("POST — runJob executor: section rendering after fixes", () => {
 
     expect(mockRenderSection).toHaveBeenCalledTimes(1);
     expect(mockRenderSection.mock.calls[0][0]).toBe("IntroComposition");
-    expect(mockRenderSection.mock.calls[0][1]).toBe("outputs/sections/section-1.mp4");
+    expect(mockRenderSection.mock.calls[0][1]).toBe(
+      path.join(process.cwd(), "outputs", "sections", "section-1.mp4")
+    );
     expect(typeof mockRenderSection.mock.calls[0][2]).toBe("function");
   });
 
@@ -894,7 +899,7 @@ describe("POST — runJob executor: section rendering after fixes", () => {
 
     expect(mockRenderSection).toHaveBeenCalledWith(
       "ColdOpenSection",
-      "outputs/sections/cold_open.mp4",
+      path.join(process.cwd(), "outputs", "sections", "cold_open.mp4"),
       expect.any(Function),
     );
   });
@@ -945,8 +950,16 @@ describe("POST — runJob executor: section rendering after fixes", () => {
     const executorFn = mockRunJob.mock.calls[0][1];
     await executorFn(jest.fn());
 
+    const generateCommand = `python3 "${path.join(
+      process.cwd(),
+      "scripts",
+      "generate_section_compositions.py"
+    )}" --project-dir "${process.cwd()}" --remotion-dir "${path.join(
+      process.cwd(),
+      "remotion"
+    )}" --force`;
     expect(mockExecSync).toHaveBeenCalledWith(
-      "python3 scripts/generate_section_compositions.py --force",
+      generateCommand,
       expect.objectContaining({
         cwd: process.cwd(),
         stdio: "pipe",
@@ -960,7 +973,7 @@ describe("POST — runJob executor: section rendering after fixes", () => {
       })
     );
     const commands = mockExecSync.mock.calls.map((call) => call[0]);
-    expect(commands.indexOf("python3 scripts/generate_section_compositions.py --force")).toBeLessThan(
+    expect(commands.indexOf(generateCommand)).toBeLessThan(
       commands.indexOf("npx remotion bundle src/index.ts --out build")
     );
   });
@@ -1012,7 +1025,7 @@ describe("POST — runJob executor: section rendering after fixes", () => {
     expect(mockRunClaudeFix.mock.calls[0][0]).toContain('"section-2" section');
     expect(mockRenderSection).toHaveBeenCalledWith(
       "SectionTwoComposition",
-      "outputs/sections/section-2.mp4",
+      path.join(process.cwd(), "outputs", "sections", "section-2.mp4"),
       expect.any(Function)
     );
     expect(mockRun).toHaveBeenCalledWith("section-2", 5.800000000000001, "ann-global");
@@ -1091,7 +1104,7 @@ describe("POST — runJob executor: section rendering after fixes", () => {
     );
     expect(mockRenderSection).toHaveBeenCalledWith(
       "SectionTwoComposition",
-      "outputs/sections/section-2.mp4",
+      path.join(process.cwd(), "outputs", "sections", "section-2.mp4"),
       expect.any(Function)
     );
   });

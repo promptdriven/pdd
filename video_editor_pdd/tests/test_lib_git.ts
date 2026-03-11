@@ -1,4 +1,6 @@
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 // Mock child_process before importing
@@ -20,7 +22,7 @@ const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
 
 describe('lib/git', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    mockExecSync.mockReset();
   });
 
   describe('isGitAvailable', () => {
@@ -37,6 +39,7 @@ describe('lib/git', () => {
 
   describe('preFixCommit', () => {
     it('creates a commit and returns SHA', () => {
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(true);
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))   // isGitAvailable
         .mockReturnValueOnce(Buffer.from(''))        // git add
@@ -44,14 +47,17 @@ describe('lib/git', () => {
         .mockReturnValueOnce(Buffer.from(''))        // git commit
         .mockReturnValueOnce(Buffer.from('abc123\n')); // git rev-parse
       expect(preFixCommit('s1', 'b1')).toBe('abc123');
+      existsSpy.mockRestore();
     });
 
     it('returns null when nothing to commit', () => {
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(true);
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))   // isGitAvailable
         .mockReturnValueOnce(Buffer.from(''))        // git add
         .mockReturnValueOnce(Buffer.from(''));        // git diff --cached (empty)
       expect(preFixCommit('s1', 'b1')).toBeNull();
+      existsSpy.mockRestore();
     });
 
     it('returns null when git is not available', () => {
@@ -63,6 +69,9 @@ describe('lib/git', () => {
       const projectDir = path.join(process.cwd(), 'projects', 'demo');
       const remotionDir = path.join(projectDir, 'remotion', 'src', 'remotion');
       const specsDir = path.join(projectDir, 'specs');
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockImplementation((candidate) =>
+        candidate === remotionDir || candidate === specsDir
+      );
 
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))
@@ -79,11 +88,42 @@ describe('lib/git', () => {
       expect(addCall).toBeDefined();
       expect(addCall![0]).toContain(remotionDir);
       expect(addCall![0]).toContain(specsDir);
+      existsSpy.mockRestore();
+    });
+
+    it('ignores missing paths when creating a pre-fix commit', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-path-filter-'));
+      const remotionDir = path.join(tmpDir, 'remotion', 'src', 'remotion');
+      fs.mkdirSync(remotionDir, { recursive: true });
+      const missingSpecsDir = path.join(tmpDir, 'specs');
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockImplementation((candidate) =>
+        candidate === remotionDir
+      );
+
+      mockExecSync
+        .mockReturnValueOnce(Buffer.from('true'))
+        .mockReturnValueOnce(Buffer.from(''))
+        .mockReturnValueOnce(Buffer.from('remotion/src/remotion/index.tsx'))
+        .mockReturnValueOnce(Buffer.from(''))
+        .mockReturnValueOnce(Buffer.from('sha\n'));
+
+      expect(preFixCommitWithPaths('s1', 'b1', [remotionDir, missingSpecsDir])).toBe('sha');
+
+      const addCall = mockExecSync.mock.calls.find(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('git add')
+      );
+      expect(addCall).toBeDefined();
+      expect(addCall![0]).toContain(remotionDir);
+      expect(addCall![0]).not.toContain(missingSpecsDir);
+
+      existsSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     });
   });
 
   describe('fixCommit', () => {
     it('creates a fix commit and returns SHA', () => {
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(true);
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))     // isGitAvailable
         .mockReturnValueOnce(Buffer.from(''))          // git add
@@ -91,9 +131,18 @@ describe('lib/git', () => {
         .mockReturnValueOnce(Buffer.from(''))          // git commit
         .mockReturnValueOnce(Buffer.from('def456\n')); // git rev-parse
       expect(fixCommit('ann-1', 'Fix text alignment')).toBe('def456');
+      existsSpy.mockRestore();
     });
 
     it('stages custom file paths when provided', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-fix-filter-'));
+      const existingSpecPath = path.join(tmpDir, 'specs', 'veo_section', '02_ocean_wave_sunset.md');
+      fs.mkdirSync(path.dirname(existingSpecPath), { recursive: true });
+      fs.writeFileSync(existingSpecPath, '# spec\n');
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockImplementation((candidate) =>
+        candidate === existingSpecPath
+      );
+
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))
         .mockReturnValueOnce(Buffer.from(''))
@@ -101,16 +150,21 @@ describe('lib/git', () => {
         .mockReturnValueOnce(Buffer.from(''))
         .mockReturnValueOnce(Buffer.from('sha\n'));
 
-      fixCommit('ann-1', 'Update Veo prompt', ['specs/veo_section/02_ocean_wave_sunset.md']);
+      fixCommit('ann-1', 'Update Veo prompt', [existingSpecPath, path.join(tmpDir, 'missing.md')]);
 
       const addCall = mockExecSync.mock.calls.find(
         (call) => typeof call[0] === 'string' && call[0].startsWith('git add')
       );
       expect(addCall).toBeDefined();
-      expect(addCall![0]).toContain('specs/veo_section/02_ocean_wave_sunset.md');
+      expect(addCall![0]).toContain(existingSpecPath);
+      expect(addCall![0]).not.toContain(path.join(tmpDir, 'missing.md'));
+
+      existsSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
     it('sanitizes summary in commit message', () => {
+      const existsSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(true);
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))
         .mockReturnValueOnce(Buffer.from(''))
@@ -124,6 +178,7 @@ describe('lib/git', () => {
       );
       expect(commitCall).toBeDefined();
       expect(commitCall![0]).not.toContain('\n');
+      existsSpy.mockRestore();
     });
   });
 

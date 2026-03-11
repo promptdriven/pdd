@@ -49,6 +49,14 @@ jest.mock("@/lib/project", () => ({
   saveProject: (...args: unknown[]) => mockSaveProject(...args),
 }));
 
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
+  getAppRemotionDir: () => path.join(process.cwd(), "remotion"),
+  getAppRemotionPublicDir: () => path.join(process.cwd(), "remotion", "public"),
+  getAppRemotionSrcDir: () => path.join(process.cwd(), "remotion", "src", "remotion"),
+  getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
+}));
+
 const mockRenderStill = jest.fn();
 
 jest.mock("@/lib/render", () => ({
@@ -682,7 +690,14 @@ describe("compositions executor factory — component generation", () => {
     expect(errorEvent![0].name).toBe("HeroSection");
     expect(mockSpawn).toHaveBeenCalledWith(
       "python3",
-      ["scripts/generate_section_compositions.py", "--force"],
+      [
+        path.join(process.cwd(), "scripts", "generate_section_compositions.py"),
+        "--project-dir",
+        process.cwd(),
+        "--remotion-dir",
+        path.join(process.cwd(), "remotion"),
+        "--force",
+      ],
       expect.objectContaining({
         cwd: process.cwd(),
         stdio: ["ignore", "pipe", "pipe"],
@@ -1068,7 +1083,11 @@ describe("compositions executor factory — wrapper generation", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(mockSpawn.mock.calls[0][0]).toBe("python3");
     expect(mockSpawn.mock.calls[0][1]).toEqual([
-      "scripts/generate_section_compositions.py",
+      path.join(process.cwd(), "scripts", "generate_section_compositions.py"),
+      "--project-dir",
+      process.cwd(),
+      "--remotion-dir",
+      path.join(process.cwd(), "remotion"),
       "--force",
     ]);
   });

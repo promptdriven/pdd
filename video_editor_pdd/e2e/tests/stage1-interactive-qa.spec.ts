@@ -4,7 +4,14 @@ import fs from 'fs';
 import { loadActiveProjectFixture } from './helpers/project-fixtures';
 
 const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
-const PROJECT_JSON_PATH = path.join(__dirname, '..', '..', 'project.json');
+const PROJECT_JSON_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'projects',
+  'integration-test',
+  'project.json',
+);
 
 test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
   // Tests share project.json on disk via the real API - must run serially
