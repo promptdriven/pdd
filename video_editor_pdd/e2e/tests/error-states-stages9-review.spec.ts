@@ -22,7 +22,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await page.waitForTimeout(3000);
 
     // Page should still render the heading without crashing
@@ -48,7 +48,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Mock the render run API to return 500
@@ -90,7 +90,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Mock the render run API to return SSE with an error event
@@ -130,7 +130,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Mock the stitch API to return 500
@@ -171,7 +171,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Mock the stitch API to return malformed response
@@ -208,7 +208,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Wait for table rows to load
@@ -269,7 +269,7 @@ test.describe('Error States: Stage 10 (Audit)', () => {
 
     // Navigate to Stage 10
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await page.waitForTimeout(3000);
 
     // Page should still render the heading without crashing
@@ -307,7 +307,7 @@ test.describe('Error States: Stage 10 (Audit)', () => {
 
     // Navigate to Stage 10
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await page.waitForTimeout(3000);
 
     // Page should still render the heading
@@ -335,7 +335,7 @@ test.describe('Error States: Stage 10 (Audit)', () => {
 
     // Navigate to Stage 10
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
     await page.waitForTimeout(1000);
 
@@ -393,7 +393,7 @@ test.describe('Error States: Stage 10 (Audit)', () => {
 
     // Navigate to Stage 10
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await page.waitForTimeout(3000);
 
     // Page should still render the heading without crashing
@@ -445,7 +445,7 @@ test.describe('Error States: Stage 10 (Audit)', () => {
 
     // Navigate to Stage 10
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
     await page.waitForTimeout(1000);
 

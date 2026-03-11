@@ -11,7 +11,7 @@ export const COLORS = {
   backgroundRight: '#111827',
   divider: '#F8FAFC',
   circle: '#EC4899',
-  square: '#22C55E',
+  square: '#FACC15',
   label: '#F8FAFC',
 };
 

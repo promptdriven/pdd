@@ -129,4 +129,19 @@ describe('POST /api/sections/[id]/preview-fixes', () => {
     );
     expect(prepareCall).toBeDefined();
   });
+
+  it('queries explicit annotationIds across sections instead of filtering to the route section', async () => {
+    mockDb.prepare().all.mockReturnValue([]);
+
+    await POST(makeRequest({ annotationIds: ['ann-veo-1'] }), { params: { id: 'animation_section' } });
+
+    const prepareCall = mockDb.prepare.mock.calls.find(
+      (call: string[]) => typeof call[0] === 'string' && call[0].includes('IN')
+    );
+
+    expect(prepareCall).toBeDefined();
+    expect(prepareCall[0]).toContain('WHERE id IN');
+    expect(prepareCall[0]).not.toContain('sectionId = ? AND id IN');
+    expect(mockDb.prepare().all).toHaveBeenCalledWith('ann-veo-1');
+  });
 });

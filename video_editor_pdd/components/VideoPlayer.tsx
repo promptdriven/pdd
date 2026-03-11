@@ -16,6 +16,8 @@ interface VideoPlayerProps {
   annotations: Annotation[];
   onAnnotationCapture: (data: AnnotationCaptureData) => void;
   onTimeChange?: (seconds: number) => void;
+  onAnnotationSelect?: (annotationId: string) => void;
+  seekRequest?: { annotationId: string; timestamp: number } | null;
 }
 
 const CANVAS_WIDTH = 1920;
@@ -36,6 +38,8 @@ export default function VideoPlayer({
   annotations,
   onAnnotationCapture,
   onTimeChange,
+  onAnnotationSelect,
+  seekRequest,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -264,19 +268,24 @@ export default function VideoPlayer({
     const canvasEl = canvasRef.current;
     if (!videoEl || !canvasEl) return null;
 
-    const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
-    const ctx = offscreen.getContext('2d');
-    if (!ctx) return null;
+    try {
+      const offscreen = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+      const ctx = offscreen.getContext('2d');
+      if (!ctx) return null;
 
-    ctx.drawImage(videoEl, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-    ctx.drawImage(canvasEl, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      ctx.drawImage(videoEl, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      ctx.drawImage(canvasEl, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-    const blob = await offscreen.convertToBlob({ type: 'image/png' });
-    return await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(blob);
-    });
+      const blob = await offscreen.convertToBlob({ type: 'image/png' });
+      return await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      console.warn('Failed to capture composite frame:', error);
+      return null;
+    }
   }, []);
 
   const captureDrawing = useCallback(() => {
@@ -328,8 +337,11 @@ export default function VideoPlayer({
   const togglePlayPause = useCallback(() => {
     const videoEl = videoRef.current;
     if (!videoEl) return;
-    if (videoEl.paused) videoEl.play();
-    else videoEl.pause();
+    if (videoEl.paused) {
+      void videoEl.play().catch(() => {});
+    } else {
+      videoEl.pause();
+    }
   }, []);
 
   const seekBy = useCallback((delta: number) => {
@@ -474,6 +486,16 @@ export default function VideoPlayer({
     };
   }, [onTimeChange, src]);
 
+  useEffect(() => {
+    if (!seekRequest) return;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    if (Math.abs(videoEl.currentTime - seekRequest.timestamp) < 0.01) return;
+    videoEl.currentTime = seekRequest.timestamp;
+    setCurrentTime(seekRequest.timestamp);
+    onTimeChange?.(seekRequest.timestamp);
+  }, [onTimeChange, seekRequest]);
+
   const progressPercent = useMemo(() => {
     if (!duration) return 0;
     return (currentTime / duration) * 100;
@@ -488,6 +510,7 @@ export default function VideoPlayer({
         <video
           ref={videoRef}
           src={src}
+          crossOrigin="anonymous"
           className="absolute inset-0 w-full h-full object-contain"
           controls={false}
         />
@@ -572,6 +595,7 @@ export default function VideoPlayer({
                 videoEl.currentTime = a.timestamp;
                 setCurrentTime(a.timestamp);
                 onTimeChange?.(a.timestamp);
+                onAnnotationSelect?.(a.id);
               }
             }}
             className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0 -translate-y-1"

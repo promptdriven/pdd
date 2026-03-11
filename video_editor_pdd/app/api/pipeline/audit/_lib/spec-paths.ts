@@ -1,11 +1,15 @@
 import path from "path";
+import { getProjectDir } from "@/lib/projects";
 
 function stripSpecsPrefix(specDir: string): string {
   return specDir.replace(/^specs[\\/]/, "").replace(/^[\\/]+/, "");
 }
 
 export function resolveSectionSpecDir(specDir: string): string {
-  return path.join(process.cwd(), "specs", stripSpecsPrefix(specDir));
+  if (path.isAbsolute(specDir)) {
+    return specDir;
+  }
+  return path.join(getProjectDir(), "specs", stripSpecsPrefix(specDir));
 }
 
 export function resolveSectionSpecFile(
@@ -16,6 +20,11 @@ export function resolveSectionSpecFile(
 }
 
 export function toSectionSpecPath(specDir: string, fileName: string): string {
-  const relativeDir = stripSpecsPrefix(specDir).replace(/\\/g, "/");
+  const relativeDir = path.isAbsolute(specDir)
+    ? path
+        .relative(path.join(getProjectDir(), "specs"), specDir)
+        .replace(/\\/g, "/")
+        .replace(/^[./]+/, "")
+    : stripSpecsPrefix(specDir).replace(/\\/g, "/");
   return path.posix.join("specs", relativeDir, fileName);
 }

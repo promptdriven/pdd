@@ -418,8 +418,8 @@ describe("app/api/project/script/route.ts source structure", () => {
     expect(sourceCode).toMatch(/fs\.renameSync\(/);
   });
 
-  it("uses process.cwd() for file path resolution", () => {
-    expect(sourceCode).toMatch(/process\.cwd\(\)/);
+  it("uses project-aware file path resolution", () => {
+    expect(sourceCode).toMatch(/getProjectDir\(\)/);
   });
 
   it("references narrative/main_script.md path", () => {

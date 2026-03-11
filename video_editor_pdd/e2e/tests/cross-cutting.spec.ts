@@ -28,7 +28,7 @@ test.describe('Cross-cutting features', () => {
     ];
 
     for (const label of stageLabels) {
-      const stageItem = sidebar.locator('div', { hasText: label }).first();
+      const stageItem = sidebar.locator('button', { hasText: label }).first();
       await expect(stageItem).toBeVisible();
     }
   });
@@ -52,7 +52,7 @@ test.describe('Cross-cutting features', () => {
 
     // Click on "Script" (Stage 2)
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
 
     // Should now show Stage 2
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible();

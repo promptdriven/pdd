@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/veo/staging-manifest
@@ -16,14 +17,11 @@ interface StagingManifestEntry {
   present: boolean;
 }
 
-const VEO_OUTPUT_DIR = path.join(process.cwd(), "outputs", "veo");
-const REMOTION_PUBLIC_DIR = path.join(process.cwd(), "remotion", "public");
-
-function loadManifest(): string[] {
+function loadManifest(veoOutputDir: string): string[] {
   const candidates = [
-    path.join(VEO_OUTPUT_DIR, "staging.json"),
-    path.join(VEO_OUTPUT_DIR, "staging-manifest.json"),
-    path.join(VEO_OUTPUT_DIR, "manifest.json"),
+    path.join(veoOutputDir, "staging.json"),
+    path.join(veoOutputDir, "staging-manifest.json"),
+    path.join(veoOutputDir, "manifest.json"),
   ];
 
   for (const p of candidates) {
@@ -40,10 +38,10 @@ function loadManifest(): string[] {
   }
 
   // Fallback: scan VEO output directory for MP4 files
-  if (fs.existsSync(VEO_OUTPUT_DIR)) {
+  if (fs.existsSync(veoOutputDir)) {
     try {
       return fs
-        .readdirSync(VEO_OUTPUT_DIR)
+        .readdirSync(veoOutputDir)
         .filter((f) => f.endsWith(".mp4") || f.endsWith(".webm"));
     } catch {
       return [];
@@ -55,11 +53,13 @@ function loadManifest(): string[] {
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const filenames = loadManifest();
+    const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
+    const remotionPublicDir = path.join(getProjectDir(), "remotion", "public");
+    const filenames = loadManifest(veoOutputDir);
 
     const entries: StagingManifestEntry[] = filenames.map((filename) => {
       const presentInPublic = fs.existsSync(
-        path.join(REMOTION_PUBLIC_DIR, filename)
+        path.join(remotionPublicDir, filename)
       );
 
       return {

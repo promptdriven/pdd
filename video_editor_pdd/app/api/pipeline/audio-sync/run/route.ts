@@ -3,6 +3,7 @@ import { spawn } from "child_process";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { loadProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * Simple SSE stream helper for Next.js Route Handlers.
@@ -48,7 +49,7 @@ registerExecutor("audio-sync", (_params, send: SseSend) => {
 
     // Spawn the Python script
     const proc = spawn("python3", ["scripts/sync_audio_pipeline.py"], {
-      cwd: process.cwd(),
+      cwd: getProjectDir(),
       env: {
         ...process.env,
         SECTION_GROUPS: JSON.stringify(sectionGroups),

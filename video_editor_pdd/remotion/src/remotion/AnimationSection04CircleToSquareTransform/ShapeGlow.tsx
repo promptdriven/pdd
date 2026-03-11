@@ -30,14 +30,6 @@ export const ShapeGlow: React.FC = () => {
   const b = Math.round(153 + (94 - 153) * colorProgress);
   const currentColor = `rgb(${r}, ${g}, ${b})`;
 
-  // Border-radius (same as main shape)
-  const currentRadius = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [SHAPE.startBorderRadius, SHAPE.endBorderRadius],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.65, 0, 0.35, 1) },
-  );
-
   return (
     <div
       style={{
@@ -46,7 +38,7 @@ export const ShapeGlow: React.FC = () => {
         height: SHAPE.size,
         left: currentX - SHAPE.size / 2,
         top: SHAPE.cy - SHAPE.size / 2,
-        borderRadius: currentRadius,
+        borderRadius: '50%',
         backgroundColor: currentColor,
         opacity: GLOW.opacity,
         filter: `blur(${GLOW.blur}px)`,

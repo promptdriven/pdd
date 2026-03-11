@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
+import { getProjectDir } from "@/lib/projects";
 
 interface WordTimestamp {
   word: string;
@@ -25,7 +26,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const filePath = path.join(
-    process.cwd(),
+    getProjectDir(),
     "outputs",
     "tts",
     sectionId,

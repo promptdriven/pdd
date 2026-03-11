@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 
 import { loadProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 import { getSectionDuration } from "@/lib/render";
 
 /**
@@ -28,16 +29,16 @@ interface FullVideoInfo {
   updatedAtMs?: number;
 }
 
-const SECTIONS_DIR = path.join(process.cwd(), "outputs", "sections");
-const FULL_VIDEO_PATH = path.join(process.cwd(), "outputs", "full_video.mp4");
-
 export async function GET(): Promise<NextResponse> {
   try {
+    const projectDir = getProjectDir();
+    const sectionsDir = path.join(projectDir, "outputs", "sections");
+    const fullVideoPath = path.join(projectDir, "outputs", "full_video.mp4");
     const config = loadProject();
     let newestSectionMtime = 0;
 
     const sections: SectionRenderStatus[] = config.sections.map((section) => {
-      const outputPath = path.join(SECTIONS_DIR, `${section.id}.mp4`);
+      const outputPath = path.join(sectionsDir, `${section.id}.mp4`);
       const exists = fs.existsSync(outputPath);
       let updatedAtMs: number | undefined;
       if (exists) {
@@ -63,12 +64,12 @@ export async function GET(): Promise<NextResponse> {
     });
 
     let fullVideo: FullVideoInfo = { exists: false };
-    if (fs.existsSync(FULL_VIDEO_PATH)) {
+    if (fs.existsSync(fullVideoPath)) {
       try {
-        const stat = fs.statSync(FULL_VIDEO_PATH);
+        const stat = fs.statSync(fullVideoPath);
         let durationSeconds: number | undefined;
         try {
-          durationSeconds = await getSectionDuration(FULL_VIDEO_PATH);
+          durationSeconds = await getSectionDuration(fullVideoPath);
         } catch {
           // ffprobe unavailable — leave undefined
         }

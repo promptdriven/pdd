@@ -79,6 +79,14 @@ describe("VideoPlayer props", () => {
   it("declares optional onTimeChange callback prop", () => {
     expect(sourceCode).toMatch(/onTimeChange\?\s*:\s*\(seconds\s*:\s*number\)\s*=>\s*void/);
   });
+
+  it("declares optional onAnnotationSelect callback prop", () => {
+    expect(sourceCode).toMatch(/onAnnotationSelect\?\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
+  });
+
+  it("declares optional seekRequest prop", () => {
+    expect(sourceCode).toMatch(/seekRequest\?\s*:\s*\{[\s\S]*annotationId\s*:\s*string[\s\S]*timestamp\s*:\s*number[\s\S]*\}\s*\|\s*null/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -124,6 +132,10 @@ describe("video element", () => {
 
   it("passes src prop to video element", () => {
     expect(sourceCode).toMatch(/src=\{src\}/);
+  });
+
+  it("sets crossOrigin to anonymous for canvas-safe frame capture", () => {
+    expect(sourceCode).toMatch(/crossOrigin=\{?['"]anonymous['"]\}?/);
   });
 
   it("disables native controls", () => {
@@ -313,6 +325,10 @@ describe("keyboard shortcut — K play/pause", () => {
     expect(sourceCode).toMatch(/videoEl\.play\s*\(\s*\)/);
     expect(sourceCode).toMatch(/videoEl\.pause\s*\(\s*\)/);
   });
+
+  it("swallows rejected play promises when toggling playback", () => {
+    expect(sourceCode).toMatch(/videoEl\.play\s*\(\s*\)\.catch\s*\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -494,6 +510,11 @@ describe("OffscreenCanvas composite capture", () => {
     expect(sourceCode).toMatch(/convertToBlob/);
   });
 
+  it("returns null when composite capture fails instead of throwing", () => {
+    expect(sourceCode).toMatch(/catch\s*\(\s*error\s*\)\s*\{/);
+    expect(sourceCode).toMatch(/return\s+null/);
+  });
+
   it("produces compositeDataUrl", () => {
     expect(sourceCode).toMatch(/compositeDataUrl/);
   });
@@ -574,6 +595,10 @@ describe("progress bar", () => {
 
   it("clicking a marker seeks video to that timestamp", () => {
     expect(sourceCode).toMatch(/videoEl\.currentTime\s*=\s*a\.timestamp/);
+  });
+
+  it("clicking a marker notifies onAnnotationSelect with the annotation id", () => {
+    expect(sourceCode).toMatch(/onAnnotationSelect\?\.\(\s*a\.id\s*\)/);
   });
 
   it("clicking or dragging the bar seeks using clientX and bar width", () => {
@@ -689,6 +714,11 @@ describe("video time sync", () => {
 
   it("notifies onTimeChange when the video time updates", () => {
     expect(sourceCode).toMatch(/onTimeChange\?\.\(\s*videoEl\.currentTime\s*\)/);
+  });
+
+  it("seeks the video when a seekRequest is provided", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*!seekRequest\s*\)\s*return/);
+    expect(sourceCode).toMatch(/videoEl\.currentTime\s*=\s*seekRequest\.timestamp/);
   });
 
   it("cleans up event listeners on unmount", () => {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { getProjectDir } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,7 @@ function resolveScriptPath(request: Request): string {
   const url = new URL(request.url);
   const file = url.searchParams.get("file") ?? "main";
   const filename = file === "tts" ? "tts_script.md" : "main_script.md";
-  return path.join(process.cwd(), "narrative", filename);
+  return path.join(getProjectDir(), "narrative", filename);
 }
 
 /**

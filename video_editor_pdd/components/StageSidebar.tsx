@@ -121,9 +121,11 @@ export default function StageSidebar({
             }`}
             title={entry?.status === 'error' ? entry.error || 'Error' : undefined}
           >
-            <span className="text-xs text-muted-foreground w-6">{number}</span>
-            <span className="flex-1 text-sm">{label}</span>
-            {entry && renderBadge(entry)}
+            <div className="flex w-full items-center gap-2">
+              <span className="text-xs text-muted-foreground w-6">{number}</span>
+              <span className="flex-1 text-sm">{label}</span>
+              {entry && renderBadge(entry)}
+            </div>
           </button>
         );
       })}

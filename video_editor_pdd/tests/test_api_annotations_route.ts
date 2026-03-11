@@ -271,7 +271,19 @@ describe("GET — Annotation shape mapping", () => {
     expect(annotation.analysis).toBeNull();
     expect(annotation.resolved).toBe(false);
     expect(annotation.resolveJobId).toBeNull();
+    expect(annotation.fixCommitSha).toBeNull();
     expect(annotation.createdAt).toBe("2025-06-01T12:00:00Z");
+  });
+
+  it("includes fixCommitSha when present in the DB row", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({ fixCommitSha: "abc123def456" }),
+    ]);
+
+    const response = await GET(makeGetRequest());
+    const body = await response.json();
+
+    expect(body.annotations[0].fixCommitSha).toBe("abc123def456");
   });
 
   it("converts resolved integer (0) to boolean false", async () => {

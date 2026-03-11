@@ -9,6 +9,7 @@ import {
   selectCanonicalVeoMarkdownSpec,
 } from "@/lib/veo-spec-context";
 import { resolveSectionHasVeoIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/veo/clips
@@ -53,7 +54,7 @@ export async function GET(): Promise<NextResponse> {
     const config = loadProject();
     const sections = config.sections;
     const aspectRatio = config.veo.defaultAspectRatio;
-    const mainScriptPath = path.join(process.cwd(), "narrative", "main_script.md");
+    const mainScriptPath = path.join(getProjectDir(), "narrative", "main_script.md");
     let mainScriptContent: string | null = null;
 
     if (fs.existsSync(mainScriptPath)) {
@@ -79,7 +80,7 @@ export async function GET(): Promise<NextResponse> {
 
     const resolvedClips: ResolvedClipEntry[] = eligibleSections.flatMap((section) => {
       const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
-      const specDir = path.join(process.cwd(), "specs", normalizedSpecDir);
+      const specDir = path.join(getProjectDir(), "specs", normalizedSpecDir);
 
       if (fs.existsSync(specDir)) {
         try {
@@ -130,7 +131,7 @@ export async function GET(): Promise<NextResponse> {
     const clips: VeoClip[] = resolvedClips.map((clip, idx) => {
       const clipId = clip.id;
       const clipPath = path.join(
-        process.cwd(),
+        getProjectDir(),
         "outputs",
         "veo",
         `${clipId}.mp4`
@@ -157,7 +158,7 @@ export async function GET(): Promise<NextResponse> {
       if (clipExists && depFilePaths.length > 0) {
         const clipTime = mtimeMs(clipPath) ?? 0;
         for (const dep of depFilePaths) {
-          const depAbs = path.join(process.cwd(), dep);
+          const depAbs = path.join(getProjectDir(), dep);
           const depTime = mtimeMs(depAbs);
           if (depTime && depTime > clipTime) {
             stale = true;

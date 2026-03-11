@@ -92,6 +92,11 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/useState\s*<\s*number\s*\|\s*null\s*>\s*\(\s*null\s*\)/);
     expect(sourceCode).toContain("reviewCurrentTime");
   });
+
+  it("tracks available projects and the active project selection", () => {
+    expect(sourceCode).toContain("projectOptions");
+    expect(sourceCode).toContain("selectedProjectOptionId");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -273,7 +278,7 @@ describe("STAGE_PANELS record", () => {
 
 describe("tab bar", () => {
   it("renders tab bar container with flex and border-b border-border", () => {
-    expect(sourceCode).toMatch(/<div\s+className=["']flex\s+border-b\s+border-border["']/);
+    expect(sourceCode).toMatch(/className="flex items-center justify-between border-b border-border pr-4"/);
   });
 
   it("has Pipeline tab button", () => {
@@ -282,6 +287,11 @@ describe("tab bar", () => {
 
   it("has Review tab button", () => {
     expect(sourceCode).toMatch(/>[\s]*Review[\s]*</);
+  });
+
+  it("renders a project selector in the top bar", () => {
+    expect(sourceCode).toMatch(/>[\s]*Project[\s]*</);
+    expect(sourceCode).toMatch(/<select/);
   });
 
   it("Pipeline button sets activeTab to 'pipeline'", () => {
@@ -367,6 +377,11 @@ describe("review tab layout", () => {
     expect(sourceCode).toMatch(/onTimeChange=\{setReviewCurrentTime\}/);
   });
 
+  it("passes annotation selection and seek props to VideoPlayer", () => {
+    expect(sourceCode).toMatch(/onAnnotationSelect=\{handleTimelineAnnotationSelected\}/);
+    expect(sourceCode).toMatch(/seekRequest=\{annotationSeekRequest\}/);
+  });
+
   it("renders AnnotationPanel with annotations and sectionId", () => {
     expect(sourceCode).toMatch(/<AnnotationPanel/);
     expect(sourceCode).toMatch(/annotations=\{annotations\}/);
@@ -380,6 +395,10 @@ describe("review tab layout", () => {
 describe("project config load on mount", () => {
   it("fetches /api/project on mount", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/project['"]\s*\)/);
+  });
+
+  it("fetches /api/projects on mount", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/projects['"]\s*\)/);
   });
 
   it("sets projectConfig from response", () => {
@@ -397,6 +416,10 @@ describe("project config load on mount", () => {
 
   it("uses cleanup flag to prevent stale state updates", () => {
     expect(sourceCode).toMatch(/cancelled\s*=\s*true/);
+  });
+
+  it("posts to /api/projects/select when switching projects", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/projects\/select['"]/);
   });
 });
 
@@ -696,6 +719,24 @@ describe("batch resolve handler", () => {
 
   it("passes an annotation-delete callback to AnnotationPanel", () => {
     expect(sourceCode).toMatch(/onAnnotationDeleted=\{handleAnnotationDeleted\}/);
+  });
+
+  it("passes an annotation-reverted callback to AnnotationPanel", () => {
+    expect(sourceCode).toMatch(/onAnnotationReverted=\{handleAnnotationReverted\}/);
+  });
+
+  it("passes annotation selection state to AnnotationPanel", () => {
+    expect(sourceCode).toMatch(/onAnnotationSelect=\{handleAnnotationSelected\}/);
+    expect(sourceCode).toMatch(/selectedAnnotationId=\{selectedAnnotationId\}/);
+  });
+
+  it("defines handleAnnotationUpdated to refresh an edited annotation in state", () => {
+    expect(sourceCode).toMatch(/const\s+handleAnnotationUpdated\s*=/);
+    expect(sourceCode).toMatch(/setAnnotations\s*\(\s*\(prev\)\s*=>\s*prev\.map/);
+  });
+
+  it("passes onAnnotationUpdated to AnnotationPanel", () => {
+    expect(sourceCode).toMatch(/onAnnotationUpdated=\{handleAnnotationUpdated\}/);
   });
 });
 

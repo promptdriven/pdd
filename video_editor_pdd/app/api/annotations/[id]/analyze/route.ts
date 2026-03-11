@@ -24,6 +24,8 @@ function mapAnnotationRow(row: any): Annotation {
     analysis: parseAnnotationAnalysis(row.analysis),
     resolved: Boolean(row.resolved),
     resolveJobId: row.resolveJobId ?? null,
+    fixCommitSha: row.fixCommitSha ?? null,
+    inputMethod: row.inputMethod ?? "typed",
     createdAt: row.createdAt,
   };
 }

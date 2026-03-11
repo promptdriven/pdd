@@ -44,6 +44,10 @@ jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
+}));
+
 // Import after mocking
 import { POST } from "../app/api/pipeline/specs/run/route";
 
@@ -708,9 +712,9 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/runPipelineStage\s*\(/);
   });
 
-  it("scopes runClaudeFix to specs/ directory via path.join", () => {
+  it("scopes runClaudeFix to specs/ directory via getProjectDir()", () => {
     expect(sourceCode).toMatch(
-      /path\.join\s*\(\s*process\.cwd\(\)\s*,\s*["']specs["']\s*\)/
+      /path\.join\s*\(\s*getProjectDir\(\)\s*,\s*["']specs["']\s*\)/
     );
   });
 

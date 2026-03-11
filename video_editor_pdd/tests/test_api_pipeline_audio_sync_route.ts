@@ -52,6 +52,10 @@ jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
+}));
+
 // Mock fs/promises for timestamps route
 const mockReadFile = jest.fn();
 
@@ -373,7 +377,7 @@ describe("audio-sync executor factory", () => {
     expect(args).toEqual([path.join("scripts", "sync_audio_pipeline.py")]);
   });
 
-  it("spawns with cwd set to process.cwd()", async () => {
+  it("spawns with cwd set to the active project directory", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     await executor(jest.fn());
     await flushPromises();
@@ -957,8 +961,8 @@ describe("app/api/pipeline/audio-sync/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/sync_audio_pipeline\.py/);
   });
 
-  it("uses process.cwd() for spawn cwd", () => {
-    expect(sourceCode).toMatch(/cwd:\s*process\.cwd\(\)/);
+  it("uses getProjectDir() for spawn cwd", () => {
+    expect(sourceCode).toMatch(/cwd:\s*getProjectDir\(\)/);
   });
 
   it("passes SECTION_GROUPS via env", () => {

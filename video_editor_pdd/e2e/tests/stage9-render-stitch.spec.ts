@@ -18,7 +18,7 @@ test.describe('Stage 9: Render & Stitch', () => {
     await page.waitForLoadState('networkidle');
     // Click on Render stage in sidebar
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     // Wait for render status to load (table appears with Section ID column)
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
   });
@@ -224,7 +224,7 @@ test.describe('Stage 9: Render & Stitch', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await page.waitForTimeout(3000);
     const appErrors = errors.filter(
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
@@ -495,7 +495,7 @@ test.describe('Stage 9: Render & Stitch', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Row 0 (done) — preview button should be enabled (title="Preview")

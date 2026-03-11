@@ -6,6 +6,7 @@ import { spawn, execSync } from "child_process";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { renderSection, getSectionDuration } from "@/lib/render";
 import { loadProject, saveProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 import { buildSectionConstantsSource } from "@/lib/composition-timing";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
@@ -43,6 +44,7 @@ async function renderSections(
   send: SseSend,
   onLog: (msg: string) => void
 ): Promise<void> {
+  const projectDir = getProjectDir();
   const config = loadProject();
   const allSections = config.sections;
 
@@ -52,7 +54,7 @@ async function renderSections(
 
   const maxParallel = config.render.maxParallelRenders || 1;
 
-  await fs.mkdir(path.join("outputs", "sections"), { recursive: true });
+  await fs.mkdir(path.join(projectDir, "outputs", "sections"), { recursive: true });
 
   let updateChain: Promise<void> = Promise.resolve();
 
@@ -62,6 +64,7 @@ async function renderSections(
     await Promise.all(
       batch.map(async (section) => {
         const outputPath = path.join(
+          projectDir,
           "outputs",
           "sections",
           `${section.id}.mp4`
@@ -97,8 +100,9 @@ async function renderSections(
 }
 
 async function syncVeoOutputsToRemotionPublic(onLog: (msg: string) => void): Promise<void> {
-  const sourceDir = path.join(process.cwd(), "outputs", "veo");
-  const destDir = path.join(process.cwd(), "remotion", "public", "veo");
+  const projectDir = getProjectDir();
+  const sourceDir = path.join(projectDir, "outputs", "veo");
+  const destDir = path.join(projectDir, "remotion", "public", "veo");
 
   try {
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
@@ -131,6 +135,7 @@ async function refreshSectionTimelineArtifacts(
   sectionIds: string[] | undefined,
   onLog: (msg: string) => void
 ): Promise<void> {
+  const projectDir = getProjectDir();
   const config = loadProject();
   const sectionsToRefresh = sectionIds?.length
     ? config.sections.filter((section) => sectionIds.includes(section.id))
@@ -138,7 +143,7 @@ async function refreshSectionTimelineArtifacts(
 
   for (const section of sectionsToRefresh) {
     const constantsDir = path.join(
-      process.cwd(),
+      projectDir,
       "remotion",
       "src",
       "remotion",
@@ -146,7 +151,7 @@ async function refreshSectionTimelineArtifacts(
     );
     const constantsPath = path.join(constantsDir, "constants.ts");
     const constantsSource = buildSectionConstantsSource(
-      process.cwd(),
+      projectDir,
       section,
       []
     );
@@ -165,6 +170,7 @@ async function rebuildBundle(
   sectionIds: string[] | undefined,
   onLog: (msg: string) => void
 ): Promise<void> {
+  const projectDir = getProjectDir();
   onLog("Syncing staged Veo assets...");
   await syncVeoOutputsToRemotionPublic(onLog);
 
@@ -177,7 +183,7 @@ async function rebuildBundle(
     const proc = spawn(
       "python3",
       ["scripts/generate_section_compositions.py", "--force"],
-      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] }
+      { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"] }
     );
     proc.stdout.on("data", (d) => onLog(d.toString()));
     proc.stderr.on("data", (d) => onLog(d.toString()));
@@ -187,7 +193,7 @@ async function rebuildBundle(
     });
   });
 
-  const remotionDir = path.join(process.cwd(), "remotion");
+  const remotionDir = path.join(projectDir, "remotion");
   const buildDir = path.join(remotionDir, "build");
   const webpackCacheDir = path.join(
     remotionDir, "node_modules", ".cache", "webpack"

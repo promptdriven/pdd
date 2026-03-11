@@ -29,10 +29,10 @@ export const AnimationSection04ShapeShowcase: React.FC = () => {
         />
       )}
 
-      {/* Right card with green square */}
+      {/* Right card with green star */}
       {frame >= ANIMATION_TIMING.rightCardStart && (
         <ShapeCard
-          shape="square"
+          shape="star"
           color={COLORS.squareGreen}
           centerX={DIMENSIONS.rightCardCenterX}
           centerY={DIMENSIONS.cardCenterY}

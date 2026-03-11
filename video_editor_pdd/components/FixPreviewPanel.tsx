@@ -13,11 +13,12 @@ interface FixPreview {
 
 type Props = {
   sectionId: string;
+  annotationIds: string[];
   onClose: () => void;
   onApply: (annotationIds: string[]) => void;
 };
 
-export default function FixPreviewPanel({ sectionId, onClose, onApply }: Props) {
+export default function FixPreviewPanel({ sectionId, annotationIds, onClose, onApply }: Props) {
   const [previews, setPreviews] = useState<FixPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export default function FixPreviewPanel({ sectionId, onClose, onApply }: Props) 
         const res = await fetch(`/api/sections/${sectionId}/preview-fixes`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ annotationIds }),
         });
         if (!res.ok) throw new Error(`Preview failed (${res.status})`);
         const data = await res.json();
@@ -51,7 +53,7 @@ export default function FixPreviewPanel({ sectionId, onClose, onApply }: Props) 
 
     fetchPreviews();
     return () => { cancelled = true; };
-  }, [sectionId]);
+  }, [annotationIds, sectionId]);
 
   const toggleAccepted = useCallback((id: string) => {
     setAccepted((prev) => {

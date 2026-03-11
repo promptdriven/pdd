@@ -40,6 +40,7 @@ export async function GET(
       analysis: parseAnnotationAnalysis(row.analysis),
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
+      fixCommitSha: row.fixCommitSha ?? null,
       inputMethod: row.inputMethod ?? "typed",
       createdAt: row.createdAt,
     };
@@ -72,7 +73,7 @@ export async function PUT(
     }
 
     const body = await request.json();
-    const { text, sectionId, timestamp, analysis } = body;
+    const { text, sectionId, timestamp, analysis, resolved } = body;
 
     const updates: string[] = [];
     const values: unknown[] = [];
@@ -81,6 +82,7 @@ export async function PUT(
     if (sectionId !== undefined) { updates.push('sectionId = ?'); values.push(sectionId); }
     if (timestamp !== undefined) { updates.push('timestamp = ?'); values.push(timestamp); }
     if (analysis !== undefined) { updates.push('analysis = ?'); values.push(JSON.stringify(analysis)); }
+    if (resolved !== undefined) { updates.push('resolved = ?'); values.push(resolved ? 1 : 0); }
 
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
@@ -102,6 +104,7 @@ export async function PUT(
       analysis: parseAnnotationAnalysis(row.analysis),
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
+      fixCommitSha: row.fixCommitSha ?? null,
       inputMethod: row.inputMethod ?? "typed",
       createdAt: row.createdAt,
     };

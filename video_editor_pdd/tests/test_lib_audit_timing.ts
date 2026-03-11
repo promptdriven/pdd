@@ -208,7 +208,7 @@ describe("resolveRenderedAuditSampleWindow", () => {
     expect(result.source).toBe("frame-range");
     expect(result.startSeconds).toBeCloseTo(1.625);
     expect(result.endSeconds).toBeCloseTo(2.25);
-    expect(result.sampleSeconds).toBeCloseTo(1.9375);
+    expect(result.sampleSeconds).toBeCloseTo(1.9, 2);
   });
 
   it("falls back to a normalized spec timeline for specs not present in section.compositions", () => {

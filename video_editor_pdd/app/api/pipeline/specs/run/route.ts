@@ -11,6 +11,7 @@ import {
   writeDeterministicSpecsForSection,
 } from "@/lib/deterministic-pipeline";
 import { resolveSectionHasVeoIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
+import { getProjectDir } from "@/lib/projects";
 
 // ----------------------------------------------------------------------------
 // Register specs executor (runs Claude scoped to /specs)
@@ -37,9 +38,9 @@ registerExecutor("specs", (params, _send) => {
         ? (params.files as string[])
         : [];
 
-    const specsBase = path.join(process.cwd(), "specs");
-    const dataDir = path.join(process.cwd(), "data");
-    const mainScriptPath = path.join(process.cwd(), "narrative", "main_script.md");
+    const specsBase = path.join(getProjectDir(), "specs");
+    const dataDir = path.join(getProjectDir(), "data");
+    const mainScriptPath = path.join(getProjectDir(), "narrative", "main_script.md");
     let mainScriptContent: string | null = null;
 
     if (fs.existsSync(mainScriptPath)) {
@@ -103,7 +104,7 @@ registerExecutor("specs", (params, _send) => {
         }
 
         onLog(`[specs] Generating specs for section: ${sid} (${index + 1}/${sectionIds.length})`);
-        writeDeterministicSpecsForSection(process.cwd(), section, onLog);
+        writeDeterministicSpecsForSection(getProjectDir(), section, onLog);
         const pct = Math.round(((index + 1) / totalSections) * 100);
         progressFn?.(pct);
         onLog(`[specs] Section ${sid} complete (${pct}%)`);

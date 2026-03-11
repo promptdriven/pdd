@@ -521,8 +521,9 @@ describe("lib/db.ts source structure", () => {
     expect(sourceCode).toMatch(/export\s+function\s+recoverCrashedJobs/);
   });
 
-  it("uses module-level let db: Database | null for singleton", () => {
-    expect(sourceCode).toMatch(/let\s+db:\s*Database\s*\|\s*null\s*=/);
+  it("persists singleton database handles in a global map for HMR resilience", () => {
+    expect(sourceCode).toMatch(/Map<string,\s*Database>/);
+    expect(sourceCode).toMatch(/__pipelineDbs/);
   });
 
   it("persists singleton on globalThis for HMR resilience", () => {
@@ -548,8 +549,8 @@ describe("lib/db.ts source structure", () => {
     expect(sourceCode).toMatch(/process\.env\.DB_PATH/);
   });
 
-  it("references pipeline.db as default path", () => {
-    expect(sourceCode).toMatch(/pipeline\.db/);
+  it("references getProjectDbPath as the default database location", () => {
+    expect(sourceCode).toMatch(/getProjectDbPath/);
   });
 
   it("sets WAL journal mode via pragma", () => {

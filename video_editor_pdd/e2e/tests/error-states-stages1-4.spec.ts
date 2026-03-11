@@ -169,7 +169,7 @@ test.describe('Stage 2: Script Editor - Error States', () => {
 
     // Navigate to Stage 2
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await page.waitForTimeout(2000);
 
     // Page should not crash -- Stage 2 heading should be visible
@@ -188,7 +188,7 @@ test.describe('Stage 2: Script Editor - Error States', () => {
 
     // Navigate to Stage 2 first
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -254,7 +254,7 @@ test.describe('Stage 2: Script Editor - Error States', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -304,7 +304,7 @@ test.describe('Stage 2: Script Editor - Error States', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -339,7 +339,7 @@ test.describe('Stage 3: TTS Script Gen - Error States', () => {
 
     // Navigate to Stage 3
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Script' }).first().click();
     await page.waitForTimeout(1000);
 
     // Mock POST /api/pipeline/tts-script/run to return 500
@@ -389,7 +389,7 @@ test.describe('Stage 3: TTS Script Gen - Error States', () => {
 
     // Navigate to Stage 3
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Script' }).first().click();
     await page.waitForTimeout(1500);
 
     // Page should not crash
@@ -439,7 +439,7 @@ test.describe('Stage 4: TTS Rendering - Error States', () => {
 
     // Navigate to Stage 4
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Page should not crash -- error overlay should not appear
@@ -473,7 +473,7 @@ test.describe('Stage 4: TTS Rendering - Error States', () => {
 
     // Navigate to Stage 4
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Page should not crash
@@ -503,7 +503,7 @@ test.describe('Stage 4: TTS Rendering - Error States', () => {
 
     // Navigate to Stage 4 first
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(500);
 
     // Mock POST /api/pipeline/tts-render/run to return 500
@@ -553,7 +553,7 @@ test.describe('Stage 4: TTS Rendering - Error States', () => {
 
     // Navigate to Stage 4
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Page should not crash -- no error overlay

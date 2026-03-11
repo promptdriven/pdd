@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/audio/tts/[...path]
@@ -22,9 +23,10 @@ export async function GET(
       );
     }
 
-    const filePath = path.join(process.cwd(), "outputs", "tts", ...pathSegments);
+    const projectDir = getProjectDir();
+    const filePath = path.join(projectDir, "outputs", "tts", ...pathSegments);
     const resolved = path.resolve(filePath);
-    const allowedRoot = path.resolve("outputs", "tts");
+    const allowedRoot = path.resolve(projectDir, "outputs", "tts");
 
     if (!resolved.startsWith(allowedRoot + path.sep) && resolved !== allowedRoot) {
       return NextResponse.json(

@@ -2,20 +2,28 @@ import React from 'react';
 import { useCurrentFrame, interpolate, interpolateColors, Easing } from 'remotion';
 import { DIMENSIONS, COLORS, ANIMATION_TIMING } from './constants';
 
+const CIRCLE_CLIP = [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50];
+const STAR_CLIP = [50, 0, 61, 35, 98, 35, 68, 57, 79, 91, 50, 70, 21, 91, 32, 57, 2, 35, 39, 35];
+
 export const MorphShape: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Border-radius: 50% (circle) → 0% (square) during morph phase
-  const borderRadiusPercent = interpolate(
-    frame,
-    [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
-    [50, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+  // Interpolate each clip-path coordinate from circle to star during morph phase
+  const clipPoints = CIRCLE_CLIP.map((circleVal, i) => {
+    return interpolate(
+      frame,
+      [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
+      [circleVal, STAR_CLIP[i]],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.inOut(Easing.cubic),
+      }
+    );
+  });
+
+  // Build polygon clip-path from interpolated points
+  const clipPath = `polygon(${clipPoints[0]}% ${clipPoints[1]}%, ${clipPoints[2]}% ${clipPoints[3]}%, ${clipPoints[4]}% ${clipPoints[5]}%, ${clipPoints[6]}% ${clipPoints[7]}%, ${clipPoints[8]}% ${clipPoints[9]}%, ${clipPoints[10]}% ${clipPoints[11]}%, ${clipPoints[12]}% ${clipPoints[13]}%, ${clipPoints[14]}% ${clipPoints[15]}%, ${clipPoints[16]}% ${clipPoints[17]}%, ${clipPoints[18]}% ${clipPoints[19]}%)`;
 
   // Color: blue → green during morph phase (linear)
   const fillColor = interpolateColors(
@@ -32,7 +40,6 @@ export const MorphShape: React.FC = () => {
     }
 
     // Slide: center → overshoot position (easeOutCubic carries through settle)
-    // We animate all the way to overshoot across slide+settle, then correct at end
     if (frame < ANIMATION_TIMING.settleStart) {
       return interpolate(
         frame,
@@ -51,7 +58,6 @@ export const MorphShape: React.FC = () => {
       const settleMid = (ANIMATION_TIMING.settleStart + ANIMATION_TIMING.settleEnd) / 2;
 
       if (frame < settleMid) {
-        // First half: ease out to overshoot
         return interpolate(
           frame,
           [ANIMATION_TIMING.settleStart, settleMid],
@@ -64,7 +70,6 @@ export const MorphShape: React.FC = () => {
         );
       }
 
-      // Second half: ease back to final
       return interpolate(
         frame,
         [settleMid, ANIMATION_TIMING.settleEnd],
@@ -83,31 +88,18 @@ export const MorphShape: React.FC = () => {
 
   const posX = getPositionX();
 
-  // Width/height: circle starts as a square bounding box (280x280), morphs to rectangle (280x180)
-  const circleSize = DIMENSIONS.shapeWidth; // circle uses the larger dimension for uniform size
-  const currentWidth = interpolate(
-    frame,
-    [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
-    [circleSize, DIMENSIONS.shapeWidth],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
-  );
-  const currentHeight = interpolate(
-    frame,
-    [ANIMATION_TIMING.morphStart, ANIMATION_TIMING.morphEnd],
-    [circleSize, DIMENSIONS.shapeHeight],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
-  );
+  const shapeSize = DIMENSIONS.shapeWidth;
 
   return (
     <div
       style={{
         position: 'absolute',
-        width: currentWidth,
-        height: currentHeight,
+        width: shapeSize,
+        height: shapeSize,
         backgroundColor: fillColor,
-        borderRadius: `${borderRadiusPercent}%`,
-        left: posX - currentWidth / 2,
-        top: DIMENSIONS.centerY - currentHeight / 2,
+        clipPath,
+        left: posX - shapeSize / 2,
+        top: DIMENSIONS.centerY - shapeSize / 2,
       }}
     />
   );

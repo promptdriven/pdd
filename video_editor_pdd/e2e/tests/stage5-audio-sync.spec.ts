@@ -6,7 +6,7 @@ test.describe('Stage 5: Audio Sync', () => {
     await page.waitForLoadState('networkidle');
     // Click on Audio Sync stage
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
   });
 
@@ -237,9 +237,9 @@ test.describe('Stage 5: Audio Sync', () => {
 
     // Re-navigate to trigger timestamp load with our mock
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
 
     // Before filtering: word count should show "5 of 5 words"
@@ -278,9 +278,9 @@ test.describe('Stage 5: Audio Sync', () => {
 
     // Re-navigate to trigger timestamp load with our mock
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
 
     // Verify the word count
@@ -336,9 +336,9 @@ test.describe('Stage 5: Audio Sync', () => {
 
     // Re-navigate to trigger fresh load with the mock
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
 
     // The word count should reflect the 2 words, not 0 of 0

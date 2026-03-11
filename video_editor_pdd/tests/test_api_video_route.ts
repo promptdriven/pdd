@@ -142,6 +142,16 @@ describe("GET /api/video/[...path] — full file (no Range)", () => {
     expect(response.headers.get("accept-ranges")).toBe("bytes");
   });
 
+  it("sets CORS headers for canvas-safe video playback", async () => {
+    const response = await GET(
+      makeRequest(),
+      makeParams(["outputs", "sections", "intro.mp4"])
+    );
+
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
+  });
+
   it("sets Content-Length to full file size", async () => {
     const response = await GET(
       makeRequest(),
@@ -224,6 +234,16 @@ describe("GET /api/video/[...path] — Range request (206)", () => {
     );
 
     expect(response.headers.get("accept-ranges")).toBe("bytes");
+  });
+
+  it("preserves CORS headers on 206 responses", async () => {
+    const response = await GET(
+      makeRequest("bytes=0-499"),
+      makeParams(["outputs", "sections", "intro.mp4"])
+    );
+
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
   });
 
   it("passes correct start and end to fs.createReadStream", async () => {

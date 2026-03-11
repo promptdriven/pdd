@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
+import { getProjectDir } from "@/lib/projects";
 
 function nodeStreamToReadableStream(nodeStream: Readable): ReadableStream<Uint8Array> {
   let closed = false;
@@ -83,13 +84,14 @@ export async function GET(
     }
 
     // Reconstruct the file path from the catch-all segments
-    const filePath = path.join(process.cwd(), ...pathSegments);
+    const projectDir = getProjectDir();
+    const filePath = path.join(projectDir, ...pathSegments);
     const resolved = path.resolve(filePath);
 
     // Define allowed root directories
     const allowed = [
-      path.resolve("outputs"),
-      path.resolve("remotion/public"),
+      path.resolve(projectDir, "outputs"),
+      path.resolve(projectDir, "remotion/public"),
     ];
 
     // Verify the resolved path is within an allowed directory
@@ -116,6 +118,8 @@ export async function GET(
     const commonHeaders: Record<string, string> = {
       "Content-Type": "video/mp4",
       "Accept-Ranges": "bytes",
+      "Access-Control-Allow-Origin": "*",
+      "Cross-Origin-Resource-Policy": "cross-origin",
     };
 
     // Parse the Range header

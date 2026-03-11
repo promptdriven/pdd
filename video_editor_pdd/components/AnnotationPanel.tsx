@@ -10,6 +10,10 @@ type Props = {
   sectionId: string;
   onBatchResolve: (jobId: string) => void;
   onAnnotationDeleted: (annotationId: string) => void;
+  onAnnotationReverted: (annotationId: string) => void;
+  onAnnotationSelect: (annotationId: string) => void;
+  onAnnotationUpdated: (annotation: Annotation) => void;
+  selectedAnnotationId?: string | null;
 };
 
 const severityColors: Record<
@@ -184,24 +188,38 @@ function AnnotationCard({
   annotation: a,
   isLocallyResolved,
   defaultExpanded,
+  isSelected,
+  containerRef,
   onToggle,
+  onSelect,
   onRetryJob,
   onMarkResolved,
   onDeleteAnnotation,
+  onAnnotationReverted,
+  onAnnotationUpdated,
 }: {
   annotation: Annotation;
   isLocallyResolved: boolean;
   defaultExpanded: boolean;
+  isSelected: boolean;
+  containerRef?: (node: HTMLDivElement | null) => void;
   onToggle: () => void;
+  onSelect: () => void;
   onRetryJob: (jobId: string) => void;
   onMarkResolved: (annotationId: string) => void;
   onDeleteAnnotation: (annotationId: string) => void;
+  onAnnotationReverted: (annotationId: string) => void;
+  onAnnotationUpdated: (annotation: Annotation) => void;
 }) {
   const [showDiff, setShowDiff] = useState(false);
   const [diffText, setDiffText] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [isEditingTranscript, setIsEditingTranscript] = useState(false);
+  const [transcriptDraft, setTranscriptDraft] = useState(a.text);
+  const [savingTranscript, setSavingTranscript] = useState(false);
+  const [reanalyzing, setReanalyzing] = useState(false);
 
   const isResolved = a.resolved || isLocallyResolved;
   const isExpanded = defaultExpanded;
@@ -226,6 +244,10 @@ function AnnotationCard({
     ? technicalAssessment.replace(/\s+/g, ' ').trim()
     : 'Awaiting analysis…';
 
+  useEffect(() => {
+    setTranscriptDraft(a.text);
+  }, [a.text]);
+
   const handleViewDiff = async () => {
     if (showDiff) {
       setShowDiff(false);
@@ -248,11 +270,12 @@ function AnnotationCard({
 
   const handleRevert = async () => {
     if (!a.fixCommitSha) return;
-    if (!window.confirm('Revert this fix? This will create a new revert commit.')) return;
+    if (!window.confirm('Undo this fix? This will create a new revert commit and rerender the video.')) return;
     setReverting(true);
     try {
       const res = await fetch(`/api/annotations/${a.id}/revert`, { method: 'POST' });
       if (!res.ok) throw new Error('Revert failed');
+      onAnnotationReverted(a.id);
     } catch (e) {
       console.error(e);
     } finally {
@@ -274,17 +297,76 @@ function AnnotationCard({
     }
   };
 
+  const handleTranscriptSave = async () => {
+    setSavingTranscript(true);
+    try {
+      const res = await fetch(`/api/annotations/${a.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: transcriptDraft }),
+      });
+      if (!res.ok) throw new Error('Failed to save transcript');
+      const updatedAnnotation = (await res.json()) as Annotation;
+      onAnnotationUpdated(updatedAnnotation);
+      setIsEditingTranscript(false);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingTranscript(false);
+    }
+  };
+
+  const handleReanalyze = async () => {
+    setReanalyzing(true);
+    try {
+      let updatedAnnotation: Annotation = a;
+
+      if (transcriptDraft !== a.text) {
+        const saveRes = await fetch(`/api/annotations/${a.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: transcriptDraft }),
+        });
+        if (!saveRes.ok) throw new Error('Failed to save transcript');
+        updatedAnnotation = (await saveRes.json()) as Annotation;
+        onAnnotationUpdated(updatedAnnotation);
+        setIsEditingTranscript(false);
+      }
+
+      const analyzeRes = await fetch(`/api/annotations/${a.id}/analyze`, {
+        method: 'POST',
+      });
+      if (!analyzeRes.ok) throw new Error('Failed to re-analyze annotation');
+      const analyzeBody = (await analyzeRes.json()) as { annotation?: Annotation };
+      if (analyzeBody.annotation) {
+        updatedAnnotation = analyzeBody.annotation;
+        onAnnotationUpdated(updatedAnnotation);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setReanalyzing(false);
+    }
+  };
+
   return (
     <div
+      ref={containerRef}
+      data-annotation-id={a.id}
       className={`rounded border p-2 transition-colors ${
         isResolved
           ? 'border-green-500/30 bg-green-500/5'
-          : 'border-white/10 bg-white/5 hover:bg-white/7'
+          : isSelected
+            ? 'border-blue-400/50 bg-blue-400/10 hover:bg-blue-400/15'
+            : 'border-white/10 bg-white/5 hover:bg-white/7'
       }`}
     >
       <button
         type="button"
-        onClick={onToggle}
+        onClick={() => {
+          onSelect();
+          onToggle();
+        }}
         className="w-full text-left"
         aria-expanded={isExpanded}
       >
@@ -354,6 +436,44 @@ function AnnotationCard({
           <div className="grid gap-2">
             <div>
               <div className="text-[11px] font-semibold text-white/70">
+                Transcript
+              </div>
+              {isEditingTranscript ? (
+                <div className="mt-1 space-y-2">
+                  <textarea
+                    value={transcriptDraft}
+                    onChange={(event) => setTranscriptDraft(event.target.value)}
+                    className="min-h-24 w-full rounded border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-blue-400/60"
+                  />
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      onClick={() => {
+                        setTranscriptDraft(a.text);
+                        setIsEditingTranscript(false);
+                      }}
+                      disabled={savingTranscript || reanalyzing}
+                      className="rounded bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/15 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleTranscriptSave}
+                      disabled={savingTranscript || reanalyzing}
+                      className="rounded bg-blue-500/20 px-3 py-1.5 text-xs font-medium text-blue-200 hover:bg-blue-500/30 disabled:opacity-50"
+                    >
+                      {savingTranscript ? 'Saving...' : 'Save Transcript'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-1 whitespace-pre-wrap text-xs text-white/85">
+                  {a.text || 'No transcript available.'}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="text-[11px] font-semibold text-white/70">
                 Technical assessment
               </div>
               <div className="mt-1 whitespace-pre-wrap text-xs text-white/85">
@@ -377,6 +497,24 @@ function AnnotationCard({
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
+              {!isEditingTranscript ? (
+                <button
+                  onClick={() => setIsEditingTranscript(true)}
+                  disabled={savingTranscript || reanalyzing}
+                  className="rounded bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/15 disabled:opacity-50"
+                >
+                  Edit Transcript
+                </button>
+              ) : null}
+
+              <button
+                onClick={handleReanalyze}
+                disabled={savingTranscript || reanalyzing}
+                className="rounded bg-purple-500/20 px-3 py-1.5 text-xs font-medium text-purple-200 hover:bg-purple-500/30 disabled:opacity-50"
+              >
+                {reanalyzing ? 'Re-analyzing...' : 'Re-analyze'}
+              </button>
+
               {a.fixCommitSha ? (
                 <>
                   <button
@@ -391,7 +529,7 @@ function AnnotationCard({
                     disabled={reverting}
                     className="rounded bg-red-500/20 px-3 py-1.5 text-xs font-medium text-red-200 hover:bg-red-500/30 disabled:opacity-50"
                   >
-                    {reverting ? 'Reverting...' : 'Revert Fix'}
+                    {reverting ? 'Undoing...' : 'Undo'}
                   </button>
                 </>
               ) : null}
@@ -445,11 +583,16 @@ export default function AnnotationPanel({
   sectionId,
   onBatchResolve,
   onAnnotationDeleted,
+  onAnnotationReverted,
+  onAnnotationSelect,
+  onAnnotationUpdated,
+  selectedAnnotationId = null,
 }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [batchJobId, setBatchJobId] = useState<string | null>(null);
   const [batchPosting, setBatchPosting] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Local-only resolve state (to support "Mark Resolved" without assuming an API exists).
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<Set<string>>(() => new Set());
@@ -467,7 +610,26 @@ export default function AnnotationPanel({
     ).length;
   }, [sorted, locallyResolvedIds]);
 
-  const batchInProgress = Boolean(batchJobId) && batchPosting;
+  const unresolvedWithAnalysisIds = useMemo(() => {
+    return sorted
+      .filter((a) => !a.resolved && !locallyResolvedIds.has(a.id) && a.analysis !== null)
+      .map((a) => a.id);
+  }, [sorted, locallyResolvedIds]);
+
+  const { job: batchJob } = useJob(batchJobId);
+  const batchJobActive = Boolean(batchJobId) && !isTerminal(batchJob?.status);
+
+  useEffect(() => {
+    if (!selectedAnnotationId) return;
+
+    setExpanded((prev) => ({
+      ...prev,
+      [selectedAnnotationId]: true,
+    }));
+
+    const node = cardRefs.current[selectedAnnotationId];
+    node?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedAnnotationId]);
 
   const handleToggle = (id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -507,12 +669,23 @@ export default function AnnotationPanel({
     }
   };
 
-  const handleMarkResolved = (annotationId: string) => {
-    setLocallyResolvedIds((prev) => {
-      const next = new Set(prev);
-      next.add(annotationId);
-      return next;
-    });
+  const handleMarkResolved = async (annotationId: string) => {
+    try {
+      const res = await fetch(`/api/annotations/${annotationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved: true }),
+      });
+      if (!res.ok) throw new Error('Failed to mark annotation resolved');
+
+      setLocallyResolvedIds((prev) => {
+        const next = new Set(prev);
+        next.add(annotationId);
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   const handleDeleteAnnotation = (annotationId: string) => {
@@ -531,12 +704,12 @@ export default function AnnotationPanel({
 
         <button
           onClick={handleApplyBatch}
-          disabled={unresolvedWithAnalysisCount === 0 || Boolean(batchJobId)}
+          disabled={unresolvedWithAnalysisCount === 0 || batchPosting || batchJobActive}
           className="rounded bg-white/10 px-3 py-1.5 text-xs font-medium text-white hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
           title={
             unresolvedWithAnalysisCount === 0
               ? 'No unresolved analyzed annotations'
-              : batchJobId
+              : batchPosting || batchJobActive
                 ? 'Batch resolve already in progress'
                 : 'Apply fixes for unresolved analyzed annotations'
           }
@@ -575,6 +748,7 @@ export default function AnnotationPanel({
       {showPreview ? (
         <FixPreviewPanel
           sectionId={sectionId}
+          annotationIds={unresolvedWithAnalysisIds}
           onClose={() => setShowPreview(false)}
           onApply={handlePreviewApply}
         />
@@ -598,10 +772,17 @@ export default function AnnotationPanel({
                   annotation={a}
                   isLocallyResolved={isLocallyResolved}
                   defaultExpanded={isExpanded}
+                  isSelected={selectedAnnotationId === a.id}
+                  containerRef={(node) => {
+                    cardRefs.current[a.id] = node;
+                  }}
                   onToggle={() => handleToggle(a.id)}
+                  onSelect={() => onAnnotationSelect(a.id)}
                   onRetryJob={handleRetryJob}
                   onMarkResolved={handleMarkResolved}
                   onDeleteAnnotation={handleDeleteAnnotation}
+                  onAnnotationReverted={onAnnotationReverted}
+                  onAnnotationUpdated={onAnnotationUpdated}
                 />
               );
             })

@@ -4,6 +4,7 @@ import { createSseStream } from "@/lib/sse";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 import {
   isDeterministicPipelineMode,
   writeDeterministicTtsScript,
@@ -41,13 +42,13 @@ registerExecutor("tts-script", (_params, _send) => {
   return async (onLog) => {
     if (isDeterministicPipelineMode()) {
       const project = loadProject();
-      writeDeterministicTtsScript(process.cwd(), project.sections, onLog);
+      writeDeterministicTtsScript(getProjectDir(), project.sections, onLog);
       return;
     }
 
     await runClaudeFix(
       TTS_SCRIPT_PROMPT,
-      path.join(process.cwd(), "narrative"),
+      path.join(getProjectDir(), "narrative"),
       onLog
     );
   };

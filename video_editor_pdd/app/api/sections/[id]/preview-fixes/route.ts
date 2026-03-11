@@ -64,9 +64,9 @@ export async function POST(request: Request, { params }: RouteParams) {
       const placeholders = annotationIds.map(() => '?').join(',');
       rows = db
         .prepare(
-          `SELECT * FROM annotations WHERE sectionId = ? AND id IN (${placeholders}) AND resolved = 0 ORDER BY timestamp ASC`
+          `SELECT * FROM annotations WHERE id IN (${placeholders}) AND resolved = 0 ORDER BY timestamp ASC`
         )
-        .all(sectionId, ...annotationIds) as Array<Record<string, unknown>>;
+        .all(...annotationIds) as Array<Record<string, unknown>>;
     } else {
       rows = db
         .prepare(

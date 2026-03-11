@@ -73,6 +73,18 @@ describe("AnnotationPanel props", () => {
   it("declares onBatchResolve callback prop", () => {
     expect(sourceCode).toMatch(/onBatchResolve\s*:\s*\(jobId\s*:\s*string\)\s*=>\s*void/);
   });
+
+  it("declares onAnnotationSelect callback prop", () => {
+    expect(sourceCode).toMatch(/onAnnotationSelect\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
+  });
+
+  it("declares optional selectedAnnotationId prop", () => {
+    expect(sourceCode).toMatch(/selectedAnnotationId\?\s*:\s*string\s*\|\s*null/);
+  });
+
+  it("declares onAnnotationUpdated callback prop", () => {
+    expect(sourceCode).toMatch(/onAnnotationUpdated\s*:\s*\(annotation\s*:\s*Annotation\)\s*=>\s*void/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -239,6 +251,11 @@ describe("card expand/collapse", () => {
     expect(sourceCode).toMatch(/aria-expanded=\{isExpanded\}/);
   });
 
+  it("clicking a card calls onSelect before toggling expansion", () => {
+    expect(sourceCode).toMatch(/onSelect\(\)/);
+    expect(sourceCode).toMatch(/onToggle\(\)/);
+  });
+
   it("expanded card shows technical assessment section", () => {
     expect(sourceCode).toMatch(/Technical assessment/);
   });
@@ -251,8 +268,31 @@ describe("card expand/collapse", () => {
     expect(sourceCode).toMatch(/suggestedFixes\.map/);
   });
 
+  it("expanded card shows transcript editing controls", () => {
+    expect(sourceCode).toMatch(/Transcript/);
+    expect(sourceCode).toMatch(/Edit Transcript/);
+    expect(sourceCode).toMatch(/Save Transcript/);
+    expect(sourceCode).toMatch(/Cancel/);
+  });
+
+  it("renders a textarea for editing transcript text", () => {
+    expect(sourceCode).toMatch(/<textarea/);
+    expect(sourceCode).toMatch(/value=\{transcriptDraft\}/);
+    expect(sourceCode).toMatch(/onChange=\{\(event\)\s*=>\s*setTranscriptDraft/);
+  });
+
+  it("shows a Re-analyze action for the annotation", () => {
+    expect(sourceCode).toMatch(/Re-analyze/);
+  });
+
   it("shows Mark Resolved button when not resolved", () => {
     expect(sourceCode).toMatch(/Mark Resolved/);
+  });
+
+  it("persists Mark Resolved via PUT to /api/annotations/${a.id}", () => {
+    expect(sourceCode).toMatch(/fetch\(`\/api\/annotations\/\$\{annotationId\}`,\s*\{/);
+    expect(sourceCode).toMatch(/method:\s*'PUT'/);
+    expect(sourceCode).toMatch(/body:\s*JSON\.stringify\(\{\s*resolved:\s*true\s*\}\)/);
   });
 
   it("shows Delete button in the expanded action row", () => {
@@ -282,7 +322,8 @@ describe("Apply N Fixes button", () => {
   });
 
   it("button is disabled when batch job is in progress", () => {
-    expect(sourceCode).toMatch(/Boolean\(batchJobId\)/);
+    expect(sourceCode).toMatch(/!isTerminal\(batchJob\?\.status\)/);
+    expect(sourceCode).toMatch(/disabled=\{unresolvedWithAnalysisCount\s*===\s*0\s*\|\|\s*batchPosting\s*\|\|\s*batchJobActive\}/);
   });
 
   it("POSTs to /api/sections/${sectionId}/resolve-batch", () => {
@@ -299,6 +340,15 @@ describe("Apply N Fixes button", () => {
 
   it("shows Applying spinner text while posting", () => {
     expect(sourceCode).toMatch(/Applying…/);
+  });
+
+  it("derives unresolved analyzed annotation IDs for preview/apply", () => {
+    expect(sourceCode).toMatch(/const\s+unresolvedWithAnalysisIds\s*=\s*useMemo/);
+    expect(sourceCode).toMatch(/\.map\(\(a\)\s*=>\s*a\.id\)/);
+  });
+
+  it("passes unresolved annotation IDs into FixPreviewPanel", () => {
+    expect(sourceCode).toMatch(/annotationIds=\{unresolvedWithAnalysisIds\}/);
   });
 });
 
@@ -481,6 +531,10 @@ describe("delete annotation action", () => {
     expect(sourceCode).toMatch(/onAnnotationDeleted\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
   });
 
+  it("declares an onAnnotationReverted callback prop", () => {
+    expect(sourceCode).toMatch(/onAnnotationReverted\s*:\s*\(annotationId\s*:\s*string\)\s*=>\s*void/);
+  });
+
   it("tracks locally deleted annotation ids", () => {
     expect(sourceCode).toMatch(/locallyDeletedIds/);
     expect(sourceCode).toMatch(/handleDeleteAnnotation/);
@@ -638,13 +692,22 @@ describe("card rendering", () => {
   it("renders AnnotationCard for each sorted annotation", () => {
     expect(sourceCode).toMatch(/sorted\.map\s*\(\s*\(a\)/);
   });
+
+  it("passes selectedAnnotationId into AnnotationCard selection state", () => {
+    expect(sourceCode).toMatch(/isSelected=\{selectedAnnotationId === a\.id\}/);
+  });
+
+  it("stores card DOM refs by annotation id", () => {
+    expect(sourceCode).toMatch(/cardRefs/);
+    expect(sourceCode).toMatch(/cardRefs\.current\[a\.id\]\s*=\s*node/);
+  });
 });
 
 // ---------------------------------------------------------------------------
 // 25. View Diff / Revert Fix when fixCommitSha exists (items 10.8, 10.11)
 // ---------------------------------------------------------------------------
 
-describe("View Diff and Revert Fix buttons (10.8, 10.11)", () => {
+describe("View Diff and Undo buttons (10.8, 10.11)", () => {
   it("conditionally renders View Diff button when fixCommitSha exists", () => {
     // 10.8: "View Diff" button shown when fixCommitSha exists
     expect(sourceCode).toMatch(/a\.fixCommitSha\s*\?/);
@@ -657,13 +720,13 @@ describe("View Diff and Revert Fix buttons (10.8, 10.11)", () => {
     expect(sourceCode).toMatch(/showDiff\s*\?\s*['"]Hide Diff['"]\s*:\s*['"]View Diff['"]/);
   });
 
-  it("conditionally renders Revert Fix button when fixCommitSha exists (10.11)", () => {
-    expect(sourceCode).toMatch(/Revert Fix/);
+  it("conditionally renders Undo button when fixCommitSha exists (10.11)", () => {
+    expect(sourceCode).toMatch(/Undo/);
   });
 
   it("both buttons are inside the fixCommitSha conditional block", () => {
-    // Both View Diff and Revert Fix must appear together inside `a.fixCommitSha ?`
-    const fixBlock = sourceCode.match(/a\.fixCommitSha\s*\?[\s\S]*?Revert Fix/);
+    // Both View Diff and Undo must appear together inside `a.fixCommitSha ?`
+    const fixBlock = sourceCode.match(/a\.fixCommitSha\s*\?[\s\S]*?Undo/);
     expect(fixBlock).not.toBeNull();
     expect(fixBlock![0]).toContain('View Diff');
   });
@@ -693,6 +756,25 @@ describe("diff panel display (10.9, 10.10)", () => {
   it("POSTs to /api/annotations/${id}/revert for revert action", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{a\.id\}\/revert`/);
   });
+
+  it("calls onAnnotationReverted after a successful undo", () => {
+    expect(sourceCode).toMatch(/onAnnotationReverted\s*\(\s*a\.id\s*\)/);
+  });
+
+  it("PUTs to /api/annotations/${id} when saving transcript edits", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{a\.id\}`/);
+    expect(sourceCode).toMatch(/method:\s*'PUT'/);
+    expect(sourceCode).toMatch(/body:\s*JSON\.stringify\(\{\s*text:\s*transcriptDraft\s*\}\)/);
+  });
+
+  it("POSTs to /api/annotations/${id}/analyze when re-analyzing", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{a\.id\}\/analyze`/);
+    expect(sourceCode).toMatch(/method:\s*'POST'/);
+  });
+
+  it("calls onAnnotationUpdated after a successful transcript save or re-analysis", () => {
+    expect(sourceCode).toMatch(/onAnnotationUpdated\s*\(\s*updatedAnnotation\s*\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -706,5 +788,20 @@ describe("SseLogPanel onDone triggers annotation refresh (13.5)", () => {
     // A no-op onDone means the parent never reloads — this is the bug.
     // Fix: call onBatchResolve(batchJobId) inside the onDone callback.
     expect(sourceCode).toMatch(/onDone=\{\s*\(\)\s*=>\s*\{[^}]*onBatchResolve/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 28. External selection sync
+// ---------------------------------------------------------------------------
+
+describe("external annotation selection sync", () => {
+  it("expands the externally selected annotation", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*!selectedAnnotationId\s*\)\s*return/);
+    expect(sourceCode).toMatch(/\[selectedAnnotationId\]\s*:\s*true/);
+  });
+
+  it("scrolls the selected annotation into view", () => {
+    expect(sourceCode).toMatch(/scrollIntoView/);
   });
 });

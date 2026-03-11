@@ -3,7 +3,7 @@ import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import { COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
 
 interface ShapeCardProps {
-  shape: 'circle' | 'square';
+  shape: 'circle' | 'oval' | 'star';
   color: string;
   centerX: number;
   centerY: number;
@@ -89,7 +89,11 @@ export const ShapeCard: React.FC<ShapeCardProps> = ({
           width: DIMENSIONS.shapeSize,
           height: DIMENSIONS.shapeSize,
           backgroundColor: color,
-          borderRadius: shape === 'circle' ? '50%' : 0,
+          borderRadius: shape === 'circle' ? '50%' : undefined,
+          clipPath:
+            shape === 'star'
+              ? 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)'
+              : undefined,
           transform: `scale(${shapeScale})`,
         }}
       />

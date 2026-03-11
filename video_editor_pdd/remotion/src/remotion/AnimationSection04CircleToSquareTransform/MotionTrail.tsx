@@ -2,6 +2,9 @@ import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import { SHAPE, TRAIL, TIMING, COLORS } from './constants';
 
+const CIRCLE_CLIP = [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50];
+const STAR_CLIP = [50, 0, 61, 35, 98, 35, 68, 57, 79, 91, 50, 70, 21, 91, 32, 57, 2, 35, 39, 35];
+
 /**
  * Renders ghost copies trailing behind the moving shape.
  * Each copy is offset further back along the X axis with decreasing opacity.
@@ -17,13 +20,17 @@ export const MotionTrail: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.poly(4) },
   );
 
-  // Current border-radius
-  const currentRadius = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [SHAPE.startBorderRadius, SHAPE.endBorderRadius],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.65, 0, 0.35, 1) },
-  );
+  // Current clip-path (circle → star)
+  const clipPoints = CIRCLE_CLIP.map((circleVal, i) => {
+    return interpolate(
+      frame,
+      [TIMING.morphStart, TIMING.morphEnd],
+      [circleVal, STAR_CLIP[i]],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.65, 0, 0.35, 1) },
+    );
+  });
+
+  const clipPath = `polygon(${clipPoints[0]}% ${clipPoints[1]}%, ${clipPoints[2]}% ${clipPoints[3]}%, ${clipPoints[4]}% ${clipPoints[5]}%, ${clipPoints[6]}% ${clipPoints[7]}%, ${clipPoints[8]}% ${clipPoints[9]}%, ${clipPoints[10]}% ${clipPoints[11]}%, ${clipPoints[12]}% ${clipPoints[13]}%, ${clipPoints[14]}% ${clipPoints[15]}%, ${clipPoints[16]}% ${clipPoints[17]}%, ${clipPoints[18]}% ${clipPoints[19]}%)`;
 
   // Current color as interpolated rgb
   const colorProgress = interpolate(
@@ -64,7 +71,7 @@ export const MotionTrail: React.FC = () => {
               height: SHAPE.size,
               left: trailX - SHAPE.size / 2,
               top: SHAPE.cy - SHAPE.size / 2,
-              borderRadius: currentRadius,
+              clipPath,
               backgroundColor: currentColor,
               opacity,
             }}

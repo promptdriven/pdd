@@ -63,6 +63,23 @@ describe('lib/git', () => {
       expect(fixCommit('ann-1', 'Fix text alignment')).toBe('def456');
     });
 
+    it('stages custom file paths when provided', () => {
+      mockExecSync
+        .mockReturnValueOnce(Buffer.from('true'))
+        .mockReturnValueOnce(Buffer.from(''))
+        .mockReturnValueOnce(Buffer.from('specs/veo_section/02_ocean_wave_sunset.md'))
+        .mockReturnValueOnce(Buffer.from(''))
+        .mockReturnValueOnce(Buffer.from('sha\n'));
+
+      fixCommit('ann-1', 'Update Veo prompt', ['specs/veo_section/02_ocean_wave_sunset.md']);
+
+      const addCall = mockExecSync.mock.calls.find(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('git add')
+      );
+      expect(addCall).toBeDefined();
+      expect(addCall![0]).toContain('specs/veo_section/02_ocean_wave_sunset.md');
+    });
+
     it('sanitizes summary in commit message', () => {
       mockExecSync
         .mockReturnValueOnce(Buffer.from('true'))

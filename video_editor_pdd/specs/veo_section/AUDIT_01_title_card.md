@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame satisfies all key spec requirements. The title 'VEO SECTION' is displayed in uppercase, centered horizontally and vertically, in a warm white color consistent with #FFF8E7, with wide letter-spacing (~8px) and bold weight matching Inter Bold at ~72px. The background is dark charcoal (#121212) with a visible soft radial warm glow centered behind the text, consistent with the #2A1F0E accent. A thin horizontal amber/gold light streak is visible spanning the width of the frame at the vertical center, matching the #F59E0B accent color at reduced opacity. The overall cinematic tone with warm amber accents is faithfully rendered. This appears to be captured during the hold phase (frames 50-90) where all elements are static and fully visible, which is the correct representative frame for auditing.

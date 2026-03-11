@@ -25,7 +25,7 @@ test.describe('Cross-stage navigation flow', () => {
 
     for (const stage of stages) {
       const sidebar = page.locator('aside');
-      await sidebar.locator('div', { hasText: stage.nav }).first().click();
+      await sidebar.locator('button', { hasText: stage.nav }).first().click();
       await page.waitForTimeout(1000);
       await expect(page.locator('h2', { hasText: stage.heading })).toBeVisible({ timeout: 15000 });
     }
@@ -47,7 +47,7 @@ test.describe('Cross-stage navigation flow', () => {
 
     // Navigate to Stage 5 (Audio Sync)
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 5' }).first()).toBeVisible({ timeout: 15000 });
 
@@ -79,23 +79,23 @@ test.describe('Cross-stage navigation flow', () => {
     // Stage 1 is already active
 
     // Stage 7
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(100);
 
     // Stage 3
-    await sidebar.locator('div', { hasText: 'TTS Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Script' }).first().click();
     await page.waitForTimeout(100);
 
     // Stage 9
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await page.waitForTimeout(100);
 
     // Stage 2
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await page.waitForTimeout(100);
 
     // Stage 10
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await page.waitForTimeout(2000);
 
     // Last stage (10) heading should be visible
@@ -114,7 +114,7 @@ test.describe('Cross-stage navigation flow', () => {
 
     // Navigate to Stage 7 (Veo Gen)
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     // Click Continue button
@@ -133,11 +133,11 @@ test.describe('Cross-stage navigation flow', () => {
 
     // Navigate to Stage 7
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 7' })).toBeVisible({ timeout: 15000 });
 
     // Navigate back to Stage 1
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(1000);
 
     // Stage 1 heading and project name input should be visible
@@ -165,7 +165,7 @@ test.describe('Cross-stage data consistency', () => {
 
     // Stage 7: verify clips table loads with content
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
     const stage7Rows = page.locator('tbody tr');
     const stage7Count = await stage7Rows.count();
@@ -190,7 +190,7 @@ test.describe('Cross-stage data consistency', () => {
 
     // Stage 7: verify clips table loads with rows
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
     const stage7Rows = page.locator('tbody tr');
     const stage7Count = await stage7Rows.count();
@@ -218,7 +218,7 @@ test.describe('Cross-stage data consistency', () => {
     ];
 
     for (const label of stageLabels) {
-      const stageItem = sidebar.locator('div', { hasText: label }).first();
+      const stageItem = sidebar.locator('button', { hasText: label }).first();
       await expect(stageItem).toBeVisible();
     }
 
@@ -236,7 +236,7 @@ test.describe('Cross-stage data consistency', () => {
     const sidebarItems = sidebar.locator('> div');
 
     // Navigate to Stage 5 (Audio Sync) -- index 4 (0-based)
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 5' }).first()).toBeVisible({ timeout: 15000 });
 
@@ -245,7 +245,7 @@ test.describe('Cross-stage data consistency', () => {
     const stage5Bg = await stage5Item.evaluate((el) => getComputedStyle(el).backgroundColor);
 
     // Navigate to Stage 7 (Veo Gen) -- index 6 (0-based)
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 7' })).toBeVisible({ timeout: 15000 });
 
@@ -294,10 +294,10 @@ test.describe('Cross-stage error recovery', () => {
     const sidebar = page.locator('aside');
 
     // Navigate to Stage 7 (which loads clips from API)
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
 
     // Immediately switch to Stage 1 before loading completes
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(2000);
 
     // Stage 1 should render correctly
@@ -326,7 +326,7 @@ test.describe('Cross-stage error recovery', () => {
 
     // Visit Stage 7 (will fail)
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(2000);
 
     // Remove the mock and navigate to Stage 9
@@ -356,7 +356,7 @@ test.describe('Cross-stage error recovery', () => {
     await page.locator('button', { hasText: 'Pipeline' }).click();
     await page.waitForTimeout(500);
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 5' }).first()).toBeVisible({ timeout: 15000 });
 
@@ -413,47 +413,47 @@ test.describe('Cross-stage error recovery', () => {
     await page.waitForTimeout(500);
 
     // Stage 2
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 15000 });
 
     // Stage 3
-    await sidebar.locator('div', { hasText: 'TTS Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Script' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 3' })).toBeVisible({ timeout: 15000 });
 
     // Stage 4
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 4' })).toBeVisible({ timeout: 15000 });
 
     // Stage 5
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 5' }).first()).toBeVisible({ timeout: 15000 });
 
     // Stage 6
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 6' })).toBeVisible({ timeout: 15000 });
 
     // Stage 7
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 7' })).toBeVisible({ timeout: 15000 });
 
     // Stage 8
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 8' })).toBeVisible({ timeout: 15000 });
 
     // Stage 9
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible({ timeout: 15000 });
 
     // Stage 10
-    await sidebar.locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^10\s*Audit/ }).click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
 

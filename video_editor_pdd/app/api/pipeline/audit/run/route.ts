@@ -12,6 +12,7 @@ import {
   resolveSectionSpecFile,
 } from "../_lib/spec-paths";
 import type { AnnotationAnalysis, Section, SseSend } from "@/lib/types";
+import { getProjectDir } from "@/lib/projects";
 
 // --- app/api/pipeline/audit/run/route.ts ---
 
@@ -24,14 +25,14 @@ function resolveSectionRenderedVideoPath(section: Section): string | null {
     if (path.isAbsolute(section.videoFile)) {
       candidates.add(section.videoFile);
     } else {
-      candidates.add(path.join(process.cwd(), section.videoFile));
+      candidates.add(path.join(getProjectDir(), section.videoFile));
       candidates.add(
-        path.join(process.cwd(), "outputs", "sections", path.basename(section.videoFile))
+        path.join(getProjectDir(), "outputs", "sections", path.basename(section.videoFile))
       );
     }
   }
 
-  candidates.add(path.join(process.cwd(), "outputs", "sections", `${section.id}.mp4`));
+  candidates.add(path.join(getProjectDir(), "outputs", "sections", `${section.id}.mp4`));
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
@@ -63,7 +64,7 @@ async function auditSection(
     const specName = path.basename(specFile, ".md");
     const specContent = fs.readFileSync(specPath, "utf-8");
     const sampleWindow = resolveRenderedAuditSampleWindow(specContent, {
-      projectDir: process.cwd(),
+      projectDir: getProjectDir(),
       specPath,
       section,
       sectionSpecFiles: specFiles,

@@ -40,6 +40,11 @@ type ReviewRenderStatus = {
   };
 };
 
+type ProjectOption = {
+  id: string;
+  name: string;
+};
+
 const FULL_VIDEO_SRC = '/api/video/outputs/full_video.mp4';
 const REVIEW_SECTION_STORAGE_KEY = 'video-editor-review-section';
 
@@ -122,10 +127,18 @@ export default function Page() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
   const [loadingProject, setLoadingProject] = useState<boolean>(false);
+  const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
+  const [selectedProjectOptionId, setSelectedProjectOptionId] = useState<string | null>(null);
+  const [switchingProject, setSwitchingProject] = useState(false);
   const [loadingAnnotations, setLoadingAnnotations] = useState<boolean>(false);
   const [reviewRenderStatus, setReviewRenderStatus] =
     useState<ReviewRenderStatus | null>(null);
   const [reviewCurrentTime, setReviewCurrentTime] = useState<number | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [annotationSeekRequest, setAnnotationSeekRequest] = useState<{
+    annotationId: string;
+    timestamp: number;
+  } | null>(null);
 
   // Load project config on mount
   useEffect(() => {
@@ -177,6 +190,31 @@ export default function Page() {
       }
     };
     loadProject();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProjects = async () => {
+      try {
+        const res = await fetch('/api/projects');
+        if (!res.ok) {
+          throw new Error('Failed to load project list');
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setProjectOptions(data.projects ?? []);
+        setSelectedProjectOptionId(data.selectedProjectId ?? null);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    void loadProjects();
+
     return () => {
       cancelled = true;
     };
@@ -258,6 +296,21 @@ export default function Page() {
           : annotation.timestamp + (sectionOffsetsById.get(annotation.sectionId) ?? 0),
     }));
   }, [annotations, reviewUsesFreshFullVideo, sectionOffsetsById]);
+
+  const resolveReviewAnnotationTimestamp = useCallback(
+    (annotation: Annotation) => {
+      if (annotation.timestamp == null) {
+        return null;
+      }
+
+      if (!reviewUsesFreshFullVideo) {
+        return annotation.timestamp;
+      }
+
+      return annotation.timestamp + (sectionOffsetsById.get(annotation.sectionId) ?? 0);
+    },
+    [reviewUsesFreshFullVideo, sectionOffsetsById]
+  );
 
   const loadAnnotations = useCallback(async (sectionIdOverride?: string) => {
     const targetSectionId = sectionIdOverride ?? annotationScopeSectionId;
@@ -409,34 +462,108 @@ export default function Page() {
 
   const handleAnnotationDeleted = useCallback((annotationId: string) => {
     setAnnotations((prev) => prev.filter((annotation) => annotation.id !== annotationId));
+    setSelectedAnnotationId((prev) => (prev === annotationId ? null : prev));
   }, []);
+
+  const handleAnnotationReverted = useCallback(async (_annotationId: string) => {
+    await Promise.all([loadAnnotations(), loadReviewRenderStatus()]);
+  }, [loadAnnotations, loadReviewRenderStatus]);
+
+  const handleAnnotationUpdated = useCallback((annotation: Annotation) => {
+    setAnnotations((prev) =>
+      prev.map((entry) => (entry.id === annotation.id ? annotation : entry))
+    );
+  }, []);
+
+  const handleAnnotationSelected = useCallback(
+    (annotationId: string) => {
+      const annotation = annotations.find((entry) => entry.id === annotationId);
+      if (!annotation) return;
+
+      const timestamp = resolveReviewAnnotationTimestamp(annotation);
+      setSelectedAnnotationId(annotationId);
+
+      if (timestamp == null) {
+        return;
+      }
+
+      setAnnotationSeekRequest({
+        annotationId,
+        timestamp,
+      });
+    },
+    [annotations, resolveReviewAnnotationTimestamp]
+  );
+
+  const handleTimelineAnnotationSelected = useCallback((annotationId: string) => {
+    setSelectedAnnotationId(annotationId);
+  }, []);
+
+  const handleProjectSelection = useCallback(async (projectId: string) => {
+    if (!projectId || projectId === selectedProjectOptionId) {
+      return;
+    }
+
+    setSwitchingProject(true);
+    try {
+      const res = await fetch('/api/projects/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to switch project');
+      }
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      setSwitchingProject(false);
+    }
+  }, [selectedProjectOptionId]);
 
   const StagePanel = STAGE_PANELS[activeStage];
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white">
       {/* Tab bar */}
-      <div className="flex border-b border-border">
-        <button
-          onClick={() => setActiveTab('pipeline')}
-          className={`px-4 py-3 text-sm font-semibold ${
-            activeTab === 'pipeline'
-              ? 'text-white border-b-2 border-blue-500'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          Pipeline
-        </button>
-        <button
-          onClick={() => setActiveTab('review')}
-          className={`px-4 py-3 text-sm font-semibold ${
-            activeTab === 'review'
-              ? 'text-white border-b-2 border-blue-500'
-              : 'text-gray-400 hover:text-white'
-          }`}
-        >
-          Review
-        </button>
+      <div className="flex items-center justify-between border-b border-border pr-4">
+        <div className="flex">
+          <button
+            onClick={() => setActiveTab('pipeline')}
+            className={`px-4 py-3 text-sm font-semibold ${
+              activeTab === 'pipeline'
+                ? 'text-white border-b-2 border-blue-500'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            Pipeline
+          </button>
+          <button
+            onClick={() => setActiveTab('review')}
+            className={`px-4 py-3 text-sm font-semibold ${
+              activeTab === 'review'
+                ? 'text-white border-b-2 border-blue-500'
+                : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            Review
+          </button>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-gray-400">
+          <span>Project</span>
+          <select
+            value={selectedProjectOptionId ?? ''}
+            onChange={(event) => void handleProjectSelection(event.target.value)}
+            disabled={switchingProject || projectOptions.length <= 1}
+            className="rounded border border-border bg-gray-900 px-2 py-1 text-sm text-white disabled:opacity-60"
+          >
+            {projectOptions.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* Two-column layout */}
@@ -465,6 +592,8 @@ export default function Page() {
                 annotations={reviewAnnotations}
                 onAnnotationCapture={handleAnnotationCapture}
                 onTimeChange={setReviewCurrentTime}
+                onAnnotationSelect={handleTimelineAnnotationSelected}
+                seekRequest={annotationSeekRequest}
                 // @ts-expect-error optional prop for prefill is supported by UI layer
                 annotationPreFill={annotationPreFill ?? undefined}
               />
@@ -478,6 +607,10 @@ export default function Page() {
                 sectionId={annotationScopeSection?.id ?? annotationScopeSectionId ?? ''}
                 onBatchResolve={handleBatchResolve}
                 onAnnotationDeleted={handleAnnotationDeleted}
+                onAnnotationReverted={handleAnnotationReverted}
+                onAnnotationSelect={handleAnnotationSelected}
+                onAnnotationUpdated={handleAnnotationUpdated}
+                selectedAnnotationId={selectedAnnotationId}
               />
             </div>
           </>

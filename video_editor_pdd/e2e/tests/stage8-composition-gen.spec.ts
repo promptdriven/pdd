@@ -10,7 +10,7 @@ test.describe('Stage 8: Composition Generation', () => {
     await page.waitForLoadState('networkidle');
     // Click on Compositions stage in sidebar
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     // Wait for the composition data to load (loading text disappears, sections appear)
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
   });
@@ -171,7 +171,7 @@ test.describe('Stage 8: Composition Generation', () => {
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(2000);
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await page.waitForTimeout(3000);
     const appErrors = errors.filter(
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
@@ -327,7 +327,7 @@ test.describe('Stage 8: Composition Generation', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
 
     // Ensure the first section is expanded
     const firstSectionBtn = page.locator('button', { hasText: FIRST_SECTION.label }).first();
@@ -416,7 +416,7 @@ test.describe('Stage 8: Wrapper Controls', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
     await page.locator('h4', { hasText: 'Section Wrappers' }).scrollIntoViewIfNeeded();
   };
@@ -501,7 +501,7 @@ test.describe('Stage 8: Error Row Log Drawer', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
   };
 
@@ -582,7 +582,7 @@ test.describe('Stage 8: Generate All Compositions Payload', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
 
     const generateBtn = page.locator('button', { hasText: 'Generate All Compositions' });
@@ -624,7 +624,7 @@ test.describe('Stage 8: Generate All Compositions Payload', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
 
     const generateBtn = page.locator('button', { hasText: 'Generate All Compositions' });
@@ -646,7 +646,7 @@ test.describe('Stage 8: Preview Dialog Centering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
   });
 
@@ -754,7 +754,7 @@ test.describe('Stage 8: Preview Fallback Content', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
 
     const previewBtn = page.locator('button', { hasText: 'Preview' }).first();

@@ -58,3 +58,12 @@ next-env.d.ts
 
 # Testing
 coverage/
+test-results-integration/
+playwright-report-integration/
+
+# Integration test backups
+*.integration-backup
+.integration-remotion-snapshot.json
+.integration-remotion-public-snapshot.json
+remotion/build.integration-backup/
+specs.integration-backup/

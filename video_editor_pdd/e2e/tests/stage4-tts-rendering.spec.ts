@@ -19,7 +19,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.waitForLoadState('networkidle');
     // Click on TTS Render stage
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(500);
   });
 
@@ -90,7 +90,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
     // Filter out non-application errors
     const appErrors = errors.filter(
@@ -163,7 +163,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Verify segments are rendered
@@ -199,7 +199,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Find the play button (▶)
@@ -249,7 +249,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Find the re-render button (↺)
@@ -289,7 +289,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // Row should be collapsed (▼ visible)
@@ -332,7 +332,7 @@ test.describe('Stage 4: TTS Rendering', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Render' }).first().click();
+    await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
     await page.waitForTimeout(1000);
 
     // The generating badge should be visible with the pulsing animation class

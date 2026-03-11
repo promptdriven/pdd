@@ -20,18 +20,8 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 10.88,
-      "offsetSeconds": 0,
-      "timelineSource": "generated",
-      "compositions": [
-        "animation_section_01_title_card",
-        "02_blue_circle_pulse",
-        "03_circle_to_square_transform",
-        "04_shape_showcase",
-        "05_animation_timeline",
-        "06_split_before_after",
-        "07_section_closing_card"
-      ]
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     },
     {
       "id": "veo_section",
@@ -40,23 +30,8 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 11.712,
-      "offsetSeconds": 10.88,
-      "timelineSource": "generated",
-      "compositions": [
-        "veo_section_01_title_card",
-        "03_narration_overlay_intro",
-        "05_narration_overlay_forest",
-        "06_veo_badge_callout",
-        "07_split_ocean_forest",
-        "08_veo_technology_callout",
-        "09_waveform_visualizer",
-        "10_split_comparison",
-        "11_veo_badge_reprise",
-        "12_split_ocean_forest_reprise",
-        "13_veo_technology_reprise",
-        "14_section_outro"
-      ]
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     }
   ],
   "audioSync": {

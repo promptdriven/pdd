@@ -9,6 +9,7 @@ import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
 import { buildSectionConstantsSource } from "@/lib/composition-timing";
 import { loadProject, saveProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 import { renderStill } from "@/lib/render";
 import type { Section, SseSend } from "@/lib/types";
 import {
@@ -31,8 +32,8 @@ type RunBody = {
 
 type SectionComposition = NonNullable<Section["compositions"]>[number];
 
-const REMOTION_SCOPE_DIR = path.join(process.cwd(), "remotion/src/remotion");
-const SPECS_DIR = path.join(process.cwd(), "specs");
+const getRemotionScopeDir = () => path.join(getProjectDir(), "remotion/src/remotion");
+const getSpecsDir = () => path.join(getProjectDir(), "specs");
 
 /** Names that are section-level metadata, not visual components. */
 const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
@@ -40,7 +41,7 @@ const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
 function hasAuthoredSectionTimeline(section: Pick<Section, "id" | "compositionId">): boolean {
   const sectionPascal = toPascalCase(section.id);
   const componentName = `${sectionPascal}Section`;
-  const remotionSrc = path.join(process.cwd(), "remotion", "src", "remotion");
+  const remotionSrc = path.join(getProjectDir(), "remotion", "src", "remotion");
   const candidates = [
     path.join(remotionSrc, section.id, `${section.compositionId}.tsx`),
     path.join(remotionSrc, section.id, `${componentName}.tsx`),
@@ -55,13 +56,14 @@ function hasAuthoredSectionTimeline(section: Pick<Section, "id" | "compositionId
 // Utility: find spec file content for a component (best effort)
 // ---------------------------------------------------------------------------
 function findSpecForComponent(componentName: string, sectionSpecDir?: string): string {
-  if (!fs.existsSync(SPECS_DIR)) return "";
+  const specsDir = getSpecsDir();
+  if (!fs.existsSync(specsDir)) return "";
 
   // When a section specDir is provided, search there first for an exact match
   if (sectionSpecDir) {
     const absDir = path.isAbsolute(sectionSpecDir)
       ? sectionSpecDir
-      : path.join(process.cwd(), sectionSpecDir);
+      : path.join(getProjectDir(), sectionSpecDir);
     if (fs.existsSync(absDir)) {
       for (const ext of [".md", ".txt", ".tsx"]) {
         const candidate = path.join(absDir, `${componentName}${ext}`);
@@ -75,7 +77,7 @@ function findSpecForComponent(componentName: string, sectionSpecDir?: string): s
   // Handle fallback names like "animation_section_main" — map to specs/{sectionId}/spec.md
   if (componentName.endsWith("_main")) {
     const sectionId = componentName.slice(0, -"_main".length);
-    const specMd = path.join(SPECS_DIR, sectionId, "spec.md");
+    const specMd = path.join(specsDir, sectionId, "spec.md");
     if (fs.existsSync(specMd)) {
       try { return fs.readFileSync(specMd, "utf-8"); } catch { /* fall through */ }
     }
@@ -95,7 +97,7 @@ function findSpecForComponent(componentName: string, sectionSpecDir?: string): s
     }
   };
 
-  walk(SPECS_DIR);
+  walk(specsDir);
 
   if (!matches.length) return "";
   try {
@@ -109,7 +111,7 @@ function findSpecForComponent(componentName: string, sectionSpecDir?: string): s
 // Claude prompt factory
 // ---------------------------------------------------------------------------
 function listVeoAssets(): string[] {
-  const veoPublicDir = path.join(process.cwd(), "remotion", "public", "veo");
+  const veoPublicDir = path.join(getProjectDir(), "remotion", "public", "veo");
   if (!fs.existsSync(veoPublicDir)) return [];
   return fs.readdirSync(veoPublicDir).filter((f) => f.endsWith(".mp4") || f.endsWith(".webm"));
 }
@@ -182,7 +184,7 @@ async function generateSectionConstants(
   fs.mkdirSync(remotionDir, { recursive: true });
   fs.writeFileSync(
     path.join(remotionDir, "constants.ts"),
-    buildSectionConstantsSource(process.cwd(), section, componentIds)
+    buildSectionConstantsSource(getProjectDir(), section, componentIds)
   );
 }
 
@@ -265,7 +267,7 @@ Generate the complete section composition file. Include ALL visuals from VISUAL_
 `.trim();
 
   onLog(`[compositions] Generating section composition: ${remotionDir}/${pascalCompositionId}.tsx`);
-  await runClaudeFix(prompt, path.join(process.cwd(), "remotion/src/remotion"), onLog);
+  await runClaudeFix(prompt, path.join(getProjectDir(), "remotion/src/remotion"), onLog);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +281,7 @@ function generateFallbackComponent(
   veoAssets: string[],
   onLog: (msg: string) => void,
 ): void {
-  const outPath = path.join(REMOTION_SCOPE_DIR, `${name}.tsx`);
+  const outPath = path.join(getRemotionScopeDir(), `${name}.tsx`);
 
   // Check if any Veo asset matches this section (e.g., "veo_section.mp4" for "veo_section_main")
   const sectionId = name.endsWith("_main") ? name.slice(0, -"_main".length) : name;
@@ -321,6 +323,7 @@ export default ${toPascalCase(name)};
     const title = sectionId.replace(/_/g, " ").replace(/\\b\\w/g, (c) => c.toUpperCase());
     code = `import React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate } from "remotion";
+import { getProjectDir } from "@/lib/projects";
 
 export const ${toPascalCase(name)}: React.FC = () => {
   const frame = useCurrentFrame();
@@ -383,6 +386,9 @@ type ValidationTarget = {
   compositionId: string;
 };
 
+const shouldSkipPreviewValidation = () =>
+  process.env.VIDEO_EDITOR_SKIP_COMPOSITION_VALIDATION === "1";
+
 function resolveValidationTargets(
   componentName: string,
   preferredSectionId: string | undefined,
@@ -443,7 +449,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
     // Calculate section durations from audio files and update project.json
     // so that Root.tsx compositions have correct durationInFrames.
     const config = loadProject();
-    const ttsOutputDir = path.join(process.cwd(), "outputs", "tts");
+    const ttsOutputDir = path.join(getProjectDir(), "outputs", "tts");
     let durationsUpdated = false;
     for (const section of config.sections) {
       if (section.durationSeconds > 0) continue;
@@ -479,8 +485,8 @@ registerExecutor("compositions", (params, send: SseSend) => {
     // Stage Veo assets BEFORE generating components so Claude knows which
     // video files are available and uses correct staticFile() paths.
     // Clean the target directory first to remove stale files from previous runs.
-    const veoOutputDir = path.join(process.cwd(), "outputs", "veo");
-    const veoPublicDir = path.join(process.cwd(), "remotion", "public", "veo");
+    const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
+    const veoPublicDir = path.join(getProjectDir(), "remotion", "public", "veo");
     if (fs.existsSync(veoPublicDir)) {
       fs.rmSync(veoPublicDir, { recursive: true, force: true });
     }
@@ -565,14 +571,14 @@ registerExecutor("compositions", (params, send: SseSend) => {
         try {
           if (isDeterministicPipelineMode()) {
             const spec = findSpecForComponent(item.name, item.specDir);
-            writeDeterministicComponent(REMOTION_SCOPE_DIR, item.outputName, spec, onLog);
+            writeDeterministicComponent(getRemotionScopeDir(), item.outputName, spec, onLog);
           } else if (item.name.endsWith("_main")) {
             const spec = findSpecForComponent(item.name, item.specDir);
             generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
           } else {
             const spec = findSpecForComponent(item.name, item.specDir);
             const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
-            await runClaudeFix(prompt, REMOTION_SCOPE_DIR, (line) => onLog(line));
+            await runClaudeFix(prompt, getRemotionScopeDir(), (line) => onLog(line));
           }
 
           send({ type: "component", name: item.name, status: "done" });
@@ -605,7 +611,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
       let compositionsUpdated = false;
 
       for (const section of freshConfig.sections) {
-        const sectionSpecDir = path.join(SPECS_DIR, section.specDir);
+        const sectionSpecDir = path.join(getSpecsDir(), section.specDir);
         if (!fs.existsSync(sectionSpecDir)) continue;
 
         const discoveredComponents: string[] = [];
@@ -626,15 +632,15 @@ registerExecutor("compositions", (params, send: SseSend) => {
           const nnMatch = base.match(/^(\d{2})_/);
           const strippedPascal = nnMatch ? toPascalCase(base.slice(nnMatch[0].length)) : toPascalCase(base);
           const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : strippedPascal;
-          const dirIndex = path.join(REMOTION_SCOPE_DIR, dirName, "index.ts");
-          const scopedTsx = path.join(REMOTION_SCOPE_DIR, `${section.id}_${base}.tsx`);
-          const flatTsx = path.join(REMOTION_SCOPE_DIR, `${base}.tsx`);
+          const dirIndex = path.join(getRemotionScopeDir(), dirName, "index.ts");
+          const scopedTsx = path.join(getRemotionScopeDir(), `${section.id}_${base}.tsx`);
+          const flatTsx = path.join(getRemotionScopeDir(), `${base}.tsx`);
           // Also check section-prefixed PascalCase directory (e.g., ColdOpen07MonitorGlowOverlay/)
           let pascalDirIndex: string | null = null;
           if (nnMatch) {
             const sectionPascal = toPascalCase(section.id);
             const fullPascal = `${sectionPascal}${nnMatch[1]}${strippedPascal}`;
-            pascalDirIndex = path.join(REMOTION_SCOPE_DIR, fullPascal, "index.ts");
+            pascalDirIndex = path.join(getRemotionScopeDir(), fullPascal, "index.ts");
           }
           if (fs.existsSync(scopedTsx)) {
             discoveredComponents.push(`${section.id}_${base}`);
@@ -651,7 +657,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
         // the fallback {sectionId}_main.tsx component, discover it.
         if (discoveredComponents.length === 0) {
           const fallbackName = `${section.id}_main`;
-          const fallbackTsx = path.join(REMOTION_SCOPE_DIR, `${fallbackName}.tsx`);
+          const fallbackTsx = path.join(getRemotionScopeDir(), `${fallbackName}.tsx`);
           if (fs.existsSync(fallbackTsx)) {
             discoveredComponents.push(fallbackName);
           }
@@ -702,7 +708,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
         );
         try {
           if (isDeterministicPipelineMode()) {
-            writeDeterministicSectionConstants(process.cwd(), section, componentIds, onLog);
+            writeDeterministicSectionConstants(getProjectDir(), section, componentIds, onLog);
           } else {
             await generateSectionConstants(
               section,
@@ -736,7 +742,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
     onLog("[compositions] Generating section compositions and Root.tsx...");
     await new Promise<void>((resolve, reject) => {
       const proc = spawn("python3", ["scripts/generate_section_compositions.py", "--force"], {
-        cwd: process.cwd(),
+        cwd: getProjectDir(),
         stdio: ["ignore", "pipe", "pipe"],
       });
 
@@ -751,7 +757,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
 
     if (wrappers.length > 0) {
       for (const name of wrappers) {
-        const filePath = path.join(REMOTION_SCOPE_DIR, `${name}.tsx`);
+        const filePath = path.join(getRemotionScopeDir(), `${name}.tsx`);
         if (fs.existsSync(filePath)) {
           send({ type: "component", name, status: "done" });
         } else {
@@ -766,7 +772,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
     onLog("[compositions] Rebuilding Remotion bundle...");
     send({ type: "bundle", status: "building" });
 
-    const remotionDir = path.join(process.cwd(), "remotion");
+    const remotionDir = path.join(getProjectDir(), "remotion");
     execSync("npx remotion bundle src/index.ts --out build", {
       cwd: remotionDir,
       stdio: "pipe",
@@ -790,19 +796,23 @@ registerExecutor("compositions", (params, send: SseSend) => {
     }
 
     const validationFailures: string[] = [];
-    for (const target of validationTargets.values()) {
-      try {
-        onLog(
-          `[compositions] Validating preview composition: ${target.componentName} (${target.compositionId})`
-        );
-        await validatePreviewComposition(target);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown validation error";
-        validationFailures.push(`${target.componentName}: ${msg}`);
-        send({ type: "component", name: target.componentName, status: "error" });
-        onLog(
-          `[compositions] Validation failed for ${target.componentName}: ${msg}`
-        );
+    if (shouldSkipPreviewValidation()) {
+      onLog("[compositions] Skipping preview validation (VIDEO_EDITOR_SKIP_COMPOSITION_VALIDATION=1).");
+    } else {
+      for (const target of validationTargets.values()) {
+        try {
+          onLog(
+            `[compositions] Validating preview composition: ${target.componentName} (${target.compositionId})`
+          );
+          await validatePreviewComposition(target);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown validation error";
+          validationFailures.push(`${target.componentName}: ${msg}`);
+          send({ type: "component", name: target.componentName, status: "error" });
+          onLog(
+            `[compositions] Validation failed for ${target.componentName}: ${msg}`
+          );
+        }
       }
     }
 

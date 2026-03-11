@@ -7,6 +7,7 @@ import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
 import type { SseSend } from "@/lib/types";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * Spawn render_tts.py and stream stdout/stderr via onLog.
@@ -21,7 +22,7 @@ async function runRenderProcess(
   ];
 
   const proc = spawn("python3", args, {
-    cwd: process.cwd(),
+    cwd: getProjectDir(),
     env: {
       ...process.env,
       // Prefer Qwen when it works, but allow the script to fall back to Edge TTS
@@ -95,7 +96,7 @@ registerExecutor("tts-render", (params, send) => {
         : parseSegmentsFromScript().map((s) => s.id);
 
     for (const id of segIds) {
-      const filePath = path.join(process.cwd(), "outputs", "tts", `${id}.wav`);
+      const filePath = path.join(getProjectDir(), "outputs", "tts", `${id}.wav`);
       const exists = fs.existsSync(filePath);
       const duration = exists ? getWavDuration(filePath) : undefined;
       send({

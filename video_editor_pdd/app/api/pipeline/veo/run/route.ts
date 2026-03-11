@@ -9,6 +9,7 @@ import { runClaudeAnalysis } from '@/lib/claude';
 import { registerExecutor, runPipelineStage } from '@/lib/jobs';
 import { emitClipEvent } from '@/lib/clip-events';
 import type { SseSend } from '@/lib/types';
+import { getProjectDir } from "@/lib/projects";
 import {
   generateDeterministicVeoClip,
   isDeterministicPipelineMode,
@@ -36,7 +37,7 @@ function resolveVeoPrompt(
   section: { id: string; label: string; specDir?: string | null },
   mainScriptContent: string | null
 ): string {
-  const cwd = process.cwd();
+  const cwd = getProjectDir();
   const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
 
   // 1. Check JSON and text candidates first
@@ -105,7 +106,7 @@ async function validateGeneratedClip(
   onLog: (message: string) => void
 ): Promise<void> {
   const validationFramePath = path.join(
-    process.cwd(),
+    getProjectDir(),
     'outputs',
     'veo',
     `${clipId}_validation_frame.png`
@@ -151,7 +152,7 @@ type ResolvedClipJob = {
 function listSectionMarkdownEntries(
   section: { id: string; specDir?: string | null }
 ): { path: string; content: string }[] {
-  const cwd = process.cwd();
+  const cwd = getProjectDir();
   const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
   const specDir = path.join(cwd, 'specs', normalizedSpecDir);
 
@@ -196,7 +197,7 @@ registerExecutor('veo', (params, send: SseSend) => {
   return async (onLog) => {
     const config = loadProject();
     const sections = config.sections;
-    const mainScriptPath = path.join(process.cwd(), 'narrative', 'main_script.md');
+    const mainScriptPath = path.join(getProjectDir(), 'narrative', 'main_script.md');
     let mainScriptContent: string | null = null;
 
     if (fs.existsSync(mainScriptPath)) {
@@ -241,13 +242,13 @@ registerExecutor('veo', (params, send: SseSend) => {
       const aspectRatio = config.veo.defaultAspectRatio;
 
       const outputPath = path.join(
-        process.cwd(),
+        getProjectDir(),
         'outputs',
         'veo',
         `${clipId}.mp4`
       );
       const lastFramePath = path.join(
-        process.cwd(),
+        getProjectDir(),
         'outputs',
         'veo',
         `${clipId}_last_frame.png`

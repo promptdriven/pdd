@@ -21,7 +21,7 @@ test.describe('Stage 5 Error States: Audio Sync', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
 
     // Page should not crash — heading should still be visible
@@ -51,7 +51,7 @@ test.describe('Stage 5 Error States: Audio Sync', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
 
     // Page should still render the heading
@@ -87,7 +87,7 @@ test.describe('Stage 5 Error States: Audio Sync', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Audio Sync' }).first().click();
+    await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
     await page.waitForTimeout(1000);
 
     // The h2 heading must remain visible (page did not crash)
@@ -122,7 +122,7 @@ test.describe('Stage 6 Error States: Spec Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // Stage heading should remain visible
@@ -151,7 +151,7 @@ test.describe('Stage 6 Error States: Spec Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // Heading should remain
@@ -175,7 +175,7 @@ test.describe('Stage 6 Error States: Spec Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // Mock the run endpoint to return 500
@@ -211,7 +211,7 @@ test.describe('Stage 6 Error States: Spec Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // Mock the run endpoint to return malformed data
@@ -260,7 +260,7 @@ test.describe('Stage 7 Error States: Veo Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(2000);
 
     // Page should not show a crash overlay
@@ -293,7 +293,7 @@ test.describe('Stage 7 Error States: Veo Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(2000);
 
     // Page should not crash
@@ -321,7 +321,7 @@ test.describe('Stage 7 Error States: Veo Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     // Mock the run endpoint to return 500
@@ -357,7 +357,7 @@ test.describe('Stage 7 Error States: Veo Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     // Mock the run endpoint to return an SSE error event
@@ -402,7 +402,7 @@ test.describe('Stage 7 Error States: Veo Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     // Mock the run endpoint to return 500
@@ -456,7 +456,7 @@ test.describe('Stage 8 Error States: Composition Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await page.waitForTimeout(2000);
 
     // Page should not crash — sidebar should still be visible
@@ -489,7 +489,7 @@ test.describe('Stage 8 Error States: Composition Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await page.waitForTimeout(2000);
 
     // The heading should still appear
@@ -513,7 +513,7 @@ test.describe('Stage 8 Error States: Composition Generation', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
 
     // Mock the run endpoint to return 500
@@ -566,7 +566,7 @@ test.describe('Stage 8 Error States: Staging Manifest and Asset Staging', () => 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await page.waitForTimeout(2000);
 
     // h3 "Asset Staging Manifest" should still be visible despite the 500
@@ -604,7 +604,7 @@ test.describe('Stage 8 Error States: Staging Manifest and Asset Staging', () => 
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Compositions' }).first().click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Composition Generation' })).toBeVisible({ timeout: 15000 });
 
     const stageNowBtn = page.locator('button', { hasText: 'Stage Now' });

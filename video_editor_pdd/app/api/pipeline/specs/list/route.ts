@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 
 import { loadProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/specs/list
@@ -86,7 +87,7 @@ function listSpecFiles(specDirAbs: string, specDirRel: string): SpecFile[] {
 export async function GET(): Promise<NextResponse> {
   try {
     const config = loadProject();
-    const specsRoot = path.join(process.cwd(), "specs");
+    const specsRoot = path.join(getProjectDir(), "specs");
     const sections: SpecSection[] = [];
 
     for (const section of config.sections) {

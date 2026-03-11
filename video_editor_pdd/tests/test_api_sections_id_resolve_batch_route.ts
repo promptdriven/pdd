@@ -54,6 +54,10 @@ const mockCreateJob = jest.fn(() => MOCK_JOB_ID);
 const mockRunJob = jest.fn();
 const mockRunPipelineStage = jest.fn();
 const mockApplyVeoPromptFixForAnnotation = jest.fn();
+const mockApplyRemotionSpecFixForAnnotation = jest.fn();
+const mockIsGitAvailable = jest.fn();
+const mockPreFixCommit = jest.fn();
+const mockFixCommit = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   createJob: (...args: unknown[]) => mockCreateJob(...args),
@@ -80,6 +84,27 @@ jest.mock("@/lib/project", () => ({
 jest.mock("@/lib/veo-prompt-fix", () => ({
   applyVeoPromptFixForAnnotation: (...args: unknown[]) =>
     mockApplyVeoPromptFixForAnnotation(...args),
+}));
+
+jest.mock("@/lib/remotion-spec-fix", () => ({
+  applyRemotionSpecFixForAnnotation: (...args: unknown[]) =>
+    mockApplyRemotionSpecFixForAnnotation(...args),
+}));
+
+jest.mock("@/lib/git", () => ({
+  isGitAvailable: (...args: unknown[]) => mockIsGitAvailable(...args),
+  preFixCommit: (...args: unknown[]) => mockPreFixCommit(...args),
+  fixCommit: (...args: unknown[]) => mockFixCommit(...args),
+}));
+
+const mockExecSync = jest.fn();
+
+jest.mock("child_process", () => ({
+  execSync: (...args: unknown[]) => mockExecSync(...args),
+}));
+
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
 }));
 
 // Import after mock setup
@@ -166,6 +191,16 @@ beforeEach(() => {
   mockRunPipelineStage.mockResolvedValue("job-veo-001");
   mockApplyVeoPromptFixForAnnotation.mockReset();
   mockApplyVeoPromptFixForAnnotation.mockReturnValue(null);
+  mockApplyRemotionSpecFixForAnnotation.mockReset();
+  mockApplyRemotionSpecFixForAnnotation.mockReturnValue(null);
+  mockIsGitAvailable.mockReset();
+  mockIsGitAvailable.mockReturnValue(true);
+  mockPreFixCommit.mockReset();
+  mockPreFixCommit.mockReturnValue("pre-fix-commit");
+  mockFixCommit.mockReset();
+  mockFixCommit.mockReturnValue("fix-commit-sha");
+  mockExecSync.mockReset();
+  mockExecSync.mockReturnValue(Buffer.from(""));
   mockRunClaudeFix.mockReset();
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockRenderSection.mockReset();
@@ -514,6 +549,55 @@ describe("POST — runJob executor: fixType grouping", () => {
     expect(logFn).toBe(onLog);
   });
 
+  it("updates the targeted Remotion spec before running the code fix", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-rspec",
+        sectionId: "section-1",
+        timestamp: 3.4,
+        analysis: JSON.stringify({
+          fixType: "remotion",
+          severity: "major",
+          technicalAssessment: "square should be yellow",
+          suggestedFixes: ["Change the square fill to yellow in the spec and component"],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+    mockApplyRemotionSpecFixForAnnotation.mockReturnValue({
+      specPath: path.join(process.cwd(), "specs", "section-1", "03_square.md"),
+      note: "square should be yellow",
+    });
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    const onLog = jest.fn();
+    await executorFn(onLog);
+
+    expect(mockApplyRemotionSpecFixForAnnotation).toHaveBeenCalledWith(
+      process.cwd(),
+      expect.objectContaining({ id: "section-1" }),
+      expect.objectContaining({ id: "ann-rspec", timestamp: 3.4 })
+    );
+    expect(onLog).toHaveBeenCalledWith(
+      expect.stringContaining("Updated Remotion spec")
+    );
+    expect(mockRunClaudeFix).toHaveBeenCalledWith(
+      expect.any(String),
+      "remotion/src/remotion/",
+      onLog
+    );
+    expect(mockFixCommit).toHaveBeenCalledWith(
+      "ann-rspec",
+      expect.any(String),
+      expect.arrayContaining([
+        "remotion/src/remotion/",
+        path.join("specs", "section-1", "03_square.md"),
+      ])
+    );
+  });
+
   it("runs veo regeneration for affected sections", async () => {
     mockAll.mockReturnValue([
       makeDbRow({
@@ -577,8 +661,17 @@ describe("POST — runJob executor: fixType grouping", () => {
       { clips: ["ocean_wave_sunset"] },
       expect.any(Function)
     );
+    expect(mockFixCommit).toHaveBeenCalledWith(
+      "ann-v1",
+      expect.any(String),
+      [path.join("specs", "section-1", "02_ocean_wave_sunset.md")]
+    );
+    expect(mockRun).toHaveBeenCalledWith("fix-commit-sha", "ann-v1");
     expect(onLog).toHaveBeenCalledWith(
       expect.stringContaining("Updated Veo prompt for ocean_wave_sunset")
+    );
+    expect(onLog).toHaveBeenCalledWith(
+      expect.stringContaining("Fix committed: fix-comm")
     );
   });
 
@@ -662,6 +755,69 @@ describe("POST — runJob executor: fixType grouping", () => {
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining("Veo regeneration"));
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining("TTS re-render"));
     expect(onLog).toHaveBeenCalledWith(expect.stringContaining("Skipped manual"));
+  });
+
+  it("marks processed fix annotations as resolved after successful completion", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-rdone",
+        analysis: JSON.stringify({
+          fixType: "remotion",
+          severity: "major",
+          technicalAssessment: "update shape",
+          suggestedFixes: [],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    mockRun.mockClear();
+    await executorFn(jest.fn());
+
+    const resolvedUpdate = mockPrepare.mock.calls.find((call: any[]) =>
+      (call[0] as string).includes("UPDATE annotations SET resolved = 1 WHERE id = ?")
+    );
+
+    expect(resolvedUpdate).toBeDefined();
+    expect(mockRun).toHaveBeenCalledWith("ann-rdone");
+  });
+
+  it("does not mark a veo annotation resolved when no prompt rewrite was derived", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-veo-unresolved",
+        analysis: JSON.stringify({
+          fixType: "veo",
+          severity: "major",
+          technicalAssessment: "add balloons",
+          suggestedFixes: [
+            "Update the Veo prompt from 'old prompt' to 'new prompt with balloons'",
+          ],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+    mockApplyVeoPromptFixForAnnotation.mockReturnValue(null);
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    const onLog = jest.fn();
+    mockRun.mockClear();
+    await executorFn(onLog);
+
+    const resolvedUpdate = mockPrepare.mock.calls.find((call: any[]) =>
+      (call[0] as string).includes("UPDATE annotations SET resolved = 1 WHERE id = ?")
+    );
+
+    expect(resolvedUpdate).toBeUndefined();
+    expect(mockRun).not.toHaveBeenCalledWith("ann-veo-unresolved");
+    expect(onLog).toHaveBeenCalledWith(
+      expect.stringContaining("Leaving annotation ann-veo-unresolved unresolved")
+    );
   });
 });
 

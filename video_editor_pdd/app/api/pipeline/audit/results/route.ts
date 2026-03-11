@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
 import { resolveRenderedAuditSampleWindow } from "@/lib/audit-timing";
+import { getProjectDir } from "@/lib/projects";
 import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
@@ -92,7 +93,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
             ? resolveRenderedAuditSampleWindow(
                 fs.readFileSync(specSourcePath, "utf-8"),
                 {
-                  projectDir: process.cwd(),
+                  projectDir: getProjectDir(),
                   specPath: specSourcePath,
                   section,
                   sectionSpecFiles: specFiles,

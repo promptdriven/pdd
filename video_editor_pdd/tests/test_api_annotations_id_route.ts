@@ -204,7 +204,17 @@ describe("GET — Annotation shape mapping", () => {
     expect(annotation.analysis).toBeNull();
     expect(annotation.resolved).toBe(false);
     expect(annotation.resolveJobId).toBeNull();
+    expect(annotation.fixCommitSha).toBeNull();
     expect(annotation.createdAt).toBe("2025-06-01T12:00:00Z");
+  });
+
+  it("includes fixCommitSha when present on GET", async () => {
+    mockGet.mockReturnValue(makeDbRow({ fixCommitSha: "abc123def456" }));
+
+    const response = await GET(makeRequest("ann-123"), makeParams("ann-123"));
+    const body = await response.json();
+
+    expect(body.fixCommitSha).toBe("abc123def456");
   });
 
   it("converts resolved integer (0) to boolean false", async () => {
@@ -521,6 +531,35 @@ describe("PUT /api/annotations/[id] — successful update", () => {
     const body = await response.json();
     expect(body.id).toBe("ann-123");
     expect(body.text).toBe("New text");
+  });
+
+  it("persists resolved when provided in the request body", async () => {
+    let callCount = 0;
+    mockPrepare.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return { get: () => ({ id: "ann-123" }) };
+      if (callCount === 2) return { run: mockRun };
+      return {
+        get: () =>
+          makeDbRow({
+            id: "ann-123",
+            resolved: 1,
+          }),
+      };
+    });
+
+    const request = new Request("http://localhost/api/annotations/ann-123", {
+      method: "PUT",
+      body: JSON.stringify({ resolved: true }),
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const response = await PUT(request, makeParams("ann-123"));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mockRun).toHaveBeenCalledWith(1, "ann-123");
+    expect(body.resolved).toBe(true);
   });
 });
 

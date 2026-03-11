@@ -12,7 +12,7 @@ test.describe('Stage 6: Spec Generation', () => {
     await page.waitForLoadState('networkidle');
     // Click on Spec Gen stage in sidebar
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
   });
 
@@ -137,9 +137,9 @@ test.describe('Stage 6: Spec Generation', () => {
 
     // Re-click on Stage 6 to trigger a fresh load within the already-loaded page
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(2000);
 
     // Filter out non-application errors
@@ -327,9 +327,9 @@ test.describe('Stage 6: Spec Generation', () => {
 
     // Navigate away then back to trigger fresh mount
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(300);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
 
     // Loading text should appear immediately while API is in flight
     await expect(page.locator('text=Loading spec list…')).toBeVisible({ timeout: 2000 });
@@ -347,9 +347,9 @@ test.describe('Stage 6: Spec Generation', () => {
 
     // Navigate away and back to trigger fresh load with error
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(300);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1500);
 
     // Error message should be visible
@@ -381,7 +381,7 @@ test.describe('Stage 6: Spec Generation', () => {
 
     // Navigate back to Stage 6
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1500);
 
     // The first section should still be collapsed (localStorage persisted)
@@ -411,9 +411,9 @@ test.describe('Stage 6: Spec Generation', () => {
     });
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(300);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // The badge should exist and have blue styling
@@ -443,9 +443,9 @@ test.describe('Stage 6: Spec Generation', () => {
     });
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(300);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // The badge should have purple styling
@@ -475,9 +475,9 @@ test.describe('Stage 6: Spec Generation', () => {
     });
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(300);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     // Component uses teal for [title:] badges (bg-teal-900/50 text-teal-300 border-teal-700)
@@ -507,9 +507,9 @@ test.describe('Stage 6: Spec Generation', () => {
     });
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(300);
-    await sidebar.locator('div', { hasText: 'Spec Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
     await page.waitForTimeout(1000);
 
     const badge = page.locator('span').filter({ hasText: /\[split:/ }).first();

@@ -42,6 +42,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       analysis: parseAnnotationAnalysis(row.analysis),
       resolved: Boolean(row.resolved),
       resolveJobId: row.resolveJobId ?? null,
+      fixCommitSha: row.fixCommitSha ?? null,
       inputMethod: row.inputMethod ?? "typed",
       createdAt: row.createdAt,
     }));
@@ -134,6 +135,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       analysis: null,
       resolved: false,
       resolveJobId: null,
+      fixCommitSha: null,
       inputMethod: inputMethod ?? "typed",
       createdAt,
     };

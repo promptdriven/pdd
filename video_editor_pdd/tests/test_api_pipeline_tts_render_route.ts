@@ -73,6 +73,10 @@ jest.mock("crypto", () => ({
   randomUUID: () => "test-uuid-1234",
 }));
 
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
+}));
+
 // Import after mocking
 import { POST } from "../app/api/pipeline/tts-render/run/route";
 import { parseSegmentsFromScript, getWavDuration } from "../lib/tts-segments";
@@ -1155,8 +1159,8 @@ describe("app/api/pipeline/tts-render/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/--segment/);
   });
 
-  it("uses process.cwd() for spawn cwd", () => {
-    expect(sourceCode).toMatch(/cwd:\s*process\.cwd\(\)/);
+  it("uses getProjectDir() for spawn cwd", () => {
+    expect(sourceCode).toMatch(/cwd:\s*getProjectDir\(\)/);
   });
 
   it("creates SSE stream with correct Content-Type header", () => {

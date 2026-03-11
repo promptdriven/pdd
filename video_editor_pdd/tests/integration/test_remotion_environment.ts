@@ -20,6 +20,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { execSync } from "child_process";
 
 /**
  * Retry helper for flaky tests that depend on Remotion child processes.
@@ -41,19 +42,80 @@ type ProjectSectionFixture = {
   id: string;
   label: string;
   compositionId: string;
+  durationSeconds?: number;
+  offsetSeconds?: number;
 };
 
 type ProjectFixture = {
   sections: ProjectSectionFixture[];
-};
+} & Record<string, unknown>;
+
+const PROJECT_ROOT = process.cwd();
+const PROJECT_JSON_PATH = path.join(PROJECT_ROOT, "project.json");
+const REMOTION_DIR = path.join(PROJECT_ROOT, "remotion");
+const ROOT_TSX_PATH = path.join(REMOTION_DIR, "src", "remotion", "Root.tsx");
+const ACTIVE_PROJECT_ID = path.basename(PROJECT_ROOT);
+const ORIGINAL_PROJECT_ID = process.env.VIDEO_EDITOR_PROJECT_ID;
+const ORIGINAL_PROJECT_JSON = fs.readFileSync(PROJECT_JSON_PATH, "utf-8");
+const GENERATED_FILE_BACKUPS = new Map<string, string | null>();
+
+function ensureTestProjectDurations(project: ProjectFixture): ProjectFixture {
+  let offsetSeconds = 0;
+
+  return {
+    ...project,
+    sections: project.sections.map((section) => {
+      const durationSeconds =
+        typeof section.durationSeconds === "number" && section.durationSeconds > 0
+          ? section.durationSeconds
+          : 12;
+
+      const nextSection = {
+        ...section,
+        durationSeconds,
+        offsetSeconds,
+      };
+      offsetSeconds += durationSeconds;
+      return nextSection;
+    }),
+  };
+}
+
+function backupGeneratedFiles(project: ProjectFixture): void {
+  GENERATED_FILE_BACKUPS.set(
+    ROOT_TSX_PATH,
+    fs.existsSync(ROOT_TSX_PATH) ? fs.readFileSync(ROOT_TSX_PATH, "utf-8") : null
+  );
+
+  for (const section of project.sections) {
+    const wrapperPath = getSectionWrapperPath(section.id);
+    GENERATED_FILE_BACKUPS.set(
+      wrapperPath,
+      fs.existsSync(wrapperPath) ? fs.readFileSync(wrapperPath, "utf-8") : null
+    );
+  }
+}
+
+function restoreGeneratedFiles(): void {
+  for (const [filePath, originalContent] of GENERATED_FILE_BACKUPS.entries()) {
+    if (originalContent === null) {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      continue;
+    }
+
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, originalContent, "utf-8");
+  }
+}
 
 function loadActiveProjectFixture(): ProjectFixture {
-  const projectPath = path.join(process.cwd(), "project.json");
-  return JSON.parse(fs.readFileSync(projectPath, "utf-8")) as ProjectFixture;
+  return JSON.parse(fs.readFileSync(PROJECT_JSON_PATH, "utf-8")) as ProjectFixture;
 }
 
 function getSectionWrapperPath(sectionId: string): string {
-  return path.join(process.cwd(), "remotion", "src", "remotion", sectionId, "index.tsx");
+  return path.join(PROJECT_ROOT, "remotion", "src", "remotion", sectionId, "index.tsx");
 }
 
 function getSectionWrapperSource(sectionId: string): string {
@@ -63,6 +125,39 @@ function getSectionWrapperSource(sectionId: string): string {
 function extractStaticFileAssets(source: string): string[] {
   return Array.from(source.matchAll(/staticFile\((["'`])(.+?)\1\)/g), (match) => match[2]);
 }
+
+beforeAll(() => {
+  process.env.VIDEO_EDITOR_PROJECT_ID = ACTIVE_PROJECT_ID;
+
+  const project = ensureTestProjectDurations(
+    JSON.parse(ORIGINAL_PROJECT_JSON) as ProjectFixture
+  );
+
+  backupGeneratedFiles(project);
+  fs.writeFileSync(PROJECT_JSON_PATH, JSON.stringify(project, null, 2), "utf-8");
+
+  execSync("python3 scripts/generate_section_compositions.py --force", {
+    cwd: PROJECT_ROOT,
+    stdio: "pipe",
+  });
+
+  execSync("npx remotion bundle src/index.ts --out build", {
+    cwd: REMOTION_DIR,
+    stdio: "pipe",
+    timeout: 120_000,
+  });
+});
+
+afterAll(() => {
+  if (ORIGINAL_PROJECT_ID) {
+    process.env.VIDEO_EDITOR_PROJECT_ID = ORIGINAL_PROJECT_ID;
+  } else {
+    delete process.env.VIDEO_EDITOR_PROJECT_ID;
+  }
+
+  fs.writeFileSync(PROJECT_JSON_PATH, ORIGINAL_PROJECT_JSON, "utf-8");
+  restoreGeneratedFiles();
+});
 
 const ACTIVE_PROJECT = loadActiveProjectFixture();
 const ACTIVE_SECTIONS = ACTIVE_PROJECT.sections;
@@ -397,7 +492,22 @@ describe("resolve-batch pipeline", () => {
 
         // Wait for the job to complete (max 4 minutes)
         const status = await waitForJob(jobId, 240_000);
-        expect(status).toBe("done");
+        const jobRow = db
+          .prepare("SELECT status, error, logs FROM jobs WHERE id = ?")
+          .get(jobId) as
+            | { status: string; error: string | null; logs: string | null }
+            | undefined;
+
+        expect(jobRow).toBeDefined();
+        if (status !== "done") {
+          throw new Error(
+            `resolve-batch job failed: ${JSON.stringify(
+              { status, error: jobRow?.error, logs: jobRow?.logs },
+              null,
+              2,
+            )}`,
+          );
+        }
 
         // Check the annotation was updated
         const row = db

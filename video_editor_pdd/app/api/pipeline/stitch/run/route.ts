@@ -5,6 +5,7 @@ import fs from "fs/promises";
 
 import { stitchFullVideo } from "@/lib/render";
 import { loadProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * POST /api/pipeline/stitch/run
@@ -14,9 +15,10 @@ import { loadProject } from "@/lib/project";
  */
 export async function POST(): Promise<NextResponse> {
   try {
+    const projectDir = getProjectDir();
     const project = loadProject();
     const sectionPaths = project.sections
-      .map((s) => path.join("outputs", "sections", `${s.id}.mp4`))
+      .map((s) => path.join(projectDir, "outputs", "sections", `${s.id}.mp4`))
       .filter((p) => {
         try {
           require("fs").accessSync(p);
@@ -33,8 +35,8 @@ export async function POST(): Promise<NextResponse> {
       );
     }
 
-    const outputPath = path.join("outputs", "full_video.mp4");
-    await fs.mkdir("outputs", { recursive: true });
+    const outputPath = path.join(projectDir, "outputs", "full_video.mp4");
+    await fs.mkdir(path.join(projectDir, "outputs"), { recursive: true });
 
     const jobId = randomUUID();
     await stitchFullVideo(sectionPaths, outputPath, () => {});

@@ -1,3 +1,25 @@
+## v0.0.173 (2026-03-10)
+
+### Feat
+
+- Introduce an `onAnnotationDeleted` callback prop to `AnnotationPanel` for parent components to handle annotation deletions.
+- Implement precise global and section timestamps for annotations, enhance batch resolution with VEO regeneration, and update annotation loading logic for full-video review.
+- Add annotation deletion functionality and improve AI analysis by including drawing markup and enforcing JSON output.
+
+### Fix
+
+- PDD fix for #796 (#799)
+- apply veo prompt updates before rerender
+- **bc7d6358-62ad-48b5-bc7c-6de8d77dba1f**: make this pink
+- **bc7d6358-62ad-48b5-bc7c-6de8d77dba1f**: make this pink
+- **05c2649f-1288-4eb7-be63-cdca9990cf0a**: breakfast a rectangle
+- bust stale review video caches
+- **945c56d8-21c7-4c19-9a00-f48967b1b32d**: I want to switch the ocean in the forest  see on t
+- **124a8259-bbcb-4bf0-a6b7-eba7f0e0cbe8**: practice yellow  I wanted to be yellow
+- **58155437-afea-451d-aaba-d2abf78fc673**: swap the beach in the forest
+- **1e88f647-89d0-4671-9233-7819e8b71888**: make this a square
+- Add TypeScript test file support to the e2e orchestrator, include new unit and E2E tests, and create `data.sqlite`.
+
 ## v0.0.172 (2026-03-09)
 
 ### Feat

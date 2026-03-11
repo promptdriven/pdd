@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * POST /api/pipeline/asset-staging/run
@@ -14,11 +15,10 @@ interface AssetStagingBody {
   files?: string[];
 }
 
-const VEO_OUTPUT_DIR = path.join(process.cwd(), "outputs", "veo");
-const REMOTION_PUBLIC_DIR = path.join(process.cwd(), "remotion", "public");
-
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
+    const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
+    const remotionPublicDir = path.join(getProjectDir(), "remotion", "public");
     const body = (await request.json().catch(() => ({}))) as AssetStagingBody;
     const files = body.files ?? [];
 
@@ -26,8 +26,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let staged = 0;
 
     for (const file of files) {
-      const src = path.join(VEO_OUTPUT_DIR, file);
-      const dest = path.join(REMOTION_PUBLIC_DIR, file);
+      const src = path.join(veoOutputDir, file);
+      const dest = path.join(remotionPublicDir, file);
 
       if (!fs.existsSync(src)) continue;
 

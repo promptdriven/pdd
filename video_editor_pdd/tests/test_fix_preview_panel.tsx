@@ -36,6 +36,10 @@ describe("FixPreviewPanel module structure", () => {
       /export\s+default\s+function\s+FixPreviewPanel/
     );
   });
+
+  it("accepts annotationIds in props", () => {
+    expect(sourceCode).toMatch(/annotationIds:\s*string\[\]/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -114,6 +118,10 @@ describe("error state when preview fetch fails (12.2)", () => {
 
   it("captures the error message from the thrown Error", () => {
     expect(sourceCode).toMatch(/Preview failed \(\$\{res\.status\}\)/);
+  });
+
+  it("posts annotationIds in the preview request body", () => {
+    expect(sourceCode).toMatch(/body:\s*JSON\.stringify\(\{\s*annotationIds\s*\}\)/);
   });
 
   it("renders the error message string in the error box", () => {

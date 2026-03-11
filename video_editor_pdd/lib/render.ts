@@ -8,6 +8,7 @@ import { exec, spawn } from "child_process";
 // @remotion/renderer is used in spawned child scripts (see renderSection / renderStill)
 // and must NOT be imported directly here — it crashes inside the Next.js server.
 import type { RenderProgress } from "./types";
+import { getProjectDir } from "./projects";
 
 const execAsync = promisify(exec);
 
@@ -19,26 +20,27 @@ const execAsync = promisify(exec);
  * 3) remotion (project root)
  */
 const getServeUrl = (): string => {
+  const projectDir = getProjectDir();
   const envPath = process.env.REMOTION_BUNDLE_PATH;
   if (envPath) {
     // Resolve relative paths to absolute so Remotion can locate the bundle
     return path.isAbsolute(envPath)
       ? envPath
-      : path.join(process.cwd(), envPath);
+      : path.join(projectDir, envPath);
   }
 
   // Auto-detect pre-compiled bundle: check for index.html in remotion/build/
   const buildIndexHtml = path.join(
-    process.cwd(),
+    projectDir,
     "remotion",
     "build",
     "index.html"
   );
   if (fs.existsSync(buildIndexHtml)) {
-    return path.join(process.cwd(), "remotion", "build");
+    return path.join(projectDir, "remotion", "build");
   }
 
-  return path.join(process.cwd(), "remotion");
+  return path.join(projectDir, "remotion");
 };
 
 const ensureDir = async (filePath: string): Promise<void> => {
@@ -104,13 +106,14 @@ run().catch((err) => {
   await fs.promises.writeFile(scriptPath, script, "utf-8");
 
   try {
+    const projectDir = getProjectDir();
     await new Promise<void>((resolve, reject) => {
       const child = spawn("node", [scriptPath], {
         stdio: ["ignore", "pipe", "pipe"],
-        cwd: process.cwd(),
+        cwd: projectDir,
         env: {
           ...process.env,
-          NODE_PATH: path.join(process.cwd(), "node_modules"),
+          NODE_PATH: path.join(projectDir, "node_modules"),
         },
       });
 
@@ -260,13 +263,14 @@ run().catch((err) => {
   await fs.promises.writeFile(scriptPath, script, "utf-8");
 
   try {
+    const projectDir = getProjectDir();
     await new Promise<void>((resolve, reject) => {
       const child = spawn("node", [scriptPath], {
         stdio: ["ignore", "ignore", "pipe"],
-        cwd: process.cwd(),
+        cwd: projectDir,
         env: {
           ...process.env,
-          NODE_PATH: path.join(process.cwd(), "node_modules"),
+          NODE_PATH: path.join(projectDir, "node_modules"),
         },
       });
 

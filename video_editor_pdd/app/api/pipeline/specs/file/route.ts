@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/specs/file?path=specs/00-cold-open/spec.md
@@ -12,7 +13,7 @@ import path from "path";
  */
 
 function resolveSafePath(relPath: string): string | null {
-  const cwd = process.cwd();
+  const cwd = getProjectDir();
   const abs = path.resolve(cwd, relPath);
 
   // Ensure path stays within the project root

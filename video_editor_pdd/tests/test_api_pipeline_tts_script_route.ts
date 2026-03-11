@@ -50,6 +50,10 @@ jest.mock("@/lib/claude", () => ({
   runClaudeFix: (...args: unknown[]) => mockRunClaudeFix(...args),
 }));
 
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
+}));
+
 // Import after mocking
 import { POST, dynamic } from "../app/api/pipeline/tts-script/run/route";
 
@@ -486,9 +490,9 @@ describe("source file structure", () => {
     expect(sourceCode).toMatch(/NARRATOR/);
   });
 
-  it("scopes runClaudeFix to narrative/ directory via path.join", () => {
+  it("scopes runClaudeFix to narrative/ directory via getProjectDir()", () => {
     expect(sourceCode).toMatch(
-      /path\.join\s*\(\s*process\.cwd\(\)\s*,\s*["']narrative["']\s*\)/
+      /path\.join\s*\(\s*getProjectDir\(\)\s*,\s*["']narrative["']\s*\)/
     );
   });
 });

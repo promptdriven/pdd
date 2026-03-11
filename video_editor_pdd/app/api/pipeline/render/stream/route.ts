@@ -5,10 +5,9 @@ import path from "path";
 import { getJob } from "@/lib/jobs";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
+import { getProjectDir } from "@/lib/projects";
 
 export const dynamic = "force-dynamic";
-
-const SECTIONS_DIR = path.join(process.cwd(), "outputs", "sections");
 
 /**
  * GET /api/pipeline/render/stream?jobId=...
@@ -35,6 +34,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
   const poll = () => {
     try {
+      const sectionsDir = path.join(getProjectDir(), "outputs", "sections");
       const job = getJob(jobId);
 
       if (!job) {
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest): Promise<Response> {
       // Emit section-progress 100% as output files appear
       for (const sectionId of sectionsToRender) {
         if (reportedComplete.has(sectionId)) continue;
-        const outputPath = path.join(SECTIONS_DIR, `${sectionId}.mp4`);
+        const outputPath = path.join(sectionsDir, `${sectionId}.mp4`);
         if (fs.existsSync(outputPath)) {
           send({ type: "section-progress", sectionId, percent: 100 });
           reportedComplete.add(sectionId);

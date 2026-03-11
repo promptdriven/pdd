@@ -6,7 +6,7 @@ test.describe('Stage 3: TTS Script Generation', () => {
     await page.waitForLoadState('load');
     // Wait for React to hydrate and sidebar to render
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'TTS Script' }).first().click({ timeout: 10000 });
+    await sidebar.locator('button', { hasText: 'TTS Script' }).first().click({ timeout: 10000 });
     await page.waitForTimeout(1000);
   });
 

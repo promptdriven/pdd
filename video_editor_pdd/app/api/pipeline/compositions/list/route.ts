@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 
 import { loadProject } from "@/lib/project";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * GET /api/pipeline/compositions/list
@@ -26,8 +27,7 @@ interface CompositionSection {
   wrappers: CompositionComponent[];
 }
 
-const REMOTION_DIR = path.join(process.cwd(), "remotion", "src", "remotion");
-const SPECS_DIR = path.join(process.cwd(), "specs");
+const getRemotionDir = () => path.join(getProjectDir(), "remotion", "src", "remotion");
 
 /** Check if a spec file is a Veo generation prompt (not a Remotion component). */
 function isVeoPromptSpec(filePath: string): boolean {
@@ -53,7 +53,7 @@ function isVeoPromptSpec(filePath: string): boolean {
  * - The main spec.md UNLESS it's the only Remotion spec (fallback component)
  */
 function listSpecComponents(specDir: string, sectionId?: string): string[] {
-  const absDir = path.isAbsolute(specDir) ? specDir : path.join(process.cwd(), specDir);
+  const absDir = path.isAbsolute(specDir) ? specDir : path.join(getProjectDir(), specDir);
   if (!fs.existsSync(absDir)) return [];
 
   const names: Set<string> = new Set();
@@ -106,17 +106,18 @@ function buildComponent(name: string, sectionId?: string): CompositionComponent 
   const nnMatch = name.match(/^(\d{2})_/);
   const strippedPascal = nnMatch ? toPascalCase(name.slice(nnMatch[0].length)) : toPascalCase(name);
   const dirName = nnMatch ? `${nnMatch[1]}-${strippedPascal}` : strippedPascal;
-  const dirExists = fs.existsSync(path.join(REMOTION_DIR, dirName, "index.ts"));
+  const remotionDir = getRemotionDir();
+  const dirExists = fs.existsSync(path.join(remotionDir, dirName, "index.ts"));
   // Also check section-prefixed PascalCase directory (e.g., Part1Economics06StatCalloutUplevel/)
   let pascalDirExists = false;
   if (!dirExists && sectionId && nnMatch) {
     const sectionPascal = toPascalCase(sectionId);
     const fullPascal = `${sectionPascal}${nnMatch[1]}${strippedPascal}`;
-    pascalDirExists = fs.existsSync(path.join(REMOTION_DIR, fullPascal, "index.ts"));
+    pascalDirExists = fs.existsSync(path.join(remotionDir, fullPascal, "index.ts"));
   }
   // Then check section-scoped file ({sectionId}_{name}.tsx), fall back to flat ({name}.tsx)
-  const scopedExists = sectionId && fs.existsSync(path.join(REMOTION_DIR, `${sectionId}_${name}.tsx`));
-  const flatExists = fs.existsSync(path.join(REMOTION_DIR, `${name}.tsx`));
+  const scopedExists = sectionId && fs.existsSync(path.join(remotionDir, `${sectionId}_${name}.tsx`));
+  const flatExists = fs.existsSync(path.join(remotionDir, `${name}.tsx`));
   return {
     name,
     status: dirExists || pascalDirExists || scopedExists || flatExists ? "done" : "missing",
@@ -129,9 +130,10 @@ function buildWrapper(name: string, section: { id: string; compositionId: string
   // 1. {sectionId}/index.tsx  (Python-generated section wrapper)
   // 2. {compositionId}.tsx    (Claude-generated section composition)
   // 3. {name}.tsx             (flat file matching wrapper name directly)
-  const indexExists = fs.existsSync(path.join(REMOTION_DIR, section.id, "index.tsx"));
-  const compositionExists = fs.existsSync(path.join(REMOTION_DIR, `${section.compositionId}.tsx`));
-  const flatExists = fs.existsSync(path.join(REMOTION_DIR, `${name}.tsx`));
+  const remotionDir = getRemotionDir();
+  const indexExists = fs.existsSync(path.join(remotionDir, section.id, "index.tsx"));
+  const compositionExists = fs.existsSync(path.join(remotionDir, `${section.compositionId}.tsx`));
+  const flatExists = fs.existsSync(path.join(remotionDir, `${name}.tsx`));
   return {
     name,
     status: indexExists || compositionExists || flatExists ? "done" : "missing",

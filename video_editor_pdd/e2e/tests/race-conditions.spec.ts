@@ -14,7 +14,7 @@ test.describe('Double-click prevention', () => {
 
     // Navigate to Stage 7
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     let callCount = 0;
@@ -85,7 +85,7 @@ test.describe('Double-click prevention', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     let callCount = 0;
@@ -121,7 +121,7 @@ test.describe('Double-click prevention', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     let callCount = 0;
@@ -182,7 +182,7 @@ test.describe('Debounce behavior', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500); // Wait for CodeMirror init
 
@@ -227,7 +227,7 @@ test.describe('Debounce behavior', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500); // Wait for CodeMirror init
 
@@ -269,7 +269,7 @@ test.describe('Debounce behavior', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500); // Wait for CodeMirror init
 
@@ -334,11 +334,11 @@ test.describe('Navigation during loading', () => {
 
     // Start loading Stage 7
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(500);
 
     // Immediately switch to Stage 1
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
 
     // Stage 1 should render correctly
@@ -363,7 +363,7 @@ test.describe('Navigation during loading', () => {
 
     // Navigate to Stage 7
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     // Mock SSE that sends events over time
@@ -413,7 +413,7 @@ test.describe('Navigation during loading', () => {
 
     // Navigate to Stage 9
     const sidebar = page.locator('aside');
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Mock stitch with delayed response
@@ -446,7 +446,7 @@ test.describe('Navigation during loading', () => {
     await page.waitForTimeout(500);
 
     // Navigate to Stage 1 while stitch is in-flight
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
 
     // Stage 1 should render correctly
@@ -516,11 +516,11 @@ test.describe('Concurrent operations', () => {
     const sidebar = page.locator('aside');
 
     // Navigate to Stage 7 (loads clips — will be delayed)
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await page.waitForTimeout(300);
 
     // Immediately switch to Stage 9 (loads render status)
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
 
     // Stage 9 should load correctly despite Stage 7 still being in-flight
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
@@ -577,7 +577,7 @@ test.describe('Concurrent operations', () => {
 
     // While save is in-flight, navigate to Stage 2
     const sidebar = page.locator('aside');
-    await sidebar.locator('div', { hasText: 'Script' }).first().click();
+    await sidebar.locator('button', { hasText: 'Script' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(1500);
 
@@ -615,7 +615,7 @@ test.describe('Concurrent operations', () => {
     const sidebar = page.locator('aside');
 
     // Navigate to Stage 7
-    await sidebar.locator('div', { hasText: 'Veo Gen' }).first().click();
+    await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
     await expect(page.locator('th', { hasText: 'Clip' }).first()).toBeVisible({ timeout: 15000 });
 
     // Mock SSE for veo generation
@@ -633,7 +633,7 @@ test.describe('Concurrent operations', () => {
     await page.waitForTimeout(300);
 
     // Navigate to Stage 9
-    await sidebar.locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await sidebar.locator('button').filter({ hasText: /^9\s*Render/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
 
     // Mock SSE for render
@@ -651,7 +651,7 @@ test.describe('Concurrent operations', () => {
     await page.waitForTimeout(300);
 
     // Navigate to Stage 1
-    await sidebar.locator('div', { hasText: 'Setup' }).first().click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
 
     // Stage 1 should render correctly

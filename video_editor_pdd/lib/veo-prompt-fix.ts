@@ -18,6 +18,12 @@ export type VeoPromptPatchResult = {
 
 const QUOTED_PROMPT_RE =
   /update\s+the\s+veo\s+prompt\s+to:\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`)/i;
+const REPLACEMENT_PROMPT_RE =
+  /update\s+the\s+veo\s+prompt\s+from\s+(?:"[^"]+"|'[^']+'|`[^`]+`)\s+to\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`)/i;
+const EXAMPLE_PROMPT_RE =
+  /update\s+the\s+veo\s+prompt[\s\S]*?(?:e\.g\.:|for example:)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`)/i;
+const SPEC_TARGET_RE = /\b(\d{2}_[a-z0-9_]+)(?:\.md)?\b/i;
+const CLIP_TARGET_RE = /\b(?:veo\/)?([a-z0-9_]+)\.mp4\b/i;
 
 function loadSectionMarkdownEntries(projectDir: string, section: SectionTarget) {
   const specDir = path.join(
@@ -45,10 +51,54 @@ export function extractSuggestedVeoPrompt(
   const suggestedFixes = annotation.analysis?.suggestedFixes ?? [];
 
   for (const suggestedFix of suggestedFixes) {
+    const replacementMatch = suggestedFix.match(REPLACEMENT_PROMPT_RE);
+    const replacementPrompt =
+      replacementMatch?.[1] ?? replacementMatch?.[2] ?? replacementMatch?.[3];
+    if (replacementPrompt?.trim()) {
+      return replacementPrompt.trim();
+    }
+
     const match = suggestedFix.match(QUOTED_PROMPT_RE);
     const prompt = match?.[1] ?? match?.[2] ?? match?.[3];
     if (prompt?.trim()) {
       return prompt.trim();
+    }
+
+    const exampleMatch = suggestedFix.match(EXAMPLE_PROMPT_RE);
+    const examplePrompt =
+      exampleMatch?.[1] ?? exampleMatch?.[2] ?? exampleMatch?.[3];
+    if (examplePrompt?.trim()) {
+      return examplePrompt.trim();
+    }
+  }
+
+  return null;
+}
+
+function normalizeExplicitTarget(value: string): string {
+  return value.trim().toLowerCase().replace(/\.md$/i, "").replace(/\.mp4$/i, "");
+}
+
+function extractExplicitVeoTarget(
+  annotation: Pick<Annotation, "analysis" | "text">
+): string | null {
+  const candidateTexts = [
+    annotation.analysis?.technicalAssessment ?? "",
+    ...(annotation.analysis?.suggestedFixes ?? []),
+    annotation.text ?? "",
+  ];
+
+  for (const candidateText of candidateTexts) {
+    const clipMatch = candidateText.match(CLIP_TARGET_RE);
+    const clipTarget = clipMatch?.[1];
+    if (clipTarget) {
+      return normalizeExplicitTarget(clipTarget);
+    }
+
+    const specMatch = candidateText.match(SPEC_TARGET_RE);
+    const specTarget = specMatch?.[1];
+    if (specTarget) {
+      return normalizeExplicitTarget(specTarget);
     }
   }
 
@@ -97,7 +147,7 @@ function replaceVeoPromptJsonField(content: string, prompt: string): string {
 function resolveTargetVeoSpec(
   projectDir: string,
   section: SectionTarget,
-  annotationTimestamp: number | null
+  annotation: Pick<Annotation, "analysis" | "text" | "timestamp">
 ): { clipId: string; specPath: string } | null {
   const markdownEntries = loadSectionMarkdownEntries(projectDir, section);
   const resolvedClips = listResolvedVeoClipSpecs(markdownEntries);
@@ -128,7 +178,26 @@ function resolveTargetVeoSpec(
     })
     .sort((left, right) => left.startSeconds - right.startSeconds);
 
-  if (annotationTimestamp != null) {
+  const explicitTarget = extractExplicitVeoTarget(annotation);
+  if (explicitTarget) {
+    const explicitMatch = candidates.find((candidate) => {
+      const specBaseName = path.basename(candidate.specPath, path.extname(candidate.specPath)).toLowerCase();
+      return (
+        candidate.clipId.toLowerCase() === explicitTarget ||
+        specBaseName === explicitTarget
+      );
+    });
+
+    if (explicitMatch) {
+      return {
+        clipId: explicitMatch.clipId,
+        specPath: explicitMatch.specPath,
+      };
+    }
+  }
+
+  if (annotation.timestamp != null) {
+    const annotationTimestamp = annotation.timestamp;
     const directMatch = candidates.find(
       (candidate) =>
         annotationTimestamp >= candidate.startSeconds &&
@@ -173,7 +242,7 @@ export function applyVeoPromptFixForAnnotation(
     return null;
   }
 
-  const target = resolveTargetVeoSpec(projectDir, section, annotation.timestamp);
+  const target = resolveTargetVeoSpec(projectDir, section, annotation);
   if (!target) {
     return null;
   }

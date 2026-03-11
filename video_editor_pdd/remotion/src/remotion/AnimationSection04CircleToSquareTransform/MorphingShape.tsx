@@ -2,20 +2,27 @@ import React from 'react';
 import { useCurrentFrame, interpolate, spring, Easing } from 'remotion';
 import { SHAPE, TIMING, COLORS } from './constants';
 
+const CIRCLE_CLIP = [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50];
+const STAR_CLIP = [50, 0, 61, 35, 98, 35, 68, 57, 79, 91, 50, 70, 21, 91, 32, 57, 2, 35, 39, 35];
+
 /**
- * The main shape that morphs from a circle to a rounded square,
+ * The main shape that morphs from a circle to a star,
  * transitions color, slides right, and settles with a bounce.
  */
 export const MorphingShape: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // 1. Border-radius morph (circle → square)
-  const borderRadius = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [SHAPE.startBorderRadius, SHAPE.endBorderRadius],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.65, 0, 0.35, 1) },
-  );
+  // 1. Clip-path morph (circle → star)
+  const clipPoints = CIRCLE_CLIP.map((circleVal, i) => {
+    return interpolate(
+      frame,
+      [TIMING.morphStart, TIMING.morphEnd],
+      [circleVal, STAR_CLIP[i]],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.65, 0, 0.35, 1) },
+    );
+  });
+
+  const clipPath = `polygon(${clipPoints[0]}% ${clipPoints[1]}%, ${clipPoints[2]}% ${clipPoints[3]}%, ${clipPoints[4]}% ${clipPoints[5]}%, ${clipPoints[6]}% ${clipPoints[7]}%, ${clipPoints[8]}% ${clipPoints[9]}%, ${clipPoints[10]}% ${clipPoints[11]}%, ${clipPoints[12]}% ${clipPoints[13]}%, ${clipPoints[14]}% ${clipPoints[15]}%, ${clipPoints[16]}% ${clipPoints[17]}%, ${clipPoints[18]}% ${clipPoints[19]}%)`;
 
   // 2. Color transition (blue → green, linear)
   const colorProgress = interpolate(
@@ -61,7 +68,7 @@ export const MorphingShape: React.FC = () => {
         height: SHAPE.size,
         left: slideX - SHAPE.size / 2,
         top: SHAPE.cy - SHAPE.size / 2,
-        borderRadius,
+        clipPath,
         backgroundColor: fillColor,
         transform: `scale(${scale})`,
         transformOrigin: 'center center',

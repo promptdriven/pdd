@@ -552,12 +552,10 @@ describe("GET /api/pipeline/audit/results", () => {
 
 import { GET as GET_renderStatus } from "@/app/api/pipeline/render/status/route";
 
-// NOTE: The render/status route computes SECTIONS_DIR and FULL_VIDEO_PATH at
-// module-load time using the *real* process.cwd() (before our beforeAll mock).
-// We must use the real project directory for file-based assertions here.
-const REAL_CWD = process.cwd();
-const REAL_SECTIONS_DIR = path.join(REAL_CWD, "outputs", "sections");
-const REAL_FULL_VIDEO_PATH = path.join(REAL_CWD, "outputs", "full_video.mp4");
+// The render/status route now resolves paths from the active project directory
+// at request time, so these assertions can target the temp project workspace.
+const REAL_SECTIONS_DIR = path.join(tmpDir, "outputs", "sections");
+const REAL_FULL_VIDEO_PATH = path.join(tmpDir, "outputs", "full_video.mp4");
 
 describe("GET /api/pipeline/render/status", () => {
   it("returns 200 with sections showing 'missing' when no render outputs exist", async () => {
@@ -578,8 +576,7 @@ describe("GET /api/pipeline/render/status", () => {
   });
 
   it("returns 'done' for sections with output files", async () => {
-    // Write a dummy .mp4 into the REAL sections dir (where module-level
-    // SECTIONS_DIR constant points).
+    // Write a dummy .mp4 into the active project's sections dir.
     fs.mkdirSync(REAL_SECTIONS_DIR, { recursive: true });
     const dummyPath = path.join(REAL_SECTIONS_DIR, "intro.mp4");
     fs.writeFileSync(dummyPath, "fake-mp4-data");

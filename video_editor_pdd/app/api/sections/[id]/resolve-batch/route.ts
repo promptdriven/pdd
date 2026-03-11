@@ -11,7 +11,9 @@ import { loadProject, getSection } from "@/lib/project";
 import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
 import { resolveAnnotationTarget } from "@/lib/annotation-target";
+import { applyRemotionSpecFixForAnnotation } from "@/lib/remotion-spec-fix";
 import { applyVeoPromptFixForAnnotation } from "@/lib/veo-prompt-fix";
+import { getProjectDir } from "@/lib/projects";
 import {
   applyDeterministicRemotionFix,
   applyDeterministicVideoOverlay,
@@ -61,8 +63,8 @@ Apply the fix NOW — do not just describe it. Edit the actual file(s).
 }
 
 async function syncVeoOutputsToRemotionPublic(onLog: (message: string) => void) {
-  const sourceDir = path.join(process.cwd(), "outputs", "veo");
-  const destDir = path.join(process.cwd(), "remotion", "public", "veo");
+  const sourceDir = path.join(getProjectDir(), "outputs", "veo");
+  const destDir = path.join(getProjectDir(), "remotion", "public", "veo");
 
   try {
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
@@ -169,6 +171,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
     // 5. Fire-and-forget execution
     void runJob(jobId, async (onLog) => {
       const project = loadProject();
+      const resolvedAnnotationIds = new Set<string>();
       const normalizedAnnotations = annotations.map((annotation) => {
         const target = resolveAnnotationTarget(project, {
           sectionId: annotation.sectionId,
@@ -214,8 +217,25 @@ export async function POST(_request: Request, { params }: RouteParams) {
       // Remotion fixes via Claude
       for (const ann of byFixType.remotion) {
         onLog(`Running Claude fix for annotation ${ann.id}`);
+        const targetSection = project.sections.find(
+          (section) => section.id === ann.sectionId
+        );
+        const stagedPaths = ["remotion/src/remotion/"];
+        if (targetSection) {
+          const patch = applyRemotionSpecFixForAnnotation(
+            getProjectDir(),
+            targetSection,
+            ann
+          );
+          if (patch) {
+            onLog(
+              `Updated Remotion spec ${path.relative(getProjectDir(), patch.specPath)}`
+            );
+            stagedPaths.push(path.relative(getProjectDir(), patch.specPath));
+          }
+        }
         if (isDeterministicPipelineMode()) {
-          applyDeterministicRemotionFix(process.cwd(), ann.sectionId, ann.text, onLog);
+          applyDeterministicRemotionFix(getProjectDir(), ann.sectionId, ann.text, onLog);
         } else {
           await runClaudeFix(
             buildRemotionPrompt(ann),
@@ -226,12 +246,14 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
         // Git commit after fix
         if (gitAvail) {
-          const sha = fixCommit(ann.id, ann.text.slice(0, 50));
+          const sha = fixCommit(ann.id, ann.text.slice(0, 50), stagedPaths);
           if (sha) {
             onLog(`Fix committed: ${sha.slice(0, 8)}`);
             db.prepare("UPDATE annotations SET fixCommitSha = ? WHERE id = ?").run(sha, ann.id);
           }
         }
+
+        resolvedAnnotationIds.add(ann.id);
       }
 
       // Veo fixes
@@ -249,21 +271,38 @@ export async function POST(_request: Request, { params }: RouteParams) {
           }
 
           const patch = applyVeoPromptFixForAnnotation(
-            process.cwd(),
+            getProjectDir(),
             targetSection,
             ann
           );
 
           if (patch) {
             onLog(
-              `Updated Veo prompt for ${patch.clipId} in ${path.relative(process.cwd(), patch.specPath)}`
+              `Updated Veo prompt for ${patch.clipId} in ${path.relative(getProjectDir(), patch.specPath)}`
             );
             veoClipTargets.add(patch.clipId);
+
+            if (gitAvail) {
+              const sha = fixCommit(
+                ann.id,
+                ann.text.slice(0, 50),
+                [path.relative(getProjectDir(), patch.specPath)]
+              );
+              if (sha) {
+                onLog(`Fix committed: ${sha.slice(0, 8)}`);
+                db.prepare("UPDATE annotations SET fixCommitSha = ? WHERE id = ?").run(sha, ann.id);
+              }
+            }
+
+            resolvedAnnotationIds.add(ann.id);
           } else {
             onLog(
               `No Veo prompt rewrite derived for annotation ${ann.id}; regenerating ${ann.sectionId} with existing prompt sources`
             );
             veoClipTargets.add(ann.sectionId);
+            onLog(
+              `Leaving annotation ${ann.id} unresolved because no Veo prompt rewrite could be derived.`
+            );
           }
         }
 
@@ -283,7 +322,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
       }
 
       // Rebuild Remotion bundle so renders pick up the edited TSX
-      const remotionDir = path.join(process.cwd(), "remotion");
+      const remotionDir = path.join(getProjectDir(), "remotion");
       const buildDir = path.join(remotionDir, "build");
       const webpackCacheDir = path.join(
         remotionDir,
@@ -358,6 +397,16 @@ export async function POST(_request: Request, { params }: RouteParams) {
           extractRequestedHexColor(byFixType.remotion[0].text),
           onLog,
         );
+      }
+
+      if (resolvedAnnotationIds.size > 0) {
+        const markResolved = db.prepare(
+          "UPDATE annotations SET resolved = 1 WHERE id = ?"
+        );
+        for (const annotationId of resolvedAnnotationIds) {
+          markResolved.run(annotationId);
+        }
+        onLog(`Marked ${resolvedAnnotationIds.size} annotations resolved.`);
       }
     }).catch((err) => {
       console.error(`[resolve-batch] runJob ${jobId} failed unexpectedly:`, err);

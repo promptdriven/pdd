@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 
 import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * Local TtsSegment type (required).
@@ -19,7 +20,7 @@ interface TtsSegment {
  * Returns TTS segments + status.
  */
 export async function GET(): Promise<NextResponse> {
-  const outputDir = path.join(process.cwd(), "outputs", "tts");
+  const outputDir = path.join(getProjectDir(), "outputs", "tts");
   const scriptSegments = parseSegmentsFromScript();
 
   const wavFiles = fs.existsSync(outputDir)

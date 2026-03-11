@@ -10,7 +10,7 @@ export const COLORS = {
   cardBackground: '#1E293B',
   cardBorder: '#334155',
   circleBlue: '#3B82F6',
-  squareGreen: '#22C55E',
+  squareGreen: '#FACC15',
   subtitleText: '#94A3B8',
   labelText: '#E2E8F0',
   arrowStroke: '#475569',

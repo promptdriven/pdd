@@ -913,7 +913,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(4);
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(3.9995, 4);
   });
 
   it("prefers a hold frame range when the spec provides both timestamps and animation ranges", async () => {
@@ -1044,7 +1044,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.9375);
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.9, 2);
   });
 });
 
@@ -1156,6 +1156,13 @@ describe("GET — audit markdown parsing", () => {
   });
 
   it("handles multiple audit files per section", async () => {
+    const pathMod = require("path");
+    const specDir = pathMod.join(process.cwd(), "specs", "intro");
+    const visualAuditPath = pathMod.join(specDir, "AUDIT_visual.md");
+    const overlayAuditPath = pathMod.join(specDir, "AUDIT_overlay.md");
+    const visualSpecPath = pathMod.join(specDir, "visual.md");
+    const overlaySpecPath = pathMod.join(specDir, "overlay.md");
+
     mockExistsSync.mockReturnValue(true);
     mockReaddirSync.mockReturnValue([
       "AUDIT_visual.md",
@@ -1163,9 +1170,18 @@ describe("GET — audit markdown parsing", () => {
       "visual.md",
       "overlay.md",
     ]);
-    mockReadFileSync
-      .mockReturnValueOnce("## Verdict\npass\n## Summary\nAll good\n")
-      .mockReturnValueOnce("## Verdict\nfail\n## Summary\nOverlay off\n");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === visualAuditPath) {
+        return "## Verdict\npass\n## Summary\nAll good\n";
+      }
+      if (candidate === overlayAuditPath) {
+        return "## Verdict\nfail\n## Summary\nOverlay off\n";
+      }
+      if (candidate === visualSpecPath || candidate === overlaySpecPath) {
+        return "**Timestamp:** 0:00 - 0:03\n";
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
 
     const response = await GET(makeGetRequest() as any);
     const body = await response.json();

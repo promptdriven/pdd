@@ -33,12 +33,13 @@ export const GhostTrail: React.FC = () => {
             style={{
               position: 'absolute',
               width: DIMENSIONS.shapeWidth,
-              height: DIMENSIONS.shapeHeight,
+              height: DIMENSIONS.shapeWidth,
               backgroundColor: COLORS.squareGreen,
-              borderRadius: '0%',
+              clipPath:
+                'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
               opacity,
               left: ghostX - DIMENSIONS.shapeWidth / 2,
-              top: DIMENSIONS.centerY - DIMENSIONS.shapeHeight / 2,
+              top: DIMENSIONS.centerY - DIMENSIONS.shapeWidth / 2,
             }}
           />
         );

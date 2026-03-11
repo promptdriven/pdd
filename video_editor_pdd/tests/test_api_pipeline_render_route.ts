@@ -54,6 +54,17 @@ jest.mock("@/lib/project", () => ({
   saveProject: (...args: unknown[]) => mockSaveProject(...args),
 }));
 
+const mockBuildSectionConstantsSource = jest.fn();
+
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => process.cwd(),
+}));
+
+jest.mock("@/lib/composition-timing", () => ({
+  buildSectionConstantsSource: (...args: unknown[]) =>
+    mockBuildSectionConstantsSource(...args),
+}));
+
 const mockMkdir = jest.fn();
 const mockAccess = jest.fn();
 const mockStat = jest.fn();
@@ -231,6 +242,10 @@ beforeEach(() => {
     on: jest.fn((event: string, cb: Function) => { if (event === 'close') cb(0); }),
   });
   mockExecSync.mockReturnValue(Buffer.from(''));
+  mockBuildSectionConstantsSource.mockImplementation(
+    (_projectDir: string, section: { id: string }) =>
+      `// constants for ${section.id}\nexport const VISUAL_SEQUENCE = [];\n`
+  );
 
   mockRunPipelineStage.mockResolvedValue("test-job-render-001");
   mockRenderSection.mockResolvedValue(undefined);
@@ -504,7 +519,7 @@ describe("render executor factory", () => {
     const pathMod = require("path");
     expect(mockRenderSection.mock.calls[0][0]).toBe("IntroComposition");
     expect(mockRenderSection.mock.calls[0][1]).toBe(
-      pathMod.join("outputs", "sections", "intro.mp4")
+      pathMod.join(process.cwd(), "outputs", "sections", "intro.mp4")
     );
   });
 
@@ -518,7 +533,7 @@ describe("render executor factory", () => {
 
     const pathMod = require("path");
     expect(mockRenderSection.mock.calls[0][1]).toBe(
-      pathMod.join("outputs", "sections", "main.mp4")
+      pathMod.join(process.cwd(), "outputs", "sections", "main.mp4")
     );
   });
 
@@ -528,7 +543,7 @@ describe("render executor factory", () => {
 
     const pathMod = require("path");
     expect(mockMkdir).toHaveBeenCalledWith(
-      pathMod.join("outputs", "sections"),
+      pathMod.join(process.cwd(), "outputs", "sections"),
       { recursive: true }
     );
   });
@@ -889,6 +904,9 @@ describe("rebuildBundle — cache clearing", () => {
   });
 
   it("rewrites section constants from the resolved spec timeline before bundling", async () => {
+    mockBuildSectionConstantsSource.mockReturnValue(
+      'export const VISUAL_SEQUENCE = [{ id: "02_ocean_wave_sunset" }, { id: "04_forest_canopy_aerial" }];\n'
+    );
     mockLoadProject.mockReturnValue({
       ...mockProjectConfig(),
       sections: [
@@ -918,6 +936,7 @@ describe("rebuildBundle — cache clearing", () => {
     );
 
     expect(constantsCall).toBeDefined();
+    expect(mockBuildSectionConstantsSource).toHaveBeenCalled();
     expect(String(constantsCall?.[1])).toContain('id: "02_ocean_wave_sunset"');
     expect(String(constantsCall?.[1])).toContain('id: "04_forest_canopy_aerial"');
   });

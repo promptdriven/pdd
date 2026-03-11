@@ -7,8 +7,8 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#111827',
-  circleBlue: '#EC4899',
-  squareGreen: '#22C55E',
+  circleBlue: '#FACC15',
+  squareGreen: '#FACC15',
 };
 
 export const DIMENSIONS = {
@@ -30,10 +30,10 @@ export const ANIMATION_TIMING = {
   // Frame 0-10: Hold — blue circle visible at center
   holdStart: 0,
   holdEnd: 10,
-  // Frame 10-50: Morph — border-radius 50% → 0%, color blue → yellow
+  // Frame 10-50: Morph — dimensions change circle→oval, color blue → green
   morphStart: 10,
   morphEnd: 50,
-  // Frame 50-90: Slide — yellow square moves from center to x=1280
+  // Frame 50-90: Slide — green oval moves from center to x=1280
   slideStart: 50,
   slideEnd: 90,
   // Frame 90-110: Settle — overshoot bounce to x=1300, ease back to x=1280

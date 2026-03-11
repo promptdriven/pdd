@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { createSseStream } from '@/lib/sse';
 import { loadProject } from '@/lib/project';
 import { generateReferenceImage } from '@/lib/veo';
+import { getProjectDir } from "@/lib/projects";
 
 /**
  * API ROUTE: app/api/pipeline/veo/references/run/route.ts
@@ -42,7 +43,7 @@ export async function POST(request: Request): Promise<Response> {
       const prompt = `Professional portrait photograph of ${label}, detailed face, neutral background`;
 
       const outputPath = path.join(
-        process.cwd(),
+        getProjectDir(),
         'outputs',
         'veo',
         'references',

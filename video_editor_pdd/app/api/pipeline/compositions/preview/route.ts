@@ -5,8 +5,8 @@ import { Readable } from "stream";
 
 import { loadProject } from "@/lib/project";
 import { renderStill } from "@/lib/render";
+import { getProjectDir } from "@/lib/projects";
 
-const PREVIEWS_DIR = path.join(process.cwd(), "outputs", "previews");
 const FPS = 30;
 
 type PreviewSection = {
@@ -99,7 +99,7 @@ function resolvePreviewSpec(
     return { specPath: null, specContent: null };
   }
 
-  const specDir = path.join(process.cwd(), "specs", section.specDir);
+  const specDir = path.join(getProjectDir(), "specs", section.specDir);
   const candidateNames = new Set<string>();
   candidateNames.add(`${componentName}.md`);
 
@@ -122,7 +122,7 @@ function resolvePreviewSpec(
     }
 
     return {
-      specPath: path.relative(process.cwd(), candidatePath),
+      specPath: path.relative(getProjectDir(), candidatePath),
       specContent: fs.readFileSync(candidatePath, "utf-8"),
     };
   }
@@ -136,8 +136,9 @@ function resolvePreviewSpec(
  * (e.g. "title_card" exists in multiple sections).
  */
 function previewFilename(componentName: string, sectionId?: string): string {
+  const previewsDir = path.join(getProjectDir(), "outputs", "previews");
   const base = sectionId ? `${sectionId}--${componentName}` : componentName;
-  return path.join(PREVIEWS_DIR, `${base}.png`);
+  return path.join(previewsDir, `${base}.png`);
 }
 
 /**

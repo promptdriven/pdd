@@ -1239,7 +1239,12 @@ describe("GET_clips — script-derived Veo eligibility", () => {
 
 describe("GET_clips — status detection", () => {
   it("returns 'done' when clip file exists", async () => {
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation(
+      (candidate: string) =>
+        typeof candidate === "string" &&
+        candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockReturnValue([]);
     mockStatSync.mockReturnValue({ mtimeMs: 1000 });
 
     const response = await GET_clips();
@@ -1250,6 +1255,7 @@ describe("GET_clips — status detection", () => {
 
   it("returns 'missing' when clip file does not exist", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
     const response = await GET_clips();
     const data = await response.json();
@@ -1299,7 +1305,12 @@ describe("GET_clips — frameChainDeps", () => {
 
 describe("GET_clips — stale detection", () => {
   it("clip is stale when dep has newer mtime than clip", async () => {
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation(
+      (candidate: string) =>
+        typeof candidate === "string" &&
+        candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockReturnValue([]);
     mockStatSync.mockImplementation((p: string) => {
       // clip mtime = 1000, dep mtime = 2000 (newer)
       if (typeof p === "string" && p.includes("_last_frame")) {
@@ -1316,7 +1327,12 @@ describe("GET_clips — stale detection", () => {
   });
 
   it("clip is not stale when dep has older mtime", async () => {
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation(
+      (candidate: string) =>
+        typeof candidate === "string" &&
+        candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockReturnValue([]);
     mockStatSync.mockImplementation((p: string) => {
       // clip mtime = 2000, dep mtime = 1000 (older)
       if (typeof p === "string" && p.includes("_last_frame")) {
@@ -1332,7 +1348,12 @@ describe("GET_clips — stale detection", () => {
   });
 
   it("first clip (no deps) is never stale", async () => {
-    mockExistsSync.mockReturnValue(true);
+    mockExistsSync.mockImplementation(
+      (candidate: string) =>
+        typeof candidate === "string" &&
+        candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockReturnValue([]);
     mockStatSync.mockReturnValue({ mtimeMs: 1000 });
 
     const response = await GET_clips();
@@ -1343,6 +1364,7 @@ describe("GET_clips — stale detection", () => {
 
   it("missing clip is not stale regardless of dep mtime", async () => {
     mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
 
     const response = await GET_clips();
     const data = await response.json();
