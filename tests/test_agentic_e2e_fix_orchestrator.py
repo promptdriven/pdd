@@ -2148,3 +2148,368 @@ class TestIssue797TypeScriptTestFiles:
 
         assert passed is False
         assert "no test runner available" in output.lower()
+
+
+class TestCrossCycleFailureMemory:
+    """Tests for issue #661: workflow retries deterministically failed steps across cycles.
+
+    The orchestrator clears step_outputs at cycle boundaries (lines 696, 920, 924),
+    erasing all knowledge of which steps failed and why. This causes identical retries
+    of steps that failed deterministically (e.g., provider timeouts), wasting cost and time.
+    """
+
+    def _make_side_effect(self, failure_steps=None, cycle_failure_steps=None):
+        """Helper to create a side_effect function for run_agentic_task.
+
+        Args:
+            failure_steps: Dict of step_num -> failure message (fails in ALL cycles)
+            cycle_failure_steps: Dict of (cycle, step_num) -> failure message (fails in specific cycle)
+        """
+        failure_steps = failure_steps or {}
+        cycle_failure_steps = cycle_failure_steps or {}
+        call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            call_count[0] += 1
+
+            # Parse cycle and step from label like "cycle1_step2"
+            cycle_num = None
+            step_num = None
+            for part in label.split('_'):
+                if part.startswith('cycle'):
+                    cycle_num = int(part[5:])
+                elif part.startswith('step'):
+                    step_num = int(part[4:])
+
+            # Check cycle-specific failures first
+            if cycle_num and step_num and (cycle_num, step_num) in cycle_failure_steps:
+                msg = cycle_failure_steps[(cycle_num, step_num)]
+                return (False, msg, 0.1, "gpt-4")
+
+            # Check global failures
+            if step_num and step_num in failure_steps:
+                msg = failure_steps[step_num]
+                return (False, msg, 0.1, "gpt-4")
+
+            # Step 9 default: CONTINUE_CYCLE to trigger next cycle
+            if step_num == 9:
+                return (True, "Tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        return side_effect
+
+    def test_failure_history_preserved_across_cycles(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Bug reproduction: step_outputs is cleared at cycle boundary, erasing failure history.
+
+        Issue #661: When Step 2 fails with a provider timeout in Cycle 1, the orchestrator
+        should retain this failure information for Cycle 2. Currently, step_outputs = {} at
+        line 920 erases everything.
+
+        This test verifies that the state saved at the start of Cycle 2 contains failure
+        history from Cycle 1.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Step 2 fails with provider timeout in every cycle
+        mock_run.side_effect = self._make_side_effect(
+            failure_steps={2: "All agent providers failed: anthropic: Timeout expired"}
+        )
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Inspect what was passed to save_workflow_state at the cycle boundary.
+        # After Cycle 1 completes and before Cycle 2 starts, the state should
+        # retain failure information from Cycle 1.
+        from unittest.mock import call
+        save_state_mock = None
+        with patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as _:
+            pass
+        # Access the mock through the fixture's context - need to get it from the
+        # patched module
+        # Instead, check: in Cycle 2, step prompts should contain failure context from Cycle 1
+        # We verify this through the run_agentic_task calls in Cycle 2
+        cycle2_calls = [c for c in mock_run.call_args_list if 'cycle2' in c.kwargs.get('label', '')]
+        assert len(cycle2_calls) > 0, "Cycle 2 should have executed steps"
+
+        # The key assertion: In Cycle 2, the instruction (prompt) passed to run_agentic_task
+        # should contain information about Cycle 1's Step 2 failure.
+        # On buggy code: step_outputs is cleared, so no failure context appears.
+        cycle2_step1_call = [c for c in cycle2_calls if 'step1' in c.kwargs.get('label', '')][0]
+        cycle2_instruction = cycle2_step1_call.kwargs.get('instruction', '')
+
+        # After the fix, failure history should be injected into prompts.
+        # On buggy code, there's no mechanism for this, so this assertion fails.
+        # We check that SOME failure context from prior cycles is available.
+        # The fix should add a failure_history or prior_step_failures field to the context.
+        assert "Timeout expired" in cycle2_instruction or "failure" in cycle2_instruction.lower() or "prior" in cycle2_instruction.lower(), (
+            "Cycle 2 prompts should contain failure context from Cycle 1. "
+            "Currently step_outputs is cleared at the cycle boundary (line 920), "
+            "so Cycle 2 has no knowledge of Cycle 1's Step 2 provider timeout failure."
+        )
+
+    def test_failure_context_injected_into_prompt(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Prompt context channel: prior-cycle failure data should appear in step prompts.
+
+        Issue #661: The context dict (lines 737-764) never includes prior-cycle failure
+        data. Even if failures were preserved in state, the LLM wouldn't see them because
+        no failure_history/prior_failures key is added to the context.
+
+        This test captures the formatted prompt passed to run_agentic_task in Cycle 2
+        and verifies it mentions the Cycle 1 failure.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Step 2 fails with timeout only in Cycle 1, succeeds in Cycle 2
+        mock_run.side_effect = self._make_side_effect(
+            cycle_failure_steps={(1, 2): "All agent providers failed: anthropic: Timeout expired"}
+        )
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Get Cycle 2 calls
+        cycle2_calls = [c for c in mock_run.call_args_list if 'cycle2' in c.kwargs.get('label', '')]
+        assert len(cycle2_calls) > 0, "Cycle 2 should have executed"
+
+        # Check ANY Cycle 2 step prompt for prior failure context
+        any_has_failure_context = False
+        for call in cycle2_calls:
+            instruction = call.kwargs.get('instruction', '')
+            if 'timeout' in instruction.lower() or 'failed' in instruction.lower() or 'prior' in instruction.lower():
+                any_has_failure_context = True
+                break
+
+        assert any_has_failure_context, (
+            "No Cycle 2 step prompt contains failure context from Cycle 1. "
+            "The context dict (lines 737-764) has no key for prior-cycle failures, "
+            "so the LLM retries Step 2 blindly with no awareness of the prior timeout."
+        )
+
+    def test_persisted_state_retains_failure_history(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Persisted state channel: saved state at cycle boundary should retain failure history.
+
+        Issue #661: Line 924 sets state_data['step_outputs'] = {}, erasing failure
+        data from the persisted state. The save_workflow_state call at line 928-930
+        then persists an empty step_outputs.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Step 2 fails with timeout in Cycle 1
+        mock_run.side_effect = self._make_side_effect(
+            cycle_failure_steps={(1, 2): "All agent providers failed: anthropic: Timeout expired"}
+        )
+
+        # We need to capture what save_workflow_state receives at the cycle boundary.
+        # The fixture already mocks save_workflow_state. We need to access it.
+        # Re-patch to capture call args.
+        with patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            mock_save.return_value = None
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Find the save call at the cycle boundary (the one that prepares for Cycle 2).
+            # This is the save_workflow_state call AFTER all Cycle 1 steps complete,
+            # where state_data["current_cycle"] is incremented.
+            cycle_boundary_saves = []
+            for call_obj in mock_save.call_args_list:
+                args, kwargs = call_obj
+                # save_workflow_state(cwd, issue_number, workflow_name, state_data, ...)
+                # state_data is the 4th positional arg (index 3)
+                if len(args) >= 4:
+                    state_data = args[3]
+                    if isinstance(state_data, dict) and state_data.get("current_cycle", 0) == 2:
+                        cycle_boundary_saves.append(state_data)
+
+            assert len(cycle_boundary_saves) > 0, (
+                "Expected save_workflow_state to be called with current_cycle=2 at the cycle boundary"
+            )
+
+            # The state saved for Cycle 2 should contain failure history from Cycle 1
+            boundary_state = cycle_boundary_saves[0]
+
+            # Check that failure information is preserved (not cleared to {})
+            # The bug: line 924 sets state_data["step_outputs"] = {}, so this will be empty.
+            # After fix: either step_outputs retains failure entries, or a separate
+            # failure_history field is present.
+            has_failure_data = False
+            step_outputs = boundary_state.get("step_outputs", {})
+            failure_history = boundary_state.get("failure_history", {})
+
+            # Check if step_outputs has any FAILED entries from prior cycle
+            for key, val in step_outputs.items():
+                if isinstance(val, str) and "FAILED:" in val:
+                    has_failure_data = True
+                    break
+
+            # Or check if a dedicated failure_history field exists
+            if failure_history:
+                has_failure_data = True
+
+            assert has_failure_data, (
+                f"Persisted state at cycle boundary has no failure data. "
+                f"step_outputs={step_outputs}, failure_history={failure_history}. "
+                f"Line 924 sets state_data['step_outputs'] = {{}}, erasing Cycle 1's "
+                f"Step 2 timeout failure from the saved state."
+            )
+
+    def test_resume_from_completed_cycle_preserves_failure_history(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Resume path channel: resuming from a completed cycle should preserve failure history.
+
+        Issue #661: Line 696 sets step_outputs = {} when resuming from a completed cycle
+        (last_completed_step >= 9), erasing any failure data from the saved state.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["resume"] = True
+
+        # Simulate resuming from a saved state where Cycle 1 completed (all 9 steps done)
+        # and Step 2 had failed with a timeout
+        saved_state = {
+            "workflow": "e2e_fix",
+            "issue_url": e2e_fix_default_args["issue_url"],
+            "issue_number": 1,
+            "current_cycle": 1,
+            "last_completed_step": 9,  # All steps completed
+            "step_outputs": {
+                "1": "All 15 unit tests pass.",
+                "2": "FAILED: All agent providers failed: anthropic: Timeout expired",
+                "3": "Root cause identified.",
+                "4": "Fix plan created.",
+                "5": "Dev units: module_a, module_b",
+                "6": "Applied fix to module_a.",
+                "7": "Applied fix to module_b.",
+                "8": "Ran dev unit tests.",
+                "9": "Tests still failing. CONTINUE_CYCLE"
+            },
+            "dev_unit_states": {},
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "last_saved_at": "2024-01-01T00:00:00",
+        }
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load_state, \
+             patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save_state:
+            mock_load_state.return_value = (saved_state, None)
+            mock_save_state.return_value = None
+
+            # Step 2 fails again in Cycle 2 (but we want to verify the prompt includes
+            # Cycle 1's failure context)
+            mock_run.side_effect = self._make_side_effect(
+                failure_steps={2: "All agent providers failed: anthropic: Timeout expired"}
+            )
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # After resume, the orchestrator should have started Cycle 2 (since Cycle 1
+            # was complete). Check that Cycle 2's prompts include failure context.
+            cycle2_calls = [c for c in mock_run.call_args_list if 'cycle2' in c.kwargs.get('label', '')]
+            assert len(cycle2_calls) > 0, "Cycle 2 should execute after resuming from completed Cycle 1"
+
+            # Verify failure context from Cycle 1 is available in Cycle 2 prompts
+            cycle2_step2_calls = [c for c in cycle2_calls if 'step2' in c.kwargs.get('label', '')]
+            if cycle2_step2_calls:
+                instruction = cycle2_step2_calls[0].kwargs.get('instruction', '')
+                assert 'timeout' in instruction.lower() or 'failed' in instruction.lower() or 'prior' in instruction.lower(), (
+                    "After resuming from a completed cycle with a failed Step 2, "
+                    "Cycle 2's Step 2 prompt should contain failure context. "
+                    "Line 696 sets step_outputs = {}, erasing this history."
+                )
+
+    def test_deterministic_failure_not_retried_identically(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 2 should not be called with identical inputs when it failed identically before.
+
+        Issue #661: The orchestrator calls run_agentic_task for the same step with the
+        exact same context in every cycle, even when the step failed deterministically.
+        After the fix, either the step is skipped, or the prompt includes failure context
+        so the LLM can adapt its strategy.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Step 2 fails with provider timeout in both cycles
+        mock_run.side_effect = self._make_side_effect(
+            failure_steps={2: "All agent providers failed: anthropic: Timeout expired"}
+        )
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Get Step 2 calls from both cycles
+        step2_calls = [c for c in mock_run.call_args_list if 'step2' in c.kwargs.get('label', '')]
+
+        if len(step2_calls) >= 2:
+            cycle1_instruction = step2_calls[0].kwargs.get('instruction', '')
+            cycle2_instruction = step2_calls[1].kwargs.get('instruction', '')
+
+            # The instructions should NOT be identical — Cycle 2 should have additional
+            # failure context that Cycle 1 didn't have.
+            assert cycle1_instruction != cycle2_instruction, (
+                "Step 2 was called with identical instructions in Cycle 1 and Cycle 2. "
+                "After Step 2 failed with a provider timeout in Cycle 1, Cycle 2 should "
+                "either skip the step or include failure context in the prompt so the LLM "
+                "can adapt. Currently step_outputs is cleared (line 920) and no failure "
+                "history is injected into the context (lines 737-764)."
+            )
+        elif len(step2_calls) == 1:
+            # If only 1 call, the fix might be skipping Step 2 in Cycle 2 — that's valid
+            pass
+        else:
+            pytest.fail("Step 2 should have been called at least once")
+
+    def test_happy_path_multi_cycle_no_failures_unaffected(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Regression: normal multi-cycle behavior should not be broken by failure tracking.
+
+        When all steps succeed and Step 9 returns CONTINUE_CYCLE, both cycles should
+        run all 9 steps normally. This ensures the failure-tracking fix doesn't break
+        the happy path.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # All steps succeed, Step 9 returns CONTINUE_CYCLE
+        mock_run.side_effect = self._make_side_effect()  # No failures
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # All 18 steps should execute (9 per cycle x 2 cycles)
+        assert mock_run.call_count == 18, (
+            f"Expected 18 step calls (9 per cycle x 2 cycles) but got {mock_run.call_count}. "
+            f"The failure-tracking changes should not affect normal multi-cycle behavior."
+        )
+
+    def test_mixed_outcomes_partial_failures_across_cycles(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Edge case: system should distinguish steps that succeeded vs. failed across cycles.
+
+        Cycle 1: Step 2 fails, all other steps succeed.
+        Cycle 2: All steps should have access to the fact that Step 2 failed in Cycle 1.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Step 2 fails only in Cycle 1
+        mock_run.side_effect = self._make_side_effect(
+            cycle_failure_steps={(1, 2): "All agent providers failed: anthropic: Timeout expired"}
+        )
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Get Cycle 2 calls
+        cycle2_calls = [c for c in mock_run.call_args_list if 'cycle2' in c.kwargs.get('label', '')]
+        assert len(cycle2_calls) > 0, "Cycle 2 should execute"
+
+        # In Cycle 2, at least one step's prompt should mention the prior cycle's Step 2 failure
+        has_prior_failure_context = False
+        for call in cycle2_calls:
+            instruction = call.kwargs.get('instruction', '')
+            if 'timeout' in instruction.lower() or 'prior' in instruction.lower() or 'failure_history' in instruction.lower():
+                has_prior_failure_context = True
+                break
+
+        assert has_prior_failure_context, (
+            "Cycle 2 prompts should contain context about Cycle 1's Step 2 failure. "
+            "The system should distinguish successful steps from failed ones across cycles, "
+            "but step_outputs is cleared at the cycle boundary (line 920)."
+        )
