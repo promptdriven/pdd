@@ -17,14 +17,14 @@ const VISUAL_DURATIONS: Record<string, number> = {
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "veo_section_01_title_card": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "veo_section_02_key_visual": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "veo_section_03_split_summary": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
+  "veo_section_01_title_card": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
+  "veo_section_02_key_visual": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
+  "veo_section_03_split_summary": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
 };
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 3.818667;
+  const durationSeconds = 12.245333;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
@@ -44,7 +44,7 @@ export const VeoSectionSection: React.FC = () => {
       {activeVisualMedia?.defaultSrc ? (
         <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
       ) : (
-        <OffthreadVideo src={staticFile("veo/veo_section.mp4")} style={{ width: "100%", height: "100%" }} />
+        <OffthreadVideo src={staticFile("veo_section.mp4")} style={{ width: "100%", height: "100%" }} />
       )}
       {ActiveComponent && activeVisual ? (
         <Sequence
