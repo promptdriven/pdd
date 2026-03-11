@@ -6,6 +6,7 @@ import { extractFrameAtTime, renderStill } from "@/lib/render";
 import { runClaudeAnalysis } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
+import { resolveSectionVisuals } from "@/lib/composition-timing";
 import {
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
@@ -52,19 +53,40 @@ async function auditSection(
   onLog: (msg: string) => void
 ): Promise<{ passCount: number; failCount: number }> {
   const specDir = resolveSectionSpecDir(section.specDir);
-  const specFiles = fs.existsSync(specDir)
+  const rawSpecFiles = fs.existsSync(specDir)
     ? fs
         .readdirSync(specDir)
         .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
     : [];
+  const configuredCompositionIds = (section.compositions ?? [])
+    .map((composition) =>
+      typeof composition === "string" ? composition : composition?.id
+    )
+    .filter((compositionId): compositionId is string => Boolean(compositionId));
+  const renderableVisuals =
+    configuredCompositionIds.length > 0
+      ? resolveSectionVisuals(
+          getProjectDir(),
+          section,
+          configuredCompositionIds
+        )
+          .filter((visual) => Boolean(visual.specPath))
+          .map((visual) => ({
+            specPath: visual.specPath as string,
+            specName: visual.specBaseName,
+          }))
+      : rawSpecFiles.map((specFile) => ({
+          specPath: path.join(specDir, specFile),
+          specName: path.basename(specFile, ".md"),
+        }));
   const fps = loadProject().render.fps ?? 30;
 
   let passCount = 0;
   let failCount = 0;
 
-  for (const specFile of specFiles) {
-    const specPath = path.join(specDir, specFile);
-    const specName = path.basename(specFile, ".md");
+  for (const visual of renderableVisuals) {
+    const specPath = visual.specPath;
+    const specName = visual.specName;
     const specContent = fs.readFileSync(specPath, "utf-8");
     const sampleWindow =
       Array.isArray(section.compositions) && section.compositions.length > 0
@@ -72,7 +94,6 @@ async function auditSection(
             projectDir: getProjectDir(),
             specPath,
             section,
-            sectionSpecFiles: specFiles,
             sectionDurationSeconds: section.durationSeconds,
             fps,
           })

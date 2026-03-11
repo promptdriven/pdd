@@ -16,6 +16,19 @@ interface FixPreview {
   confidence: number;
 }
 
+function resolvePreviewConfidence(
+  previewConfidence: number | undefined,
+  fallbackConfidence: number | undefined
+): number {
+  if (typeof previewConfidence === "number" && previewConfidence > 0) {
+    return previewConfidence;
+  }
+  if (typeof fallbackConfidence === "number" && fallbackConfidence > 0) {
+    return fallbackConfidence;
+  }
+  return 0;
+}
+
 function buildPreviewPrompt(annotation: Annotation): string {
   const analysisJson = annotation.analysis ? JSON.stringify(annotation.analysis, null, 2) : "none";
   return `
@@ -128,7 +141,10 @@ export async function POST(request: Request, { params }: RouteParams) {
           preview: result.changeDescription,
           diff: result.proposedDiff || null,
           filesModified: result.filesModified,
-          confidence: result.confidence,
+          confidence: resolvePreviewConfidence(
+            result.confidence,
+            ann.analysis?.confidence
+          ),
         });
       } catch (err) {
         previews.push({
@@ -137,7 +153,10 @@ export async function POST(request: Request, { params }: RouteParams) {
           preview: `Preview failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
           diff: null,
           filesModified: [],
-          confidence: 0,
+          confidence: resolvePreviewConfidence(
+            undefined,
+            ann.analysis?.confidence
+          ),
         });
       }
     }

@@ -965,6 +965,44 @@ describe("audit executor factory", () => {
     expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(7);
   });
 
+  it("audits only renderable spec visuals instead of every markdown file in the folder", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+        videoFile: "outputs/sections/animation_section.mp4",
+        compositions: ["animation_section_01_title_card"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["01_title_card.md", "04_veo_broll.md"]);
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (String(filePath).includes("01_title_card.md")) {
+        return "**Timestamp:** 0:00 - 0:03\n";
+      }
+      if (String(filePath).includes("04_veo_broll.md")) {
+        return "**Timestamp:** 0:03 - 0:06\n";
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return !String(candidate).endsWith("04_veo_broll.mp4");
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRunClaudeAnalysis).toHaveBeenCalledTimes(1);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    expect(String(mockWriteFileSync.mock.calls[0][0])).toContain("AUDIT_01_title_card.md");
+  });
+
   it("clamps animation-sequence offsets to the end of the timestamp window", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[1]]; // main
@@ -1044,7 +1082,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.9, 2);
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.889, 2);
   });
 });
 
@@ -1223,7 +1261,7 @@ describe("GET — audit markdown parsing", () => {
     const auditPath = pathMod.join(specDir, "AUDIT_title_card.md");
 
     mockExistsSync.mockImplementation((candidate: string) =>
-      candidate === specDir || candidate === specPath
+      candidate === specDir || candidate === specPath || candidate === auditPath
     );
     mockReaddirSync.mockImplementation((candidate: string) => {
       if (candidate === specDir) return ["AUDIT_title_card.md", "title_card.md"];
@@ -1254,9 +1292,26 @@ describe("GET — audit markdown parsing", () => {
 
 describe("GET — status determination", () => {
   it("returns 'pending' when no audit files exist but spec files do", async () => {
-    mockExistsSync.mockReturnValue(true);
-    // Has spec files but no AUDIT_ files
-    mockReaddirSync.mockReturnValue(["visual.md", "overlay.md"]);
+    const pathMod = require("path");
+    const specDir = pathMod.join(process.cwd(), "specs", "intro");
+    const visualSpecPath = pathMod.join(specDir, "visual.md");
+    const overlaySpecPath = pathMod.join(specDir, "overlay.md");
+    const visualAuditPath = pathMod.join(specDir, "AUDIT_visual.md");
+    const overlayAuditPath = pathMod.join(specDir, "AUDIT_overlay.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === visualSpecPath ||
+      candidate === overlaySpecPath
+        ? true
+        : candidate === visualAuditPath || candidate === overlayAuditPath
+          ? false
+          : true
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) return ["visual.md", "overlay.md"];
+      return [];
+    });
 
     const response = await GET(makeGetRequest() as any);
     const body = await response.json();
@@ -1372,7 +1427,7 @@ describe("GET — specPath must start with specs/ for specs/file route compatibi
     const auditPath = pathMod.join(specDir, "AUDIT_title_card.md");
 
     mockExistsSync.mockImplementation((candidate: string) =>
-      candidate === specDir || candidate === specPath
+      candidate === specDir || candidate === specPath || candidate === auditPath
     );
     mockReaddirSync.mockImplementation((candidate: string) => {
       if (candidate === specDir) return ["AUDIT_title_card.md", "title_card.md"];

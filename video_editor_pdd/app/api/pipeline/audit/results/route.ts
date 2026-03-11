@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
+import { resolveSectionVisuals } from "@/lib/composition-timing";
 import {
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
@@ -62,34 +63,70 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
     for (const section of config.sections) {
       const specDir = resolveSectionSpecDir(section.specDir);
       const files = fs.existsSync(specDir) ? fs.readdirSync(specDir) : [];
-
-      const auditFiles = files.filter((f) => f.startsWith("AUDIT_"));
-      const specFiles = files.filter(
+      const rawSpecFiles = files.filter(
         (f) => f.endsWith(".md") && !f.startsWith("AUDIT_")
       );
+      const auditFiles = files.filter(
+        (f) => f.endsWith(".md") && f.startsWith("AUDIT_")
+      );
+      const configuredCompositionIds = (section.compositions ?? [])
+        .map((composition) =>
+          typeof composition === "string" ? composition : composition?.id
+        )
+        .filter((compositionId): compositionId is string => Boolean(compositionId));
+      const renderableVisuals =
+        configuredCompositionIds.length > 0
+          ? resolveSectionVisuals(
+              getProjectDir(),
+              section,
+              configuredCompositionIds
+            )
+              .filter((visual) => Boolean(visual.specPath))
+              .map((visual) => ({
+                specName: visual.specBaseName,
+                specPath: visual.specPath as string,
+              }))
+          : rawSpecFiles.map((specFile) => ({
+              specName: path.basename(specFile, ".md"),
+              specPath: resolveSectionSpecFile(section.specDir, specFile),
+            }));
+      const visualsToRead =
+        renderableVisuals.length > 0
+          ? renderableVisuals
+          : auditFiles.map((auditFile) => {
+              const specName = path
+                .basename(auditFile, ".md")
+                .replace(/^AUDIT_/, "");
+              return {
+                specName,
+                specPath: resolveSectionSpecFile(section.specDir, `${specName}.md`),
+              };
+            });
       const fps = config.render?.fps ?? 30;
 
       const specs: SpecAuditResult[] = [];
       let passCount = 0;
       let failCount = 0;
+      let missingAuditCount = 0;
 
-      for (const auditFile of auditFiles) {
-        const auditPath = path.join(specDir, auditFile);
+      for (const visual of visualsToRead) {
+        const specName = visual.specName;
+        const auditPath = resolveSectionSpecFile(
+          section.specDir,
+          `AUDIT_${specName}.md`
+        );
+        if (!fs.existsSync(auditPath)) {
+          missingAuditCount++;
+          continue;
+        }
         try {
           const content = fs.readFileSync(auditPath, "utf-8");
           const { verdict, summary } = parseAuditMarkdown(content);
 
-          const specName = auditFile
-            .replace(/^AUDIT_/, "")
-            .replace(/\.md$/, "");
-
           if (verdict === "PASS") passCount++;
           else failCount++;
 
-          const specSourcePath = resolveSectionSpecFile(
-            section.specDir,
-            `${specName}.md`
-          );
+          const specSourcePath = visual.specPath;
           const safeSpecPath = toSectionSpecPath(section.specDir, `${specName}.md`);
           const specExists = fs.existsSync(specSourcePath);
           const playbackWindow = specExists
@@ -101,7 +138,6 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
                         projectDir: getProjectDir(),
                         specPath: specSourcePath,
                         section,
-                        sectionSpecFiles: specFiles,
                         sectionDurationSeconds: section.durationSeconds,
                         fps,
                       }
@@ -125,9 +161,6 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
             playbackWindow,
           });
         } catch {
-          const specName = auditFile
-            .replace(/^AUDIT_/, "")
-            .replace(/\.md$/, "");
           specs.push({
             specName,
             verdict: "FAIL",
@@ -139,7 +172,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
       }
 
       const status: AuditSectionResult["status"] =
-        auditFiles.length === 0 && specFiles.length > 0
+        missingAuditCount > 0 || (specs.length === 0 && rawSpecFiles.length > 0)
           ? "pending"
           : "done";
 

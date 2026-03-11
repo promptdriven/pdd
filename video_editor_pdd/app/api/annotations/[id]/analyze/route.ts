@@ -12,6 +12,51 @@ import type { Annotation, AnnotationAnalysis } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+function isClaudeAuthFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return (
+    message.includes("Failed to authenticate") ||
+    message.includes("authentication_error") ||
+    message.includes("Invalid authentication credentials") ||
+    message.includes("API Error: 401")
+  );
+}
+
+function inferFallbackFixType(text: string): AnnotationAnalysis["fixType"] {
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("audio") ||
+    normalized.includes("voice") ||
+    normalized.includes("narration") ||
+    normalized.includes("tts")
+  ) {
+    return "tts";
+  }
+  if (
+    normalized.includes("clip") ||
+    normalized.includes("footage") ||
+    normalized.includes("regenerate") ||
+    normalized.includes("bird") ||
+    normalized.includes("balloon") ||
+    normalized.includes("couple") ||
+    normalized.includes("sky")
+  ) {
+    return "veo";
+  }
+  return "remotion";
+}
+
+function buildFallbackAnalysis(annotation: Annotation): AnnotationAnalysis {
+  const requestedChange = annotation.text.trim() || "Visual change requested";
+  return {
+    severity: "major",
+    fixType: inferFallbackFixType(requestedChange),
+    technicalAssessment: `Claude analysis was unavailable due to authentication; using fallback analysis based on the annotation text: ${requestedChange}`,
+    suggestedFixes: [requestedChange],
+    confidence: 0.25,
+  };
+}
+
 function mapAnnotationRow(row: any): Annotation {
   return {
     id: row.id,
@@ -128,13 +173,22 @@ Do not return markdown, prose outside the JSON object, or a Claude result envelo
 Do not ignore the markup overlay when one is provided.
 `.trim();
 
-    const rawAnalysis = await runClaudeAnalysis(prompt, (line) => {
-      console.log(`[Claude] ${line}`);
-    });
-    const analysis = parseAnnotationAnalysis(rawAnalysis);
+    let analysis: AnnotationAnalysis | null = null;
+    try {
+      const rawAnalysis = await runClaudeAnalysis(prompt, (line) => {
+        console.log(`[Claude] ${line}`);
+      });
+      analysis = parseAnnotationAnalysis(rawAnalysis);
 
-    if (!analysis) {
-      throw new Error("Claude returned invalid AnnotationAnalysis payload");
+      if (!analysis) {
+        throw new Error("Claude returned invalid AnnotationAnalysis payload");
+      }
+    } catch (error) {
+      if (!isClaudeAuthFailure(error)) {
+        throw error;
+      }
+      console.warn("Claude analysis unavailable due to authentication; using fallback analysis");
+      analysis = buildFallbackAnalysis(normalizedAnnotation);
     }
 
     // Store analysis JSON in DB

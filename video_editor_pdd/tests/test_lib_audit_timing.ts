@@ -206,12 +206,12 @@ describe("resolveRenderedAuditSampleWindow", () => {
     );
 
     expect(result.source).toBe("frame-range");
-    expect(result.startSeconds).toBeCloseTo(1.625);
+    expect(result.startSeconds).toBeCloseTo(0);
     expect(result.endSeconds).toBeCloseTo(2.25);
-    expect(result.sampleSeconds).toBeCloseTo(1.9, 2);
+    expect(result.sampleSeconds).toBeCloseTo(1.889, 3);
   });
 
-  it("falls back to a normalized spec timeline for specs not present in section.compositions", () => {
+  it("falls back to the raw spec timing when the spec is not part of the rendered visual graph", () => {
     const specDir = path.join(tmpDir, "specs", "veo_section");
     fs.mkdirSync(specDir, { recursive: true });
     fs.writeFileSync(
@@ -252,8 +252,8 @@ describe("resolveRenderedAuditSampleWindow", () => {
     );
 
     expect(result.source).toBe("timestamp");
-    expect(result.startSeconds).toBeCloseTo(2);
-    expect(result.endSeconds).toBeCloseTo(4);
-    expect(result.sampleSeconds).toBeCloseTo(3.5);
+    expect(result.startSeconds).toBeCloseTo(3);
+    expect(result.endSeconds).toBeCloseTo(6);
+    expect(result.sampleSeconds).toBeCloseTo(5.25);
   });
 });

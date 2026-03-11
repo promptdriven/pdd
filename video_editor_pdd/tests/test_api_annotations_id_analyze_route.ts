@@ -555,6 +555,38 @@ describe("POST — error handling (500)", () => {
 
     expect(console.error).toHaveBeenCalled();
   });
+
+  it("falls back to local analysis when Claude authentication fails", async () => {
+    const initialRow = makeDbRow({
+      text: "Change the main background color to bright red.",
+    });
+    const updatedRow = makeDbRow({
+      text: "Change the main background color to bright red.",
+      analysis: JSON.stringify({
+        severity: "major",
+        fixType: "remotion",
+        technicalAssessment:
+          "Claude analysis was unavailable due to authentication; using fallback analysis based on the annotation text: Change the main background color to bright red.",
+        suggestedFixes: ["Change the main background color to bright red."],
+        confidence: 0.25,
+      }),
+    });
+    mockGet.mockReturnValueOnce(initialRow).mockReturnValueOnce(updatedRow);
+    mockRunClaudeAnalysis.mockRejectedValue(
+      new Error(
+        'Claude CLI returned error: Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"}}'
+      )
+    );
+    mockExistsSync.mockReturnValue(true);
+
+    const response = await POST(makeRequest("ann-123"), makeParams("ann-123"));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.annotation.analysis.fixType).toBe("remotion");
+    expect(body.annotation.analysis.confidence).toBe(0.25);
+    expect(console.warn).toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

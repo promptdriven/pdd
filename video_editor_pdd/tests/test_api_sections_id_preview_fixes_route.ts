@@ -91,6 +91,75 @@ describe('POST /api/sections/[id]/preview-fixes', () => {
     expect(body.previews[0].diff).toContain('center');
   });
 
+  it('falls back to annotation analysis confidence when dry-run confidence is zero', async () => {
+    mockDb.prepare().all.mockReturnValue([
+      {
+        id: 'ann-1',
+        sectionId: 's1',
+        timestamp: 10.0,
+        text: 'Fix the text alignment',
+        videoFile: null,
+        drawingDataUrl: null,
+        compositeDataUrl: null,
+        analysis: JSON.stringify({
+          severity: 'major',
+          fixType: 'remotion',
+          technicalAssessment: 'Text is misaligned',
+          suggestedFixes: ['Adjust position'],
+          confidence: 0.85,
+        }),
+        resolved: 0,
+        resolveJobId: null,
+        createdAt: '2026-01-01',
+      },
+    ]);
+
+    mockDryRun.mockResolvedValue({
+      fixType: 'remotion',
+      filesModified: ['Section1.tsx'],
+      changeDescription: 'Adjust text position from left to center',
+      confidence: 0,
+      proposedDiff: '--- a/Section1.tsx\n+++ b/Section1.tsx\n-left\n+center',
+    });
+
+    const res = await POST(makeRequest(), { params: { id: 's1' } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.previews[0].confidence).toBe(0.85);
+  });
+
+  it('falls back to annotation analysis confidence when dry-run preview throws', async () => {
+    mockDb.prepare().all.mockReturnValue([
+      {
+        id: 'ann-1',
+        sectionId: 's1',
+        timestamp: 10.0,
+        text: 'Fix the text alignment',
+        videoFile: null,
+        drawingDataUrl: null,
+        compositeDataUrl: null,
+        analysis: JSON.stringify({
+          severity: 'major',
+          fixType: 'remotion',
+          technicalAssessment: 'Text is misaligned',
+          suggestedFixes: ['Adjust position'],
+          confidence: 0.85,
+        }),
+        resolved: 0,
+        resolveJobId: null,
+        createdAt: '2026-01-01',
+      },
+    ]);
+
+    mockDryRun.mockRejectedValue(new Error('Claude dry-run failed'));
+
+    const res = await POST(makeRequest(), { params: { id: 's1' } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.previews[0].preview).toContain('Preview failed');
+    expect(body.previews[0].confidence).toBe(0.85);
+  });
+
   it('generates placeholder for veo annotation', async () => {
     mockDb.prepare().all.mockReturnValue([
       {

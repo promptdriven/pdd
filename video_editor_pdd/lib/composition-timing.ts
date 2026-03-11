@@ -33,6 +33,14 @@ type SectionTimingTarget = Pick<Section, "id" | "specDir" | "durationSeconds" | 
   compositions?: Section["compositions"];
 };
 
+export type ResolvedSectionVisual = {
+  id: string;
+  specBaseName: string;
+  specPath?: string;
+  hasComponent: boolean;
+  hasExplicitMedia: boolean;
+};
+
 type TimingCandidate = {
   startSeconds: number;
   endSeconds?: number;
@@ -69,6 +77,10 @@ function componentBaseName(componentId: string, sectionId: string): string {
   return componentId.startsWith(prefix) ? componentId.slice(prefix.length) : componentId;
 }
 
+const SPEC_MEDIA_RE =
+  /\b(?:clipSource|leftClip|rightClip|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)\b/i;
+const STATIC_FILE_RE = /staticFile\(\s*["'][^"']+\.(?:mp4|webm|mov|m4v)["']\s*\)/i;
+
 function listSectionSpecBaseNames(
   projectDir: string,
   section: Pick<SectionTimingTarget, "id" | "specDir">
@@ -82,12 +94,16 @@ function listSectionSpecBaseNames(
     return [];
   }
 
-  return fs
-    .readdirSync(specDir)
-    .filter((entry) => entry.endsWith(".md") && !entry.startsWith("AUDIT_"))
-    .map((entry) => path.basename(entry, path.extname(entry)))
-    .filter((baseName) => !NON_COMPONENT_BASENAMES.has(baseName))
-    .sort((left, right) => left.localeCompare(right));
+  try {
+    return fs
+      .readdirSync(specDir)
+      .filter((entry) => entry.endsWith(".md") && !entry.startsWith("AUDIT_"))
+      .map((entry) => path.basename(entry, path.extname(entry)))
+      .filter((baseName) => !NON_COMPONENT_BASENAMES.has(baseName))
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
 }
 
 function listCompositionIds(section: SectionTimingTarget, componentIds: string[]): string[] {
@@ -110,15 +126,44 @@ function listCompositionIds(section: SectionTimingTarget, componentIds: string[]
   });
 }
 
-export function listSectionVisualIds(
+function hasRenderableSpecMedia(
+  projectDir: string,
+  section: Pick<SectionTimingTarget, "id" | "specDir">,
+  specBaseName: string
+): { specPath?: string; hasExplicitMedia: boolean } {
+  if (!section.specDir) {
+    return { hasExplicitMedia: false };
+  }
+
+  const specDir = resolveSectionSpecDir(projectDir, section.specDir);
+  const specPath = path.join(specDir, `${specBaseName}.md`);
+  const stagedCandidates = [
+    path.join(projectDir, "outputs", "veo", `${specBaseName}.mp4`),
+    path.join(projectDir, "remotion", "public", "veo", `${specBaseName}.mp4`),
+  ];
+
+  const hasStagedAsset = stagedCandidates.some((candidate) => fs.existsSync(candidate));
+  if (!fs.existsSync(specPath)) {
+    return { specPath: undefined, hasExplicitMedia: hasStagedAsset };
+  }
+
+  const content = fs.readFileSync(specPath, "utf-8");
+  return {
+    specPath,
+    hasExplicitMedia:
+      hasStagedAsset || SPEC_MEDIA_RE.test(content) || STATIC_FILE_RE.test(content),
+  };
+}
+
+export function resolveSectionVisuals(
   projectDir: string,
   section: SectionTimingTarget,
   componentIds: string[]
-): string[] {
+): ResolvedSectionVisual[] {
   const specBaseNames = listSectionSpecBaseNames(projectDir, section);
   const configuredIds = listCompositionIds(section, componentIds);
   const consumedCompositionIds = new Set<string>();
-  const resolvedVisualIds: string[] = [];
+  const resolvedVisuals: ResolvedSectionVisual[] = [];
 
   for (const specBaseName of specBaseNames) {
     const matchingCompositionId = configuredIds.find((compositionId) => {
@@ -127,20 +172,64 @@ export function listSectionVisualIds(
 
     if (matchingCompositionId) {
       consumedCompositionIds.add(matchingCompositionId);
-      resolvedVisualIds.push(matchingCompositionId);
+      resolvedVisuals.push({
+        id: matchingCompositionId,
+        specBaseName,
+        specPath: path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`),
+        hasComponent: true,
+        hasExplicitMedia: false,
+      });
       continue;
     }
 
-    resolvedVisualIds.push(specBaseName);
+    const { specPath, hasExplicitMedia } = hasRenderableSpecMedia(
+      projectDir,
+      section,
+      specBaseName
+    );
+    if (!hasExplicitMedia) {
+      continue;
+    }
+
+    resolvedVisuals.push({
+      id: specBaseName,
+      specBaseName,
+      specPath,
+      hasComponent: false,
+      hasExplicitMedia: true,
+    });
   }
 
   for (const compositionId of configuredIds) {
-    if (!consumedCompositionIds.has(compositionId)) {
-      resolvedVisualIds.push(compositionId);
+    if (consumedCompositionIds.has(compositionId)) {
+      continue;
     }
+
+    const specBaseName = componentBaseName(compositionId, section.id);
+    const specPath = section.specDir
+      ? path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`)
+      : undefined;
+
+    resolvedVisuals.push({
+      id: compositionId,
+      specBaseName,
+      specPath: specPath && fs.existsSync(specPath) ? specPath : undefined,
+      hasComponent: true,
+      hasExplicitMedia: false,
+    });
   }
 
-  return resolvedVisualIds;
+  return resolvedVisuals;
+}
+
+export function listSectionVisualIds(
+  projectDir: string,
+  section: SectionTimingTarget,
+  componentIds: string[]
+): string[] {
+  return resolveSectionVisuals(projectDir, section, componentIds).map(
+    (visual) => visual.id
+  );
 }
 
 function readSpecContent(projectDir: string, section: SectionTimingTarget, componentId: string): {
@@ -590,6 +679,63 @@ function normalizeVisualTimings(
   });
 }
 
+function shouldSequentializeTimings(timings: ResolvedVisualTiming[]): boolean {
+  if (timings.length <= 1) {
+    return false;
+  }
+
+  for (let index = 1; index < timings.length; index += 1) {
+    const previous = timings[index - 1];
+    const current = timings[index];
+    if (current.startSeconds < previous.endSeconds - MIN_VISUAL_DURATION_SECONDS / 2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function sequentializeTimings(
+  timings: ResolvedVisualTiming[],
+  sectionDurationSeconds: number
+): ResolvedVisualTiming[] {
+  if (timings.length === 0 || sectionDurationSeconds <= 0) {
+    return timings;
+  }
+
+  const desiredDurations = timings.map((timing) =>
+    Math.max(MIN_VISUAL_DURATION_SECONDS, timing.endSeconds - timing.startSeconds)
+  );
+  const totalDesired = desiredDurations.reduce((sum, value) => sum + value, 0);
+  const scale = totalDesired > 0 ? sectionDurationSeconds / totalDesired : 1;
+  let cursor = 0;
+
+  return timings.map((timing, index) => {
+    const remaining = timings.length - index - 1;
+    const minimumRemaining = remaining * MIN_VISUAL_DURATION_SECONDS;
+    const desiredDuration = Math.max(
+      MIN_VISUAL_DURATION_SECONDS,
+      desiredDurations[index] * scale
+    );
+    const startSeconds = cursor;
+    const unclampedEnd =
+      index === timings.length - 1
+        ? sectionDurationSeconds
+        : Math.min(sectionDurationSeconds - minimumRemaining, startSeconds + desiredDuration);
+    const endSeconds = Math.max(
+      Math.min(sectionDurationSeconds, unclampedEnd),
+      startSeconds + MIN_VISUAL_DURATION_SECONDS
+    );
+    cursor = endSeconds;
+
+    return {
+      ...timing,
+      startSeconds,
+      endSeconds,
+    };
+  });
+}
+
 export function resolveSectionVisualTimings(
   projectDir: string,
   section: SectionTimingTarget,
@@ -606,8 +752,11 @@ export function resolveSectionVisualTimings(
     visualIds.length
   );
   const seededTimings = buildFallbackTimings(visualIds, candidates, durationSeconds);
+  const linearizedTimings = shouldSequentializeTimings(seededTimings)
+    ? sequentializeTimings(seededTimings, durationSeconds)
+    : seededTimings;
 
-  return normalizeVisualTimings(seededTimings, durationSeconds);
+  return normalizeVisualTimings(linearizedTimings, durationSeconds);
 }
 
 export function buildSectionConstantsSource(

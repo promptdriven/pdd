@@ -145,7 +145,9 @@ describe("lib/composition-timing", () => {
 
   it("builds a full section timeline from spec files, including pure Veo visuals", () => {
     const specDir = path.join(tmpDir, "specs", "veo_section");
+    const veoOutputDir = path.join(tmpDir, "outputs", "veo");
     fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(veoOutputDir, { recursive: true });
     fs.writeFileSync(
       path.join(specDir, "01_title_card.md"),
       "**Timestamp:** 0:00 - 0:03\n"
@@ -157,6 +159,10 @@ describe("lib/composition-timing", () => {
     fs.writeFileSync(
       path.join(specDir, "03_narration_overlay_intro.md"),
       "**Timestamp:** 0:06 - 0:09\n"
+    );
+    fs.writeFileSync(
+      path.join(veoOutputDir, "02_ocean_wave_sunset.mp4"),
+      "stub veo asset"
     );
 
     const visualIds = listSectionVisualIds(
@@ -190,5 +196,69 @@ describe("lib/composition-timing", () => {
     expect(source).toContain('id: "veo_section_01_title_card"');
     expect(source).toContain('id: "02_ocean_wave_sunset"');
     expect(source).toContain('id: "03_narration_overlay_intro"');
+  });
+
+  it("drops spec-only visuals that have no component and no explicit staged media", () => {
+    const specDir = path.join(tmpDir, "specs", "animation_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:03\n"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "04_veo_broll.md"),
+      "**Timestamp:** 0:03 - 0:06\n"
+    );
+
+    const visualIds = listSectionVisualIds(
+      tmpDir,
+      {
+        id: "animation_section",
+        specDir: "animation_section",
+        durationSeconds: 6,
+        compositionId: "AnimationSection",
+      },
+      ["animation_section_01_title_card"]
+    );
+
+    expect(visualIds).toEqual(["animation_section_01_title_card"]);
+  });
+
+  it("sequentializes overlapping spec windows instead of collapsing later visuals into one-frame slots", () => {
+    const specDir = path.join(tmpDir, "specs", "animation_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:05\n"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_key_visual.md"),
+      "**Timestamp:** 0:00 - 0:05\n"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "03_split_summary.md"),
+      "**Timestamp:** 0:00 - 0:05\n"
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "animation_section",
+        specDir: "animation_section",
+        durationSeconds: 12,
+        compositionId: "AnimationSection",
+      },
+      [
+        "animation_section_01_title_card",
+        "animation_section_02_key_visual",
+        "animation_section_03_split_summary",
+      ]
+    );
+
+    expect(timings).toHaveLength(3);
+    expect(timings[0].startSeconds).toBe(0);
+    expect(timings[1].startSeconds).toBeGreaterThan(3);
+    expect(timings[2].startSeconds).toBeGreaterThan(7);
+    expect(timings[2].endSeconds).toBe(12);
   });
 });

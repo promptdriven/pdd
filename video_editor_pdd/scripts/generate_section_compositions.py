@@ -146,7 +146,43 @@ def _list_section_spec_basenames(project_dir: str, section: Dict[str, Any]) -> L
     return basenames
 
 
-def resolve_section_visual_ids(section: Dict[str, Any], project_dir: str) -> List[str]:
+def _has_renderable_spec_media(
+    project_dir: str,
+    section: Dict[str, Any],
+    spec_base: str,
+    remotion_public: str = '',
+) -> bool:
+    """Return True when a spec-only visual has an explicit or staged media source."""
+    if not project_dir:
+        return False
+
+    spec_dir = section.get('specDir') or section['id']
+    if not os.path.isabs(spec_dir):
+        spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
+
+    spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+    if os.path.isfile(spec_path):
+        spec_content = _read_text_if_exists(spec_path)
+        if VISUAL_MEDIA_KEY_RE.search(spec_content):
+            return True
+        for rel_path in STATIC_FILE_RE.findall(spec_content):
+            if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
+                return True
+
+    staged_candidates = [
+        os.path.join(project_dir, 'outputs', 'veo', f'{spec_base}.mp4'),
+    ]
+    if remotion_public:
+        staged_candidates.append(os.path.join(remotion_public, 'veo', f'{spec_base}.mp4'))
+
+    return any(os.path.isfile(candidate) for candidate in staged_candidates)
+
+
+def resolve_section_visual_ids(
+    section: Dict[str, Any],
+    project_dir: str,
+    remotion_public: str = '',
+) -> List[str]:
     """Build the rendered visual order from spec files plus configured components."""
     compositions: List[Any] = section.get('compositions', [])
     composition_ids: List[str] = []
@@ -171,7 +207,7 @@ def resolve_section_visual_ids(section: Dict[str, Any], project_dir: str) -> Lis
         if matching is not None:
             visual_ids.append(matching)
             consumed.add(matching)
-        else:
+        elif _has_renderable_spec_media(project_dir, section, base, remotion_public):
             visual_ids.append(base)
 
     for comp_id in composition_ids:
@@ -264,7 +300,7 @@ def build_visual_media_manifest(
     fallback_video_src: Optional[str] = None,
 ) -> Dict[str, Dict[str, str]]:
     """Build per-visual media aliases for the section wrapper."""
-    visual_ids = resolve_section_visual_ids(section, project_dir)
+    visual_ids = resolve_section_visual_ids(section, project_dir, remotion_public)
     if not visual_ids or not project_dir or not remotion_public:
         return {}
 
@@ -719,28 +755,16 @@ def generate_generated_timeline_wrapper(
     lines.append(f'  const durationSeconds = {duration_seconds};')
     lines.append('  const frame = useCurrentFrame();')
     lines.append('  let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;')
-    lines.append('  let activeVisualIndex = VISUAL_SEQUENCE.length > 0 ? 0 : -1;')
     lines.append('  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {')
     lines.append('    if (frame >= VISUAL_SEQUENCE[i].start) {')
     lines.append('      activeVisual = VISUAL_SEQUENCE[i];')
-    lines.append('      activeVisualIndex = i;')
     lines.append('      break;')
     lines.append('    }')
     lines.append('  }')
-    lines.append('  let renderVisual = activeVisual;')
-    lines.append('  for (let i = activeVisualIndex; i >= 0; i--) {')
-    lines.append('    const candidate = VISUAL_SEQUENCE[i];')
-    lines.append('    const candidateComponent = COMPONENT_MAP[candidate.id] ?? null;')
-    lines.append('    const candidateMedia = VISUAL_MEDIA[candidate.id] ?? null;')
-    lines.append('    if (candidateComponent || candidateMedia?.defaultSrc) {')
-    lines.append('      renderVisual = candidate;')
-    lines.append('      break;')
-    lines.append('    }')
-    lines.append('  }')
-    lines.append('  const ActiveComponent = renderVisual ? COMPONENT_MAP[renderVisual.id] ?? null : null;')
+    lines.append('  const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;')
     lines.append('  const activeVisualDuration = activeVisual ? Math.max(1, activeVisual.end - activeVisual.start) : 1;')
-    lines.append('  const intrinsicDurationInFrames = renderVisual ? VISUAL_DURATIONS[renderVisual.id] ?? activeVisualDuration : activeVisualDuration;')
-    lines.append('  const activeVisualMedia = renderVisual ? VISUAL_MEDIA[renderVisual.id] ?? null : null;')
+    lines.append('  const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;')
+    lines.append('  const activeVisualMedia = activeVisual ? VISUAL_MEDIA[activeVisual.id] ?? null : null;')
     lines.append('')
     lines.append('  return (')
     lines.append('    <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>')

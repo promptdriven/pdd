@@ -45,6 +45,7 @@ from generate_section_compositions import (
     to_pascal_case,
     resolve_comp_import,
     ensure_section_asset_aliases,
+    resolve_section_visual_ids,
     resolve_section_base_component,
     load_project_json,
     get_fps,
@@ -1484,8 +1485,8 @@ class TestGeneratedTimelineWrapper:
         assert 'import { VeoSection01OpeningTitleCard } from "../VeoSection01OpeningTitleCard";' in tsx
         assert 'const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {' in tsx
         assert 'const frame = useCurrentFrame();' in tsx
-        assert 'let renderVisual = activeVisual;' in tsx
-        assert 'const ActiveComponent = renderVisual ? COMPONENT_MAP[renderVisual.id] ?? null : null;' in tsx
+        assert 'let renderVisual = activeVisual;' not in tsx
+        assert 'const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;' in tsx
         assert 'SlotScaledSequence' in tsx
         assert 'VisualMediaProvider' in tsx
         assert '<ActiveComponent />' in tsx
@@ -1593,7 +1594,7 @@ class TestGeneratedTimelineWrapper:
         assert '<SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>' in tsx
         assert '<VisualMediaProvider media={activeVisualMedia}>' in tsx
 
-    def test_generated_timeline_reuses_last_renderable_visual_for_unmapped_slots(self, tmp_path):
+    def test_generated_timeline_does_not_reuse_last_renderable_visual_for_unmapped_slots(self, tmp_path):
         project_dir = tmp_path
         remotion_src = tmp_path
         section_dir = remotion_src / "animation_section"
@@ -1651,9 +1652,9 @@ class TestGeneratedTimelineWrapper:
             project_dir=str(project_dir),
         )
 
-        assert "let renderVisual = activeVisual;" in tsx
-        assert "const ActiveComponent = renderVisual ? COMPONENT_MAP[renderVisual.id] ?? null : null;" in tsx
-        assert "const intrinsicDurationInFrames = renderVisual ? VISUAL_DURATIONS[renderVisual.id] ?? activeVisualDuration : activeVisualDuration;" in tsx
+        assert "let renderVisual = activeVisual;" not in tsx
+        assert "const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;" in tsx
+        assert "const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;" in tsx
         assert 'from={activeVisual.start}' in tsx
         assert 'durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}' in tsx
 
@@ -1684,6 +1685,27 @@ class TestGeneratedTimelineWrapper:
         assert 'import { VISUAL_SEQUENCE } from "./constants";' not in tsx
         assert 'import { ColdOpenSection as ColdOpenSectionBase } from "./ColdOpenSection"' in tsx
         assert '<ColdOpenSectionBase />' in tsx
+
+    def test_resolve_section_visual_ids_excludes_spec_only_visuals_without_media(self, tmp_path):
+        project_dir = tmp_path
+        specs_dir = project_dir / "specs" / "animation_section"
+        specs_dir.mkdir(parents=True)
+        (specs_dir / "01_title_card.md").write_text("**Timestamp:** 0:00 - 0:03\n")
+        (specs_dir / "04_veo_broll.md").write_text("**Timestamp:** 0:03 - 0:06\n")
+
+        section = {
+            "id": "animation_section",
+            "compositionId": "AnimationSection",
+            "durationSeconds": 6,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "animation_section",
+            "compositions": ["animation_section_01_title_card"],
+        }
+
+        visual_ids = resolve_section_visual_ids(section, str(project_dir))
+
+        assert visual_ids == ["animation_section_01_title_card"]
 
     def test_generated_timeline_ignores_stale_veo_asset_when_script_has_no_veo(self, tmp_path):
         """A stale staged Veo asset must not contaminate a Remotion-only section render."""
