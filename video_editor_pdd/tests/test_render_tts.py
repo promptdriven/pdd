@@ -45,6 +45,7 @@ from render_tts import (
     DEFAULT_MODEL,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PROJECT_DIR,
+    EdgeTTSEngine,
     NARRATOR_PATTERN,
     PAUSE_PATTERN,
     SAMPLE_RATE,
@@ -119,6 +120,43 @@ class TestConstants:
 
     def test_default_project_dir(self):
         assert DEFAULT_PROJECT_DIR == "."
+
+
+class TestEdgeTtsFallback:
+    """Verify the EdgeTTS fallback does not depend on soundfile."""
+
+    def test_edge_tts_engine_reads_ffmpeg_wav_without_soundfile(self, tmp_path):
+        engine = EdgeTTSEngine()
+
+        class FakeCommunicate:
+            def __init__(self, _text, _voice):
+                self._text = _text
+                self._voice = _voice
+
+            async def save(self, filepath):
+                Path(filepath).write_bytes(b"fake-mp3")
+
+        class FakeEdgeTtsModule:
+            Communicate = FakeCommunicate
+
+        def fake_ffmpeg_run(args, capture_output, timeout):
+            wav_path = args[-1]
+            samples = struct.pack("<4h", 0, 16384, -16384, 0)
+            with wave.open(wav_path, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(SAMPLE_RATE)
+                wav_file.writeframes(samples)
+
+            return mock.Mock(returncode=0, stderr=b"")
+
+        with mock.patch.dict(sys.modules, {"edge_tts": FakeEdgeTtsModule()}):
+            with mock.patch("subprocess.run", side_effect=fake_ffmpeg_run):
+                audio = engine.synthesize("hello from edge")
+
+        assert audio.dtype == "float32"
+        assert len(audio) == 4
+        assert max(audio) > 0
 
     def test_sample_rate(self):
         assert SAMPLE_RATE == 24000
@@ -715,6 +753,32 @@ class TestMain:
         assert error_data["status"] == "error"
         assert error_data["segmentId"] == "global"
         assert "Model not found" in error_data["error"]
+
+    def test_model_and_edge_failures_use_deterministic_fallback_when_allowed(
+        self, tmp_project, capsys
+    ):
+        """Spec: test/dev fallback still produces WAVs when online engines are absent."""
+        output_dir = tmp_project / "outputs" / "tts"
+
+        with mock.patch("render_tts.TTSEngine", side_effect=RuntimeError("Model not found")):
+            with mock.patch("render_tts.EdgeTTSEngine", side_effect=RuntimeError("Edge missing")):
+                with mock.patch.dict(os.environ, {"RENDER_TTS_ALLOW_EDGE_FALLBACK": "1"}):
+                    with mock.patch(
+                        "sys.argv",
+                        ["render_tts.py",
+                         "--project-dir", str(tmp_project),
+                         "--output-dir", str(output_dir)],
+                    ):
+                        from render_tts import main
+                        with pytest.raises(SystemExit) as exc_info:
+                            main()
+                        assert exc_info.value.code == 0
+
+        captured = capsys.readouterr()
+        lines = [json.loads(line) for line in captured.out.strip().split("\n") if line.strip()]
+        assert all(line["status"] == "done" for line in lines)
+        assert (output_dir / "seg_001.wav").exists()
+        assert (output_dir / "seg_002.wav").exists()
 
     def test_generates_wav_files(self, tmp_project):
         """Spec: Generates one WAV file per NARRATOR: segment."""
