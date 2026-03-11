@@ -190,12 +190,14 @@ describe("status polling", () => {
   });
 
   it("calls fetchStatus immediately on mount", () => {
-    // fetchStatus() is called before the setInterval
-    expect(sourceCode).toMatch(/fetchStatus\(\)\s*;\s*\n\s*const interval/);
+    // fetchStatus() is called before polling is conditionally disabled/enabled
+    expect(sourceCode).toMatch(/fetchStatus\(\)\s*;\s*\n\s*if\s*\(\s*disablePolling\s*\)/);
   });
 
-  it("uses empty dependency array for useEffect", () => {
-    expect(sourceCode).toMatch(/useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*,\s*\[\]\s*\)/);
+  it("tracks polling mode in the useEffect dependency array", () => {
+    expect(sourceCode).toMatch(
+      /useEffect\s*\(\s*\(\)\s*=>\s*\{[\s\S]*?\}\s*,\s*\[\s*disablePolling\s*\]\s*\)/
+    );
   });
 
   it("updates state without flicker using spread merge", () => {

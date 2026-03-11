@@ -8,7 +8,7 @@ import { runClaudeFix } from "@/lib/claude";
 import { createJob, runJob, runPipelineStage } from "@/lib/jobs";
 import { renderSection, stitchFullVideo } from "@/lib/render";
 import { loadProject, getSection } from "@/lib/project";
-import { isGitAvailable, preFixCommit, fixCommit } from "@/lib/git";
+import { isGitAvailable, preFixCommitWithPaths, fixCommit } from "@/lib/git";
 import type { Annotation } from "@/lib/types";
 import { resolveAnnotationTarget } from "@/lib/annotation-target";
 import { applyRemotionSpecFixForAnnotation } from "@/lib/remotion-spec-fix";
@@ -170,6 +170,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
     // 5. Fire-and-forget execution
     void runJob(jobId, async (onLog) => {
+      const projectDir = getProjectDir();
       const project = loadProject();
       const resolvedAnnotationIds = new Set<string>();
       const normalizedAnnotations = annotations.map((annotation) => {
@@ -210,7 +211,10 @@ export async function POST(_request: Request, { params }: RouteParams) {
       // Pre-fix git snapshot
       const gitAvail = isGitAvailable();
       if (gitAvail) {
-        const preSha = preFixCommit(sectionId, jobId);
+        const preSha = preFixCommitWithPaths(sectionId, jobId, [
+          path.join(projectDir, "remotion", "src", "remotion"),
+          path.join(projectDir, "specs"),
+        ]);
         if (preSha) onLog(`Pre-fix snapshot committed: ${preSha.slice(0, 8)}`);
       }
 
@@ -223,19 +227,20 @@ export async function POST(_request: Request, { params }: RouteParams) {
         const stagedPaths = ["remotion/src/remotion/"];
         if (targetSection) {
           const patch = applyRemotionSpecFixForAnnotation(
-            getProjectDir(),
+            projectDir,
             targetSection,
             ann
           );
           if (patch) {
             onLog(
-              `Updated Remotion spec ${path.relative(getProjectDir(), patch.specPath)}`
+              `Updated Remotion spec ${path.relative(projectDir, patch.specPath)}`
             );
-            stagedPaths.push(path.relative(getProjectDir(), patch.specPath));
+            stagedPaths.push(patch.specPath);
           }
         }
+        stagedPaths[0] = path.join(projectDir, "remotion", "src", "remotion");
         if (isDeterministicPipelineMode()) {
-          applyDeterministicRemotionFix(getProjectDir(), ann.sectionId, ann.text, onLog);
+          applyDeterministicRemotionFix(projectDir, ann.sectionId, ann.text, onLog);
         } else {
           await runClaudeFix(
             buildRemotionPrompt(ann),
@@ -271,14 +276,14 @@ export async function POST(_request: Request, { params }: RouteParams) {
           }
 
           const patch = applyVeoPromptFixForAnnotation(
-            getProjectDir(),
+            projectDir,
             targetSection,
             ann
           );
 
           if (patch) {
             onLog(
-              `Updated Veo prompt for ${patch.clipId} in ${path.relative(getProjectDir(), patch.specPath)}`
+              `Updated Veo prompt for ${patch.clipId} in ${path.relative(projectDir, patch.specPath)}`
             );
             veoClipTargets.add(patch.clipId);
 
@@ -286,7 +291,7 @@ export async function POST(_request: Request, { params }: RouteParams) {
               const sha = fixCommit(
                 ann.id,
                 ann.text.slice(0, 50),
-                [path.relative(getProjectDir(), patch.specPath)]
+                [patch.specPath]
               );
               if (sha) {
                 onLog(`Fix committed: ${sha.slice(0, 8)}`);
@@ -337,6 +342,12 @@ export async function POST(_request: Request, { params }: RouteParams) {
       onLog("Clearing stale bundle and webpack cache...");
       await fs.rm(buildDir, { recursive: true, force: true });
       await fs.rm(webpackCacheDir, { recursive: true, force: true });
+      onLog("Regenerating Root.tsx...");
+      execSync("python3 scripts/generate_section_compositions.py --force", {
+        cwd: getProjectDir(),
+        stdio: "pipe",
+        timeout: 120_000,
+      });
       onLog("Rebuilding Remotion bundle...");
       execSync("npx remotion bundle src/index.ts --out build", {
         cwd: remotionDir,

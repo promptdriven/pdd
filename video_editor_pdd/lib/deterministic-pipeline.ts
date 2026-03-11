@@ -13,6 +13,28 @@ function ensureDir(dirPath: string): void {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function collectFilesRecursively(rootDir: string, predicate: (filePath: string) => boolean): string[] {
+  if (!fs.existsSync(rootDir)) {
+    return [];
+  }
+
+  const results: string[] = [];
+
+  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+    const entryPath = path.join(rootDir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...collectFilesRecursively(entryPath, predicate));
+      continue;
+    }
+
+    if (predicate(entryPath)) {
+      results.push(entryPath);
+    }
+  }
+
+  return results;
+}
+
 function cleanText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -427,15 +449,27 @@ export function applyDeterministicRemotionFix(
   const requestedColor = extractRequestedHexColor(instructionText);
   const remotionDir = path.join(projectDir, "remotion", "src", "remotion");
   const modifiedFiles: string[] = [];
+  const sectionPascal = toPascalCase(sectionId);
 
   if (!fs.existsSync(remotionDir)) {
     return modifiedFiles;
   }
 
-  const candidateFiles = fs
-    .readdirSync(remotionDir)
-    .filter((entry) => entry.endsWith(".tsx") && entry.startsWith(`${sectionId}_`))
-    .map((entry) => path.join(remotionDir, entry));
+  const candidateFiles = collectFilesRecursively(remotionDir, (filePath) => {
+    if (!/\.(tsx|ts)$/.test(filePath)) {
+      return false;
+    }
+
+    const relativePath = path.relative(remotionDir, filePath).replace(/\\/g, "/");
+    const baseName = path.basename(filePath);
+
+    return (
+      relativePath.startsWith(`${sectionId}/`) ||
+      baseName.startsWith(`${sectionId}_`) ||
+      baseName.startsWith(sectionPascal) ||
+      relativePath.startsWith(`${sectionPascal}/`)
+    );
+  });
 
   for (const filePath of candidateFiles) {
     const original = fs.readFileSync(filePath, "utf-8");

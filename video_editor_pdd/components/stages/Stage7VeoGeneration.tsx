@@ -354,6 +354,8 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
               Generate Missing
             </button>
             <select
+              aria-label="Section"
+              data-testid="veo-section-select"
               value={selectedSection}
               onChange={(e) => setSelectedSection(e.target.value)}
               className="border border-slate-600 rounded px-2 py-1 text-sm text-slate-200 bg-slate-800"

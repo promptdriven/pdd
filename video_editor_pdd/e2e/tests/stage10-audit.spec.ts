@@ -270,10 +270,11 @@ test.describe('Stage 10: Audit', () => {
     await firstItem.click();
     await page.waitForTimeout(1000);
 
-    // The API should have been called with a specific sectionId
+    // The API should have been called with a specific section target
     expect(capturedBody).not.toBeNull();
-    expect(capturedBody).toHaveProperty('sectionId');
-    expect(typeof capturedBody.sectionId).toBe('string');
+    expect(Array.isArray(capturedBody.sections)).toBe(true);
+    expect(capturedBody.sections).toHaveLength(1);
+    expect(typeof capturedBody.sections[0]).toBe('string');
 
     // The dropdown should be closed after selection
     await expect(dropdownMenu).not.toBeVisible();
@@ -316,10 +317,11 @@ test.describe('Stage 10: Audit', () => {
     await firstReauditButton.click();
     await page.waitForTimeout(1000);
 
-    // The API should have been called with the specific sectionId
+    // The API should have been called with the specific section target
     expect(capturedBody).not.toBeNull();
-    expect(capturedBody).toHaveProperty('sectionId');
-    expect(typeof capturedBody.sectionId).toBe('string');
+    expect(Array.isArray(capturedBody.sections)).toBe(true);
+    expect(capturedBody.sections).toHaveLength(1);
+    expect(typeof capturedBody.sections[0]).toBe('string');
   });
 
   test('Play Video swaps the frame preview into an inline section video', async ({ page }) => {

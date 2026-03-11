@@ -160,6 +160,10 @@ describe("canvas overlay", () => {
     expect(sourceCode).toMatch(/CANVAS_HEIGHT\s*=\s*1080/);
   });
 
+  it("defines a fallback timeline duration for metadata-free review seeking", () => {
+    expect(sourceCode).toMatch(/FALLBACK_TIMELINE_DURATION\s*=\s*5/);
+  });
+
   it("sets canvas width to CANVAS_WIDTH", () => {
     expect(sourceCode).toMatch(/width=\{CANVAS_WIDTH\}/);
   });
@@ -581,8 +585,14 @@ describe("progress bar", () => {
     expect(sourceCode).toMatch(/annotations\.map/);
   });
 
-  it("positions dots using percentage of timestamp/duration", () => {
-    expect(sourceCode).toMatch(/a\.timestamp\s*\/\s*duration/);
+  it("positions dots using percentage of timestamp/markerTimelineDuration", () => {
+    expect(sourceCode).toMatch(/a\.timestamp\s*\/\s*markerTimelineDuration/);
+  });
+
+  it("derives markerTimelineDuration from annotations when video duration is unavailable", () => {
+    expect(sourceCode).toMatch(/const\s+markerTimelineDuration\s*=\s*useMemo/);
+    expect(sourceCode).toMatch(/annotations\.reduce/);
+    expect(sourceCode).toMatch(/Math\.max\(\s*currentTime,\s*maxAnnotationTimestamp,\s*FALLBACK_TIMELINE_DURATION\s*\)/);
   });
 
   it("dots use bg-yellow-400 styling", () => {
@@ -605,6 +615,7 @@ describe("progress bar", () => {
     expect(sourceCode).toMatch(/seekToClientX/);
     expect(sourceCode).toMatch(/getBoundingClientRect\s*\(\s*\)/);
     expect(sourceCode).toMatch(/clientX/);
+    expect(sourceCode).toMatch(/duration\s*\|\|\s*videoEl\.duration\s*\|\|\s*markerTimelineDuration\s*\|\|\s*0/);
     expect(sourceCode).toMatch(/percent\s*=\s*clamp\(\(clientX\s*-\s*rect\.left\)\s*\/\s*rect\.width/);
   });
 

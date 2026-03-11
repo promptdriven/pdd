@@ -30,8 +30,8 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     await expect(page.locator('h2', { hasText: 'Render & Stitch' })).toBeVisible();
 
     // Buttons should still be present
-    await expect(page.locator('button', { hasText: /Render/ }).first()).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Stitch Full Video' })).toBeVisible();
+    await expect(page.getByTestId('render-sections-button')).toBeVisible();
+    await expect(page.getByTestId('stitch-full-video-button')).toBeVisible();
 
     const appErrors = errors.filter(
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
@@ -61,13 +61,13 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     });
 
     // Click the Render button
-    const renderButton = page.locator('button', { hasText: /Render/ }).first();
+    const renderButton = page.getByTestId('render-sections-button');
     await renderButton.click();
     await page.waitForTimeout(1000);
 
     // Page should still be functional — heading and buttons visible
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Stitch Full Video' })).toBeVisible();
+    await expect(page.getByTestId('stitch-full-video-button')).toBeVisible();
 
     // Table should not be stuck showing "rendering" status for all sections
     const renderingBadges = page.locator('tbody span.rounded-full', { hasText: 'rendering' });
@@ -103,7 +103,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     });
 
     // Click the Render button
-    const renderButton = page.locator('button', { hasText: /Render/ }).first();
+    const renderButton = page.getByTestId('render-sections-button');
     await renderButton.click();
     await page.waitForTimeout(1500);
 
@@ -112,8 +112,8 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible();
 
     // Render and Stitch buttons should still be usable
-    await expect(page.locator('button', { hasText: /Render/ }).first()).toBeVisible();
-    await expect(page.locator('button', { hasText: 'Stitch Full Video' })).toBeVisible();
+    await expect(page.getByTestId('render-sections-button')).toBeVisible();
+    await expect(page.getByTestId('stitch-full-video-button')).toBeVisible();
 
     const appErrors = errors.filter(
       (e) => !e.includes('Extension') && !e.includes('chrome-extension')
@@ -143,7 +143,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     });
 
     // Click the Stitch Full Video button
-    const stitchButton = page.locator('button', { hasText: 'Stitch Full Video' });
+    const stitchButton = page.getByTestId('stitch-full-video-button');
     await stitchButton.click();
     await page.waitForTimeout(1000);
 
@@ -153,7 +153,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible();
 
     // Buttons should remain clickable
-    await expect(page.locator('button', { hasText: /Render/ }).first()).toBeVisible();
+    await expect(page.getByTestId('render-sections-button')).toBeVisible();
     await expect(stitchButton).toBeVisible();
 
     const appErrors = errors.filter(
@@ -184,7 +184,7 @@ test.describe('Error States: Stage 9 (Render & Stitch)', () => {
     });
 
     // Click the Stitch Full Video button
-    const stitchButton = page.locator('button', { hasText: 'Stitch Full Video' });
+    const stitchButton = page.getByTestId('stitch-full-video-button');
     await stitchButton.click();
     await page.waitForTimeout(1000);
 

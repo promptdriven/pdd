@@ -2,8 +2,10 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Cross-cutting features', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+      timeout: 15000,
+    });
   });
 
   test('page loads and displays Pipeline tab as active by default', async ({ page }) => {
@@ -60,7 +62,7 @@ test.describe('Cross-cutting features', () => {
 
   test('clicking all 10 stages loads without crash', async ({ page }) => {
     const sidebar = page.locator('aside');
-    const stages = sidebar.locator('> div');
+    const stages = sidebar.locator('button');
 
     const count = await stages.count();
     expect(count).toBe(10);

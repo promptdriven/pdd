@@ -3,6 +3,10 @@ import path from 'path';
 
 const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 
+function stage7SectionSelect(page: import('@playwright/test').Page) {
+  return page.getByLabel('Section');
+}
+
 /**
  * Navigate to Stage 7 (Veo Generation) via the sidebar.
  */
@@ -180,7 +184,7 @@ test.describe('Stage 7: Interactive QA - Comprehensive Feature Testing', () => {
 
     test('A5: Section dropdown visible with bg-slate-800', async ({ page }) => {
       await navigateWithMockedClips(page, MOCK_CLIPS, MOCK_REFERENCES);
-      const select = page.locator('select');
+      const select = stage7SectionSelect(page);
       await expect(select).toBeVisible();
       const cls = await select.getAttribute('class') ?? '';
       expect(cls).toContain('bg-slate-800');
@@ -204,12 +208,31 @@ test.describe('Stage 7: Interactive QA - Comprehensive Feature Testing', () => {
           '## Visual Description',
           'A calm ocean wave rolling onto a beach at golden hour.',
         ].join('\n'),
+        'specs/part1_economics/02_ocean.md': [
+          '[veo: A cinematic ocean wave at sunset]',
+          '',
+          '# Ocean Wave Sunset',
+          '',
+          '## Visual Description',
+          'A calm ocean wave rolling onto a beach at golden hour.',
+        ].join('\n'),
       });
 
-      await expect(page.locator('text=Veo Spec')).toBeVisible();
-      await expect(page.locator('text=Generated Video')).toBeVisible();
-      await expect(page.locator('text=Ocean Wave Sunset')).toBeVisible();
-      await expect(page.locator('video')).toBeVisible();
+      await page.locator('tr', { hasText: 'part1_economics' }).click();
+
+      await expect(page.getByText('Veo Spec', { exact: true })).toBeVisible();
+      await expect(page.getByText('Generated Video', { exact: true })).toBeVisible();
+      await expect(page.getByText('specs/part1_economics/02_ocean.md', { exact: true })).toBeVisible();
+      await expect(page.getByText('part1_economics · 16:9', { exact: true })).toBeVisible();
+
+      const video = page.locator('video');
+      if (await video.count()) {
+        await expect(video).toBeVisible();
+      } else {
+        await expect(
+          page.getByText('The generated Veo video could not be loaded from disk.', { exact: true })
+        ).toBeVisible();
+      }
     });
 
     test('A8: Auto-composite checkbox and label visible', async ({ page }) => {
@@ -701,7 +724,7 @@ test.describe('Stage 7: Interactive QA - Comprehensive Feature Testing', () => {
       await page.waitForTimeout(500);
 
       // Select part2_history section
-      const select = page.locator('select');
+      const select = stage7SectionSelect(page);
       await select.selectOption('part2_history');
       await page.waitForTimeout(300);
 

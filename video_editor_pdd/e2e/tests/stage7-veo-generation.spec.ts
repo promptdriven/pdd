@@ -1,4 +1,8 @@
 import { test, expect } from '@playwright/test';
+
+function stage7SectionSelect(page: import('@playwright/test').Page) {
+  return page.getByLabel('Section');
+}
 import { loadActiveProjectFixture } from './helpers/project-fixtures';
 
 const ACTIVE_PROJECT = loadActiveProjectFixture();
@@ -113,7 +117,7 @@ test.describe('Stage 7: Veo Generation', () => {
   });
 
   test('displays section dropdown', async ({ page }) => {
-    const select = page.locator('select');
+    const select = stage7SectionSelect(page);
     await expect(select).toBeVisible();
   });
 
@@ -277,7 +281,7 @@ test.describe('Stage 7: Veo Generation', () => {
       });
     });
 
-    const select = page.locator('select');
+    const select = stage7SectionSelect(page);
     await expect(select).toBeVisible();
 
     // Pick a specific section from the dropdown (the second option if available)

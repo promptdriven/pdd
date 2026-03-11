@@ -230,6 +230,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
 
         <div className="flex items-center gap-2">
           <select
+            data-testid="render-mode-select"
             className="border rounded-md px-3 py-2 text-sm text-slate-200 bg-slate-800 border-slate-600"
             value={renderMode}
             onChange={(e) => setRenderMode(e.target.value as RenderMode)}
@@ -239,12 +240,14 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
             <option value="selected">Selected</option>
           </select>
           <button
+            data-testid="render-sections-button"
             onClick={() => handleRender(renderMode)}
             className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
           >
             Render ▾
           </button>
           <button
+            data-testid="stitch-full-video-button"
             onClick={handleStitch}
             disabled={anyRenderInProgress || stitching}
             className={`px-4 py-2 rounded-md text-sm font-medium ${

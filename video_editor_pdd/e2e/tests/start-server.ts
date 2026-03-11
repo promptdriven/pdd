@@ -1,11 +1,7 @@
 import { spawn, spawnSync } from 'child_process';
 import path from 'path';
 
-import globalSetup from './global-setup';
-
-const INTEGRATION_PORT = '3101';
-
-globalSetup();
+const E2E_PORT = '3201';
 
 const activeProjectId = path.basename(process.cwd());
 
@@ -24,10 +20,14 @@ const commonEnv = {
     process.env.NEXT_PUBLIC_E2E_DISABLE_POLLING ?? '1',
 };
 
-spawnSync('bash', ['-lc', `lsof -ti tcp:${INTEGRATION_PORT} | xargs kill -9 2>/dev/null || true`], {
-  env: commonEnv,
-  stdio: 'inherit',
-});
+spawnSync(
+  'bash',
+  ['-lc', `lsof -ti tcp:${E2E_PORT} | xargs kill -9 2>/dev/null || true`],
+  {
+    env: commonEnv,
+    stdio: 'inherit',
+  }
+);
 
 const build = spawnSync('npx', ['next', 'build'], {
   env: commonEnv,
@@ -38,14 +38,10 @@ if (build.status !== 0) {
   process.exit(build.status ?? 1);
 }
 
-const child = spawn(
-  'npx',
-  ['next', 'start', '-p', INTEGRATION_PORT],
-  {
-    env: commonEnv,
-    stdio: 'inherit',
-  }
-);
+const child = spawn('npx', ['next', 'start', '-p', E2E_PORT], {
+  env: commonEnv,
+  stdio: 'inherit',
+});
 
 const forwardSignal = (signal: NodeJS.Signals) => {
   child.kill(signal);

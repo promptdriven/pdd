@@ -115,7 +115,7 @@ test.describe('Stage 5: Audio Sync', () => {
   });
 
   test('section dropdown is present', async ({ page }) => {
-    const select = page.locator('select');
+    const select = page.getByLabel('Section');
     await expect(select).toBeVisible();
   });
 
@@ -182,7 +182,7 @@ test.describe('Stage 5: Audio Sync', () => {
   });
 
   test('section select dropdown changes the displayed section and re-fetches timestamps', async ({ page }) => {
-    const select = page.locator('select');
+    const select = page.getByLabel('Section');
     await expect(select).toBeVisible();
 
     // Record the initial selected value

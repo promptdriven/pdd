@@ -22,6 +22,7 @@ interface VideoPlayerProps {
 
 const CANVAS_WIDTH = 1920;
 const CANVAS_HEIGHT = 1080;
+const FALLBACK_TIMELINE_DURATION = 5;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -355,12 +356,28 @@ export default function VideoPlayer({
     onTimeChange?.(videoEl.currentTime);
   }, [duration, onTimeChange]);
 
+  const markerTimelineDuration = useMemo(() => {
+    if (duration > 0) {
+      return duration;
+    }
+
+    const maxAnnotationTimestamp = annotations.reduce((max, annotation) => {
+      return Math.max(max, annotation.timestamp ?? 0);
+    }, 0);
+
+    return Math.max(
+      currentTime,
+      maxAnnotationTimestamp,
+      FALLBACK_TIMELINE_DURATION
+    );
+  }, [annotations, currentTime, duration]);
+
   const seekToClientX = useCallback((clientX: number) => {
     const videoEl = videoRef.current;
     const progressEl = progressBarRef.current;
     if (!videoEl || !progressEl) return;
 
-    const effectiveDuration = duration || videoEl.duration || 0;
+    const effectiveDuration = duration || videoEl.duration || markerTimelineDuration || 0;
     if (!Number.isFinite(effectiveDuration) || effectiveDuration <= 0) return;
 
     const rect = progressEl.getBoundingClientRect();
@@ -371,7 +388,7 @@ export default function VideoPlayer({
     videoEl.currentTime = nextTime;
     setCurrentTime(nextTime);
     onTimeChange?.(nextTime);
-  }, [duration, onTimeChange]);
+  }, [duration, markerTimelineDuration, onTimeChange]);
 
   const handleProgressPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -599,7 +616,9 @@ export default function VideoPlayer({
               }
             }}
             className="absolute w-1.5 h-1.5 rounded-full bg-yellow-400 top-0 -translate-y-1"
-            style={{ left: `${a.timestamp != null ? (a.timestamp / duration) * 100 : 0}%` }}
+            style={{
+              left: `${a.timestamp != null ? (a.timestamp / markerTimelineDuration) * 100 : 0}%`,
+            }}
             aria-label={`annotation at ${(a.timestamp ?? 0).toFixed(2)} seconds`}
           />
         ))}

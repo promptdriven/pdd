@@ -23,29 +23,37 @@ const FULL_VIDEO_NONE = { exists: false };
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function navigateToStage9(page: import('@playwright/test').Page) {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+    timeout: 15000,
+  });
 
   const sidebar = page.locator('aside');
   await expect(sidebar).toBeVisible({ timeout: 5000 });
-  await page.waitForTimeout(1000);
+  await expect(sidebar.locator('button').filter({ hasText: /^9\s*Render/ })).toBeVisible({
+    timeout: 10000,
+  });
 
   const heading = page.locator('h2', { hasText: 'Stage 9' });
+  const stageButton = sidebar.locator('button').filter({ hasText: /^9\s*Render/ });
 
-  await sidebar.locator('div.cursor-pointer').nth(8).click();
+  await stageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[8]) (items[8] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) =>
+        item.textContent?.trim().match(/^9\s*Render/)
+      );
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(8).click({ force: true });
+      await stageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -234,7 +242,7 @@ test.describe('Stage 9 QA · B: Section Table Data & Progress Bars', () => {
 test.describe('Stage 9 QA · C: Render Mode & Payload Logic', () => {
   test('C1: default render mode is "all"', async ({ page }) => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
-    const select = page.locator('select');
+    const select = page.getByTestId('render-mode-select');
     await expect(select).toHaveValue('all');
   });
 
@@ -264,9 +272,9 @@ test.describe('Stage 9 QA · C: Render Mode & Payload Logic', () => {
     });
     await navigateToStage9(page);
 
-    const select = page.locator('select');
+    const select = page.getByTestId('render-mode-select');
     await expect(select).toHaveValue('all');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(1000);
 
     expect(capturedBody).not.toBeNull();
@@ -301,8 +309,8 @@ test.describe('Stage 9 QA · C: Render Mode & Payload Logic', () => {
     });
     await navigateToStage9(page);
 
-    await page.locator('select').selectOption('missing');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-mode-select').selectOption('missing');
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(1000);
 
     expect(capturedBody).not.toBeNull();
@@ -342,8 +350,8 @@ test.describe('Stage 9 QA · C: Render Mode & Payload Logic', () => {
     await page.locator('tbody tr').nth(0).locator('input[type="checkbox"]').check();
     await page.locator('tbody tr').nth(2).locator('input[type="checkbox"]').check();
 
-    await page.locator('select').selectOption('selected');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-mode-select').selectOption('selected');
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(1000);
 
     expect(capturedBody).not.toBeNull();
@@ -352,8 +360,8 @@ test.describe('Stage 9 QA · C: Render Mode & Payload Logic', () => {
 
   test('C5: "Selected" mode with no checkboxes shows error', async ({ page }) => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
-    await page.locator('select').selectOption('selected');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-mode-select').selectOption('selected');
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(500);
 
     const errorDiv = page.locator('div.bg-red-900\\/50', { hasText: 'No sections selected for render.' });
@@ -362,8 +370,8 @@ test.describe('Stage 9 QA · C: Render Mode & Payload Logic', () => {
 
   test('C6: error "No sections selected" displayed in red pill', async ({ page }) => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
-    await page.locator('select').selectOption('selected');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-mode-select').selectOption('selected');
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(500);
 
     const errorDiv = page.locator('div.bg-red-900\\/50');
@@ -448,7 +456,7 @@ test.describe('Stage 9 QA · D: Stitch Button & Full Video Panel', () => {
     ];
     await navigateWithMockedStatus(page, noActiveRenderSections, FULL_VIDEO_NONE);
 
-    const stitchBtn = page.locator('button', { hasText: 'Stitch Full Video' });
+    const stitchBtn = page.getByTestId('stitch-full-video-button');
     await expect(stitchBtn).toBeEnabled();
     const classes = await stitchBtn.getAttribute('class');
     expect(classes).toContain('bg-emerald-600');
@@ -459,7 +467,7 @@ test.describe('Stage 9 QA · D: Stitch Button & Full Video Panel', () => {
     // part1_economics has 0<progress<100 → renders in progress
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
 
-    const stitchBtn = page.locator('button', { hasText: 'Stitch Full Video' });
+    const stitchBtn = page.getByTestId('stitch-full-video-button');
     await expect(stitchBtn).toBeDisabled();
     const classes = await stitchBtn.getAttribute('class');
     expect(classes).toContain('bg-slate-700');
@@ -496,7 +504,7 @@ test.describe('Stage 9 QA · D: Stitch Button & Full Video Panel', () => {
     });
     await navigateToStage9(page);
 
-    await page.locator('button', { hasText: 'Stitch Full Video' }).click();
+    await page.getByTestId('stitch-full-video-button').click();
     await page.waitForTimeout(1000);
 
     expect(stitchCalled).toBe(true);
@@ -629,7 +637,7 @@ test.describe('Stage 9 QA · E: Active Renders Panel & SSE Progress', () => {
     await navigateToStage9(page);
 
     // Trigger a render to get a jobId → which triggers SSE
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(2000);
 
     // After SSE update, progress should show 75%
@@ -675,7 +683,7 @@ test.describe('Stage 9 QA · E: Active Renders Panel & SSE Progress', () => {
     await navigateToStage9(page);
 
     // Trigger render to start SSE
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(2000);
 
     // After render-complete, status is reloaded → should show "Rendered"
@@ -813,7 +821,7 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
     );
     await navigateToStage9(page);
 
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(1000);
 
     const errorDiv = page.locator('div.bg-red-900\\/50', { hasText: 'Failed to start render job.' });
@@ -843,7 +851,7 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
     );
     await navigateToStage9(page);
 
-    await page.locator('button', { hasText: 'Stitch Full Video' }).click();
+    await page.getByTestId('stitch-full-video-button').click();
     await page.waitForTimeout(1000);
 
     const errorDiv = page.locator('div.bg-red-900\\/50', { hasText: 'Failed to stitch full video.' });
@@ -868,7 +876,7 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
     await page.route('**/api/pipeline/render/run', (route) => route.abort());
     await navigateToStage9(page);
 
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(1000);
 
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
@@ -895,7 +903,7 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
     await page.route('**/api/pipeline/stitch/run', (route) => route.abort());
     await navigateToStage9(page);
 
-    await page.locator('button', { hasText: 'Stitch Full Video' }).click();
+    await page.getByTestId('stitch-full-video-button').click();
     await page.waitForTimeout(1000);
 
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
@@ -905,13 +913,13 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
 
     // Trigger "No sections selected" error
-    await page.locator('select').selectOption('selected');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-mode-select').selectOption('selected');
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(500);
     await expect(page.locator('div.bg-red-900\\/50')).toBeVisible();
 
     // Now switch to "all" and render again → error should clear
-    await page.locator('select').selectOption('all');
+    await page.getByTestId('render-mode-select').selectOption('all');
 
     // Mock the render endpoint
     await page.route('**/api/pipeline/render/run', (route) =>
@@ -921,7 +929,7 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
         body: JSON.stringify({ jobId: 'clear-error-job' }),
       })
     );
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(500);
 
     await expect(page.locator('div.bg-red-900\\/50')).not.toBeVisible();
@@ -950,7 +958,7 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
     );
     await navigateToStage9(page);
 
-    const stitchBtn = page.locator('button', { hasText: 'Stitch Full Video' });
+    const stitchBtn = page.getByTestId('stitch-full-video-button');
     await stitchBtn.click();
     await page.waitForTimeout(1000);
 
@@ -962,8 +970,8 @@ test.describe('Stage 9 QA · G: Error States & Network Failures', () => {
 
   test('G8: screenshot — error state', async ({ page }) => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
-    await page.locator('select').selectOption('selected');
-    await page.locator('button', { hasText: /Render/ }).first().click();
+    await page.getByTestId('render-mode-select').selectOption('selected');
+    await page.getByTestId('render-sections-button').click();
     await page.waitForTimeout(500);
     await page.screenshot({
       path: path.join(SCREENSHOT_DIR, 'stage9-G8-error-state.png'),

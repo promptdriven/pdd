@@ -46,6 +46,7 @@ export default function StageSidebar({
     PipelineStage,
     StageStatusEntry
   >>(initStatuses);
+  const disablePolling = process.env.NEXT_PUBLIC_E2E_DISABLE_POLLING === '1';
 
   useEffect(() => {
     let mounted = true;
@@ -68,12 +69,18 @@ export default function StageSidebar({
     };
 
     fetchStatus();
+    if (disablePolling) {
+      return () => {
+        mounted = false;
+      };
+    }
+
     const interval = setInterval(() => fetchStatus(), 5000);
     return () => {
       mounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [disablePolling]);
 
   const renderBadge = (entry: StageStatusEntry) => {
     const status = entry.status;

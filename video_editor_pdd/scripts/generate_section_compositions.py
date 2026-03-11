@@ -719,19 +719,31 @@ def generate_generated_timeline_wrapper(
     lines.append(f'  const durationSeconds = {duration_seconds};')
     lines.append('  const frame = useCurrentFrame();')
     lines.append('  let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;')
+    lines.append('  let activeVisualIndex = VISUAL_SEQUENCE.length > 0 ? 0 : -1;')
     lines.append('  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {')
     lines.append('    if (frame >= VISUAL_SEQUENCE[i].start) {')
     lines.append('      activeVisual = VISUAL_SEQUENCE[i];')
+    lines.append('      activeVisualIndex = i;')
     lines.append('      break;')
     lines.append('    }')
     lines.append('  }')
-    lines.append('  const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;')
+    lines.append('  let renderVisual = activeVisual;')
+    lines.append('  for (let i = activeVisualIndex; i >= 0; i--) {')
+    lines.append('    const candidate = VISUAL_SEQUENCE[i];')
+    lines.append('    const candidateComponent = COMPONENT_MAP[candidate.id] ?? null;')
+    lines.append('    const candidateMedia = VISUAL_MEDIA[candidate.id] ?? null;')
+    lines.append('    if (candidateComponent || candidateMedia?.defaultSrc) {')
+    lines.append('      renderVisual = candidate;')
+    lines.append('      break;')
+    lines.append('    }')
+    lines.append('  }')
+    lines.append('  const ActiveComponent = renderVisual ? COMPONENT_MAP[renderVisual.id] ?? null : null;')
     lines.append('  const activeVisualDuration = activeVisual ? Math.max(1, activeVisual.end - activeVisual.start) : 1;')
-    lines.append('  const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;')
-    lines.append('  const activeVisualMedia = activeVisual ? VISUAL_MEDIA[activeVisual.id] ?? null : null;')
+    lines.append('  const intrinsicDurationInFrames = renderVisual ? VISUAL_DURATIONS[renderVisual.id] ?? activeVisualDuration : activeVisualDuration;')
+    lines.append('  const activeVisualMedia = renderVisual ? VISUAL_MEDIA[renderVisual.id] ?? null : null;')
     lines.append('')
     lines.append('  return (')
-    lines.append('    <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>')
+    lines.append('    <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>')
     if needs_direct_audio and direct_audio_src is not None:
         lines.append(f'      <Audio src={{staticFile("{direct_audio_src}")}} />')
     if has_visual_video:
@@ -875,7 +887,7 @@ def generate_section_component(
     lines.append(f'  const durationSeconds = {duration_seconds};')
     lines.append('')
     lines.append('  return (')
-    lines.append(f'    <Sequence from={{0}} durationInFrames={{Math.ceil(durationSeconds * fps)}}>')
+    lines.append(f'    <Sequence from={{0}} durationInFrames={{Math.max(1, Math.ceil(durationSeconds * fps))}}>')
 
     # Render missing direct assets first so the authored component can overlay them.
     if needs_direct_audio and direct_audio_src is not None:
@@ -963,7 +975,7 @@ def generate_root_tsx(
         component_name = f'{pascal_name}Section'
         composition_id = section.get('compositionId', pascal_name + 'Section')
         duration_seconds = section.get('durationSeconds', 0)
-        duration_frames = math.ceil(duration_seconds * fps)
+        duration_frames = max(1, math.ceil(duration_seconds * fps))
         width = section.get('width', 1920)
         height = section.get('height', 1080)
 
@@ -1053,7 +1065,7 @@ def _merge_root_tsx(
         component_name = f'{pascal_name}Section'
         composition_id = section.get('compositionId', pascal_name + 'Section')
         duration_seconds = section.get('durationSeconds', 0)
-        duration_frames = math.ceil(duration_seconds * fps)
+        duration_frames = max(1, math.ceil(duration_seconds * fps))
         width = section.get('width', 1920)
         height = section.get('height', 1080)
 

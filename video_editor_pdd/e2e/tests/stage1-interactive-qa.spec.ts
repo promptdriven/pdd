@@ -44,7 +44,10 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
     });
 
     test('A3: resolution dropdown matches project.json', async ({ page }) => {
-      const resSelect = page.locator('select').first();
+      const resSelect = page
+        .locator('label', { hasText: 'Output Resolution' })
+        .locator('..')
+        .locator('select');
       const resolution = `${initialProject.outputResolution.width}x${initialProject.outputResolution.height}`;
       await expect(resSelect).toHaveValue(resolution);
     });
@@ -130,7 +133,10 @@ test.describe('Stage 1: Interactive QA - Comprehensive Feature Testing', () => {
     });
 
     test('B2: changing resolution dropdown updates value', async ({ page }) => {
-      const resSelect = page.locator('select').first();
+      const resSelect = page
+        .locator('label', { hasText: 'Output Resolution' })
+        .locator('..')
+        .locator('select');
       await resSelect.selectOption('1280x720');
       await expect(resSelect).toHaveValue('1280x720');
     });

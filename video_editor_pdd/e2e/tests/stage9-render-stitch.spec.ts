@@ -67,7 +67,7 @@ test.describe('Stage 9: Render & Stitch', () => {
   });
 
   test('displays render mode selector with All/Missing/Selected options', async ({ page }) => {
-    const select = page.locator('select');
+    const select = page.getByTestId('render-mode-select');
     await expect(select).toBeVisible();
 
     // Check options
@@ -79,7 +79,7 @@ test.describe('Stage 9: Render & Stitch', () => {
   });
 
   test('render mode selector text is readable (dark theme fix)', async ({ page }) => {
-    const select = page.locator('select');
+    const select = page.getByTestId('render-mode-select');
     await expect(select).toBeVisible();
 
     const color = await select.evaluate((el) => getComputedStyle(el).color);
@@ -93,7 +93,7 @@ test.describe('Stage 9: Render & Stitch', () => {
   });
 
   test('render mode selector is changeable', async ({ page }) => {
-    const select = page.locator('select');
+    const select = page.getByTestId('render-mode-select');
     await select.selectOption('missing');
     await expect(select).toHaveValue('missing');
     await select.selectOption('selected');
@@ -103,11 +103,11 @@ test.describe('Stage 9: Render & Stitch', () => {
   });
 
   test('displays Render button', async ({ page }) => {
-    await expect(page.locator('button', { hasText: /Render/ }).first()).toBeVisible();
+    await expect(page.getByTestId('render-sections-button')).toBeVisible();
   });
 
   test('displays Stitch Full Video button', async ({ page }) => {
-    await expect(page.locator('button', { hasText: 'Stitch Full Video' })).toBeVisible();
+    await expect(page.getByTestId('stitch-full-video-button')).toBeVisible();
   });
 
   test('displays Section Renders heading', async ({ page }) => {
@@ -246,12 +246,12 @@ test.describe('Stage 9: Render & Stitch', () => {
     });
 
     // Select "Missing" mode
-    const select = page.locator('select');
+    const select = page.getByTestId('render-mode-select');
     await select.selectOption('missing');
     await expect(select).toHaveValue('missing');
 
     // Click the Render button
-    const renderButton = page.locator('button', { hasText: /Render/ }).first();
+    const renderButton = page.getByTestId('render-sections-button');
     await renderButton.click();
 
     // Wait for the API call to be made
@@ -295,7 +295,7 @@ test.describe('Stage 9: Render & Stitch', () => {
       });
     });
 
-    const stitchButton = page.locator('button', { hasText: 'Stitch Full Video' });
+    const stitchButton = page.getByTestId('stitch-full-video-button');
     await stitchButton.click();
 
     await page.waitForTimeout(1000);
@@ -439,7 +439,7 @@ test.describe('Stage 9: Render & Stitch', () => {
       });
     });
 
-    const renderButton = page.locator('button', { hasText: /Render/ }).first();
+    const renderButton = page.getByTestId('render-sections-button');
     await renderButton.click();
     await page.waitForTimeout(1500);
 

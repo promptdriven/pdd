@@ -56,7 +56,7 @@ const mockRunPipelineStage = jest.fn();
 const mockApplyVeoPromptFixForAnnotation = jest.fn();
 const mockApplyRemotionSpecFixForAnnotation = jest.fn();
 const mockIsGitAvailable = jest.fn();
-const mockPreFixCommit = jest.fn();
+const mockPreFixCommitWithPaths = jest.fn();
 const mockFixCommit = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
@@ -93,7 +93,7 @@ jest.mock("@/lib/remotion-spec-fix", () => ({
 
 jest.mock("@/lib/git", () => ({
   isGitAvailable: (...args: unknown[]) => mockIsGitAvailable(...args),
-  preFixCommit: (...args: unknown[]) => mockPreFixCommit(...args),
+  preFixCommitWithPaths: (...args: unknown[]) => mockPreFixCommitWithPaths(...args),
   fixCommit: (...args: unknown[]) => mockFixCommit(...args),
 }));
 
@@ -195,8 +195,8 @@ beforeEach(() => {
   mockApplyRemotionSpecFixForAnnotation.mockReturnValue(null);
   mockIsGitAvailable.mockReset();
   mockIsGitAvailable.mockReturnValue(true);
-  mockPreFixCommit.mockReset();
-  mockPreFixCommit.mockReturnValue("pre-fix-commit");
+  mockPreFixCommitWithPaths.mockReset();
+  mockPreFixCommitWithPaths.mockReturnValue("pre-fix-commit");
   mockFixCommit.mockReset();
   mockFixCommit.mockReturnValue("fix-commit-sha");
   mockExecSync.mockReset();
@@ -592,8 +592,8 @@ describe("POST — runJob executor: fixType grouping", () => {
       "ann-rspec",
       expect.any(String),
       expect.arrayContaining([
-        "remotion/src/remotion/",
-        path.join("specs", "section-1", "03_square.md"),
+        path.join(process.cwd(), "remotion", "src", "remotion"),
+        path.join(process.cwd(), "specs", "section-1", "03_square.md"),
       ])
     );
   });
@@ -664,7 +664,7 @@ describe("POST — runJob executor: fixType grouping", () => {
     expect(mockFixCommit).toHaveBeenCalledWith(
       "ann-v1",
       expect.any(String),
-      [path.join("specs", "section-1", "02_ocean_wave_sunset.md")]
+      [path.join(process.cwd(), "specs", "section-1", "02_ocean_wave_sunset.md")]
     );
     expect(mockRun).toHaveBeenCalledWith("fix-commit-sha", "ann-v1");
     expect(onLog).toHaveBeenCalledWith(
@@ -924,6 +924,45 @@ describe("POST — runJob executor: section rendering after fixes", () => {
     await executorFn(jest.fn());
 
     expect(callOrder).toEqual(["claudeFix", "renderSection", "stitchFullVideo"]);
+  });
+
+  it("regenerates Root.tsx before rebuilding the Remotion bundle", async () => {
+    mockAll.mockReturnValue([
+      makeDbRow({
+        id: "ann-r1",
+        analysis: JSON.stringify({
+          fixType: "remotion",
+          severity: "major",
+          technicalAssessment: "",
+          suggestedFixes: [],
+          confidence: 0.9,
+        }),
+      }),
+    ]);
+
+    await POST(makeRequest(), makeParams("section-1"));
+
+    const executorFn = mockRunJob.mock.calls[0][1];
+    await executorFn(jest.fn());
+
+    expect(mockExecSync).toHaveBeenCalledWith(
+      "python3 scripts/generate_section_compositions.py --force",
+      expect.objectContaining({
+        cwd: process.cwd(),
+        stdio: "pipe",
+      })
+    );
+    expect(mockExecSync).toHaveBeenCalledWith(
+      "npx remotion bundle src/index.ts --out build",
+      expect.objectContaining({
+        cwd: path.join(process.cwd(), "remotion"),
+        stdio: "pipe",
+      })
+    );
+    const commands = mockExecSync.mock.calls.map((call) => call[0]);
+    expect(commands.indexOf("python3 scripts/generate_section_compositions.py --force")).toBeLessThan(
+      commands.indexOf("npx remotion bundle src/index.ts --out build")
+    );
   });
 
   it("normalizes stale full-video annotations to the effective section before rendering", async () => {

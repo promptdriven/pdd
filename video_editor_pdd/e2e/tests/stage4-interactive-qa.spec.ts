@@ -5,37 +5,44 @@ const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 
 /**
  * Navigate to Stage 4 (TTS Rendering) via the sidebar.
- * Uses 3-attempt retry with sidebar `div.cursor-pointer.nth(3)`.
+ * Uses the real sidebar stage button and avoids networkidle waits, which are
+ * noisy in the app because of polling/SSE during startup.
  */
 async function navigateToStage4(page: import('@playwright/test').Page) {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+    timeout: 15000,
+  });
 
   const sidebar = page.locator('aside');
   await expect(sidebar).toBeVisible({ timeout: 5000 });
-
-  // Wait for React hydration
-  await page.waitForTimeout(1000);
+  await expect(sidebar.locator('button', { hasText: 'TTS Render' }).first()).toBeVisible({
+    timeout: 10000,
+  });
 
   const heading = page.locator('h2', { hasText: 'Stage 4' });
+  const stageButton = sidebar.locator('button', { hasText: 'TTS Render' }).first();
 
   // Attempt 1: Playwright click
-  await sidebar.locator('div.cursor-pointer').nth(3).click();
+  await stageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     // Attempt 2: JS click
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[3]) (items[3] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) =>
+        item.textContent?.includes('TTS Render')
+      );
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       // Attempt 3: force click after longer wait
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(3).click({ force: true });
+      await stageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -128,10 +135,12 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         });
       });
 
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+        timeout: 15000,
+      });
       const sidebar = page.locator('aside');
-      await sidebar.locator('div.cursor-pointer').nth(3).click();
+      await sidebar.locator('button', { hasText: 'TTS Render' }).first().click();
 
       // Loading text should appear while waiting
       await expect(page.locator('text=Loading segments')).toBeVisible({ timeout: 3000 });
@@ -169,7 +178,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
     test('B1: Row numbers (1, 2, 3, 4) display correctly', async ({ page }) => {
       await navigateWithMockedSegments(page, fourSegments);
       // Each row's first column should show the index
-      const rows = page.locator('.grid.grid-cols-6.px-4.py-3');
+      const rows = page.locator('.grid.grid-cols-7.px-4.py-3');
       await expect(rows).toHaveCount(4);
       for (let i = 0; i < 4; i++) {
         const rowText = await rows.nth(i).locator('div').first().textContent();
@@ -231,7 +240,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
 
     test('B8: Rows have cursor-pointer styling', async ({ page }) => {
       await navigateWithMockedSegments(page, fourSegments);
-      const rows = page.locator('.cursor-pointer.grid.grid-cols-6');
+      const rows = page.locator('.cursor-pointer.grid.grid-cols-7');
       const count = await rows.count();
       expect(count).toBeGreaterThanOrEqual(4);
     });
@@ -271,7 +280,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       });
 
       // Click the first row
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(500);
 
@@ -291,7 +300,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
       });
 
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(500);
 
@@ -306,12 +315,12 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
       });
 
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(500);
 
-      // The waveform container has bg-slate-900 p-2
-      const waveformContainer = page.locator('.bg-slate-900.p-2');
+      // The waveform mount container is the inner bg-slate-950 p-2 div
+      const waveformContainer = page.locator('.bg-slate-950.p-2');
       await expect(waveformContainer).toBeVisible();
     });
 
@@ -321,7 +330,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
       });
 
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
 
       // Expand
       await firstRow.click();
@@ -341,7 +350,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
       });
 
-      const rows = page.locator('.grid.grid-cols-6.px-4.py-3');
+      const rows = page.locator('.grid.grid-cols-7.px-4.py-3');
 
       // Expand first row
       await rows.first().click();
@@ -365,12 +374,12 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
       });
 
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(500);
 
       // The waveform container should exist as a div
-      const container = page.locator('.bg-slate-900.p-2');
+      const container = page.locator('.bg-slate-950.p-2');
       await expect(container).toBeVisible();
       // It should be a div element
       const tagName = await container.evaluate((el) => el.tagName);
@@ -383,7 +392,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
         route.fulfill({ status: 200, contentType: 'audio/wav', body: Buffer.alloc(44) });
       });
 
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(500);
 
@@ -463,7 +472,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       // Row should auto-expand
       await expect(page.locator('text=▲').first()).toBeVisible();
       // Waveform container should be visible
-      await expect(page.locator('.bg-slate-900.p-2')).toBeVisible();
+      await expect(page.locator('.bg-slate-950.p-2')).toBeVisible();
     });
 
     test('D5: Re-render click does not propagate to row toggle', async ({ page }) => {
@@ -539,7 +548,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       });
 
       // Expand the row first
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(300);
 
@@ -593,7 +602,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       });
 
       // Expand the row
-      const firstRow = page.locator('.grid.grid-cols-6.px-4.py-3').first();
+      const firstRow = page.locator('.grid.grid-cols-7.px-4.py-3').first();
       await firstRow.click();
       await page.waitForTimeout(300);
 

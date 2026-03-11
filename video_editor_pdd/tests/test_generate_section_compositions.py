@@ -267,10 +267,10 @@ class TestGenerateSectionComponent:
         assert "offsetSeconds = 2" in tsx
 
     def test_wraps_in_sequence_with_frame_calculations(self):
-        """Spec: <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>."""
+        """Spec: wrappers clamp section duration to at least one frame."""
         section = {"id": "intro", "durationSeconds": 5, "offsetSeconds": 0}
         tsx = generate_section_component(section, fps=30)
-        assert "<Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>" in tsx
+        assert "<Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>" in tsx
 
     def test_renders_sub_composition_jsx_tags(self):
         section = {
@@ -1484,7 +1484,8 @@ class TestGeneratedTimelineWrapper:
         assert 'import { VeoSection01OpeningTitleCard } from "../VeoSection01OpeningTitleCard";' in tsx
         assert 'const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {' in tsx
         assert 'const frame = useCurrentFrame();' in tsx
-        assert 'const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;' in tsx
+        assert 'let renderVisual = activeVisual;' in tsx
+        assert 'const ActiveComponent = renderVisual ? COMPONENT_MAP[renderVisual.id] ?? null : null;' in tsx
         assert 'SlotScaledSequence' in tsx
         assert 'VisualMediaProvider' in tsx
         assert '<ActiveComponent />' in tsx
@@ -1591,6 +1592,70 @@ class TestGeneratedTimelineWrapper:
         assert 'activeVisualMedia?.defaultSrc' in tsx
         assert '<SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>' in tsx
         assert '<VisualMediaProvider media={activeVisualMedia}>' in tsx
+
+    def test_generated_timeline_reuses_last_renderable_visual_for_unmapped_slots(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        section_dir = remotion_src / "animation_section"
+        title_dir = remotion_src / "AnimationSection01TitleCard"
+        specs_dir = project_dir / "specs" / "animation_section"
+
+        section_dir.mkdir()
+        title_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 30, id: "animation_section_01_title_card", desc: "Title" },',
+                    '  { start: 30, end: 180, id: "04_veo_broll", desc: "Unmapped Veo" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (title_dir / "index.ts").write_text(
+            'export const AnimationSection01TitleCard = () => null;\n'
+            'export default AnimationSection01TitleCard;',
+            encoding="utf-8",
+        )
+        (title_dir / "constants.ts").write_text(
+            "export const ANIMATION_TIMING = { totalDuration: 90 };\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "01_title_card.md").write_text(
+            "**Timestamp:** 0:00 - 0:01\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "04_veo_broll.md").write_text(
+            "[veo: cinematic cutaway]\n\n**Timestamp:** 0:01 - 0:06\n",
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "animation_section",
+            "compositionId": "AnimationSection",
+            "durationSeconds": 6,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "animation_section",
+            "compositions": ["animation_section_01_title_card"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public="",
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert "let renderVisual = activeVisual;" in tsx
+        assert "const ActiveComponent = renderVisual ? COMPONENT_MAP[renderVisual.id] ?? null : null;" in tsx
+        assert "const intrinsicDurationInFrames = renderVisual ? VISUAL_DURATIONS[renderVisual.id] ?? activeVisualDuration : activeVisualDuration;" in tsx
+        assert 'from={activeVisual.start}' in tsx
+        assert 'durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}' in tsx
 
     def test_generated_timeline_falls_back_when_constants_are_missing(self, tmp_path):
         remotion_src = tmp_path

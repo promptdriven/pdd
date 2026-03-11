@@ -98,7 +98,7 @@ test.describe('Double-click prevention', () => {
       });
     });
 
-    const renderBtn = page.locator('button', { hasText: /Render/ }).first();
+    const renderBtn = page.getByTestId('render-sections-button');
     await expect(renderBtn).toBeVisible();
     await renderBtn.dblclick();
     await page.waitForTimeout(2000);
@@ -646,7 +646,7 @@ test.describe('Concurrent operations', () => {
     });
 
     // Start render (opens another SSE)
-    const renderBtn = page.locator('button', { hasText: /Render/ }).first();
+    const renderBtn = page.getByTestId('render-sections-button');
     await renderBtn.click();
     await page.waitForTimeout(300);
 

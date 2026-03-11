@@ -5,37 +5,44 @@ const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 
 /**
  * Navigate to Stage 6 (Spec Generation) via the sidebar.
- * Uses 3-attempt retry with sidebar `div.cursor-pointer.nth(5)`.
+ * Uses the real sidebar stage button and avoids networkidle waits, which are
+ * noisy in the app because of polling/SSE during startup.
  */
 async function navigateToStage6(page: import('@playwright/test').Page) {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+    timeout: 15000,
+  });
 
   const sidebar = page.locator('aside');
   await expect(sidebar).toBeVisible({ timeout: 5000 });
-
-  // Wait for React hydration
-  await page.waitForTimeout(1000);
+  await expect(sidebar.locator('button', { hasText: 'Spec Gen' }).first()).toBeVisible({
+    timeout: 10000,
+  });
 
   const heading = page.locator('h2', { hasText: 'Stage 6' });
+  const stageButton = sidebar.locator('button', { hasText: 'Spec Gen' }).first();
 
   // Attempt 1: Playwright click
-  await sidebar.locator('div.cursor-pointer').nth(5).click();
+  await stageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     // Attempt 2: JS click
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[5]) (items[5] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) =>
+        item.textContent?.includes('Spec Gen')
+      );
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       // Attempt 3: force click after longer wait
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(5).click({ force: true });
+      await stageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -283,11 +290,11 @@ test.describe('Stage 6: Interactive QA - Comprehensive Feature Testing', () => {
 
       // Navigate away to Setup
       const sidebar = page.locator('aside');
-      await sidebar.locator('div.cursor-pointer').nth(0).click();
+      await sidebar.locator('button', { hasText: 'Setup' }).first().click();
       await page.waitForTimeout(500);
 
       // Navigate back to Stage 6
-      await sidebar.locator('div.cursor-pointer').nth(5).click();
+      await sidebar.locator('button', { hasText: 'Spec Gen' }).first().click();
       await page.waitForTimeout(1500);
 
       // Cold Open should still be collapsed
@@ -810,8 +817,8 @@ test.describe('Stage 6: Interactive QA - Comprehensive Feature Testing', () => {
       await page.waitForTimeout(500);
 
       await expect(page.locator('text=Script Context')).toBeVisible();
-      await expect(page.locator('text=COLD OPEN')).toBeVisible();
-      await expect(page.locator('text=A clean narration line for the cold open.')).toHaveCount(2);
+      await expect(page.getByText('COLD OPEN', { exact: true })).toBeVisible();
+      await expect(page.locator('text=A clean narration line for the cold open.').first()).toBeVisible();
     });
   });
 

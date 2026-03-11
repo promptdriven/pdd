@@ -243,8 +243,8 @@ test.describe('Stage 8: Composition Generation', () => {
       const dialog = page.locator('dialog');
       await expect(dialog).toBeVisible();
 
-      // The dialog should contain "Preview" text in its header
-      await expect(dialog.locator('text=Preview')).toBeVisible();
+      // The dialog header uses "Preview · {component}".
+      await expect(dialog.getByText(/^Preview · /)).toBeVisible();
     }
   });
 

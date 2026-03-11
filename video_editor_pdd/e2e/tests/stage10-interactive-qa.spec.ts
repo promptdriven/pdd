@@ -77,21 +77,23 @@ async function navigateToStage10(page: import('@playwright/test').Page) {
   await page.waitForTimeout(1000);
 
   const heading = page.locator('h2', { hasText: 'Audit Results' });
+  const auditStageButton = sidebar.locator('button').filter({ hasText: /^10\s*Audit/ });
 
-  await sidebar.locator('div.cursor-pointer').nth(9).click();
+  await auditStageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[9]) (items[9] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) => item.textContent?.trim().startsWith('10'));
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(9).click({ force: true });
+      await auditStageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -389,7 +391,7 @@ test.describe('Stage 10 QA – D: Audit Actions & API Calls', () => {
     await expect(dropdownMenu).not.toBeVisible();
   });
 
-  test('D5: dropdown item click sends POST with { sectionId }', async ({ page }) => {
+  test('D5: dropdown item click sends POST with { sections: [id] }', async ({ page }) => {
     let capturedBody: any = null;
     await page.route('**/api/pipeline/audit/run', async (route) => {
       capturedBody = JSON.parse(route.request().postData() || '{}');
@@ -406,10 +408,10 @@ test.describe('Stage 10 QA – D: Audit Actions & API Calls', () => {
     await page.waitForTimeout(500);
 
     expect(capturedBody).not.toBeNull();
-    expect(capturedBody.sectionId).toBe('cold_open');
+    expect(capturedBody.sections).toEqual(['cold_open']);
   });
 
-  test('D6: per-row ↺ Audit sends POST with { sectionId }', async ({ page }) => {
+  test('D6: per-row ↺ Audit sends POST with { sections: [id] }', async ({ page }) => {
     let capturedBody: any = null;
     await page.route('**/api/pipeline/audit/run', async (route) => {
       capturedBody = JSON.parse(route.request().postData() || '{}');
@@ -423,7 +425,7 @@ test.describe('Stage 10 QA – D: Audit Actions & API Calls', () => {
     await page.waitForTimeout(500);
 
     expect(capturedBody).not.toBeNull();
-    expect(capturedBody.sectionId).toBe('cold_open');
+    expect(capturedBody.sections).toEqual(['cold_open']);
   });
 
   test('D7: View Report toggles expanded state', async ({ page }) => {
@@ -888,19 +890,28 @@ test.describe('Stage 10 QA – H: Loading & Edge Cases', () => {
     await expect(part1Row).toContainText('0');
   });
 
-  test('H5: SSE audit-section event updates section counts in real time', async ({ page }) => {
-    // Set up mocked results first
+  test('H5: audit run SSE updates section counts in real time', async ({ page }) => {
+    let currentSections = ALL_STATUS_SECTIONS.map((section) => ({ ...section }));
+
     await page.route('**/api/pipeline/audit/results', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ sections: ALL_STATUS_SECTIONS }),
+        body: JSON.stringify({ sections: currentSections }),
       }),
     );
 
-    // Set up SSE that sends an update after a delay
-    await page.route('**/api/pipeline/audit/stream', (route) => {
-      const body = `data: ${JSON.stringify({ type: 'connected' })}\n\ndata: ${JSON.stringify({ type: 'audit-section', sectionId: 'part1', passCount: 5, failCount: 1 })}\n\n`;
+    await page.route('**/api/pipeline/audit/stream', (route) =>
+      route.fulfill({ status: 200, contentType: 'text/event-stream', body: '' }),
+    );
+
+    await page.route('**/api/pipeline/audit/run', (route) => {
+      currentSections = currentSections.map((section) =>
+        section.sectionId === 'part1'
+          ? { ...section, passCount: 5, failCount: 1, status: 'done' }
+          : section
+      );
+      const body = `data: ${JSON.stringify({ type: 'audit-section', sectionId: 'part1', passCount: 5, failCount: 1, status: 'done' })}\n\n`;
       route.fulfill({
         status: 200,
         contentType: 'text/event-stream',
@@ -910,11 +921,12 @@ test.describe('Stage 10 QA – H: Loading & Edge Cases', () => {
     });
 
     await navigateToStage10(page);
-    await page.waitForTimeout(2000);
 
-    // Part 1 should now show updated counts
+    await page.locator('button', { hasText: 'Audit All Sections' }).click();
+
     const part1Row = page.locator('.grid.grid-cols-6.items-center', { hasText: 'Part 1: Economics' });
     await expect(part1Row).toContainText('5');
+    await expect(part1Row).toContainText('1');
   });
 
   test('H6: section with no specs — expanded view shows empty detail area', async ({ page }) => {

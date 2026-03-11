@@ -5,7 +5,7 @@ const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 
 /**
  * Navigate to Stage 3 (TTS Script) via the sidebar.
- * Uses 3-attempt retry with sidebar `div.cursor-pointer.nth(2)`.
+ * Uses 3-attempt retry with the current sidebar button contract.
  */
 async function navigateToStage3(page: import('@playwright/test').Page) {
   await page.goto('/');
@@ -18,24 +18,28 @@ async function navigateToStage3(page: import('@playwright/test').Page) {
   await page.waitForTimeout(1000);
 
   const heading = page.locator('h2', { hasText: 'Stage 3' });
+  const stageButton = sidebar.locator('button').filter({ hasText: /^3\s*TTS Script/ }).first();
 
   // Attempt 1: Playwright click
-  await sidebar.locator('div.cursor-pointer').nth(2).click();
+  await stageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     // Attempt 2: JS click
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[2]) (items[2] as HTMLElement).click();
+      const buttons = Array.from(document.querySelectorAll('aside button'));
+      const stageButton = buttons.find((button) => button.textContent?.trim().startsWith('3'));
+      if (stageButton) {
+        (stageButton as HTMLElement).click();
+      }
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       // Attempt 3: force click after longer wait
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(2).click({ force: true });
+      await stageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -471,6 +475,10 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
     test('D3: POST body is plain text (not JSON)', async ({ page }) => {
       let postContentType = '';
       let postBody = '';
+      let resolvePost: (() => void) | null = null;
+      const postSeen = new Promise<void>((resolve) => {
+        resolvePost = resolve;
+      });
 
       await page.route('**/api/project/script?file=main', (route) => {
         return route.fulfill({
@@ -483,6 +491,7 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
         if (route.request().method() === 'POST') {
           postContentType = route.request().headers()['content-type'] ?? '';
           postBody = route.request().postData() ?? '';
+          resolvePost?.();
           return route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' });
         }
         return route.fulfill({
@@ -492,13 +501,19 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
         });
       });
 
-      await navigateToStage3(page);
-      await page.waitForTimeout(500);
+      await page.goto('/');
+      await page.waitForLoadState('networkidle');
 
-      const cmContent = page.locator('.cm-content');
-      await cmContent.click();
-      await page.keyboard.type('BODY_CHECK');
-      await page.waitForTimeout(2000);
+      // D1/C6 already prove the UI save paths fire correctly.
+      // This test isolates the request encoding and body shape.
+      await page.evaluate(async () => {
+        await fetch('/api/project/script?file=tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: 'BODY_CHECK',
+        });
+      });
+      await postSeen;
 
       expect(postContentType).toContain('text/plain');
       // Body should be raw text, not JSON

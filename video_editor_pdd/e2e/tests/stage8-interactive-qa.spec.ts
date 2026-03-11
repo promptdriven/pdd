@@ -36,29 +36,37 @@ const MIXED_MANIFEST = [
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function navigateToStage8(page: import('@playwright/test').Page) {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+    timeout: 15000,
+  });
 
   const sidebar = page.locator('aside');
   await expect(sidebar).toBeVisible({ timeout: 5000 });
-  await page.waitForTimeout(1000);
+  await expect(sidebar.locator('button', { hasText: 'Compositions' }).first()).toBeVisible({
+    timeout: 10000,
+  });
 
   const heading = page.locator('h2', { hasText: 'Stage 8' });
+  const stageButton = sidebar.locator('button', { hasText: 'Compositions' }).first();
 
-  await sidebar.locator('div.cursor-pointer').nth(7).click();
+  await stageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[7]) (items[7] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) =>
+        item.textContent?.includes('Compositions')
+      );
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(7).click({ force: true });
+      await stageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -792,11 +800,11 @@ test.describe('Stage 8 QA · F: localStorage Persistence', () => {
 
     // Navigate away (click stage 1 in sidebar)
     const sidebar = page.locator('aside');
-    await sidebar.locator('div.cursor-pointer').nth(0).click();
+    await sidebar.locator('button', { hasText: 'Setup' }).first().click();
     await page.waitForTimeout(500);
 
     // Navigate back to Stage 8
-    await sidebar.locator('div.cursor-pointer').nth(7).click();
+    await sidebar.locator('button', { hasText: 'Compositions' }).first().click();
     await expect(page.locator('h2', { hasText: 'Stage 8' })).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(500);
 

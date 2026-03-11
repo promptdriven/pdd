@@ -431,10 +431,9 @@ test.describe('Review QA — Group C: Expanded Details', () => {
     await card.click();
     await page.waitForTimeout(300);
 
-    const assessmentLabel = card.locator('..').locator('text=Technical assessment');
-    await expect(assessmentLabel).toBeVisible();
-
-    const assessmentText = card.locator('..').locator('.text-xs.text-white\\/85').first();
+    const parent = card.locator('..');
+    await expect(parent.locator('text=Technical assessment')).toBeVisible();
+    const assessmentText = parent.locator('.whitespace-pre-wrap.text-xs.text-white\\/85').nth(1);
     await expect(assessmentText).toContainText('text element overflows');
   });
 
@@ -462,12 +461,12 @@ test.describe('Review QA — Group C: Expanded Details', () => {
     expect(hasBgClass).toBe(true);
   });
 
-  test('C5: Revert Fix button visible when fixCommitSha exists (bg-red-500/20)', async ({ page }) => {
+  test('C5: Undo button visible when fixCommitSha exists (bg-red-500/20)', async ({ page }) => {
     const card = nthCard(page, 1); // ann-1 has fixCommitSha
     await card.click();
     await page.waitForTimeout(300);
 
-    const revertBtn = card.locator('..').locator('button', { hasText: 'Revert Fix' });
+    const revertBtn = card.locator('..').locator('button', { hasText: 'Undo' });
     await expect(revertBtn).toBeVisible();
     const hasBgClass = await revertBtn.evaluate((el) =>
       el.classList.contains('bg-red-500/20')
@@ -475,13 +474,13 @@ test.describe('Review QA — Group C: Expanded Details', () => {
     expect(hasBgClass).toBe(true);
   });
 
-  test('C6: View Diff + Revert Fix NOT visible when fixCommitSha is null', async ({ page }) => {
+  test('C6: View Diff + Undo NOT visible when fixCommitSha is null', async ({ page }) => {
     const card = nthCard(page, 2); // ann-2 has no fixCommitSha
     await card.click();
     await page.waitForTimeout(300);
 
     const viewDiffBtn = card.locator('..').locator('button', { hasText: 'View Diff' });
-    const revertBtn = card.locator('..').locator('button', { hasText: 'Revert Fix' });
+    const revertBtn = card.locator('..').locator('button', { hasText: 'Undo' });
     await expect(viewDiffBtn).toHaveCount(0);
     await expect(revertBtn).toHaveCount(0);
   });
@@ -614,7 +613,7 @@ test.describe('Review QA — Group D: View Diff, Revert, Mark Resolved, Retry', 
     await expect(loadingBtn).toBeDisabled();
   });
 
-  test('D4: Revert Fix POSTs to /api/annotations/{id}/revert', async ({ page }) => {
+  test('D4: Undo POSTs to /api/annotations/{id}/revert', async ({ page }) => {
     let revertCalled = false;
     await page.route('**/api/annotations/ann-1/revert', (route) => {
       revertCalled = true;
@@ -632,7 +631,7 @@ test.describe('Review QA — Group D: View Diff, Revert, Mark Resolved, Retry', 
     await card.click();
     await page.waitForTimeout(300);
 
-    const revertBtn = card.locator('..').locator('button', { hasText: 'Revert Fix' });
+    const revertBtn = card.locator('..').locator('button', { hasText: 'Undo' });
     await revertBtn.click();
     await page.waitForTimeout(500);
 
@@ -640,6 +639,22 @@ test.describe('Review QA — Group D: View Diff, Revert, Mark Resolved, Retry', 
   });
 
   test('D5: Mark Resolved toggles card to resolved state', async ({ page }) => {
+    await page.route('**/api/annotations/ann-1', (route) => {
+      if (route.request().method() !== 'PUT') {
+        route.continue();
+        return;
+      }
+
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...MOCK_ANNOTATIONS[0],
+          resolved: true,
+        }),
+      });
+    });
+
     const card = nthCard(page, 1); // ann-1 unresolved
     await card.click();
     await page.waitForTimeout(300);
@@ -656,6 +671,22 @@ test.describe('Review QA — Group D: View Diff, Revert, Mark Resolved, Retry', 
   });
 
   test('D6: Mark Resolved decrements Apply N Fixes count', async ({ page }) => {
+    await page.route('**/api/annotations/ann-1', (route) => {
+      if (route.request().method() !== 'PUT') {
+        route.continue();
+        return;
+      }
+
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...MOCK_ANNOTATIONS[0],
+          resolved: true,
+        }),
+      });
+    });
+
     // Initially should be "Apply 3 Fixes" (ann-1, ann-2, ann-4 are unresolved with analysis)
     const applyBtn = page.locator('button', { hasText: /Apply \d+ Fixes/ });
     await expect(applyBtn).toContainText('Apply 3 Fixes');

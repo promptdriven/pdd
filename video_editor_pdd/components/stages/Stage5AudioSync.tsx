@@ -389,8 +389,16 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           <h2 className="text-lg font-semibold text-slate-100">Word Timestamp Viewer</h2>
 
           <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-300">Section:</label>
+            <label
+              htmlFor="audio-sync-section-select"
+              className="text-sm text-slate-300"
+            >
+              Section:
+            </label>
             <select
+              id="audio-sync-section-select"
+              aria-label="Section"
+              data-testid="audio-sync-section-select"
               className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-200"
               value={selectedSectionId}
               onChange={(e) => setSelectedSectionId(e.target.value)}

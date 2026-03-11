@@ -1,4 +1,5 @@
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+import path from 'path';
 
 // Mock child_process before importing
 jest.mock('child_process', () => ({
@@ -6,7 +7,14 @@ jest.mock('child_process', () => ({
 }));
 
 import { execSync } from 'child_process';
-import { isGitAvailable, preFixCommit, fixCommit, getFixDiff, revertFix } from '../lib/git';
+import {
+  isGitAvailable,
+  preFixCommit,
+  preFixCommitWithPaths,
+  fixCommit,
+  getFixDiff,
+  revertFix,
+} from '../lib/git';
 
 const mockExecSync = execSync as jest.MockedFunction<typeof execSync>;
 
@@ -49,6 +57,28 @@ describe('lib/git', () => {
     it('returns null when git is not available', () => {
       mockExecSync.mockImplementation(() => { throw new Error('not a git repo'); });
       expect(preFixCommit('s1', 'b1')).toBeNull();
+    });
+
+    it('stages custom absolute paths when provided', () => {
+      const projectDir = path.join(process.cwd(), 'projects', 'demo');
+      const remotionDir = path.join(projectDir, 'remotion', 'src', 'remotion');
+      const specsDir = path.join(projectDir, 'specs');
+
+      mockExecSync
+        .mockReturnValueOnce(Buffer.from('true'))
+        .mockReturnValueOnce(Buffer.from(''))
+        .mockReturnValueOnce(Buffer.from('specs/veo_section/veo.json'))
+        .mockReturnValueOnce(Buffer.from(''))
+        .mockReturnValueOnce(Buffer.from('sha\n'));
+
+      expect(preFixCommitWithPaths('s1', 'b1', [remotionDir, specsDir])).toBe('sha');
+
+      const addCall = mockExecSync.mock.calls.find(
+        (call) => typeof call[0] === 'string' && call[0].startsWith('git add')
+      );
+      expect(addCall).toBeDefined();
+      expect(addCall![0]).toContain(remotionDir);
+      expect(addCall![0]).toContain(specsDir);
     });
   });
 

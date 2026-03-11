@@ -31,12 +31,12 @@ test.describe('Cross-stage navigation flow', () => {
     }
 
     // Stage 9
-    await page.locator('aside').locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await page.locator('aside').getByRole('button', { name: /^9\s+Render\b/ }).click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible({ timeout: 15000 });
 
     // Stage 10
-    await page.locator('aside').locator('div').filter({ hasText: /^10\s*Audit/ }).click();
+    await page.locator('aside').getByRole('button', { name: /^10\s+Audit\b/ }).click();
     await page.waitForTimeout(1000);
     await expect(page.locator('h2', { hasText: 'Audit Results' })).toBeVisible({ timeout: 15000 });
   });
@@ -172,7 +172,7 @@ test.describe('Cross-stage data consistency', () => {
     expect(stage7Count).toBeGreaterThan(0);
 
     // Stage 9: verify render table loads with content
-    await page.locator('aside').locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await page.locator('aside').getByRole('button', { name: /^9\s+Render\b/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
     const stage9Rows = page.locator('tbody tr');
     const stage9Count = await stage9Rows.count();
@@ -197,7 +197,7 @@ test.describe('Cross-stage data consistency', () => {
     expect(stage7Count).toBeGreaterThan(0);
 
     // Stage 9: verify render table loads with rows
-    await page.locator('aside').locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await page.locator('aside').getByRole('button', { name: /^9\s+Render\b/ }).click();
     await expect(page.locator('th', { hasText: 'Section ID' })).toBeVisible({ timeout: 15000 });
     const stage9Rows = page.locator('tbody tr');
     const stage9Count = await stage9Rows.count();
@@ -233,7 +233,7 @@ test.describe('Cross-stage data consistency', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    const sidebarItems = sidebar.locator('> div');
+    const sidebarItems = sidebar.locator('button');
 
     // Navigate to Stage 5 (Audio Sync) -- index 4 (0-based)
     await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
@@ -242,7 +242,10 @@ test.describe('Cross-stage data consistency', () => {
 
     // Get the computed background color of the Stage 5 sidebar item
     const stage5Item = sidebarItems.nth(4);
-    const stage5Bg = await stage5Item.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const stage5Bg = await stage5Item.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return `${style.backgroundColor}|${style.borderLeftWidth}|${style.borderLeftColor}`;
+    });
 
     // Navigate to Stage 7 (Veo Gen) -- index 6 (0-based)
     await sidebar.locator('button', { hasText: 'Veo Gen' }).first().click();
@@ -251,10 +254,16 @@ test.describe('Cross-stage data consistency', () => {
 
     // Stage 7 sidebar item should now have the active background
     const stage7Item = sidebarItems.nth(6);
-    const stage7Bg = await stage7Item.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const stage7Bg = await stage7Item.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return `${style.backgroundColor}|${style.borderLeftWidth}|${style.borderLeftColor}`;
+    });
 
     // Stage 5 should no longer have the active background
-    const stage5BgAfter = await stage5Item.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const stage5BgAfter = await stage5Item.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return `${style.backgroundColor}|${style.borderLeftWidth}|${style.borderLeftColor}`;
+    });
 
     // The newly active stage (7) should have a different bg than the now-inactive stage (5)
     expect(stage7Bg).not.toBe(stage5BgAfter);
@@ -265,7 +274,7 @@ test.describe('Cross-stage data consistency', () => {
     await page.waitForLoadState('networkidle');
 
     const sidebar = page.locator('aside');
-    const sidebarItems = sidebar.locator('> div');
+    const sidebarItems = sidebar.locator('button');
 
     // Verify there are exactly 10 sidebar items
     const count = await sidebarItems.count();
@@ -331,7 +340,7 @@ test.describe('Cross-stage error recovery', () => {
 
     // Remove the mock and navigate to Stage 9
     await page.unroute('**/api/pipeline/veo/clips');
-    await page.locator('aside').locator('div').filter({ hasText: /^9\s*Render/ }).click();
+    await page.locator('aside').getByRole('button', { name: /^9\s+Render\b/ }).click();
     await page.waitForTimeout(2000);
 
     // Stage 9 should load fine

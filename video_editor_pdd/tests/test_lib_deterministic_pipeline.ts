@@ -136,6 +136,32 @@ describe("lib/deterministic-pipeline", () => {
     expect(updated).toContain('background: "#FF0000"');
   });
 
+  it("applyDeterministicRemotionFix rewrites nested directory-based section components", () => {
+    const componentDir = path.join(
+      tmpDir,
+      "remotion",
+      "src",
+      "remotion",
+      "VeoSection11VeoBadgeReprise",
+    );
+    fs.mkdirSync(componentDir, { recursive: true });
+    const targetFile = path.join(componentDir, "VeoSection11VeoBadgeReprise.tsx");
+    fs.writeFileSync(
+      targetFile,
+      'export const Demo = () => <div style={{ backgroundColor: "#0A1628" }} />;',
+    );
+
+    const modified = applyDeterministicRemotionFix(
+      tmpDir,
+      "veo_section",
+      "Change the background color to bright green (#00FF00).",
+    );
+
+    expect(modified).toContain(targetFile);
+    const updated = fs.readFileSync(targetFile, "utf-8");
+    expect(updated).toContain('backgroundColor: "#00FF00"');
+  });
+
   it("applyDeterministicVideoOverlay rewrites the mp4 with a visible video filter", () => {
     const outPath = path.join(tmpDir, "outputs", "sections", "animation_section.mp4");
     generateDeterministicVeoClip(outPath);

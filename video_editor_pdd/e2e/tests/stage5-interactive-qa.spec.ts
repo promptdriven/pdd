@@ -3,39 +3,50 @@ import path from 'path';
 
 const SCREENSHOT_DIR = path.join(__dirname, '..', 'screenshots');
 
+function stage5SectionSelect(page: import('@playwright/test').Page) {
+  return page.getByLabel('Section');
+}
+
 /**
  * Navigate to Stage 5 (Audio Sync) via the sidebar.
- * Uses 3-attempt retry with sidebar `div.cursor-pointer.nth(4)`.
+ * Uses the real sidebar stage button and avoids networkidle waits, which are
+ * noisy in the app because of polling/SSE during startup.
  */
 async function navigateToStage5(page: import('@playwright/test').Page) {
-  await page.goto('/');
-  await page.waitForLoadState('networkidle');
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+    timeout: 15000,
+  });
 
   const sidebar = page.locator('aside');
   await expect(sidebar).toBeVisible({ timeout: 5000 });
-
-  // Wait for React hydration
-  await page.waitForTimeout(1000);
+  await expect(sidebar.locator('button', { hasText: 'Audio Sync' }).first()).toBeVisible({
+    timeout: 10000,
+  });
 
   const heading = page.locator('h2', { hasText: 'Stage 5' });
+  const stageButton = sidebar.locator('button', { hasText: 'Audio Sync' }).first();
 
   // Attempt 1: Playwright click
-  await sidebar.locator('div.cursor-pointer').nth(4).click();
+  await stageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
     // Attempt 2: JS click
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[4]) (items[4] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) =>
+        item.textContent?.includes('Audio Sync')
+      );
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       // Attempt 3: force click after longer wait
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(4).click({ force: true });
+      await stageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -137,7 +148,7 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
 
     test('A6: Section dropdown (select) present', async ({ page }) => {
       await navigateToStage5(page);
-      const select = page.locator('select');
+      const select = stage5SectionSelect(page);
       await expect(select).toBeVisible();
     });
 
@@ -578,7 +589,7 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
 
     test('E1: Section dropdown changes selectedSectionId', async ({ page }) => {
       await navigateWithMockedProject(page, {}, sampleWords);
-      const select = page.locator('select');
+      const select = stage5SectionSelect(page);
       await expect(select).toBeVisible();
 
       // Initial value should be first section
@@ -636,7 +647,7 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
       const initialFetchCount = fetchCount;
 
       // Change section
-      await page.locator('select').selectOption('main');
+      await stage5SectionSelect(page).selectOption('main');
       await page.waitForTimeout(1000);
 
       expect(fetchCount).toBeGreaterThan(initialFetchCount);
@@ -966,12 +977,14 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
         return route.continue();
       });
 
-      await page.goto('/');
-      await page.waitForLoadState('networkidle');
+      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await expect(page.locator('button', { hasText: 'Pipeline' })).toBeVisible({
+        timeout: 15000,
+      });
       const sidebar = page.locator('aside');
-      await sidebar.locator('div.cursor-pointer').nth(4).click();
+      await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
 
-      await expect(page.locator('text=Loading project')).toBeVisible({ timeout: 3000 });
+      await expect(page.locator('text=Loading project').last()).toBeVisible({ timeout: 3000 });
     });
 
     test('G8: Network error on project load → error message with red styling', async ({ page }) => {
@@ -997,7 +1010,7 @@ test.describe('Stage 5: Interactive QA - Comprehensive Feature Testing', () => {
       const sidebar = page.locator('aside');
       await expect(sidebar).toBeVisible({ timeout: 5000 });
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(4).click();
+      await sidebar.locator('button', { hasText: 'Audio Sync' }).first().click();
       await page.waitForTimeout(2000);
 
       // Error message with red styling

@@ -19,9 +19,10 @@ async function navigateToStage2(page: import('@playwright/test').Page) {
   await page.waitForTimeout(1000);
 
   const heading = page.locator('h2', { hasText: 'Stage 2' });
+  const scriptStageButton = sidebar.locator('button').filter({ hasText: /^2\s*Script/ });
 
   // Attempt 1: Playwright click
-  await sidebar.locator('div.cursor-pointer').nth(1).click();
+  await scriptStageButton.click();
   try {
     await expect(heading).toBeVisible({ timeout: 3000 });
   } catch {
@@ -29,15 +30,16 @@ async function navigateToStage2(page: import('@playwright/test').Page) {
     // directly triggers React's synthetic event system)
     await page.waitForTimeout(500);
     await page.evaluate(() => {
-      const items = document.querySelectorAll('aside div.cursor-pointer');
-      if (items[1]) (items[1] as HTMLElement).click();
+      const items = Array.from(document.querySelectorAll('aside button'));
+      const target = items.find((item) => item.textContent?.trim().startsWith('2'));
+      if (target) (target as HTMLElement).click();
     });
     try {
       await expect(heading).toBeVisible({ timeout: 3000 });
     } catch {
       // Attempt 3: force click after longer wait
       await page.waitForTimeout(1000);
-      await sidebar.locator('div.cursor-pointer').nth(1).click({ force: true });
+      await scriptStageButton.click({ force: true });
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
   }
@@ -704,7 +706,7 @@ test.describe('Stage 2: Interactive QA - Comprehensive Feature Testing', () => {
       });
 
       const sidebar = page.locator('aside');
-      await sidebar.locator('div.cursor-pointer').nth(1).click();
+      await sidebar.locator('button').filter({ hasText: /^2\s*Script/ }).click();
       await expect(page.locator('h2', { hasText: 'Stage 2' })).toBeVisible({ timeout: 10000 });
       await page.waitForTimeout(1500);
 

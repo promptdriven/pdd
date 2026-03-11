@@ -23,7 +23,10 @@ test.describe('Stage 1: Project Setup', () => {
   });
 
   test('output resolution dropdown exists', async ({ page }) => {
-    const resolutionSelect = page.locator('select').first();
+    const resolutionSelect = page
+      .locator('label', { hasText: 'Output Resolution' })
+      .locator('..')
+      .locator('select');
     await expect(resolutionSelect).toBeVisible();
     await expect(resolutionSelect).toHaveValue(
       `${ACTIVE_PROJECT.outputResolution.width}x${ACTIVE_PROJECT.outputResolution.height}`
@@ -229,7 +232,10 @@ test.describe('Stage 1: Project Setup', () => {
   });
 
   test('Output Resolution select changes value when new option selected', async ({ page }) => {
-    const resolutionSelect = page.locator('select').first();
+    const resolutionSelect = page
+      .locator('label', { hasText: 'Output Resolution' })
+      .locator('..')
+      .locator('select');
     const initialResolution = `${ACTIVE_PROJECT.outputResolution.width}x${ACTIVE_PROJECT.outputResolution.height}`;
     const alternateResolution = initialResolution === '1920x1080' ? '1280x720' : '1920x1080';
 
@@ -253,8 +259,10 @@ test.describe('Stage 1: Project Setup', () => {
   });
 
   test('Veo Aspect Ratio select changes value', async ({ page }) => {
-    // Veo Aspect Ratio is the second <select> on the page
-    const aspectRatioSelect = page.locator('select').nth(1);
+    const aspectRatioSelect = page
+      .locator('label', { hasText: 'Veo Aspect Ratio' })
+      .locator('..')
+      .locator('select');
     await expect(aspectRatioSelect).toBeVisible();
 
     // Default should be 16:9

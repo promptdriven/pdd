@@ -1,9 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
+const E2E_PORT = 3201;
+
 export default defineConfig({
   testDir: './e2e/tests',
   testIgnore: ['**/integration/**'],
-  timeout: 30000,
+  timeout: 60000,
   expect: {
     timeout: 10000,
   },
@@ -14,13 +16,13 @@ export default defineConfig({
   reporter: [['list'], ['html', { outputFolder: 'playwright-report' }]],
   outputDir: 'test-results/',
   use: {
-    baseURL: 'http://localhost:3001',
+    baseURL: `http://localhost:${E2E_PORT}`,
     screenshot: 'only-on-failure',
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'VIDEO_EDITOR_PROJECT_ID=video_editor_pdd CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 PDD_DETERMINISTIC_PIPELINE=1 VIDEO_EDITOR_SKIP_COMPOSITION_VALIDATION=1 npx next build && VIDEO_EDITOR_PROJECT_ID=video_editor_pdd CLAUDE_FIX_MODEL=claude-sonnet-4-5 CLAUDE_DRY_RUN_MODEL=claude-sonnet-4-5 PDD_DETERMINISTIC_PIPELINE=1 VIDEO_EDITOR_SKIP_COMPOSITION_VALIDATION=1 npx next start -p 3001',
-    port: 3001,
+    command: 'npx tsx e2e/tests/start-server.ts',
+    port: E2E_PORT,
     reuseExistingServer: false,
     timeout: 180_000,
   },

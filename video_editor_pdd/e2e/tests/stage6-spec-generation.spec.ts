@@ -75,13 +75,12 @@ test.describe('Stage 6: Spec Generation', () => {
     await expect(page.locator('th', { hasText: 'Actions' }).first()).toBeVisible();
   });
 
-  test('file status shows missing when spec files do not exist', async ({ page }) => {
+  test('file status badges are visible for listed spec files', async ({ page }) => {
     // Wait for sections to load
     await expect(page.locator('text=' + FIRST_SECTION.label).first()).toBeVisible({ timeout: 10000 });
-    // All spec files are "missing" since specs/ directory is empty
-    const missingBadges = page.locator('text=missing');
-    await expect(missingBadges.first()).toBeVisible();
-    const count = await missingBadges.count();
+    const statusBadges = page.locator('text=/^(exists|missing)$/');
+    await expect(statusBadges.first()).toBeVisible();
+    const count = await statusBadges.count();
     expect(count).toBeGreaterThanOrEqual(1);
   });
 

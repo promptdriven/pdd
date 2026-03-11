@@ -73,6 +73,27 @@ function snapshotAnimationTsx(): Map<string, string> {
   return snapshot;
 }
 
+async function getJsonWithRetry(
+  page: Page,
+  url: string,
+  timeoutMs: number = 30_000,
+): Promise<unknown> {
+  const startTime = Date.now();
+  let lastError: Error | null = null;
+
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const response = await page.request.get(url);
+      return await response.json();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      await page.waitForTimeout(1_000);
+    }
+  }
+
+  throw lastError ?? new Error(`GET ${url} timed out after ${timeoutMs}ms`);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -343,7 +364,7 @@ test.describe.serial('Full pipeline end-to-end', () => {
     expect(fs.existsSync(fullVideoPath)).toBe(true);
 
     // Navigate to Review tab and verify video player is visible
-    await page.locator('button', { hasText: 'Review' }).click();
+    await page.getByRole('button', { name: 'Review', exact: true }).click();
     await page.waitForTimeout(2000);
     await expect(page.locator('video').first()).toBeVisible({ timeout: 15000 });
 
@@ -473,8 +494,10 @@ test.describe.serial('Full pipeline end-to-end', () => {
     let resolveJobId: string | null = null;
     const jobPollStart = Date.now();
     while (Date.now() - jobPollStart < 60_000) {
-      const annRes = await page.request.get(`/api/annotations/${annotationId}`);
-      const annData = await annRes.json();
+      const annData = await getJsonWithRetry(
+        page,
+        `/api/annotations/${annotationId}`,
+      ) as { resolveJobId?: string | null };
       if (annData.resolveJobId) {
         resolveJobId = annData.resolveJobId;
         break;
@@ -486,8 +509,10 @@ test.describe.serial('Full pipeline end-to-end', () => {
     // Poll the job until done
     const jobStart = Date.now();
     while (Date.now() - jobStart < 600_000) {
-      const jobRes = await page.request.get(`/api/jobs/${resolveJobId}`);
-      const jobData = await jobRes.json();
+      const jobData = await getJsonWithRetry(
+        page,
+        `/api/jobs/${resolveJobId}`,
+      ) as { status?: string; error?: string | null };
       if (jobData.status === 'done') break;
       if (jobData.status === 'error') {
         throw new Error(`Fix job failed: ${jobData.error ?? JSON.stringify(jobData)}`);
@@ -496,8 +521,10 @@ test.describe.serial('Full pipeline end-to-end', () => {
     }
 
     // Verify job completed
-    const finalJobRes = await page.request.get(`/api/jobs/${resolveJobId}`);
-    const finalJob = await finalJobRes.json();
+    const finalJob = await getJsonWithRetry(
+      page,
+      `/api/jobs/${resolveJobId}`,
+    ) as { status?: string };
     expect(finalJob.status).toBe('done');
 
     // ── Phase 7: Verify post-fix state ──────────────────────────────────
