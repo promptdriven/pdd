@@ -8,7 +8,7 @@ export const AnimationSection01TitleCard: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: "#FF0000",
+        backgroundColor: "#00FF00",
         justifyContent: "center",
         alignItems: "center",
         color: "#F8FAFC",
