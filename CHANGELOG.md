@@ -2,23 +2,41 @@
 
 ### Feat
 
-- Introduce an `onAnnotationDeleted` callback prop to `AnnotationPanel` for parent components to handle annotation deletions.
-- Implement precise global and section timestamps for annotations, enhance batch resolution with VEO regeneration, and update annotation loading logic for full-video review.
-- Add annotation deletion functionality and improve AI analysis by including drawing markup and enforcing JSON output.
+- **Language-aware LLM validation (issue #796)**: `fix_errors_from_unit_tests` now accepts and forwards a `language` parameter to `llm_invoke`, preventing Python `ast.parse()` validation from running on TypeScript/JavaScript code — `fix_error_loop` infers the language from the code file extension via `get_language()`
+- **VEO prompt fix module**: new `veo-prompt-fix.ts` extracts suggested VEO prompts from annotation analysis and applies them to the correct spec file, matching by timestamp or explicit clip/spec target references
+- **Project switching**: new `/api/projects` and `/api/projects/select` API routes with project selector dropdown on the main page for multi-project support
+- **Annotation management**: add delete, revert-with-rerender, edit transcript, and re-analyze capabilities to `AnnotationPanel`; annotations can be selected and scrolled-to from the video player
+- **Batch resolution with VEO regeneration**: resolve-batch now applies VEO prompt updates and Remotion spec fixes before running Claude, syncs VEO outputs to Remotion public dir, and triggers VEO pipeline regeneration for affected clips
+- **Global timestamp annotation review**: map full-video playback time to the correct section for annotation display; persist selected review section across page reloads
+- **Lazy pipeline executor registration**: `ensureExecutorRegistered` in `jobs.ts` dynamically imports pipeline stage route modules on demand, removing the need for eager registration in `Root.tsx`
+- **Video player enhancements**: `onTimeChange`, `seekRequest`, and `onAnnotationSelect` callbacks; auto-resume playback after voice recording capture
 
 ### Fix
 
-- PDD fix for #796 (#799)
-- apply veo prompt updates before rerender
-- **bc7d6358-62ad-48b5-bc7c-6de8d77dba1f**: make this pink
-- **bc7d6358-62ad-48b5-bc7c-6de8d77dba1f**: make this pink
-- **05c2649f-1288-4eb7-be63-cdca9990cf0a**: breakfast a rectangle
-- bust stale review video caches
-- **945c56d8-21c7-4c19-9a00-f48967b1b32d**: I want to switch the ocean in the forest  see on t
-- **124a8259-bbcb-4bf0-a6b7-eba7f0e0cbe8**: practice yellow  I wanted to be yellow
-- **58155437-afea-451d-aaba-d2abf78fc673**: swap the beach in the forest
-- **1e88f647-89d0-4671-9233-7819e8b71888**: make this a square
-- Add TypeScript test file support to the e2e orchestrator, include new unit and E2E tests, and create `data.sqlite`.
+- Apply VEO prompt updates to spec files before triggering rerender
+- Bust stale review video caches by appending `updatedAtMs` query parameter to video source URLs
+- Robust Node-to-Web stream adapter in video API route with safe close/cancel handling to prevent controller errors on client disconnect
+- Annotation batch query no longer filters by `sectionId`, allowing cross-section batch resolution
+
+### Refactor
+
+- Simplify Remotion section compositions from 7/14 visuals down to a 5-visual structure (title card, key visual, split summary, VEO b-roll, VEO cutaway) for both animation and veo sections
+- Remove hardcoded `Root.tsx` composition registrations (193 lines) in favor of dynamic section resolution
+- Replace 21 per-section markdown spec files and 14 audit files with `veo.json` manifests
+- Video API routes use `getProjectDir()` instead of `process.cwd()` for multi-project workspace support
+
+### Build
+
+- Remove stale orchestrator error logs (`bug_orch_test_errors.txt`, `change_orch_errors.txt`, `change_orch_test_errors.txt`)
+- Remove `.pdd_gh_token` from repo
+- Delete unused `agentic_change_orchestrator_fixed.py` (955 lines)
+
+### Test
+
+- New E2E test `test_e2e_issue_796_typescript_python_validation.py` verifying the full `fix_errors_from_unit_tests` pipeline forwards `language` to `llm_invoke`
+- Unit tests for language parameter forwarding (TypeScript, JavaScript, Python, default None) in `test_fix_errors_from_unit_tests.py`
+- `TestIssue796TypeScriptPythonValidation` tests in `test_llm_invoke.py` proving TypeScript triggers `_looks_like_python_code()` heuristic and `_has_invalid_python_code()` false positive
+- New video editor tests: `test_veo_prompt_fix.ts`, `test_api_projects_route.ts`, `test_remotion_spec_fix.ts`, `test_video_player.tsx`
 
 ## v0.0.172 (2026-03-09)
 
