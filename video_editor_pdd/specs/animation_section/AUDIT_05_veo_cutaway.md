@@ -1,4 +1,4 @@
 ## Verdict
 fail
 ## Summary
-The frame displays the wrong composition entirely. The spec calls for '05_veo_cutaway' — a cinematic cutaway for the Animation Section with background #0A1628 and a Veo-style cinematic look. Instead, the rendered frame shows the '03_split_summary' composition (a 'Split Summary' layout with 'Before' / 'After' labels separated by a cyan vertical divider). This is a composition routing or sequencing error where the wrong Remotion component is being rendered for this section index.
+The rendered frame shows the Section 03 'Split Summary' layout (with 'Before' and 'After' labels and a cyan vertical divider) instead of the Section 05 'Veo Cutaway' composition. This is a wrong-component error — the composition for section 05 is either missing, not registered, or incorrectly mapped, causing it to fall back to or render the section 03 component. The spec calls for a dedicated cinematic cutaway composition with its own animation sequence (establish → motion → hold), but the frame shows an entirely different section's content.
