@@ -13,6 +13,7 @@
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'protect_tests' - A boolean that, when True, prevents the LLM from modifying the unit test. Only the code will be fixed. Default is False.
+        'language' - An optional string indicating the programming language of the code under test (e.g., "python", "typescript", "javascript"). If not provided, defaults to None. This is passed to llm_invoke to ensure language-appropriate post-processing validation (e.g., skipping Python ast.parse for non-Python code).
     Outputs as a tuple:
         'update_unit_test' - Boolean indicating whether the unit test needs to be updated.
         'update_code' - Boolean indicating whether the code under test needs to be updated.
@@ -64,6 +65,7 @@
             - 'temperature' (the input temperature)
             - 'time' (the input time)
             - 'verbose' (the input verbose)
+            - 'language' (the input language, to ensure correct post-processing validation)
         3d. Store the full LLM response as analysis_results
         3e. Append the output to error_file with a clear separator and timestamp to distinguish it from previous content
     
@@ -80,6 +82,7 @@
             - Use a fixed strength (e.g., 0.8), the input 'temperature', and the input 'time'.
             - Specify 'output_pydantic=CodeFix' to get structured output.
             - Pass the input 'verbose'.
+            - Pass the input 'language' to ensure correct post-processing validation.
         5d. Store the resulting 'CodeFix' object which contains:
             - 'update_unit_test' (boolean)
             - 'update_code' (boolean)

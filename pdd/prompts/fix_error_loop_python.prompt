@@ -201,7 +201,7 @@ Notes:
     *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
     *   **The Loop**:
         *   Create timestamped backups in `.pdd/backups/{code_basename}/{timestamp}/` with format: `test_{iter}_{errors}_{fails}_{warnings}.py` and `code_{iter}_{errors}_{fails}_{warnings}.py`
-        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context, passing through the `protect_tests` parameter.
+        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context, passing through the `protect_tests` and `language` parameters. Infer `language` from the code file extension using `get_language(code_file_ext)` (e.g., ".ts" → "typescript", ".py" → "python").
         *   Update files, run verification, and re-run pytest to update the state.
         *   When `protect_tests=True`, skip writing the fixed unit test (only write the fixed code).
     *   **Finalization**: Compare final state to the best iteration and restore if necessary. Print a `rich` summary of improvements including percentage reduction.

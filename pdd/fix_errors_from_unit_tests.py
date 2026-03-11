@@ -109,7 +109,8 @@ def fix_errors_from_unit_tests(
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
     verbose: bool = False,
-    protect_tests: bool = False
+    protect_tests: bool = False,
+    language: Optional[str] = None
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in unit tests using LLM models and log the process.
@@ -126,6 +127,7 @@ def fix_errors_from_unit_tests(
         time (float): Time parameter for llm_invoke
         verbose (bool): Whether to print detailed output
         protect_tests (bool): If True, prevents LLM from modifying unit tests
+        language (Optional[str]): Programming language of the code (e.g., "python", "typescript")
 
     Returns:
         Tuple containing update flags, fixed code/tests, total cost, and model name
@@ -183,7 +185,8 @@ def fix_errors_from_unit_tests(
             strength=strength,
             temperature=temperature,
             verbose=verbose,
-            time=time
+            time=time,
+            language=language
         )
 
         total_cost += response1['cost']
@@ -220,7 +223,8 @@ def fix_errors_from_unit_tests(
             temperature=temperature,
             output_pydantic=CodeFix,
             verbose=verbose,
-            time=time
+            time=time,
+            language=language
         )
 
         total_cost += response2['cost']
