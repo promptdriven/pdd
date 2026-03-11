@@ -100,7 +100,7 @@ export const VeoSection09SectionOutro: React.FC = () => {
           top: 0,
           width: CANVAS.width,
           height: CANVAS.height,
-          backgroundColor: '#000000',
+          backgroundColor: '#00FF00',
           opacity: fadeToBlack,
           pointerEvents: 'none',
         }}

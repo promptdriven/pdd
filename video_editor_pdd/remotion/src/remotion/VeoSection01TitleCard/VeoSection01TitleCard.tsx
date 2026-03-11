@@ -23,7 +23,7 @@ export const VeoSection01TitleCard: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#000000',
+        backgroundColor: '#00FF00',
       }}
     >
       <AbsoluteFill
