@@ -451,7 +451,8 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save_state, \
          patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
-         patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit:
+         patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
+         patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e:
 
         # Default: successful run, generic output
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
@@ -465,6 +466,8 @@ def e2e_fix_mock_dependencies(tmp_path):
         mock_hashes.return_value = {}
         # Default: commit succeeds
         mock_commit.return_value = (True, "No changes to commit")
+        # Default: E2E environment available
+        mock_check_e2e.return_value = (True, "")
 
         yield mock_run, mock_load, mock_console
 
@@ -1160,6 +1163,7 @@ class TestIssue545CommitAndPushWithTaintedHashes:
              patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
              patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear, \
              patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
              patch("pdd.agentic_e2e_fix_orchestrator.console"):
 
             mock_run.side_effect = step_side_effect
@@ -2148,3 +2152,499 @@ class TestIssue797TypeScriptTestFiles:
 
         assert passed is False
         assert "no test runner available" in output.lower()
+
+
+# ============================================================================
+# Issue #791: E2E test step times out on every cycle
+# ============================================================================
+
+
+class TestIssue791PromptVerification:
+    """Tests 1-2: Verify prompt specifies E2E pre-flight check and cross-cycle memory.
+
+    Issue #791: The prompt should now include requirements for:
+    1. _check_e2e_environment pre-flight check before Step 2
+    2. skipped_steps cross-cycle memory to avoid retrying failed steps
+    """
+
+    def test_prompt_specifies_check_e2e_environment(self):
+        """Test 1: Prompt must specify _check_e2e_environment pre-flight check.
+
+        The prompt should instruct the code generator to create a
+        _check_e2e_environment helper that checks for playwright/browser
+        before running Step 2.
+        """
+        template = load_prompt_template("agentic_e2e_fix_orchestrator_python")
+        assert template is not None, "Orchestrator prompt should load"
+
+        assert "_check_e2e_environment" in template, (
+            "Prompt must specify _check_e2e_environment helper function. "
+            "Without this, Step 2 dispatches E2E tests to LLM agent without "
+            "checking if the environment can run them, causing 240s timeouts."
+        )
+
+    def test_prompt_specifies_skipped_steps_memory(self):
+        """Test 2: Prompt must specify skipped_steps cross-cycle memory.
+
+        The prompt should instruct the code generator to maintain a
+        skipped_steps dict that persists across cycles, preventing
+        retries of environmentally-failed steps.
+        """
+        template = load_prompt_template("agentic_e2e_fix_orchestrator_python")
+        assert template is not None, "Orchestrator prompt should load"
+
+        assert "skipped_steps" in template, (
+            "Prompt must specify skipped_steps cross-cycle memory. "
+            "Without this, step_outputs is cleared between cycles (line 859), "
+            "destroying failure information and causing identical retries."
+        )
+
+        # Verify skipped_steps is NOT cleared with step_outputs
+        assert "NOT cleared when" in template or "Persists across cycles" in template, (
+            "Prompt must explicitly state skipped_steps persists across cycles "
+            "and is NOT cleared when step_outputs is cleared."
+        )
+
+
+class TestIssue791E2EEnvironmentCheck:
+    """Tests 3-5: Verify E2E skip when environment unavailable.
+
+    Issue #791: The orchestrator should skip Step 2 immediately when the
+    executor environment lacks E2E infrastructure (playwright/browser/dev-server).
+    """
+
+    def test_step2_skipped_when_e2e_environment_unavailable(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Test 3: Step 2 should be skipped when E2E environment is unavailable.
+
+        Bug: The current code dispatches Step 2 to the LLM agent without
+        checking if playwright/browser exist, consuming a full 240s timeout.
+
+        Fix: _check_e2e_environment should detect missing infrastructure and
+        skip Step 2 immediately with E2E_SKIP output.
+
+        This test FAILS on buggy code because _check_e2e_environment doesn't exist.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # All steps succeed, step 9 signals completion
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Mock _check_e2e_environment to report environment unavailable
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (False, "playwright not installed")
+
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+            # Verify _check_e2e_environment was called
+            mock_check.assert_called_once()
+
+            # Step 2 should NOT have been dispatched to the LLM agent
+            step_labels = [c.kwargs.get('label', '') for c in mock_run.call_args_list]
+            assert not any('step2' in label for label in step_labels), (
+                f"Step 2 should be skipped when E2E environment is unavailable, "
+                f"but it was dispatched. Labels: {step_labels}"
+            )
+
+    def test_step2_timeout_converts_to_skip(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Test 4: Step 2 timeout should be converted to E2E_SKIP for future cycles.
+
+        Bug: When Step 2 times out with 'All agent providers failed: Timeout expired',
+        the failure is stored in step_outputs but cleared between cycles (line 859).
+
+        Fix: Timeout failures should be added to skipped_steps so Step 2 is
+        skipped immediately on subsequent cycles.
+
+        This test FAILS on buggy code because skipped_steps doesn't exist.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            call_count[0] += 1
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                # Step 2 times out (simulating the real bug scenario)
+                return (False, "All agent providers failed: anthropic: Timeout expired", 0.1, "gpt-4")
+            if 'step9' in label:
+                # Cycle 1: continue, Cycle 2: max cycles
+                if 'cycle1' in label:
+                    return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Run with 2 max cycles so we can observe cycle 2 behavior
+        e2e_fix_default_args["max_cycles"] = 2
+
+        # Need _check_e2e_environment to exist (returns True = environment is fine)
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (True, "")  # Environment appears fine initially
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Count how many times Step 2 was dispatched to LLM
+            step2_calls = [c for c in mock_run.call_args_list if 'step2' in c.kwargs.get('label', '')]
+
+            # Step 2 should only be dispatched ONCE (cycle 1).
+            # In cycle 2, skipped_steps should prevent retry.
+            assert len(step2_calls) == 1, (
+                f"Step 2 should only be dispatched once (cycle 1), then skipped in cycle 2 "
+                f"via skipped_steps memory. But it was called {len(step2_calls)} times. "
+                f"All labels: {[c.kwargs.get('label', '') for c in mock_run.call_args_list]}"
+            )
+
+    def test_normal_failure_still_retried(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Test 5: Normal test failures (not timeouts) should still be retried.
+
+        Only environmental/timeout failures should be added to skipped_steps.
+        Normal test failures (e.g., 'FAILED: 3 tests failed') should be retried
+        on subsequent cycles.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        cycle_tracker = [0]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                # Normal test failure (NOT a timeout)
+                return (False, "FAILED: 3 of 5 e2e tests failed", 0.1, "gpt-4")
+            if 'step9' in label:
+                cycle_tracker[0] += 1
+                if cycle_tracker[0] < 2:
+                    return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        e2e_fix_default_args["max_cycles"] = 2
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (True, "")  # Environment is fine
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Step 2 should be dispatched in BOTH cycles (normal failure = retryable)
+            step2_calls = [c for c in mock_run.call_args_list if 'step2' in c.kwargs.get('label', '')]
+            assert len(step2_calls) == 2, (
+                f"Normal test failures should be retried on subsequent cycles. "
+                f"Expected Step 2 to run in both cycles (2 calls), got {len(step2_calls)}."
+            )
+
+
+class TestIssue791CrossCycleMemory:
+    """Tests 6-8: Verify cross-cycle state management.
+
+    Issue #791: skipped_steps should persist across cycles while
+    step_outputs is correctly cleared.
+    """
+
+    def test_skipped_steps_not_cleared_between_cycles(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Test 6: skipped_steps should NOT be cleared when step_outputs is cleared.
+
+        Bug: Lines 857-859 clear step_outputs and reset last_completed_step
+        between cycles. The fix must NOT clear skipped_steps alongside them.
+
+        This test FAILS on buggy code because skipped_steps doesn't exist,
+        so all state including failure memory is lost between cycles.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        step2_dispatch_count = [0]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                step2_dispatch_count[0] += 1
+                return (False, "All agent providers failed: anthropic: Timeout expired", 0.1, "gpt-4")
+            if 'step9' in label:
+                if 'cycle1' in label:
+                    return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+                if 'cycle2' in label:
+                    return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        e2e_fix_default_args["max_cycles"] = 3
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (True, "")  # Environment seems fine initially
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Step 2 should only be dispatched once (cycle 1), then remembered as
+            # skipped for cycles 2 and 3
+            assert step2_dispatch_count[0] == 1, (
+                f"Step 2 timed out in cycle 1 and should be skipped in cycles 2-3 "
+                f"via skipped_steps memory, but was dispatched {step2_dispatch_count[0]} times. "
+                f"This means skipped_steps was cleared between cycles."
+            )
+
+    def test_e2e_skip_output_set_correctly(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Test 7: When E2E environment is unavailable, step_outputs['2'] should contain E2E_SKIP.
+
+        The orchestrator should set step_outputs['2'] = 'E2E_SKIP: {reason}'
+        so that Step 3 receives the skip reason as context.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        step3_received_context = [None]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            instruction = kwargs.get('instruction', '') or (args[0] if args else '')
+            if 'step3' in label:
+                # Capture what Step 3 receives as context (includes step2_output)
+                step3_received_context[0] = instruction
+                return (True, "Root cause analysis", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (False, "playwright not installed")
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Step 3's formatted prompt should contain E2E_SKIP info
+            assert step3_received_context[0] is not None, (
+                "Step 3 should have been called"
+            )
+            assert "E2E_SKIP" in step3_received_context[0], (
+                "Step 3 context should include E2E_SKIP information from Step 2, "
+                "so the root cause analysis knows E2E tests were skipped."
+            )
+
+    def test_check_e2e_environment_function_exists(self):
+        """Test 8: _check_e2e_environment helper function must exist in the module.
+
+        The orchestrator must have a _check_e2e_environment function that checks
+        for playwright/browser availability before running Step 2.
+
+        This test FAILS on buggy code because the function doesn't exist yet.
+        """
+        from pdd import agentic_e2e_fix_orchestrator
+        assert hasattr(agentic_e2e_fix_orchestrator, '_check_e2e_environment'), (
+            "agentic_e2e_fix_orchestrator must have _check_e2e_environment function. "
+            "Without this, Step 2 always dispatches to LLM, causing 240s timeouts "
+            "in environments without E2E infrastructure."
+        )
+
+        import inspect
+        sig = inspect.signature(agentic_e2e_fix_orchestrator._check_e2e_environment)
+        params = list(sig.parameters.keys())
+        assert 'cwd' in params, (
+            "_check_e2e_environment must accept 'cwd' parameter"
+        )
+
+
+class TestIssue791CheckE2EEnvironmentUnit:
+    """Unit tests for _check_e2e_environment helper function.
+
+    Issue #791 Cycle 2: Direct unit tests for the pre-flight check that
+    detects whether the executor environment can run E2E tests.
+    """
+
+    def test_returns_false_when_npx_not_found(self, tmp_path):
+        """_check_e2e_environment returns (False, reason) when npx is not on PATH.
+
+        Without npx, playwright cannot run — the check should detect this
+        before the orchestrator wastes 240s dispatching Step 2 to the LLM.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        # Create a playwright config so the only missing piece is npx
+        (tmp_path / "playwright.config.ts").write_text("export default {}")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value=None):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is False, "Should return False when npx is not found"
+        assert "npx" in reason.lower(), f"Reason should mention npx, got: {reason}"
+
+    def test_returns_false_when_no_playwright_config(self, tmp_path):
+        """_check_e2e_environment returns (False, reason) when no playwright config exists.
+
+        Even if npx is available, without a playwright config file the project
+        doesn't have E2E tests to run.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is False, "Should return False when no playwright config exists"
+        assert "playwright" in reason.lower(), f"Reason should mention playwright, got: {reason}"
+
+    def test_returns_true_when_npx_and_config_present(self, tmp_path):
+        """_check_e2e_environment returns (True, '') when both npx and config exist.
+
+        When the environment has both npx and a playwright config file,
+        the pre-flight check should allow Step 2 to proceed.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        (tmp_path / "playwright.config.ts").write_text("export default {}")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is True, "Should return True when npx and config are present"
+        assert reason == "", f"Reason should be empty, got: {reason}"
+
+    def test_detects_js_playwright_config(self, tmp_path):
+        """_check_e2e_environment detects playwright.config.js (not just .ts)."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        (tmp_path / "playwright.config.js").write_text("module.exports = {}")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is True, "Should detect playwright.config.js"
+
+    def test_detects_mjs_playwright_config(self, tmp_path):
+        """_check_e2e_environment detects playwright.config.mjs."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        (tmp_path / "playwright.config.mjs").write_text("export default {}")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is True, "Should detect playwright.config.mjs"
+
+    def test_return_type_is_tuple(self, tmp_path):
+        """_check_e2e_environment must return a (bool, str) tuple."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value=None):
+            result = _check_e2e_environment(tmp_path)
+
+        assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"
+        assert len(result) == 2, f"Expected 2-element tuple, got {len(result)}"
+        assert isinstance(result[0], bool), f"First element should be bool, got {type(result[0])}"
+        assert isinstance(result[1], str), f"Second element should be str, got {type(result[1])}"
+
+
+class TestIssue791SkippedStepsEdgeCases:
+    """Edge case tests for skipped_steps cross-cycle memory.
+
+    Issue #791 Cycle 2: Tests for edge cases in the timeout-to-skip conversion
+    and E2E_SKIP note propagation to subsequent steps.
+    """
+
+    def test_e2e_skip_note_appended_to_step4_prompt(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 2 is skipped, subsequent steps (3, 4, ...) should receive
+        an appended note about the skip so LLM agents have context.
+
+        The orchestrator appends 'Note: Step 2 was skipped — E2E_SKIP: ...'
+        to the formatted prompt for steps after the skipped step.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        step4_instruction = [None]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            instruction = kwargs.get('instruction', '') or (args[0] if args else '')
+            if 'step4' in label:
+                step4_instruction[0] = instruction
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (False, "playwright not installed")
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert step4_instruction[0] is not None, "Step 4 should have been called"
+        assert "E2E_SKIP" in step4_instruction[0], (
+            "Step 4 prompt should contain E2E_SKIP note from skipped Step 2"
+        )
+
+    def test_timeout_skip_only_for_all_providers_failed(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Only 'All agent providers failed' timeouts should trigger skip memory.
+
+        Other failure types (e.g., prompt errors, partial failures) should NOT
+        be added to skipped_steps, ensuring they can be retried after code fixes.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        step2_call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                step2_call_count[0] += 1
+                # Partial failure — NOT a provider timeout
+                return (False, "FAILED: 2 of 5 tests timed out individually", 0.1, "gpt-4")
+            if 'step9' in label:
+                if 'cycle1' in label:
+                    return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (True, "")
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 2 should be called in BOTH cycles since it's not a provider timeout
+        assert step2_call_count[0] == 2, (
+            f"Non-provider failures should be retried. Step 2 was called "
+            f"{step2_call_count[0]} times, expected 2."
+        )
+
+    def test_skipped_step_cost_is_zero(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Skipped steps should not incur any LLM cost.
+
+        When Step 2 is skipped via pre-flight check, no run_agentic_task call
+        is made, so the cost for that step should be $0.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check:
+            mock_check.return_value = (False, "no playwright")
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        # With Step 2 skipped, we should have 8 steps * $0.1 = $0.8
+        # NOT 9 steps * $0.1 = $0.9
+        step_labels = [c.kwargs.get('label', '') for c in mock_run.call_args_list]
+        assert not any('step2' in label for label in step_labels), (
+            "Step 2 should not have been dispatched"
+        )
+        # Cost should reflect only 8 dispatched steps
+        assert cost == pytest.approx(0.8, abs=0.01), (
+            f"Cost should be ~$0.80 (8 steps at $0.10 each, Step 2 skipped), got ${cost:.4f}"
+        )

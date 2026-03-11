@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -67,6 +68,30 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 }
 
 console = Console()
+
+
+def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
+    """Check if the executor environment has E2E test infrastructure.
+
+    Returns (available, reason) where available is True if E2E tests
+    can run, False otherwise with a reason string.
+    """
+    # Check for npx (needed for playwright)
+    if not shutil.which("npx"):
+        return (False, "npx not found — playwright/browser infrastructure unavailable")
+
+    # Check for playwright config files
+    playwright_configs = [
+        "playwright.config.ts",
+        "playwright.config.js",
+        "playwright.config.mjs",
+    ]
+    has_config = any((cwd / cfg).exists() for cfg in playwright_configs)
+    if not has_config:
+        return (False, "no playwright config found in project")
+
+    return (True, "")
+
 
 def _get_state_dir(cwd: Path) -> Path:
     """Returns the state directory .pdd/e2e-fix-state/ relative to git root."""
@@ -663,6 +688,7 @@ def run_agentic_e2e_fix_orchestrator(
     model_used = "unknown"
     changed_files: List[str] = []
     dev_unit_states: Dict[str, Any] = {}
+    skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
     
     # Resume Logic
@@ -679,6 +705,9 @@ def run_agentic_e2e_fix_orchestrator(
             model_used = loaded_state.get("model_used", "unknown")
             changed_files = loaded_state.get("changed_files", [])
             dev_unit_states = loaded_state.get("dev_unit_states", {})
+            # Load skipped_steps from state (keys are strings in JSON, convert to int)
+            skipped_steps_raw = loaded_state.get("skipped_steps", {})
+            skipped_steps = {int(k): v for k, v in skipped_steps_raw.items()}
             github_comment_id = gh_id
 
             # Issue #467: Validate cached state — correct last_completed_step
@@ -722,11 +751,29 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num <= last_completed_step:
                     continue # Skip already completed steps in this cycle
 
+                # Skip steps that failed for environmental/timeout reasons in previous cycles
+                if step_num in skipped_steps:
+                    skip_reason = skipped_steps[step_num]
+                    console.print(f"[bold][Step {step_num}/9] Skipped (remembered): {skip_reason}[/bold]")
+                    step_outputs[str(step_num)] = f"E2E_SKIP: {skip_reason}"
+                    last_completed_step = step_num
+                    continue
+
                 step_name = STEP_NAMES[step_num]
                 description = STEP_DESCRIPTIONS[step_num]
-                
+
+                # Pre-flight check for Step 2 (E2E tests)
+                if step_num == 2:
+                    e2e_available, e2e_reason = _check_e2e_environment(cwd)
+                    if not e2e_available:
+                        console.print(f"[bold][Step 2/9] E2E test skipped: {e2e_reason}[/bold]")
+                        step_outputs[str(step_num)] = f"E2E_SKIP: {e2e_reason}"
+                        skipped_steps[step_num] = e2e_reason
+                        last_completed_step = step_num
+                        continue
+
                 console.print(f"[bold][Step {step_num}/9] {description}...[/bold]")
-                
+
                 # 1. Load Prompt
                 template_name = f"agentic_e2e_fix_step{step_num}_{step_name}_LLM"
                 prompt_template = load_prompt_template(template_name)
@@ -772,6 +819,12 @@ def run_agentic_e2e_fix_orchestrator(
                 for key, value in context.items():
                     formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
 
+                # Append E2E_SKIP context for steps following skipped steps
+                for prev_step in range(1, step_num):
+                    prev_output = step_outputs.get(str(prev_step), "")
+                    if prev_output.startswith("E2E_SKIP:"):
+                        formatted_prompt += f"\n\nNote: Step {prev_step} was skipped — {prev_output}"
+
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
                 timeout = base_timeout + timeout_adder
@@ -795,6 +848,17 @@ def run_agentic_e2e_fix_orchestrator(
                 else:
                     step_outputs[str(step_num)] = f"FAILED: {step_output}"
                     # Don't update last_completed_step - keep it at previous value
+
+                    # Convert Step 2 timeout failures to skipped_steps so they
+                    # are not retried on subsequent cycles (Issue #791).
+                    # Only trigger on timeout-specific errors — transient provider
+                    # outages (rate limits, etc.) should still be retried.
+                    if (
+                        step_num == 2
+                        and "All agent providers failed" in step_output
+                        and ("Timeout" in step_output or "timed out" in step_output)
+                    ):
+                        skipped_steps[step_num] = step_output
 
                 total_cost += step_cost
                 model_used = step_model if step_model else model_used
@@ -839,6 +903,7 @@ def run_agentic_e2e_fix_orchestrator(
                     "total_cost": total_cost,
                     "model_used": model_used,
                     "changed_files": changed_files.copy(),  # Copy to avoid shared reference
+                    "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id
                 }
@@ -985,6 +1050,7 @@ def run_agentic_e2e_fix_orchestrator(
             "last_completed_step": last_completed_step,
             "step_outputs": step_outputs,
             "dev_unit_states": dev_unit_states,
+            "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
             "total_cost": total_cost,
             "model_used": model_used,
             "changed_files": changed_files,
@@ -1007,6 +1073,7 @@ def run_agentic_e2e_fix_orchestrator(
                 "last_completed_step": last_completed_step,
                 "step_outputs": step_outputs,
                 "dev_unit_states": dev_unit_states,
+                "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
                 "total_cost": total_cost,
                 "model_used": model_used,
                 "changed_files": changed_files,

@@ -238,36 +238,37 @@ class TestIssue357Step9KeyErrorE2E:
             pass
 
         # Patch the LLM task runner and state management
-        with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-            with patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state', side_effect=mock_save_state):
-                with patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', side_effect=mock_load_state):
-                    with patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
-                        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+        with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task), \
+             patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state', side_effect=mock_save_state), \
+             patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', side_effect=mock_load_state), \
+             patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state', side_effect=mock_clear_state), \
+             patch('pdd.agentic_e2e_fix_orchestrator._check_e2e_environment', return_value=(True, "")):
+            from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
-                        try:
-                            success, message, cost, model, files = run_agentic_e2e_fix_orchestrator(
-                                issue_url="https://github.com/test/repo/issues/357",
-                                issue_content="Test issue for bug #357",
-                                repo_owner="test",
-                                repo_name="repo",
-                                issue_number=357,
-                                issue_author="test-user",
-                                issue_title="Test Issue 357",
-                                cwd=mock_cwd,
-                                max_cycles=1,  # Single cycle to reach Step 9 quickly
-                                resume=False,
-                                verbose=False,
-                                quiet=True,
-                                use_github_state=False,
-                                protect_tests=False
-                            )
-                        except KeyError as e:
-                            pytest.fail(
-                                f"BUG DETECTED (Issue #357): Orchestrator raised KeyError '{e.args[0]}' "
-                                f"during Step 9 prompt formatting.\n\n"
-                                f"Steps attempted before crash: {steps_attempted}\n\n"
-                                f"This confirms the bug at lines 126-127 of the Step 9 template."
-                            )
+            try:
+                success, message, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                    issue_url="https://github.com/test/repo/issues/357",
+                    issue_content="Test issue for bug #357",
+                    repo_owner="test",
+                    repo_name="repo",
+                    issue_number=357,
+                    issue_author="test-user",
+                    issue_title="Test Issue 357",
+                    cwd=mock_cwd,
+                    max_cycles=1,  # Single cycle to reach Step 9 quickly
+                    resume=False,
+                    verbose=False,
+                    quiet=True,
+                    use_github_state=False,
+                    protect_tests=False
+                )
+            except KeyError as e:
+                pytest.fail(
+                    f"BUG DETECTED (Issue #357): Orchestrator raised KeyError '{e.args[0]}' "
+                    f"during Step 9 prompt formatting.\n\n"
+                    f"Steps attempted before crash: {steps_attempted}\n\n"
+                    f"This confirms the bug at lines 126-127 of the Step 9 template."
+                )
 
         # Verify Step 9 was attempted (meaning all steps including Step 9 were formatted)
         assert 9 in steps_attempted, (

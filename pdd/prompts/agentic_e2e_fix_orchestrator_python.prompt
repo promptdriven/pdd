@@ -73,15 +73,39 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 }
 ```
 
+% E2E Environment Pre-flight Check
+Before running Step 2 (e2e_tests), check whether the executor environment can run E2E tests:
+
+1. **Helper function**: `_check_e2e_environment(cwd: Path) -> Tuple[bool, str]`
+   - Check if `npx playwright` is available (run `npx playwright --version` with short timeout ~5s)
+   - Check if a dev server is running or startable (check for `localhost:3000` or similar)
+   - Return `(True, "")` if environment is ready
+   - Return `(False, reason)` if environment cannot support E2E tests (e.g., "playwright not installed", "no dev server available")
+
+2. **Integration**: Before dispatching Step 2 to the LLM agent, call `_check_e2e_environment(cwd)`:
+   - If environment is not ready: skip Step 2 entirely, set `step_outputs["2"] = "E2E_SKIP: {reason}"`, log the skip, and continue to Step 3
+   - If environment is ready: proceed with normal Step 2 execution
+
+% Cross-Cycle Failure Memory
+Track steps that failed due to environmental (non-transient) reasons across cycles:
+
+1. Maintain a `skipped_steps: Dict[int, str]` mapping step numbers to skip reasons
+2. When Step 2 times out with "All agent providers failed" or is skipped via pre-flight check, add it to `skipped_steps`
+3. On subsequent cycles, if a step is in `skipped_steps`, skip it immediately with the stored reason instead of retrying
+4. `skipped_steps` persists across cycles (NOT cleared when `step_outputs` is cleared)
+5. Only environmental/timeout failures are added to `skipped_steps` — normal test failures are NOT skipped on retry
+
 % Step Execution
 For each step (1-9):
-1. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{STEP_NAMES[n]}_LLM")`
-2. Format template with: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles, issue_content, step1_output, etc.
-3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
+1. Check if step is in `skipped_steps` — if so, reuse the skip output and continue to next step
+2. Load the step prompt template via `load_prompt_template(f"agentic_e2e_fix_step{n}_{STEP_NAMES[n]}_LLM")`
+3. Format template with: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles, issue_content, step1_output, etc.
+4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
    - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
-4. Store the output for use by subsequent steps
-5. Save state to file after step completes
-6. Accumulate cost: `total_cost += step_cost`
+5. If step fails with "All agent providers failed" and timeout: add to `skipped_steps` for future cycles
+6. Store the output for use by subsequent steps
+7. Save state to file after step completes
+8. Accumulate cost: `total_cost += step_cost`
 
 % Step Sequence
 | Step | Template Name | Purpose |
@@ -99,6 +123,8 @@ For each step (1-9):
 % Outer Loop Logic
 ```python
 cycle = 0
+skipped_steps = {}  # Persists across cycles — tracks environmentally-failed steps
+
 while cycle < max_cycles:
     cycle += 1
 
@@ -106,7 +132,20 @@ while cycle < max_cycles:
     step1_output = run_step_1()
 
     # Step 2: Run e2e tests (early exit check)
-    step2_output = run_step_2()
+    # Pre-flight: check if E2E environment is available
+    if 2 in skipped_steps:
+        step2_output = skipped_steps[2]  # Reuse skip reason from previous cycle
+    else:
+        e2e_ready, e2e_reason = _check_e2e_environment(cwd)
+        if not e2e_ready:
+            step2_output = f"E2E_SKIP: {e2e_reason}"
+            skipped_steps[2] = step2_output
+        else:
+            step2_output = run_step_2()
+            # If step 2 timed out (environmental), remember for next cycle
+            if "All agent providers failed" in step2_output and "Timeout" in step2_output:
+                skipped_steps[2] = f"E2E_SKIP: E2E step timed out (environment lacks infrastructure)"
+
     if "ALL_TESTS_PASS" in step2_output:
         break  # Success! Exit outer loop early
 

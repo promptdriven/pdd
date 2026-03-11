@@ -138,10 +138,11 @@ def generate():
 
         def mock_clear_state(*args, **kwargs):
             pass
-        with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-            with patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state', side_effect=mock_save_state):
-                with patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', side_effect=mock_load_state):
-                    with patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
+        with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task), \
+             patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state', side_effect=mock_save_state), \
+             patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', side_effect=mock_load_state), \
+             patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state', side_effect=mock_clear_state), \
+             patch('pdd.agentic_e2e_fix_orchestrator._check_e2e_environment', return_value=(True, "")):
                         from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
                         success, message, cost, model, files = run_agentic_e2e_fix_orchestrator(
@@ -223,10 +224,11 @@ def generate():
                 return (True, "ALL_TESTS_PASS", 0.001, "mock-model")
             return (True, "Success", 0.001, "mock-model")
 
-        with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-            with patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state'):
-                with patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', return_value=(None, None)):
-                    with patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state'):
+        with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task), \
+             patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state'), \
+             patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', return_value=(None, None)), \
+             patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state'), \
+             patch('pdd.agentic_e2e_fix_orchestrator._check_e2e_environment', return_value=(True, "")):
                         from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
                         success, message, cost, model, files = run_agentic_e2e_fix_orchestrator(
