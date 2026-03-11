@@ -85,7 +85,7 @@ export const AnimationSection06FrameworkComparison: React.FC = () => {
       style={{
         width: CANVAS.width,
         height: CANVAS.height,
-        backgroundColor: '#00FF00',
+        backgroundColor: '#FF0000',
       }}
     >
       {/* Left panel — Remotion */}
