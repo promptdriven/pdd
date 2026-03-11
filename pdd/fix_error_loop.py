@@ -707,7 +707,8 @@ def fix_error_loop(unit_test_file: str,
                         temperature,
                         verbose=verbose,
                         time=time,
-                        protect_tests=protect_tests
+                        protect_tests=protect_tests,
+                        language=get_language(os.path.splitext(code_file)[1])
                     )
             else:
                 # Use local LLM for fix
@@ -721,7 +722,8 @@ def fix_error_loop(unit_test_file: str,
                     temperature,
                     verbose=verbose,
                     time=time,  # Pass time parameter
-                    protect_tests=protect_tests
+                    protect_tests=protect_tests,
+                    language=get_language(os.path.splitext(code_file)[1])
                 )
 
             # Update the fix attempt in the structured log
