@@ -21,7 +21,7 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
 
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 12.053333;
+  const durationSeconds = 7.32;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   let activeVisualIndex = VISUAL_SEQUENCE.length > 0 ? 0 : -1;
