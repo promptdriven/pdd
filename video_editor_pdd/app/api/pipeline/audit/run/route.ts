@@ -6,7 +6,10 @@ import { extractFrameAtTime, renderStill } from "@/lib/render";
 import { runClaudeAnalysis } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
-import { resolveRenderedAuditSampleWindow } from "@/lib/audit-timing";
+import {
+  resolveAuditSampleWindow,
+  resolveRenderedAuditSampleWindow,
+} from "@/lib/audit-timing";
 import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
@@ -63,14 +66,20 @@ async function auditSection(
     const specPath = path.join(specDir, specFile);
     const specName = path.basename(specFile, ".md");
     const specContent = fs.readFileSync(specPath, "utf-8");
-    const sampleWindow = resolveRenderedAuditSampleWindow(specContent, {
-      projectDir: getProjectDir(),
-      specPath,
-      section,
-      sectionSpecFiles: specFiles,
-      sectionDurationSeconds: section.durationSeconds,
-      fps,
-    });
+    const sampleWindow =
+      Array.isArray(section.compositions) && section.compositions.length > 0
+        ? resolveRenderedAuditSampleWindow(specContent, {
+            projectDir: getProjectDir(),
+            specPath,
+            section,
+            sectionSpecFiles: specFiles,
+            sectionDurationSeconds: section.durationSeconds,
+            fps,
+          })
+        : resolveAuditSampleWindow(specContent, {
+            sectionDurationSeconds: section.durationSeconds,
+            fps,
+          });
     const renderedVideoPath = resolveSectionRenderedVideoPath(section);
 
     const outputStill = path.join(

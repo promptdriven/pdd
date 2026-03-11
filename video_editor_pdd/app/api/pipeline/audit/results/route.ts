@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
-import { resolveRenderedAuditSampleWindow } from "@/lib/audit-timing";
+import {
+  resolveAuditSampleWindow,
+  resolveRenderedAuditSampleWindow,
+} from "@/lib/audit-timing";
 import { getProjectDir } from "@/lib/projects";
 import {
   resolveSectionSpecDir,
@@ -90,16 +93,26 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           const safeSpecPath = toSectionSpecPath(section.specDir, `${specName}.md`);
           const specExists = fs.existsSync(specSourcePath);
           const playbackWindow = specExists
-            ? resolveRenderedAuditSampleWindow(
-                fs.readFileSync(specSourcePath, "utf-8"),
-                {
-                  projectDir: getProjectDir(),
-                  specPath: specSourcePath,
-                  section,
-                  sectionSpecFiles: specFiles,
-                  sectionDurationSeconds: section.durationSeconds,
-                  fps,
-                }
+            ? (
+                Array.isArray(section.compositions) && section.compositions.length > 0
+                  ? resolveRenderedAuditSampleWindow(
+                      fs.readFileSync(specSourcePath, "utf-8"),
+                      {
+                        projectDir: getProjectDir(),
+                        specPath: specSourcePath,
+                        section,
+                        sectionSpecFiles: specFiles,
+                        sectionDurationSeconds: section.durationSeconds,
+                        fps,
+                      }
+                    )
+                  : resolveAuditSampleWindow(
+                      fs.readFileSync(specSourcePath, "utf-8"),
+                      {
+                        sectionDurationSeconds: section.durationSeconds,
+                        fps,
+                      }
+                    )
               )
             : undefined;
 

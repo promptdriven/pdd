@@ -86,13 +86,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const project = loadProject();
-    const target = resolveAnnotationTarget(project, {
-      sectionId,
-      timestamp: timestamp ?? null,
-      globalTimestamp: globalTimestamp ?? null,
-      sectionTimestamp: sectionTimestamp ?? null,
-      videoFile: videoFile ?? null,
-    });
+    const hasExplicitTimestamp =
+      timestamp !== undefined && timestamp !== null ||
+      globalTimestamp !== undefined && globalTimestamp !== null ||
+      sectionTimestamp !== undefined && sectionTimestamp !== null;
+    const target = hasExplicitTimestamp
+      ? resolveAnnotationTarget(project, {
+          sectionId,
+          timestamp: timestamp ?? null,
+          globalTimestamp: globalTimestamp ?? null,
+          sectionTimestamp: sectionTimestamp ?? null,
+          videoFile: videoFile ?? null,
+        })
+      : {
+          sectionId,
+          timestamp: null as number | null,
+          normalized: false,
+        };
 
     const id = randomUUID();
     const createdAt = new Date().toISOString();

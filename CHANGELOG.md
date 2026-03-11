@@ -3,27 +3,6 @@
 ### Feat
 
 - **Language-aware LLM validation (issue #796)**: `fix_errors_from_unit_tests` now accepts and forwards a `language` parameter to `llm_invoke`, preventing Python `ast.parse()` validation from running on TypeScript/JavaScript code — `fix_error_loop` infers the language from the code file extension via `get_language()`
-- **VEO prompt fix module**: new `veo-prompt-fix.ts` extracts suggested VEO prompts from annotation analysis and applies them to the correct spec file, matching by timestamp or explicit clip/spec target references
-- **Project switching**: new `/api/projects` and `/api/projects/select` API routes with project selector dropdown on the main page for multi-project support
-- **Annotation management**: add delete, revert-with-rerender, edit transcript, and re-analyze capabilities to `AnnotationPanel`; annotations can be selected and scrolled-to from the video player
-- **Batch resolution with VEO regeneration**: resolve-batch now applies VEO prompt updates and Remotion spec fixes before running Claude, syncs VEO outputs to Remotion public dir, and triggers VEO pipeline regeneration for affected clips
-- **Global timestamp annotation review**: map full-video playback time to the correct section for annotation display; persist selected review section across page reloads
-- **Lazy pipeline executor registration**: `ensureExecutorRegistered` in `jobs.ts` dynamically imports pipeline stage route modules on demand, removing the need for eager registration in `Root.tsx`
-- **Video player enhancements**: `onTimeChange`, `seekRequest`, and `onAnnotationSelect` callbacks; auto-resume playback after voice recording capture
-
-### Fix
-
-- Apply VEO prompt updates to spec files before triggering rerender
-- Bust stale review video caches by appending `updatedAtMs` query parameter to video source URLs
-- Robust Node-to-Web stream adapter in video API route with safe close/cancel handling to prevent controller errors on client disconnect
-- Annotation batch query no longer filters by `sectionId`, allowing cross-section batch resolution
-
-### Refactor
-
-- Simplify Remotion section compositions from 7/14 visuals down to a 5-visual structure (title card, key visual, split summary, VEO b-roll, VEO cutaway) for both animation and veo sections
-- Remove hardcoded `Root.tsx` composition registrations (193 lines) in favor of dynamic section resolution
-- Replace 21 per-section markdown spec files and 14 audit files with `veo.json` manifests
-- Video API routes use `getProjectDir()` instead of `process.cwd()` for multi-project workspace support
 
 ### Build
 
@@ -36,7 +15,6 @@
 - New E2E test `test_e2e_issue_796_typescript_python_validation.py` verifying the full `fix_errors_from_unit_tests` pipeline forwards `language` to `llm_invoke`
 - Unit tests for language parameter forwarding (TypeScript, JavaScript, Python, default None) in `test_fix_errors_from_unit_tests.py`
 - `TestIssue796TypeScriptPythonValidation` tests in `test_llm_invoke.py` proving TypeScript triggers `_looks_like_python_code()` heuristic and `_has_invalid_python_code()` false positive
-- New video editor tests: `test_veo_prompt_fix.ts`, `test_api_projects_route.ts`, `test_remotion_spec_fix.ts`, `test_video_player.tsx`
 
 ## v0.0.172 (2026-03-09)
 
