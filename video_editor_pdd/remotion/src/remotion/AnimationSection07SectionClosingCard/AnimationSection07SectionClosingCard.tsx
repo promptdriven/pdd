@@ -35,7 +35,7 @@ export const AnimationSection07SectionClosingCard: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#00FF00',
+        backgroundColor: '#FF0000',
       }}
     >
       <AbsoluteFill
