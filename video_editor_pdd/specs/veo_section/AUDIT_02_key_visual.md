@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame deviates from the spec in every major dimension. (1) Background: The spec requires a solid #0A1628 (dark navy) background, but the frame shows bright RGBYBMC color-bar stripes — a classic test pattern, not the specified dark canvas. (2) Content: The spec calls for 'a simple animated chart' with two data series (A=1, B=2) rendered with 'strong contrast and visible motion.' Instead the frame contains no chart at all — only vertical color bars, a diagonal rainbow streak, a small gray square, and a checkerboard-pattern block in the lower-right area. (3) Resolution appears to be 1920×1080 based on the aspect ratio, and the timecode overlay (00:00:03.967, frame 119) places this in the correct frame range (90-150, the hold phase), but the visual content is entirely wrong. This looks like a placeholder/test-card output rather than the intended composition.
