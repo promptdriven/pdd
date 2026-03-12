@@ -4,7 +4,7 @@ import path from 'path';
 import { createSseStream } from '@/lib/sse';
 import { loadProject } from '@/lib/project';
 import { generateVeoClip, extractLastFrame } from '@/lib/veo';
-import { extractFrameAtTime } from '@/lib/render';
+import { extractFrameAtTime, getSectionDuration } from '@/lib/render';
 import { runClaudeAnalysis } from '@/lib/claude';
 import { registerExecutor, runPipelineStage } from '@/lib/jobs';
 import { emitClipEvent } from '@/lib/clip-events';
@@ -29,7 +29,7 @@ import {
  */
 
 export const runtime = 'nodejs';
-const CLIP_VALIDATION_SAMPLE_SECONDS = 4;
+const CLIP_VALIDATION_SAMPLE_RATIOS = [0.2, 0.5, 0.8];
 const MAX_CLIP_GENERATION_ATTEMPTS = 2;
 
 /** Resolve a Veo prompt from specs on disk */
@@ -99,23 +99,45 @@ function ensureDir(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
 }
 
+function resolveValidationSampleTimes(durationSeconds: number): number[] {
+  const safeDuration = Number.isFinite(durationSeconds) && durationSeconds > 0
+    ? durationSeconds
+    : 4;
+  const maxTime = Math.max(safeDuration - 0.001, 0);
+
+  return CLIP_VALIDATION_SAMPLE_RATIOS.map((ratio) =>
+    Number(Math.min(maxTime, Math.max(0, safeDuration * ratio)).toFixed(3))
+  );
+}
+
 async function validateGeneratedClip(
   clipId: string,
   prompt: string,
   outputPath: string,
   onLog: (message: string) => void
 ): Promise<void> {
-  const validationFramePath = path.join(
-    getProjectDir(),
-    'outputs',
-    'veo',
-    `${clipId}_validation_frame.png`
-  );
+  const clipDurationSeconds = await getSectionDuration(outputPath);
+  const sampleTimes = resolveValidationSampleTimes(clipDurationSeconds);
+  const validationFrames = await Promise.all(
+    sampleTimes.map(async (timeSeconds, index) => {
+      const validationFramePath = path.join(
+        getProjectDir(),
+        'outputs',
+        'veo',
+        `${clipId}_validation_frame_${String(index + 1).padStart(2, '0')}.png`
+      );
 
-  await extractFrameAtTime(
-    outputPath,
-    CLIP_VALIDATION_SAMPLE_SECONDS,
-    validationFramePath
+      await extractFrameAtTime(
+        outputPath,
+        timeSeconds,
+        validationFramePath
+      );
+
+      return {
+        timeSeconds,
+        validationFramePath,
+      };
+    })
   );
 
   const analysis = await runClaudeAnalysis(
@@ -123,13 +145,19 @@ async function validateGeneratedClip(
 You are validating whether a generated Veo clip matches the requested prompt.
 
 - Prompt: ${prompt}
-- Representative frame PNG: ${validationFramePath}
+- Representative validation frames:
+${validationFrames
+  .map(
+    ({ timeSeconds, validationFramePath }) =>
+      `  - ${timeSeconds.toFixed(3)}s: ${validationFramePath}`
+  )
+  .join('\n')}
 
 Return JSON matching AnnotationAnalysis:
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
 
-Use severity="pass" only if the frame clearly matches the intended prompt.
-Use a non-pass severity when the subject, setting, or visual concept is wrong.
+Use severity="pass" only if all representative frames clearly match the intended prompt.
+Use a non-pass severity when any frame shows the wrong subject, setting, or visual concept, or when the frames are inconsistent with each other.
 `.trim(),
     onLog
   );

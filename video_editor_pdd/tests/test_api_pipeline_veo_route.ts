@@ -55,6 +55,7 @@ const mockGenerateVeoClip = jest.fn();
 const mockExtractLastFrame = jest.fn();
 const mockGenerateReferenceImage = jest.fn();
 const mockExtractFrameAtTime = jest.fn();
+const mockGetSectionDuration = jest.fn();
 const mockRunClaudeAnalysis = jest.fn();
 
 jest.mock("@/lib/veo", () => ({
@@ -66,6 +67,7 @@ jest.mock("@/lib/veo", () => ({
 
 jest.mock("@/lib/render", () => ({
   extractFrameAtTime: (...args: unknown[]) => mockExtractFrameAtTime(...args),
+  getSectionDuration: (...args: unknown[]) => mockGetSectionDuration(...args),
 }));
 
 jest.mock("@/lib/claude", () => ({
@@ -239,6 +241,7 @@ beforeEach(() => {
   mockExtractLastFrame.mockReset();
   mockGenerateReferenceImage.mockReset();
   mockExtractFrameAtTime.mockReset();
+  mockGetSectionDuration.mockReset();
   mockRunClaudeAnalysis.mockReset();
   mockExistsSync.mockReset();
   mockReadFileSync.mockReset();
@@ -254,6 +257,7 @@ beforeEach(() => {
   mockExtractLastFrame.mockResolvedValue(undefined);
   mockGenerateReferenceImage.mockResolvedValue(undefined);
   mockExtractFrameAtTime.mockResolvedValue(undefined);
+  mockGetSectionDuration.mockResolvedValue(8);
   mockRunClaudeAnalysis.mockResolvedValue({
     severity: "pass",
     fixType: "none",
@@ -1054,7 +1058,19 @@ describe("veo executor factory — clip validation", () => {
     await executor(jest.fn());
 
     expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
-    expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(2);
+    expect(mockGetSectionDuration).toHaveBeenCalledWith(
+      expect.stringContaining("outputs/veo/intro.mp4")
+    );
+    expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(6);
+    expect(mockExtractFrameAtTime.mock.calls.slice(0, 3).map((call) => call[1])).toEqual([
+      1.6,
+      4,
+      6.4,
+    ]);
+    expect(mockRunClaudeAnalysis.mock.calls[0][0]).toContain("Representative validation frames");
+    expect(mockRunClaudeAnalysis.mock.calls[0][0]).toContain("intro_validation_frame_01.png");
+    expect(mockRunClaudeAnalysis.mock.calls[0][0]).toContain("intro_validation_frame_02.png");
+    expect(mockRunClaudeAnalysis.mock.calls[0][0]).toContain("intro_validation_frame_03.png");
     expect(mockSend).toHaveBeenCalledWith({
       type: "clip",
       clipId: "intro",
