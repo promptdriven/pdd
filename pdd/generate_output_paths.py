@@ -326,14 +326,12 @@ def generate_output_paths(
                 final_path = os.path.join(user_path, default_filename)
             else:
                 logger.debug(f"User path '{user_path}' identified as a specific file path.")
-                # If the user-provided path already has an extension, respect it.
-                # Otherwise, append the language-derived file_extension.
-                user_path_stem, user_path_ext = os.path.splitext(user_path)
-                if user_path_ext:
-                    final_path = user_path
-                else:
-                    final_path = user_path_stem + file_extension
-                logger.debug(f"Resolved final_path for specific file: {final_path} (original user_path: {user_path}, file_extension: {file_extension})")
+                # Preserve the user-provided path exactly as a file path, without
+                # rewriting or appending extensions. This ensures explicit CLI
+                # --output values (including those without an extension) are
+                # treated as authoritative file paths.
+                final_path = user_path
+                logger.debug(f"Resolved final_path for specific file (preserved user path): {final_path}")
 
         # 1b. For fix and auto-deps commands, input_file_dirs takes priority over context config
         # This ensures fix outputs stay next to the original input files instead of
