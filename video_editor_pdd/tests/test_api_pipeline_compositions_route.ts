@@ -153,6 +153,15 @@ function flushPromises(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 50));
 }
 
+function mockGeneratedFlatArtifacts(...names: string[]) {
+  mockExistsSync.mockImplementation((p: string) => {
+    if (typeof p !== "string") return false;
+    return names.some((name) =>
+      p.endsWith(path.join("remotion", "src", "remotion", `${name}.tsx`))
+    );
+  });
+}
+
 /** Parse SSE events from a ReadableStream. */
 async function readSseEvents(
   stream: ReadableStream<Uint8Array>
@@ -310,6 +319,10 @@ beforeEach(() => {
   mockRandomUUID.mockReturnValue("test-uuid-staging-001");
   mockExecSync.mockReturnValue("");
   mockOpenSync.mockReturnValue(99);
+  mockExistsSync.mockImplementation((p: string) => {
+    if (typeof p !== "string") return false;
+    return /remotion[\/\\]src[\/\\]remotion[\/\\].*(\.tsx|[\/\\]index\.ts)$/.test(p);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -616,7 +629,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("calls runClaudeFix for each component", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection", "TitleCard");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -631,7 +644,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("emits 'generating' status before each component", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -651,7 +664,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("emits 'done' status after successful component generation", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -714,7 +727,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("scopes runClaudeFix to remotion/src/remotion/ directory", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -733,7 +746,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("passes a log callback to runClaudeFix", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -748,7 +761,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("builds a prompt that includes the component name", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -764,7 +777,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("builds a prompt that references the target directory", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -782,6 +795,12 @@ describe("compositions executor factory — component generation", () => {
   it("builds a prompt that includes spec content when spec file exists", async () => {
     // Mock specs dir existing and containing a matching spec file
     mockExistsSync.mockImplementation((p: string) => {
+      if (
+        typeof p === "string" &&
+        p.endsWith(path.join("remotion", "src", "remotion", "HeroSection.tsx"))
+      ) {
+        return true;
+      }
       if (typeof p === "string" && p.includes("specs")) return true;
       return false;
     });
@@ -817,7 +836,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("reports progress via onLog.progress callback", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -835,7 +854,7 @@ describe("compositions executor factory — component generation", () => {
   });
 
   it("does not crash when onLog has no progress callback", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -892,7 +911,7 @@ describe("compositions executor factory — section-scoped generation", () => {
   }
 
   it("generates section-scoped output file when sectionId is provided", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("part3_mold_title_card");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -911,6 +930,12 @@ describe("compositions executor factory — section-scoped generation", () => {
 
   it("scopes spec lookup to section specDir when sectionId is provided", async () => {
     mockExistsSync.mockImplementation((p: string) => {
+      if (
+        typeof p === "string" &&
+        p.endsWith(path.join("remotion", "src", "remotion", "main_title_card.tsx"))
+      ) {
+        return true;
+      }
       if (typeof p === "string" && p.includes("specs")) return true;
       return false;
     });
@@ -950,7 +975,7 @@ describe("compositions executor factory — sectionComponents full-run scoping",
   }
 
   it("generates section-scoped files for each entry in sectionComponents", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("intro_title_card", "main_title_card");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -986,6 +1011,13 @@ describe("compositions executor factory — sectionComponents full-run scoping",
 
   it("uses each section's specDir for spec lookup", async () => {
     mockExistsSync.mockImplementation((p: string) => {
+      if (
+        typeof p === "string" &&
+        (p.endsWith(path.join("remotion", "src", "remotion", "intro_title_card.tsx")) ||
+          p.endsWith(path.join("remotion", "src", "remotion", "main_title_card.tsx")))
+      ) {
+        return true;
+      }
       if (typeof p === "string" && p.includes("specs")) return true;
       return false;
     });
@@ -1024,7 +1056,7 @@ describe("compositions executor factory — sectionComponents full-run scoping",
   });
 
   it("emits per-component status events for sectionComponents", async () => {
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("intro_title_card", "main_title_card");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
 
@@ -2373,6 +2405,89 @@ describe("compositions executor — generated preview validation", () => {
     expect(errorEvent).toBeDefined();
     expect(errorEvent![0].name).toBe("07_stat_callout_gitclear");
   });
+
+  it("fails generation when Claude returns but the expected component artifact was not created", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "veo_section";
+    config.sections[0].specDir = "veo_section";
+    config.sections[0].compositionId = "VeoSection";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "veo_section");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs") && p.includes("veo_section")) {
+        return [{ name: "05_split_nature_comparison.md", isFile: () => true }];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("[split:]\n# Spec content");
+
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "veo_section", components: ["05_split_nature_comparison"] },
+        ],
+        wrappers: [],
+      },
+      jest.fn()
+    );
+
+    await expect(executor(jest.fn())).rejects.toThrow(
+      "Expected generated component output not found for veo_section_05_split_nature_comparison"
+    );
+    expect(mockRenderStill).not.toHaveBeenCalled();
+  });
+
+  it("only preview-validates compositions that were actually discovered into the section render graph", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "veo_section";
+    config.sections[0].specDir = "veo_section";
+    config.sections[0].compositionId = "VeoSection";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "veo_section");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      if (p === pathMod.join(remotionDir, "VeoSection05SplitNatureComparison", "index.ts")) {
+        return true;
+      }
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs") && p.includes("veo_section")) {
+        return [];
+      }
+      return [];
+    });
+
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "veo_section", components: ["05_split_nature_comparison"] },
+        ],
+        wrappers: [],
+      },
+      jest.fn()
+    );
+
+    await expect(executor(jest.fn())).resolves.toBeUndefined();
+    expect(mockRenderStill).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2416,7 +2531,7 @@ describe("compositions executor — buildComponentPrompt dirName alignment", () 
     // When baseName is "05_crossfade_transition" and outputName is "cold_open_05_crossfade_transition"
     // the prompt should use ColdOpen05CrossfadeTransition/ as the directory
     // (not 05-CrossfadeTransition/ which is the old behavior)
-    mockExistsSync.mockReturnValue(false);
+    mockGeneratedFlatArtifacts("cold_open_05_crossfade_transition");
     mockReaddirSync.mockReturnValue([]);
     mockReadFileSync.mockReturnValue("# Spec");
 

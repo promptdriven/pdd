@@ -381,6 +381,52 @@ function compToRemotionId(compId: string, sectionId: string): string {
   return pascal.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
 }
 
+function getGeneratedArtifactCandidates(
+  componentName: string,
+  outputName: string,
+  sectionId?: string,
+): string[] {
+  const remotionScopeDir = getRemotionScopeDir();
+  const candidates = new Set<string>();
+
+  candidates.add(path.join(remotionScopeDir, `${outputName}.tsx`));
+  candidates.add(path.join(remotionScopeDir, `${componentName}.tsx`));
+  candidates.add(path.join(remotionScopeDir, toPascalCase(outputName), "index.ts"));
+  candidates.add(path.join(remotionScopeDir, toPascalCase(componentName), "index.ts"));
+
+  const addLegacyDirectoryCandidates = (name: string) => {
+    const nnMatch = name.match(/^(\d{2})_(.+)$/);
+    if (!nnMatch) {
+      return;
+    }
+
+    const strippedPascal = toPascalCase(nnMatch[2]);
+    candidates.add(path.join(remotionScopeDir, `${nnMatch[1]}-${strippedPascal}`, "index.ts"));
+
+    if (sectionId) {
+      const sectionPascal = toPascalCase(sectionId);
+      candidates.add(
+        path.join(remotionScopeDir, `${sectionPascal}${nnMatch[1]}${strippedPascal}`, "index.ts")
+      );
+    }
+  };
+
+  addLegacyDirectoryCandidates(componentName);
+  addLegacyDirectoryCandidates(outputName);
+
+  return Array.from(candidates);
+}
+
+function generatedArtifactExists(
+  componentName: string,
+  outputName: string,
+  sectionId?: string,
+): boolean {
+  return getGeneratedArtifactCandidates(componentName, outputName, sectionId).some((candidate) =>
+    fs.existsSync(candidate)
+  );
+}
+
 type ProjectSectionForValidation = {
   id: string;
   compositions?: Array<string | { id: string }>;
@@ -400,21 +446,22 @@ function resolveValidationTargets(
   preferredSectionId: string | undefined,
   sections: ProjectSectionForValidation[],
 ): ValidationTarget[] {
-  const sectionIds = preferredSectionId
-    ? [preferredSectionId]
-    : sections
-        .filter((section) => {
-          const compIds = (section.compositions ?? []).map((comp) =>
-            typeof comp === "string" ? comp : comp.id
-          );
-          return compIds.includes(componentName) || compIds.includes(`${section.id}_${componentName}`);
-        })
-        .map((section) => section.id);
+  const matchingSections = sections.filter((section) => {
+    if (preferredSectionId && section.id !== preferredSectionId) {
+      return false;
+    }
 
-  return sectionIds.map((sid) => ({
+    const compIds = (section.compositions ?? []).map((comp) =>
+      typeof comp === "string" ? comp : comp.id
+    );
+
+    return compIds.includes(componentName) || compIds.includes(`${section.id}_${componentName}`);
+  });
+
+  return matchingSections.map((section) => ({
     componentName,
-    sectionId: sid,
-    compositionId: compToRemotionId(componentName, sid),
+    sectionId: section.id,
+    compositionId: compToRemotionId(componentName, section.id),
   }));
 }
 
@@ -585,6 +632,14 @@ registerExecutor("compositions", (params, send: SseSend) => {
             const spec = findSpecForComponent(item.name, item.specDir);
             const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
             await runClaudeFix(prompt, getRemotionScopeDir(), (line) => onLog(line));
+          }
+
+          if (!generatedArtifactExists(item.name, item.outputName, item.sectionId)) {
+            const msg = `Expected generated component output not found for ${item.outputName}`;
+            send({ type: "component", name: item.name, status: "error" });
+            onLog(`[compositions] Error generating ${item.name}: ${msg}`);
+            generationError = new Error(msg);
+            return;
           }
 
           send({ type: "component", name: item.name, status: "done" });
