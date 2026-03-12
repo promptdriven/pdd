@@ -1,3 +1,5 @@
+import { parseSpecTimestampRange } from "./composition-timing";
+
 export type SpecTimingWindow = {
   startSeconds: number;
   endSeconds: number;
@@ -10,52 +12,13 @@ export type SpecTimingWord = {
   segmentId?: string;
 };
 
-function parseClockTime(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parts = trimmed.split(":").map((part) => Number(part));
-  if (parts.some((part) => Number.isNaN(part))) {
-    return null;
-  }
-
-  if (parts.length === 1) {
-    return parts[0] ?? null;
-  }
-
-  if (parts.length === 2) {
-    return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
-  }
-
-  if (parts.length === 3) {
-    return (parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0);
-  }
-
-  return null;
-}
-
 export function parseSpecTimingWindow(specContent: string): SpecTimingWindow | null {
-  const match = specContent.match(
-    /\*\*Timestamp:\*\*\s*([0-9:.]+)\s*-\s*([0-9:.]+)/i
-  );
-  if (!match) {
+  const range = parseSpecTimestampRange(specContent);
+  if (!range) {
     return null;
   }
 
-  const startSeconds = parseClockTime(match[1] ?? "");
-  const endSeconds = parseClockTime(match[2] ?? "");
-
-  if (
-    startSeconds === null ||
-    endSeconds === null ||
-    endSeconds <= startSeconds
-  ) {
-    return null;
-  }
-
-  return { startSeconds, endSeconds };
+  return range;
 }
 
 export function filterWordsForSpecTimingWindow(

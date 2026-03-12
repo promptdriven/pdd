@@ -3,10 +3,7 @@ import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
 import { resolveSectionVisuals } from "@/lib/composition-timing";
-import {
-  resolveAuditSampleWindow,
-  resolveRenderedAuditSampleWindow,
-} from "@/lib/audit-timing";
+import { resolveAuditSampleWindow } from "@/lib/audit-timing";
 import { getProjectDir } from "@/lib/projects";
 import {
   resolveSectionSpecDir,
@@ -38,7 +35,7 @@ type AuditSectionResult = {
 };
 
 function parseAuditMarkdown(content: string): {
-  verdict: "PASS" | "FAIL";
+  verdict: "PASS" | "FAIL" | "SKIP";
   summary: string;
 } {
   const verdictMatch = content.match(/## Verdict\s+(\w+)/i);
@@ -48,8 +45,13 @@ function parseAuditMarkdown(content: string): {
     throw new Error("Invalid audit markdown format");
   }
 
+  const normalizedVerdict = verdictMatch[1].toLowerCase();
   const verdict =
-    verdictMatch[1].toLowerCase() === "pass" ? ("PASS" as const) : ("FAIL" as const);
+    normalizedVerdict === "pass"
+      ? ("PASS" as const)
+      : normalizedVerdict === "skip"
+        ? ("SKIP" as const)
+        : ("FAIL" as const);
   const summary = summaryMatch[1].trim();
 
   return { verdict, summary };
@@ -127,31 +129,19 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           const { verdict, summary } = parseAuditMarkdown(content);
 
           if (verdict === "PASS") passCount++;
-          else failCount++;
+          else if (verdict === "FAIL") failCount++;
 
           const specSourcePath = visual.specPath;
           const safeSpecPath = toSectionSpecPath(section.specDir, `${specName}.md`);
           const specExists = fs.existsSync(specSourcePath);
           const playbackWindow = specExists
-            ? (
-                Array.isArray(section.compositions) && section.compositions.length > 0
-                  ? resolveRenderedAuditSampleWindow(
-                      fs.readFileSync(specSourcePath, "utf-8"),
-                      {
-                        projectDir: getProjectDir(),
-                        specPath: specSourcePath,
-                        section,
-                        sectionDurationSeconds: section.durationSeconds,
-                        fps,
-                      }
-                    )
-                  : resolveAuditSampleWindow(
-                      fs.readFileSync(specSourcePath, "utf-8"),
-                      {
-                        sectionDurationSeconds: section.durationSeconds,
-                        fps,
-                      }
-                    )
+            ? resolveAuditSampleWindow(
+                fs.readFileSync(specSourcePath, "utf-8"),
+                {
+                  sectionDurationSeconds: section.durationSeconds,
+                  fps,
+                  sectionOffsetSeconds: section.offsetSeconds ?? 0,
+                }
               )
             : undefined;
 

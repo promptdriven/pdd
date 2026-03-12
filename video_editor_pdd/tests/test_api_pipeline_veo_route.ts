@@ -1126,7 +1126,7 @@ describe("GET_clips — response shape", () => {
     }
   });
 
-  it("returns the canonical markdown spec path when a section contains a Veo markdown spec", async () => {
+  it("prefers a prompt-bearing Veo markdown spec as a generated clip target before falling back to the blank canonical marker", async () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (typeof p !== "string") return false;
       if (p.includes("outputs/veo")) return false;
@@ -1144,7 +1144,7 @@ describe("GET_clips — response shape", () => {
     const response = await GET_clips();
     const data = await response.json();
 
-    expect(data.clips[0].specPath).toBe("specs/intro/02_blank.md");
+    expect(data.clips[0].specPath).toBe("specs/intro/03_ocean.md");
   });
 
   it("returns one clip per Veo markdown spec when explicit clip sources are declared", async () => {

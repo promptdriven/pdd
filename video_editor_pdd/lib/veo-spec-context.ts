@@ -84,7 +84,13 @@ export function extractVeoClipFilename(content: string, _specPath: string): stri
     return /\.[^.]+$/.test(basename) ? basename : `${basename}.mp4`;
   }
 
-  return null;
+  const fallbackBaseName = _specPath
+    .replace(/\\/g, "/")
+    .split("/")
+    .pop()
+    ?.replace(/\.[^.]+$/, "");
+
+  return fallbackBaseName ? `${fallbackBaseName}.mp4` : null;
 }
 
 export function isVeoMarkdownSpec(content: string): boolean {

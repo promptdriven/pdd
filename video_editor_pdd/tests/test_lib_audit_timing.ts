@@ -40,6 +40,40 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.sampleSeconds).toBe(76.5);
   });
 
+  it("supports timestamp ranges that use an en dash separator", () => {
+    const spec = `
+**Timestamp:** 0:10 – 0:14
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 20,
+      fps: 30,
+    });
+
+    expect(result.source).toBe("timestamp");
+    expect(result.startSeconds).toBe(10);
+    expect(result.endSeconds).toBe(14);
+    expect(result.sampleSeconds).toBe(13);
+  });
+
+  it("normalizes global timestamp ranges to section-local time when a section offset is provided", () => {
+    const spec = `
+**Timestamp:** 0:10 – 0:14
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 7.344,
+      fps: 30,
+      sectionOffsetSeconds: 7,
+    });
+
+    expect(result.source).toBe("timestamp");
+    expect(result.startSeconds).toBe(3);
+    expect(result.endSeconds).toBe(7);
+    expect(result.sampleSeconds).toBe(6);
+    expect(result.intrinsicSampleSeconds).toBeCloseTo(3, 3);
+  });
+
   it("prefers the final animation-sequence range when timestamp is missing", () => {
     const spec = `
 ## Animation Sequence

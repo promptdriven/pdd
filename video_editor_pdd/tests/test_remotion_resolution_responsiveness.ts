@@ -62,6 +62,10 @@ describe("resolution-aware Veo overlays", () => {
     process.cwd(),
     "remotion/src/remotion/VeoSection05SplitNatureComparison/VerticalDivider.tsx"
   );
+  const narrationOverlayPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection07NarrationOverlayIntro/VeoSection07NarrationOverlayIntro.tsx"
+  );
 
   it("derives the Veo title card layout from the active video config", () => {
     const source = fs.readFileSync(titleCardPath, "utf8");
@@ -149,5 +153,12 @@ describe("resolution-aware Veo overlays", () => {
     expect(labelSource).not.toMatch(/DIMENSIONS\.rightLabelX/);
     expect(dividerSource).not.toMatch(/DIMENSIONS\.dividerX/);
     expect(dividerSource).not.toMatch(/CANVAS\.height/);
+  });
+
+  it("keeps the narration overlay preview transparent so it can audit as an overlay layer", () => {
+    const source = fs.readFileSync(narrationOverlayPath, "utf8");
+
+    expect(source).toContain("pointerEvents: 'none'");
+    expect(source).not.toContain("backgroundColor: '#0A1628'");
   });
 });
