@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { randomUUID } from "crypto";
 import { getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 
 /**
@@ -22,7 +21,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const body = (await request.json().catch(() => ({}))) as AssetStagingBody;
     const files = body.files ?? [];
 
-    const jobId = randomUUID();
     let staged = 0;
 
     for (const file of files) {
@@ -42,7 +40,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    return NextResponse.json({ jobId, staged }, { status: 200 });
+    return NextResponse.json({ staged }, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(

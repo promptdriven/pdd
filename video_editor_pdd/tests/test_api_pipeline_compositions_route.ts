@@ -8,7 +8,7 @@
  *
  * Spec requirements verified:
  *   1. POST /api/pipeline/compositions/run — accepts { components?, wrappers? }, returns SSE stream with { jobId }
- *   2. POST /api/pipeline/asset-staging/run — accepts { files? }, copies files from outputs/veo/ to remotion/public/, returns { jobId }
+ *   2. POST /api/pipeline/asset-staging/run — accepts { files? }, copies files from outputs/veo/ to remotion/public/, returns { staged }
  *   3. GET /api/pipeline/compositions/list — returns { sections: CompositionSection[] }
  *   4. No authentication required
  *   5. registerExecutor('compositions', ...) called at module load time
@@ -1273,7 +1273,7 @@ describe("compositions executor factory — wrapper generation", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST_AssetStaging — response shape", () => {
-  it("returns a NextResponse with jobId", async () => {
+  it("returns a NextResponse with staged count", async () => {
     mockExistsSync.mockReturnValue(false);
 
     const request = makeRequest(
@@ -1284,8 +1284,7 @@ describe("POST_AssetStaging — response shape", () => {
     const response = await POST_AssetStaging(request as any);
     const data = await response.json();
 
-    expect(data).toHaveProperty("jobId");
-    expect(data.jobId).toBe("test-uuid-staging-001");
+    expect(data).toEqual({ staged: 0 });
   });
 
   it("returns status 200", async () => {
@@ -1298,6 +1297,20 @@ describe("POST_AssetStaging — response shape", () => {
 
     const response = await POST_AssetStaging(request as any);
     expect(response.status).toBe(200);
+  });
+
+  it("does not return a synthetic jobId for synchronous staging", async () => {
+    mockExistsSync.mockReturnValue(false);
+
+    const request = makeRequest(
+      "http://localhost/api/pipeline/asset-staging/run",
+      { files: [] }
+    );
+
+    const response = await POST_AssetStaging(request as any);
+    const data = await response.json();
+
+    expect(data).not.toHaveProperty("jobId");
   });
 });
 
@@ -1423,13 +1436,14 @@ describe("POST_AssetStaging — manifest loading", () => {
 
     await POST_AssetStaging(request as any);
 
-    // Should have tried to process the manifest file
+    // Should still return a synchronous staging payload.
     const data = await (
       await POST_AssetStaging(
         makeRequest("http://localhost/api/pipeline/asset-staging/run", {}) as any
       )
     ).json();
-    expect(data).toHaveProperty("jobId");
+    expect(data).toHaveProperty("staged");
+    expect(data).not.toHaveProperty("jobId");
   });
 
   it("returns staged count in response", async () => {
