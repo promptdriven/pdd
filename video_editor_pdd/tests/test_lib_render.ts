@@ -347,6 +347,20 @@ describe("renderSection — child-process spawn integration", () => {
       recursive: true,
     });
   });
+
+  it("prefers remotion/node_modules in child NODE_PATH so rendering uses the same Remotion toolchain as bundling", async () => {
+    await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
+
+    const nodePath = mockSpawn.mock.calls[0][2].env.NODE_PATH as string;
+    const nodePathEntries = nodePath.split(path.delimiter);
+
+    expect(nodePathEntries[0]).toContain(
+      path.join("video_editor_pdd", "remotion", "node_modules")
+    );
+    expect(nodePathEntries).toContainEqual(
+      expect.stringContaining(path.join("video_editor_pdd", "node_modules"))
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -750,6 +764,22 @@ describe("renderStill — subprocess", () => {
     await renderStill("TestComp", 0, "/stills/frame.png");
 
     expect(fs.promises.unlink).toHaveBeenCalled();
+  });
+
+  it("prefers remotion/node_modules in child NODE_PATH so still validation uses the bundled renderer version", async () => {
+    setupSpawn([], 0);
+
+    await renderStill("TestComp", 0, "/stills/frame.png");
+
+    const nodePath = mockSpawn.mock.calls[0][2].env.NODE_PATH as string;
+    const nodePathEntries = nodePath.split(path.delimiter);
+
+    expect(nodePathEntries[0]).toContain(
+      path.join("video_editor_pdd", "remotion", "node_modules")
+    );
+    expect(nodePathEntries).toContainEqual(
+      expect.stringContaining(path.join("video_editor_pdd", "node_modules"))
+    );
   });
 });
 

@@ -128,6 +128,16 @@ describe("resolution-aware Veo overlays", () => {
     expect(source).toMatch(/const\s*\{\s*width,\s*height\s*\}\s*=\s*useVideoConfig\(\)/);
   });
 
+  it("resolves split nature comparison media through shared visual aliases instead of hardcoded demo asset names", () => {
+    const source = fs.readFileSync(splitComparisonPath, "utf8");
+
+    expect(source).toMatch(/useVisualMediaSrc/);
+    expect(source).toMatch(/leftSrc\s*=\s*useVisualMediaSrc\(\s*['"]leftSrc['"]/);
+    expect(source).toMatch(/rightSrc\s*=\s*useVisualMediaSrc\(\s*['"]rightSrc['"]/);
+    expect(source).not.toContain("veo/ocean_sunset.mp4");
+    expect(source).not.toContain("veo/aerial_forest.mp4");
+  });
+
   it("avoids hardcoded 1920x1080 sizing in the split nature comparison children", () => {
     const panelSource = fs.readFileSync(splitPanelPath, "utf8");
     const labelSource = fs.readFileSync(splitLabelPath, "utf8");

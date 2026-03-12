@@ -2611,6 +2611,12 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
     expect(compositionsSourceCode).toContain("NOT Easing.quart");
   });
 
+  it("instructs Claude to route multi-clip Veo visuals through media aliases instead of inventing filenames", () => {
+    expect(compositionsSourceCode).toContain("Never hardcode Veo filenames");
+    expect(compositionsSourceCode).toContain("useVisualMediaSrc('leftSrc'");
+    expect(compositionsSourceCode).toContain("useVisualMediaSrc('rightSrc'");
+  });
+
   it("buildComponentPrompt derives dirName from baseName, not scoped outputName", () => {
     // The prompt must accept a baseName parameter for NN-prefix directory naming
     // so that "10_split_perception_reality" → "10-SplitPerceptionReality" directory

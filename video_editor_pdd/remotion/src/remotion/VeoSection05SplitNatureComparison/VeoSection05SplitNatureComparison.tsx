@@ -4,10 +4,17 @@ import { COLORS, resolveSplitNatureComparisonLayout } from './constants';
 import { VerticalDivider } from './VerticalDivider';
 import { SplitPanel } from './SplitPanel';
 import { PanelLabel } from './PanelLabel';
+import { useVisualMediaSrc } from '../_shared/visual-runtime';
 
 export const VeoSection05SplitNatureComparison: React.FC = () => {
   const { width, height } = useVideoConfig();
   const layout = resolveSplitNatureComparisonLayout(width, height);
+  const defaultSrc = useVisualMediaSrc('defaultSrc', 'veo/veo_section.mp4');
+  const leftSrc = useVisualMediaSrc('leftSrc', defaultSrc ?? 'veo/veo_section.mp4');
+  const rightSrc = useVisualMediaSrc(
+    'rightSrc',
+    leftSrc ?? defaultSrc ?? 'veo/veo_section.mp4'
+  );
 
   return (
     <AbsoluteFill
@@ -16,10 +23,10 @@ export const VeoSection05SplitNatureComparison: React.FC = () => {
       }}
     >
       {/* Left panel: Ocean sunset */}
-      <SplitPanel side="left" videoSrc="veo/ocean_sunset.mp4" layout={layout} />
+      {leftSrc ? <SplitPanel side="left" videoSrc={leftSrc} layout={layout} /> : null}
 
       {/* Right panel: Forest canopy */}
-      <SplitPanel side="right" videoSrc="veo/aerial_forest.mp4" layout={layout} />
+      {rightSrc ? <SplitPanel side="right" videoSrc={rightSrc} layout={layout} /> : null}
 
       {/* Center divider */}
       <VerticalDivider layout={layout} />

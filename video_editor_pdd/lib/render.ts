@@ -49,6 +49,9 @@ const getRemotionBuildDir = (): string => path.join(getAppRemotionDir(), "build"
 
 const getRemotionSourceDir = (): string => path.join(getAppRemotionDir(), "src");
 
+const getRemotionNodeModulesDir = (): string =>
+  path.join(getAppRemotionDir(), "node_modules");
+
 const resolveBundleDir = (candidatePath: string): string =>
   candidatePath.endsWith(".html") ? path.dirname(candidatePath) : candidatePath;
 
@@ -68,6 +71,11 @@ const getBundleCommand = (): string => {
   );
   return `"${remotionCli}" bundle "src/index.ts" --out "build"`;
 };
+
+const getRendererNodePath = (): string =>
+  [getRemotionNodeModulesDir(), getAppNodeModulesDir(), process.env.NODE_PATH]
+    .filter(Boolean)
+    .join(path.delimiter);
 
 let activeBuildRefresh:
   | { sourceVersion: number; promise: Promise<string> }
@@ -95,9 +103,7 @@ const ensureFreshBuildDir = async (): Promise<string> => {
     cwd: getAppRemotionDir(),
     env: {
       ...process.env,
-      NODE_PATH: [getAppNodeModulesDir(), process.env.NODE_PATH]
-        .filter(Boolean)
-        .join(path.delimiter),
+      NODE_PATH: getRendererNodePath(),
     },
   }).then(() => buildDir);
 
@@ -214,7 +220,7 @@ run().catch((err) => {
         cwd: getAppDir(),
         env: {
           ...process.env,
-          NODE_PATH: getAppNodeModulesDir(),
+          NODE_PATH: getRendererNodePath(),
         },
       });
 
@@ -370,7 +376,7 @@ run().catch((err) => {
         cwd: getAppDir(),
         env: {
           ...process.env,
-          NODE_PATH: getAppNodeModulesDir(),
+          NODE_PATH: getRendererNodePath(),
         },
       });
 
