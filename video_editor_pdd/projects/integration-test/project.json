@@ -20,8 +20,13 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 7.32,
+      "offsetSeconds": 0,
+      "compositions": [
+        "animation_section_01_title_card",
+        "02_blue_circle_pulse"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "veo_section",
@@ -30,8 +35,12 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 7.344,
+      "offsetSeconds": 7.32,
+      "compositions": [
+        "veo_section_01_title_card"
+      ],
+      "timelineSource": "generated"
     }
   ],
   "audioSync": {

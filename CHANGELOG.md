@@ -1,3 +1,51 @@
+## v0.0.174 (2026-03-11)
+
+### Feat
+
+- add vertex auth support for veo
+- finalize video editor workflows and test coverage
+
+### Fix
+
+- update veo generation and integration fixture
+- duplicate prompt file creation in auto-deps command (tested) (#821)
+- unify stage4 tts segmentation with renderer manifest
+- PDD fix for #794 (#795)
+- annotation eae0225c-3979-4355-aa47-33d1ad1838bd Change the main background color of this section t
+- annotation test-batch-ann-1773270943990 Change the primary background accent in Animation
+- annotation af9eda67-22b0-42d2-b1c0-3c4a51f00d67 Change the main background color of this section t
+- annotation test-batch-ann-1773268725957 Change the primary background accent in Animation
+- annotation be0fdbd3-1de4-47e1-b8bc-33cac05f2258 Change the main background color of this section t
+- annotation b63a0484-72df-404e-bb75-807b0ec35040 Change the main background color of this section t
+- annotation test-batch-ann-1773266153710 Change the primary background accent in Animation
+- annotation 7616b6d9-8ed3-46d4-afbb-063913535259 Change the main background color of this section t
+- annotation test-batch-ann-1773256989211 Change the primary background accent in Animation
+- stabilize video editor test environment
+- annotation da857351-968e-4a91-ba36-8cb2c87bf7d1 Change the main background color of this section t
+- annotation test-batch-ann-1773253511867 Change the primary background accent in Animation
+- PDD fix for #791 (#792)
+- stabilize video editor audit and review flows
+- annotation d960dd4c-e2b3-423a-be31-da9fa3b46126 Change the main background color of this section t
+- annotation test-batch-ann-1773247937451 Change the primary background accent in Animation
+- annotation test-batch-ann-1773247867794 Change the primary background accent in Animation
+- annotation test-batch-ann-1773247749292 Change the primary background accent in Animation
+- annotation test-batch-ann-1773237274248 Change the primary background accent in Animation
+- annotation 434ee0e8-d097-4463-91a3-2995d809a719 Change the main background color of this section t
+- annotation test-batch-ann-1773234881926 Change the primary background accent in Animation
+- annotation 8302e2aa-dadf-47e3-902e-d5df731143c5 Change the main background color of this section t
+- annotation ad1177e4-886b-4d05-8fc5-6b896523e6bf Change the main background color of this section t
+- annotation test-batch-ann-1773231157231 Change the primary background accent in Animation
+- annotation 584d7200-06f6-4b49-81bc-c138a73af9a4 Change the main background color of this section t
+- annotation test-batch-ann-1773217684118 Change the primary background accent in Animation
+- annotation test-batch-ann-1773217509935 Change the primary background accent in Animation
+- annotation c0724a2b-7a5b-4dbc-92b0-e50b1e5f8bcb Change the main background color of this section t
+- annotation test-batch-ann-1773215127249 Change the primary background accent in Animation
+- annotation test-batch-ann-1773214348383 Change the primary background accent in Animation
+
+### Refactor
+
+- separate app code from integration fixture
+
 ## v0.0.173 (2026-03-10)
 
 ### Feat

@@ -3,13 +3,9 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";
 import { VeoSection01TitleCard } from "../VeoSection01TitleCard";
-import { VeoSection02KeyVisual } from "../veo_section_02_key_visual";
-import { VeoSection03SplitSummary } from "../veo_section_03_split_summary";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "veo_section_01_title_card": VeoSection01TitleCard,
-  "veo_section_02_key_visual": VeoSection02KeyVisual,
-  "veo_section_03_split_summary": VeoSection03SplitSummary,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
@@ -18,13 +14,11 @@ const VISUAL_DURATIONS: Record<string, number> = {
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "veo_section_01_title_card": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "veo_section_02_key_visual": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "veo_section_03_split_summary": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
 };
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.424;
+  const durationSeconds = 7.344;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {

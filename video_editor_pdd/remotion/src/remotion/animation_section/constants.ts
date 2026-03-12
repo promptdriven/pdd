@@ -8,17 +8,14 @@ const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.000),
-  VISUAL_00_END: s2f(2.440),
-  VISUAL_01_START: s2f(2.440),
-  VISUAL_01_END: s2f(4.880),
-  VISUAL_02_START: s2f(4.880),
-  VISUAL_02_END: s2f(7.320),
+  VISUAL_00_END: s2f(3.000),
+  VISUAL_01_START: s2f(3.000),
+  VISUAL_01_END: s2f(7.320),
 };
 
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "animation_section_01_title_card", desc: "Animation Section Title Card" },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "animation_section_02_key_visual", desc: "Animation Section Key Visual" },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "animation_section_03_split_summary", desc: "Animation Section Split Summary" },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "animation_section_01_title_card", desc: "Section 1.1: Animation Section Title Card" },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_blue_circle_pulse", desc: "Section 1.2: Blue Circle Pulse" },
 ];
 
 export const AnimationSectionProps = z.object({
