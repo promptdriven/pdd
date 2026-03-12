@@ -359,6 +359,40 @@ describe("recoverCrashedJobs", () => {
     }
   });
 
+  it("reconciles stale running pipeline_status rows to recovered job errors", () => {
+    db.prepare(
+      "INSERT INTO jobs (id, stage, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)"
+    ).run("j-render", "render", "running", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z");
+
+    db.prepare(
+      "INSERT INTO pipeline_status (stage, status, lastJobId, error, updatedAt) VALUES (?, ?, ?, ?, ?)"
+    ).run("render", "running", "j-render", null, "2025-01-01T00:00:00Z");
+
+    recoverCrashedJobs(db);
+
+    const row = db.prepare("SELECT * FROM pipeline_status WHERE stage = ?").get("render") as any;
+    expect(row.status).toBe("error");
+    expect(row.lastJobId).toBe("j-render");
+    expect(row.error).toBe("Server restarted during pipeline");
+  });
+
+  it("reconciles stale running pipeline_status rows to completed jobs", () => {
+    db.prepare(
+      "INSERT INTO jobs (id, stage, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)"
+    ).run("j-render", "render", "done", "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z");
+
+    db.prepare(
+      "INSERT INTO pipeline_status (stage, status, lastJobId, error, updatedAt) VALUES (?, ?, ?, ?, ?)"
+    ).run("render", "running", "j-render", "stale", "2025-01-01T00:00:00Z");
+
+    recoverCrashedJobs(db);
+
+    const row = db.prepare("SELECT * FROM pipeline_status WHERE stage = ?").get("render") as any;
+    expect(row.status).toBe("done");
+    expect(row.lastJobId).toBe("j-render");
+    expect(row.error).toBeNull();
+  });
+
   it("is a no-op when there are no running jobs", () => {
     db.prepare(
       "INSERT INTO jobs (id, stage, status, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?)"
