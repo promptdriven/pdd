@@ -17,6 +17,77 @@ from typing import Any, Dict, List, Optional
 
 from lxml import etree
 
+from .architecture_sync_helper import filepath_to_prompt_filename
+
+# --- Issue #617: filename mirrors filepath ---
+
+# Extension (with dot, lowercased) -> PascalCase language for architecture.json
+_EXT_TO_LANGUAGE: Dict[str, str] = {
+    ".py": "Python",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScriptReact",
+    ".js": "JavaScript",
+    ".jsx": "JavaScriptReact",
+    ".prisma": "Prisma",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".java": "Java",
+    ".rb": "Ruby",
+    ".php": "PHP",
+    ".swift": "Swift",
+    ".kt": "Kotlin",
+    ".cs": "C#",
+    ".sql": "SQL",
+    ".html": "HTML",
+    ".css": "CSS",
+    ".scala": "Scala",
+    ".cpp": "C++",
+    ".c": "C",
+    ".sh": "Shell",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+    ".json": "JSON",
+    ".md": "Markdown",
+}
+
+
+def _language_from_filepath(filepath: str) -> Optional[str]:
+    """Infer PascalCase language from output filepath extension (Issue #617).
+
+    Returns None for extensionless files (e.g. Makefile, Dockerfile) so callers
+    can skip normalization rather than incorrectly defaulting to Python.
+    """
+    ext = Path(filepath).suffix.lower()
+    if ext and ext.startswith("."):
+        return _EXT_TO_LANGUAGE.get(ext, "Python")  # safe default for known-extension files
+    return None
+
+
+def normalize_architecture_filenames(arch_data: List[Dict[str, Any]]) -> None:
+    """
+    Set each module's filename from filepath so it mirrors directory structure (Issue #617).
+    Rewrites each module's dependencies list so they reference the new normalized filenames.
+    Mutates arch_data in place. Use after parsing architecture.json from LLM or template.
+    """
+    old_to_new: Dict[str, str] = {}
+    for entry in arch_data:
+        filepath = entry.get("filepath")
+        if not filepath or not isinstance(filepath, str):
+            continue
+        old_fn = entry.get("filename") or ""
+        language = _language_from_filepath(filepath)
+        if language is None:
+            # Extensionless file (e.g. Makefile) — leave filename unchanged
+            continue
+        new_fn = filepath_to_prompt_filename(filepath, language)
+        if old_fn:
+            old_to_new[old_fn] = new_fn
+        entry["filename"] = new_fn
+    for entry in arch_data:
+        deps = entry.get("dependencies")
+        if not isinstance(deps, list):
+            continue
+        entry["dependencies"] = [old_to_new.get(d, d) for d in deps]
 
 # --- Constants ---
 # Use Path.cwd() instead of __file__ so it works with the user's project directory,
@@ -149,14 +220,17 @@ def _find_renamed_prompt_file(filename: str, prompts_dir: Path) -> Optional[Path
     Returns:
         Path to the single matching file, or None if no unique match found
     """
-    match = re.match(r'^(.+?_step)\d+(_.*\.prompt)$', filename)
+    match = re.match(r'^(.+?_step)\d+(_.*\.prompt)$', Path(filename).name)
     if not match:
         return None
     prefix, suffix = match.group(1), match.group(2)
+    name_pattern = re.compile(re.escape(prefix) + r'\d+' + re.escape(suffix))
 
+    # Path-aware: search subdirs and exclude by normalized relative path (Issue #617)
+    filename_norm = Path(filename).as_posix()
     candidates = [
-        p for p in prompts_dir.glob(f"{prefix}*{suffix}")
-        if p.name != filename
+        p for p in prompts_dir.rglob('*.prompt')
+        if name_pattern.fullmatch(p.name) and p.relative_to(prompts_dir).as_posix() != filename_norm
     ]
     return candidates[0] if len(candidates) == 1 else None
 
@@ -229,8 +303,11 @@ def register_untracked_prompts(
     skipped = []
     errors = []
 
-    for prompt_file in sorted(prompts_dir.glob('*.prompt')):
-        filename = prompt_file.name
+    for prompt_file in sorted(prompts_dir.rglob('*.prompt')):
+        try:
+            filename = prompt_file.relative_to(prompts_dir).as_posix()
+        except ValueError:
+            continue
         if filename in existing_filenames:
             continue
 
@@ -319,8 +396,8 @@ def update_architecture_from_prompt(
                     'changes': {},
                     'error': f'Prompt file not found: {prompt_filename}'
                 }
-            # Auto-update architecture.json entry to use the found filename
-            new_filename = renamed_path.name
+            # Auto-update architecture.json entry to use the found filename (path-aware for #617)
+            new_filename = renamed_path.relative_to(prompts_dir).as_posix()
             if not architecture_path.exists():
                 return {
                     'success': False,
@@ -694,12 +771,21 @@ def get_architecture_entry_for_prompt(
 
     arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
 
-    # Extract just filename if full path provided
-    filename = Path(prompt_filename).name
+    # Normalize to forward-slash path for comparison (Issue #617: filename may include subdirs)
+    normalized = Path(prompt_filename).as_posix()
+    if normalized.startswith('./'):
+        normalized = normalized[2:]
 
+    # Exact path match first
     for entry in arch_data:
-        if entry.get('filename') == filename:
+        if entry.get('filename') == normalized:
             return entry
+
+    # Basename fallback: call sites may pass just the filename without subdirectory
+    basename = Path(normalized).name
+    candidates = [e for e in arch_data if Path(e.get('filename', '')).name == basename]
+    if len(candidates) == 1:
+        return candidates[0]
 
     return None
 
