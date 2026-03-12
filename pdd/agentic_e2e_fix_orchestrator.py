@@ -258,6 +258,35 @@ def _extract_test_files(
             if _is_test_file(f):
                 _add(f)
 
+    # Fallback: scan for test files committed on the feature branch that escaped
+    # the other discovery paths. This catches files committed during pdd bug that
+    # aren't in markers, changed_files, or hash detection (e.g., when
+    # initial_file_hashes is None or the files were committed before the hash
+    # snapshot was taken).
+    count_before_git = len(test_files)
+    committed_files = _get_modified_and_untracked(cwd)
+    for f in committed_files:
+        basename = Path(f).name
+        if basename.startswith("test_") and basename.endswith(".py"):
+            _add(f)
+
+    # Ultimate fallback: directory scan for test_*.py files on disk.
+    # Only runs when git-based discovery didn't add any new files, to avoid
+    # pulling the entire test suite into verification (slow + timeouts).
+    # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
+    git_found_nothing_new = len(test_files) == count_before_git
+    if git_found_nothing_new:
+        scan_dirs = [cwd / "tests", cwd]
+        for scan_dir in scan_dirs:
+            if not scan_dir.is_dir():
+                continue
+            glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
+            for test_py in sorted(glob_fn("test_*.py")):
+                rel = str(test_py.relative_to(cwd))
+                if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
+                    continue
+                _add(rel)
+
     return test_files
 
 
@@ -379,10 +408,14 @@ def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
 
 
 def _get_modified_and_untracked(cwd: Path) -> Set[str]:
-    """Returns set of modified tracked files plus untracked files."""
+    """Returns set of modified tracked files, untracked files, and files committed on the branch.
+
+    Includes files added in commits since the branch diverged from the base branch
+    (e.g., test files committed during pdd bug), not just uncommitted changes.
+    """
     files: Set[str] = set()
 
-    # Get modified tracked files
+    # Get modified tracked files (uncommitted changes)
     result = subprocess.run(
         ["git", "diff", "--name-only", "HEAD"],
         cwd=cwd,
@@ -401,6 +434,36 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
     )
     if result.returncode == 0:
         files.update(f for f in result.stdout.strip().split("\n") if f)
+
+    # Get files committed on the feature branch (since diverging from base branch).
+    # This catches test files committed during pdd bug that are neither uncommitted
+    # nor untracked — they're committed and clean, but new relative to the base.
+    # Try merge-base first (feature branch vs main/master), then fall back to
+    # listing all tracked files (single-branch scenario).
+    for base in ("main", "master"):
+        # Use merge-base to find the divergence point
+        mb_result = subprocess.run(
+            ["git", "merge-base", base, "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if mb_result.returncode == 0 and mb_result.stdout.strip():
+            merge_base = mb_result.stdout.strip()
+            result = subprocess.run(
+                ["git", "diff", "--name-only", merge_base, "HEAD"],
+                cwd=cwd,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                files.update(f for f in result.stdout.strip().split("\n") if f)
+            break
+
+    # Note: no blanket `git ls-files` fallback here — returning ALL tracked
+    # files would cause _commit_and_push to falsely detect unchanged files as
+    # "changed". Single-branch repos are handled by the rglob fallback in
+    # _extract_test_files() instead.
 
     return files
 
@@ -641,6 +704,15 @@ def _commit_and_push(
         text=True
     )
     if commit_result.returncode != 0:
+        # Commit may fail with "nothing to commit" when fallback files were
+        # already committed on the branch (merge-base diff includes them).
+        # In that case, push any unpushed commits instead of failing.
+        if _has_unpushed_commits(cwd):
+            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
+            if push_ok:
+                return True, "Pushed existing commits"
+            else:
+                return False, f"Push failed: {push_err}"
         return False, f"Failed to commit: {commit_result.stderr}"
 
     # Push to remote with retry on auth failure

@@ -18,6 +18,7 @@ from .agentic_common import (
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
+from .pytest_output import run_pytest_and_capture_output
 
 # Initialize console
 console = Console()
@@ -617,6 +618,40 @@ def run_agentic_bug_orchestrator(
             msg = "Stopped at Step 10: Generated test does not fail correctly (verification failed)."
             if not quiet: console.print(f"⏹️  {msg}")
             return False, msg, total_cost, last_model_used, changed_files
+
+        # Step 10: Independent pytest verification — catch anti-TDD tests
+        # that pass on buggy code (the LLM may claim "PASS" but the test
+        # should actually FAIL on current buggy code for TDD correctness).
+        if step_num == 10 and changed_files:
+            test_files_to_verify = [
+                f for f in changed_files
+                if Path(f).name.startswith("test_") and f.endswith(".py")
+            ]
+            for tf in test_files_to_verify:
+                abs_path = str(current_cwd / tf)
+                result = run_pytest_and_capture_output(abs_path)
+                if not result or not result.get("test_results"):
+                    # Cannot verify test — file missing or pytest error.
+                    # Treat as anti-TDD since we can't confirm the test fails.
+                    msg = (
+                        f"Stopped at Step 10: Cannot verify test {tf} fails on buggy code "
+                        "(file not found or pytest error). TDD requires independent verification."
+                    )
+                    if not quiet:
+                        console.print(f"⏹️  {msg}")
+                    return False, msg, total_cost, last_model_used, changed_files
+                tr = result["test_results"][0]
+                failures = tr.get("failures", 0) + tr.get("errors", 0)
+                if failures == 0:
+                    # Test passes on buggy code — anti-TDD pattern detected
+                    msg = (
+                        f"Stopped at Step 10: Test {tf} passes on current (buggy) code. "
+                        "TDD requires the test to FAIL before fix. This is an anti-TDD test "
+                        "that asserts buggy behavior as correct."
+                    )
+                    if not quiet:
+                        console.print(f"⏹️  {msg}")
+                    return False, msg, total_cost, last_model_used, changed_files
 
         # Step 11: E2E Test — handle skip, failure, and file extraction
         if step_num == 11:
