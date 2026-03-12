@@ -215,7 +215,9 @@ class TestIssue469DuplicateUnresolvedE2E:
 
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
              patch("pdd.agentic_bug_orchestrator.console"), \
-             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)):
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output",
+                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
 
             success, message, cost, model, files = run_agentic_bug_orchestrator(
                 issue_url="https://github.com/test/repo/issues/469",

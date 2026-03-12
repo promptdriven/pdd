@@ -45,7 +45,8 @@ def mock_dependencies():
     with patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
          patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
          patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_wt, \
-         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files:
+         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+         patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output") as mock_pytest:
 
         # Default behavior: return a template string that can be formatted
         mock_load.return_value = "Template for {issue_number}"
@@ -56,6 +57,11 @@ def mock_dependencies():
         # Default behavior: no modified/untracked files (avoids FileNotFoundError
         # from subprocess using mock worktree path as cwd)
         mock_git_files.return_value = []
+        # Default behavior: test fails on buggy code (TDD-correct — test should
+        # fail before fix). Step 10 independent verification expects failures > 0.
+        mock_pytest.return_value = {
+            "test_results": [{"tests": 1, "failures": 1, "errors": 0}]
+        }
 
         yield mock_load, mock_run, mock_wt
 

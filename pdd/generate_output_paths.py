@@ -328,7 +328,18 @@ def generate_output_paths(
                 logger.debug(f"User path '{user_path}' identified as a specific file path.")
                 final_path = user_path # Assume it's a full path or filename
 
-        # 2. Check Context Configuration Path (.pddrc)
+        # 1b. For fix and auto-deps commands, input_file_dirs takes priority over context config
+        # This ensures fix outputs stay next to the original input files instead of
+        # being redirected to the context's generate_output_path root directory.
+        # Only apply this override when context_path exists (to preserve env/default behavior otherwise)
+        elif command in ["fix", "auto-deps"] and context_path and (input_file_dirs.get(output_key) or (output_key == "output" and input_file_dir)):
+            source = "input_file_dirs"
+            # For auto-deps, the 'output' key might not be in input_file_dirs, so fallback to input_file_dir
+            specific_dir = input_file_dirs.get(output_key) or input_file_dir
+            final_path = os.path.join(specific_dir, default_filename)
+            logger.debug(f"{command.title()} command: using input file directory '{specific_dir}' for '{output_key}'")
+
+        # 2. Check Context Configuration Path (.pddrc) - Note: for fix/auto-deps, input_file_dirs checked first above
         elif context_path:
             source = "context"
 
