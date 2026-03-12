@@ -954,6 +954,8 @@ def generate_root_tsx(
     sections: List[Dict[str, Any]],
     fps: int,
     remotion_dir: str,
+    default_width: int = 1920,
+    default_height: int = 1080,
 ) -> str:
     """Generate the Root.tsx content that registers all section compositions
     and individual component compositions for preview."""
@@ -1000,8 +1002,8 @@ def generate_root_tsx(
         composition_id = section.get('compositionId', pascal_name + 'Section')
         duration_seconds = section.get('durationSeconds', 0)
         duration_frames = max(1, math.ceil(duration_seconds * fps))
-        width = section.get('width', 1920)
-        height = section.get('height', 1080)
+        width = section.get('width', default_width)
+        height = section.get('height', default_height)
 
         lines.append(f'      <Composition')
         lines.append(f'        id="{composition_id}"')
@@ -1018,8 +1020,8 @@ def generate_root_tsx(
     for section in sections:
         section_id = section['id']
         compositions = section.get('compositions', [])
-        width = section.get('width', 1920)
-        height = section.get('height', 1080)
+        width = section.get('width', default_width)
+        height = section.get('height', default_height)
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             if comp_id:
@@ -1051,6 +1053,8 @@ def update_root_tsx(
     sections: List[Dict[str, Any]],
     fps: int,
     remotion_dir: str,
+    default_width: int = 1920,
+    default_height: int = 1080,
 ) -> None:
     """Update or create Root.tsx to register all section compositions."""
     root_path = os.path.join(remotion_dir, 'src', 'remotion', 'Root.tsx')
@@ -1059,7 +1063,13 @@ def update_root_tsx(
 
     # Always regenerate Root.tsx from scratch to ensure all section and
     # individual component compositions are correctly registered.
-    new_content = generate_root_tsx(sections, fps, remotion_dir)
+    new_content = generate_root_tsx(
+        sections,
+        fps,
+        remotion_dir,
+        default_width=default_width,
+        default_height=default_height,
+    )
 
     with open(root_path, 'w', encoding='utf-8') as f:
         f.write(new_content)
@@ -1291,6 +1301,10 @@ def main() -> None:
     # Get FPS
     fps = get_fps(project_data)
 
+    output_resolution = project_data.get('outputResolution') or {}
+    default_width = int(output_resolution.get('width', 1920))
+    default_height = int(output_resolution.get('height', 1080))
+
     # Generate section components
     for section in sections:
         section_id = section.get('id')
@@ -1341,7 +1355,13 @@ def main() -> None:
         )
 
     # Update Root.tsx
-    update_root_tsx(sections, fps, remotion_dir)
+    update_root_tsx(
+        sections,
+        fps,
+        remotion_dir,
+        default_width=default_width,
+        default_height=default_height,
+    )
 
     sys.exit(0)
 

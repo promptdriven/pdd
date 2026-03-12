@@ -104,6 +104,32 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.sampleSeconds).toBeCloseTo(7);
   });
 
+  it("parses frame ranges that include parenthetical time hints before the colon", () => {
+    const spec = `
+**Timestamp:** 0:21 - 0:26
+
+## Animation Sequence
+1. Frame 0-20 (0-0.67s): Title fades in.
+2. Frame 15-40 (0.5-1.33s): Node 1 scales in.
+3. Frame 35-55 (1.17-1.83s): Arrow 1 draws.
+4. Frame 50-75 (1.67-2.5s): Node 2 scales in.
+5. Frame 70-90 (2.33-3s): Arrow 2 draws.
+6. Frame 85-110 (2.83-3.67s): Node 3 scales in.
+7. Frame 110-130 (3.67-4.33s): Descriptor 3 fades in.
+8. Frame 130-150 (4.33-5s): Hold complete diagram.
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 30,
+      fps: 30,
+    });
+
+    expect(result.source).toBe("frame-range");
+    expect(result.startSeconds).toBeCloseTo(25.333, 3);
+    expect(result.endSeconds).toBeCloseTo(26, 3);
+    expect(result.sampleSeconds).toBeCloseTo(25.666, 3);
+  });
+
   it("clamps local frame offsets to the end of the timestamp window", () => {
     const spec = `
 **Timestamp:** 0:03 - 0:06
@@ -255,5 +281,59 @@ describe("resolveRenderedAuditSampleWindow", () => {
     expect(result.startSeconds).toBeCloseTo(3);
     expect(result.endSeconds).toBeCloseTo(6);
     expect(result.sampleSeconds).toBeCloseTo(5.25);
+  });
+
+  it("uses the final hold frame range when the rendered spec includes parenthetical timing hints", () => {
+    const specDir = path.join(tmpDir, "specs", "veo_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:08\n"
+    );
+    const infographicPath = path.join(specDir, "06_veo_pipeline_infographic.md");
+    fs.writeFileSync(
+      infographicPath,
+      [
+        "**Timestamp:** 0:21 - 0:26",
+        "",
+        "## Animation Sequence",
+        "1. Frame 0-20 (0-0.67s): Title fades in.",
+        "2. Frame 15-40 (0.5-1.33s): Node 1 scales in.",
+        "3. Frame 35-55 (1.17-1.83s): Arrow 1 draws.",
+        "4. Frame 50-75 (1.67-2.5s): Node 2 scales in.",
+        "5. Frame 70-90 (2.33-3s): Arrow 2 draws.",
+        "6. Frame 85-110 (2.83-3.67s): Node 3 scales in.",
+        "7. Frame 110-130 (3.67-4.33s): Descriptor 3 fades in.",
+        "8. Frame 130-150 (4.33-5s): Hold complete diagram.",
+      ].join("\n")
+    );
+
+    const result = resolveRenderedAuditSampleWindow(
+      fs.readFileSync(infographicPath, "utf-8"),
+      {
+        projectDir: tmpDir,
+        specPath: infographicPath,
+        section: {
+          id: "veo_section",
+          specDir: "veo_section",
+          compositionId: "VeoSection",
+          durationSeconds: 7.424,
+          offsetSeconds: 0,
+          videoFile: "veo_section.mp4",
+          remotionDir: "S01-VeoSection",
+          compositions: [
+            "veo_section_01_title_card",
+            "06_veo_pipeline_infographic",
+          ],
+          label: "Veo Section",
+        },
+        fps: 30,
+      }
+    );
+
+    expect(result.source).toBe("frame-range");
+    expect(result.startSeconds).toBeCloseTo(5.996, 3);
+    expect(result.endSeconds).toBeCloseTo(7.424, 3);
+    expect(result.sampleSeconds).toBeGreaterThan(6.7);
   });
 });

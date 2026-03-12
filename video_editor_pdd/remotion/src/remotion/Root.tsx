@@ -24,106 +24,106 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={220}
+        durationInFrames={222}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={221}
+        durationInFrames={223}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section01-title-card"
         component={AnimationSection01TitleCard}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section02-blue-circle-pulse"
         component={AnimationSection02BlueCirclePulse}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section03-circle-to-square-morph"
         component={AnimationSection03CircleToSquareMorph}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section04-square-slide-right"
         component={AnimationSection04SquareSlideRight}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section05-split-comparison"
         component={AnimationSection05SplitComparison}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section06-particle-burst"
         component={AnimationSection06ParticleBurst}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="animation-section07-section-outro"
         component={AnimationSection07SectionOutro}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="veo-section01-title-card"
         component={VeoSection01TitleCard}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="veo-section03-wave-data-overlay"
         component={VeoSection03WaveDataOverlay}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="veo-section05-split-nature-comparison"
         component={VeoSection05SplitNatureComparison}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
       <Composition
         id="veo-section06-veo-pipeline-infographic"
         component={VeoSection06VeoPipelineInfographic}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
-        width={1920}
-        height={1080}
+        width={1280}
+        height={720}
       />
     </>
   );

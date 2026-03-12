@@ -4,6 +4,26 @@ import path from "path";
 import { Readable } from "stream";
 import { getAppDir, getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 
+function getContentType(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
+    case ".svg":
+      return "image/svg+xml";
+    case ".mp4":
+    default:
+      return "video/mp4";
+  }
+}
+
 function nodeStreamToReadableStream(nodeStream: Readable): ReadableStream<Uint8Array> {
   let closed = false;
 
@@ -119,7 +139,7 @@ export async function GET(
 
     // Common headers for all responses
     const commonHeaders: Record<string, string> = {
-      "Content-Type": "video/mp4",
+      "Content-Type": getContentType(resolved),
       "Accept-Ranges": "bytes",
       "Access-Control-Allow-Origin": "*",
       "Cross-Origin-Resource-Policy": "cross-origin",

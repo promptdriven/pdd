@@ -12,7 +12,7 @@ import { AnimationSection07SectionOutro } from "../07_section_outro";
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
   const offsetSeconds = 0;
-  const durationSeconds = 7.32;
+  const durationSeconds = 7.381333;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>

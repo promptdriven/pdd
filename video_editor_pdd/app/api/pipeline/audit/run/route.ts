@@ -7,6 +7,7 @@ import { runClaudeAnalysis } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
 import { resolveSectionVisuals } from "@/lib/composition-timing";
+import { normalizeSpecForAudit } from "@/lib/audit-spec-normalization";
 import {
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
@@ -79,7 +80,8 @@ async function auditSection(
           specPath: path.join(specDir, specFile),
           specName: path.basename(specFile, ".md"),
         }));
-  const fps = loadProject().render.fps ?? 30;
+  const project = loadProject();
+  const fps = project.render.fps ?? 30;
 
   let passCount = 0;
   let failCount = 0;
@@ -88,6 +90,10 @@ async function auditSection(
     const specPath = visual.specPath;
     const specName = visual.specName;
     const specContent = fs.readFileSync(specPath, "utf-8");
+    const normalizedSpecContent = normalizeSpecForAudit(
+      specContent,
+      project.outputResolution
+    );
     const sampleWindow =
       Array.isArray(section.compositions) && section.compositions.length > 0
         ? resolveRenderedAuditSampleWindow(specContent, {
@@ -104,6 +110,7 @@ async function auditSection(
     const renderedVideoPath = resolveSectionRenderedVideoPath(section);
 
     const outputStill = path.join(
+      getProjectDir(),
       "outputs",
       "audit",
       section.id,
@@ -136,10 +143,12 @@ async function auditSection(
     const prompt = `
 You are auditing a video frame against a spec.
 
-- Spec file: ${specPath}
+- Original spec file: ${specPath}
+- Normalized spec snapshot for audit:
+${normalizedSpecContent}
 - Frame PNG: ${outputStill}
 
-Read both files and return JSON matching AnnotationAnalysis:
+Read the frame PNG and compare it against the normalized spec snapshot above. Return JSON matching AnnotationAnalysis:
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
 
 Use severity="pass" if the frame fully satisfies the spec.

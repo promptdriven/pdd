@@ -16,7 +16,7 @@
  *   3. GET /api/pipeline/audit/results — returns { sections: AuditSectionResult[] }
  *      with passCount, failCount, status ('done'|'pending'|'error'), and specs array.
  *   4. No authentication required.
- *   5. Still output path: outputs/audit/{sectionId}/{specName}_frame.png
+ *   5. Still output path: {projectDir}/outputs/audit/{sectionId}/{specName}_frame.png
  *   6. Audit report path: specs/{specDir}/AUDIT_{specName}.md
  *   7. Concurrent agents: Promise.all(sections.map(...))
  *   8. Emit per-section events: { type: 'audit-section', sectionId, status, passCount, failCount }
@@ -55,6 +55,12 @@ const mockLoadProject = jest.fn();
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
+}));
+
+const mockGetProjectDir = jest.fn();
+
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: (...args: unknown[]) => mockGetProjectDir(...args),
 }));
 
 const mockReaddirSync = jest.fn();
@@ -159,7 +165,7 @@ async function readSseEvents(
 function mockProjectConfig() {
   return {
     name: "Test Project",
-    outputResolution: "1920x1080",
+    outputResolution: { width: 1920, height: 1080 },
     tts: { voice: "en-US-Neural2-F", rate: 1.0, model: "google-tts-v2" },
     sections: [
       {
@@ -236,6 +242,7 @@ beforeEach(() => {
     confidence: 0.95,
   });
   mockLoadProject.mockReturnValue(mockProjectConfig());
+  mockGetProjectDir.mockReturnValue("/project-root");
   mockReaddirSync.mockReturnValue([]);
   mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
   mockExistsSync.mockReturnValue(true);
@@ -616,11 +623,11 @@ describe("audit executor factory", () => {
     expect(mockRenderStill).not.toHaveBeenCalled();
     const pathMod = require("path");
     expect(mockExtractFrameAtTime.mock.calls[0][0]).toBe(
-      pathMod.join(process.cwd(), "output", "sections", "intro.mp4")
+      pathMod.join("/project-root", "output", "sections", "intro.mp4")
     );
     expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(2.25);
     expect(mockExtractFrameAtTime.mock.calls[0][2]).toBe(
-      pathMod.join("outputs", "audit", "intro", "visual_frame.png")
+      pathMod.join("/project-root", "outputs", "audit", "intro", "visual_frame.png")
     );
   });
 
@@ -630,7 +637,7 @@ describe("audit executor factory", () => {
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["visual.md"]);
     const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "intro");
+    const specDir = pathMod.join("/project-root", "specs", "intro");
     mockExistsSync.mockImplementation((candidate: string) => candidate === specDir);
 
     const executor = registerCallArgs.factory(
@@ -644,7 +651,7 @@ describe("audit executor factory", () => {
     expect(mockRenderStill.mock.calls[0][0]).toBe("IntroComposition");
     expect(mockRenderStill.mock.calls[0][1]).toBe(67);
     expect(mockRenderStill.mock.calls[0][2]).toBe(
-      pathMod.join("outputs", "audit", "intro", "visual_frame.png")
+      pathMod.join("/project-root", "outputs", "audit", "intro", "visual_frame.png")
     );
   });
 
@@ -661,6 +668,38 @@ describe("audit executor factory", () => {
     await executor(jest.fn());
 
     expect(mockRunClaudeAnalysis).toHaveBeenCalledTimes(2);
+  });
+
+  it("normalizes spec content to the active project resolution before calling Claude", async () => {
+    const config = mockProjectConfig();
+    config.outputResolution = { width: 1280, height: 720 };
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue(`
+### Canvas
+- Resolution: 1920x1080 (16:9)
+
+### Visual Elements
+- Wave spans the full 1920px width at y=540
+- Accent dots at x=480, x=960, x=1440
+    `.trim());
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const prompt = String(mockRunClaudeAnalysis.mock.calls[0][0]);
+    expect(prompt).toContain("Normalized spec snapshot");
+    expect(prompt).toContain("Resolution: 1280x720");
+    expect(prompt).toContain("1280px width");
+    expect(prompt).toContain("y=360");
+    expect(prompt).toContain("x=320");
+    expect(prompt).toContain("x=640");
+    expect(prompt).toContain("x=960");
+    expect(prompt).not.toContain("Resolution: 1920x1080");
   });
 
   it("writes audit report with correct format", async () => {
@@ -687,7 +726,7 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const writePath = mockWriteFileSync.mock.calls[0][0];
     expect(writePath).toBe(
-      pathMod.join(process.cwd(), "specs", "intro", "AUDIT_visual.md")
+      pathMod.join("/project-root", "specs", "intro", "AUDIT_visual.md")
     );
 
     const content = mockWriteFileSync.mock.calls[0][1];
@@ -834,7 +873,7 @@ describe("audit executor factory", () => {
 
     const pathMod = require("path");
     expect(mockExtractFrameAtTime.mock.calls[0][2]).toBe(
-      pathMod.join("outputs", "audit", "main", "transition_frame.png")
+      pathMod.join("/project-root", "outputs", "audit", "main", "transition_frame.png")
     );
   });
 
@@ -852,7 +891,7 @@ describe("audit executor factory", () => {
 
     const pathMod = require("path");
     expect(mockWriteFileSync.mock.calls[0][0]).toBe(
-      pathMod.join(process.cwd(), "specs", "main", "AUDIT_transition.md")
+      pathMod.join("/project-root", "specs", "main", "AUDIT_transition.md")
     );
   });
 
@@ -876,7 +915,7 @@ describe("audit executor factory", () => {
 
     const pathMod = require("path");
     expect(mockWriteFileSync.mock.calls[0][0]).toBe(
-      pathMod.join(process.cwd(), "specs", "cold_open", "AUDIT_title_card.md")
+      pathMod.join("/project-root", "specs", "cold_open", "AUDIT_title_card.md")
     );
   });
 
@@ -1047,7 +1086,7 @@ describe("audit executor factory", () => {
     ]);
 
     const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "animation_section");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
     const titleCardPath = pathMod.join(specDir, "01_title_card.md");
     const pulsePath = pathMod.join(specDir, "02_blue_circle_pulse.md");
     mockReadFileSync.mockImplementation((filePath: string) => {
@@ -1072,7 +1111,7 @@ describe("audit executor factory", () => {
         candidate === specDir ||
         candidate === titleCardPath ||
         candidate === pulsePath ||
-        candidate === pathMod.join(process.cwd(), "output", "sections", "animation_section.mp4")
+        candidate === pathMod.join("/project-root", "output", "sections", "animation_section.mp4")
       );
     });
 
@@ -1195,7 +1234,7 @@ describe("GET — audit markdown parsing", () => {
 
   it("handles multiple audit files per section", async () => {
     const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "intro");
+    const specDir = pathMod.join("/project-root", "specs", "intro");
     const visualAuditPath = pathMod.join(specDir, "AUDIT_visual.md");
     const overlayAuditPath = pathMod.join(specDir, "AUDIT_overlay.md");
     const visualSpecPath = pathMod.join(specDir, "visual.md");
@@ -1256,7 +1295,7 @@ describe("GET — audit markdown parsing", () => {
     mockLoadProject.mockReturnValue(config);
 
     const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const specDir = pathMod.join("/project-root", "specs", "cold_open");
     const specPath = pathMod.join(specDir, "title_card.md");
     const auditPath = pathMod.join(specDir, "AUDIT_title_card.md");
 
@@ -1293,7 +1332,7 @@ describe("GET — audit markdown parsing", () => {
 describe("GET — status determination", () => {
   it("returns 'pending' when no audit files exist but spec files do", async () => {
     const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "intro");
+    const specDir = pathMod.join("/project-root", "specs", "intro");
     const visualSpecPath = pathMod.join(specDir, "visual.md");
     const overlaySpecPath = pathMod.join(specDir, "overlay.md");
     const visualAuditPath = pathMod.join(specDir, "AUDIT_visual.md");
@@ -1422,7 +1461,7 @@ describe("GET — specPath must start with specs/ for specs/file route compatibi
     mockLoadProject.mockReturnValue(config);
 
     const pathMod = require("path");
-    const specDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const specDir = pathMod.join("/project-root", "specs", "cold_open");
     const specPath = pathMod.join(specDir, "title_card.md");
     const auditPath = pathMod.join(specDir, "AUDIT_title_card.md");
 

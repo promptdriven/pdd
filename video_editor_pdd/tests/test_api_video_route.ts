@@ -11,7 +11,7 @@
  *   3. Returns 200 for requests without a Range header (full file)
  *   4. Returns 404 if file not found
  *   5. Returns 403 if path traversal detected (path contains ".." or escapes allowed dirs)
- *   6. Sets Content-Type: video/mp4 for all responses
+ *   6. Sets Content-Type based on file extension (video/mp4, image/png, etc.)
  *   7. Allowed root directories: outputs/ and remotion/public/
  */
 
@@ -31,6 +31,12 @@ jest.mock("fs", () => ({
   createReadStream: (...args: unknown[]) => mockCreateReadStream(...args),
 }));
 
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => "/project-root",
+  getAppDir: () => "/app-root",
+  getAppRemotionPublicDir: () => "/app-root/remotion/public",
+}));
+
 // Import after mocking
 import { GET } from "../app/api/video/[...path]/route";
 
@@ -45,6 +51,17 @@ function makeRequest(rangeHeader?: string): Request {
     headers["range"] = rangeHeader;
   }
   return new Request("http://localhost/api/video/outputs/sections/intro.mp4", {
+    method: "GET",
+    headers,
+  });
+}
+
+function makePngRequest(rangeHeader?: string): Request {
+  const headers: Record<string, string> = {};
+  if (rangeHeader) {
+    headers["range"] = rangeHeader;
+  }
+  return new Request("http://localhost/api/video/outputs/audit/intro/frame.png", {
     method: "GET",
     headers,
   });
@@ -426,11 +443,11 @@ describe("GET /api/video/[...path] — allowed directories", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Content-Type always video/mp4
+// 6. Content-Type by extension
 // ---------------------------------------------------------------------------
 
 describe("GET /api/video/[...path] — Content-Type", () => {
-  it("always returns Content-Type: video/mp4 for 200", async () => {
+  it("returns Content-Type: video/mp4 for mp4 files", async () => {
     const response = await GET(
       makeRequest(),
       makeParams(["outputs", "sections", "intro.mp4"])
@@ -439,13 +456,22 @@ describe("GET /api/video/[...path] — Content-Type", () => {
     expect(response.headers.get("content-type")).toBe("video/mp4");
   });
 
-  it("always returns Content-Type: video/mp4 for 206", async () => {
+  it("returns Content-Type: video/mp4 for ranged mp4 responses", async () => {
     const response = await GET(
       makeRequest("bytes=0-499"),
       makeParams(["outputs", "sections", "intro.mp4"])
     );
 
     expect(response.headers.get("content-type")).toBe("video/mp4");
+  });
+
+  it("returns Content-Type: image/png for png audit frames", async () => {
+    const response = await GET(
+      makePngRequest(),
+      makeParams(["outputs", "audit", "intro", "frame.png"])
+    );
+
+    expect(response.headers.get("content-type")).toBe("image/png");
   });
 });
 
@@ -560,7 +586,9 @@ describe("app/api/video/[...path]/route.ts source structure", () => {
     expect(sourceCode).toMatch(/Content-Range/);
   });
 
-  it("sets Content-Type to video/mp4", () => {
+  it("maps content type from file extension", () => {
+    expect(sourceCode).toMatch(/function\s+getContentType/);
+    expect(sourceCode).toMatch(/image\/png/);
     expect(sourceCode).toMatch(/video\/mp4/);
   });
 });

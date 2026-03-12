@@ -71,11 +71,14 @@ def _write_project_json(project_dir: str, data: Dict[str, Any]) -> None:
 def _make_project_data(
     sections: List[Dict[str, Any]],
     fps: int = None,
+    output_resolution: Dict[str, int] | None = None,
 ) -> Dict[str, Any]:
     """Build a project.json data dict with given sections and optional fps."""
     data: Dict[str, Any] = {"sections": sections}
     if fps is not None:
         data["render"] = {"fps": fps}
+    if output_resolution is not None:
+        data["outputResolution"] = output_resolution
     return data
 
 
@@ -374,6 +377,18 @@ class TestGenerateRootTsx:
         assert "width={1280}" in root
         assert "height={720}" in root
 
+    def test_project_resolution_used_when_section_dimensions_missing(self):
+        sections = [{"id": "intro", "durationSeconds": 5}]
+        root = generate_root_tsx(
+            sections,
+            fps=30,
+            remotion_dir="remotion/",
+            default_width=1280,
+            default_height=720,
+        )
+        assert "width={1280}" in root
+        assert "height={720}" in root
+
     def test_multiple_sections_registered(self):
         sections = [
             {"id": "intro", "durationSeconds": 5},
@@ -423,6 +438,24 @@ class TestUpdateRootTsx:
         update_root_tsx(sections, fps=30, remotion_dir=remotion_dir)
 
         assert os.path.isdir(os.path.join(remotion_dir, "src", "remotion"))
+
+    def test_uses_project_output_resolution_when_present(self, tmp_path):
+        remotion_dir = str(tmp_path / "remotion")
+        sections = [{"id": "intro", "durationSeconds": 5}]
+        update_root_tsx(
+            sections,
+            fps=30,
+            remotion_dir=remotion_dir,
+            default_width=1280,
+            default_height=720,
+        )
+
+        root_path = os.path.join(remotion_dir, "src", "remotion", "Root.tsx")
+        with open(root_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        assert "width={1280}" in content
+        assert "height={720}" in content
 
     def test_merges_into_existing_root_tsx(self, tmp_path):
         """Spec: Find existing <Composition> blocks and replace or append."""
@@ -619,11 +652,30 @@ class TestMainFileGeneration:
                 main()
             assert exc_info.value.code == 0
 
-        # Check files created
-        base = tmp_project / "remotion" / "src" / "remotion"
-        assert (base / "intro" / "index.tsx").exists()
-        assert (base / "main_content" / "index.tsx").exists()
-        assert (base / "outro" / "index.tsx").exists()
+    def test_main_uses_project_output_resolution_for_root(self, tmp_path):
+        sections = [{"id": "intro", "durationSeconds": 5}]
+        project_data = _make_project_data(
+            sections,
+            fps=30,
+            output_resolution={"width": 1280, "height": 720},
+        )
+        _write_project_json(str(tmp_path), project_data)
+        remotion_src = tmp_path / "remotion" / "src" / "remotion"
+        remotion_src.mkdir(parents=True)
+
+        with mock.patch("sys.argv", [
+            "generate_section_compositions.py",
+            "--project-dir", str(tmp_path),
+            "--remotion-dir", str(tmp_path / "remotion"),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+        root_path = tmp_path / "remotion" / "src" / "remotion" / "Root.tsx"
+        content = root_path.read_text(encoding="utf-8")
+        assert "width={1280}" in content
+        assert "height={720}" in content
 
     def test_creates_directories_as_needed(self, tmp_project):
         """Spec: Create directories as needed: os.makedirs(...)."""

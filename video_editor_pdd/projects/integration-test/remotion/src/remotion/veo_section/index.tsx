@@ -8,8 +8,8 @@ import { VeoSection06VeoPipelineInfographic } from "../06_veo_pipeline_infograph
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 7.32;
-  const durationSeconds = 7.344;
+  const offsetSeconds = 7.381333;
+  const durationSeconds = 7.424;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
