@@ -1642,7 +1642,7 @@ class TestGeneratedTimelineWrapper:
         assert '"02_ocean_wave_sunset": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
         assert '"03_narration_overlay_intro": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
         assert '"03_narration_overlay_intro": 120' in tsx
-        assert 'activeVisualMedia?.defaultSrc' in tsx
+        assert 'activeVisualMedia?.defaultSrc && !ActiveComponent' in tsx
         assert '<SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>' in tsx
         assert '<VisualMediaProvider media={activeVisualMedia}>' in tsx
 

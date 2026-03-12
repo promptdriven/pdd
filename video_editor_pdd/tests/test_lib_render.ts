@@ -133,6 +133,7 @@ function setupFsMocks() {
   jest.spyOn(fs.promises, "writeFile").mockResolvedValue(undefined);
   jest.spyOn(fs.promises, "unlink").mockResolvedValue(undefined);
   jest.spyOn(fs, "existsSync").mockReturnValue(false);
+  mockExecPromisified.mockResolvedValue({ stdout: "", stderr: "" });
 }
 
 function setupSelectComposition(id = "TestComposition") {
@@ -373,9 +374,34 @@ describe("renderSection — bundle path resolution", () => {
     expect(script).toContain("/custom/bundle/path");
   });
 
-  it("falls back to remotion/build directory when index.html exists", async () => {
+  it("uses remotion/build when index.html exists and the source tree is not newer", async () => {
     delete process.env.REMOTION_BUNDLE_PATH;
-    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.existsSync as jest.Mock).mockImplementation((candidate: string) => {
+      return (
+        String(candidate).endsWith(path.join("remotion", "build")) ||
+        String(candidate).endsWith(path.join("remotion", "build", "index.html")) ||
+        String(candidate).endsWith(path.join("remotion", "src"))
+      );
+    });
+    jest.spyOn(fs, "statSync").mockImplementation((candidate: fs.PathLike) => {
+      const filePath = String(candidate);
+      return {
+        mtimeMs: filePath.includes(path.join("remotion", "build")) ? 200 : 100,
+        isDirectory: () =>
+          filePath.endsWith(path.join("remotion", "build")) ||
+          filePath.endsWith(path.join("remotion", "src")),
+      } as fs.Stats;
+    });
+    jest.spyOn(fs, "readdirSync").mockImplementation((candidate: fs.PathLike) => {
+      const filePath = String(candidate);
+      if (filePath.endsWith(path.join("remotion", "build"))) {
+        return [{ name: "index.html", isDirectory: () => false }] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      if (filePath.endsWith(path.join("remotion", "src"))) {
+        return [{ name: "remotion", isDirectory: () => true }] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      return [] as unknown as ReturnType<typeof fs.readdirSync>;
+    });
 
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
 
@@ -389,18 +415,72 @@ describe("renderSection — bundle path resolution", () => {
     expect(script).not.toMatch(/index\.html/);
   });
 
-  it("falls back to remotion directory when no build exists", async () => {
+  it("bundles remotion source into remotion/build when no build exists", async () => {
     delete process.env.REMOTION_BUNDLE_PATH;
     (fs.existsSync as jest.Mock).mockReturnValue(false);
 
     await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
+
+    expect(mockExecPromisified).toHaveBeenCalledWith(
+      expect.stringContaining('bundle "src/index.ts" --out "build"'),
+      expect.objectContaining({
+        cwd: expect.stringContaining(path.join("video_editor_pdd", "remotion")),
+      })
+    );
 
     const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
     const scriptCall = writeCalls.find((c: any[]) =>
       (c[0] as string).endsWith(".cjs")
     );
     const script = scriptCall![1] as string;
-    expect(script).toMatch(/remotion"/);
+    expect(script).toContain(path.join("remotion", "build"));
+  });
+
+  it("ignores a stale remotion/build bundle from REMOTION_BUNDLE_PATH when source files are newer", async () => {
+    process.env.REMOTION_BUNDLE_PATH = "remotion/build";
+    (fs.existsSync as jest.Mock).mockImplementation((candidate: string) => {
+      return (
+        String(candidate).endsWith(path.join("remotion", "build")) ||
+        String(candidate).endsWith(path.join("remotion", "build", "index.html")) ||
+        String(candidate).endsWith(path.join("remotion", "src"))
+      );
+    });
+    jest.spyOn(fs, "statSync").mockImplementation((candidate: fs.PathLike) => {
+      const filePath = String(candidate);
+      return {
+        mtimeMs: filePath.includes(path.join("remotion", "build")) ? 100 : 200,
+        isDirectory: () =>
+          filePath.endsWith(path.join("remotion", "build")) ||
+          filePath.endsWith(path.join("remotion", "src")),
+      } as fs.Stats;
+    });
+    jest.spyOn(fs, "readdirSync").mockImplementation((candidate: fs.PathLike) => {
+      const filePath = String(candidate);
+      if (filePath.endsWith(path.join("remotion", "build"))) {
+        return [{ name: "index.html", isDirectory: () => false }] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      if (filePath.endsWith(path.join("remotion", "src"))) {
+        return [{ name: "remotion", isDirectory: () => true }] as unknown as ReturnType<typeof fs.readdirSync>;
+      }
+      return [] as unknown as ReturnType<typeof fs.readdirSync>;
+    });
+
+    await renderSection("TestComp", "/tmp/out.mp4", jest.fn());
+
+    expect(mockExecPromisified).toHaveBeenCalledWith(
+      expect.stringContaining('bundle "src/index.ts" --out "build"'),
+      expect.objectContaining({
+        cwd: expect.stringContaining(path.join("video_editor_pdd", "remotion")),
+      })
+    );
+
+    const writeCalls = (fs.promises.writeFile as jest.Mock).mock.calls;
+    const scriptCall = writeCalls.find((c: any[]) =>
+      (c[0] as string).endsWith(".cjs")
+    );
+    const script = scriptCall![1] as string;
+    expect(script).toContain(path.join("remotion", "build"));
+    expect(script).not.toMatch(/index\.html/);
   });
 });
 
@@ -624,6 +704,26 @@ describe("renderStill — subprocess", () => {
     expect(scriptContent).toContain("/stills/frame.png");
     expect(scriptContent).toContain("selectComposition");
     expect(scriptContent).toContain("renderStill");
+  });
+
+  it("bundles remotion source before rendering when no build exists", async () => {
+    setupSpawn([], 0);
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+
+    await renderStill("IntroComposition", 90, "/stills/frame.png");
+
+    expect(mockExecPromisified).toHaveBeenCalledWith(
+      expect.stringContaining('bundle "src/index.ts" --out "build"'),
+      expect.objectContaining({
+        cwd: expect.stringContaining(path.join("video_editor_pdd", "remotion")),
+      })
+    );
+
+    const writeCall = (fs.promises.writeFile as jest.Mock).mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("remotion-still")
+    );
+    const scriptContent = writeCall?.[1] as string;
+    expect(scriptContent).toContain(path.join("remotion", "build"));
   });
 
   it("rejects when child process exits with non-zero code", async () => {

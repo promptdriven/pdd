@@ -587,6 +587,8 @@ describe("audit executor factory", () => {
     const prompt = mockRunClaudeAudit.mock.calls[0][0] as string;
     expect(prompt).toContain("Render resolution: 1920x1080");
     expect(prompt).toContain("Sample time (section-local):");
+    expect(prompt).toContain("Sample time (intrinsic visual):");
+    expect(prompt).toContain("Sample frame (intrinsic visual):");
     expect(prompt).toContain("Sample window:");
     expect(prompt).toContain("Audit visual type:");
   });

@@ -81,6 +81,28 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.sampleSeconds).toBeCloseTo(77.5 / 30);
   });
 
+  it("parses bolded markdown frame ranges used in generated specs", () => {
+    const spec = `
+**Timestamp:** 0:00 - 0:03
+
+## Animation Sequence
+1. **Frame 0-15 (0-0.5s):** Fade in.
+2. **Frame 15-45 (0.5-1.5s):** Title reveal.
+3. **Frame 45-65 (1.5-2.17s):** Rule expansion.
+4. **Frame 65-90 (2.17-3s):** Hold — all elements static at full opacity.
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 10.752,
+      fps: 30,
+    });
+
+    expect(result.source).toBe("frame-range");
+    expect(result.startSeconds).toBeCloseTo(65 / 30);
+    expect(result.endSeconds).toBeCloseTo(90 / 30);
+    expect(result.sampleSeconds).toBeCloseTo(77.5 / 30);
+  });
+
   it("treats animation-sequence frame ranges as offsets within the timestamp window", () => {
     const spec = `
 **Timestamp:** 0:03 - 0:08
@@ -235,6 +257,10 @@ describe("resolveRenderedAuditSampleWindow", () => {
     expect(result.startSeconds).toBeCloseTo(0);
     expect(result.endSeconds).toBeCloseTo(2.25);
     expect(result.sampleSeconds).toBeCloseTo(1.889, 3);
+    expect(result.intrinsicDurationSeconds).toBeCloseTo(3, 3);
+    expect(result.intrinsicSampleSeconds).toBeCloseTo((77.5 / 30) - 0.0005, 3);
+    expect(result.intrinsicDurationFrames).toBe(90);
+    expect(result.intrinsicSampleFrame).toBe(77);
   });
 
   it("falls back to the raw spec timing when the spec is not part of the rendered visual graph", () => {

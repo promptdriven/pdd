@@ -175,6 +175,9 @@ Rules:
 - Audit visual type: ${visual.visualType}
 - Sample window: ${sampleWindow.startSeconds.toFixed(3)}s - ${sampleWindow.endSeconds.toFixed(3)}s (${sampleWindow.source})
 - Sample time (section-local): ${sampleWindow.sampleSeconds.toFixed(3)}s
+- Sample time (intrinsic visual): ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s / ${sampleWindow.intrinsicDurationSeconds.toFixed(3)}s
+- Sample frame (intrinsic visual): ${sampleWindow.intrinsicSampleFrame} / ${sampleWindow.intrinsicDurationFrames}
+- Sample progress within intrinsic visual: ${(sampleWindow.normalizedSample * 100).toFixed(1)}%
 - Normalized spec snapshot for audit:
 ${normalizedSpecContent}
 - Frame PNG: ./${path.basename(outputStill)}

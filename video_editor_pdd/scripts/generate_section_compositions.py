@@ -772,13 +772,13 @@ def generate_generated_timeline_wrapper(
         lines.append(f'      <Audio src={{staticFile("{direct_audio_src}")}} />')
     if has_visual_video:
         if direct_video_src is not None:
-            lines.append(f'      {{activeVisualMedia?.defaultSrc ? (')
+            lines.append(f'      {{activeVisualMedia?.defaultSrc && !ActiveComponent ? (')
             lines.append('        <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
             lines.append('      ) : (')
-            lines.append(f'        <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} />')
+            lines.append(f'        !ActiveComponent ? <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} /> : null')
             lines.append('      )}')
         else:
-            lines.append('      {activeVisualMedia?.defaultSrc ? (')
+            lines.append('      {activeVisualMedia?.defaultSrc && !ActiveComponent ? (')
             lines.append('        <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
             lines.append('      ) : null}')
     lines.append('      {ActiveComponent && activeVisual ? (')

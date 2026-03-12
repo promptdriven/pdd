@@ -47,11 +47,9 @@ export const VeoSectionSection: React.FC = () => {
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
       <Audio src={staticFile("veo_section/narration.wav")} />
-      {activeVisualMedia?.defaultSrc ? (
+      {activeVisualMedia?.defaultSrc && !ActiveComponent ? (
         <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
-      ) : (
-        <OffthreadVideo src={staticFile("veo/veo_section.mp4")} style={{ width: "100%", height: "100%" }} />
-      )}
+      ) : null}
       {ActiveComponent && activeVisual ? (
         <Sequence
           from={activeVisual.start}

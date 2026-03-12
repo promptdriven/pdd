@@ -19,27 +19,130 @@ const execAsync = promisify(exec);
 /**
  * Resolve the Remotion bundle path.
  * Priority:
- * 1) REMOTION_BUNDLE_PATH env var
- * 2) remotion/build/index.js (if present)
- * 3) remotion (app root)
+ * 1) REMOTION_BUNDLE_PATH env var (unless it points at a stale remotion/build/)
+ * 2) remotion/build/ when it exists and is not older than remotion/src/
+ * 3) Bundle remotion/src/index.ts into remotion/build on demand
  */
-const getServeUrl = (): string => {
+const getLatestMtimeMs = (entryPath: string): number => {
+  if (!fs.existsSync(entryPath)) {
+    return 0;
+  }
+
+  const stat = fs.statSync(entryPath);
+  let latest = stat.mtimeMs;
+
+  if (!stat.isDirectory()) {
+    return latest;
+  }
+
+  for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
+    latest = Math.max(
+      latest,
+      getLatestMtimeMs(path.join(entryPath, entry.name))
+    );
+  }
+
+  return latest;
+};
+
+const getRemotionBuildDir = (): string => path.join(getAppRemotionDir(), "build");
+
+const getRemotionSourceDir = (): string => path.join(getAppRemotionDir(), "src");
+
+const resolveBundleDir = (candidatePath: string): string =>
+  candidatePath.endsWith(".html") ? path.dirname(candidatePath) : candidatePath;
+
+const isRemotionBuildDir = (candidateDir: string): boolean =>
+  path.resolve(candidateDir) === path.resolve(getRemotionBuildDir());
+
+const shouldPreferSourceOverBuild = (bundleDir: string): boolean => {
+  return getLatestMtimeMs(getRemotionSourceDir()) > getLatestMtimeMs(bundleDir);
+};
+
+const getBundleCommand = (): string => {
+  const remotionCli = path.join(
+    getAppRemotionDir(),
+    "node_modules",
+    ".bin",
+    "remotion"
+  );
+  return `"${remotionCli}" bundle "src/index.ts" --out "build"`;
+};
+
+let activeBuildRefresh:
+  | { sourceVersion: number; promise: Promise<string> }
+  | null = null;
+
+const ensureFreshBuildDir = async (): Promise<string> => {
+  const buildDir = getRemotionBuildDir();
+  const buildIndexHtml = path.join(buildDir, "index.html");
+  const sourceVersion = getLatestMtimeMs(getRemotionSourceDir());
+  const buildIsFresh =
+    fs.existsSync(buildIndexHtml) && !shouldPreferSourceOverBuild(buildDir);
+
+  if (buildIsFresh) {
+    return buildDir;
+  }
+
+  if (
+    activeBuildRefresh &&
+    activeBuildRefresh.sourceVersion === sourceVersion
+  ) {
+    return activeBuildRefresh.promise;
+  }
+
+  const promise = execAsync(getBundleCommand(), {
+    cwd: getAppRemotionDir(),
+    env: {
+      ...process.env,
+      NODE_PATH: [getAppNodeModulesDir(), process.env.NODE_PATH]
+        .filter(Boolean)
+        .join(path.delimiter),
+    },
+  }).then(() => buildDir);
+
+  activeBuildRefresh = {
+    sourceVersion,
+    promise,
+  };
+
+  try {
+    return await promise;
+  } finally {
+    if (activeBuildRefresh?.promise === promise) {
+      activeBuildRefresh = null;
+    }
+  }
+};
+
+const getServeUrl = async (): Promise<string> => {
   const appDir = getAppDir();
   const envPath = process.env.REMOTION_BUNDLE_PATH;
   if (envPath) {
     // Resolve relative paths to absolute so Remotion can locate the bundle
-    return path.isAbsolute(envPath)
+    const resolvedEnvPath = path.isAbsolute(envPath)
       ? envPath
       : path.join(appDir, envPath);
+    const bundleDir = resolveBundleDir(resolvedEnvPath);
+
+    if (isRemotionBuildDir(bundleDir)) {
+      return ensureFreshBuildDir();
+    }
+
+    return bundleDir;
   }
 
   // Auto-detect pre-compiled bundle: check for index.html in remotion/build/
-  const buildIndexHtml = path.join(getAppRemotionDir(), "build", "index.html");
+  const buildDir = getRemotionBuildDir();
+  const buildIndexHtml = path.join(buildDir, "index.html");
   if (fs.existsSync(buildIndexHtml)) {
-    return path.join(getAppRemotionDir(), "build");
+    if (shouldPreferSourceOverBuild(buildDir)) {
+      return ensureFreshBuildDir();
+    }
+    return buildDir;
   }
 
-  return getAppRemotionDir();
+  return ensureFreshBuildDir();
 };
 
 const ensureDir = async (filePath: string): Promise<void> => {
@@ -63,7 +166,7 @@ export const renderSection = async (
 ): Promise<void> => {
   await ensureDir(outputPath);
 
-  const serveUrl = getServeUrl();
+  const serveUrl = await getServeUrl();
 
   // Write a temporary .cjs script that performs the actual render
   const scriptPath = path.join(
@@ -232,7 +335,7 @@ export const renderStill = async (
 ): Promise<void> => {
   await ensureDir(outputPath);
 
-  const serveUrl = getServeUrl();
+  const serveUrl = await getServeUrl();
 
   const scriptPath = path.join(
     os.tmpdir(),
