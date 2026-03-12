@@ -5,16 +5,11 @@ import "./_shared/load-inter-font";
 import { AnimationSectionSection } from "./animation_section";
 import { VeoSectionSection } from "./veo_section";
 import { AnimationSection01TitleCard } from "./AnimationSection01TitleCard";
-import { AnimationSection02BlueCirclePulse } from "./AnimationSection02BlueCirclePulse";
-import { AnimationSection03CircleToSquareMorph } from "./AnimationSection03CircleToSquareMorph";
-import { AnimationSection04SquareSlideRight } from "./AnimationSection04SquareSlideRight";
-import { AnimationSection05SplitComparison } from "./AnimationSection05SplitComparison";
-import { AnimationSection06ParticleBurst } from "./AnimationSection06ParticleBurst";
-import { AnimationSection07SectionOutro } from "./AnimationSection07SectionOutro";
+import { AnimationSection02KeyVisual } from "./animation_section_02_key_visual";
+import { AnimationSection03SplitSummary } from "./animation_section_03_split_summary";
 import { VeoSection01TitleCard } from "./VeoSection01TitleCard";
-import { VeoSection03WaveDataOverlay } from "./VeoSection03WaveDataOverlay";
-import { VeoSection05SplitNatureComparison } from "./VeoSection05SplitNatureComparison";
-import { VeoSection06VeoPipelineInfographic } from "./VeoSection06VeoPipelineInfographic";
+import { VeoSection02KeyVisual } from "./veo_section_02_key_visual";
+import { VeoSection03SplitSummary } from "./veo_section_03_split_summary";
 
 const PREVIEW_DURATION = 150; // 5s at 30fps
 
@@ -24,7 +19,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={224}
+        durationInFrames={220}
         fps={30}
         width={1280}
         height={720}
@@ -32,7 +27,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={225}
+        durationInFrames={221}
         fps={30}
         width={1280}
         height={720}
@@ -46,48 +41,16 @@ export const RemotionRoot: React.FC = () => {
         height={720}
       />
       <Composition
-        id="animation-section02-blue-circle-pulse"
-        component={AnimationSection02BlueCirclePulse}
+        id="animation-section02-key-visual"
+        component={AnimationSection02KeyVisual}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
         height={720}
       />
       <Composition
-        id="animation-section03-circle-to-square-morph"
-        component={AnimationSection03CircleToSquareMorph}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section04-square-slide-right"
-        component={AnimationSection04SquareSlideRight}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section05-split-comparison"
-        component={AnimationSection05SplitComparison}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section06-particle-burst"
-        component={AnimationSection06ParticleBurst}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section07-section-outro"
-        component={AnimationSection07SectionOutro}
+        id="animation-section03-split-summary"
+        component={AnimationSection03SplitSummary}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -102,24 +65,16 @@ export const RemotionRoot: React.FC = () => {
         height={720}
       />
       <Composition
-        id="veo-section03-wave-data-overlay"
-        component={VeoSection03WaveDataOverlay}
+        id="veo-section02-key-visual"
+        component={VeoSection02KeyVisual}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
         height={720}
       />
       <Composition
-        id="veo-section05-split-nature-comparison"
-        component={VeoSection05SplitNatureComparison}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="veo-section06-veo-pipeline-infographic"
-        component={VeoSection06VeoPipelineInfographic}
+        id="veo-section03-split-summary"
+        component={VeoSection03SplitSummary}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}

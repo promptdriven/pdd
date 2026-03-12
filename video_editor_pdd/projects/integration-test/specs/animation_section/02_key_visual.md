@@ -1,12 +1,12 @@
-[title:]
-# Veo Section Title Card
+[Remotion]
+# Animation Section Key Visual
 
 **Tool:** Remotion
-**Duration:** ~4s
+**Duration:** ~5s
 **Timestamp:** 0:00 - 0:05
 
 ## Visual Description
-Veo Section appears as a crisp title card with immediate readability.
+Animation Section is represented by a simple animated chart with strong contrast and visible motion.
 
 ## Technical Specifications
 
@@ -20,7 +20,7 @@ Veo Section appears as a crisp title card with immediate readability.
 3. Frame 90-150: Hold the final state clearly for rendering verification.
 
 ## Narration Sync
-> "Veo Section appears as a crisp title card with immediate readability."
+> "Animation Section is represented by a simple animated chart with strong contrast and visible motion."
 
 ## Code Structure (Remotion)
 ```typescript
