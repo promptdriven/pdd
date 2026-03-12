@@ -74,6 +74,7 @@ def _run_orchestrator_with_all_tests_pass(worktree: Path):
          patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
          patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear, \
          patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
+         patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
          patch("pdd.agentic_e2e_fix_orchestrator.console"):
 
         mock_run.side_effect = step_side_effect

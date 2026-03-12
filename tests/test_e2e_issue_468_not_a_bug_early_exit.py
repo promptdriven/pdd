@@ -90,6 +90,7 @@ class TestIssue468NotABugEarlyExitE2E:
              patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state"), \
+             patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", return_value={}), \
              patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push", return_value=(True, "No changes")):
 
@@ -166,6 +167,7 @@ class TestIssue468NotABugEarlyExitE2E:
              patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state"), \
+             patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", return_value={}), \
              patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push", return_value=(True, "No changes")):
 
@@ -226,6 +228,7 @@ class TestIssue468NotABugEarlyExitE2E:
              patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state", return_value=None), \
              patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state", return_value=(None, None)), \
              patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state"), \
+             patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", return_value={}), \
              patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push", return_value=(True, "No changes")):
 

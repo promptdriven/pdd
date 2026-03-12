@@ -200,19 +200,21 @@ class TestIssue579OrchestratorRerunE2E:
             with patch('pdd.agentic_bug_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_bug_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_bug_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        success, message, cost, model, files = run_agentic_bug_orchestrator(
-                            issue_url="https://github.com/test/repo/issues/579",
-                            issue_content="Bug: re-run crashes with worktree conflict",
-                            repo_owner="test",
-                            repo_name="repo",
-                            issue_number=579,
-                            issue_author="testuser",
-                            issue_title="Re-run crashes with git worktree conflict",
-                            cwd=main_repo,
-                            verbose=False,
-                            quiet=True,
-                            use_github_state=False,
-                        )
+                        with patch('pdd.agentic_bug_orchestrator.run_pytest_and_capture_output',
+                                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
+                            success, message, cost, model, files = run_agentic_bug_orchestrator(
+                                issue_url="https://github.com/test/repo/issues/579",
+                                issue_content="Bug: re-run crashes with worktree conflict",
+                                repo_owner="test",
+                                repo_name="repo",
+                                issue_number=579,
+                                issue_author="testuser",
+                                issue_title="Re-run crashes with git worktree conflict",
+                                cwd=main_repo,
+                                verbose=False,
+                                quiet=True,
+                                use_github_state=False,
+                            )
 
         # The orchestrator should succeed (all 12 steps) even when the branch
         # is already checked out. On buggy code, it fails at worktree creation.
@@ -312,19 +314,21 @@ class TestIssue579OrchestratorRerunE2E:
             with patch('pdd.agentic_bug_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_bug_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_bug_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        success, message, cost, model, files = run_agentic_bug_orchestrator(
-                            issue_url="https://github.com/test/repo/issues/579",
-                            issue_content="Bug: re-run crashes with worktree conflict",
-                            repo_owner="test",
-                            repo_name="repo",
-                            issue_number=579,
-                            issue_author="testuser",
-                            issue_title="Re-run crashes with git worktree conflict",
-                            cwd=main_repo,
-                            verbose=False,
-                            quiet=True,
-                            use_github_state=False,
-                        )
+                        with patch('pdd.agentic_bug_orchestrator.run_pytest_and_capture_output',
+                                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
+                            success, message, cost, model, files = run_agentic_bug_orchestrator(
+                                issue_url="https://github.com/test/repo/issues/579",
+                                issue_content="Bug: re-run crashes with worktree conflict",
+                                repo_owner="test",
+                                repo_name="repo",
+                                issue_number=579,
+                                issue_author="testuser",
+                                issue_title="Re-run crashes with git worktree conflict",
+                                cwd=main_repo,
+                                verbose=False,
+                                quiet=True,
+                                use_github_state=False,
+                            )
 
         # The orchestrator should succeed on resume even with stale worktree metadata.
         # On buggy code, it fails at worktree recreation with:

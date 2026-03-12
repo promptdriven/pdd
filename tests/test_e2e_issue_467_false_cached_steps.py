@@ -106,7 +106,9 @@ class TestIssue467FalseCachedStepsE2E:
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=all_fail), \
              patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
              patch("pdd.agentic_bug_orchestrator.console"), \
-             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)):
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output",
+                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
 
             run_agentic_bug_orchestrator(**orchestrator_args)
 
@@ -144,7 +146,9 @@ class TestIssue467FalseCachedStepsE2E:
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=track_and_succeed), \
              patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
              patch("pdd.agentic_bug_orchestrator.console"), \
-             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)):
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output",
+                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
 
             run_agentic_bug_orchestrator(**orchestrator_args)
 
@@ -205,7 +209,9 @@ class TestIssue467FalseCachedStepsE2E:
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=partial_failure), \
              patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
              patch("pdd.agentic_bug_orchestrator.console"), \
-             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)):
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output",
+                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
 
             run_agentic_bug_orchestrator(**orchestrator_args)
 
@@ -250,7 +256,9 @@ class TestIssue467FalseCachedStepsE2E:
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=track_and_succeed), \
              patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
              patch("pdd.agentic_bug_orchestrator.console"), \
-             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)):
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output",
+                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
 
             run_agentic_bug_orchestrator(**orchestrator_args)
 

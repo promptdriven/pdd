@@ -1097,3 +1097,143 @@ class TestSubdirectoryBasenameSupport:
         result = _get_default_filename("fix", "output_code", "core/cloud", "python", ".py")
         assert result == "core/cloud_fixed.py", f"Expected 'core/cloud_fixed.py', got '{result}'"
 
+
+class TestFixAutoDepsDuplicationBugPrevention:
+    """
+    Test for the fix to issue #806: Fix and auto-deps commands creating
+    duplicate prompt files in wrong directory structure.
+    
+    Background: When input_file_dirs is provided but context config also exists,
+    fix and auto-deps commands should prioritize input_file_dirs to preserve
+    the original directory structure and prevent path duplication.
+    """
+    
+    def test_fix_command_prioritizes_input_file_dirs_over_context_config(self, tmp_path):
+        """
+        REGRESSION TEST for issue #806.
+        
+        When fix command is run with both input_file_dirs and context_config,
+        it should prioritize input_file_dirs to prevent duplicate directory creation.
+        
+        Scenario:
+        - .pddrc at project root with generate_output_path: "frontend/src"
+        - Input file is in prompts/frontend/app/settings/billing/
+        - Without fix: would create frontend/prompts/frontend/app/settings/billing/
+        - With fix: correctly uses prompts/frontend/app/settings/billing/
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        
+        # Create the directory structure
+        prompt_dir = project_root / "prompts" / "frontend" / "app" / "settings" / "billing"
+        prompt_dir.mkdir(parents=True)
+        
+        # Context config simulating .pddrc with frontend-specific path
+        context_config = {
+            "generate_output_path": "frontend/src",
+            "test_output_path": "frontend/tests",
+        }
+        
+        # Input file dirs mapping - this is what construct_paths provides
+        # when it detects input files are in specific directories
+        input_file_dirs = {
+            "output": str(prompt_dir),  # auto-deps uses 'output' key
+            "output_code": str(prompt_dir),  # fix uses 'output_code' key
+            "output_test": str(prompt_dir),  # fix uses 'output_test' key
+        }
+        
+        # Test fix command path resolution
+        fix_result = generate_output_paths(
+            command="fix",
+            output_locations={},
+            basename="page",
+            language="TypescriptReact", 
+            file_extension=".tsx",
+            context_config=context_config,
+            input_file_dir=str(prompt_dir),
+            input_file_dirs=input_file_dirs,
+            config_base_dir=str(project_root),
+        )
+        
+        # Test auto-deps command path resolution
+        autodeps_result = generate_output_paths(
+            command="auto-deps",
+            output_locations={},
+            basename="page", 
+            language="TypescriptReact",
+            file_extension=".prompt",
+            context_config=context_config,
+            input_file_dir=str(prompt_dir),
+            input_file_dirs=input_file_dirs,
+            config_base_dir=str(project_root),
+        )
+        
+        # Verify fix command uses input_file_dirs, not context config
+        fix_code_path = fix_result.get("output_code", "")
+        fix_test_path = fix_result.get("output_test", "")
+        
+        # Should be in prompts/frontend/..., NOT in frontend/prompts/frontend/...
+        assert "prompts/frontend/app/settings/billing" in fix_code_path
+        assert "prompts/frontend/app/settings/billing" in fix_test_path
+        assert "frontend/prompts/frontend" not in fix_code_path  # No duplication
+        assert "frontend/prompts/frontend" not in fix_test_path  # No duplication
+        
+        # Verify auto-deps command uses input_file_dirs, not context config
+        autodeps_output_path = autodeps_result.get("output", "")
+        
+        # Should be in prompts/frontend/..., NOT in frontend/prompts/frontend/...
+        assert "prompts/frontend/app/settings/billing" in autodeps_output_path
+        assert "frontend/prompts/frontend" not in autodeps_output_path  # No duplication
+        
+        # Expected paths
+        expected_fix_code = str(prompt_dir / "page_fixed.tsx")
+        expected_fix_test = str(prompt_dir / "test_page_fixed.tsx") 
+        expected_autodeps = str(prompt_dir / "page_with_deps.prompt")
+        
+        assert fix_code_path == expected_fix_code, \
+            f"Fix code path: expected {expected_fix_code}, got {fix_code_path}"
+        assert fix_test_path == expected_fix_test, \
+            f"Fix test path: expected {expected_fix_test}, got {fix_test_path}"
+        assert autodeps_output_path == expected_autodeps, \
+            f"Auto-deps path: expected {expected_autodeps}, got {autodeps_output_path}"
+    
+    def test_other_commands_still_use_context_config_normally(self, tmp_path):
+        """
+        Verify that commands other than fix and auto-deps still use context config normally.
+        
+        The fix should only affect fix and auto-deps commands, not break other commands.
+        """
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        
+        prompt_dir = project_root / "prompts" / "frontend" / "app"
+        prompt_dir.mkdir(parents=True)
+        
+        context_config = {
+            "generate_output_path": "frontend/src",
+            "test_output_path": "frontend/tests",
+        }
+        
+        input_file_dirs = {
+            "output": str(prompt_dir),
+        }
+        
+        # Test generate command - should use context config, not input_file_dirs
+        generate_result = generate_output_paths(
+            command="generate",
+            output_locations={},
+            basename="component",
+            language="TypescriptReact",
+            file_extension=".tsx", 
+            context_config=context_config,
+            input_file_dir=str(prompt_dir),
+            input_file_dirs=input_file_dirs,
+            config_base_dir=str(project_root),
+        )
+        
+        generate_path = generate_result.get("output", "")
+        
+        # Should use context config (frontend/src), not input_file_dirs
+        assert "frontend/src" in generate_path
+        assert str(prompt_dir) not in generate_path
+
