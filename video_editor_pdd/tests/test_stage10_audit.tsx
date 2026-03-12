@@ -481,6 +481,10 @@ describe("Verdict badge styles", () => {
     expect(sourceCode).toMatch(/FAIL:\s*['"].*red/);
   });
 
+  it("SKIP verdict has neutral styling", () => {
+    expect(sourceCode).toMatch(/SKIP:\s*['"].*(slate|gray|zinc|stone)/);
+  });
+
   it("defines verdictClasses record", () => {
     expect(sourceCode).toMatch(/const\s+verdictClasses/);
   });
@@ -539,8 +543,8 @@ describe("Type definitions", () => {
     expect(sourceCode).toMatch(/type\s+AuditStatus\s*=.*pending.*running.*done.*error/s);
   });
 
-  it("defines Verdict type with PASS and FAIL", () => {
-    expect(sourceCode).toMatch(/type\s+Verdict\s*=\s*['"]PASS['"]\s*\|\s*['"]FAIL['"]/);
+  it("defines Verdict type with PASS, FAIL, and SKIP", () => {
+    expect(sourceCode).toMatch(/type\s+Verdict\s*=\s*['"]PASS['"]\s*\|\s*['"]FAIL['"]\s*\|\s*['"]SKIP['"]/);
   });
 
   it("defines SpecVerdict interface", () => {

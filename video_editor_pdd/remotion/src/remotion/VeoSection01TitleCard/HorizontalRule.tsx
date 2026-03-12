@@ -1,8 +1,8 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, CANVAS, ANIMATION, DIMENSIONS } from './constants';
+import { COLORS, ANIMATION, type TitleCardLayout } from './constants';
 
-export const HorizontalRule: React.FC = () => {
+export const HorizontalRule: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
   const scaleX = interpolate(
@@ -20,10 +20,13 @@ export const HorizontalRule: React.FC = () => {
     <div
       style={{
         position: 'absolute',
-        top: CANVAS.height / 2 + DIMENSIONS.titleRuleGap + 32,
-        left: CANVAS.width / 2 - DIMENSIONS.ruleWidth / 2,
-        width: DIMENSIONS.ruleWidth,
-        height: DIMENSIONS.ruleHeight,
+        top:
+          layout.height / 2 +
+          layout.dimensions.titleRuleGap +
+          layout.typography.title.fontSize / 2,
+        left: layout.width / 2 - layout.dimensions.ruleWidth / 2,
+        width: layout.dimensions.ruleWidth,
+        height: layout.dimensions.ruleHeight,
         backgroundColor: COLORS.rule,
         transform: `scaleX(${scaleX})`,
         transformOrigin: 'center',

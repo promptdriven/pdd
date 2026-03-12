@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, random } from 'remotion';
-import { COLORS, CANVAS, DIMENSIONS, ANIMATION } from './constants';
+import { COLORS, type TitleCardLayout } from './constants';
 
 interface Particle {
   x: number;
@@ -10,33 +10,39 @@ interface Particle {
   opacity: number;
 }
 
-export const ParticleDrift: React.FC = () => {
+export const ParticleDrift: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
   const particles = React.useMemo<Particle[]>(() => {
     const result: Particle[] = [];
-    for (let i = 0; i < DIMENSIONS.particleCount; i++) {
+    for (let i = 0; i < layout.dimensions.particleCount; i++) {
       result.push({
-        x: random(`particle-x-${i}`) * CANVAS.width,
-        startY: CANVAS.height + random(`particle-startY-${i}`) * CANVAS.height,
+        x: random(`particle-x-${i}`) * layout.width,
+        startY: layout.height + random(`particle-startY-${i}`) * layout.height,
         radius:
-          DIMENSIONS.particleMinRadius +
+          layout.dimensions.particleMinRadius +
           random(`particle-r-${i}`) *
-            (DIMENSIONS.particleMaxRadius - DIMENSIONS.particleMinRadius),
+            (layout.dimensions.particleMaxRadius -
+              layout.dimensions.particleMinRadius),
         speed: 1.5 + random(`particle-speed-${i}`) * 2.5,
         opacity:
-          0.1 + random(`particle-opacity-${i}`) * (DIMENSIONS.particleOpacity - 0.1 + 0.05),
+          0.1 +
+          random(`particle-opacity-${i}`) *
+            (layout.dimensions.particleOpacity - 0.1 + 0.05),
       });
     }
     return result;
-  }, []);
+  }, [layout]);
 
   return (
     <AbsoluteFill style={{ pointerEvents: 'none' }}>
       {particles.map((p, i) => {
         const y = p.startY - p.speed * frame;
         // Wrap particles that have drifted off the top
-        const wrappedY = ((y % (CANVAS.height + 40)) + CANVAS.height + 40) % (CANVAS.height + 40) - 20;
+        const wrappedY =
+          ((y % (layout.height + 40)) + layout.height + 40) %
+            (layout.height + 40) -
+          20;
 
         return (
           <div

@@ -16,7 +16,7 @@ import {
 
 type SpecAuditResult = {
   specName: string;
-  verdict: "PASS" | "FAIL";
+  verdict: "PASS" | "FAIL" | "SKIP";
   summary: string;
   finding?: string;
   specPath?: string;
@@ -90,21 +90,24 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
               specName: path.basename(specFile, ".md"),
               specPath: resolveSectionSpecFile(section.specDir, specFile),
             }));
-      const visualsToRead =
-        renderableVisuals.length > 0
-          ? renderableVisuals
-          : auditFiles.map((auditFile) => {
-              const specName = path
-                .basename(auditFile, ".md")
-                .replace(/^AUDIT_/, "");
-              return {
-                specName,
-                specPath: resolveSectionSpecFile(section.specDir, `${specName}.md`),
-              };
-            });
+      const renderableSpecNames = new Set(
+        renderableVisuals.map((visual) => visual.specName)
+      );
+      const fallbackAuditVisuals = auditFiles
+        .map((auditFile) => {
+          const specName = path
+            .basename(auditFile, ".md")
+            .replace(/^AUDIT_/, "");
+          return {
+            specName,
+            specPath: resolveSectionSpecFile(section.specDir, `${specName}.md`),
+          };
+        })
+        .filter((visual) => !renderableSpecNames.has(visual.specName));
+      const visualsToRead = [...renderableVisuals, ...fallbackAuditVisuals];
       const fps = config.render?.fps ?? 30;
 
-      const specs: SpecAuditResult[] = [];
+      const specResultsByName = new Map<string, SpecAuditResult>();
       let passCount = 0;
       let failCount = 0;
       let missingAuditCount = 0;
@@ -152,7 +155,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
               )
             : undefined;
 
-          specs.push({
+          specResultsByName.set(specName, {
             specName,
             verdict,
             summary,
@@ -161,7 +164,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
             playbackWindow,
           });
         } catch {
-          specs.push({
+          specResultsByName.set(specName, {
             specName,
             verdict: "FAIL",
             summary: "Error parsing audit report",
@@ -171,8 +174,37 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
         }
       }
 
+      const knownSpecNames = new Set(specResultsByName.keys());
+      for (const specFile of rawSpecFiles) {
+        const specName = path.basename(specFile, ".md");
+        if (knownSpecNames.has(specName)) {
+          continue;
+        }
+
+        specResultsByName.set(specName, {
+          specName,
+          verdict: "SKIP",
+          summary:
+            "Not audited as a standalone visual because this spec does not map to a rendered composition or directly staged media slot.",
+          specPath: toSectionSpecPath(section.specDir, specFile),
+        });
+      }
+
+      const rawSpecNames = rawSpecFiles.map((specFile) =>
+        path.basename(specFile, ".md")
+      );
+      const orderedSpecNames = [
+        ...rawSpecNames,
+        ...Array.from(specResultsByName.keys()).filter(
+          (specName) => !rawSpecNames.includes(specName)
+        ),
+      ];
+      const specs = orderedSpecNames
+        .map((specName) => specResultsByName.get(specName))
+        .filter((spec): spec is SpecAuditResult => Boolean(spec));
+
       const status: AuditSectionResult["status"] =
-        missingAuditCount > 0 || (specs.length === 0 && rawSpecFiles.length > 0)
+        missingAuditCount > 0
           ? "pending"
           : "done";
 

@@ -2,6 +2,8 @@ import {
   buildSlotScaledSequenceContext,
   computeSlotScaledFrame,
 } from "../lib/visual-runtime";
+import fs from "fs";
+import path from "path";
 
 describe("computeSlotScaledFrame", () => {
   it("scales a slot-local frame into the intrinsic visual duration", () => {
@@ -64,5 +66,26 @@ describe("buildSlotScaledSequenceContext", () => {
 
   it("returns null when no parent sequence context exists", () => {
     expect(buildSlotScaledSequenceContext(null, 90)).toBeNull();
+  });
+});
+
+describe("shared Remotion runtime", () => {
+  const source = fs.readFileSync(
+    path.join(
+      process.cwd(),
+      "remotion/src/remotion/_shared/visual-runtime.tsx"
+    ),
+    "utf8"
+  );
+
+  it("reuses the slot-scaling helpers instead of duplicating the logic inline", () => {
+    expect(source).toMatch(/computeSlotScaledFrame/);
+    expect(source).toMatch(/buildSlotScaledSequenceContext/);
+  });
+
+  it("resets sequence offsets for scaled visuals so late slots can reach their intrinsic frames", () => {
+    expect(source).toMatch(/cumulatedFrom:\s*0/);
+    expect(source).toMatch(/relativeFrom:\s*0/);
+    expect(source).toMatch(/parentFrom:\s*0/);
   });
 });

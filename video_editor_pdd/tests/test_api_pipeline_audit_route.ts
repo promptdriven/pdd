@@ -563,6 +563,34 @@ describe("audit executor factory", () => {
     expect(doneEvent![0].failCount).toBe(1);
   });
 
+  it("passes render resolution and sample timing metadata to Claude", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "**Timestamp:** 0:00 - 0:03",
+          "Frame 40-55 (1.33-1.83s): Hold complete layout",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    expect(prompt).toContain("Render resolution: 1920x1080");
+    expect(prompt).toContain("Sample time (section-local):");
+    expect(prompt).toContain("Sample window:");
+    expect(prompt).toContain("Audit visual type:");
+  });
+
   it("emits 'error' status when auditSection throws", async () => {
     mockReaddirSync.mockImplementation(() => {
       throw new Error("ENOENT: no such directory");
@@ -1282,6 +1310,66 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].verdict).toBe("FAIL");
     expect(intro.specs[0].summary).toBe("Error parsing audit report");
     expect(intro.failCount).toBe(1);
+  });
+
+  it("returns SKIP entries for raw specs that are not auditable standalone visuals", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo",
+        label: "Veo",
+        specDir: "veo",
+        compositions: ["match_visual"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "veo");
+    const matchedSpecPath = pathMod.join(specDir, "match_visual.md");
+    const assetOnlySpecPath = pathMod.join(specDir, "asset_only.md");
+    const matchedAuditPath = pathMod.join(specDir, "AUDIT_match_visual.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === matchedSpecPath ||
+      candidate === assetOnlySpecPath ||
+      candidate === matchedAuditPath
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return ["match_visual.md", "asset_only.md", "AUDIT_match_visual.md"];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === matchedAuditPath) {
+        return "## Verdict\npass\n## Summary\nFrame matches spec\n";
+      }
+      if (candidate === matchedSpecPath) {
+        return "**Timestamp:** 0:00 - 0:03\n";
+      }
+      if (candidate === assetOnlySpecPath) {
+        return "# Supporting source footage\n";
+      }
+      return "";
+    });
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    expect(body.sections[0].status).toBe("done");
+    expect(body.sections[0].passCount).toBe(1);
+    expect(body.sections[0].failCount).toBe(0);
+    expect(body.sections[0].specs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          specName: "asset_only",
+          verdict: "SKIP",
+        }),
+      ])
+    );
   });
 
   it("reads audit files from specs/{specDir} when project.json omits the specs/ prefix", async () => {

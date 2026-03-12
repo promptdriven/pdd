@@ -1,6 +1,6 @@
 // Component-level constants for VeoSection05SplitNatureComparison
 
-export const CANVAS = {
+export const BASE_CANVAS = {
   width: 1920,
   height: 1080,
 };
@@ -48,4 +48,68 @@ export const DIMENSIONS = {
   vignetteWidth: 20,
   kenBurnsStart: 1.0,
   kenBurnsEnd: 1.05,
+};
+
+export type SplitNatureComparisonLayout = {
+  width: number;
+  height: number;
+  typography: {
+    label: typeof TYPOGRAPHY.label;
+  };
+  positions: {
+    dividerX: number;
+    leftPanelWidth: number;
+    rightPanelStart: number;
+    rightPanelWidth: number;
+    labelY: number;
+    leftLabelX: number;
+    rightLabelX: number;
+  };
+  dimensions: {
+    dividerWidth: number;
+    vignetteWidth: number;
+    kenBurnsStart: number;
+    kenBurnsEnd: number;
+  };
+};
+
+export const resolveSplitNatureComparisonLayout = (
+  width: number,
+  height: number
+): SplitNatureComparisonLayout => {
+  const scaleX = width / BASE_CANVAS.width;
+  const scaleY = height / BASE_CANVAS.height;
+  const uniformScale = Math.min(scaleX, scaleY);
+  const dividerWidth = Math.max(2, DIMENSIONS.dividerWidth * scaleX);
+  const panelGap = Math.max(2, dividerWidth);
+  const dividerX = width / 2;
+  const leftPanelWidth = Math.max(0, dividerX - panelGap);
+  const rightPanelStart = dividerX + panelGap;
+  const rightPanelWidth = Math.max(0, width - rightPanelStart);
+
+  return {
+    width,
+    height,
+    typography: {
+      label: {
+        ...TYPOGRAPHY.label,
+        fontSize: Math.max(16, TYPOGRAPHY.label.fontSize * uniformScale),
+      },
+    },
+    positions: {
+      dividerX,
+      leftPanelWidth,
+      rightPanelStart,
+      rightPanelWidth,
+      labelY: DIMENSIONS.labelY * scaleY,
+      leftLabelX: width * 0.25,
+      rightLabelX: width * 0.75,
+    },
+    dimensions: {
+      dividerWidth,
+      vignetteWidth: Math.max(12, DIMENSIONS.vignetteWidth * uniformScale),
+      kenBurnsStart: DIMENSIONS.kenBurnsStart,
+      kenBurnsEnd: DIMENSIONS.kenBurnsEnd,
+    },
+  };
 };

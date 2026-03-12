@@ -1,13 +1,14 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing, OffthreadVideo, staticFile } from 'remotion';
-import { CANVAS, ANIMATION, DIMENSIONS, COLORS } from './constants';
+import { ANIMATION, COLORS, type SplitNatureComparisonLayout } from './constants';
 
 interface SplitPanelProps {
   side: 'left' | 'right';
   videoSrc: string;
+  layout: SplitNatureComparisonLayout;
 }
 
-export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc }) => {
+export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc, layout }) => {
   const frame = useCurrentFrame();
 
   const isLeft = side === 'left';
@@ -15,8 +16,10 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc }) => {
   const wipeEnd = isLeft ? ANIMATION.leftPanelWipeEnd : ANIMATION.rightPanelWipeEnd;
 
   // Panel width: left=0..957 (957px), right=963..1920 (957px)
-  const panelWidth = isLeft ? DIMENSIONS.leftPanelEnd + 1 : CANVAS.width - DIMENSIONS.rightPanelStart;
-  const panelLeft = isLeft ? 0 : DIMENSIONS.rightPanelStart;
+  const panelWidth = isLeft
+    ? layout.positions.leftPanelWidth
+    : layout.positions.rightPanelWidth;
+  const panelLeft = isLeft ? 0 : layout.positions.rightPanelStart;
 
   // Clip-path reveal: wipe from the divider edge outward
   // For left panel: reveal from right edge toward left
@@ -36,7 +39,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc }) => {
   const zoom = interpolate(
     frame,
     [0, ANIMATION.totalDuration],
-    [DIMENSIONS.kenBurnsStart, DIMENSIONS.kenBurnsEnd],
+    [layout.dimensions.kenBurnsStart, layout.dimensions.kenBurnsEnd],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -62,7 +65,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc }) => {
         left: panelLeft,
         top: 0,
         width: panelWidth,
-        height: CANVAS.height,
+        height: layout.height,
         overflow: 'hidden',
         clipPath,
       }}
@@ -88,7 +91,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc }) => {
           position: 'absolute',
           top: 0,
           [isLeft ? 'right' : 'left']: 0,
-          width: DIMENSIONS.vignetteWidth,
+          width: layout.dimensions.vignetteWidth,
           height: '100%',
           background: isLeft
             ? `linear-gradient(to left, ${COLORS.vignette}, transparent)`

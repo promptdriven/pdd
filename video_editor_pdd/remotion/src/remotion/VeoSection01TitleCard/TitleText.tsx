@@ -1,8 +1,8 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, CANVAS, TYPOGRAPHY, ANIMATION } from './constants';
+import { COLORS, ANIMATION, type TitleCardLayout } from './constants';
 
-export const TitleText: React.FC = () => {
+export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
   const opacity = interpolate(
@@ -34,8 +34,8 @@ export const TitleText: React.FC = () => {
         position: 'absolute',
         top: 0,
         left: 0,
-        width: CANVAS.width,
-        height: CANVAS.height,
+        width: layout.width,
+        height: layout.height,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -43,9 +43,9 @@ export const TitleText: React.FC = () => {
     >
       <span
         style={{
-          fontFamily: TYPOGRAPHY.title.fontFamily,
-          fontSize: TYPOGRAPHY.title.fontSize,
-          fontWeight: TYPOGRAPHY.title.fontWeight,
+          fontFamily: layout.typography.title.fontFamily,
+          fontSize: layout.typography.title.fontSize,
+          fontWeight: layout.typography.title.fontWeight,
           color: COLORS.titleText,
           opacity,
           transform: `translateY(${translateY}px)`,

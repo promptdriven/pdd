@@ -1,12 +1,14 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
-import { COLORS, ANIMATION } from './constants';
+import { AbsoluteFill, useCurrentFrame, interpolate, useVideoConfig } from 'remotion';
+import { COLORS, ANIMATION, resolveTitleCardLayout } from './constants';
 import { TitleText } from './TitleText';
 import { HorizontalRule } from './HorizontalRule';
 import { ParticleDrift } from './ParticleDrift';
 
 export const VeoSection01TitleCard: React.FC = () => {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+  const layout = resolveTitleCardLayout(width, height);
 
   // Background gradient fades in from black over frames 0-15
   const backgroundOpacity = interpolate(
@@ -38,13 +40,13 @@ export const VeoSection01TitleCard: React.FC = () => {
         />
 
         {/* Particle drift layer — runs continuously across full duration */}
-        <ParticleDrift />
+        <ParticleDrift layout={layout} />
 
         {/* Centered title text with parallax fade-in */}
-        <TitleText />
+        <TitleText layout={layout} />
 
         {/* Horizontal rule drawing outward from center */}
-        <HorizontalRule />
+        <HorizontalRule layout={layout} />
       </AbsoluteFill>
     </AbsoluteFill>
   );

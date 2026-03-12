@@ -22,6 +22,7 @@ import { getProjectDir } from "@/lib/projects";
 // --- app/api/pipeline/audit/run/route.ts ---
 
 type AuditSectionStatus = "running" | "done" | "error";
+type AuditVisualType = "component" | "media" | "hybrid" | "spec";
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -75,10 +76,18 @@ async function auditSection(
           .map((visual) => ({
             specPath: visual.specPath as string,
             specName: visual.specBaseName,
+            visualType: visual.hasComponent && visual.hasExplicitMedia
+              ? ("hybrid" as const)
+              : visual.hasComponent
+                ? ("component" as const)
+                : visual.hasExplicitMedia
+                  ? ("media" as const)
+                  : ("spec" as const),
           }))
       : rawSpecFiles.map((specFile) => ({
           specPath: path.join(specDir, specFile),
           specName: path.basename(specFile, ".md"),
+          visualType: "spec" as const,
         }));
   const project = loadProject();
   const fps = project.render.fps ?? 30;
@@ -144,6 +153,10 @@ async function auditSection(
 You are auditing a video frame against a spec.
 
 - Original spec file: ${specPath}
+- Render resolution: ${project.outputResolution.width}x${project.outputResolution.height}
+- Audit visual type: ${visual.visualType}
+- Sample window: ${sampleWindow.startSeconds.toFixed(3)}s - ${sampleWindow.endSeconds.toFixed(3)}s (${sampleWindow.source})
+- Sample time (section-local): ${sampleWindow.sampleSeconds.toFixed(3)}s
 - Normalized spec snapshot for audit:
 ${normalizedSpecContent}
 - Frame PNG: ${outputStill}

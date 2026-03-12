@@ -1,13 +1,18 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, TYPOGRAPHY, ANIMATION, DIMENSIONS } from './constants';
+import {
+  COLORS,
+  ANIMATION,
+  type SplitNatureComparisonLayout,
+} from './constants';
 
 interface PanelLabelProps {
   text: string;
   side: 'left' | 'right';
+  layout: SplitNatureComparisonLayout;
 }
 
-export const PanelLabel: React.FC<PanelLabelProps> = ({ text, side }) => {
+export const PanelLabel: React.FC<PanelLabelProps> = ({ text, side, layout }) => {
   const frame = useCurrentFrame();
 
   const opacity = interpolate(
@@ -21,18 +26,18 @@ export const PanelLabel: React.FC<PanelLabelProps> = ({ text, side }) => {
     },
   );
 
-  const x = side === 'left' ? DIMENSIONS.leftLabelX : DIMENSIONS.rightLabelX;
+  const x = side === 'left' ? layout.positions.leftLabelX : layout.positions.rightLabelX;
 
   return (
     <div
       style={{
         position: 'absolute',
         left: x,
-        top: DIMENSIONS.labelY,
+        top: layout.positions.labelY,
         transform: 'translateX(-50%)',
-        fontFamily: TYPOGRAPHY.label.fontFamily,
-        fontWeight: TYPOGRAPHY.label.fontWeight,
-        fontSize: TYPOGRAPHY.label.fontSize,
+        fontFamily: layout.typography.label.fontFamily,
+        fontWeight: layout.typography.label.fontWeight,
+        fontSize: layout.typography.label.fontSize,
         color: COLORS.labelText,
         opacity,
         whiteSpace: 'nowrap',
