@@ -1,4 +1,4 @@
-import { parseSpecTimestampRange } from "./composition-timing";
+import { parseSpecTimestampRange } from "./spec-timestamp";
 
 export type SpecTimingWindow = {
   startSeconds: number;

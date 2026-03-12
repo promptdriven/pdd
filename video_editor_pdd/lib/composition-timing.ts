@@ -1,14 +1,22 @@
 import fs from "fs";
 import path from "path";
 
+import {
+  normalizeSpecTimestampRangeToSection,
+  parseSpecTimestampRange,
+} from "./spec-timestamp";
 import type { Section } from "./types";
+
+export {
+  normalizeSpecTimestampRangeToSection,
+  parseSpecTimestampRange,
+} from "./spec-timestamp";
 
 const DEFAULT_FPS = 30;
 const DEFAULT_VISUAL_DURATION_SECONDS = 5;
 const DEFAULT_KEYWORD_LEAD_SECONDS = 1;
 const MIN_VISUAL_DURATION_SECONDS = 1 / DEFAULT_FPS;
 const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
-const TIMESTAMP_SEPARATOR_RE = "[-–—]";
 const VIDEO_PATH_RE = /["']([^"'\\\n]+\.(?:mp4|webm|mov|m4v))["']/gi;
 
 type SectionComposition = NonNullable<Section["compositions"]>[number];
@@ -81,29 +89,6 @@ function titleFromId(value: string): string {
 function componentBaseName(componentId: string, sectionId: string): string {
   const prefix = `${sectionId}_`;
   return componentId.startsWith(prefix) ? componentId.slice(prefix.length) : componentId;
-}
-
-export function normalizeSpecTimestampRangeToSection(
-  range: { startSeconds: number; endSeconds: number },
-  sectionDurationSeconds: number,
-  sectionOffsetSeconds = 0
-): { startSeconds: number; endSeconds: number } {
-  if (sectionOffsetSeconds <= 0) {
-    return range;
-  }
-
-  const fitsSectionWindow =
-    range.startSeconds >= 0 &&
-    range.endSeconds <= sectionDurationSeconds + MIN_VISUAL_DURATION_SECONDS;
-  const shifted = {
-    startSeconds: range.startSeconds - sectionOffsetSeconds,
-    endSeconds: range.endSeconds - sectionOffsetSeconds,
-  };
-  const shiftedFitsSectionWindow =
-    shifted.endSeconds > 0 &&
-    shifted.startSeconds < sectionDurationSeconds + MIN_VISUAL_DURATION_SECONDS;
-
-  return !fitsSectionWindow && shiftedFitsSectionWindow ? shifted : range;
 }
 
 function toPascalCase(value: string): string {
@@ -370,57 +355,6 @@ function readSpecContent(projectDir: string, section: SectionTimingTarget, compo
   }
 
   return {};
-}
-
-function parseClockTime(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parts = trimmed.split(":").map((part) => Number(part));
-  if (parts.some((part) => Number.isNaN(part))) {
-    return null;
-  }
-
-  if (parts.length === 1) {
-    return parts[0] ?? null;
-  }
-
-  if (parts.length === 2) {
-    return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
-  }
-
-  if (parts.length === 3) {
-    return (parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0);
-  }
-
-  return null;
-}
-
-export function parseSpecTimestampRange(content: string): {
-  startSeconds: number;
-  endSeconds: number;
-} | null {
-  const match = content.match(
-    new RegExp(`\\*\\*Timestamp:\\*\\*\\s*([0-9:.]+)\\s*${TIMESTAMP_SEPARATOR_RE}\\s*([0-9:.]+)`, "i")
-  );
-  if (!match) {
-    return null;
-  }
-
-  const startSeconds = parseClockTime(match[1] ?? "");
-  const endSeconds = parseClockTime(match[2] ?? "");
-
-  if (
-    startSeconds === null ||
-    endSeconds === null ||
-    endSeconds <= startSeconds
-  ) {
-    return null;
-  }
-
-  return { startSeconds, endSeconds };
 }
 
 function parseSpecHeading(content: string, componentId: string): string {

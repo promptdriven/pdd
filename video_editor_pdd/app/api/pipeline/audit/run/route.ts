@@ -353,10 +353,12 @@ async function auditSection(
         sampleWindow.sampleSeconds,
         outputStill
       );
-    } else {
+    } else if (renderSource.kind === "skip") {
       onLog(`[audit] Skipping standalone audit for ${section.id} (${specName}): ${renderSource.reason}`);
       writeAuditReport(auditPath, "skip", renderSource.reason);
       continue;
+    } else {
+      throw new Error(`Unsupported audit render source: ${JSON.stringify(renderSource)}`);
     }
 
     // Claude analysis prompt

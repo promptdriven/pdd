@@ -2,6 +2,8 @@ import {
   filterWordsForSpecTimingWindow,
   parseSpecTimingWindow,
 } from "../lib/spec-timing-context";
+import fs from "fs";
+import path from "path";
 
 describe("lib/spec-timing-context", () => {
   it("parses a spec timestamp window", () => {
@@ -48,5 +50,15 @@ describe("lib/spec-timing-context", () => {
     ];
 
     expect(filterWordsForSpecTimingWindow(words, null)).toEqual(words);
+  });
+
+  it("keeps the spec timing helper on a browser-safe import path", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "lib/spec-timing-context.ts"),
+      "utf-8"
+    );
+
+    expect(source).toContain('./spec-timestamp');
+    expect(source).not.toContain('./composition-timing');
   });
 });
