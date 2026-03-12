@@ -301,12 +301,26 @@ After successful completion (ALL_TESTS_PASS), commit only files that changed dur
 3. **Snapshot before workflow**:
    - At start of orchestrator (after setup, before main loop): `initial_file_hashes = _get_file_hashes(cwd)`
 
-4. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, repo_owner: str, repo_name: str, initial_file_hashes: Dict[str, Optional[str]], quiet: bool = False) -> Tuple[bool, str]`
+4. **Helper function**: `_is_intermediate_file(filepath: str) -> bool`
+   - Returns True if the file is a workflow artifact that must never be committed
+   - Must match ALL of the following patterns:
+     - Files under `.pdd/backups/` (timestamped iteration backups)
+     - Files under `.pdd/core_dumps/` (crash/diagnostic dumps)
+     - Any path starting with `.pdd/` that is not `.pdd/e2e-fix-state/` (catch-all for PDD working directories)
+     - `*_fixed.py`, `*.fixed.py`, `*-fixed.py` (backup module copies from fix iterations)
+     - `*.bak`, `*.backup`, `*.orig`, `*.tmp` extensions
+     - `error_output*.txt` (debug output files)
+     - `*_errors.txt`, `*_fix_errors.txt` (test error log files passed between steps)
+     - `step*_output.md` (workflow step debug output files)
+     - `test_issue_*_reproduction.py` (bug reproduction test leftovers)
+
+5. **Helper function**: `_commit_and_push(cwd: Path, issue_number: int, issue_title: str, repo_owner: str, repo_name: str, initial_file_hashes: Dict[str, Optional[str]], quiet: bool = False) -> Tuple[bool, str]`
    - Get current hashes: `current_hashes = _get_file_hashes(cwd)`
    - Find files changed during workflow:
      - New files: in current_hashes but not in initial_file_hashes
      - Modified files: hash differs between initial and current
-   - If no files to commit: return `(True, "No changes to commit")`
+   - Filter out intermediate files: exclude any file where `_is_intermediate_file(filepath)` returns True
+   - If no files to commit (after filtering): return `(True, "No changes to commit")`
    - Stage only those files: `git add <file>` for each
    - Commit with message: `f"fix: {issue_title}\n\nFixes #{issue_number}"`
    - Push to remote: `git push`
@@ -323,7 +337,7 @@ After successful completion (ALL_TESTS_PASS), commit only files that changed dur
        - If restore fails, print a WARNING to stderr (token may remain in .git/config)
      - If no token file available, file is empty, or retry also fails: return `(False, error)` as before
 
-5. **Integration in orchestrator**:
+6. **Integration in orchestrator**:
    - Call `_commit_and_push(..., repo_owner=repo_owner, repo_name=repo_name, initial_file_hashes=initial_file_hashes)` after clearing workflow state
    - Log result to console (success message or warning)
    - Do NOT fail the overall workflow if push fails - just print warning
