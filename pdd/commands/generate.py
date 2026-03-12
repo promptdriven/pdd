@@ -266,63 +266,38 @@ def test(
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
-        if len(args) == 1 and not manual:
+        # Story metadata linking: pdd test story__my_story.md
+        if (len(args) == 1 and not manual
+                and Path(args[0]).suffix.lower() == ".md"
+                and Path(args[0]).name.startswith("story__")):
             story_path = Path(args[0])
-            if story_path.suffix.lower() == ".md" and story_path.name.startswith("story__"):
-                obj = ctx.obj or {}
-                success, message, cost, model, linked_prompts = cache_story_prompt_links(
-                    story_file=str(story_path),
-                    prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
-                    strength=obj.get("strength", 0.2),
-                    temperature=obj.get("temperature", 0.0),
-                    time=obj.get("time", 0.25),
-                    verbose=obj.get("verbose", False),
-                )
+            obj = ctx.obj or {}
+            success, message, cost, model, linked_prompts = cache_story_prompt_links(
+                story_file=str(story_path),
+                prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+                strength=obj.get("strength", 0.2),
+                temperature=obj.get("temperature", 0.0),
+                time=obj.get("time", 0.25),
+                verbose=obj.get("verbose", False),
+            )
 
-                if not obj.get("quiet", False):
-                    if success:
-                        console.print(f"[bold green]Story metadata updated:[/bold green] {message}")
-                    else:
-                        console.print(f"[bold red]Story metadata update failed:[/bold red] {message}")
-                    if linked_prompts:
-                        console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+            if not obj.get("quiet", False):
+                if success:
+                    console.print(f"[bold green]Story metadata updated:[/bold green] {message}")
+                else:
+                    console.print(f"[bold red]Story metadata update failed:[/bold red] {message}")
+                if linked_prompts:
+                    console.print(f"Linked prompts: {', '.join(linked_prompts)}")
 
-                result_dict = {
-                    "success": success,
-                    "message": message,
-                    "story_file": str(story_path),
-                    "linked_prompts": linked_prompts,
-                }
-                return result_dict, cost, model
+            result_dict = {
+                "success": success,
+                "message": message,
+                "story_file": str(story_path),
+                "linked_prompts": linked_prompts,
+            }
+            return result_dict, cost, model
 
-            if story_path.suffix.lower() == ".prompt":
-                obj = ctx.obj or {}
-                story_prompt_args = [str(Path(arg)) for arg in args]
-                success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
-                    prompt_files=story_prompt_args,
-                    output=output,
-                    stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
-                    prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
-                    strength=obj.get("strength", 0.2),
-                    temperature=obj.get("temperature", 0.0),
-                    time=obj.get("time", 0.25),
-                    verbose=obj.get("verbose", False),
-                )
-                if not obj.get("quiet", False):
-                    if success:
-                        console.print(f"[bold green]Story generated:[/bold green] {message}")
-                    else:
-                        console.print(f"[bold red]Story generation failed:[/bold red] {message}")
-                    if linked_prompts:
-                        console.print(f"Linked prompts: {', '.join(linked_prompts)}")
-                result_dict = {
-                    "success": success,
-                    "message": message,
-                    "story_file": generated_story_file,
-                    "linked_prompts": linked_prompts,
-                }
-                return result_dict, cost, model
-
+        # Story generation: pdd test prompt1.prompt [prompt2.prompt ...]
         if not manual and args and all(Path(arg).suffix.lower() == ".prompt" for arg in args):
             obj = ctx.obj or {}
             story_prompt_args = [str(Path(arg)) for arg in args]
