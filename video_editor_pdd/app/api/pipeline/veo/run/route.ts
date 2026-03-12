@@ -231,6 +231,7 @@ registerExecutor('veo', (params, send: SseSend) => {
     );
 
     const total = ordered.length;
+    const model = config.veo.model;
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
       .progress;
 
@@ -274,7 +275,8 @@ registerExecutor('veo', (params, send: SseSend) => {
             prompt,
             referenceImagePath,
             aspectRatio,
-            outputPath
+            outputPath,
+            model
           );
 
           try {

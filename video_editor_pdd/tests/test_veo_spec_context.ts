@@ -118,4 +118,48 @@ describe("veo spec context helpers", () => {
       },
     ]);
   });
+
+  it("resolves one generated clip per Veo markdown spec when clip_id is declared in the spec JSON", () => {
+    const clips = listResolvedVeoClipSpecs([
+      {
+        path: "specs/veo_section/02_ocean_sunset_footage.md",
+        content: [
+          "[veo:]",
+          "```json",
+          "{",
+          '  "veoPrompt": "Ocean wave at sunset",',
+          '  "clip_id": "ocean_sunset"',
+          "}",
+          "```",
+        ].join("\n"),
+      },
+      {
+        path: "specs/veo_section/04_aerial_forest_footage.md",
+        content: [
+          "[veo:]",
+          "```json",
+          "{",
+          '  "veoPrompt": "Forest canopy aerial",',
+          '  "clip_id": "aerial_forest"',
+          "}",
+          "```",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(clips).toEqual([
+      {
+        id: "ocean_sunset",
+        path: "specs/veo_section/02_ocean_sunset_footage.md",
+        prompt: "Ocean wave at sunset",
+        filename: "ocean_sunset.mp4",
+      },
+      {
+        id: "aerial_forest",
+        path: "specs/veo_section/04_aerial_forest_footage.md",
+        prompt: "Forest canopy aerial",
+        filename: "aerial_forest.mp4",
+      },
+    ]);
+  });
 });

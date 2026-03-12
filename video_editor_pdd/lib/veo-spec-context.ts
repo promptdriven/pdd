@@ -70,6 +70,20 @@ export function extractVeoClipFilename(content: string, _specPath: string): stri
     const basename = normalized.split("/").pop() ?? normalized;
     return basename || null;
   }
+
+  const clipId =
+    extractJsonStringField(content, ["clip_id", "clipId"]) ?? null;
+
+  if (clipId) {
+    const normalized = clipId.replace(/\\/g, "/");
+    const basename = normalized.split("/").pop() ?? normalized;
+    if (!basename) {
+      return null;
+    }
+
+    return /\.[^.]+$/.test(basename) ? basename : `${basename}.mp4`;
+  }
+
   return null;
 }
 

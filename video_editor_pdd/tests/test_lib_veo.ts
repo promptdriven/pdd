@@ -6,7 +6,7 @@
  *
  * Spec requirements verified:
  *   1. Export generateReferenceImage(prompt, outputPath) -> Promise<void>
- *   2. Export generateVeoClip(prompt, refImagePath | null, aspectRatio, outputPath) -> Promise<void>
+ *   2. Export generateVeoClip(prompt, refImagePath | null, aspectRatio, outputPath, model?) -> Promise<void>
  *   3. Export extractLastFrame(clipPath, outputPath) -> Promise<void>
  *   4. Use GOOGLE_API_KEY env var for Gemini API auth, or Vertex AI project/location envs when configured
  *   5. Imagen via GenAI SDK: numberOfImages: 1, aspectRatio: '1:1', outputMimeType: 'image/png'
@@ -99,6 +99,8 @@ function setupVertexEnv() {
   process.env.GOOGLE_GENAI_USE_VERTEXAI = "true";
 }
 
+const DEFAULT_VEO_MODEL = "veo-3.1-generate-001";
+
 function setupFsMocks() {
   jest.spyOn(fs, "writeFileSync").mockImplementation(() => {});
   jest.spyOn(fs, "mkdirSync").mockReturnValue(undefined as any);
@@ -135,6 +137,22 @@ function makeVeoOperation({
           ],
         }
       : undefined,
+  };
+}
+
+function makeInlineBytesVeoOperation(base64 = "dGVzdC12aWRlby1ieXRlcw==") {
+  return {
+    done: true,
+    response: {
+      generatedVideos: [
+        {
+          video: {
+            videoBytes: base64,
+            mimeType: "video/mp4",
+          },
+        },
+      ],
+    },
   };
 }
 
@@ -257,6 +275,7 @@ describe("generateReferenceImage -- GenAI SDK call", () => {
       vertexai: true,
       project: "vertex-test-project",
       location: "global",
+      apiVersion: "v1",
     });
   });
 
@@ -273,6 +292,7 @@ describe("generateReferenceImage -- GenAI SDK call", () => {
       vertexai: true,
       project: "vertex-auto-project",
       location: "us-central1",
+      apiVersion: "v1",
     });
   });
 });
@@ -388,7 +408,7 @@ describe("generateVeoClip -- GenAI SDK call without reference", () => {
     setupFsMocks();
   });
 
-  it("calls generateVideos with veo-3.1-generate-preview model", async () => {
+  it("calls generateVideos with veo-3.1-generate-001 model by default", async () => {
     mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
     mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
     jest.spyOn(global, "fetch").mockResolvedValue({
@@ -400,7 +420,26 @@ describe("generateVeoClip -- GenAI SDK call without reference", () => {
 
     expect(mockGenerateVideos).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "veo-3.1-generate-preview",
+        model: DEFAULT_VEO_MODEL,
+      })
+    );
+  });
+
+  it("uses the explicitly requested model when one is provided", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+
+    await generateVeoClip(
+      "test prompt",
+      null,
+      "16:9",
+      "/tmp/out.mp4",
+      "veo-3.1-fast-generate-001"
+    );
+
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "veo-3.1-fast-generate-001",
       })
     );
   });
@@ -513,7 +552,41 @@ describe("generateVeoClip -- GenAI SDK call without reference", () => {
       vertexai: true,
       project: "vertex-test-project",
       location: "global",
+      apiVersion: "v1",
     });
+  });
+
+  it("passes apiVersion v1 in request httpOptions for Vertex video generation", async () => {
+    setupVertexEnv();
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(mockGenerateVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          apiVersion: "v1",
+          timeout: expect.any(Number),
+        }),
+      })
+    );
+    expect(mockGetVideosOperation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          apiVersion: "v1",
+          timeout: expect.any(Number),
+        }),
+      })
+    );
+    expect(mockFilesDownload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          apiVersion: "v1",
+          timeout: expect.any(Number),
+        }),
+      })
+    );
   });
 
   it("auto-selects Vertex AI for video generation when GOOGLE_CLOUD_PROJECT is present and API key is absent", async () => {
@@ -530,6 +603,7 @@ describe("generateVeoClip -- GenAI SDK call without reference", () => {
       vertexai: true,
       project: "vertex-auto-project",
       location: "us-central1",
+      apiVersion: "v1",
     });
   });
 });
@@ -633,6 +707,45 @@ describe("generateVeoClip -- polling & download", () => {
       expect.objectContaining({ downloadPath: "/my/custom/path.mp4" })
     );
   });
+
+  it("writes inline video bytes directly when Vertex returns videoBytes", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeInlineBytesVeoOperation());
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      "/tmp/out.mp4",
+      Buffer.from("dGVzdC12aWRlby1ieXRlcw==", "base64"),
+    );
+    expect(mockFilesDownload).not.toHaveBeenCalled();
+  });
+
+  it("prefers inline video bytes over files.download when both bytes and uri exist", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "gs://bucket/video.mp4",
+              videoBytes: "dGVzdC12aWRlby1ieXRlcw==",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      "/tmp/out.mp4",
+      Buffer.from("dGVzdC12aWRlby1ieXRlcw==", "base64"),
+    );
+    expect(mockFilesDownload).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -644,12 +757,19 @@ describe("generateVeoClip -- error handling", () => {
     setupFsMocks();
   });
 
-  it("throws when GOOGLE_API_KEY is not set", async () => {
+  it("throws when no Veo authentication method is configured", async () => {
     delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_GENAI_USE_VERTEXAI;
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    delete process.env.GOOGLE_CLOUD_LOCATION;
+    delete process.env.VERTEXAI_PROJECT;
+    delete process.env.VERTEXAI_LOCATION;
+    delete process.env.VERTEX_PROJECT;
+    delete process.env.VERTEX_LOCATION;
 
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
-    ).rejects.toThrow("GOOGLE_API_KEY");
+    ).rejects.toThrow("Veo authentication is not configured");
   });
 
   it("throws when generateVideos SDK call fails", async () => {
@@ -929,6 +1049,7 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/GOOGLE_CLOUD_PROJECT/);
     expect(sourceCode).toMatch(/VERTEXAI_PROJECT/);
     expect(sourceCode).toMatch(/vertexai:\s*true/);
+    expect(sourceCode).toMatch(/apiVersion:\s*["']v1["']/);
   });
 
   it("imports GoogleGenAI from @google/genai", () => {
@@ -966,8 +1087,8 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/imagen-4\.0-generate-001/);
   });
 
-  it("uses veo-3.1-generate-preview model in endpoint", () => {
-    expect(sourceCode).toMatch(/veo-3\.1-generate-preview/);
+  it("uses veo-3.1-generate-001 as the default Veo model in endpoint", () => {
+    expect(sourceCode).toMatch(/veo-3\.1-generate-001/);
   });
 
   it("sets numberOfImages: 1 for Imagen (GenAI SDK format)", () => {

@@ -17,6 +17,7 @@ import { GoogleGenAI, type GenerateVideosParameters } from "@google/genai";
 const execAsync = promisify(exec);
 const POLL_INTERVAL_MS = 5000;
 const OPERATION_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_VEO_MODEL = "veo-3.1-generate-001";
 
 const truthyEnv = (value: string | undefined): boolean =>
   /^(1|true|yes)$/i.test((value ?? "").trim());
@@ -32,6 +33,16 @@ const getVertexLocation = (): string =>
   process.env.VERTEXAI_LOCATION ||
   process.env.VERTEX_LOCATION ||
   "global";
+
+const getRequestHttpOptions = (): { timeout: number; apiVersion?: "v1" } =>
+  shouldUseVertex()
+    ? {
+        timeout: OPERATION_TIMEOUT_MS,
+        apiVersion: "v1",
+      }
+    : {
+        timeout: OPERATION_TIMEOUT_MS,
+      };
 
 const shouldUseVertex = (): boolean => {
   if (truthyEnv(process.env.GOOGLE_GENAI_USE_VERTEXAI)) {
@@ -54,6 +65,7 @@ const createClient = (): GoogleGenAI => {
       vertexai: true,
       project,
       location: getVertexLocation(),
+      apiVersion: "v1",
     });
   }
 
@@ -75,6 +87,10 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) =>
     setTimeout(resolve, process.env.JEST_WORKER_ID ? 0 : ms),
   );
+
+const writeInlineVideoBytes = (outputPath: string, videoBytes: string): void => {
+  fs.writeFileSync(outputPath, Buffer.from(videoBytes, "base64"));
+};
 
 export async function generateReferenceImage(prompt: string, outputPath: string): Promise<void> {
   try {
@@ -108,24 +124,24 @@ export async function generateVeoClip(
   referenceImagePath: string | null,
   aspectRatio: string,
   outputPath: string,
+  model = DEFAULT_VEO_MODEL,
 ): Promise<void> {
   try {
     ensureOutputDir(outputPath);
     const genai = createClient();
+    const httpOptions = getRequestHttpOptions();
     const request: GenerateVideosParameters & {
-      httpOptions: { timeout: number };
+      httpOptions: { timeout: number; apiVersion?: "v1" };
       image?: { imageBytes: string; mimeType: string };
     } = {
-      model: "veo-3.1-generate-preview",
+      model,
       prompt,
       config: {
         numberOfVideos: 1,
         aspectRatio,
         durationSeconds: 8,
       },
-      httpOptions: {
-        timeout: OPERATION_TIMEOUT_MS,
-      },
+      httpOptions,
     };
 
     if (referenceImagePath) {
@@ -148,11 +164,9 @@ export async function generateVeoClip(
       await sleep(POLL_INTERVAL_MS);
       currentOperation = await genai.operations.getVideosOperation({
         operation: currentOperation,
-        httpOptions: {
-          timeout: OPERATION_TIMEOUT_MS,
-        },
+        httpOptions,
       } as Parameters<typeof genai.operations.getVideosOperation>[0] & {
-        httpOptions: { timeout: number };
+        httpOptions: { timeout: number; apiVersion?: "v1" };
       });
     }
 
@@ -160,19 +174,23 @@ export async function generateVeoClip(
       throw new Error(`Veo operation failed: ${JSON.stringify(currentOperation.error)}`);
     }
 
-    const video = currentOperation.response?.generatedVideos?.[0]?.video;
+    const generatedVideo = currentOperation.response?.generatedVideos?.[0];
+    const video = generatedVideo?.video;
     if (!video) {
       throw new Error("Veo operation completed with no video");
+    }
+
+    if (video.videoBytes) {
+      writeInlineVideoBytes(outputPath, video.videoBytes);
+      return;
     }
 
     await genai.files.download({
       file: video,
       downloadPath: outputPath,
-      httpOptions: {
-        timeout: OPERATION_TIMEOUT_MS,
-      },
+      httpOptions,
     } as Parameters<typeof genai.files.download>[0] & {
-      httpOptions: { timeout: number };
+      httpOptions: { timeout: number; apiVersion?: "v1" };
     });
   } catch (error) {
     throw new Error(

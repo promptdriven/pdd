@@ -20,14 +20,8 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 7.381333,
-      "offsetSeconds": 0,
-      "compositions": [
-        "animation_section_01_title_card",
-        "animation_section_02_key_visual",
-        "animation_section_03_split_summary"
-      ],
-      "timelineSource": "generated"
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     },
     {
       "id": "veo_section",
@@ -36,14 +30,8 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 7.424,
-      "offsetSeconds": 7.381333,
-      "compositions": [
-        "veo_section_01_title_card",
-        "veo_section_02_key_visual",
-        "veo_section_03_split_summary"
-      ],
-      "timelineSource": "generated"
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     }
   ],
   "audioSync": {
@@ -60,7 +48,7 @@
     "silenceGapDefault": 0.3
   },
   "veo": {
-    "model": "veo-3.1-generate-preview",
+    "model": "veo-3.1-generate-001",
     "defaultAspectRatio": "16:9",
     "maxConcurrentGenerations": 4,
     "references": [],

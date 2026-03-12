@@ -1,27 +1,32 @@
+# TTS Script — Integration Test
+
+---
+
 ## Animation Section
 
-[TONE: explanatory]
+[TONE: neutral, clear]
 [PACE: moderate]
-[EMOTION: calm]
+[EMOTION: informative]
 This is the first section of the integration test video.
-[PAUSE: 1.0s]
+[PAUSE: 0.5s]
 
-[TONE: explanatory]
+[TONE: neutral, clear]
 [PACE: moderate]
-[EMOTION: calm]
+[EMOTION: informative]
 It uses only Remotion animations with no Veo clips.
+[PAUSE: 1.0s]
 
 ---
 
 ## Veo Section
 
-[TONE: explanatory]
-[PACE: moderate]
-[EMOTION: calm]
+[TONE: calm, warm]
+[PACE: slightly slow]
+[EMOTION: contemplative]
 This is the second section of the integration test video.
-[PAUSE: 1.0s]
+[PAUSE: 0.5s]
 
-[TONE: explanatory]
-[PACE: moderate]
-[EMOTION: calm]
+[TONE: calm, warm]
+[PACE: slightly slow]
+[EMOTION: appreciative]
 It uses Veo-generated clips with narration overlay.
