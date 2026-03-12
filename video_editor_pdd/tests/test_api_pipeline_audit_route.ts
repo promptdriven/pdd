@@ -689,6 +689,62 @@ describe("audit executor factory", () => {
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
   });
 
+  it("uses the intrinsic sample frame for preview compositions instead of scaling against the 150-frame preview container", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 7.381,
+        offsetSeconds: 0,
+        compositions: ["04_square_slide_right"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["04_square_slide_right.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
+    const slidePath = pathMod.join(specDir, "04_square_slide_right.md");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === slidePath) {
+        return [
+          "**Timestamp:** 0:04 - 0:05",
+          "",
+          "## Animation Sequence",
+          "1. Frame 0-3: Hold square at center.",
+          "2. Frame 3-22: Square slides to the right.",
+          "3. Frame 22-27: Overshoot settle.",
+          "4. Frame 27-33: Guide line fades out and glow appears.",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === slidePath ||
+        candidate === pathMod.join("/project-root", "outputs", "sections", "animation_section.mp4")
+      );
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "animation-section04-square-slide-right",
+      27,
+      pathMod.join("/project-root", "outputs", "audit", "animation_section", "04_square_slide_right_frame.png")
+    );
+  });
+
   it("extracts frames from a staged per-visual Veo clip when auditing a media-only spec", async () => {
     const config = mockProjectConfig();
     config.sections = [
@@ -1315,7 +1371,7 @@ describe("audit executor factory", () => {
     expect(mockRenderStill).toHaveBeenCalledTimes(2);
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
     expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
-    expect(mockRenderStill.mock.calls[0][1]).toBe(128);
+    expect(mockRenderStill.mock.calls[0][1]).toBe(77);
   });
 });
 

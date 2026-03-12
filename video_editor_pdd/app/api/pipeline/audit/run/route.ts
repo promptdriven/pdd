@@ -316,10 +316,7 @@ async function auditSection(
     if (renderSource.kind === "preview-composition") {
       const sampleFrame = Math.min(
         DEFAULT_PREVIEW_DURATION_FRAMES - 1,
-        Math.max(
-          0,
-          Math.floor(sampleWindow.normalizedSample * (DEFAULT_PREVIEW_DURATION_FRAMES - 1))
-        )
+        Math.max(0, sampleWindow.intrinsicSampleFrame)
       );
       onLog(
         `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`

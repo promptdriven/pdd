@@ -1,11 +1,13 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import { ANIMATION, NARRATION_TEXT } from './constants';
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing, useVideoConfig } from 'remotion';
+import { ANIMATION, NARRATION_TEXT, resolveNarrationOverlayLayout } from './constants';
 import { FrostedPill } from './FrostedPill';
 import { ProgressBar } from './ProgressBar';
 
 export const VeoSection07NarrationOverlayIntro: React.FC = () => {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+  const layout = resolveNarrationOverlayLayout(width, height);
 
   // Frame 100-120: Entire overlay fades out with easeInQuad
   const fadeOutOpacity = interpolate(
@@ -26,8 +28,8 @@ export const VeoSection07NarrationOverlayIntro: React.FC = () => {
       }}
     >
       <AbsoluteFill style={{ opacity: fadeOutOpacity }}>
-        <FrostedPill text={NARRATION_TEXT} />
-        <ProgressBar />
+        <FrostedPill text={NARRATION_TEXT} layout={layout} />
+        <ProgressBar layout={layout} />
       </AbsoluteFill>
     </AbsoluteFill>
   );

@@ -66,6 +66,14 @@ describe("resolution-aware Veo overlays", () => {
     process.cwd(),
     "remotion/src/remotion/VeoSection07NarrationOverlayIntro/VeoSection07NarrationOverlayIntro.tsx"
   );
+  const narrationFrostedPillPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection07NarrationOverlayIntro/FrostedPill.tsx"
+  );
+  const narrationProgressBarPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection07NarrationOverlayIntro/ProgressBar.tsx"
+  );
 
   it("derives the Veo title card layout from the active video config", () => {
     const source = fs.readFileSync(titleCardPath, "utf8");
@@ -160,5 +168,21 @@ describe("resolution-aware Veo overlays", () => {
 
     expect(source).toContain("pointerEvents: 'none'");
     expect(source).not.toContain("backgroundColor: '#0A1628'");
+  });
+
+  it("derives the narration overlay layout from the active video config", () => {
+    const source = fs.readFileSync(narrationOverlayPath, "utf8");
+
+    expect(source).toMatch(/useVideoConfig/);
+    expect(source).toMatch(/const\s*\{\s*width,\s*height\s*\}\s*=\s*useVideoConfig\(\)/);
+  });
+
+  it("avoids hardcoded 1920x1080 positioning in the narration overlay children", () => {
+    const pillSource = fs.readFileSync(narrationFrostedPillPath, "utf8");
+    const progressSource = fs.readFileSync(narrationProgressBarPath, "utf8");
+
+    expect(pillSource).not.toMatch(/top:\s*PILL\.y/);
+    expect(pillSource).not.toMatch(/left:\s*PILL\.x/);
+    expect(progressSource).not.toMatch(/top:\s*PILL\.y\s*\+\s*PILL\.height/);
   });
 });
