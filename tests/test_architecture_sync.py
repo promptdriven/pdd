@@ -14,9 +14,11 @@ from pdd.architecture_sync import (
     _find_renamed_prompt_file,
     _infer_filepath,
     _infer_module_tags,
+    filepath_to_prompt_filename,
     generate_tags_from_architecture,
     get_architecture_entry_for_prompt,
     has_pdd_tags,
+    normalize_architecture_filenames,
     parse_prompt_tags,
     register_untracked_prompts,
     sync_all_prompts_to_architecture,
@@ -1916,6 +1918,40 @@ def test_infer_module_tags_python():
 def test_infer_module_tags_llm():
     """_infer_module_tags returns ['llm'] for _LLM.prompt files."""
     assert _infer_module_tags('agentic_arch_step5_design_LLM.prompt') == ['llm']
+
+
+def test_normalize_architecture_filenames_issue617():
+    """Issue #617: normalize_architecture_filenames sets filename from filepath (mirror structure)."""
+    arch_data = [
+        {"filepath": "prisma/schema.prisma", "filename": "prisma_schema_Prisma.prompt", "priority": 1},
+        {"filepath": "app/api/route.ts", "filename": "app_api_route_TypeScript.prompt", "priority": 2},
+    ]
+    normalize_architecture_filenames(arch_data)
+    assert arch_data[0]["filename"] == "prisma/schema_Prisma.prompt"
+    assert arch_data[1]["filename"] == "app/api/route_TypeScript.prompt"
+    # Entry without filepath is unchanged
+    arch_data.append({"filepath": "", "filename": "old.prompt", "priority": 3})
+    normalize_architecture_filenames(arch_data)
+    assert arch_data[2]["filename"] == "old.prompt"
+
+
+def test_filename_mirrors_filepath_issue617():
+    """Issue #617: prompt filename should mirror filepath directory structure, not flatten with underscores."""
+    cases = [
+        ("prisma/schema.prisma", "Prisma", "prisma/schema_Prisma.prompt"),
+        ("lib/types.ts", "TypeScript", "lib/types_TypeScript.prompt"),
+        ("lib/formulaEngine.ts", "TypeScript", "lib/formulaEngine_TypeScript.prompt"),
+        ("app/api/sheets/route.ts", "TypeScript", "app/api/sheets/route_TypeScript.prompt"),
+        ("app/api/sheets/[id]/route.ts", "TypeScript", "app/api/sheets/[id]/route_TypeScript.prompt"),
+        ("components/grid/Cell.tsx", "TypeScriptReact", "components/grid/Cell_TypeScriptReact.prompt"),
+        ("app/sheet/[id]/page.tsx", "TypeScriptReact", "app/sheet/[id]/page_TypeScriptReact.prompt"),
+        ("src/models/user.py", "Python", "src/models/user_Python.prompt"),
+        ("app/layout.tsx", "TypeScriptReact", "app/layout_TypeScriptReact.prompt"),
+    ]
+    for filepath, language, expected in cases:
+        assert filepath_to_prompt_filename(filepath, language) == expected, (
+            f"filepath={filepath!r} language={language!r}: expected {expected!r}"
+        )
 
 
 def test_register_untracked_prompts_adds_entry():

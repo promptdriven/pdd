@@ -246,29 +246,29 @@ contexts:
 % ARCHITECTURE.JSON FIELDS
 % ============================================================================
 
-**filename**: The PROMPT file name (basename + language suffix)
-- Format: `{{descriptive_name}}_{{Language}}.prompt`
-- Use underscores to separate words, NOT slashes
-- This becomes the basename for `pdd sync`
+**filename**: The PROMPT file name — MUST mirror the filepath directory structure (Issue #617).
+- Format: same path as filepath, with extension replaced by `_{{Language}}.prompt`
+- Use forward slashes (/) so filename has the same directory structure as filepath.
+- This becomes the path under prompts/ for `pdd sync` (e.g. prompts/prisma/schema_Prisma.prompt).
 
 **filepath**: The OUTPUT code path (where generated code will be written)
-- Use framework-specific paths with exact filenames
-- INDEPENDENT from filename - mapped via `.pddrc`
+- Use framework-specific paths with exact filenames.
+- filename is derived from filepath by mirroring its path and swapping extension.
 
-**CRITICAL**: filename encodes WHAT, filepath encodes WHERE.
+**CRITICAL**: filename MUST mirror filepath (same directories, extension → _Language.prompt).
 
-| filename (prompt) | basename | filepath (output) |
-|-------------------|----------|-------------------|
-| `prisma_schema_Prisma.prompt` | `prisma_schema` | `prisma/schema.prisma` |
-| `home_page_TypeScriptReact.prompt` | `home_page` | `app/page.tsx` |
-| `api_tasks_route_TypeScript.prompt` | `api_tasks_route` | `app/api/tasks/route.ts` |
-| `api_tasks_id_route_TypeScript.prompt` | `api_tasks_id_route` | `app/api/tasks/[id]/route.ts` |
+| filepath (output) | filename (prompt) |
+|-------------------|-------------------|
+| `prisma/schema.prisma` | `prisma/schema_Prisma.prompt` |
+| `app/page.tsx` | `app/page_TypeScriptReact.prompt` |
+| `app/api/tasks/route.ts` | `app/api/tasks/route_TypeScript.prompt` |
+| `app/api/tasks/[id]/route.ts` | `app/api/tasks/[id]/route_TypeScript.prompt` |
 
-**WRONG filename examples:**
-- `prisma/schema_Prisma.prompt` ❌ (NO SLASHES in filename!)
-- `app/page_TypeScriptReact.prompt` ❌ (NO SLASHES!)
-- `page_NextJS.prompt` ❌ (NO FRAMEWORK NAMES!)
-- `home-page_TypeScriptReact.prompt` ❌ (use underscores, not hyphens)
+**WRONG filename examples (do not flatten with underscores):**
+- `prisma_schema_Prisma.prompt` ❌ (flattened; use prisma/schema_Prisma.prompt)
+- `api_tasks_route_TypeScript.prompt` ❌ (flattened; use app/api/tasks/route_TypeScript.prompt)
+- `page_NextJS.prompt` ❌ (NO FRAMEWORK NAMES — use TypeScriptReact!)
+- `home-page_TypeScriptReact.prompt` ❌ (use slashes for path, not hyphens)
 
 % ============================================================================
 % COMPLETE WORKING EXAMPLES (VERIFIED)
@@ -283,18 +283,18 @@ For a complete, verified working example of a Next.js Task Notes application wit
 <include>pdd/templates/architecture/example_nextjs_task_notes.prompt</include>
 </complete_working_example_a>
 
-**Quick Reference - Style 1 patterns (Next.js):**
+**Quick Reference - Style 1 patterns (Next.js, Issue #617 filename mirrors filepath):**
 
-| filename | basename | filepath | context paths |
-|----------|----------|----------|---------------|
-| `prisma_schema_Prisma.prompt` | `prisma_schema` | `prisma/schema.prisma` | `["*prisma_schema*"]` |
-| `home_page_TypeScriptReact.prompt` | `home_page` | `app/page.tsx` | `["*home_page*"]` |
-| `api_tasks_id_route_TypeScript.prompt` | `api_tasks_id_route` | `app/api/tasks/[id]/route.ts` | `["*api_tasks_id_route*"]` |
+| filename (prompt) | filepath | context paths |
+|-------------------|----------|---------------|
+| `prisma/schema_Prisma.prompt` | `prisma/schema.prisma` | `["*prisma/schema*"]` |
+| `app/page_TypeScriptReact.prompt` | `app/page.tsx` | `["*app/page*"]` |
+| `app/api/tasks/[id]/route_TypeScript.prompt` | `app/api/tasks/[id]/route.ts` | `["*app/api/tasks/[id]/route*"]` |
 
 ```bash
-pdd sync prisma_schema      → prisma/schema.prisma
-pdd sync home_page          → app/page.tsx
-pdd sync api_tasks_id_route → app/api/tasks/[id]/route.ts
+pdd sync prisma/schema      → prisma/schema.prisma
+pdd sync app/page           → app/page.tsx
+pdd sync app/api/tasks/[id]/route → app/api/tasks/[id]/route.ts
 ```
 
 % --- Example B: Python Backend (Style 2 - Template-based group contexts) ---
