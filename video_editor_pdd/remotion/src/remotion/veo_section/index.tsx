@@ -30,7 +30,7 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.424;
+  const durationSeconds = 7.488;
   const frame = useCurrentFrame();
   let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
   for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
@@ -49,7 +49,9 @@ export const VeoSectionSection: React.FC = () => {
       <Audio src={staticFile("veo_section/narration.wav")} />
       {activeVisualMedia?.defaultSrc && !ActiveComponent ? (
         <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
-      ) : null}
+      ) : (
+        !ActiveComponent ? <OffthreadVideo src={staticFile("veo/veo_section.mp4")} style={{ width: "100%", height: "100%" }} /> : null
+      )}
       {ActiveComponent && activeVisual ? (
         <Sequence
           from={activeVisual.start}
