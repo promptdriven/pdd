@@ -62,13 +62,14 @@ This module handles the synchronization of architecture metadata between `archit
 2. Extract `<pdd-reason>` (single line description), `<pdd-interface>` (JSON), `<pdd-dependency>` (multiple allowed)
 3. Before XML parsing, parse only the header section (content before the first `\n%` section marker) so that example tags in code fences or prose in the body are never extracted as real metadata
 4. Update architecture.json entries from prompt file tags (only update fields with tags present)
-5. Support dry_run mode to preview changes without writing
-6. Track `has_dependency_tags` flag to distinguish "no tags" from "tags removed" (clearing dependencies)
-7. Validate dependencies (check file existence, detect duplicates)
-8. Validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
-9. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
-10. Use Path.cwd() for default paths to work with user's project directory, not package installation
-11. Handle malformed XML/JSON gracefully without crashing (lenient validation)
+5. When updating an interface, merge function signatures rather than replacing them: the new signature must be a superset of the old one (all existing parameters preserved, new parameters added). If the new signature would remove a parameter that existed in the old one, emit a warning but preserve the parameter. This prevents silent parameter loss when the source tag is incomplete.
+6. Support dry_run mode to preview changes without writing
+7. Track `has_dependency_tags` flag to distinguish "no tags" from "tags removed" (clearing dependencies)
+8. Validate dependencies (check file existence, detect duplicates)
+9. Validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
+10. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
+11. Use Path.cwd() for default paths to work with user's project directory, not package installation
+12. Handle malformed XML/JSON gracefully without crashing (lenient validation)
 
 % Dependencies
 Uses lxml.etree for XML parsing with recovery mode.
@@ -92,6 +93,7 @@ Uses pathlib.Path for file operations.
    - Load prompt file and extract tags
    - Find matching module in architecture.json by filename
    - Update only fields with tags present (lenient)
+   - For interface updates: merge function signatures from the new tag with existing ones. For each function, if the new signature would drop parameters present in the old signature, preserve the old parameters and emit a warning. New functions and new parameters on existing functions should be added.
    - Clear dependencies if prompt has ANY PDD tags but no dependency tags
    - Track changes for diff display
    - Include interface_parse_error in warnings
