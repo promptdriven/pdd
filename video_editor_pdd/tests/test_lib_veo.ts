@@ -8,7 +8,7 @@
  *   1. Export generateReferenceImage(prompt, outputPath) -> Promise<void>
  *   2. Export generateVeoClip(prompt, refImagePath | null, aspectRatio, outputPath) -> Promise<void>
  *   3. Export extractLastFrame(clipPath, outputPath) -> Promise<void>
- *   4. Use GOOGLE_API_KEY env var for auth via @google/genai SDK
+ *   4. Use GOOGLE_API_KEY env var for Gemini API auth, or Vertex AI project/location envs when configured
  *   5. Imagen via GenAI SDK: numberOfImages: 1, aspectRatio: '1:1', outputMimeType: 'image/png'
  *   6. Veo via GenAI SDK: numberOfVideos: 1, aspectRatio from param, durationSeconds: 8
  *   7. Poll every 5s; timeout after 10 min
@@ -46,6 +46,10 @@ jest.mock("@google/genai", () => ({
   })),
 }));
 
+const { GoogleGenAI } = jest.requireMock("@google/genai") as {
+  GoogleGenAI: jest.Mock;
+};
+
 // ---------------------------------------------------------------------------
 // Mock child_process.exec
 // ---------------------------------------------------------------------------
@@ -66,10 +70,33 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ORIGINAL_API_KEY = process.env.GOOGLE_API_KEY;
+const ORIGINAL_AUTH_ENV = {
+  GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+  GOOGLE_GENAI_USE_VERTEXAI: process.env.GOOGLE_GENAI_USE_VERTEXAI,
+  GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT,
+  GOOGLE_CLOUD_LOCATION: process.env.GOOGLE_CLOUD_LOCATION,
+  VERTEXAI_PROJECT: process.env.VERTEXAI_PROJECT,
+  VERTEXAI_LOCATION: process.env.VERTEXAI_LOCATION,
+  VERTEX_PROJECT: process.env.VERTEX_PROJECT,
+  VERTEX_LOCATION: process.env.VERTEX_LOCATION,
+};
 
-function setupEnvVars() {
+function setupApiKeyEnv() {
   process.env.GOOGLE_API_KEY = "test-api-key-123";
+  delete process.env.GOOGLE_GENAI_USE_VERTEXAI;
+  delete process.env.GOOGLE_CLOUD_PROJECT;
+  delete process.env.GOOGLE_CLOUD_LOCATION;
+  delete process.env.VERTEXAI_PROJECT;
+  delete process.env.VERTEXAI_LOCATION;
+  delete process.env.VERTEX_PROJECT;
+  delete process.env.VERTEX_LOCATION;
+}
+
+function setupVertexEnv() {
+  delete process.env.GOOGLE_API_KEY;
+  process.env.GOOGLE_CLOUD_PROJECT = "vertex-test-project";
+  process.env.GOOGLE_CLOUD_LOCATION = "global";
+  process.env.GOOGLE_GENAI_USE_VERTEXAI = "true";
 }
 
 function setupFsMocks() {
@@ -116,21 +143,24 @@ function makeVeoOperation({
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  setupEnvVars();
+  setupApiKeyEnv();
   jest.clearAllMocks();
   mockGenerateImages.mockReset();
   mockGenerateVideos.mockReset();
   mockGetVideosOperation.mockReset();
   mockFilesDownload.mockReset();
   mockFilesDownload.mockResolvedValue(undefined);
+  GoogleGenAI.mockClear();
 });
 
 afterEach(() => {
   jest.restoreAllMocks();
-  if (ORIGINAL_API_KEY !== undefined) {
-    process.env.GOOGLE_API_KEY = ORIGINAL_API_KEY;
-  } else {
-    delete process.env.GOOGLE_API_KEY;
+  for (const [key, value] of Object.entries(ORIGINAL_AUTH_ENV)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
   }
 });
 
@@ -214,9 +244,36 @@ describe("generateReferenceImage -- GenAI SDK call", () => {
 
     await generateReferenceImage("test", "/tmp/out.png");
 
-    // GoogleGenAI is constructed at module-load time with apiKey from env.
-    // Verify the mock SDK methods were actually called (proving SDK is wired up).
-    expect(mockGenerateImages).toHaveBeenCalledTimes(1);
+    expect(GoogleGenAI).toHaveBeenCalledWith({ apiKey: "test-api-key-123" });
+  });
+
+  it("uses Vertex AI constructor options when vertex mode is enabled", async () => {
+    setupVertexEnv();
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
+
+    await generateReferenceImage("test", "/tmp/out.png");
+
+    expect(GoogleGenAI).toHaveBeenCalledWith({
+      vertexai: true,
+      project: "vertex-test-project",
+      location: "global",
+    });
+  });
+
+  it("auto-selects Vertex AI when no API key is set but GOOGLE_CLOUD_PROJECT is available", async () => {
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_GENAI_USE_VERTEXAI;
+    process.env.GOOGLE_CLOUD_PROJECT = "vertex-auto-project";
+    process.env.GOOGLE_CLOUD_LOCATION = "us-central1";
+    mockGenerateImages.mockResolvedValue(makeImagenResponse());
+
+    await generateReferenceImage("test", "/tmp/out.png");
+
+    expect(GoogleGenAI).toHaveBeenCalledWith({
+      vertexai: true,
+      project: "vertex-auto-project",
+      location: "us-central1",
+    });
   });
 });
 
@@ -261,12 +318,26 @@ describe("generateReferenceImage -- error handling", () => {
     setupFsMocks();
   });
 
-  it("throws when GOOGLE_API_KEY is not set", async () => {
+  it("throws when neither GOOGLE_API_KEY nor Vertex AI project settings are present", async () => {
     delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_GENAI_USE_VERTEXAI;
+    delete process.env.GOOGLE_CLOUD_PROJECT;
 
     await expect(
       generateReferenceImage("test", "/tmp/out.png")
-    ).rejects.toThrow("GOOGLE_API_KEY");
+    ).rejects.toThrow("Veo authentication is not configured");
+  });
+
+  it("throws when vertex mode is explicitly enabled but no project is configured", async () => {
+    delete process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_GENAI_USE_VERTEXAI = "true";
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    delete process.env.VERTEXAI_PROJECT;
+    delete process.env.VERTEX_PROJECT;
+
+    await expect(
+      generateReferenceImage("test", "/tmp/out.png")
+    ).rejects.toThrow("Vertex AI is enabled but no project was configured");
   });
 
   it("throws when API returns no image data", async () => {
@@ -425,16 +496,41 @@ describe("generateVeoClip -- GenAI SDK call without reference", () => {
   it("uses GOOGLE_API_KEY for authentication via GoogleGenAI constructor", async () => {
     mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
     mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
-    jest.spyOn(global, "fetch").mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
-    } as any);
 
     await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
 
-    // GoogleGenAI is constructed at module-load time with apiKey from env.
-    // Verify the mock SDK methods were actually called (proving SDK is wired up).
-    expect(mockGenerateVideos).toHaveBeenCalledTimes(1);
+    expect(GoogleGenAI).toHaveBeenCalledWith({ apiKey: "test-api-key-123" });
+  });
+
+  it("uses Vertex AI constructor options for video generation when project-based auth is configured", async () => {
+    setupVertexEnv();
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(GoogleGenAI).toHaveBeenCalledWith({
+      vertexai: true,
+      project: "vertex-test-project",
+      location: "global",
+    });
+  });
+
+  it("auto-selects Vertex AI for video generation when GOOGLE_CLOUD_PROJECT is present and API key is absent", async () => {
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GOOGLE_GENAI_USE_VERTEXAI;
+    process.env.GOOGLE_CLOUD_PROJECT = "vertex-auto-project";
+    process.env.GOOGLE_CLOUD_LOCATION = "us-central1";
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(makeVeoOperation({ done: true }));
+
+    await generateVeoClip("test", null, "16:9", "/tmp/out.mp4");
+
+    expect(GoogleGenAI).toHaveBeenCalledWith({
+      vertexai: true,
+      project: "vertex-auto-project",
+      location: "us-central1",
+    });
   });
 });
 
@@ -824,8 +920,15 @@ describe("lib/veo.ts source structure", () => {
     expect(sourceCode).toMatch(/server-only/);
   });
 
-  it("uses GOOGLE_API_KEY env var", () => {
+  it("supports GOOGLE_API_KEY env var", () => {
     expect(sourceCode).toMatch(/GOOGLE_API_KEY/);
+  });
+
+  it("supports Vertex AI env configuration", () => {
+    expect(sourceCode).toMatch(/GOOGLE_GENAI_USE_VERTEXAI/);
+    expect(sourceCode).toMatch(/GOOGLE_CLOUD_PROJECT/);
+    expect(sourceCode).toMatch(/VERTEXAI_PROJECT/);
+    expect(sourceCode).toMatch(/vertexai:\s*true/);
   });
 
   it("imports GoogleGenAI from @google/genai", () => {
