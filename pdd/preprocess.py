@@ -2,7 +2,7 @@ import os
 import re
 import base64
 import subprocess
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Union
 import traceback
 from pathlib import Path
 from rich.console import Console
@@ -118,7 +118,7 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
         pass
     return single_brace, template_brace
 
-def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None) -> str:
+def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None) -> str:
     try:
         # Some tests patch template loading to return mock objects with .format().
         # In that case preprocessing is not applicable; return as string.
