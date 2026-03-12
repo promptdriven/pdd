@@ -53,6 +53,7 @@ from render_tts import (
     TONE_PATTERN,
     PACE_PATTERN,
     EMOTION_PATTERN,
+    SEGMENTS_MANIFEST_FILENAME,
     Segment,
     build_parser,
     concatenate_pcm,
@@ -805,6 +806,92 @@ class TestMain:
         assert (output_dir / "seg_001.wav").exists()
         assert (output_dir / "seg_002.wav").exists()
         assert (output_dir / "seg_003.wav").exists()
+
+    def test_writes_segments_manifest_during_render(self, tmp_project):
+        """Spec: renderer writes outputs/tts/segments.json from the actual parsed segments."""
+        output_dir = tmp_project / "outputs" / "tts"
+
+        with mock.patch("render_tts.TTSEngine") as MockEngine:
+            instance = MockEngine.return_value
+            instance.sample_rate = SAMPLE_RATE
+            num_samples = int(SAMPLE_RATE * 0.5)
+            instance.synthesize.return_value = struct.pack(
+                f"<{num_samples}h", *([100] * num_samples)
+            )
+
+            with mock.patch(
+                "sys.argv",
+                [
+                    "render_tts.py",
+                    "--project-dir",
+                    str(tmp_project),
+                    "--output-dir",
+                    str(output_dir),
+                ],
+            ):
+                from render_tts import main
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 0
+
+        manifest_path = output_dir / SEGMENTS_MANIFEST_FILENAME
+        assert manifest_path.exists()
+        manifest = json.loads(manifest_path.read_text())
+        assert [segment["id"] for segment in manifest["segments"]] == [
+            "seg_001",
+            "seg_002",
+            "seg_003",
+        ]
+
+    def test_manifest_only_writes_split_section_manifest_without_audio(self, tmp_path):
+        """Spec: --manifest-only emits the renderer's true pause-split segments for section scripts."""
+        narrative_dir = tmp_path / "narrative"
+        narrative_dir.mkdir()
+        (tmp_path / "project.json").write_text(
+            json.dumps(
+                {
+                    "sections": [
+                        {"id": "animation_section", "label": "Animation Section"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (narrative_dir / "tts_script.md").write_text(
+            "# Demo\n\n"
+            "## Animation Section\n\n"
+            "[TONE: neutral] First sentence.\n"
+            "[PAUSE: 1.0s]\n"
+            "Second sentence.\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "outputs" / "tts"
+
+        with mock.patch(
+            "sys.argv",
+            [
+                "render_tts.py",
+                "--project-dir",
+                str(tmp_path),
+                "--output-dir",
+                str(output_dir),
+                "--manifest-only",
+            ],
+        ):
+            from render_tts import main
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+        manifest_path = output_dir / SEGMENTS_MANIFEST_FILENAME
+        assert manifest_path.exists()
+        manifest = json.loads(manifest_path.read_text())
+        assert [segment["id"] for segment in manifest["segments"]] == [
+            "animation_section_001",
+            "animation_section_002",
+        ]
+        assert not (output_dir / "animation_section_001.wav").exists()
+        assert manifest["segments"][1]["text"] == "Second sentence."
 
     def test_json_error_format(self, tmp_project, capsys):
         """Spec: Error format: {"segmentId": "seg_001", "status": "error", "error": "..."}"""

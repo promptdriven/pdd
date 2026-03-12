@@ -328,6 +328,30 @@ describe("GET /api/pipeline/tts-render/segments", () => {
       fs.unlinkSync(wavPath);
     }
   });
+
+  it("prefers outputs/tts/segments.json when present", async () => {
+    const manifestPath = path.join(tmpDir, "outputs", "tts", "segments.json");
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        segments: [
+          { id: "animation_section_001", text: "This is the first split segment." },
+          { id: "animation_section_002", text: "This is the second split segment." },
+        ],
+      }),
+      "utf-8",
+    );
+
+    const response = await GET_ttsSegments();
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body.segments.map((s: { id: string }) => s.id)).toEqual([
+      "animation_section_001",
+      "animation_section_002",
+    ]);
+    expect(body.segments[1].text).toMatch(/second split segment/);
+  });
 });
 
 // =========================================================================

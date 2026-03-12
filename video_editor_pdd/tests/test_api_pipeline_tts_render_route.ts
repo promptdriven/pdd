@@ -39,6 +39,7 @@ jest.mock("@/lib/jobs", () => ({
 const mockOn = jest.fn();
 const mockStdoutOn = jest.fn();
 const mockStderrOn = jest.fn();
+const mockSpawnSync = jest.fn();
 const mockSpawn = jest.fn(() => ({
   stdout: { on: mockStdoutOn },
   stderr: { on: mockStderrOn },
@@ -47,6 +48,7 @@ const mockSpawn = jest.fn(() => ({
 
 jest.mock("child_process", () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
+  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
 }));
 
 // Mock fs
@@ -82,6 +84,7 @@ jest.mock("@/lib/projects", () => ({
 
 // Import after mocking
 import { POST } from "../app/api/pipeline/tts-render/run/route";
+import { GET as GETSegments } from "../app/api/pipeline/tts-render/segments/route";
 import { parseSegmentsFromScript, getWavDuration } from "../lib/tts-segments";
 
 // Capture executor factory registered at module load
@@ -171,6 +174,7 @@ function makeWavBuffer(opts: {
 
 beforeEach(() => {
   mockSpawn.mockClear();
+  mockSpawnSync.mockReset();
   mockOn.mockReset();
   mockStdoutOn.mockReset();
   mockStderrOn.mockReset();
@@ -180,6 +184,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
+  mockSpawnSync.mockReturnValue({ status: 0, stdout: "", stderr: "" });
 
   // Default: spawn completes successfully
   mockSpawn.mockImplementation(() => {
@@ -218,6 +223,27 @@ describe("registerExecutor at module load", () => {
 // ---------------------------------------------------------------------------
 
 describe("parseSegmentsFromScript", () => {
+  it("prefers outputs/tts/segments.json when present", () => {
+    mockExistsSync.mockImplementation((p: string) => p.includes("segments.json"));
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return JSON.stringify({
+          segments: [
+            { id: "animation_section_001", text: "[TONE: calm] First line." },
+            { id: "animation_section_002", text: "Second line." },
+          ],
+        });
+      }
+      return "";
+    });
+
+    const result = parseSegmentsFromScript();
+    expect(result).toEqual([
+      { id: "animation_section_001", text: "[TONE: calm] First line." },
+      { id: "animation_section_002", text: "Second line." },
+    ]);
+  });
+
   it("returns empty array when no WAV files and no tts_script.md exist", () => {
     mockExistsSync.mockReturnValue(false);
     mockReaddirSync.mockReturnValue([]);
@@ -383,6 +409,59 @@ describe("parseSegmentsFromScript", () => {
     const result = parseSegmentsFromScript();
     expect(result).toHaveLength(1);
     expect(result[0].text).toContain("enough text");
+  });
+});
+
+describe("GET /api/pipeline/tts-render/segments manifest behavior", () => {
+  it("builds a manifest on demand when outputs/tts/segments.json is missing", async () => {
+    let manifestExists = false;
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return manifestExists;
+      }
+      if (p.includes("render_tts.py")) {
+        return true;
+      }
+      if (p.includes("tts_script.md")) {
+        return false;
+      }
+      if (p.includes("outputs") && p.includes("tts")) {
+        return true;
+      }
+      if (p.includes("project.json")) {
+        return false;
+      }
+      return false;
+    });
+
+    mockSpawnSync.mockImplementation(() => {
+      manifestExists = true;
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return JSON.stringify({
+          segments: [
+            { id: "animation_section_001", text: "This is first." },
+            { id: "animation_section_002", text: "This is second." },
+          ],
+        });
+      }
+      return Buffer.alloc(44);
+    });
+
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GETSegments();
+    const body = await response.json();
+
+    expect(mockSpawnSync).toHaveBeenCalled();
+    expect(body.segments.map((seg: { id: string }) => seg.id)).toEqual([
+      "animation_section_001",
+      "animation_section_002",
+    ]);
   });
 });
 

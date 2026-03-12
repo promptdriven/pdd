@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 DEFAULT_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 DEFAULT_OUTPUT_DIR = "outputs/tts/"
 DEFAULT_PROJECT_DIR = "."
+SEGMENTS_MANIFEST_FILENAME = "segments.json"
 SAMPLE_RATE = 24000  # Qwen TTS models typically output 24kHz audio
 
 # Annotation tag patterns
@@ -122,6 +123,39 @@ class Segment:
     def clean_text(self) -> str:
         """Full text with all annotation tags stripped."""
         return TAG_PATTERN.sub("", self.raw_text).strip()
+
+
+def build_segments_manifest(segments: List["Segment"]) -> List[Dict[str, Any]]:
+    """Build a JSON-serializable manifest for the parsed TTS segments."""
+    manifest: List[Dict[str, Any]] = []
+    for segment in segments:
+        segment_id = segment.segment_id
+        base_id, _, counter = segment_id.rpartition("_")
+        split_index = None
+        if counter.isdigit():
+            split_index = int(counter)
+
+        manifest.append(
+            {
+                "id": segment_id,
+                "sectionId": base_id or segment_id,
+                "splitIndex": split_index,
+                "text": segment.raw_text,
+                "cleanText": segment.clean_text,
+                "annotations": segment.annotations,
+            }
+        )
+
+    return manifest
+
+
+def write_segments_manifest(output_dir: str, segments: List["Segment"]) -> str:
+    """Persist the parsed segment manifest beside the generated WAV files."""
+    os.makedirs(output_dir, exist_ok=True)
+    manifest_path = os.path.join(output_dir, SEGMENTS_MANIFEST_FILENAME)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump({"segments": build_segments_manifest(segments)}, f, indent=2)
+    return manifest_path
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +750,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MODEL,
         help=f"Qwen3-TTS model ID. Default: {DEFAULT_MODEL}",
     )
+    parser.add_argument(
+        "--manifest-only",
+        action="store_true",
+        help="Parse tts_script.md and write outputs/tts/segments.json without rendering audio.",
+    )
     return parser
 
 
@@ -743,6 +782,8 @@ def main() -> None:
         print(json.dumps(error_result), flush=True)
         sys.exit(1)
 
+    write_segments_manifest(output_dir, all_segments)
+
     # Filter segments if --segments or --segment is specified
     requested_ids: Optional[set] = None
     if args.segments:
@@ -754,6 +795,9 @@ def main() -> None:
         segments_to_render = [s for s in all_segments if s.segment_id in requested_ids]
     else:
         segments_to_render = all_segments
+
+    if args.manifest_only:
+        sys.exit(0)
 
     if not segments_to_render:
         # No segments to render — this is not an error, just nothing to do
