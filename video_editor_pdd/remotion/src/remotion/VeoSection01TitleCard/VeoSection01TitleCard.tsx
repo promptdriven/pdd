@@ -1,15 +1,14 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
-import { COLORS, CANVAS, ANIMATION } from './constants';
-import { FilmGrainOverlay } from './FilmGrainOverlay';
-import { LightStreak } from './LightStreak';
-import { LetterRevealTitle } from './LetterRevealTitle';
-import { RadialGlowPulse } from './RadialGlowPulse';
+import { COLORS, ANIMATION } from './constants';
+import { TitleText } from './TitleText';
+import { HorizontalRule } from './HorizontalRule';
+import { ParticleDrift } from './ParticleDrift';
 
 export const VeoSection01TitleCard: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Background fades in from black over frames 0-10
+  // Background gradient fades in from black over frames 0-15
   const backgroundOpacity = interpolate(
     frame,
     [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
@@ -23,7 +22,7 @@ export const VeoSection01TitleCard: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#00FF00',
+        backgroundColor: '#0B1D3A',
       }}
     >
       <AbsoluteFill
@@ -31,36 +30,21 @@ export const VeoSection01TitleCard: React.FC = () => {
           opacity: backgroundOpacity,
         }}
       >
-        {/* Dark charcoal background with warm radial center highlight */}
+        {/* Deep ocean-blue gradient background */}
         <AbsoluteFill
           style={{
-            backgroundColor: COLORS.background,
-          }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            top: CANVAS.height / 2 - 400,
-            left: CANVAS.width / 2 - 400,
-            width: 800,
-            height: 800,
-            borderRadius: '50%',
-            background: `radial-gradient(circle, ${COLORS.gradientCenter}90 0%, transparent 65%)`,
-            pointerEvents: 'none',
+            background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
           }}
         />
 
-        {/* Film grain texture overlay at 3% opacity */}
-        <FilmGrainOverlay />
+        {/* Particle drift layer — runs continuously across full duration */}
+        <ParticleDrift />
 
-        {/* Radial glow pulse behind title */}
-        <RadialGlowPulse />
+        {/* Centered title text with parallax fade-in */}
+        <TitleText />
 
-        {/* Amber light streak sweeping left-to-right */}
-        <LightStreak />
-
-        {/* Letter-by-letter title reveal */}
-        <LetterRevealTitle />
+        {/* Horizontal rule drawing outward from center */}
+        <HorizontalRule />
       </AbsoluteFill>
     </AbsoluteFill>
   );

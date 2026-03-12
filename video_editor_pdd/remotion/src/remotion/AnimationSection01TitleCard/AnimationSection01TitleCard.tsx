@@ -2,8 +2,8 @@ import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
 import { COLORS, ANIMATION_TIMING } from './constants';
 import { RadialGlow } from './RadialGlow';
-import { TitleText } from './TitleText';
-import { ExpandingRule } from './ExpandingRule';
+import { StaggeredText } from './StaggeredText';
+import { ExpandingDivider } from './ExpandingDivider';
 
 export const AnimationSection01TitleCard: React.FC = () => {
   const frame = useCurrentFrame();
@@ -21,13 +21,19 @@ export const AnimationSection01TitleCard: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.background,
-        opacity: backgroundOpacity,
+        backgroundColor: '#000000',
       }}
     >
-      <RadialGlow />
-      {frame >= ANIMATION_TIMING.titleFadeStart && <TitleText />}
-      {frame >= ANIMATION_TIMING.ruleFadeStart && <ExpandingRule />}
+      <AbsoluteFill
+        style={{
+          backgroundColor: COLORS.background,
+          opacity: backgroundOpacity,
+        }}
+      >
+        <RadialGlow />
+        <StaggeredText />
+        <ExpandingDivider />
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };

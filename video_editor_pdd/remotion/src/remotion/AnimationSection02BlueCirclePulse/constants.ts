@@ -1,45 +1,43 @@
 // Component-level constants for AnimationSection02BlueCirclePulse
 
 export const CANVAS = {
-  width: 1920,
-  height: 1080,
-  centerX: 960,
-  centerY: 540,
+  width: 1280,
+  height: 720,
 };
 
 export const COLORS = {
-  background: '#111827',
-  circleFill: '#FACC15',
-  glowColor: 'rgba(250, 204, 21, 0.5)',
-  pulseRingColor: '#FACC15',
+  background: '#141921',
+  circle: '#3B82F6',
+  dropShadow: 'rgba(59, 130, 246, 0.3)',
 };
 
-export const CIRCLE = {
-  radius: 100,
-  diameter: 200,
-};
-
-export const PULSE = {
-  scaleMax: 1.15,
-  ringStartRadius: 100,
-  ringEndRadius: 150,
-  ringStartOpacity: 0.3,
+export const DIMENSIONS = {
+  circleDiameter: 180,
+  glowDiameter: 220,
+  glowExpandedDiameter: 280,
+  glowBlur: 30,
 };
 
 export const TIMING = {
-  // Frame 0-20: Circle scales from 0 to 1.0, opacity 0→100%
+  // Frame 0-20: Circle scales in with spring overshoot
   scaleInStart: 0,
   scaleInEnd: 20,
-  // Frame 20-40: Hold at full size, drop shadow fades in
+  // Frame 20-50: Hold steady, glow fades in
   holdStart: 20,
-  holdEnd: 40,
-  // Frame 40-60: Pulse — scale 1.0→1.15→1.0, pulse ring expands
-  pulseStart: 40,
-  pulsePeak: 50,
-  pulseEnd: 60,
-  // Frame 60-90: Hold steady
-  steadyStart: 60,
-  steadyEnd: 90,
-  // Frame 90-150: Remain on screen
-  totalDuration: 150,
+  glowFadeEnd: 50,
+  // Frame 50-75: Pulse beat
+  pulseStart: 50,
+  pulseMid: 62,
+  pulseEnd: 75,
+  // Frame 75-120: Rest with gentle glow oscillation
+  restStart: 75,
+  totalDuration: 120,
+};
+
+export const PULSE = {
+  peakScale: 1.15,
+  glowOpacityMin: 0.15,
+  glowOpacityMax: 0.25,
+  glowOpacityPeak: 0.4,
+  glowOpacityRest: 0.2,
 };

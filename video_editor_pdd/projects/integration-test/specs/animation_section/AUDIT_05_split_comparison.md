@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame shows several significant layout deviations from the spec: (1) The right panel (dark green background) does not extend to the right edge of the canvas — it appears as a centered rectangle leaving dark navy gaps on the right side and bottom, instead of filling the full right half (x: 640-1280) and full height. (2) The left panel background does not appear to have a distinct tint from the outer background — spec calls for left=#0F172A and right=#0F2318 as full-bleed panels, but the right panel is rendered as a floating box. (3) No vertical divider line is visible at x=640 (spec requires a 2px white line at 25% opacity). (4) Both shapes and labels appear vertically shifted upward from the specified center positions (shapes should be centered at y=320, labels at y=440, but they appear higher). (5) The right panel green background does not extend to the full canvas height — there are dark navy areas above and below it.

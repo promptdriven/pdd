@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame shows a green square (#22C55E) on a charcoal background (#141921) with a horizontal dashed guide line at approximately y=360. The square appears centered (around x=640), which is consistent with the early hold phase (Frame 0-10) of the animation sequence. However, there are two issues: (1) The horizontal guide line does not span the full width of the canvas — it only extends from the left edge to roughly x=950, stopping short of the right edge. The spec requires the guide line to span the full width (1280px). (2) There are no visible motion trail ghost copies behind the square. While this could be acceptable if the frame is captured at Frame 0-10 (before the slide begins and trails appear), the guide line truncation is a clear deviation from spec regardless of which frame is captured.

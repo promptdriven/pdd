@@ -6,38 +6,42 @@ export const CANVAS = {
 };
 
 export const COLORS = {
-  background: '#121212',
-  gradientCenter: '#2A1F0E',
-  titleText: '#FFF8E7',
-  accent: '#F59E0B',
-  glowColor: '#2A1F0E',
-  filmGrain: '#FFFFFF',
+  gradientTop: '#0B1D3A',
+  gradientBottom: '#162D50',
+  titleText: '#FFFFFF',
+  rule: '#5B9BD5',
+  particle: '#FFFFFF',
 };
 
 export const TYPOGRAPHY = {
   title: {
-    fontSize: 72,
+    fontSize: 64,
     fontFamily: 'Inter',
     fontWeight: 'bold' as const,
-    letterSpacing: 8,
   },
 };
 
 export const ANIMATION = {
+  // Background gradient fades in from black
   backgroundFadeStart: 0,
-  backgroundFadeEnd: 10,
-  lightStreakStart: 10,
-  lightStreakEnd: 30,
-  letterRevealStart: 15,
-  letterStaggerFrames: 2,
-  glowPulseStart: 30,
-  glowPulseEnd: 50,
-  holdStart: 50,
+  backgroundFadeEnd: 15,
+  // Title text fades in and shifts up 10px
+  titleFadeStart: 15,
+  titleFadeEnd: 45,
+  // Horizontal rule draws outward from center
+  ruleFadeStart: 30,
+  ruleFadeEnd: 60,
+  // Particle drift runs full duration
+  particleDurationFrames: 90,
   totalDuration: 90,
 };
 
 export const DIMENSIONS = {
-  glowDiameter: 500,
-  lightStreakHeight: 1,
-  grainOpacity: 0.03,
+  ruleWidth: 200,
+  ruleHeight: 2,
+  particleCount: 18,
+  particleMinRadius: 2,
+  particleMaxRadius: 4,
+  particleOpacity: 0.15,
+  titleRuleGap: 24,
 };

@@ -1,43 +1,54 @@
 // Component-level constants for AnimationSection01TitleCard
 
 export const CANVAS = {
-  width: 1920,
-  height: 1080,
+  width: 1280,
+  height: 720,
 };
 
 export const COLORS = {
   background: '#0B1120',
-  radialGlowCenter: '#1A2744',
+  glowCenter: '#2E4A7A',
+  gradientCenter: '#1A2744',
   titleText: '#FFFFFF',
-  accentLine: '#38BDF8',
+  divider: '#FFFFFF',
 };
 
 export const TYPOGRAPHY = {
   title: {
-    fontSize: 72,
+    fontSize: 56,
     fontFamily: 'Inter',
     fontWeight: 'bold' as const,
-    letterSpacing: '6px',
   },
 };
 
 export const DIMENSIONS = {
-  accentLineHeight: 2,
-  accentLineMaxWidth: 400,
-  radialGlowDiameter: 600,
-  titleToRuleGap: 16,
+  dividerWidth: 200,
+  dividerHeight: 2,
+  dividerOpacity: 0.4,
+  dividerOffsetY: 20,
+  glowRadius: 300,
+  glowBaseOpacity: 0.3,
+  glowPulseOpacity: 0.5,
+  floatAmplitude: 2,
 };
 
 export const ANIMATION_TIMING = {
-  // Frame 0-15: Background + radial glow fade in
+  // Frame 0-15: Background fades in, glow expands
   backgroundFadeStart: 0,
   backgroundFadeEnd: 15,
-  // Frame 15-45: Title fade in with upward drift
-  titleFadeStart: 15,
-  titleFadeEnd: 45,
-  // Frame 45-65: Horizontal rule expands
-  ruleFadeStart: 45,
-  ruleFadeEnd: 65,
-  // Frame 65-90: Hold
+  // Frame 15-45: Title letter-by-letter stagger
+  titleStaggerStart: 15,
+  titleStaggerEnd: 45,
+  letterStaggerFrames: 1.5, // ~50ms per char at 30fps
+  letterTranslateY: 5,
+  // Frame 45-60: Divider expands, glow pulses
+  dividerExpandStart: 45,
+  dividerExpandEnd: 60,
+  glowPulseStart: 45,
+  glowPulseEnd: 60,
+  // Frame 60-90: Hold with float
+  holdStart: 60,
   totalDuration: 90,
 };
+
+export const TITLE_TEXT = 'Animation Section';

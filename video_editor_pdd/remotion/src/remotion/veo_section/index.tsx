@@ -3,17 +3,29 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";
 import { VeoSection01TitleCard } from "../VeoSection01TitleCard";
+import { VeoSection03WaveDataOverlay } from "../VeoSection03WaveDataOverlay";
+import { VeoSection05SplitNatureComparison } from "../VeoSection05SplitNatureComparison";
+import { VeoSection06VeoPipelineInfographic } from "../VeoSection06VeoPipelineInfographic";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "veo_section_01_title_card": VeoSection01TitleCard,
+  "03_wave_data_overlay": VeoSection03WaveDataOverlay,
+  "05_split_nature_comparison": VeoSection05SplitNatureComparison,
+  "06_veo_pipeline_infographic": VeoSection06VeoPipelineInfographic,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "veo_section_01_title_card": 90,
+  "03_wave_data_overlay": 120,
+  "05_split_nature_comparison": 120,
+  "06_veo_pipeline_infographic": 150,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "veo_section_01_title_card": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
+  "03_wave_data_overlay": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
+  "05_split_nature_comparison": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
+  "06_veo_pipeline_infographic": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
 };
 
 export const VeoSectionSection: React.FC = () => {
