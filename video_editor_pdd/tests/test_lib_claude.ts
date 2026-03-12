@@ -54,7 +54,7 @@ jest.mock("child_process", () => ({
 }));
 
 // Must import after jest.mock
-import { runClaudeAnalysis, runClaudeFix, runClaudeFixDryRun } from "../lib/claude";
+import { runClaudeAnalysis, runClaudeAudit, runClaudeFix, runClaudeFixDryRun } from "../lib/claude";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -350,6 +350,38 @@ describe("runClaudeAnalysis — returns parsed result", () => {
     const result = await promise;
     expect(result).toEqual(sampleAnalysis);
     warnSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6b. runClaudeAudit — scoped audit runner
+// ---------------------------------------------------------------------------
+
+describe("runClaudeAudit — spawn arguments", () => {
+  beforeEach(() => {
+    mockProc = createMockProc();
+    lastSpawnArgs = null;
+  });
+
+  it("scopes cwd to the audit directory", () => {
+    const promise = runClaudeAudit("audit this frame", "/tmp/audit-scope");
+    emitAndClose(mockProc, JSON.stringify(sampleAnalysis), "", 0);
+
+    return promise.then(() => {
+      expect(lastSpawnArgs!.options.cwd).toBe("/tmp/audit-scope");
+    });
+  });
+
+  it("uses Read-only access without Glob for audit", () => {
+    const promise = runClaudeAudit("audit this frame", "/tmp/audit-scope");
+    emitAndClose(mockProc, JSON.stringify(sampleAnalysis), "", 0);
+
+    return promise.then(() => {
+      const args = lastSpawnArgs!.args;
+      const idx = args.indexOf("--allowedTools");
+      expect(idx).toBeGreaterThan(-1);
+      expect(args[idx + 1]).toBe("Read");
+    });
   });
 });
 

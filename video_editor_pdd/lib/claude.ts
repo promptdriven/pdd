@@ -171,6 +171,28 @@ export async function runClaudeAnalysis(
 }
 
 /**
+ * Runs a frame/spec audit in a cwd-scoped directory so Claude only has access
+ * to the audit artifacts for that comparison.
+ */
+export async function runClaudeAudit(
+  prompt: string,
+  scopeDir: string,
+  onLog?: (line: string) => void
+): Promise<AnnotationAnalysis> {
+  const args = [
+    '--model',
+    'claude-opus-4-6',
+    '--output-format',
+    'json',
+    '--allowedTools',
+    'Read',
+    '--no-session-persistence',
+  ];
+
+  return runClaude(prompt, args, { cwd: scopeDir }, onLog) as Promise<AnnotationAnalysis>;
+}
+
+/**
  * Runs a read-only extraction task using Claude with a generic return type.
  */
 export async function runClaudeExtract<T>(

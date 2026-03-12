@@ -10,7 +10,7 @@
  *      Launches one agent per section concurrently. Returns SSE stream with { jobId }.
  *   2. Each per-section agent: resolves a spec-local audit timestamp → extracts
  *      a frame from the rendered section video when available (or falls back to
- *      renderStill()) → calls runClaudeAnalysis() comparing the still PNG against
+ *      renderStill()) → calls runClaudeAudit() comparing the still PNG against
  *      the spec file → writes
  *      specs/{specDir}/AUDIT_{specName}.md with pass/fail verdict and details.
  *   3. GET /api/pipeline/audit/results — returns { sections: AuditSectionResult[] }
@@ -45,10 +45,10 @@ jest.mock("@/lib/render", () => ({
   extractFrameAtTime: (...args: unknown[]) => mockExtractFrameAtTime(...args),
 }));
 
-const mockRunClaudeAnalysis = jest.fn();
+const mockRunClaudeAudit = jest.fn();
 
 jest.mock("@/lib/claude", () => ({
-  runClaudeAnalysis: (...args: unknown[]) => mockRunClaudeAnalysis(...args),
+  runClaudeAudit: (...args: unknown[]) => mockRunClaudeAudit(...args),
 }));
 
 const mockLoadProject = jest.fn();
@@ -223,7 +223,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockRenderStill.mockReset();
   mockExtractFrameAtTime.mockReset();
-  mockRunClaudeAnalysis.mockReset();
+  mockRunClaudeAudit.mockReset();
   mockLoadProject.mockReset();
   mockReaddirSync.mockReset();
   mockReadFileSync.mockReset();
@@ -234,7 +234,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockResolvedValue("test-job-audit-001");
   mockRenderStill.mockResolvedValue(undefined);
   mockExtractFrameAtTime.mockResolvedValue(undefined);
-  mockRunClaudeAnalysis.mockResolvedValue({
+  mockRunClaudeAudit.mockResolvedValue({
     severity: "pass",
     fixType: "none",
     technicalAssessment: "Frame matches spec",
@@ -529,7 +529,7 @@ describe("audit executor factory", () => {
 
   it("emits 'done' status with passCount and failCount after section completes", async () => {
     mockReaddirSync.mockReturnValue(["visual.md", "overlay.md"]);
-    mockRunClaudeAnalysis
+    mockRunClaudeAudit
       .mockResolvedValueOnce({
         severity: "pass",
         fixType: "none",
@@ -584,7 +584,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    const prompt = mockRunClaudeAnalysis.mock.calls[0][0] as string;
+    const prompt = mockRunClaudeAudit.mock.calls[0][0] as string;
     expect(prompt).toContain("Render resolution: 1920x1080");
     expect(prompt).toContain("Sample time (section-local):");
     expect(prompt).toContain("Sample window:");
@@ -659,6 +659,34 @@ describe("audit executor factory", () => {
     );
   });
 
+  it("renders a fresh still when the section has configured compositions even if a rendered mp4 exists", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 6,
+        compositions: ["animation_section_01_title_card"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["01_title_card.md"]);
+    mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledTimes(1);
+    expect(mockRenderStill.mock.calls[0][0]).toBe("AnimationSection");
+    expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+  });
+
   it("falls back to renderStill when the rendered section video is unavailable", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro
@@ -695,7 +723,30 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockRunClaudeAnalysis).toHaveBeenCalledTimes(2);
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(2);
+  });
+
+  it("scopes audit analysis to the audit frame directory and avoids embedding repo spec paths in the prompt", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const pathMod = require("path");
+    const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
+    const scopeDir = String(mockRunClaudeAudit.mock.calls[0][1]);
+
+    expect(scopeDir).toBe(
+      pathMod.join("/project-root", "outputs", "audit", "intro")
+    );
+    expect(prompt).toContain("Frame PNG: ./visual_frame.png");
+    expect(prompt).not.toContain("/project-root/specs/intro/visual.md");
   });
 
   it("normalizes spec content to the active project resolution before calling Claude", async () => {
@@ -719,7 +770,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    const prompt = String(mockRunClaudeAnalysis.mock.calls[0][0]);
+    const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
     expect(prompt).toContain("Normalized spec snapshot");
     expect(prompt).toContain("Resolution: 1280x720");
     expect(prompt).toContain("1280px width");
@@ -735,7 +786,7 @@ describe("audit executor factory", () => {
     config.sections = [config.sections[0]]; // just intro
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["visual.md"]);
-    mockRunClaudeAnalysis.mockResolvedValue({
+    mockRunClaudeAudit.mockResolvedValue({
       severity: "pass",
       fixType: "none",
       technicalAssessment: "Frame matches spec perfectly",
@@ -769,7 +820,7 @@ describe("audit executor factory", () => {
     config.sections = [config.sections[0]]; // just intro
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["visual.md"]);
-    mockRunClaudeAnalysis.mockResolvedValue({
+    mockRunClaudeAudit.mockResolvedValue({
       severity: "major",
       fixType: "remotion",
       technicalAssessment: "Text is clipped",
@@ -824,7 +875,7 @@ describe("audit executor factory", () => {
 
     // Should only process visual.md and overlay.md, not AUDIT_ files
     expect(mockExtractFrameAtTime).toHaveBeenCalledTimes(2);
-    expect(mockRunClaudeAnalysis).toHaveBeenCalledTimes(2);
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(2);
   });
 
   it("filters out non-.md files from spec directory listing", async () => {
@@ -1065,7 +1116,7 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockRunClaudeAnalysis).toHaveBeenCalledTimes(1);
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(1);
     expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
     expect(String(mockWriteFileSync.mock.calls[0][0])).toContain("AUDIT_01_title_card.md");
   });
@@ -1149,7 +1200,9 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(1.889, 2);
+    expect(mockRenderStill).toHaveBeenCalledTimes(2);
+    expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+    expect(mockRenderStill.mock.calls[0][1]).toBe(56);
   });
 });
 
@@ -1721,9 +1774,9 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/resolveRenderedAuditSampleWindow/);
   });
 
-  it("imports runClaudeAnalysis from @/lib/claude", () => {
+  it("imports runClaudeAudit from @/lib/claude", () => {
     expect(sourceCode).toMatch(/@\/lib\/claude/);
-    expect(sourceCode).toMatch(/runClaudeAnalysis/);
+    expect(sourceCode).toMatch(/runClaudeAudit/);
   });
 
   it("imports loadProject from @/lib/project", () => {
@@ -1798,7 +1851,7 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/renderStill/);
   });
 
-  it("uses runClaudeAnalysis for comparing stills against specs", () => {
-    expect(sourceCode).toMatch(/runClaudeAnalysis/);
+  it("uses runClaudeAudit for comparing stills against specs", () => {
+    expect(sourceCode).toMatch(/runClaudeAudit/);
   });
 });

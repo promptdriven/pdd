@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { extractFrameAtTime, renderStill } from "@/lib/render";
-import { runClaudeAnalysis } from "@/lib/claude";
+import { runClaudeAudit } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
 import { resolveSectionVisuals } from "@/lib/composition-timing";
@@ -91,6 +91,8 @@ async function auditSection(
         }));
   const project = loadProject();
   const fps = project.render.fps ?? 30;
+  const canRenderFreshStill =
+    configuredCompositionIds.length > 0 && Boolean(section.compositionId);
 
   let passCount = 0;
   let failCount = 0;
@@ -127,7 +129,17 @@ async function auditSection(
     );
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
 
-    if (renderedVideoPath) {
+    if (canRenderFreshStill) {
+      const sectionFrameCount = Math.max(1, Math.floor(section.durationSeconds * fps));
+      const sampleFrame = Math.min(
+        sectionFrameCount - 1,
+        Math.max(0, Math.floor(sampleWindow.sampleSeconds * fps))
+      );
+      onLog(
+        `[audit] Rendering fresh still for ${section.id} (${specName}) at frame ${sampleFrame} (${sampleWindow.source})`
+      );
+      await renderStill(section.compositionId, sampleFrame, outputStill);
+    } else if (renderedVideoPath) {
       onLog(
         `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleWindow.sampleSeconds.toFixed(3)}s from rendered video`
       );
@@ -150,16 +162,22 @@ async function auditSection(
 
     // Claude analysis prompt
     const prompt = `
-You are auditing a video frame against a spec.
+You are auditing a rendered video frame against a normalized spec snapshot.
 
-- Original spec file: ${specPath}
+Rules:
+- Judge only the visible pixels in the frame.
+- Do not inspect, infer, or comment on source code, implementation files, or repository contents.
+- Do not speculate about stale renders or code state.
+- Fail only for visible mismatches in the sampled frame.
+
+- Audit spec name: ${path.basename(specPath)}
 - Render resolution: ${project.outputResolution.width}x${project.outputResolution.height}
 - Audit visual type: ${visual.visualType}
 - Sample window: ${sampleWindow.startSeconds.toFixed(3)}s - ${sampleWindow.endSeconds.toFixed(3)}s (${sampleWindow.source})
 - Sample time (section-local): ${sampleWindow.sampleSeconds.toFixed(3)}s
 - Normalized spec snapshot for audit:
 ${normalizedSpecContent}
-- Frame PNG: ${outputStill}
+- Frame PNG: ./${path.basename(outputStill)}
 
 Read the frame PNG and compare it against the normalized spec snapshot above. Return JSON matching AnnotationAnalysis:
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
@@ -167,8 +185,9 @@ Read the frame PNG and compare it against the normalized spec snapshot above. Re
 Use severity="pass" if the frame fully satisfies the spec.
 `;
 
-    const analysis = (await runClaudeAnalysis(
+    const analysis = (await runClaudeAudit(
       prompt,
+      path.dirname(outputStill),
       onLog
     )) as AnnotationAnalysis;
 
