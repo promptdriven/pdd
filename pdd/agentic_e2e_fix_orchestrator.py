@@ -147,6 +147,10 @@ def _is_intermediate_file(filepath: str) -> bool:
     - *-fixed.* (e.g., module-fixed.py)
     - *.bak, *.backup, *.orig, *.tmp extensions
     - error_output*.txt (e.g., error_output.txt, error_output_models.txt)
+    - .pdd/** (any file under .pdd/ directory — backups, core_dumps, etc.)
+    - *_errors.txt, *_fix_errors.txt (e.g., waitlist_fix_errors.txt)
+    - step*_output.md (e.g., step9_output.md)
+    - test_issue_*_reproduction.py (e.g., test_issue_824_reproduction.py)
 
     Args:
         filepath: Relative path to the file
@@ -175,6 +179,24 @@ def _is_intermediate_file(filepath: str) -> bool:
 
     # Check for error_output debug files (e.g., error_output.txt, error_output_models.txt)
     if suffix == ".txt" and stem.startswith("error_output"):
+        return True
+
+    # Check for .pdd/ directory files (backups, core_dumps, and any future artifacts)
+    normalized = filepath.replace("\\", "/")
+    if normalized.startswith(".pdd/") or "/.pdd/" in normalized:
+        return True
+
+    # Check for *_errors.txt and *_fix_errors.txt files
+    if suffix == ".txt" and (stem.endswith("_errors") or stem.endswith("_fix_errors")):
+        return True
+
+    # Check for step*_output.md debug output files
+    if suffix == ".md" and stem.startswith("step") and stem.endswith("_output"):
+        return True
+
+    # Check for test_issue_*_reproduction.py leftover reproduction tests
+    # Pattern: test_issue_<number>_reproduction (not test_issue_reproduction_helper etc.)
+    if suffix == ".py" and stem.startswith("test_issue_") and stem.endswith("_reproduction"):
         return True
 
     return False
