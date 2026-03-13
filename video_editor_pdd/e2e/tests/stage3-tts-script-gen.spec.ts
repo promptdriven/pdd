@@ -34,8 +34,8 @@ test.describe('Stage 3: TTS Script Generation', () => {
     await expect(cmEditor).toBeVisible();
   });
 
-  test('displays Render Audio advance button', async ({ page }) => {
-    const advanceBtn = page.locator('button', { hasText: 'Render Audio' });
+  test('displays Continue advance button', async ({ page }) => {
+    const advanceBtn = page.locator('button', { hasText: 'Continue' });
     await expect(advanceBtn).toBeVisible();
   });
 
@@ -124,16 +124,16 @@ test.describe('Stage 3: TTS Script Generation', () => {
     await expect(cmEditor).toContainText('INTERACTIVE_TEST_TEXT');
   });
 
-  test('Render Audio button exists and is clickable without crash', async ({ page }) => {
-    const renderAudioBtn = page.locator('button', { hasText: 'Render Audio' });
-    await expect(renderAudioBtn).toBeVisible();
+  test('Continue button exists and is clickable without crash', async ({ page }) => {
+    const continueBtn = page.locator('button', { hasText: 'Continue' });
+    await expect(continueBtn).toBeVisible();
 
     // The button click should not cause any crash
     // Note: The button may be disabled if tts_script does not exist yet
-    const isDisabled = await renderAudioBtn.getAttribute('disabled');
+    const isDisabled = await continueBtn.getAttribute('disabled');
     if (isDisabled === null) {
       // If not disabled, click it and verify no error overlay appears
-      await renderAudioBtn.click();
+      await continueBtn.click();
       await page.waitForTimeout(500);
 
       const errorOverlay = page.locator('text=Runtime TypeError');
@@ -141,7 +141,7 @@ test.describe('Stage 3: TTS Script Generation', () => {
       expect(hasError).toBe(false);
     } else {
       // If disabled, verify it has the expected disabled styling (cursor-not-allowed)
-      await expect(renderAudioBtn).toBeDisabled();
+      await expect(continueBtn).toBeDisabled();
     }
   });
 

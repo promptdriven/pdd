@@ -11,7 +11,7 @@
  *   3. SSE log panel (SseLogPanel) shown below the button, with jobId from the latest run.
  *   4. Diff view below log: split display of main_script.md (left) and tts_script.md (right) with line coloring: added=green, removed=red, unchanged=gray.
  *   5. Inline CodeMirror editor for tts_script.md. Auto-saves on blur + 1s debounce.
- *   6. [Render Audio →] button enabled when tts_script.md exists. Calls onAdvance().
+ *   6. [Continue →] button enabled when tts_script.md exists. Calls onAdvance().
  *   7. 'use client' directive.
  */
 
@@ -569,12 +569,12 @@ describe("CodeMirror editor", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 19. Render Audio button (Req 6)
+// 19. Continue button (Req 6)
 // ---------------------------------------------------------------------------
 
-describe("Render Audio button", () => {
-  it("renders Render Audio → button text", () => {
-    expect(sourceCode).toMatch(/Render Audio →/);
+describe("Continue button", () => {
+  it("renders Continue → button text", () => {
+    expect(sourceCode).toMatch(/Continue →/);
   });
 
   it("button calls onAdvance on click", () => {
@@ -585,16 +585,17 @@ describe("Render Audio button", () => {
     expect(sourceCode).toMatch(/disabled=\{!ttsExists\}/);
   });
 
-  it("button has enabled styling when ttsExists is true", () => {
-    expect(sourceCode).toMatch(/bg-green-600\s+text-white\s+hover:bg-green-700/);
+  it("uses the shared PipelineAdvanceButton component", () => {
+    expect(sourceCode).toMatch(/PipelineAdvanceButton/);
   });
 
-  it("button has disabled styling when ttsExists is false", () => {
-    expect(sourceCode).toMatch(/bg-gray-700\s+text-gray-400\s+cursor-not-allowed/);
+  it("button uses shared disabled styling when ttsExists is false", () => {
+    expect(sourceCode).toMatch(/disabled=\{!ttsExists\}/);
+    expect(sourceCode).toMatch(/PipelineAdvanceButton/);
   });
 
-  it("conditionally applies styling based on ttsExists", () => {
-    expect(sourceCode).toMatch(/ttsExists\s*\?/);
+  it("does not hardcode a separate render-audio label anymore", () => {
+    expect(sourceCode).not.toMatch(/Render Audio →/);
   });
 });
 

@@ -6,6 +6,7 @@ import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { keymap, type KeyBinding } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
@@ -250,17 +251,12 @@ export default function Stage2ScriptEditor({ onAdvance }: Stage2ScriptEditorProp
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700 bg-slate-900">
         <h2 className="text-lg font-semibold text-slate-100">Stage 2 — Script Editor</h2>
-        <button
+        <PipelineAdvanceButton
           onClick={handleGenerateTts}
           disabled={!hasNarrator || isGenerating}
-          className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
-            hasNarrator && !isGenerating
-              ? 'bg-blue-600 hover:bg-blue-700 text-white'
-              : 'bg-slate-700 text-slate-400 cursor-not-allowed'
-          }`}
-        >
-          {isGenerating ? 'Generating…' : 'Generate TTS Script →'}
-        </button>
+          label={isGenerating ? 'Generating…' : 'Generate TTS Script & Continue →'}
+          className="rounded-lg"
+        />
       </div>
 
       {/* Main Split Pane */}

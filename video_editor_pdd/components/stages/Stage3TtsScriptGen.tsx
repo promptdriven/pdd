@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { diffLines } from 'diff';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
 
 interface Stage3TtsScriptGenProps {
@@ -293,17 +294,11 @@ export default function Stage3TtsScriptGen({ onAdvance }: Stage3TtsScriptGenProp
 
       {/* Advance */}
       <div className="flex justify-end">
-        <button
+        <PipelineAdvanceButton
           onClick={onAdvance}
           disabled={!ttsExists}
-          className={`px-4 py-2 rounded font-semibold transition ${
-            ttsExists
-              ? 'bg-green-600 text-white hover:bg-green-700'
-              : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-          }`}
-        >
-          Render Audio →
-        </button>
+          label="Continue →"
+        />
       </div>
     </div>
   );

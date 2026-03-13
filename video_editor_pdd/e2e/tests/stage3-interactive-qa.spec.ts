@@ -127,9 +127,9 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
       await expect(cmEditor).toBeVisible();
     });
 
-    test('A6: "Render Audio →" advance button visible', async ({ page }) => {
+    test('A6: "Continue →" advance button visible', async ({ page }) => {
       await navigateToStage3(page);
-      const btn = page.locator('button', { hasText: 'Render Audio' });
+      const btn = page.locator('button', { hasText: 'Continue' });
       await expect(btn).toBeVisible();
       await expect(btn).toContainText('→');
     });
@@ -976,36 +976,36 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
   });
 
   // =========================================================================
-  // Group F: Advance Button & Edge Cases (~7 tests + screenshots)
+  // Group F: Continue Button & Edge Cases (~7 tests + screenshots)
   // =========================================================================
-  test.describe('Group F: Advance button & edge cases', () => {
-    test('F1: "Render Audio →" disabled when no tts_script exists', async ({ page }) => {
+  test.describe('Group F: Continue button & edge cases', () => {
+    test('F1: "Continue →" disabled when no tts_script exists', async ({ page }) => {
       await navigateWithMockedScripts(page, 'Main content', null);
-      const btn = page.locator('button', { hasText: 'Render Audio' });
+      const btn = page.locator('button', { hasText: 'Continue' });
       await expect(btn).toBeDisabled();
     });
 
-    test('F2: "Render Audio →" enabled when tts_script exists', async ({ page }) => {
+    test('F2: "Continue →" enabled when tts_script exists', async ({ page }) => {
       await navigateWithMockedScripts(page, 'Main content', 'TTS content exists');
-      const btn = page.locator('button', { hasText: 'Render Audio' });
+      const btn = page.locator('button', { hasText: 'Continue' });
       await expect(btn).toBeEnabled();
     });
 
-    test('F3: Disabled button has gray styling (bg-gray-700)', async ({ page }) => {
+    test('F3: Disabled button has shared slate styling', async ({ page }) => {
       await navigateWithMockedScripts(page, 'Main', null);
-      const btn = page.locator('button', { hasText: 'Render Audio' });
+      const btn = page.locator('button', { hasText: 'Continue' });
       await expect(btn).toBeDisabled();
       const cls = await btn.getAttribute('class') ?? '';
-      expect(cls).toContain('bg-gray-700');
+      expect(cls).toContain('bg-slate-700');
       expect(cls).toContain('cursor-not-allowed');
     });
 
-    test('F4: Enabled button has green styling (bg-green-600)', async ({ page }) => {
+    test('F4: Enabled button has shared emerald styling', async ({ page }) => {
       await navigateWithMockedScripts(page, 'Main', 'TTS exists');
-      const btn = page.locator('button', { hasText: 'Render Audio' });
+      const btn = page.locator('button', { hasText: 'Continue' });
       await expect(btn).toBeEnabled();
       const cls = await btn.getAttribute('class') ?? '';
-      expect(cls).toContain('bg-green-600');
+      expect(cls).toContain('bg-emerald-600');
     });
 
     test('F5: Empty script does not crash page', async ({ page }) => {

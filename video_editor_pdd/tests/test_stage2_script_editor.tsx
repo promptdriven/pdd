@@ -10,7 +10,7 @@
  *   2. Left pane: CodeMirror 6 editor with Markdown syntax highlighting. Loads script from GET /api/project/script. Auto-saves via PUT /api/project/script on 1s debounce.
  *   3. Right pane: structured preview re-rendered on 200ms debounce. NARRATOR: blocks → blue ■ prefix. [VISUAL:] blocks → teal ▣ prefix. ## headers → gray section label.
  *   4. Resizable split pane: draggable vertical divider. Persists ratio in localStorage.
- *   5. [Generate TTS Script →] button: enabled only when ≥1 NARRATOR: block is detected. POSTs to /api/pipeline/tts-script/run. On success, calls onAdvance().
+ *   5. [Generate TTS Script & Continue →] button: enabled only when ≥1 NARRATOR: block is detected. POSTs to /api/pipeline/tts-script/run. On success, calls onAdvance().
  *   6. 'use client' directive.
  *   7. Show SseLogPanel with returned jobId after triggering TTS script generation.
  */
@@ -452,8 +452,8 @@ describe("NARRATOR detection", () => {
 // ---------------------------------------------------------------------------
 
 describe("Generate TTS Script button", () => {
-  it("renders the Generate TTS Script → button text", () => {
-    expect(sourceCode).toMatch(/Generate TTS Script →/);
+  it("renders the Generate TTS Script & Continue → button text", () => {
+    expect(sourceCode).toMatch(/Generate TTS Script & Continue →/);
   });
 
   it("button is disabled when no NARRATOR blocks detected", () => {
@@ -464,12 +464,12 @@ describe("Generate TTS Script button", () => {
     expect(sourceCode).toMatch(/isGenerating\s*\?\s*['"]Generating…['"]/);
   });
 
-  it("button has enabled styling when hasNarrator and not generating", () => {
-    expect(sourceCode).toMatch(/bg-blue-600\s+hover:bg-blue-700\s+text-white/);
+  it("uses the shared PipelineAdvanceButton component", () => {
+    expect(sourceCode).toMatch(/PipelineAdvanceButton/);
   });
 
   it("button has disabled styling when no narrator or generating", () => {
-    expect(sourceCode).toMatch(/bg-slate-700\s+text-slate-400\s+cursor-not-allowed/);
+    expect(sourceCode).toMatch(/disabled=\{!hasNarrator\s*\|\|\s*isGenerating\}/);
   });
 });
 
@@ -617,7 +617,7 @@ describe("Dark theme compliance", () => {
 
   it("disabled button uses dark theme colors", () => {
     expect(sourceCode).not.toMatch(/bg-slate-200 text-slate-500/);
-    expect(sourceCode).toMatch(/bg-slate-700 text-slate-400/);
+    expect(sourceCode).toMatch(/PipelineAdvanceButton/);
   });
 
   it("split pane uses dark background", () => {
