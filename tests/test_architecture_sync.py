@@ -1510,6 +1510,61 @@ def test_sanitize_architecture_dependencies_no_file_is_noop():
         _sanitize_architecture_dependencies(Path(tmpdir))  # should not raise
 
 
+def test_sanitize_architecture_interfaces_preserves_existing_params():
+    """Step 10 post-check should preserve params dropped by a direct architecture edit."""
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_interfaces
+
+    previous_architecture = [
+        {
+            "filename": "orchestrator_python.prompt",
+            "filepath": "pdd/orchestrator.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {
+                            "name": "run_agentic_e2e_fix_orchestrator",
+                            "signature": "(issue_url, issue_content, use_github_state, protect_tests)",
+                            "returns": "Dict",
+                        }
+                    ]
+                },
+            },
+        }
+    ]
+    current_architecture = [
+        {
+            "filename": "orchestrator_python.prompt",
+            "filepath": "pdd/orchestrator.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {
+                            "name": "run_agentic_e2e_fix_orchestrator",
+                            "signature": "(issue_url, issue_content, use_github_state, ci_retries = 3, skip_ci = False)",
+                            "returns": "Dict",
+                        }
+                    ]
+                },
+            },
+        }
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        arch_path = Path(tmpdir) / "architecture.json"
+        arch_path.write_text(json.dumps(current_architecture, indent=2))
+
+        warnings = _sanitize_architecture_interfaces(Path(tmpdir), previous_architecture)
+
+        result = json.loads(arch_path.read_text())
+        signature = result[0]["interface"]["module"]["functions"][0]["signature"]
+        assert "protect_tests" in signature
+        assert "ci_retries" in signature
+        assert "skip_ci" in signature
+        assert any("protect_tests" in warning for warning in warnings)
+
+
 # --- Tests for issue #566: parse_prompt_tags must ignore tags inside code fences ---
 
 
