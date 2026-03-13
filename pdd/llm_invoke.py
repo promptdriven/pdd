@@ -110,23 +110,23 @@ def set_verbose_logging(verbose=False):
         logger.debug("Verbose logging enabled (including LiteLLM debug output)")
 
 
-def set_quiet_logging():
-    """Suppress INFO/DEBUG output by raising logger levels to ERROR."""
+def set_quiet_logging() -> None:
+    """Suppress non-error logging for quiet mode."""
     logger.setLevel(logging.ERROR)
     litellm_logger.setLevel(logging.ERROR)
     try:
-        litellm.set_verbose = False
-        litellm.suppress_debug_info = True
+        if hasattr(litellm, "set_verbose"):
+            litellm.set_verbose = False
+        if hasattr(litellm, "suppress_debug_info"):
+            litellm.suppress_debug_info = True
     except Exception:
         pass
 
 
-# Apply quiet suppression at import time if PDD_QUIET env var is already set.
-# This handles the case where the CLI callback sets PDD_QUIET=1 before llm_invoke
-# is imported (lazy import), ensuring module-level logger.info() calls are suppressed.
-if os.getenv('PDD_QUIET'):
+# Honor process-level quiet mode as early as possible.
+if os.getenv("PDD_QUIET") == "1":
     set_quiet_logging()
-
+    
 # --- End Logging Configuration ---
 
 import json
@@ -628,19 +628,19 @@ else:
 # Selection order
 if user_model_csv_path.is_file():
     LLM_MODEL_CSV_PATH = user_model_csv_path
-    logger.info(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using user-specific LLM model CSV: {LLM_MODEL_CSV_PATH}")
 elif PROJECT_ROOT_FROM_ENV and project_csv_from_env.is_file():
     # Honor an explicitly-set PDD_PATH pointing to a real project directory
     LLM_MODEL_CSV_PATH = project_csv_from_env
-    logger.info(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using project-specific LLM model CSV (from PDD_PATH): {LLM_MODEL_CSV_PATH}")
 elif project_csv_from_cwd.is_file():
     # Otherwise, prefer the project relative to the current working directory
     LLM_MODEL_CSV_PATH = project_csv_from_cwd
-    logger.info(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
+    logger.debug(f"Using project-specific LLM model CSV (from CWD): {LLM_MODEL_CSV_PATH}")
 else:
     # Neither exists, we'll use a marker path that _load_model_data will handle
     LLM_MODEL_CSV_PATH = None
-    logger.info("No local LLM model CSV found, will use package default")
+    logger.debug("No local LLM model CSV found, will use package default")
 # ---------------------------------
 
 # Load environment variables from .env file
@@ -717,7 +717,7 @@ if GCS_BUCKET_NAME and GCS_HMAC_ACCESS_KEY_ID and GCS_HMAC_SECRET_ACCESS_KEY:
 
 # Check if caching is disabled via environment variable
 if os.getenv("LITELLM_CACHE_DISABLE") == "1":
-    logger.info("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
+    logger.debug("LiteLLM caching disabled via LITELLM_CACHE_DISABLE=1")
     litellm.cache = None
     cache_configured = True
 
@@ -727,7 +727,7 @@ if not cache_configured:
         sqlite_cache_path = PROJECT_ROOT / "litellm_cache.sqlite"
         configured_cache = Cache(type="disk", disk_cache_dir=str(sqlite_cache_path))
         litellm.cache = configured_cache
-        logger.info(f"LiteLLM disk cache configured at {sqlite_cache_path}")
+        logger.debug(f"LiteLLM disk cache configured at {sqlite_cache_path}")
         cache_configured = True
     except Exception as e2:
         warnings.warn(f"Failed to configure LiteLLM disk cache: {e2}. Caching is disabled.")
