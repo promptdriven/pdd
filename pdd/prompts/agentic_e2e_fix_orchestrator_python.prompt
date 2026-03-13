@@ -172,7 +172,11 @@ while cycle < max_cycles:
     elif "MAX_CYCLES_REACHED" in step9_output:
         # Step 9 detected we're at max cycles - let loop exit naturally
         pass
-    # "CONTINUE_CYCLE" means continue to next iteration (default behavior)
+    # "CONTINUE_CYCLE" means continue to next iteration
+    else:
+        # No recognized token — treat as terminal error, break
+        console.print("[yellow]Warning: No loop control token found in Step 9. Stopping.[/yellow]")
+        break
 
 if cycle >= max_cycles and "ALL_TESTS_PASS" not in step9_output:
     return (False, f"Max cycles ({max_cycles}) reached without all tests passing", ...)
@@ -185,7 +189,7 @@ Steps 2, 3, and 9 output specific tokens to control the outer loop:
 - `CONTINUE_CYCLE`: Some tests still failing, continue to next cycle (Step 9 only)
 - `MAX_CYCLES_REACHED`: Step 9 detected we're at max cycles (Step 9 only, informational)
 
-**Default behavior**: If Step 9 output contains none of these tokens, treat as `CONTINUE_CYCLE` (continue to next iteration). Log a warning about missing loop control token.
+**Default behavior**: If Step 9 output contains none of these tokens, treat as a terminal error — log a warning about the missing loop control token and `break` out of the cycle loop. This prevents wasting resources on unnecessary cycles when verification output is unparseable.
 
 % Context Accumulation
 All steps receive common variables: issue_url, repo_owner, repo_name, issue_number, cycle_number, max_cycles

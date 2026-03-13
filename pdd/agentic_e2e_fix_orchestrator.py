@@ -22,6 +22,7 @@ from .agentic_common import (
     save_workflow_state,
     clear_workflow_state,
     validate_cached_state,
+    post_final_comment,
     DEFAULT_MAX_RETRIES,
 )
 from .get_test_command import get_test_command_for_file
@@ -803,6 +804,36 @@ def run_agentic_e2e_fix_orchestrator(
 
     console.print(f"Fixing e2e tests for issue #{issue_number}: \"{issue_title}\"")
 
+    # Reuse pdd-bug analysis if available (Issue #830: skip redundant diagnosis)
+    # Load the bug workflow state to check if Steps 2-3 were already analyzed.
+    # Search common state locations for the bug workflow state file.
+    bug_step_outputs: Dict[str, str] = {}
+    _bug_state_candidates = [
+        state_dir / f"bug_state_{issue_number}.json",
+        cwd / ".pdd" / "state" / f"bug_state_{issue_number}.json",
+        cwd / ".pdd" / "bug-state" / f"bug_state_{issue_number}.json",
+    ]
+    for bug_state_file in _bug_state_candidates:
+        if bug_state_file.exists():
+            try:
+                with open(bug_state_file, "r") as f:
+                    bug_state = json.load(f)
+                bug_outputs = bug_state.get("step_outputs", {})
+                # Reuse step 2 and 3 outputs if they completed successfully
+                for s in ("2", "3"):
+                    if s in bug_outputs and not bug_outputs[s].startswith("FAILED:"):
+                        bug_step_outputs[s] = bug_outputs[s]
+                if bug_step_outputs:
+                    console.print(f"[blue]Reusing pdd-bug analysis for steps {', '.join(sorted(bug_step_outputs.keys()))}[/blue]")
+                    # Pre-populate step_outputs so subsequent steps can reference them
+                    for s, output in bug_step_outputs.items():
+                        if s not in step_outputs:
+                            step_outputs[s] = output
+                break
+            except (OSError, json.JSONDecodeError, KeyError) as e:
+                console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
+                continue  # Try next candidate
+
     # Snapshot file state before workflow (for hash-based commit detection)
     initial_file_hashes = _get_file_hashes(cwd)
 
@@ -828,6 +859,12 @@ def run_agentic_e2e_fix_orchestrator(
                     skip_reason = skipped_steps[step_num]
                     console.print(f"[bold][Step {step_num}/9] Skipped (remembered): {skip_reason}[/bold]")
                     step_outputs[str(step_num)] = f"E2E_SKIP: {skip_reason}"
+                    last_completed_step = step_num
+                    continue
+
+                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
+                if str(step_num) in bug_step_outputs and current_cycle == 1:
+                    console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
                     last_completed_step = step_num
                     continue
 
@@ -910,6 +947,26 @@ def run_agentic_e2e_fix_orchestrator(
                     label=f"cycle{current_cycle}_step{step_num}",
                     max_retries=DEFAULT_MAX_RETRIES,
                 )
+
+                # Step 1 timeout retry: retry once with increased timeout
+                # before falling through to diagnostic steps (Issue #830)
+                if (
+                    step_num == 1
+                    and not step_success
+                    and "Timeout" in step_output
+                ):
+                    console.print("[yellow]Step 1 timed out. Retrying with extended timeout...[/yellow]")
+                    retry_timeout = timeout * 1.5
+                    step_success, step_output, retry_cost, step_model = run_agentic_task(
+                        instruction=formatted_prompt,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=retry_timeout,
+                        label=f"cycle{current_cycle}_step{step_num}_retry1",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    step_cost += retry_cost
 
                 # 4. Store Output & Accumulate
                 # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
@@ -1040,15 +1097,23 @@ def run_agentic_e2e_fix_orchestrator(
                             break
                     elif "MAX_CYCLES_REACHED" in step_output:
                         console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
+                        final_message = "Max cycles reached."
+                        break
                     elif "CONTINUE_CYCLE" not in step_output:
-                        console.print("[yellow]Warning: No loop control token found in Step 9. Defaulting to CONTINUE_CYCLE.[/yellow]")
+                        console.print("[yellow]Warning: No loop control token found in Step 9. Stopping workflow — missing token treated as terminal condition.[/yellow]")
+                        final_message = "Workflow stopped: no loop control token in Step 9 output."
+                        break
 
             # Check if we should exit the outer loop
             if success:
                 break
-            
+
             # Check if NOT_A_BUG was detected (exit outer loop too)
             if step_num == 3 and "NOT_A_BUG" in step_outputs.get("3", ""):
+                break
+
+            # Check if workflow was stopped due to missing loop control token or max cycles
+            if final_message:
                 break
             
             # Prepare for next cycle
@@ -1110,6 +1175,19 @@ def run_agentic_e2e_fix_orchestrator(
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
             if remaining:
                 console.print(f"   Remaining failures: {', '.join(remaining)}")
+
+            # Post final status comment to GitHub so users see why the workflow stopped
+            post_final_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                reason=final_message,
+                total_cost=total_cost,
+                steps_completed=last_completed_step or step_num,
+                total_steps=9,
+                cwd=cwd,
+            )
+
             return False, final_message, total_cost, model_used, changed_files
 
     except KeyboardInterrupt:

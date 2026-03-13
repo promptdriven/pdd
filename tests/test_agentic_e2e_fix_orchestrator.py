@@ -2648,3 +2648,195 @@ class TestIssue791SkippedStepsEdgeCases:
         assert cost == pytest.approx(0.8, abs=0.01), (
             f"Cost should be ~$0.80 (8 steps at $0.10 each, Step 2 skipped), got ${cost:.4f}"
         )
+
+
+# ============================================================================
+# Issue #830: Missing Loop Control Token, State Divergence
+#
+# Bug 1: When Step 9 output has no loop control token, the orchestrator
+# prints a warning but falls through to cycle increment (CONTINUE_CYCLE
+# by default), causing an unnecessary Cycle 2.
+# Fix: treat missing token as terminal — break out of the loop.
+#
+# Bug 3 (orchestrator side): save_workflow_state() returning stale
+# github_comment_id when GitHub save fails, masking state divergence.
+# ============================================================================
+
+
+class TestIssue830MissingLoopControlToken:
+    """Tests for issue #830 Bug 1: Step 9 missing loop control token.
+
+    When Step 9 output contains none of the recognized loop control tokens
+    (ALL_TESTS_PASS, CONTINUE_CYCLE, MAX_CYCLES_REACHED), the orchestrator
+    should treat it as a terminal condition and break, not default to
+    CONTINUE_CYCLE.
+    """
+
+    def test_no_loop_control_token_breaks_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 9 with no control token should NOT start Cycle 2.
+
+        Bug: The orchestrator defaults to CONTINUE_CYCLE when no token is
+        found, causing unnecessary Cycle 2. Fix: break the loop.
+        """
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 3
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                # Step 9 output with NO loop control token
+                return (True, "Verification complete. Some output without any token.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should only run 9 steps (1 cycle), NOT 18+ (2+ cycles)
+        assert mock_run.call_count == 9, (
+            f"Expected exactly 9 step calls (1 cycle only) but got {mock_run.call_count}. "
+            f"Missing loop control token should break the loop, not default to CONTINUE_CYCLE."
+        )
+
+    def test_no_loop_control_token_logs_warning(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 9 with no control token should log a warning.
+
+        The orchestrator should clearly indicate that no loop control token
+        was found, rather than silently continuing.
+        """
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Verification complete. No token here.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Verify a warning was logged about the missing token
+        warning_logged = any(
+            "No loop control token" in str(call) or "no loop control token" in str(call).lower()
+            for call in mock_console.print.call_args_list
+        )
+        assert warning_logged, (
+            "Expected a warning about missing loop control token in console output. "
+            f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
+        )
+
+    def test_continue_cycle_token_still_works(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """CONTINUE_CYCLE token should still trigger another cycle.
+
+        Regression guard: explicit CONTINUE_CYCLE should still cause a
+        new cycle to start.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Should run 2 full cycles = 18 steps
+        assert mock_run.call_count == 18, (
+            f"Expected 18 step calls (2 cycles) but got {mock_run.call_count}. "
+            f"CONTINUE_CYCLE should still trigger another cycle."
+        )
+
+    def test_max_cycles_reached_token_still_works(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """MAX_CYCLES_REACHED token should still allow natural loop exit.
+
+        Regression guard: MAX_CYCLES_REACHED is informational and the loop
+        should exit naturally via the max_cycles check.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Max cycles reached. MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should run exactly 9 steps (1 cycle), then exit naturally
+        assert mock_run.call_count == 9, (
+            f"Expected 9 step calls (1 cycle) but got {mock_run.call_count}."
+        )
+
+
+class TestIssue830SaveWorkflowStateOrchestratorIntegration:
+    """Tests for issue #830 Bug 3: save_workflow_state failure masking.
+
+    When save_workflow_state() fails to save to GitHub, it should return
+    None (not the stale comment_id), so the orchestrator can detect the
+    divergence.
+    """
+
+    def test_save_state_github_failure_returns_none_not_stale_id(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When GitHub save fails, save_workflow_state should return None.
+
+        Bug: save_workflow_state returns the old github_comment_id when
+        GitHub save fails, making the caller think the save succeeded.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["use_github_state"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Test the save_workflow_state function directly for this bug
+        from pdd.agentic_common import save_workflow_state, github_save_state
+
+        state = {"last_completed_step": 5, "step_outputs": {}}
+        stale_comment_id = 12345
+
+        with patch("pdd.agentic_common.github_save_state") as mock_gh_save, \
+             patch("pdd.agentic_common._should_use_github_state") as mock_should:
+            mock_should.return_value = True
+            # GitHub save fails — returns None
+            mock_gh_save.return_value = None
+
+            result = save_workflow_state(
+                cwd=e2e_fix_default_args["cwd"],
+                issue_number=1,
+                workflow_type="e2e_fix",
+                state=state,
+                state_dir=e2e_fix_default_args["cwd"] / ".pdd" / "state",
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+                github_comment_id=stale_comment_id,
+            )
+
+        # Bug: returns stale_comment_id (12345) instead of None
+        assert result is None or result != stale_comment_id, (
+            f"save_workflow_state returned stale comment_id {result} when GitHub save failed. "
+            f"Should return None to signal failure, not the old id {stale_comment_id}."
+        )
