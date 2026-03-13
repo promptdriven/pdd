@@ -8,7 +8,6 @@ Only the LLM boundary is mocked (`context_generator`) so the real path
 resolution and output-file writing logic runs unchanged.
 """
 
-from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner

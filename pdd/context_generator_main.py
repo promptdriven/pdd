@@ -119,34 +119,53 @@ def context_generator_main(ctx: click.Context, prompt_file: str, code_file: str,
         # Resolve the final output path.
         #
         # Rules:
-        # - If the user provided an explicit filename via --output, respect it exactly
-        #   (do not rewrite the suffix based on format or language).
-        # - If no explicit filename was provided, start from construct_paths' output
-        #   and, when format is specified, normalize the suffix accordingly.
+        # - If the user provided an explicit filename with a suffix (e.g. --output out.tsx),
+        #   respect it exactly. Paths without a suffix (e.g. --output out) are treated as
+        #   a base name and get format/language extension applied.
+        # - Treat trailing "/" or os.path.sep as directory (Windows-safe).
+        # - Otherwise use construct_paths' output and apply format normalization when set.
+        output_path_obj = Path(output) if output else None
+        is_dir_like = (
+            output and (
+                output.endswith("/") or
+                output.endswith(os.path.sep) or
+                (output_path_obj and output_path_obj.is_dir())
+            )
+        )
+        has_suffix = bool(output_path_obj.suffix) if output_path_obj else False
         explicit_file_output = (
             output
-            and not output.endswith("/")
-            and not Path(output).is_dir()
+            and not is_dir_like
+            and has_suffix
         )
 
         if explicit_file_output:
-            # User passed a concrete filename; it is authoritative.
+            # User passed a concrete filename with extension; it is authoritative.
             resolved_output = output
         else:
             base_output = output_file_paths.get("output")
-            if base_output and format is not None:
+            # User gave a path with no suffix (e.g. --output out): use as base and apply format/language extension.
+            if output and not is_dir_like and not has_suffix and format is not None:
+                base = output.rstrip("/").rstrip(os.path.sep)
+                format_lower = format.lower()
+                if format_lower == "md":
+                    resolved_output = base + ".md"
+                elif format_lower == "code":
+                    lang_key = (language or "").lower()
+                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else ".py")
+                    resolved_output = base + (lang_ext if lang_ext.startswith(".") else "." + lang_ext)
+                else:
+                    resolved_output = base_output or base
+            elif base_output and format is not None:
                 output_path = Path(base_output)
                 format_lower = format.lower()
                 if format_lower == "md":
-                    # Force .md only for auto-generated output paths
                     resolved_output = str(output_path.with_suffix(".md"))
                 elif format_lower == "code":
-                    # For code format, determine the correct language extension based on language
-                    lang_key = language.lower() if language else ''
-                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else '.py')
+                    lang_key = (language or "").lower()
+                    lang_ext = BUILTIN_EXT_MAP.get(lang_key, f".{lang_key}" if lang_key else ".py")
                     resolved_output = str(output_path.with_suffix(lang_ext))
                 else:
-                    # Fallback (shouldn't happen due to click.Choice validation)
                     resolved_output = base_output
             else:
                 resolved_output = base_output

@@ -1553,7 +1553,7 @@ Options:
 - `--format FORMAT`: Output format for the generated example (default: `code`). Valid values:
   - `code`: Uses the language-specific file extension (e.g., `.py` for Python, `.js` for JavaScript)
   - `md`: Generates markdown format with `.md` extension
-  When `--format` is specified with an explicit `--output` path, the format option constrains the output file extension accordingly.
+  When `--output` is an explicit filename with an extension (e.g. `out.tsx` or `report.md`), that path is used as-is and `--format` does not rewrite the extension. When `--output` is a path without an extension (e.g. `out`), the output file extension is set from `--format` (and from the detected language when format is `code`).
 
 Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
