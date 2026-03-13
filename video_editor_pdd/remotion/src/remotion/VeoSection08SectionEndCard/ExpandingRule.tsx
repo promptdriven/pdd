@@ -1,16 +1,14 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION, type EndCardLayout } from './constants';
+import { COLORS, DIMENSIONS, ANIMATION } from './constants';
 
-export const ExpandingRule: React.FC<{ layout: EndCardLayout }> = ({ layout }) => {
+export const ExpandingRule: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const { ruleWidth, ruleHeight, labelY, ruleGapBelow } = layout.dimensions;
-
-  // Scale outward from centre (scaleX 0 → 1, frames 60-80)
+  // Expand from center (scaleX 0 → 1, frames 16-22) with easeInOutQuad
   const scaleX = interpolate(
     frame,
-    [ANIMATION.ruleScaleStart, ANIMATION.ruleScaleEnd],
+    [ANIMATION.textFadeStart, ANIMATION.textFadeEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -19,21 +17,18 @@ export const ExpandingRule: React.FC<{ layout: EndCardLayout }> = ({ layout }) =
     },
   );
 
-  // Position: 16px below the label
-  const ruleTop = labelY + layout.typography.label.fontSize + ruleGapBelow;
-
   return (
     <div
       style={{
         position: 'absolute',
-        left: layout.width / 2 - ruleWidth / 2,
-        top: ruleTop,
-        width: ruleWidth,
-        height: ruleHeight,
-        backgroundColor: COLORS.rule,
-        borderRadius: ruleHeight / 2,
+        left: (1920 - DIMENSIONS.ruleWidth) / 2,
+        top: DIMENSIONS.ruleY,
+        width: DIMENSIONS.ruleWidth,
+        height: DIMENSIONS.ruleHeight,
+        backgroundColor: COLORS.accent,
+        borderRadius: DIMENSIONS.ruleHeight / 2,
         transform: `scaleX(${scaleX})`,
-        opacity: frame >= ANIMATION.ruleScaleStart ? 1 : 0,
+        opacity: frame >= ANIMATION.textFadeStart ? 1 : 0,
       }}
     />
   );

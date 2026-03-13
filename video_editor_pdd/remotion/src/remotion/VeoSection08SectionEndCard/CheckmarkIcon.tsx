@@ -1,50 +1,61 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION, type EndCardLayout } from './constants';
+import {
+  COLORS,
+  DIMENSIONS,
+  ANIMATION,
+  CHECK_PATH,
+  CHECK_PATH_LENGTH,
+} from './constants';
 
-export const CheckmarkIcon: React.FC<{ layout: EndCardLayout }> = ({ layout }) => {
+export const CheckmarkIcon: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const { checkmarkSize, checkmarkStrokeWidth, ringCenterX, ringCenterY } = layout.dimensions;
+  const { circleCenterX, circleCenterY, circleRadius, checkStrokeWidth } =
+    DIMENSIONS;
 
-  // Scale in from 0 → 1 with back(1.5) bounce (frames 40-55)
-  const scale = interpolate(
+  // Check stroke draws in (frames 8-16) with easeOutQuad
+  const drawProgress = interpolate(
     frame,
-    [ANIMATION.checkmarkStart, ANIMATION.checkmarkEnd],
+    [ANIMATION.checkDrawStart, ANIMATION.checkDrawEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.back(1.5)),
+      easing: Easing.out(Easing.quad),
     },
   );
 
-  const svgSize = checkmarkSize * 1.5;
+  const dashOffset = CHECK_PATH_LENGTH * (1 - drawProgress);
+
+  // SVG viewBox is 120x120 (matching the circle diameter area)
+  // The check path is drawn in a 120x120 coordinate space
+  const svgSize = circleRadius * 2;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: ringCenterX - svgSize / 2,
-        top: ringCenterY - svgSize / 2,
+        left: circleCenterX - svgSize / 2,
+        top: circleCenterY - svgSize / 2,
         width: svgSize,
         height: svgSize,
-        transform: `scale(${scale})`,
-        opacity: frame >= ANIMATION.checkmarkStart ? 1 : 0,
       }}
     >
       <svg
         width={svgSize}
         height={svgSize}
-        viewBox="0 0 40 40"
+        viewBox="0 0 120 120"
         fill="none"
       >
         <path
-          d="M 10 20 L 17 27 L 30 13"
+          d={CHECK_PATH}
           stroke={COLORS.checkmark}
-          strokeWidth={checkmarkStrokeWidth}
+          strokeWidth={checkStrokeWidth}
           strokeLinecap="round"
           strokeLinejoin="round"
+          strokeDasharray={CHECK_PATH_LENGTH}
+          strokeDashoffset={dashOffset}
         />
       </svg>
     </div>

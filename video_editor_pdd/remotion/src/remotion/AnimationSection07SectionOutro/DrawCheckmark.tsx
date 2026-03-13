@@ -1,15 +1,11 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
-
-// Checkmark SVG path: M 8,20 L 16,28 L 32,12
-// Left leg ≈ 11.3, right leg ≈ 22.6, total ≈ 34
-const CHECKMARK_PATH = 'M 8 20 L 16 28 L 32 12';
-const TOTAL_PATH_LENGTH = 34;
+import { CANVAS, COLORS, DIMENSIONS, ANIMATION_TIMING, CHECKMARK_PATH, CHECKMARK_PATH_LENGTH } from './constants';
 
 export const DrawCheckmark: React.FC = () => {
   const frame = useCurrentFrame();
 
+  // Stroke draws in over frames 0-9 with easeInOutCubic
   const drawProgress = interpolate(
     frame,
     [ANIMATION_TIMING.checkmarkDrawStart, ANIMATION_TIMING.checkmarkDrawEnd],
@@ -17,30 +13,26 @@ export const DrawCheckmark: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
+      easing: Easing.inOut(Easing.cubic),
     }
   );
 
-  const dashOffset = TOTAL_PATH_LENGTH * (1 - drawProgress);
-
-  // Only show after divider contracts
-  const opacity = frame >= ANIMATION_TIMING.checkmarkDrawStart ? 1 : 0;
+  const dashOffset = CHECKMARK_PATH_LENGTH * (1 - drawProgress);
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: CANVAS.width / 2 - DIMENSIONS.checkmarkSize / 2,
+        left: DIMENSIONS.checkmarkCenterX - DIMENSIONS.checkmarkSize / 2,
         top: DIMENSIONS.checkmarkCenterY - DIMENSIONS.checkmarkSize / 2,
         width: DIMENSIONS.checkmarkSize,
         height: DIMENSIONS.checkmarkSize,
-        opacity,
       }}
     >
       <svg
         width={DIMENSIONS.checkmarkSize}
         height={DIMENSIONS.checkmarkSize}
-        viewBox="0 0 40 40"
+        viewBox="0 0 48 48"
         fill="none"
       >
         <path
@@ -49,7 +41,7 @@ export const DrawCheckmark: React.FC = () => {
           strokeWidth={DIMENSIONS.checkmarkStrokeWidth}
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeDasharray={TOTAL_PATH_LENGTH}
+          strokeDasharray={CHECKMARK_PATH_LENGTH}
           strokeDashoffset={dashOffset}
         />
       </svg>

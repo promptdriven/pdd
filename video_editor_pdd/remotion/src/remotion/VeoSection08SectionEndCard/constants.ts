@@ -1,5 +1,5 @@
 // Component-level constants for VeoSection08SectionEndCard
-// Duration: ~3s (90 frames @ 30fps)
+// Duration: ~1.2s (37 frames @ 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
@@ -7,125 +7,72 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
-  gradientTop: '#0B1D3A',
-  gradientBottom: '#162D50',
-  ring: '#5B9BD5',
-  checkmark: '#40916C',
-  labelText: '#FFFFFF',
-  rule: '#5B9BD5',
-  bokeh: '#FFFFFF',
+  gradientTop: '#0A1628',
+  gradientBottom: '#1B3A5C',
+  checkmark: '#6FCF97',
+  accent: '#4DA8DA',
+  completionText: '#FFFFFF',
+  taglineText: 'rgba(255,255,255,0.7)',
+  fadeToBlack: '#000000',
 } as const;
 
 export const TYPOGRAPHY = {
-  label: {
-    fontSize: 36,
+  completion: {
+    fontSize: 48,
     fontFamily: "'Inter', sans-serif",
-    fontWeight: 600 as const,
+    fontWeight: 700 as const,
+    letterSpacing: 6,
+  },
+  tagline: {
+    fontSize: 20,
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 400 as const,
+    letterSpacing: 2,
   },
 } as const;
 
 export const DIMENSIONS = {
-  ringRadius: 80,
-  ringStroke: 4,
-  ringCenterX: 960,
-  ringCenterY: 460,
-  checkmarkSize: 32,
-  checkmarkStrokeWidth: 3,
-  labelY: 600,
-  ruleWidth: 160,
+  // Checkmark circle
+  circleCenterX: 960,
+  circleCenterY: 380,
+  circleRadius: 60,
+  circleStrokeWidth: 4,
+  // Text positions
+  completionTextY: 540,
+  ruleY: 510,
+  ruleWidth: 400,
   ruleHeight: 2,
-  ruleGapBelow: 16,
-  bokehCount: 12,
-  bokehMinRadius: 3,
-  bokehMaxRadius: 8,
-  bokehMinOpacity: 0.08,
-  bokehMaxOpacity: 0.15,
-  bokehBlur: 3,
-  bokehMinSpeed: 0.5,
-  bokehMaxSpeed: 2.0,
+  taglineY: 600,
+  // Checkmark path inside circle
+  checkStrokeWidth: 4,
 } as const;
+
+// Approximate total length of the check path "M 36 52 L 50 66 L 76 38"
+// Segment 1: (36,52)→(50,66) = sqrt(14²+14²) ≈ 19.8
+// Segment 2: (50,66)→(76,38) = sqrt(26²+28²) ≈ 38.2
+// Total ≈ 58
+export const CHECK_PATH = 'M 36 52 L 50 66 L 76 38';
+export const CHECK_PATH_LENGTH = 58;
+
+export const COMPLETION_TEXT = 'VEO SECTION COMPLETE';
+export const TAGLINE_TEXT = 'Integration Test — Section 2 of 2';
 
 export const ANIMATION = {
-  // Frame 0-10: Background gradient fades in (opacity 0 → 1)
-  backgroundFadeStart: 0,
-  backgroundFadeEnd: 10,
-  // Frame 0-90: Bokeh particles drift continuously
-  // Frame 10-40: Completion ring draws clockwise (0° → 360°)
-  ringDrawStart: 10,
-  ringDrawEnd: 40,
-  // Frame 40-55: Checkmark scales in with bounce
-  checkmarkStart: 40,
-  checkmarkEnd: 55,
-  // Frame 50-70: Label fades in with translateY
-  labelFadeStart: 50,
-  labelFadeEnd: 70,
-  labelShiftPx: 10,
-  // Frame 60-80: Horizontal rule scales outward
-  ruleScaleStart: 60,
-  ruleScaleEnd: 80,
-  totalDuration: 90,
+  // Frame 0-8: Circle draws itself (strokeDashoffset, clockwise from top)
+  circleDrawStart: 0,
+  circleDrawEnd: 8,
+  // Frame 8-16: Check stroke draws inside circle; circle fills with green tint
+  checkDrawStart: 8,
+  checkDrawEnd: 16,
+  // Frame 16-22: Completion text fades in + slides up 15px; rule expands
+  textFadeStart: 16,
+  textFadeEnd: 22,
+  textSlideY: 15,
+  // Frame 22-28: Tagline fades in (opacity 0 → 0.7)
+  taglineFadeStart: 22,
+  taglineFadeEnd: 28,
+  // Frame 28-37: Fade to black overlay (opacity 0 → 1)
+  fadeToBlackStart: 28,
+  fadeToBlackEnd: 37,
+  totalDuration: 37,
 } as const;
-
-export const LABEL_TEXT = 'Veo Section Complete';
-
-export type EndCardLayout = {
-  width: number;
-  height: number;
-  scaleX: number;
-  scaleY: number;
-  uniformScale: number;
-  typography: {
-    label: {
-      fontSize: number;
-      fontFamily: string;
-      fontWeight: number;
-    };
-  };
-  dimensions: {
-    ringRadius: number;
-    ringStroke: number;
-    ringCenterX: number;
-    ringCenterY: number;
-    checkmarkSize: number;
-    checkmarkStrokeWidth: number;
-    labelY: number;
-    ruleWidth: number;
-    ruleHeight: number;
-    ruleGapBelow: number;
-  };
-};
-
-export const resolveEndCardLayout = (
-  width: number,
-  height: number,
-): EndCardLayout => {
-  const scaleX = width / BASE_CANVAS.width;
-  const scaleY = height / BASE_CANVAS.height;
-  const uniformScale = Math.min(scaleX, scaleY);
-
-  return {
-    width,
-    height,
-    scaleX,
-    scaleY,
-    uniformScale,
-    typography: {
-      label: {
-        ...TYPOGRAPHY.label,
-        fontSize: Math.max(24, TYPOGRAPHY.label.fontSize * uniformScale),
-      },
-    },
-    dimensions: {
-      ringRadius: DIMENSIONS.ringRadius * uniformScale,
-      ringStroke: Math.max(2, DIMENSIONS.ringStroke * uniformScale),
-      ringCenterX: DIMENSIONS.ringCenterX * scaleX,
-      ringCenterY: DIMENSIONS.ringCenterY * scaleY,
-      checkmarkSize: DIMENSIONS.checkmarkSize * uniformScale,
-      checkmarkStrokeWidth: Math.max(2, DIMENSIONS.checkmarkStrokeWidth * uniformScale),
-      labelY: DIMENSIONS.labelY * scaleY,
-      ruleWidth: DIMENSIONS.ruleWidth * scaleX,
-      ruleHeight: Math.max(1.5, DIMENSIONS.ruleHeight * scaleY),
-      ruleGapBelow: DIMENSIONS.ruleGapBelow * scaleY,
-    },
-  };
-};

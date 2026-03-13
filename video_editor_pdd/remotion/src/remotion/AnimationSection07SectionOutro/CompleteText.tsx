@@ -1,11 +1,12 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, DIMENSIONS, TYPOGRAPHY, ANIMATION_TIMING, LABEL_TEXT } from './constants';
+import { CANVAS, COLORS, DIMENSIONS, TYPOGRAPHY, ANIMATION_TIMING } from './constants';
 
 export const CompleteText: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const progress = interpolate(
+  // Text fades in over frames 6-12 with easeOutQuad
+  const opacity = interpolate(
     frame,
     [ANIMATION_TIMING.textFadeStart, ANIMATION_TIMING.textFadeEnd],
     [0, 1],
@@ -16,26 +17,22 @@ export const CompleteText: React.FC = () => {
     }
   );
 
-  const translateY = interpolate(progress, [0, 1], [8, 0]);
-
   return (
     <div
       style={{
         position: 'absolute',
         left: 0,
-        top: DIMENSIONS.labelY,
+        top: DIMENSIONS.textCenterY,
         width: CANVAS.width,
         textAlign: 'center',
-        opacity: progress,
-        color: COLORS.labelText,
-        fontSize: TYPOGRAPHY.label.fontSize,
-        fontFamily: TYPOGRAPHY.label.fontFamily,
-        fontWeight: TYPOGRAPHY.label.fontWeight,
-        letterSpacing: TYPOGRAPHY.label.letterSpacing,
-        transform: `translateY(${translateY}px)`,
+        opacity,
+        color: COLORS.text,
+        fontSize: TYPOGRAPHY.text.fontSize,
+        fontFamily: TYPOGRAPHY.text.fontFamily,
+        fontWeight: TYPOGRAPHY.text.fontWeight,
       }}
     >
-      {LABEL_TEXT}
+      Section Complete
     </div>
   );
 };

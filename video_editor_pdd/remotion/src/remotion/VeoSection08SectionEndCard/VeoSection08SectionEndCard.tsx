@@ -1,51 +1,37 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, useVideoConfig } from 'remotion';
-import { COLORS, ANIMATION, resolveEndCardLayout } from './constants';
-import { BokehParticles } from './BokehParticles';
+import { AbsoluteFill } from 'remotion';
+import { COLORS } from './constants';
 import { CompletionRing } from './CompletionRing';
 import { CheckmarkIcon } from './CheckmarkIcon';
-import { SectionLabel } from './SectionLabel';
+import { CompletionText } from './CompletionText';
 import { ExpandingRule } from './ExpandingRule';
+import { TaglineText } from './TaglineText';
+import { FadeToBlack } from './FadeToBlack';
 
 export const VeoSection08SectionEndCard: React.FC = () => {
-  const frame = useCurrentFrame();
-  const { width, height } = useVideoConfig();
-  const layout = resolveEndCardLayout(width, height);
-
-  // Frame 0-10: Content fades in over the gradient background
-  // Background gradient is always visible (non-black) from frame 0.
-  const contentOpacity = interpolate(
-    frame,
-    [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
-
   return (
     <AbsoluteFill
       style={{
         background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
       }}
     >
-      {/* Bokeh particles — drift continuously from frame 0, visible immediately */}
-      <BokehParticles layout={layout} />
+      {/* Circle outline draws itself (frames 0-8), fills with green tint (frames 8-16) */}
+      <CompletionRing />
 
-      <AbsoluteFill style={{ opacity: contentOpacity }}>
-        {/* Completion ring draws clockwise */}
-        <CompletionRing layout={layout} />
+      {/* Check stroke draws inside circle (frames 8-16) */}
+      <CheckmarkIcon />
 
-        {/* Checkmark icon pops in with bounce */}
-        <CheckmarkIcon layout={layout} />
+      {/* "VEO SECTION COMPLETE" fades in + slides up (frames 16-22) */}
+      <CompletionText />
 
-        {/* Section label fades in */}
-        <SectionLabel layout={layout} />
+      {/* Horizontal rule expands from center (frames 16-22) */}
+      <ExpandingRule />
 
-        {/* Horizontal rule expands outward from centre */}
-        <ExpandingRule layout={layout} />
-      </AbsoluteFill>
+      {/* Tagline fades in (frames 22-28) */}
+      <TaglineText />
+
+      {/* Full-screen fade to black (frames 28-37) */}
+      <FadeToBlack />
     </AbsoluteFill>
   );
 };

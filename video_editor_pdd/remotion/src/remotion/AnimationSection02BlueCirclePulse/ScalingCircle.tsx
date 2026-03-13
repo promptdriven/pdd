@@ -1,2 +1,2 @@
-// Deprecated: replaced by AnimatedTriangle.tsx per annotation update
+// Replaced by PulsingCircle.tsx
 export {};

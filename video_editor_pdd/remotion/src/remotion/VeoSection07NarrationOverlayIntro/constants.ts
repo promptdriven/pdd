@@ -1,145 +1,87 @@
 // Component-level constants for VeoSection07NarrationOverlayIntro
-// Duration: ~4s (120 frames @ 30fps)
+// Duration: ~1.3s (38 frames @ 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
   height: 1080,
-};
+} as const;
 
 export const COLORS = {
   background: '#0A1628',
-  pillFill: 'rgba(11,29,58,0.7)',
-  pillBorder: 'rgba(91,155,213,0.3)',
-  accentGradientStart: '#5B9BD5',
-  accentGradientEnd: '#D4A843',
-  narrationText: '#FFFFFF',
-  progressBar: '#5B9BD5',
-};
+  gradientMesh: ['#0A1628', '#1B3A5C', '#0D4D4D'] as readonly string[],
+  waveformBottom: '#4DA8DA',
+  waveformTop: '#8EC8E8',
+  waveformOpacity: 0.7,
+  waveformReflectionOpacity: 0.15,
+  activeWord: '#FFFFFF',
+  inactiveWord: 'rgba(255,255,255,0.4)',
+  badgeBackground: 'rgba(77,168,218,0.2)',
+  badgeBorder: '#4DA8DA',
+  badgeText: '#8EC8E8',
+} as const;
 
 export const TYPOGRAPHY = {
   narration: {
-    fontSize: 22,
+    fontSize: 36,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 500 as const,
-    lineHeight: 1.5,
+    lineHeight: 1.4,
   },
-};
+  badge: {
+    fontSize: 14,
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 400 as const,
+  },
+} as const;
 
-export const PILL = {
-  x: 80,
-  y: 900,
-  width: 800,
-  height: 100,
-  borderRadius: 16,
-  backdropBlur: 12,
-  textMaxWidth: 720,
-  textPaddingX: 24,
-  textPaddingY: 20,
-};
+export const WAVEFORM = {
+  barCount: 64,
+  xStart: 100,
+  xEnd: 1820,
+  baselineY: 700,
+  bottomY: 980,
+  barWidth: 20,
+  barGap: 6,
+  minHeight: 20,
+  maxHeight: 280,
+} as const;
 
-export const NARRATION_TEXT =
-  'This is the second section of the integration test video.';
+export const NARRATION = {
+  centerX: 960,
+  centerY: 400,
+  maxWidth: 1200,
+  words: ['It', 'uses', 'Veo-generated', 'clips', 'with', 'narration', 'overlay.'] as readonly string[],
+  framesPerWord: 5,
+  wordFadeDuration: 3,
+} as const;
+
+export const BADGE = {
+  x: 1680,
+  y: 40,
+  paddingX: 16,
+  paddingY: 8,
+  borderRadius: 20,
+  text: 'TTS: Qwen3 — Aiden',
+  slideDistance: 40,
+} as const;
 
 export const ANIMATION = {
-  // Frame 0-20: Pill slides in from left
-  pillSlideStart: 0,
-  pillSlideEnd: 20,
-  pillSlideOffset: -100,
+  // Frame 0-6: Gradient mesh fades in, badge slides in
+  meshFadeStart: 0,
+  meshFadeEnd: 6,
+  badgeSlideStart: 0,
+  badgeSlideEnd: 6,
 
-  // Frame 10-15: Accent gradient bar fades in
-  accentFadeStart: 10,
-  accentFadeEnd: 15,
+  // Frame 6-10: Waveform bars begin animating
+  waveformStart: 6,
+  waveformRampEnd: 10,
 
-  // Frame 20-90: Narration text types on
-  typeOnStart: 20,
-  typeOnEnd: 90,
+  // Frame 6-34: Words reveal one by one (~1 word per 5 frames)
+  wordRevealStart: 6,
 
-  // Frame 0-120: Progress bar fills
-  progressStart: 0,
-  progressEnd: 120,
+  // Frame 34-38: Waveform tails off
+  waveformTailStart: 34,
+  waveformTailEnd: 38,
 
-  // Frame 100-120: Entire overlay fades out
-  fadeOutStart: 100,
-  fadeOutEnd: 120,
-
-  totalDuration: 120,
-};
-
-export const DIMENSIONS = {
-  accentBarHeight: 3,
-  progressBarHeight: 2,
-  progressBarOpacity: 0.4,
-};
-
-export type NarrationOverlayLayout = {
-  width: number;
-  height: number;
-  scaleX: number;
-  scaleY: number;
-  uniformScale: number;
-  typography: {
-    narration: {
-      fontSize: number;
-      fontFamily: string;
-      fontWeight: number;
-      lineHeight: number;
-    };
-  };
-  pill: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    borderRadius: number;
-    backdropBlur: number;
-    textMaxWidth: number;
-    textPaddingX: number;
-    textPaddingY: number;
-  };
-  dimensions: {
-    accentBarHeight: number;
-    progressBarHeight: number;
-    progressBarOpacity: number;
-    progressBarGap: number;
-  };
-};
-
-export const resolveNarrationOverlayLayout = (
-  width: number,
-  height: number,
-): NarrationOverlayLayout => {
-  const scaleX = width / BASE_CANVAS.width;
-  const scaleY = height / BASE_CANVAS.height;
-  const uniformScale = Math.min(scaleX, scaleY);
-
-  return {
-    width,
-    height,
-    scaleX,
-    scaleY,
-    uniformScale,
-    typography: {
-      narration: {
-        ...TYPOGRAPHY.narration,
-        fontSize: Math.max(16, TYPOGRAPHY.narration.fontSize * uniformScale),
-      },
-    },
-    pill: {
-      x: PILL.x * scaleX,
-      y: PILL.y * scaleY,
-      width: PILL.width * scaleX,
-      height: PILL.height * scaleY,
-      borderRadius: Math.max(12, PILL.borderRadius * uniformScale),
-      backdropBlur: Math.max(8, PILL.backdropBlur * uniformScale),
-      textMaxWidth: PILL.textMaxWidth * scaleX,
-      textPaddingX: PILL.textPaddingX * scaleX,
-      textPaddingY: PILL.textPaddingY * scaleY,
-    },
-    dimensions: {
-      accentBarHeight: Math.max(2, DIMENSIONS.accentBarHeight * scaleY),
-      progressBarHeight: Math.max(1.5, DIMENSIONS.progressBarHeight * scaleY),
-      progressBarOpacity: DIMENSIONS.progressBarOpacity,
-      progressBarGap: 8 * scaleY,
-    },
-  };
-};
+  totalDuration: 38,
+} as const;

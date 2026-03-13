@@ -1,17 +1,18 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION, type EndCardLayout } from './constants';
+import { COLORS, DIMENSIONS, ANIMATION } from './constants';
 
-export const CompletionRing: React.FC<{ layout: EndCardLayout }> = ({ layout }) => {
+export const CompletionRing: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const { ringRadius, ringStroke, ringCenterX, ringCenterY } = layout.dimensions;
-  const circumference = 2 * Math.PI * ringRadius;
+  const { circleRadius, circleStrokeWidth, circleCenterX, circleCenterY } =
+    DIMENSIONS;
+  const circumference = 2 * Math.PI * circleRadius;
 
-  // Ring draws clockwise from 0° → 360° (frames 10-40)
-  const ringProgress = interpolate(
+  // Circle draws clockwise from top (frames 0-8) with easeInOutCubic
+  const drawProgress = interpolate(
     frame,
-    [ANIMATION.ringDrawStart, ANIMATION.ringDrawEnd],
+    [ANIMATION.circleDrawStart, ANIMATION.circleDrawEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -20,35 +21,42 @@ export const CompletionRing: React.FC<{ layout: EndCardLayout }> = ({ layout }) 
     },
   );
 
-  const strokeDashoffset = circumference * (1 - ringProgress);
+  const strokeDashoffset = circumference * (1 - drawProgress);
 
-  // SVG viewBox sized to fit the ring with padding
-  const padding = ringStroke * 2;
-  const svgSize = (ringRadius + padding) * 2;
+  // After frame 8, fill with subtle green tint
+  const fillOpacity = interpolate(
+    frame,
+    [ANIMATION.checkDrawStart, ANIMATION.checkDrawEnd],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  const padding = circleStrokeWidth * 2;
+  const svgSize = (circleRadius + padding) * 2;
   const center = svgSize / 2;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: ringCenterX - svgSize / 2,
-        top: ringCenterY - svgSize / 2,
+        left: circleCenterX - svgSize / 2,
+        top: circleCenterY - svgSize / 2,
         width: svgSize,
         height: svgSize,
       }}
     >
-      <svg
-        width={svgSize}
-        height={svgSize}
-        viewBox={`0 0 ${svgSize} ${svgSize}`}
-      >
+      <svg width={svgSize} height={svgSize} viewBox={`0 0 ${svgSize} ${svgSize}`}>
         <circle
           cx={center}
           cy={center}
-          r={ringRadius}
-          fill="none"
-          stroke={COLORS.ring}
-          strokeWidth={ringStroke}
+          r={circleRadius}
+          fill={`rgba(111,207,151,${0.1 * fillOpacity})`}
+          stroke={COLORS.checkmark}
+          strokeWidth={circleStrokeWidth}
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
