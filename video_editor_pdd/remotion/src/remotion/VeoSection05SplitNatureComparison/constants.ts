@@ -1,4 +1,5 @@
 // Component-level constants for VeoSection05SplitNatureComparison
+// Single-frame flash card — no animation timing needed.
 
 export const BASE_CANVAS = {
   width: 1920,
@@ -6,110 +7,89 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
-  background: '#0D1117',
-  divider: '#5B9BD5',
-  labelText: '#FFFFFF',
-  vignette: 'rgba(0, 0, 0, 0.6)',
+  background: '#0D1B2A',
+  divider: '#4DA8DA',
+  dividerGlow: '#4DA8DA',
+  leftLabel: '#FFD4A8',
+  rightLabel: '#A8E6CF',
+  headerText: '#FFFFFF',
+  vignette: 'rgba(0, 0, 0, 0.5)',
 };
 
 export const TYPOGRAPHY = {
+  header: {
+    fontSize: 32,
+    fontFamily: 'Inter, sans-serif',
+    fontWeight: 700 as const,
+    letterSpacing: 8,
+  },
   label: {
-    fontSize: 24,
-    fontFamily: 'Inter',
+    fontSize: 20,
+    fontFamily: 'Inter, sans-serif',
     fontWeight: 600 as const,
   },
 };
 
-export const ANIMATION = {
-  // Divider draws top to bottom
-  dividerDrawStart: 0,
-  dividerDrawEnd: 20,
-  // Left panel wipes in from center outward
-  leftPanelWipeStart: 15,
-  leftPanelWipeEnd: 45,
-  // Right panel wipes in from center outward
-  rightPanelWipeStart: 20,
-  rightPanelWipeEnd: 50,
-  // Labels fade in
-  labelFadeStart: 50,
-  labelFadeEnd: 70,
-  // Total duration
-  totalDuration: 120,
-};
-
 export const DIMENSIONS = {
-  dividerWidth: 3,
+  // Left panel: 940×810 at (10, 140)
+  leftPanelX: 10,
+  leftPanelY: 140,
+  panelWidth: 940,
+  panelHeight: 810,
+  panelBorderRadius: 8,
+  // Right panel: 940×810 at (970, 140)
+  rightPanelX: 970,
+  rightPanelY: 140,
+  // Center divider at x=960, 2px wide, height 810px
   dividerX: 960,
-  leftPanelEnd: 957,    // x=0 to 957
-  rightPanelStart: 963, // x=963 to 1920
+  dividerY: 140,
+  dividerWidth: 2,
+  dividerHeight: 810,
+  dividerGlowRadius: 12,
+  // Labels below panels at y=980
   labelY: 980,
-  leftLabelX: 480,
-  rightLabelX: 1440,
-  vignetteWidth: 20,
-  kenBurnsStart: 1.0,
-  kenBurnsEnd: 1.05,
+  leftLabelCenterX: 480,   // centered under left panel
+  rightLabelCenterX: 1440, // centered under right panel
+  // Header at y=60
+  headerY: 60,
 };
 
 export type SplitNatureComparisonLayout = {
   width: number;
   height: number;
+  scaleX: number;
+  scaleY: number;
+  uniformScale: number;
   typography: {
+    header: typeof TYPOGRAPHY.header;
     label: typeof TYPOGRAPHY.label;
-  };
-  positions: {
-    dividerX: number;
-    leftPanelWidth: number;
-    rightPanelStart: number;
-    rightPanelWidth: number;
-    labelY: number;
-    leftLabelX: number;
-    rightLabelX: number;
-  };
-  dimensions: {
-    dividerWidth: number;
-    vignetteWidth: number;
-    kenBurnsStart: number;
-    kenBurnsEnd: number;
   };
 };
 
 export const resolveSplitNatureComparisonLayout = (
   width: number,
-  height: number
+  height: number,
 ): SplitNatureComparisonLayout => {
   const scaleX = width / BASE_CANVAS.width;
   const scaleY = height / BASE_CANVAS.height;
   const uniformScale = Math.min(scaleX, scaleY);
-  const dividerWidth = Math.max(2, DIMENSIONS.dividerWidth * scaleX);
-  const panelGap = Math.max(2, dividerWidth);
-  const dividerX = width / 2;
-  const leftPanelWidth = Math.max(0, dividerX - panelGap);
-  const rightPanelStart = dividerX + panelGap;
-  const rightPanelWidth = Math.max(0, width - rightPanelStart);
 
   return {
     width,
     height,
+    scaleX,
+    scaleY,
+    uniformScale,
     typography: {
+      header: {
+        ...TYPOGRAPHY.header,
+        fontSize: Math.max(20, TYPOGRAPHY.header.fontSize * uniformScale),
+        letterSpacing: Math.max(4, TYPOGRAPHY.header.letterSpacing * uniformScale),
+      },
       label: {
         ...TYPOGRAPHY.label,
-        fontSize: Math.max(16, TYPOGRAPHY.label.fontSize * uniformScale),
+        fontSize: Math.max(14, TYPOGRAPHY.label.fontSize * uniformScale),
       },
-    },
-    positions: {
-      dividerX,
-      leftPanelWidth,
-      rightPanelStart,
-      rightPanelWidth,
-      labelY: DIMENSIONS.labelY * scaleY,
-      leftLabelX: width * 0.25,
-      rightLabelX: width * 0.75,
-    },
-    dimensions: {
-      dividerWidth,
-      vignetteWidth: Math.max(12, DIMENSIONS.vignetteWidth * uniformScale),
-      kenBurnsStart: DIMENSIONS.kenBurnsStart,
-      kenBurnsEnd: DIMENSIONS.kenBurnsEnd,
     },
   };
 };

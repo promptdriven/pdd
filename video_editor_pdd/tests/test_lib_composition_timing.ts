@@ -31,6 +31,17 @@ describe("lib/composition-timing", () => {
     expect(result).toEqual({ startSeconds: 3, endSeconds: 8 });
   });
 
+  it("parses markdown timestamp ranges that use an en dash separator", () => {
+    const result = parseSpecTimestampRange([
+      "# Demo",
+      "",
+      "**Timestamp:** 0:03 – 0:08",
+      "",
+    ].join("\n"));
+
+    expect(result).toEqual({ startSeconds: 3, endSeconds: 8 });
+  });
+
   it("returns null when a spec has no timestamp range", () => {
     expect(parseSpecTimestampRange("# Demo\n\nNo timestamp here")).toBeNull();
   });
@@ -73,6 +84,35 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("normalizes global spec timestamps into section-local time using the section offset", () => {
+    const specDir = path.join(tmpDir, "specs", "veo_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "02_ocean_wave_broll.md"),
+      "**Timestamp:** 0:10 – 0:14\n\n# Ocean Wave Broll"
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "veo_section",
+        specDir: "veo_section",
+        durationSeconds: 7.344,
+        offsetSeconds: 7,
+      },
+      ["02_ocean_wave_broll"]
+    );
+
+    expect(timings).toEqual([
+      expect.objectContaining({
+        id: "02_ocean_wave_broll",
+        startSeconds: 3,
+        endSeconds: 7.344,
+        source: "spec",
+      }),
+    ]);
+  });
+
   it("falls back to audio sync word timestamps when a spec timestamp is missing", () => {
     const specDir = path.join(tmpDir, "specs", "part1_economics");
     const wordsDir = path.join(tmpDir, "outputs", "tts", "part1_economics");
@@ -107,6 +147,42 @@ describe("lib/composition-timing", () => {
         source: "audio-sync",
       }),
     ]);
+  });
+
+  it("strips numeric prefixes before resolving audio-sync keywords", () => {
+    const specDir = path.join(tmpDir, "specs", "animation_section");
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "animation_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "05_split_comparison.md"),
+      "# Split Comparison\n\nNo explicit timestamp"
+    );
+    fs.writeFileSync(
+      path.join(wordsDir, "word_timestamps.json"),
+      JSON.stringify([
+        { word: "comparison", start: 4.25, end: 4.5, segmentId: "animation_section_001" },
+      ])
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "animation_section",
+        specDir: "animation_section",
+        durationSeconds: 9,
+      },
+      ["05_split_comparison"]
+    );
+
+    expect(timings).toEqual([
+      expect.objectContaining({
+        id: "05_split_comparison",
+        startSeconds: 3.25,
+        source: "audio-sync",
+      }),
+    ]);
+    expect(timings[0]?.endSeconds).toBe(9);
   });
 
   it("fills untimed gaps deterministically without exceeding the section duration", () => {

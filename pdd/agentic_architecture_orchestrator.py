@@ -40,6 +40,7 @@ from pdd.agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from pdd.architecture_registry import merge_architecture, record_generation
+from pdd.architecture_sync import normalize_architecture_filenames
 from pdd.load_prompt_template import load_prompt_template
 from pdd.preprocess import preprocess
 # Import render_mermaid dynamically or assume it's available in the package
@@ -249,14 +250,36 @@ def _save_architecture_files(
         clean_content = clean_content.strip()
 
         arch_data = json.loads(clean_content)
+        # Issue #617: ensure filename mirrors filepath; handle list or object wrappers safely
+        arch_list = None
+        if isinstance(arch_data, list):
+            normalize_architecture_filenames(arch_data)
+            arch_list = arch_data
+        elif isinstance(arch_data, dict):
+            for key in ("architecture", "files"):
+                if key in arch_data and isinstance(arch_data[key], list):
+                    normalize_architecture_filenames(arch_data[key])
+                    arch_list = arch_data[key]
+                    break
+            else:
+                console.print(
+                    "[yellow]Warning: architecture JSON is an object and does not "
+                    "contain a list under known keys ('architecture', 'files'); "
+                    "skipping filename normalization.[/yellow]"
+                )
+        else:
+            console.print(
+                "[yellow]Warning: Unexpected architecture JSON type "
+                f"({type(arch_data).__name__}); skipping filename normalization.[/yellow]"
+            )
 
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(arch_data, f, indent=2)
         output_files.append(str(json_path))
 
-        if HAS_MERMAID:
-            mermaid_code = generate_mermaid_code(arch_data, issue_title)
-            html_content = generate_html(mermaid_code, arch_data, issue_title)
+        if HAS_MERMAID and arch_list is not None:
+            mermaid_code = generate_mermaid_code(arch_list, issue_title)
+            html_content = generate_html(mermaid_code, arch_list, issue_title)
 
             html_path = cwd / "architecture_diagram.html"
             with open(html_path, "w", encoding="utf-8") as f:
@@ -936,12 +959,17 @@ def run_agentic_architecture_orchestrator(
 
                     # Post-Step-7 merge: merge new arch with snapshot
                     if existing_arch_snapshot is not None:
+                        # Normalize before merge so merge_report added/updated match post-normalization filenames
+                        normalize_architecture_filenames(existing_arch_snapshot)
+                        normalize_architecture_filenames(arch_data)
                         merged_arch, merge_report = merge_architecture(
                             existing_arch=existing_arch_snapshot,
                             new_arch=arch_data,
                             issue_number=issue_number,
                             issue_url=issue_url,
                         )
+                        # Issue #617: ensure filename mirrors filepath (idempotent after pre-merge normalize)
+                        normalize_architecture_filenames(merged_arch)
                         # Write full merged architecture to disk
                         with open(arch_file, "w", encoding="utf-8") as f:
                             json.dump(merged_arch, f, indent=2, ensure_ascii=False)
@@ -967,7 +995,11 @@ def run_agentic_architecture_orchestrator(
                             target_dir=target_dir,
                         )
                     else:
-                        step_output = arch_content
+                        # Issue #617: ensure filename mirrors filepath before writing
+                        normalize_architecture_filenames(arch_data)
+                        with open(arch_file, "w", encoding="utf-8") as f:
+                            json.dump(arch_data, f, indent=2, ensure_ascii=False)
+                        step_output = json.dumps(arch_data, indent=2)
                         if not quiet:
                             console.print(f"   → architecture.json created with {len(arch_data)} modules")
 

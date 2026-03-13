@@ -6,7 +6,10 @@ import { extractFrameAtTime, renderStill } from "@/lib/render";
 import { runClaudeAudit } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
-import { resolveSectionVisuals } from "@/lib/composition-timing";
+import {
+  resolveSectionVisuals,
+  type ResolvedSectionVisual,
+} from "@/lib/composition-timing";
 import { normalizeSpecForAudit } from "@/lib/audit-spec-normalization";
 import {
   resolveAuditSampleWindow,
@@ -23,6 +26,29 @@ import { getProjectDir } from "@/lib/projects";
 
 type AuditSectionStatus = "running" | "done" | "error";
 type AuditVisualType = "component" | "media" | "hybrid" | "spec";
+type AuditRenderSource =
+  | {
+      kind: "preview-composition";
+      visualType: AuditVisualType;
+      compositionId: string;
+    }
+  | {
+      kind: "media-clip" | "section-video";
+      visualType: AuditVisualType;
+      mediaPath: string;
+    }
+  | {
+      kind: "section-composition";
+      visualType: AuditVisualType;
+      compositionId: string;
+    }
+  | {
+      kind: "skip";
+      visualType: AuditVisualType;
+      reason: string;
+    };
+
+const DEFAULT_PREVIEW_DURATION_FRAMES = 150;
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -47,6 +73,145 @@ function resolveSectionRenderedVideoPath(section: Section): string | null {
   }
 
   return null;
+}
+
+function resolveVisualType(visual: Pick<ResolvedSectionVisual, "hasComponent" | "hasExplicitMedia">): AuditVisualType {
+  if (visual.hasComponent && visual.hasExplicitMedia) {
+    return "hybrid";
+  }
+  if (visual.hasComponent) {
+    return "component";
+  }
+  if (visual.hasExplicitMedia) {
+    return "media";
+  }
+  return "spec";
+}
+
+function resolveVisualMediaAssetPath(
+  projectDir: string,
+  visual: Pick<ResolvedSectionVisual, "mediaReferences" | "stagedAssetPath">
+): string | null {
+  const candidates = new Set<string>();
+
+  if (visual.stagedAssetPath) {
+    candidates.add(visual.stagedAssetPath);
+  }
+
+  for (const mediaReference of visual.mediaReferences ?? []) {
+    if (path.isAbsolute(mediaReference)) {
+      candidates.add(mediaReference);
+      continue;
+    }
+
+    const normalized = mediaReference
+      .replace(/\\/g, "/")
+      .replace(/^public\//, "")
+      .replace(/^\//, "");
+
+    candidates.add(path.join(projectDir, "remotion", "public", normalized));
+    candidates.add(path.join(projectDir, normalized));
+    candidates.add(
+      path.join(projectDir, "outputs", "veo", path.basename(normalized))
+    );
+  }
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function writeAuditReport(
+  auditPath: string,
+  verdict: "pass" | "fail" | "skip",
+  summary: string
+): void {
+  const auditReport = `## Verdict\n${verdict}\n## Summary\n${summary}\n`;
+  fs.mkdirSync(path.dirname(auditPath), { recursive: true });
+  fs.writeFileSync(auditPath, auditReport, "utf-8");
+}
+
+function resolveAuditRenderSource(
+  projectDir: string,
+  section: Section,
+  visual: Pick<
+    ResolvedSectionVisual,
+    "hasComponent" | "hasExplicitMedia" | "previewCompositionId" | "mediaReferences" | "stagedAssetPath"
+  >,
+  renderedVideoPath: string | null,
+  canRenderFreshStill: boolean
+): AuditRenderSource {
+  const visualType = resolveVisualType(visual);
+
+  if (visualType === "component" && visual.previewCompositionId) {
+    return {
+      kind: "preview-composition",
+      visualType,
+      compositionId: visual.previewCompositionId,
+    };
+  }
+
+  if (visualType === "media") {
+    const mediaPath = resolveVisualMediaAssetPath(projectDir, visual);
+    if (mediaPath) {
+      return {
+        kind: "media-clip",
+        visualType,
+        mediaPath,
+      };
+    }
+
+    return {
+      kind: "skip",
+      visualType,
+      reason:
+        "Standalone audit skipped because the staged media clip for this spec could not be resolved.",
+    };
+  }
+
+  if (visualType === "hybrid") {
+    return {
+      kind: "skip",
+      visualType,
+      reason:
+        "Standalone audit skipped because this visual mixes component rendering with media references that are not auditable as a single standalone source.",
+    };
+  }
+
+  if (canRenderFreshStill && section.compositionId) {
+    return {
+      kind: "section-composition",
+      visualType,
+      compositionId: section.compositionId,
+    };
+  }
+
+  if (renderedVideoPath) {
+    return {
+      kind: "section-video",
+      visualType,
+      mediaPath: renderedVideoPath,
+    };
+  }
+
+  if (section.compositionId) {
+    return {
+      kind: "section-composition",
+      visualType,
+      compositionId: section.compositionId,
+    };
+  }
+
+  return {
+    kind: "skip",
+    visualType,
+    reason:
+      "Standalone audit skipped because there is no renderable composition or staged media clip for this spec.",
+  };
 }
 
 async function auditSection(
@@ -76,23 +241,25 @@ async function auditSection(
           .map((visual) => ({
             specPath: visual.specPath as string,
             specName: visual.specBaseName,
-            visualType: visual.hasComponent && visual.hasExplicitMedia
-              ? ("hybrid" as const)
-              : visual.hasComponent
-                ? ("component" as const)
-                : visual.hasExplicitMedia
-                  ? ("media" as const)
-                  : ("spec" as const),
+            visual,
           }))
       : rawSpecFiles.map((specFile) => ({
           specPath: path.join(specDir, specFile),
           specName: path.basename(specFile, ".md"),
-          visualType: "spec" as const,
+          visual: {
+            id: path.basename(specFile, ".md"),
+            specBaseName: path.basename(specFile, ".md"),
+            specPath: path.join(specDir, specFile),
+            hasComponent: false,
+            hasExplicitMedia: false,
+            mediaReferences: [],
+          } satisfies ResolvedSectionVisual,
         }));
   const project = loadProject();
   const fps = project.render.fps ?? 30;
   const canRenderFreshStill =
     configuredCompositionIds.length > 0 && Boolean(section.compositionId);
+  const renderedVideoPath = resolveSectionRenderedVideoPath(section);
 
   let passCount = 0;
   let failCount = 0;
@@ -105,7 +272,12 @@ async function auditSection(
       specContent,
       project.outputResolution
     );
-    const sampleWindow =
+    const rawSampleWindow = resolveAuditSampleWindow(specContent, {
+      sectionDurationSeconds: section.durationSeconds,
+      fps,
+      sectionOffsetSeconds: section.offsetSeconds ?? 0,
+    });
+    const renderedSampleWindow =
       Array.isArray(section.compositions) && section.compositions.length > 0
         ? resolveRenderedAuditSampleWindow(specContent, {
             projectDir: getProjectDir(),
@@ -114,11 +286,19 @@ async function auditSection(
             sectionDurationSeconds: section.durationSeconds,
             fps,
           })
-        : resolveAuditSampleWindow(specContent, {
-            sectionDurationSeconds: section.durationSeconds,
-            fps,
-          });
-    const renderedVideoPath = resolveSectionRenderedVideoPath(section);
+        : rawSampleWindow;
+    const renderSource = resolveAuditRenderSource(
+      getProjectDir(),
+      section,
+      visual.visual,
+      renderedVideoPath,
+      canRenderFreshStill
+    );
+    const sampleWindow =
+      renderSource.kind === "section-composition" ||
+      renderSource.kind === "section-video"
+        ? renderedSampleWindow
+        : rawSampleWindow;
 
     const outputStill = path.join(
       getProjectDir(),
@@ -128,8 +308,30 @@ async function auditSection(
       `${specName}_frame.png`
     );
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
+    const auditPath = resolveSectionSpecFile(
+      section.specDir,
+      `AUDIT_${specName}.md`
+    );
 
-    if (canRenderFreshStill) {
+    if (renderSource.kind === "preview-composition") {
+      const sampleFrame = Math.min(
+        DEFAULT_PREVIEW_DURATION_FRAMES - 1,
+        Math.max(0, sampleWindow.intrinsicSampleFrame)
+      );
+      onLog(
+        `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
+      );
+      await renderStill(renderSource.compositionId, sampleFrame, outputStill);
+    } else if (renderSource.kind === "media-clip") {
+      onLog(
+        `[audit] Extracting standalone media frame for ${section.id} (${specName}) at ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s`
+      );
+      await extractFrameAtTime(
+        renderSource.mediaPath,
+        sampleWindow.intrinsicSampleSeconds,
+        outputStill
+      );
+    } else if (renderSource.kind === "section-composition") {
       const sectionFrameCount = Math.max(1, Math.floor(section.durationSeconds * fps));
       const sampleFrame = Math.min(
         sectionFrameCount - 1,
@@ -138,26 +340,22 @@ async function auditSection(
       onLog(
         `[audit] Rendering fresh still for ${section.id} (${specName}) at frame ${sampleFrame} (${sampleWindow.source})`
       );
-      await renderStill(section.compositionId, sampleFrame, outputStill);
-    } else if (renderedVideoPath) {
+      await renderStill(renderSource.compositionId, sampleFrame, outputStill);
+    } else if (renderSource.kind === "section-video") {
       onLog(
         `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleWindow.sampleSeconds.toFixed(3)}s from rendered video`
       );
       await extractFrameAtTime(
-        renderedVideoPath,
+        renderSource.mediaPath,
         sampleWindow.sampleSeconds,
         outputStill
       );
+    } else if (renderSource.kind === "skip") {
+      onLog(`[audit] Skipping standalone audit for ${section.id} (${specName}): ${renderSource.reason}`);
+      writeAuditReport(auditPath, "skip", renderSource.reason);
+      continue;
     } else {
-      const sectionFrameCount = Math.max(1, Math.floor(section.durationSeconds * fps));
-      const sampleFrame = Math.min(
-        sectionFrameCount - 1,
-        Math.max(0, Math.floor(sampleWindow.sampleSeconds * fps))
-      );
-      onLog(
-        `[audit] Rendering still for ${section.id} (${specName}) at frame ${sampleFrame} (${sampleWindow.source})`
-      );
-      await renderStill(section.compositionId, sampleFrame, outputStill);
+      throw new Error(`Unsupported audit render source: ${JSON.stringify(renderSource)}`);
     }
 
     // Claude analysis prompt
@@ -171,8 +369,9 @@ Rules:
 - Fail only for visible mismatches in the sampled frame.
 
 - Audit spec name: ${path.basename(specPath)}
+- Audit render source: ${renderSource.kind}
 - Render resolution: ${project.outputResolution.width}x${project.outputResolution.height}
-- Audit visual type: ${visual.visualType}
+- Audit visual type: ${renderSource.visualType}
 - Sample window: ${sampleWindow.startSeconds.toFixed(3)}s - ${sampleWindow.endSeconds.toFixed(3)}s (${sampleWindow.source})
 - Sample time (section-local): ${sampleWindow.sampleSeconds.toFixed(3)}s
 - Sample time (intrinsic visual): ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s / ${sampleWindow.intrinsicDurationSeconds.toFixed(3)}s
@@ -197,15 +396,7 @@ Use severity="pass" if the frame fully satisfies the spec.
     const verdict = analysis.severity === "pass" ? "pass" : "fail";
     if (verdict === "pass") passCount++;
     else failCount++;
-
-    const auditReport = `## Verdict\n${verdict}\n## Summary\n${analysis.technicalAssessment}\n`;
-
-    const auditPath = resolveSectionSpecFile(
-      section.specDir,
-      `AUDIT_${specName}.md`
-    );
-    fs.mkdirSync(path.dirname(auditPath), { recursive: true });
-    fs.writeFileSync(auditPath, auditReport, "utf-8");
+    writeAuditReport(auditPath, verdict, analysis.technicalAssessment);
   }
 
   return { passCount, failCount };

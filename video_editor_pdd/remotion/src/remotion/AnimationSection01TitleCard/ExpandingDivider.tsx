@@ -21,12 +21,11 @@ export const ExpandingDivider: React.FC = () => {
       style={{
         position: 'absolute',
         left: '50%',
-        top: `calc(50% + 28px + ${DIMENSIONS.dividerOffsetY}px)`,
-        transform: 'translateX(-50%)',
+        top: '50%',
+        transform: `translate(-50%, ${DIMENSIONS.dividerOffsetY}px)`,
         width,
         height: DIMENSIONS.dividerHeight,
         backgroundColor: COLORS.divider,
-        opacity: DIMENSIONS.dividerOpacity,
       }}
     />
   );

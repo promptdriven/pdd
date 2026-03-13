@@ -239,6 +239,42 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     }
   };
 
+  const runAssetStaging = async (files: string[], busyKey?: string) => {
+    if (busyKey) {
+      setActionBusy((prev) => ({ ...prev, [busyKey]: true }));
+    }
+    setManifestError(null);
+
+    try {
+      const res = await fetch('/api/pipeline/asset-staging/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files }),
+      });
+
+      let payload: { error?: string } | null = null;
+      try {
+        payload = (await res.json()) as { error?: string };
+      } catch {
+        payload = null;
+      }
+
+      if (!res.ok) {
+        throw new Error(payload?.error ?? `Request failed (${res.status})`);
+      }
+
+      await refreshData();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to stage assets';
+      setManifestError(message);
+      console.error(err);
+    } finally {
+      if (busyKey) {
+        setActionBusy((prev) => ({ ...prev, [busyKey]: false }));
+      }
+    }
+  };
+
   const openPreview = async (componentName: string, sectionId?: string) => {
     setPreviewName(componentName);
     setPreviewUrl(null);
@@ -461,9 +497,8 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             <button
               className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
               onClick={() =>
-                runJob(
-                  '/api/pipeline/asset-staging/run',
-                  { files: missingFiles.map((f) => f.filename) },
+                runAssetStaging(
+                  missingFiles.map((f) => f.filename),
                   'stage-all'
                 )
               }
@@ -512,9 +547,8 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                         <button
                           className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                           onClick={() =>
-                            runJob(
-                              '/api/pipeline/asset-staging/run',
-                              { files: [entry.filename] },
+                            runAssetStaging(
+                              [entry.filename],
                               `stage-${entry.filename}`
                             )
                           }

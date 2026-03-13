@@ -3,76 +3,63 @@
 # Section 2.5: Split Nature Comparison
 
 **Tool:** Remotion
-**Duration:** ~4s
-**Timestamp:** 0:17 - 0:21
+**Duration:** ~0.03s (1 frame transition beat)
+**Timestamp:** 0:05 - 0:05
 
 ## Visual Description
-A split-screen comparison layout showing the two Veo-generated environments side by side. The left panel displays a still frame from the ocean sunset footage; the right panel displays a still frame from the aerial forest footage. A thin vertical divider separates them. Labels appear below each panel identifying the scene. The divider animates in from the top, then both panels reveal simultaneously with a horizontal wipe.
+A split-screen comparison placing the ocean sunset footage side-by-side with the aerial forest footage. The screen divides vertically at the center with a glowing separator line. The left panel shows a still from the ocean B-roll with the label "OCEAN — Sunset" below. The right panel shows a still from the forest cutaway with "FOREST — Canopy" below. A header reads "VEO GENERATION RANGE". This beat is a brief transitional flash — it appears for approximately 1 frame as a visual punctuation mark between the data overlay and the infographic.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #0D1117
-- Divider: 3px wide, color #5B9BD5, centered at x=960
+- Background: #0D1B2A
+- No grid lines
 
 ### Chart/Visual Elements
-- **Left panel (x=0–957):** Still frame from ocean sunset clip, scaled to fill panel with slight ken-burns zoom (1.0→1.05)
-- **Right panel (x=963–1920):** Still frame from aerial forest clip, scaled to fill panel with slight ken-burns zoom (1.0→1.05)
-- **Divider line:** Vertical, x=960, full height, 3px, color #5B9BD5
-- **Left label:** "Ocean at Sunset" — positioned at (480, 980), centered
-- **Right label:** "Forest Canopy" — positioned at (1440, 980), centered
-- **Subtle vignette:** on each panel edge, 20px soft black gradient inward
+- **Left panel:** 940x810 at position (10, 140), contains ocean still frame, rounded corners 8px
+- **Right panel:** 940x810 at position (970, 140), contains forest still frame, rounded corners 8px
+- **Center divider:** Vertical line at x=960, height 810px, 2px solid #4DA8DA, box-shadow glow 0 0 12px #4DA8DA
+- **Left label:** "OCEAN — Sunset" centered below left panel at y=980, color #FFD4A8
+- **Right label:** "FOREST — Canopy" centered below right panel at y=980, color #A8E6CF
+- **Header:** "VEO GENERATION RANGE" centered at y=60
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Divider line draws from top to bottom (y=0→1080)
-2. **Frame 15-45 (0.5-1.5s):** Left panel wipes in from center-outward (clipPath reveal)
-3. **Frame 20-50 (0.67-1.67s):** Right panel wipes in from center-outward (clipPath reveal)
-4. **Frame 50-70 (1.67-2.33s):** Labels fade in below each panel
-5. **Frame 0-120 (0-4s):** Ken-burns slow zoom runs continuously on both panels
+1. **Frame 0-1 (0-0.03s):** All elements appear instantly (single-frame beat). No animated transitions — this is a flash card.
 
 ### Typography
-- Panel labels: Inter SemiBold, 24px, #FFFFFF, 90% opacity
-- No title text
+- Header: Inter Bold, 32px, #FFFFFF, letter-spacing 8px
+- Panel labels: Inter SemiBold, 20px, respective colors (#FFD4A8 / #A8E6CF)
 
 ### Easing
-- Divider draw: `easeInOutCubic`
-- Panel wipe: `easeOutQuad`
-- Label fade: `easeOutCubic`
-- Ken-burns zoom: `linear`
+- None (single-frame display)
 
 ## Narration Sync
-> (No narration — visual recap bridge after second narration beat)
+> (Transitional beat — no dedicated narration)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={510} durationInFrames={120}>
-  <Background color="#0D1117" />
-  <Sequence from={0}>
-    <VerticalDivider x={960} color="#5B9BD5" />
-  </Sequence>
-  <Sequence from={15}>
-    <SplitPanel side="left" src={stillFrame("ocean_sunset")} zoom={[1.0, 1.05]}>
-      <Label text="Ocean at Sunset" />
-    </SplitPanel>
-  </Sequence>
-  <Sequence from={20}>
-    <SplitPanel side="right" src={stillFrame("aerial_forest")} zoom={[1.0, 1.05]}>
-      <Label text="Forest Canopy" />
-    </SplitPanel>
-  </Sequence>
+<Sequence from={153} durationInFrames={1}>
+  <AbsoluteFill style={{ backgroundColor: '#0D1B2A' }}>
+    <HeaderText text="VEO GENERATION RANGE" />
+    <SplitPanel
+      left={<StillFrame src={staticFile("veo/04_veo_broll.mp4")} frame={15} />}
+      right={<StillFrame src={staticFile("veo/05_veo_cutaway.mp4")} frame={15} />}
+      dividerColor="#4DA8DA"
+    />
+    <PanelLabel side="left" text="OCEAN — Sunset" color="#FFD4A8" />
+    <PanelLabel side="right" text="FOREST — Canopy" color="#A8E6CF" />
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
+  "header": "VEO GENERATION RANGE",
   "panels": [
-    { "side": "left", "source": "ocean_sunset", "label": "Ocean at Sunset" },
-    { "side": "right", "source": "aerial_forest", "label": "Forest Canopy" }
-  ],
-  "divider_color": "#5B9BD5"
+    { "side": "left", "label": "OCEAN — Sunset", "source": "veo/04_veo_broll.mp4", "color": "#FFD4A8" },
+    { "side": "right", "label": "FOREST — Canopy", "source": "veo/05_veo_cutaway.mp4", "color": "#A8E6CF" }
+  ]
 }
 ```
-
----

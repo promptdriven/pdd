@@ -14,9 +14,11 @@ from pdd.architecture_sync import (
     _find_renamed_prompt_file,
     _infer_filepath,
     _infer_module_tags,
+    filepath_to_prompt_filename,
     generate_tags_from_architecture,
     get_architecture_entry_for_prompt,
     has_pdd_tags,
+    normalize_architecture_filenames,
     parse_prompt_tags,
     register_untracked_prompts,
     sync_all_prompts_to_architecture,
@@ -2648,3 +2650,76 @@ def test_interface_sync_dry_run_shows_merged_result():
         assert 'verbose' in merged_sig, (
             f"Dry-run result missing new param 'verbose': {merged_sig}"
         )
+def test_normalize_architecture_filenames_issue617():
+    """Issue #617: normalize_architecture_filenames sets filename from filepath (mirror structure)."""
+    arch_data = [
+        {"filepath": "prisma/schema.prisma", "filename": "prisma_schema_Prisma.prompt", "priority": 1},
+        {"filepath": "app/api/route.ts", "filename": "app_api_route_TypeScript.prompt", "priority": 2},
+    ]
+    normalize_architecture_filenames(arch_data)
+    assert arch_data[0]["filename"] == "prisma/schema_Prisma.prompt"
+    assert arch_data[1]["filename"] == "app/api/route_TypeScript.prompt"
+    # Entry without filepath is unchanged
+    arch_data.append({"filepath": "", "filename": "old.prompt", "priority": 3})
+    normalize_architecture_filenames(arch_data)
+    assert arch_data[2]["filename"] == "old.prompt"
+
+
+def test_filename_mirrors_filepath_issue617():
+    """Issue #617: prompt filename should mirror filepath directory structure, not flatten with underscores."""
+    cases = [
+        ("prisma/schema.prisma", "Prisma", "prisma/schema_Prisma.prompt"),
+        ("lib/types.ts", "TypeScript", "lib/types_TypeScript.prompt"),
+        ("lib/formulaEngine.ts", "TypeScript", "lib/formulaEngine_TypeScript.prompt"),
+        ("app/api/sheets/route.ts", "TypeScript", "app/api/sheets/route_TypeScript.prompt"),
+        ("app/api/sheets/[id]/route.ts", "TypeScript", "app/api/sheets/[id]/route_TypeScript.prompt"),
+        ("components/grid/Cell.tsx", "TypeScriptReact", "components/grid/Cell_TypeScriptReact.prompt"),
+        ("app/sheet/[id]/page.tsx", "TypeScriptReact", "app/sheet/[id]/page_TypeScriptReact.prompt"),
+        ("src/models/user.py", "Python", "src/models/user_Python.prompt"),
+        ("app/layout.tsx", "TypeScriptReact", "app/layout_TypeScriptReact.prompt"),
+    ]
+    for filepath, language, expected in cases:
+        assert filepath_to_prompt_filename(filepath, language) == expected, (
+            f"filepath={filepath!r} language={language!r}: expected {expected!r}"
+        )
+
+
+def test_normalize_skips_extensionless_files_issue617():
+    """Issue #617: extensionless files like Makefile should not be normalized."""
+    arch_data = [
+        {"filepath": "Makefile", "filename": "makefile_build.prompt", "priority": 1},
+        {"filepath": "app/api/route.ts", "filename": "app_api_route_TypeScript.prompt", "priority": 2},
+    ]
+    normalize_architecture_filenames(arch_data)
+    assert arch_data[0]["filename"] == "makefile_build.prompt"  # unchanged
+    assert arch_data[1]["filename"] == "app/api/route_TypeScript.prompt"  # normalized
+
+
+def test_get_architecture_entry_for_prompt_subdir_filename_issue617():
+    """Issue #617: get_architecture_entry_for_prompt handles subdirectory-style filenames."""
+    with tempfile.TemporaryDirectory() as tmp:
+        arch_path = Path(tmp) / "architecture.json"
+        arch_data = [
+            {"filename": "app/page_TypeScriptReact.prompt", "filepath": "app/page.tsx", "priority": 1},
+        ]
+        arch_path.write_text(json.dumps(arch_data), encoding="utf-8")
+        entry = get_architecture_entry_for_prompt(
+            "app/page_TypeScriptReact.prompt", architecture_path=arch_path
+        )
+        assert entry is not None
+        assert entry["filename"] == "app/page_TypeScriptReact.prompt"
+
+
+def test_get_architecture_entry_for_prompt_basename_fallback_issue617():
+    """Issue #617: get_architecture_entry_for_prompt falls back to basename match."""
+    with tempfile.TemporaryDirectory() as tmp:
+        arch_path = Path(tmp) / "architecture.json"
+        arch_data = [
+            {"filename": "app/page_TypeScriptReact.prompt", "filepath": "app/page.tsx", "priority": 1},
+        ]
+        arch_path.write_text(json.dumps(arch_data), encoding="utf-8")
+        entry = get_architecture_entry_for_prompt(
+            "page_TypeScriptReact.prompt", architecture_path=arch_path
+        )
+        assert entry is not None
+        assert entry["filename"] == "app/page_TypeScriptReact.prompt"

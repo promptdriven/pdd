@@ -11,7 +11,7 @@
  *   3. Section wrappers listed separately below components.
  *   4. [Generate All Compositions] runs POST /api/pipeline/compositions/run.
  *   5. Right: asset staging manifest table — columns: filename, expected (✓/✗), present (✓/✗), [Stage Now] button for missing files.
- *   6. [Stage All Missing] button runs POST /api/pipeline/asset-staging/run.
+ *   6. [Stage All Missing] button runs POST /api/pipeline/asset-staging/run without opening a fake job log.
  *   7. Error status shows last error message in a tooltip on hover.
  *   8. Log drawer (expandable) shows SSE log for the active job.
  *   9. 'use client' directive.
@@ -197,8 +197,13 @@ describe("Right Panel: Staging Manifest", () => {
     expect(sourceCode).toContain("Stage All Missing");
   });
 
-  it("Stage All Missing triggers POST /api/pipeline/asset-staging/run", () => {
-     expect(sourceCode).toMatch(/runJob\(\s*['"]\/api\/pipeline\/asset-staging\/run['"]\s*,/);
+  it("Stage All Missing triggers dedicated asset staging handler", () => {
+     expect(sourceCode).toMatch(/runAssetStaging\s*\(/);
+     expect(sourceCode).not.toMatch(/runJob\(\s*['"]\/api\/pipeline\/asset-staging\/run['"]\s*,/);
+  });
+
+  it("Stage Now buttons use the dedicated asset staging handler", () => {
+    expect(sourceCode).toMatch(/runAssetStaging\s*\(\s*\[entry\.filename\]/);
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from "@/lib/veo-spec-context";
 import { resolveSectionHasVeoIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
 import { getProjectDir } from "@/lib/projects";
+import { resolveVeoFrameChainPlan } from "../_lib/frame-chains";
 
 /**
  * GET /api/pipeline/veo/clips
@@ -128,7 +129,13 @@ export async function GET(): Promise<NextResponse> {
       ];
     });
 
-    const clips: VeoClip[] = resolvedClips.map((clip, idx) => {
+    const chainPlan = resolveVeoFrameChainPlan(
+      getProjectDir(),
+      resolvedClips.map((clip) => clip.id),
+      config.veo
+    );
+
+    const clips: VeoClip[] = resolvedClips.map((clip) => {
       const clipId = clip.id;
       const clipPath = path.join(
         getProjectDir(),
@@ -136,19 +143,12 @@ export async function GET(): Promise<NextResponse> {
         "veo",
         `${clipId}.mp4`
       );
-
-      const prevClip = resolvedClips[idx - 1];
-      // frameChainDeps exposes clean clip IDs for the UI (e.g. "cold_open")
-      const frameChainDeps: string[] = prevClip ? [prevClip.id] : [];
-      // depFilePaths are used internally for staleness checking only
-      const depFilePaths: string[] = prevClip
-        ? [
-            path.join(
-              "outputs",
-              "veo",
-              `${prevClip.id}_last_frame.png`
-            ),
-          ]
+      const clipChain = chainPlan.get(clipId);
+      const frameChainDeps: string[] = clipChain?.previousClipId
+        ? [clipChain.previousClipId]
+        : [];
+      const depFilePaths: string[] = clipChain?.previousClipId
+        ? [path.join("outputs", "veo", `${clipChain.previousClipId}_last_frame.png`)]
         : [];
 
       const clipExists = fs.existsSync(clipPath);

@@ -3,92 +3,72 @@
 # Section 2.6: Veo Pipeline Infographic
 
 **Tool:** Remotion
-**Duration:** ~5s
-**Timestamp:** 0:21 - 0:26
+**Duration:** ~0.03s (1 frame transition beat)
+**Timestamp:** 0:05 - 0:05
 
 ## Visual Description
-An animated infographic showing the Veo generation pipeline as a horizontal flow diagram. Three rounded-rectangle nodes appear in sequence from left to right: "Prompt" → "Veo 3.1" → "Clip". Connecting arrows animate between nodes. Below each node, a small descriptor label provides context. The overall aesthetic is clean and technical, with a dark background and accent colors matching the section palette.
+A compact infographic showing the Veo video generation pipeline as a horizontal flowchart. Four nodes connected by animated arrows illustrate the process: "Script" → "Veo Prompt" → "AI Video" → "Remotion Composite". Each node is a rounded rectangle with an icon and label. This beat is a brief transitional flash — it appears for approximately 1 frame as visual punctuation. The design uses a dark tech-blueprint aesthetic with neon accent lines.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #0D1117
-- No grid lines
+- Background: #0A1628 with subtle dot-grid pattern (dots at 40px intervals, color rgba(77,168,218,0.1))
+- Grid: Dot pattern only
 
 ### Chart/Visual Elements
-- **Node 1 ("Prompt"):** Rounded rectangle (240x80, border-radius 12px), fill #1B2838, border 2px #5B9BD5, centered at (380, 440)
-  - Icon: text-cursor icon (20px, #5B9BD5) left of label
-  - Descriptor: "Text description" at (380, 540), color #8B949E
-- **Node 2 ("Veo 3.1"):** Rounded rectangle (240x80, border-radius 12px), fill #1B2838, border 2px #D4A843, centered at (960, 440)
-  - Icon: sparkle icon (20px, #D4A843) left of label
-  - Descriptor: "AI video model" at (960, 540), color #8B949E
-- **Node 3 ("Clip"):** Rounded rectangle (240x80, border-radius 12px), fill #1B2838, border 2px #40916C, centered at (1540, 440)
-  - Icon: play-circle icon (20px, #40916C) left of label
-  - Descriptor: "5s footage" at (1540, 540), color #8B949E
-- **Arrow 1:** From (500, 440) → (840, 440), stroke #5B9BD5, 2px, arrowhead at end
-- **Arrow 2:** From (1080, 440) → (1420, 440), stroke #D4A843, 2px, arrowhead at end
-- **Section title:** "Veo Generation Pipeline" at top center (960, 120)
+- **Pipeline nodes (4):**
+  - Node 1: "Script" at x=200, y=440 — icon: document, bg #1B3A5C, border #4DA8DA, size 200x200
+  - Node 2: "Veo Prompt" at x=560, y=440 — icon: sparkle, bg #1B3A5C, border #4DA8DA, size 200x200
+  - Node 3: "AI Video" at x=920, y=440 — icon: film, bg #1B3A5C, border #6FCF97, size 200x200
+  - Node 4: "Remotion Composite" at x=1280, y=440 — icon: layers, bg #1B3A5C, border #F2C94C, size 200x200
+- **Connecting arrows (3):**
+  - Arrow 1→2: Horizontal line from x=400 to x=560, y=540, color #4DA8DA, dashed
+  - Arrow 2→3: Horizontal line from x=760 to x=920, y=540, color #4DA8DA, dashed
+  - Arrow 3→4: Horizontal line from x=1120 to x=1280, y=540, color #6FCF97, dashed
+- **Title:** "VIDEO GENERATION PIPELINE" at top center y=100
+- **Accent glow:** Each node has a subtle outer glow matching its border color (blur 16px, opacity 0.3)
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Section title fades in from top
-2. **Frame 15-40 (0.5-1.33s):** Node 1 scales in (0→1) with slight bounce
-3. **Frame 35-55 (1.17-1.83s):** Arrow 1 draws left-to-right
-4. **Frame 50-75 (1.67-2.5s):** Node 2 scales in (0→1) with slight bounce
-5. **Frame 70-90 (2.33-3s):** Arrow 2 draws left-to-right
-6. **Frame 85-110 (2.83-3.67s):** Node 3 scales in (0→1) with slight bounce
-7. **Frame 40-60 (1.33-2s):** Descriptor 1 fades in
-8. **Frame 75-95 (2.5-3.17s):** Descriptor 2 fades in
-9. **Frame 110-130 (3.67-4.33s):** Descriptor 3 fades in
-10. **Frame 130-150 (4.33-5s):** Hold complete diagram
+1. **Frame 0-1 (0-0.03s):** All elements rendered instantly (single-frame beat). No animation — static infographic flash.
 
 ### Typography
-- Section title: Inter Bold, 36px, #FFFFFF
-- Node labels: Inter SemiBold, 26px, #FFFFFF
-- Descriptor labels: Inter Regular, 18px, #8B949E
+- Title: Inter Bold, 36px, #FFFFFF, letter-spacing 8px
+- Node labels: Inter SemiBold, 16px, #FFFFFF
+- Node icons: Lucide icon set, 40px, matching border color
 
 ### Easing
-- Node scale-in: `easeOutBack`
-- Arrow draw: `easeInOutCubic`
-- Fade-ins: `easeOutCubic`
+- None (single-frame display)
 
 ## Narration Sync
-> (No narration — visual explanation of the Veo pipeline as a closing infographic)
+> (Transitional beat — no dedicated narration)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={630} durationInFrames={150}>
-  <Background color="#0D1117" />
-  <Sequence from={0}>
-    <FadeIn><SectionTitle text="Veo Generation Pipeline" /></FadeIn>
-  </Sequence>
-  <Sequence from={15}>
-    <PipelineNode label="Prompt" icon="text-cursor" borderColor="#5B9BD5" x={380} />
-  </Sequence>
-  <Sequence from={35}>
-    <Arrow from={[500, 440]} to={[840, 440]} color="#5B9BD5" />
-  </Sequence>
-  <Sequence from={50}>
-    <PipelineNode label="Veo 3.1" icon="sparkle" borderColor="#D4A843" x={960} />
-  </Sequence>
-  <Sequence from={70}>
-    <Arrow from={[1080, 440]} to={[1420, 440]} color="#D4A843" />
-  </Sequence>
-  <Sequence from={85}>
-    <PipelineNode label="Clip" icon="play-circle" borderColor="#40916C" x={1540} />
-  </Sequence>
+<Sequence from={154} durationInFrames={1}>
+  <AbsoluteFill style={{ backgroundColor: '#0A1628' }}>
+    <DotGridPattern spacing={40} color="rgba(77,168,218,0.1)" />
+    <HeaderText text="VIDEO GENERATION PIPELINE" />
+    <PipelineNode x={200} label="Script" icon="document" borderColor="#4DA8DA" />
+    <PipelineArrow from={400} to={560} color="#4DA8DA" />
+    <PipelineNode x={560} label="Veo Prompt" icon="sparkle" borderColor="#4DA8DA" />
+    <PipelineArrow from={760} to={920} color="#4DA8DA" />
+    <PipelineNode x={920} label="AI Video" icon="film" borderColor="#6FCF97" />
+    <PipelineArrow from={1120} to={1280} color="#6FCF97" />
+    <PipelineNode x={1280} label="Remotion Composite" icon="layers" borderColor="#F2C94C" />
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "pipeline_nodes": [
-    { "label": "Prompt", "icon": "text-cursor", "color": "#5B9BD5", "descriptor": "Text description" },
-    { "label": "Veo 3.1", "icon": "sparkle", "color": "#D4A843", "descriptor": "AI video model" },
-    { "label": "Clip", "icon": "play-circle", "color": "#40916C", "descriptor": "5s footage" }
+  "title": "VIDEO GENERATION PIPELINE",
+  "nodes": [
+    { "label": "Script", "icon": "document", "color": "#4DA8DA" },
+    { "label": "Veo Prompt", "icon": "sparkle", "color": "#4DA8DA" },
+    { "label": "AI Video", "icon": "film", "color": "#6FCF97" },
+    { "label": "Remotion Composite", "icon": "layers", "color": "#F2C94C" }
   ]
 }
 ```
-
----

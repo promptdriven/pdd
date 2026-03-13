@@ -1,25 +1,15 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, TYPOGRAPHY, ANIMATION_TIMING, LABEL_TEXT } from './constants';
+import { CANVAS, COLORS, DIMENSIONS, TYPOGRAPHY, ANIMATION_TIMING } from './constants';
 
 export const CompleteText: React.FC = () => {
   const frame = useCurrentFrame();
 
+  // Text fades in over frames 6-12 with easeOutQuad
   const opacity = interpolate(
     frame,
     [ANIMATION_TIMING.textFadeStart, ANIMATION_TIMING.textFadeEnd],
-    [0, 0.8],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  const translateY = interpolate(
-    frame,
-    [ANIMATION_TIMING.textFadeStart, ANIMATION_TIMING.textFadeEnd],
-    [3, 0],
+    [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -31,17 +21,18 @@ export const CompleteText: React.FC = () => {
     <div
       style={{
         position: 'absolute',
-        left: '50%',
-        top: 400,
-        transform: `translate(-50%, -50%) translateY(${translateY}px)`,
+        left: 0,
+        top: DIMENSIONS.textCenterY,
+        width: CANVAS.width,
+        textAlign: 'center',
         opacity,
-        color: COLORS.labelText,
-        fontSize: TYPOGRAPHY.label.fontSize,
-        fontFamily: TYPOGRAPHY.label.fontFamily,
-        fontWeight: TYPOGRAPHY.label.fontWeight,
+        color: COLORS.text,
+        fontSize: TYPOGRAPHY.text.fontSize,
+        fontFamily: TYPOGRAPHY.text.fontFamily,
+        fontWeight: TYPOGRAPHY.text.fontWeight,
       }}
     >
-      {LABEL_TEXT}
+      Section Complete
     </div>
   );
 };

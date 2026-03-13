@@ -162,4 +162,40 @@ describe("veo spec context helpers", () => {
       },
     ]);
   });
+
+  it("derives the generated clip filename from the spec basename when no clip_id or clipSource is provided", () => {
+    const clips = listResolvedVeoClipSpecs([
+      {
+        path: "specs/veo_section/02_ocean_wave_broll.md",
+        content: [
+          "[veo: Ocean wave at sunset]",
+          "",
+          "**Timestamp:** 0:10 – 0:14",
+        ].join("\n"),
+      },
+      {
+        path: "specs/veo_section/04_aerial_forest_broll.md",
+        content: [
+          "[veo: Aerial forest canopy]",
+          "",
+          "**Timestamp:** 0:14 – 0:18",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(clips).toEqual([
+      {
+        id: "02_ocean_wave_broll",
+        path: "specs/veo_section/02_ocean_wave_broll.md",
+        prompt: "Ocean wave at sunset",
+        filename: "02_ocean_wave_broll.mp4",
+      },
+      {
+        id: "04_aerial_forest_broll",
+        path: "specs/veo_section/04_aerial_forest_broll.md",
+        prompt: "Aerial forest canopy",
+        filename: "04_aerial_forest_broll.mp4",
+      },
+    ]);
+  });
 });

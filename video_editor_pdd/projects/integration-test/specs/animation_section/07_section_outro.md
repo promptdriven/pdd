@@ -1,69 +1,69 @@
 [title:]
 
-# Section 1.7: Section Outro Card
+# Section 1.7: Section Outro
 
 **Tool:** Remotion
-**Duration:** ~2s
-**Timestamp:** 0:18 - 0:20
+**Duration:** ~0.7s
+**Timestamp:** 0:06.7 - 0:07.4
 
 ## Visual Description
-A minimal closing card for the animation section. A thin horizontal line contracts inward to a center point, then a small checkmark icon draws itself in green, confirming section completion. The word "Complete" fades in softly below the checkmark.
+A brief outro card closes the animation section. All previous elements have cleared. On the charcoal background, a small checkmark icon (drawn with animated SVG stroke) appears at center, followed by the text "Section Complete" fading in below it. After a brief hold, all elements fade out to black, preparing for the transition to the next section.
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1280x720 (16:9)
-- Background: Dark navy (#0B1120)
-- Grid lines: none
+- Resolution: 1920x1080 (16:9)
+- Background: Charcoal #1E293B fading to black #000000 at end
+- Grid lines: None
 
 ### Chart/Visual Elements
-- Horizontal line: starts at 200px wide (centered), contracts to 0px — same style as title card divider for bookend symmetry
-- Checkmark icon: SVG path stroke, 40px bounding box, stroke #22C55E, stroke-width 3px, centered at (640, 340)
-- "Complete" text: centered at (640, 400)
+- Checkmark icon: centered at (960, 480), 48x48px, stroke #22C55E (green-500), strokeWidth 3px, no fill
+- SVG path: "M8 24 L20 36 L40 12" (simple checkmark within 48x48 viewBox)
+- Text "Section Complete": centered at (960, 560)
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Horizontal line (200px, white at 40% opacity) visible, then contracts from 200px → 0px toward center.
-2. **Frame 15-35 (0.5-1.17s):** Checkmark draws in via stroke-dashoffset animation (left stroke first, then right stroke). Stroke color #22C55E.
-3. **Frame 35-45 (1.17-1.5s):** "Complete" text fades in from 0% to 80% opacity with 3px upward translate.
-4. **Frame 45-60 (1.5-2.0s):** All elements hold. Subtle fade-to-black begins at frame 55 (opacity 0 → 100% over 5 frames).
+1. **Frame 0-9 (0-0.3s):** Checkmark SVG stroke draws in (strokeDashoffset animates from full length to 0)
+2. **Frame 6-12 (0.2-0.4s):** "Section Complete" text fades in from opacity 0 to 1
+3. **Frame 12-15 (0.4-0.5s):** Hold at full visibility
+4. **Frame 15-21 (0.5-0.7s):** All elements fade out; background fades to black (#000000)
 
 ### Typography
-- Label: Inter Regular, 20px, white (#FFFFFF) at 80% opacity
+- Text: Inter Medium, 28px, slate-300 (#CBD5E1)
 
 ### Easing
-- Line contraction: `easeInCubic`
-- Checkmark draw: `easeInOutQuad`
-- Text fade-in: `easeOutQuad`
-- Fade-to-black: `linear`
+- Stroke draw: `easeInOutCubic`
+- Text fade in: `easeOutQuad`
+- Fade to black: `easeInQuad`
 
 ## Narration Sync
-> (No narration — closing visual beat)
+> (No narration — plays after second narration segment ends)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={60}>
-  <AbsoluteFill style={{ backgroundColor: '#0B1120', justifyContent: 'center', alignItems: 'center' }}>
-    <ContractingDivider width={200} contractEnd={15} />
-    <Sequence from={15}>
-      <DrawCheckmark size={40} color="#22C55E" strokeWidth={3} />
-    </Sequence>
-    <Sequence from={35}>
-      <FadeInText text="Complete" opacity={0.8} />
-    </Sequence>
-    <Sequence from={55}>
-      <FadeToBlack durationInFrames={5} />
-    </Sequence>
-  </AbsoluteFill>
+<Sequence from={0} durationInFrames={21}>
+  <Sequence from={0}>
+    <AnimatedCheckmark color="#22C55E" size={48} strokeWidth={3} />
+  </Sequence>
+  <Sequence from={6}>
+    <FadeIn>
+      <Text text="Section Complete" />
+    </FadeIn>
+  </Sequence>
+  <Sequence from={15}>
+    <FadeToBlack />
+  </Sequence>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "checkmarkColor": "#22C55E",
-  "checkmarkSize": 40,
-  "labelText": "Complete",
-  "bgColor": "#0B1120"
+  "outro": {
+    "icon": "checkmark",
+    "iconColor": "#22C55E",
+    "text": "Section Complete",
+    "fadeToColor": "#000000"
+  }
 }
 ```
 

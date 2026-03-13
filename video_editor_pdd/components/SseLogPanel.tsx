@@ -67,6 +67,12 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
     pollingRef.current = setInterval(async () => {
       try {
         const res = await fetch(`/api/jobs/${id}`);
+        if (res.status === 404) {
+          appendLog('Error: Job not found');
+          handleError('Job not found');
+          stopPolling();
+          return;
+        }
         if (!res.ok) return;
 
         const job: Job = await res.json();
@@ -125,6 +131,7 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
       es.addEventListener('done', () => {
         appendLog('Job completed.');
         handleDone();
+        es.close();
       });
 
       es.addEventListener('error', (evt: Event) => {
@@ -135,19 +142,29 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
             const msg = data?.message ?? 'Unknown error';
             appendLog(`Error: ${msg}`);
             handleError(msg);
+            es.close();
           } catch {
             const msg = (evt as MessageEvent).data || 'Unknown error';
             appendLog(`Error: ${msg}`);
             handleError(msg);
+            es.close();
           }
         } else {
           // Connection error → fallback polling
+          if (errorCalledRef.current || doneCalledRef.current) {
+            es.close();
+            return;
+          }
           es.close();
           startPolling(jobId);
         }
       });
 
       es.onerror = () => {
+        if (errorCalledRef.current || doneCalledRef.current) {
+          es.close();
+          return;
+        }
         es.close();
         startPolling(jobId);
       };

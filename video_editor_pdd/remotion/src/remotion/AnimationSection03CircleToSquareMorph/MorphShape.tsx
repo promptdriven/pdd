@@ -1,116 +1,86 @@
 import React from 'react';
 import {
-  useCurrentFrame,
-  interpolate,
-  interpolateColors,
-  spring,
-  Easing,
+	useCurrentFrame,
+	interpolate,
+	interpolateColors,
+	Easing,
 } from 'remotion';
-import { COLORS, DIMENSIONS, TIMING, MORPH, FPS } from './constants';
+import { COLORS, SHAPE, TIMING } from './constants';
 
+/**
+ * The primary morphing shape: a centered 120x120 element that transitions
+ * from a circle (borderRadius 50%) to a rounded square (borderRadius 12px),
+ * with a color shift from blue to indigo and subtle scale animation.
+ */
 export const MorphShape: React.FC = () => {
-  const frame = useCurrentFrame();
+	const frame = useCurrentFrame();
 
-  // --- Border Radius: 50% (circle) → 0% (square) ---
-  const borderRadius = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [50, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+	// --- Border Radius: 60px (circle) → 12px (rounded square) ---
+	const borderRadius = interpolate(
+		frame,
+		[TIMING.morphStart, TIMING.morphEnd],
+		[SHAPE.borderRadiusStart, SHAPE.borderRadiusEnd],
+		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.inOut(Easing.cubic),
+		},
+	);
 
-  // --- Fill color: blue → green ---
-  const fillColor = interpolateColors(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [COLORS.fromShape, COLORS.toShape]
-  );
+	// --- Fill color: #3B82F6 → #6366F1 (linear) ---
+	const fillColor = interpolateColors(
+		frame,
+		[TIMING.morphStart, TIMING.morphEnd],
+		[COLORS.shapeStart, COLORS.shapeEnd],
+	);
 
-  // --- Size: 180px → 160px ---
-  const size = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [DIMENSIONS.fromSize, DIMENSIONS.toSize],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+	// --- Scale animation ---
+	// Phase 1 (frames 0-5): Scale up 1.0 → 1.05
+	const scaleUp = interpolate(
+		frame,
+		[0, TIMING.holdEnd],
+		[1.0, 1.05],
+		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.out(Easing.quad),
+		},
+	);
 
-  // --- Rotation: 0° → 90° ---
-  const rotation = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [0, MORPH.rotationDegrees],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
-    }
-  );
+	// Phase 3 (frames 30-35): Scale settle 1.05 → 1.0
+	const scaleSettle = interpolate(
+		frame,
+		[TIMING.settleStart, TIMING.settleEnd],
+		[1.05, 1.0],
+		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.out(Easing.quad),
+		},
+	);
 
-  // --- Scale ---
-  // Phase 1 (0-15): Subtle breathing 1.0 → 1.02
-  const breathingScale = interpolate(
-    frame,
-    [TIMING.holdStart, TIMING.holdEnd],
-    [1.0, MORPH.breathingScale],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
-    }
-  );
+	let scale: number;
+	if (frame < TIMING.holdEnd) {
+		scale = scaleUp;
+	} else if (frame < TIMING.settleStart) {
+		scale = 1.05;
+	} else {
+		scale = scaleSettle;
+	}
 
-  // Phase 2 (15-60): Hold at 1.0 during morph
-  // Phase 3 (60-90): Spring settle with overshoot
-  const settleSpring = spring({
-    frame: Math.max(0, frame - TIMING.settleStart),
-    fps: FPS,
-    config: {
-      damping: 14,
-      stiffness: 200,
-    },
-  });
-  // Spring goes 0→1, we want overshoot: 1.05 → 1.0
-  const settleScale =
-    MORPH.settleOvershootScale -
-    settleSpring * (MORPH.settleOvershootScale - 1.0);
-
-  let scale: number;
-  if (frame < TIMING.holdEnd) {
-    scale = breathingScale;
-  } else if (frame < TIMING.settleStart) {
-    scale = 1.0;
-  } else {
-    scale = settleScale;
-  }
-
-  // --- Drop shadow color blends with shape ---
-  const shadowColor = interpolateColors(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    ['rgba(59, 130, 246, 0.3)', 'rgba(34, 197, 94, 0.3)']
-  );
-
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        width: size,
-        height: size,
-        borderRadius: `${borderRadius}%`,
-        backgroundColor: fillColor,
-        boxShadow: `0 4px 20px ${shadowColor}`,
-        top: '50%',
-        left: '50%',
-        transform: `translate(-50%, -50%) scale(${scale}) rotate(${rotation}deg)`,
-      }}
-    />
-  );
+	return (
+		<div
+			style={{
+				position: 'absolute',
+				width: SHAPE.size,
+				height: SHAPE.size,
+				borderRadius,
+				backgroundColor: fillColor,
+				boxShadow: `0 0 30px ${fillColor}`,
+				top: '50%',
+				left: '50%',
+				transform: `translate(-50%, -50%) scale(${scale})`,
+			}}
+		/>
+	);
 };

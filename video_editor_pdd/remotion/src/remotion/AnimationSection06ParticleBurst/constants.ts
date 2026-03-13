@@ -1,47 +1,62 @@
 // Component-level constants for AnimationSection06ParticleBurst
+// Duration: 22 frames @ 30fps (~0.75s)
 
 export const CANVAS = {
   width: 1280,
   height: 720,
-};
+  centerX: 640,
+  centerY: 360,
+} as const;
 
 export const COLORS = {
-  backgroundStart: '#141921',
-  backgroundEnd: '#0B1120',
-  blue: '#3B82F6',
-  green: '#22C55E',
+  bgFrom: '#141921',
+  bgTo: '#0B1120',
   flash: '#FFFFFF',
-};
+  blueParticle: '#3B82F6',
+  greenParticle: '#22C55E',
+} as const;
 
-export const PARTICLE_CONFIG = {
-  totalCount: 40,
+// RGB values for background interpolation
+// #141921 = rgb(20, 25, 33)
+// #0B1120 = rgb(11, 17, 32)
+export const BG_RGB = {
+  from: { r: 20, g: 25, b: 33 },
+  to: { r: 11, g: 17, b: 32 },
+} as const;
+
+export const FLASH = {
+  diameter: 30,
+  peakOpacity: 0.8,
+} as const;
+
+export const PARTICLES = {
   blueCount: 20,
   greenCount: 20,
-  blueSizeRange: [6, 12] as [number, number],
-  greenSizeRange: [6, 10] as [number, number],
-  speedRange: [200, 600] as [number, number],
-  origin: { x: 640, y: 360 },
-};
-
-export const FLASH_CONFIG = {
-  size: 30,
-  opacity: 0.8,
-  durationFrames: 3,
-};
+  blueSizeRange: [6, 12] as readonly [number, number],
+  greenSizeRange: [6, 10] as readonly [number, number],
+  greenBorderRadius: 1,
+  speedRange: [200, 600] as readonly [number, number],
+  rotationSpeedRange: [-8, 8] as readonly [number, number],
+} as const;
 
 export const TIMING = {
   fps: 30,
-  totalFrames: 60,
-  // Flash: frames 0-3
-  flashEnd: 3,
-  // Particles travel: frames 3-50
-  particleSpawnFrame: 0,
-  particleFadeStart: 15,
-  particleFadeEnd: 50,
-  // Background transition: frames 30-50
-  bgTransitionStart: 30,
-  bgTransitionEnd: 50,
-};
+  totalFrames: 22,
+  // Flash scale: frames 0-2
+  flashScaleStart: 0,
+  flashScaleEnd: 2,
+  // Flash fade: frames 2-3
+  flashFadeStart: 2,
+  flashFadeEnd: 3,
+  // Particles begin outward travel at frame 2
+  particleStartFrame: 2,
+  // Particle fade: frames 5-16
+  particleFadeStart: 5,
+  particleFadeEnd: 16,
+  // Background transition: frames 10-18
+  bgTransitionStart: 10,
+  bgTransitionEnd: 18,
+} as const;
 
 export type ParticleData = {
   id: number;

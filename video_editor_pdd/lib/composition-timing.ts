@@ -1,13 +1,23 @@
 import fs from "fs";
 import path from "path";
 
+import {
+  normalizeSpecTimestampRangeToSection,
+  parseSpecTimestampRange,
+} from "./spec-timestamp";
 import type { Section } from "./types";
+
+export {
+  normalizeSpecTimestampRangeToSection,
+  parseSpecTimestampRange,
+} from "./spec-timestamp";
 
 const DEFAULT_FPS = 30;
 const DEFAULT_VISUAL_DURATION_SECONDS = 5;
 const DEFAULT_KEYWORD_LEAD_SECONDS = 1;
 const MIN_VISUAL_DURATION_SECONDS = 1 / DEFAULT_FPS;
 const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
+const VIDEO_PATH_RE = /["']([^"'\\\n]+\.(?:mp4|webm|mov|m4v))["']/gi;
 
 type SectionComposition = NonNullable<Section["compositions"]>[number];
 
@@ -30,6 +40,7 @@ export type ResolvedVisualTiming = {
 };
 
 type SectionTimingTarget = Pick<Section, "id" | "specDir" | "durationSeconds" | "compositionId"> & {
+  offsetSeconds?: Section["offsetSeconds"];
   compositions?: Section["compositions"];
 };
 
@@ -39,6 +50,9 @@ export type ResolvedSectionVisual = {
   specPath?: string;
   hasComponent: boolean;
   hasExplicitMedia: boolean;
+  previewCompositionId?: string;
+  mediaReferences: string[];
+  stagedAssetPath?: string;
 };
 
 type TimingCandidate = {
@@ -77,9 +91,50 @@ function componentBaseName(componentId: string, sectionId: string): string {
   return componentId.startsWith(prefix) ? componentId.slice(prefix.length) : componentId;
 }
 
+function toPascalCase(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join("");
+}
+
+export function resolvePreviewCompositionId(
+  componentId: string,
+  sectionId: string
+): string {
+  let componentPascal = toPascalCase(componentId);
+  if (componentPascal && /^\d/.test(componentPascal)) {
+    componentPascal = `${toPascalCase(sectionId)}${componentPascal}`;
+  }
+
+  return componentPascal
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase();
+}
+
 const SPEC_MEDIA_RE =
   /\b(?:clipSource|leftClip|rightClip|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)\b/i;
 const STATIC_FILE_RE = /staticFile\(\s*["'][^"']+\.(?:mp4|webm|mov|m4v)["']\s*\)/i;
+const GENERIC_MEDIA_RE = /\.(?:mp4|webm|mov|m4v)\b/i;
+
+export function extractSpecMediaReferences(content: string): string[] {
+  const references: string[] = [];
+
+  for (const match of content.matchAll(VIDEO_PATH_RE)) {
+    const rawPath = match[1]?.trim();
+    if (!rawPath) {
+      continue;
+    }
+
+    const normalized = rawPath.replace(/\\/g, "/").replace(/^\.?\//, "");
+    if (!references.includes(normalized)) {
+      references.push(normalized);
+    }
+  }
+
+  return references;
+}
 
 function listSectionSpecBaseNames(
   projectDir: string,
@@ -126,13 +181,23 @@ function listCompositionIds(section: SectionTimingTarget, componentIds: string[]
   });
 }
 
-function hasRenderableSpecMedia(
+function resolveSpecMediaInfo(
   projectDir: string,
   section: Pick<SectionTimingTarget, "id" | "specDir">,
   specBaseName: string
-): { specPath?: string; hasExplicitMedia: boolean } {
+): {
+  specPath?: string;
+  hasExplicitMedia: boolean;
+  hasSpecReferencedMedia: boolean;
+  mediaReferences: string[];
+  stagedAssetPath?: string;
+} {
   if (!section.specDir) {
-    return { hasExplicitMedia: false };
+    return {
+      hasExplicitMedia: false,
+      hasSpecReferencedMedia: false,
+      mediaReferences: [],
+    };
   }
 
   const specDir = resolveSectionSpecDir(projectDir, section.specDir);
@@ -141,17 +206,34 @@ function hasRenderableSpecMedia(
     path.join(projectDir, "outputs", "veo", `${specBaseName}.mp4`),
     path.join(projectDir, "remotion", "public", "veo", `${specBaseName}.mp4`),
   ];
+  const stagedAssetPath = stagedCandidates.find((candidate) => fs.existsSync(candidate));
 
-  const hasStagedAsset = stagedCandidates.some((candidate) => fs.existsSync(candidate));
+  const hasStagedAsset = Boolean(stagedAssetPath);
   if (!fs.existsSync(specPath)) {
-    return { specPath: undefined, hasExplicitMedia: hasStagedAsset };
+    return {
+      specPath: undefined,
+      hasExplicitMedia: hasStagedAsset,
+      hasSpecReferencedMedia: false,
+      mediaReferences: stagedAssetPath ? [`veo/${specBaseName}.mp4`] : [],
+      stagedAssetPath,
+    };
   }
 
   const content = fs.readFileSync(specPath, "utf-8");
+  const mediaReferences = extractSpecMediaReferences(content);
+  const hasSpecReferencedMedia =
+    SPEC_MEDIA_RE.test(content) ||
+    STATIC_FILE_RE.test(content) ||
+    GENERIC_MEDIA_RE.test(content);
   return {
     specPath,
-    hasExplicitMedia:
-      hasStagedAsset || SPEC_MEDIA_RE.test(content) || STATIC_FILE_RE.test(content),
+    hasExplicitMedia: hasStagedAsset || hasSpecReferencedMedia,
+    hasSpecReferencedMedia,
+    mediaReferences:
+      stagedAssetPath && !mediaReferences.includes(`veo/${specBaseName}.mp4`)
+        ? [...mediaReferences, `veo/${specBaseName}.mp4`]
+        : mediaReferences,
+    stagedAssetPath,
   };
 }
 
@@ -170,6 +252,12 @@ export function resolveSectionVisuals(
       return componentBaseName(compositionId, section.id) === specBaseName;
     });
 
+    const mediaInfo = resolveSpecMediaInfo(
+      projectDir,
+      section,
+      specBaseName
+    );
+
     if (matchingCompositionId) {
       consumedCompositionIds.add(matchingCompositionId);
       resolvedVisuals.push({
@@ -177,26 +265,31 @@ export function resolveSectionVisuals(
         specBaseName,
         specPath: path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`),
         hasComponent: true,
-        hasExplicitMedia: false,
+        hasExplicitMedia: mediaInfo.hasSpecReferencedMedia,
+        previewCompositionId: resolvePreviewCompositionId(
+          matchingCompositionId,
+          section.id
+        ),
+        mediaReferences: mediaInfo.hasSpecReferencedMedia
+          ? mediaInfo.mediaReferences
+          : [],
+        stagedAssetPath: mediaInfo.stagedAssetPath,
       });
       continue;
     }
 
-    const { specPath, hasExplicitMedia } = hasRenderableSpecMedia(
-      projectDir,
-      section,
-      specBaseName
-    );
-    if (!hasExplicitMedia) {
+    if (!mediaInfo.hasExplicitMedia) {
       continue;
     }
 
     resolvedVisuals.push({
       id: specBaseName,
       specBaseName,
-      specPath,
+      specPath: mediaInfo.specPath,
       hasComponent: false,
       hasExplicitMedia: true,
+      mediaReferences: mediaInfo.mediaReferences,
+      stagedAssetPath: mediaInfo.stagedAssetPath,
     });
   }
 
@@ -216,6 +309,8 @@ export function resolveSectionVisuals(
       specPath: specPath && fs.existsSync(specPath) ? specPath : undefined,
       hasComponent: true,
       hasExplicitMedia: false,
+      previewCompositionId: resolvePreviewCompositionId(compositionId, section.id),
+      mediaReferences: [],
     });
   }
 
@@ -262,57 +357,6 @@ function readSpecContent(projectDir: string, section: SectionTimingTarget, compo
   return {};
 }
 
-function parseClockTime(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parts = trimmed.split(":").map((part) => Number(part));
-  if (parts.some((part) => Number.isNaN(part))) {
-    return null;
-  }
-
-  if (parts.length === 1) {
-    return parts[0] ?? null;
-  }
-
-  if (parts.length === 2) {
-    return (parts[0] ?? 0) * 60 + (parts[1] ?? 0);
-  }
-
-  if (parts.length === 3) {
-    return (parts[0] ?? 0) * 3600 + (parts[1] ?? 0) * 60 + (parts[2] ?? 0);
-  }
-
-  return null;
-}
-
-export function parseSpecTimestampRange(content: string): {
-  startSeconds: number;
-  endSeconds: number;
-} | null {
-  const match = content.match(
-    /\*\*Timestamp:\*\*\s*([0-9:.]+)\s*-\s*([0-9:.]+)/i
-  );
-  if (!match) {
-    return null;
-  }
-
-  const startSeconds = parseClockTime(match[1] ?? "");
-  const endSeconds = parseClockTime(match[2] ?? "");
-
-  if (
-    startSeconds === null ||
-    endSeconds === null ||
-    endSeconds <= startSeconds
-  ) {
-    return null;
-  }
-
-  return { startSeconds, endSeconds };
-}
-
 function parseSpecHeading(content: string, componentId: string): string {
   const match = content.match(/^#\s+(.+)$/m);
   return match?.[1]?.trim() || titleFromId(componentId);
@@ -351,9 +395,10 @@ function extractKeyword(componentId: string, sectionId: string): {
   keyword: string;
   type: "stat_callout" | "split" | "title_card" | "main" | "other";
 } {
-  const suffix = componentId.startsWith(`${sectionId}_`)
+  const rawSuffix = componentId.startsWith(`${sectionId}_`)
     ? componentId.slice(sectionId.length + 1)
     : componentId;
+  const suffix = rawSuffix.replace(/^\d+[_-]?/, "");
 
   if (suffix === "title_card" || suffix === "main") {
     return { keyword: "", type: suffix };
@@ -506,9 +551,14 @@ function buildTimingCandidates(
     if (specContent) {
       const range = parseSpecTimestampRange(specContent);
       if (range) {
+        const normalizedRange = normalizeSpecTimestampRangeToSection(
+          range,
+          section.durationSeconds,
+          section.offsetSeconds ?? 0
+        );
         return {
-          startSeconds: range.startSeconds,
-          endSeconds: range.endSeconds,
+          startSeconds: normalizedRange.startSeconds,
+          endSeconds: normalizedRange.endSeconds,
           source: "spec",
           desc: parseSpecHeading(specContent, componentId),
           specPath,

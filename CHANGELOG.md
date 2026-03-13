@@ -1,3 +1,30 @@
+## v0.0.175 (2026-03-12)
+
+### Feat
+
+- **Prompt filenames mirror output filepath structure (issue #617)**: `architecture.json` `filename` fields now preserve the directory path from `filepath` (e.g. `app/api/route_TypeScript.prompt` instead of `api_route_TypeScript.prompt`). New `normalize_architecture_filenames()` in `architecture_sync.py` rewrites filenames and dependency references automatically. Applied in architecture orchestrator, code generator, and fix prompts. Thanks Vishal Ramvelu!
+- **User story prompt metadata and auto-detection**: stories can declare linked prompts via `<!-- pdd-story-prompts: ... -->` HTML comment metadata. `detect_change` auto-caches story-prompt links. New `pdd test story__*.md` command links metadata, and `pdd test *.prompt ...` generates user stories from prompt files. Thanks Benjamin Knobloch!
+- **`substitute_template_variables` helper**: new centralized template substitution in `agentic_common.py` that uses iterative `str.replace` instead of `str.format`, preserving JSON braces in context values and supporting `strict_unresolved` mode for key validation
+- **Quiet mode improvements**: `PDD_QUIET=1` now consistently suppresses preprocessing banners, `double_curly` messages, and LLM model CSV info-level log lines (downgraded to debug). `set_quiet_logging` checks for attribute existence on litellm before setting
+
+### Fix
+
+- **Prompt filename normalization in `architecture_sync`**: `register_untracked_prompts` uses `rglob` and relative paths; `_find_renamed_prompt_file` searches subdirectories; `get_architecture_entry_for_prompt` tries exact path match first with basename fallback
+- **Architecture dependency sanitization**: `_sanitize_architecture_dependencies` strips corrupted dependency values (full prompt contents mistaken for dependency names) from architecture.json after step 10
+- **Namespace package bootstrap**: `cli.py` seeds missing package-level defaults (`DEFAULT_STRENGTH`, `DEFAULT_TIME`, `__version__`) when `pdd` loads as a namespace package; `core/cli.py` and `core/dump.py` add `ImportError` fallbacks
+
+### Refactor
+
+- **Simplify fix_main_python.prompt**: rewrite from verbose step-by-step specification (~163 lines) to concise requirements-based format (~87 lines) while preserving all behavioral requirements
+- **Centralize template substitution**: replace inline `str.replace` loops in `agentic_change_orchestrator`, `agentic_checkup_orchestrator`, and `agentic_bug_orchestrator` with `substitute_template_variables`
+- **Update agentic_arch_step13_fix prompt for issue #617**: reverse the "no slashes in filename" rule — filenames must now mirror filepath directory structure; update all examples, cleanup scripts, and .pddrc patterns
+- **Preprocess handles non-string templates**: `preprocess()` accepts non-string template objects (from test mocks) and returns `str(prompt)` instead of crashing
+
+### Build
+
+- New `architecture_sync_helper.py` module with `filepath_to_prompt_filename` utility
+- Story template updated with `pdd-story-prompts` metadata comment example
+
 ## v0.0.174 (2026-03-11)
 
 ### Feat

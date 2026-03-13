@@ -1,58 +1,55 @@
 // Component-level constants for AnimationSection05SplitComparison
+// Duration: 30 frames @ 30fps (~1.0s)
 
 export const CANVAS = {
-  width: 1280,
-  height: 720,
-};
+	width: 1920,
+	height: 1080,
+} as const;
 
 export const COLORS = {
-  leftPanelBg: '#0F172A',
-  rightPanelBg: '#0F2318',
-  circle: '#3B82F6',
-  square: '#22C55E',
-  divider: '#FFFFFF',
-  labelText: '#FFFFFF',
-};
+	outerBackground: '#0A1628',
+	leftBackground: '#1E3A5F',
+	rightBackground: '#312E81',
+	circleFill: '#3B82F6',
+	squareFill: '#6366F1',
+	divider: '#FFFFFF',
+	label: '#FFFFFF',
+} as const;
 
-export const DIMENSIONS = {
-  circleDiameter: 120,
-  squareSize: 110,
-  dividerWidth: 2,
-  dividerOpacity: 0.25,
-  shapeCenterY: 320,
-  labelY: 440,
-  labelOpacity: 0.7,
-};
+export const LAYOUT = {
+	panelWidth: 960,
+	dividerWidth: 2,
+	dividerMaxOpacity: 0.6,
+} as const;
+
+export const SHAPES = {
+	circleCenterX: 480,
+	circleCenterY: 440,
+	circleRadius: 80,
+	squareCenterX: 480, // relative to right panel
+	squareCenterY: 440,
+	squareSize: 120,
+	squareBorderRadius: 12,
+} as const;
 
 export const TYPOGRAPHY = {
-  label: {
-    fontSize: 24,
-    fontFamily: 'Inter',
-    fontWeight: 500 as const,
-  },
-};
+	fontFamily: "'Inter', sans-serif",
+	fontSize: 24,
+	fontWeight: 600 as const,
+	labelOpacity: 0.9,
+	labelY: 580,
+} as const;
 
-export const ANIMATION_TIMING = {
-  // Frame 0-20: Divider draws from center outward, panels tint in
-  dividerDrawStart: 0,
-  dividerDrawEnd: 20,
-  // Frame 20-40: Shapes scale in (circle at 20, square at 25)
-  circleScaleStart: 20,
-  squareScaleStart: 25,
-  // Frame 40-55: Labels fade in
-  labelFadeStart: 40,
-  labelFadeEnd: 55,
-  // Frame 55-90: Breathing loop (30-frame cycle)
-  breathingStart: 55,
-  breathingCycleFrames: 30,
-  breathingScaleMin: 1.0,
-  breathingScaleMax: 1.04,
-  totalDuration: 90,
-};
-
-// Spring config for shape scale-in
-export const SHAPE_SPRING_CONFIG = {
-  damping: 12,
-  stiffness: 180,
-  mass: 1,
-};
+export const TIMING = {
+	// Frame 0-15: Slide up from y=1080 to y=0
+	slideUpStart: 0,
+	slideUpEnd: 15,
+	// Frame 12-22: "Before" label fades in
+	beforeLabelStart: 12,
+	beforeLabelEnd: 22,
+	// Frame 15-25: "After" label fades in
+	afterLabelStart: 15,
+	afterLabelEnd: 25,
+	// Frame 25-30: Hold
+	totalFrames: 30,
+} as const;

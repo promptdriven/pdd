@@ -1,77 +1,68 @@
 [Remotion]
 
-# Section 1.4: Green Square Slide Right
+# Section 1.4: Square Slide Right
 
 **Tool:** Remotion
-**Duration:** ~3s
-**Timestamp:** 0:10 - 0:13
+**Duration:** ~1.0s
+**Timestamp:** 0:03.7 - 0:04.7
 
 ## Visual Description
-The green square from the morph transition slides smoothly from center to the right side of the screen, leaving a fading motion trail behind it. As it slides, a subtle dotted guide line appears along the horizontal center axis, reinforcing the movement direction. The square comes to rest at the right-third position.
+The indigo rounded square from the previous morph slides from center to the right side of the canvas. The square translates horizontally from x=960 to x=1440 while leaving a horizontal motion streak behind it. The streak is a gradient bar that fades from the shape's color to transparent, trailing 200px behind the shape. As the square reaches its destination, it performs a small bounce (overshoot by 20px, then settle).
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1280x720 (16:9)
-- Background: Charcoal (#141921)
-- Grid lines: Dotted horizontal center line, #FFFFFF at 10% opacity, 1px dashed
+- Resolution: 1920x1080 (16:9)
+- Background: Charcoal #1E293B with radial gradient to #0F172A at edges
+- Grid lines: None
 
 ### Chart/Visual Elements
-- Square: 160px, solid fill #22C55E, starts centered at x=640, ends at x=920
-- Motion trail: 4 ghost copies of the square at 15%, 10%, 6%, 3% opacity, spaced 40px apart behind the square, each delayed by 3 frames
-- Guide line: Horizontal dashed line at y=360, spans full width, appears during slide
+- Square: 120x120px, borderRadius 12px, fill #6366F1 (indigo)
+- Start position: centered at (960, 540)
+- End position: (1440, 540)
+- Motion streak: horizontal gradient bar, height 120px, trailing the square, from #6366F1 at 30% opacity to transparent
+- Streak length: up to 200px
 
 ### Animation Sequence
-1. **Frame 0-10 (0-0.33s):** Green square holds at center. Guide line fades in from 0% to 10% opacity.
-2. **Frame 10-60 (0.33-2.0s):** Square translates x from 640 → 920. Motion trail ghosts follow with staggered delay. Guide line is visible throughout.
-3. **Frame 60-75 (2.0-2.5s):** Square arrives at x=920 with slight overshoot (x=935) then settles back to 920. Trail ghosts catch up and fade out.
-4. **Frame 75-90 (2.5-3.0s):** Square rests at final position. Guide line fades out. Soft green glow appears behind square.
+1. **Frame 0-3 (0-0.1s):** Anticipation — square shifts 10px left (to 950)
+2. **Frame 3-21 (0.1-0.7s):** Square slides from x=950 to x=1460 (overshoot); motion streak visible
+3. **Frame 21-27 (0.7-0.9s):** Bounce back from x=1460 to x=1440; streak fades
+4. **Frame 27-30 (0.9-1.0s):** Settle at x=1440, streak fully faded
 
 ### Typography
 - None
 
 ### Easing
-- Slide translation: `easeInOutCubic`
-- Overshoot settle: `spring({ damping: 10, stiffness: 160 })`
-- Trail fade: `easeOutQuad`
-- Guide line fade: `easeInOutSine`
+- Anticipation: `easeInQuad`
+- Main slide: `easeOutCubic`
+- Bounce settle: `easeOutBounce`
+- Streak fade: `easeOutQuad`
 
 ## Narration Sync
 > "It uses only Remotion animations with no Veo clips."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={90}>
-  <AbsoluteFill style={{ backgroundColor: '#141921' }}>
-    <GuideLine axis="horizontal" y={360} fadeIn={0} fadeOut={75} />
-    <MotionTrail
-      count={4}
-      opacities={[0.15, 0.10, 0.06, 0.03]}
-      spacing={40}
-      delayFrames={3}
-    />
-    <SlidingSquare
-      size={160}
-      color="#22C55E"
-      fromX={640}
-      toX={920}
-      slideStart={10}
-      slideEnd={60}
-    />
-  </AbsoluteFill>
+<Sequence from={0} durationInFrames={30}>
+  <SlideWithStreak
+    fromX={960}
+    toX={1440}
+    overshoot={20}
+    shape={<RoundedSquare size={120} radius={12} color="#6366F1" />}
+  />
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "shape": "square",
-  "size": 160,
-  "color": "#22C55E",
-  "startX": 640,
-  "endX": 920,
-  "trailCopies": 4,
-  "centerY": 360
+  "slide": {
+    "fromX": 960,
+    "toX": 1440,
+    "y": 540,
+    "overshoot": 20,
+    "streakLength": 200
+  }
 }
 ```
 

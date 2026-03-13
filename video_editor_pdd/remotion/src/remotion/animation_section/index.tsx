@@ -21,12 +21,9 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "animation_section_01_title_card": 90,
-  "02_blue_circle_pulse": 120,
-  "03_circle_to_square_morph": 90,
-  "04_square_slide_right": 90,
-  "05_split_comparison": 90,
-  "07_section_outro": 60,
+  "animation_section_01_title_card": 45,
+  "02_blue_circle_pulse": 30,
+  "07_section_outro": 21,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {

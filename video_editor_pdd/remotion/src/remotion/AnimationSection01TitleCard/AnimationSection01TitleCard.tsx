@@ -1,39 +1,31 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
+import { AbsoluteFill, Sequence } from 'remotion';
 import { COLORS, ANIMATION_TIMING } from './constants';
-import { RadialGlow } from './RadialGlow';
-import { StaggeredText } from './StaggeredText';
-import { ExpandingDivider } from './ExpandingDivider';
+import { TitleText } from './TitleText';
+import { AccentLine } from './AccentLine';
+import { SubtitleText } from './SubtitleText';
 
 export const AnimationSection01TitleCard: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  const backgroundOpacity = interpolate(
-    frame,
-    [ANIMATION_TIMING.backgroundFadeStart, ANIMATION_TIMING.backgroundFadeEnd],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    }
-  );
-
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#000000',
+        backgroundColor: COLORS.background,
       }}
     >
-      <AbsoluteFill
-        style={{
-          backgroundColor: COLORS.background,
-          opacity: backgroundOpacity,
-        }}
-      >
-        <RadialGlow />
-        <StaggeredText />
-        <ExpandingDivider />
-      </AbsoluteFill>
+      {/* Frame 0-15: Title fades in and scales up */}
+      <Sequence from={ANIMATION_TIMING.titleFadeStart} durationInFrames={ANIMATION_TIMING.totalDuration}>
+        <TitleText />
+      </Sequence>
+
+      {/* Frame 9-24: Accent line expands outward from center */}
+      <Sequence from={ANIMATION_TIMING.accentLineStart} durationInFrames={ANIMATION_TIMING.totalDuration - ANIMATION_TIMING.accentLineStart}>
+        <AccentLine />
+      </Sequence>
+
+      {/* Frame 15-30: Subtitle fades in */}
+      <Sequence from={ANIMATION_TIMING.subtitleFadeStart} durationInFrames={ANIMATION_TIMING.totalDuration - ANIMATION_TIMING.subtitleFadeStart}>
+        <SubtitleText />
+      </Sequence>
     </AbsoluteFill>
   );
 };

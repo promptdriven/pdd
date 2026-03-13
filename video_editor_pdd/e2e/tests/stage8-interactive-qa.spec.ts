@@ -492,12 +492,12 @@ test.describe('Stage 8 QA · D: Job Logs Auto-Open & SseLogPanel', () => {
     await expect(jobLogsBtn.locator('span', { hasText: 'Hide' })).toBeVisible();
   });
 
-  test('D3: Stage All Missing auto-opens Job Logs', async ({ page }) => {
+  test('D3: Stage All Missing keeps Job Logs closed for synchronous staging', async ({ page }) => {
     await page.route('**/api/pipeline/asset-staging/run', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ jobId: 'stage-all-auto-open' }),
+        body: JSON.stringify({ staged: 1 }),
       })
     );
     await navigateWithMockedData(page, ALL_STATUS_SECTIONS, MIXED_MANIFEST);
@@ -507,7 +507,7 @@ test.describe('Stage 8 QA · D: Job Logs Auto-Open & SseLogPanel', () => {
     await page.waitForTimeout(500);
 
     const jobLogsBtn = page.locator('button', { hasText: 'Job Logs' });
-    await expect(jobLogsBtn.locator('span', { hasText: 'Hide' })).toBeVisible();
+    await expect(jobLogsBtn.locator('span', { hasText: 'Show' })).toBeVisible();
   });
 
   test('D4: per-component regenerate auto-opens Job Logs', async ({ page }) => {

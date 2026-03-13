@@ -92,9 +92,18 @@ AUDIO_EXTENSIONS = {'.wav', '.mp3', '.aac', '.m4a', '.ogg'}
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v'}
 NON_COMPONENT_BASENAMES = {'spec', 'veo'}
 VISUAL_MEDIA_KEY_RE = re.compile(
-    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
+    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|outputFile|filename|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
     re.IGNORECASE,
 )
+STRUCTURED_VIDEO_FIELD_RE = re.compile(
+    r'(?:"|\b)(outputFile|filename|clip_id|clipId)(?:"|\b)\s*[:=]\s*["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+GENERIC_VIDEO_REF_RE = re.compile(
+    r'(?:"|\b)(video|src)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
+    re.IGNORECASE,
+)
+VIDEO_EXTENSION_PRIORITY = ('.mp4', '.webm', '.mov', '.m4v')
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -165,15 +174,23 @@ def _has_renderable_spec_media(
         spec_content = _read_text_if_exists(spec_path)
         if VISUAL_MEDIA_KEY_RE.search(spec_content):
             return True
+        if STRUCTURED_VIDEO_FIELD_RE.search(spec_content):
+            return True
+        if GENERIC_VIDEO_REF_RE.search(spec_content):
+            return True
         for rel_path in STATIC_FILE_RE.findall(spec_content):
             if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
                 return True
 
     staged_candidates = [
-        os.path.join(project_dir, 'outputs', 'veo', f'{spec_base}.mp4'),
+        os.path.join(project_dir, 'outputs', 'veo', f'{spec_base}{ext}')
+        for ext in VIDEO_EXTENSION_PRIORITY
     ]
     if remotion_public:
-        staged_candidates.append(os.path.join(remotion_public, 'veo', f'{spec_base}.mp4'))
+        staged_candidates.extend(
+            os.path.join(remotion_public, 'veo', f'{spec_base}{ext}')
+            for ext in VIDEO_EXTENSION_PRIORITY
+        )
 
     return any(os.path.isfile(candidate) for candidate in staged_candidates)
 
@@ -225,10 +242,167 @@ def _resolve_media_static_path(remotion_public: str, rel_path: str) -> Optional[
     return normalized if os.path.isfile(os.path.join(remotion_public, normalized)) else None
 
 
+def _resolve_video_reference_static_path(
+    remotion_public: str,
+    raw_value: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Resolve a video reference to a staged static path.
+
+    Resolution order:
+      1. Per-section logical alias map, used to translate names like
+         `veo/ocean_sunset.mp4` to the actual staged clip for another visual.
+      2. Exact staged path as written in the spec.
+      3. Compatibility fallback candidates under remotion/public.
+    """
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    if not normalized:
+        return None
+
+    basename = normalized.split('/')[-1]
+    if reference_aliases:
+        for key in (normalized, basename):
+            resolved = reference_aliases.get(key)
+            if resolved and os.path.isfile(os.path.join(remotion_public, resolved)):
+                return resolved
+
+    exact = _resolve_media_static_path(remotion_public, normalized)
+    if exact is not None:
+        return exact
+
+    return _existing_static_path(
+        remotion_public,
+        _candidate_video_static_paths(normalized),
+    )
+
+
+def _candidate_video_static_paths(raw_value: str) -> List[str]:
+    """Build likely staged staticFile() paths for a structured video reference."""
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    if not normalized:
+        return []
+
+    basename = normalized.split('/')[-1]
+    candidates: List[str] = []
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    if Path(normalized).suffix.lower() in VIDEO_EXTENSIONS:
+        _add(normalized)
+        if not normalized.startswith('veo/'):
+            _add(f'veo/{basename}')
+            _add(basename)
+        return candidates
+
+    for ext in VIDEO_EXTENSION_PRIORITY:
+        _add(f'veo/{basename}{ext}')
+        _add(f'{basename}{ext}')
+
+    return candidates
+
+
+def _resolve_structured_video_static_path(
+    spec_content: str,
+    remotion_public: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Resolve a staged video path from structured spec fields like outputFile / clip_id."""
+    if not remotion_public:
+        return None
+
+    for _, raw_value in STRUCTURED_VIDEO_FIELD_RE.findall(spec_content):
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            raw_value,
+            reference_aliases,
+        )
+        if resolved is not None:
+            return resolved
+
+    return None
+
+
+def _resolve_generated_spec_basename_video(
+    spec_base: str,
+    remotion_public: str,
+) -> Optional[str]:
+    """Resolve the staged clip generated for a spec basename."""
+    if not remotion_public:
+        return None
+
+    return _existing_static_path(
+        remotion_public,
+        [f'veo/{spec_base}{ext}' for ext in VIDEO_EXTENSION_PRIORITY],
+    )
+
+
+def _iter_video_reference_values(spec_content: str) -> List[str]:
+    """Collect logical video references declared inside a spec."""
+    values: List[str] = []
+
+    def _add(raw_value: str) -> None:
+        normalized = raw_value.replace('\\', '/').lstrip('/')
+        if normalized and normalized not in values:
+            values.append(normalized)
+
+    for _, raw_value in STRUCTURED_VIDEO_FIELD_RE.findall(spec_content):
+        _add(raw_value)
+    for _, raw_value in GENERIC_VIDEO_REF_RE.findall(spec_content):
+        _add(raw_value)
+    for rel_path in STATIC_FILE_RE.findall(spec_content):
+        if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
+            _add(rel_path)
+
+    return values
+
+
+def _build_section_video_reference_aliases(
+    visual_ids: List[str],
+    spec_dir: str,
+    section_id: str,
+    remotion_public: str,
+) -> Dict[str, str]:
+    """Map logical spec video names to the actual staged clips for this section."""
+    aliases: Dict[str, str] = {}
+    if not spec_dir or not remotion_public:
+        return aliases
+
+    for visual_id in visual_ids:
+        spec_base = component_base_name(visual_id, section_id)
+        spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+        if not os.path.isfile(spec_path):
+            continue
+
+        spec_content = _read_text_if_exists(spec_path)
+        if not spec_content:
+            continue
+
+        direct_target: Optional[str] = None
+        for ref in _iter_video_reference_values(spec_content):
+            direct_target = _resolve_media_static_path(remotion_public, ref)
+            if direct_target is not None:
+                break
+
+        staged_target = _resolve_generated_spec_basename_video(spec_base, remotion_public)
+        canonical_target = staged_target or direct_target
+        if canonical_target is None:
+            continue
+
+        for ref in _iter_video_reference_values(spec_content):
+            aliases.setdefault(ref, canonical_target)
+            aliases.setdefault(ref.split('/')[-1], canonical_target)
+
+    return aliases
+
+
 def _extract_visual_media_aliases(
     spec_content: str,
     remotion_public: str,
     inherited_default: Optional[str],
+    spec_base: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
 ) -> tuple[Dict[str, str], Optional[str], bool]:
     """Extract named Veo asset aliases from a spec file."""
     explicit_sources: List[str] = []
@@ -242,6 +416,8 @@ def _extract_visual_media_aliases(
         'rightclip': 'rightSrc',
         'rightsrc': 'rightSrc',
         'outputsrc': 'outputSrc',
+        'outputfile': 'defaultSrc',
+        'filename': 'defaultSrc',
         'backgroundclip': 'backgroundSrc',
         'backgroundsrc': 'backgroundSrc',
         'baseclip': 'baseSrc',
@@ -251,7 +427,11 @@ def _extract_visual_media_aliases(
     }
 
     for key, rel_path in VISUAL_MEDIA_KEY_RE.findall(spec_content):
-        resolved = _resolve_media_static_path(remotion_public, rel_path)
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            rel_path,
+            reference_aliases,
+        )
         if resolved is None:
             continue
         explicit = True
@@ -261,15 +441,51 @@ def _extract_visual_media_aliases(
         if alias_name:
             aliases[alias_name] = resolved
 
-    for rel_path in STATIC_FILE_RE.findall(spec_content):
-        if Path(rel_path).suffix.lower() not in VIDEO_EXTENSIONS:
-            continue
-        resolved = _resolve_media_static_path(remotion_public, rel_path)
+    structured_default = _resolve_structured_video_static_path(
+        spec_content,
+        remotion_public,
+        reference_aliases,
+    )
+    if structured_default is not None:
+        explicit = True
+        if structured_default not in explicit_sources:
+            explicit_sources.append(structured_default)
+        aliases.setdefault('defaultSrc', structured_default)
+
+    for _, raw_value in GENERIC_VIDEO_REF_RE.findall(spec_content):
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            raw_value,
+            reference_aliases,
+        )
         if resolved is None:
             continue
         explicit = True
         if resolved not in explicit_sources:
             explicit_sources.append(resolved)
+
+    for rel_path in STATIC_FILE_RE.findall(spec_content):
+        if Path(rel_path).suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            rel_path,
+            reference_aliases,
+        )
+        if resolved is None:
+            continue
+        explicit = True
+        if resolved not in explicit_sources:
+            explicit_sources.append(resolved)
+
+    if not explicit_sources:
+        generated_default = _resolve_generated_spec_basename_video(
+            spec_base,
+            remotion_public,
+        )
+        if generated_default is not None:
+            explicit_sources.append(generated_default)
+            aliases.setdefault('defaultSrc', generated_default)
 
     primary = aliases.get('defaultSrc')
     if primary is None and explicit_sources:
@@ -311,6 +527,12 @@ def build_visual_media_manifest(
     manifest: Dict[str, Dict[str, str]] = {}
     inherited_default: Optional[str] = None
     saw_explicit_source = False
+    reference_aliases = _build_section_video_reference_aliases(
+        visual_ids,
+        spec_dir,
+        section['id'],
+        remotion_public,
+    )
 
     for visual_id in visual_ids:
         spec_base = component_base_name(visual_id, section['id'])
@@ -322,6 +544,8 @@ def build_visual_media_manifest(
                 _read_text_if_exists(spec_path),
                 remotion_public,
                 inherited_default,
+                spec_base,
+                reference_aliases,
             )
             if explicit:
                 saw_explicit_source = True
@@ -956,13 +1180,44 @@ def generate_root_tsx(
     remotion_dir: str,
     default_width: int = 1920,
     default_height: int = 1080,
+    project_dir: str = '',
 ) -> str:
     """Generate the Root.tsx content that registers all section compositions
     and individual component compositions for preview."""
     lines: List[str] = []
+    remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
+    remotion_public = os.path.join(remotion_dir, 'public') if remotion_dir else ''
+    preview_media_records: List[tuple[str, str, Dict[str, str]]] = []
+    preview_wrapper_names: Dict[str, str] = {}
+
+    for section in sections:
+        if not project_dir or not remotion_public:
+            continue
+
+        fallback_video_src = resolve_direct_video_src(section['id'], remotion_public)
+        visual_media_manifest = build_visual_media_manifest(
+            section,
+            project_dir,
+            remotion_public,
+            fallback_video_src=fallback_video_src,
+        )
+
+        compositions = section.get('compositions', [])
+        for comp in compositions:
+            comp_id = comp if isinstance(comp, str) else comp.get('id', '')
+            if not comp_id:
+                continue
+            media = visual_media_manifest.get(comp_id)
+            if not media:
+                continue
+            comp_pascal, _ = resolve_comp_import(comp_id, section['id'], remotion_src)
+            preview_wrapper_names[comp_pascal] = f'{comp_pascal}Preview'
+            preview_media_records.append((section['id'], comp_id, media))
 
     lines.append('import React from "react";')
     lines.append('import { Composition } from "remotion";')
+    if preview_media_records:
+        lines.append('import { VisualMediaProvider } from "./_shared/visual-runtime";')
     lines.append('import "./_shared/load-inter-font";')
     lines.append('')
 
@@ -974,7 +1229,6 @@ def generate_root_tsx(
         lines.append(f'import {{ {component_name} }} from "./{section_id}";')
 
     # Import individual components for preview compositions
-    remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
     imported_pascals: set = set()
     for section in sections:
         section_id = section['id']
@@ -988,6 +1242,35 @@ def generate_root_tsx(
                     imported_pascals.add(comp_pascal)
 
     lines.append('')
+    if preview_media_records:
+        lines.append('const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {')
+        for section_id, comp_id, aliases in preview_media_records:
+            alias_parts = ', '.join(
+                f'{alias_name}: "{alias_value}"'
+                for alias_name, alias_value in aliases.items()
+            )
+            lines.append(f'  "{section_id}:{comp_id}": {{ {alias_parts} }},')
+        lines.append('};')
+        lines.append('')
+        generated_preview_wrappers: set = set()
+        for section in sections:
+            section_id = section['id']
+            compositions = section.get('compositions', [])
+            for comp in compositions:
+                comp_id = comp if isinstance(comp, str) else comp.get('id', '')
+                if not comp_id:
+                    continue
+                comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
+                preview_wrapper_name = preview_wrapper_names.get(comp_pascal)
+                if not preview_wrapper_name or preview_wrapper_name in generated_preview_wrappers:
+                    continue
+                lines.append(f'const {preview_wrapper_name}: React.FC = () => (')
+                lines.append(f'  <VisualMediaProvider media={{PREVIEW_VISUAL_MEDIA["{section_id}:{comp_id}"] ?? null}}>')
+                lines.append(f'    <{comp_pascal} />')
+                lines.append('  </VisualMediaProvider>')
+                lines.append(');')
+                generated_preview_wrappers.add(preview_wrapper_name)
+        lines.append('')
     lines.append('const PREVIEW_DURATION = 150; // 5s at 30fps')
     lines.append('')
     lines.append('export const RemotionRoot: React.FC = () => {')
@@ -1028,12 +1311,13 @@ def generate_root_tsx(
                 comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
                 if comp_pascal in registered:
                     continue
+                preview_component = preview_wrapper_names.get(comp_pascal, comp_pascal)
                 # Use hyphenated comp_pascal as the Remotion composition ID
                 # to ensure uniqueness across sections
                 remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
                 lines.append(f'      <Composition')
                 lines.append(f'        id="{remotion_id}"')
-                lines.append(f'        component={{{comp_pascal}}}')
+                lines.append(f'        component={{{preview_component}}}')
                 lines.append(f'        durationInFrames={{PREVIEW_DURATION}}')
                 lines.append(f'        fps={{{fps}}}')
                 lines.append(f'        width={{{width}}}')
@@ -1055,6 +1339,7 @@ def update_root_tsx(
     remotion_dir: str,
     default_width: int = 1920,
     default_height: int = 1080,
+    project_dir: str = '',
 ) -> None:
     """Update or create Root.tsx to register all section compositions."""
     root_path = os.path.join(remotion_dir, 'src', 'remotion', 'Root.tsx')
@@ -1069,6 +1354,7 @@ def update_root_tsx(
         remotion_dir,
         default_width=default_width,
         default_height=default_height,
+        project_dir=project_dir,
     )
 
     with open(root_path, 'w', encoding='utf-8') as f:
@@ -1361,6 +1647,7 @@ def main() -> None:
         remotion_dir,
         default_width=default_width,
         default_height=default_height,
+        project_dir=project_dir,
     )
 
     sys.exit(0)

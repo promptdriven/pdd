@@ -5,6 +5,7 @@ import { COLORS, ANIMATION, type TitleCardLayout } from './constants';
 export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
+  // Frame 15-45: Fade in with easeOutCubic
   const opacity = interpolate(
     frame,
     [ANIMATION.titleFadeStart, ANIMATION.titleFadeEnd],
@@ -16,11 +17,11 @@ export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => 
     },
   );
 
-  // Parallax entrance: shifts up 10px as it fades in
+  // Parallax entrance: slides up 10px → 0px
   const translateY = interpolate(
     frame,
     [ANIMATION.titleFadeStart, ANIMATION.titleFadeEnd],
-    [10, 0],
+    [ANIMATION.titleShiftPx, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

@@ -1,8 +1,7 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   COLORS,
-  ANIMATION,
+  DIMENSIONS,
   type SplitNatureComparisonLayout,
 } from './constants';
 
@@ -13,33 +12,23 @@ interface PanelLabelProps {
 }
 
 export const PanelLabel: React.FC<PanelLabelProps> = ({ text, side, layout }) => {
-  const frame = useCurrentFrame();
-
-  const opacity = interpolate(
-    frame,
-    [ANIMATION.labelFadeStart, ANIMATION.labelFadeEnd],
-    [0, 0.9],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    },
-  );
-
-  const x = side === 'left' ? layout.positions.leftLabelX : layout.positions.rightLabelX;
+  const isLeft = side === 'left';
+  const centerX = isLeft
+    ? DIMENSIONS.leftLabelCenterX * layout.scaleX
+    : DIMENSIONS.rightLabelCenterX * layout.scaleX;
+  const color = isLeft ? COLORS.leftLabel : COLORS.rightLabel;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x,
-        top: layout.positions.labelY,
+        left: centerX,
+        top: DIMENSIONS.labelY * layout.scaleY,
         transform: 'translateX(-50%)',
         fontFamily: layout.typography.label.fontFamily,
         fontWeight: layout.typography.label.fontWeight,
         fontSize: layout.typography.label.fontSize,
-        color: COLORS.labelText,
-        opacity,
+        color,
         whiteSpace: 'nowrap',
       }}
     >

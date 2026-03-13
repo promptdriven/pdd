@@ -3,67 +3,65 @@
 # Section 1.2: Blue Circle Pulse
 
 **Tool:** Remotion
-**Duration:** ~4s
-**Timestamp:** 0:03 - 0:07
+**Duration:** ~1.0s
+**Timestamp:** 0:01.5 - 0:02.5
 
 ## Visual Description
-A solid blue circle appears at the center of the screen, starting as a small dot and scaling up to full size. Once at full size, the circle pulses once — expanding slightly and contracting — with a soft glow radiating outward on the pulse beat. The background is a clean dark surface.
+A blue circle appears at the center of the canvas and pulses outward twice. The circle starts at 60px radius and scales up to 80px, then back to 60px, repeating once. A soft glow effect (radial gradient) emanates from the circle during each pulse. The background is a dark charcoal with a subtle radial gradient centered behind the circle.
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1280x720 (16:9)
-- Background: Charcoal (#141921)
-- Grid lines: none
+- Resolution: 1920x1080 (16:9)
+- Background: Charcoal #1E293B with radial gradient to #0F172A at edges
+- Grid lines: None
 
 ### Chart/Visual Elements
-- Circle: 180px diameter, solid fill #3B82F6 (Tailwind blue-500), centered at (640, 360)
-- Glow ring: 220px diameter, #3B82F6 at 20% opacity, blurred 30px (box-shadow or radial gradient)
-- Subtle drop shadow: 0 4px 20px rgba(59, 130, 246, 0.3)
+- Circle: centered at (960, 540), fill color #3B82F6 (blue-500)
+- Glow ring: same center, radial gradient from #3B82F6 at 20% opacity to transparent, radius 120px
+- Circle stroke: none
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Circle scales from 0 to 1.0, appearing from center with spring-like overshoot (scale peaks at 1.08, settles to 1.0).
-2. **Frame 20-50 (0.67-1.67s):** Circle holds steady at full size. Glow ring fades in from 0% to 20% opacity.
-3. **Frame 50-75 (1.67-2.5s):** Pulse beat — circle scales from 1.0 → 1.15 → 1.0. Glow ring expands from 220px to 280px and opacity peaks at 40% then returns to 20%.
-4. **Frame 75-120 (2.5-4.0s):** Circle holds at rest. Glow gently oscillates (opacity 15%-25%) to suggest life.
+1. **Frame 0-5 (0-0.17s):** Circle appears, scaling from 0 to 60px radius
+2. **Frame 5-15 (0.17-0.5s):** First pulse — circle scales from 60px to 80px, glow expands from 80px to 120px
+3. **Frame 15-20 (0.5-0.67s):** Circle contracts from 80px back to 60px, glow fades
+4. **Frame 20-28 (0.67-0.93s):** Second pulse — same expansion pattern
+5. **Frame 28-30 (0.93-1.0s):** Hold at 60px
 
 ### Typography
-- None (pure shape animation)
+- None
 
 ### Easing
-- Scale-in: `spring({ damping: 12, stiffness: 180 })`
-- Pulse expand: `easeOutCubic`
-- Pulse contract: `easeInOutSine`
-- Glow oscillation: `easeInOutSine`
+- Initial appear: `easeOutBack`
+- Pulse expansion: `easeInOutSine`
+- Pulse contraction: `easeInOutSine`
 
 ## Narration Sync
 > "This is the first section of the integration test video."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={120}>
-  <AbsoluteFill style={{ backgroundColor: '#141921', justifyContent: 'center', alignItems: 'center' }}>
-    <GlowRing diameter={220} color="#3B82F6" pulseAt={50} />
-    <AnimatedCircle
-      diameter={180}
-      color="#3B82F6"
-      scaleInFrames={20}
-      pulseFrame={50}
-    />
-  </AbsoluteFill>
+<Sequence from={0} durationInFrames={30}>
+  <PulsingCircle
+    color="#3B82F6"
+    baseRadius={60}
+    pulseRadius={80}
+    glowRadius={120}
+    pulseCount={2}
+  />
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "shape": "circle",
-  "diameter": 180,
-  "color": "#3B82F6",
-  "pulseScale": 1.15,
-  "glowDiameter": 220,
-  "centerX": 640,
-  "centerY": 360
+  "circle": {
+    "color": "#3B82F6",
+    "baseRadius": 60,
+    "pulseRadius": 80,
+    "position": [960, 540]
+  },
+  "pulseCount": 2
 }
 ```
 

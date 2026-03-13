@@ -1,20 +1,20 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { COLORS } from './constants';
-import { GuideLine } from './GuideLine';
-import { MotionTrail } from './MotionTrail';
+import { MotionStreak } from './MotionStreak';
 import { SlidingSquare } from './SlidingSquare';
-import { SquareGlow } from './SquareGlow';
 
 export const AnimationSection04SquareSlideRight: React.FC = () => {
-  return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
-      <GuideLine />
-      <SquareGlow />
-      <MotionTrail />
-      <SlidingSquare />
-    </AbsoluteFill>
-  );
+	return (
+		<AbsoluteFill
+			style={{
+				background: `radial-gradient(circle at center, ${COLORS.backgroundCenter} 0%, ${COLORS.backgroundEdge} 100%)`,
+			}}
+		>
+			<MotionStreak />
+			<SlidingSquare />
+		</AbsoluteFill>
+	);
 };
 
 export const defaultAnimationSection04SquareSlideRightProps = {};

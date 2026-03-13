@@ -1,20 +1,18 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { COLORS } from './constants';
-import { GlowRing } from './GlowRing';
-import { AnimatedCircle } from './AnimatedCircle';
+import { GlowEffect } from './GlowEffect';
+import { PulsingCircle } from './PulsingCircle';
 
 export const AnimationSection02BlueCirclePulse: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.background,
-        justifyContent: 'center',
-        alignItems: 'center',
+        background: `radial-gradient(circle at center, ${COLORS.backgroundCenter} 0%, ${COLORS.backgroundEdge} 100%)`,
       }}
     >
-      <GlowRing />
-      <AnimatedCircle />
+      <GlowEffect />
+      <PulsingCircle />
     </AbsoluteFill>
   );
 };

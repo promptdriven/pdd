@@ -1,2 +1,2 @@
-// This file is deprecated. Use AnimatedCircle.tsx instead.
+// Replaced by PulsingCircle.tsx
 export {};

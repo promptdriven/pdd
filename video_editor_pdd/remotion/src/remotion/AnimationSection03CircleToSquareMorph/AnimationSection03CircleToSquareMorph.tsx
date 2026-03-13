@@ -1,22 +1,20 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { COLORS } from './constants';
-import { MorphGlow } from './MorphGlow';
+import { GhostTrail } from './GhostTrail';
 import { MorphShape } from './MorphShape';
 
 export const AnimationSection03CircleToSquareMorph: React.FC = () => {
-  return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: COLORS.background,
-        justifyContent: 'center',
-        alignItems: 'center',
-      }}
-    >
-      <MorphGlow />
-      <MorphShape />
-    </AbsoluteFill>
-  );
+	return (
+		<AbsoluteFill
+			style={{
+				background: `radial-gradient(circle at 50% 50%, ${COLORS.backgroundCenter} 0%, ${COLORS.backgroundEdge} 100%)`,
+			}}
+		>
+			<GhostTrail />
+			<MorphShape />
+		</AbsoluteFill>
+	);
 };
 
 export const defaultAnimationSection03CircleToSquareMorphProps = {};

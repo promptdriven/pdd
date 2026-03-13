@@ -216,6 +216,15 @@ describe("polling fallback", () => {
   it("stops polling when job completes", () => {
     expect(sourceCode).toMatch(/stopPolling\s*\(\)/);
   });
+
+  it("treats a 404 polling response as terminal Job not found error", () => {
+    expect(sourceCode).toMatch(/res\.status\s*===\s*404/);
+    expect(sourceCode).toMatch(/handleError\s*\(\s*['"]Job not found['"]\s*\)/);
+  });
+
+  it("does not restart polling after a terminal SSE done/error state", () => {
+    expect(sourceCode).toMatch(/errorCalledRef\.current\s*\|\|\s*doneCalledRef\.current/);
+  });
 });
 
 // ---------------------------------------------------------------------------

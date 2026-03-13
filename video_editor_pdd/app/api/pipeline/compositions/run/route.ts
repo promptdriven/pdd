@@ -164,6 +164,11 @@ CRITICAL RENDERING REQUIREMENTS:
   and resolve media via that hook instead of hardcoding staticFile("veo/<section>.mp4").
   Wrapper code will provide per-visual media aliases like backgroundSrc, outputSrc,
   leftSrc, rightSrc, baseSrc, and revealSrc.
+- Never hardcode Veo filenames from the prose/spec unless the exact file is present
+  in the available assets list below.
+- For split/compare or other multi-clip visuals, prefer useVisualMediaSrc('leftSrc'),
+  useVisualMediaSrc('rightSrc'), and useVisualMediaSrc('defaultSrc') fallbacks
+  instead of inventing per-shot filenames.
 - Only import from "remotion" — do not import from other local files in the component directory.
 - Break complex visuals into sub-components (e.g., AnimatedLine.tsx, ChartAxes.tsx) for maintainability.
 

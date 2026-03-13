@@ -1,28 +1,19 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, POSITIONS, DIMENSIONS, ANIMATION_TIMING } from './constants';
+import { COLORS, DIMENSIONS, ANIMATION } from './constants';
 
 export const ExpandingRule: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const ruleWidth = interpolate(
+  // Expand from center (scaleX 0 → 1, frames 16-22) with easeInOutQuad
+  const scaleX = interpolate(
     frame,
-    [ANIMATION_TIMING.ruleExpandStart, ANIMATION_TIMING.ruleExpandEnd],
-    [0, DIMENSIONS.ruleMaxWidth],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
-    },
-  );
-
-  const ruleOpacity = interpolate(
-    frame,
-    [ANIMATION_TIMING.ruleExpandStart, ANIMATION_TIMING.ruleExpandStart + 6],
+    [ANIMATION.textFadeStart, ANIMATION.textFadeEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.quad),
     },
   );
 
@@ -30,13 +21,14 @@ export const ExpandingRule: React.FC = () => {
     <div
       style={{
         position: 'absolute',
-        left: CANVAS.width / 2 - ruleWidth / 2,
-        top: POSITIONS.ruleY,
-        width: ruleWidth,
+        left: (1920 - DIMENSIONS.ruleWidth) / 2,
+        top: DIMENSIONS.ruleY,
+        width: DIMENSIONS.ruleWidth,
         height: DIMENSIONS.ruleHeight,
-        background: `linear-gradient(90deg, transparent 0%, ${COLORS.ruleColor} 30%, ${COLORS.ruleColor} 70%, transparent 100%)`,
-        opacity: ruleOpacity,
+        backgroundColor: COLORS.accent,
         borderRadius: DIMENSIONS.ruleHeight / 2,
+        transform: `scaleX(${scaleX})`,
+        opacity: frame >= ANIMATION.textFadeStart ? 1 : 0,
       }}
     />
   );

@@ -1,2 +1,2 @@
-// This file is deprecated. Use GlowRing.tsx instead.
+// Replaced by GlowEffect.tsx
 export {};

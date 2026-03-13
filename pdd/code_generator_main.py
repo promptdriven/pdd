@@ -1296,6 +1296,11 @@ def code_generator_main(
                                 parsed, repaired = _repair_architecture_interface_types(parsed)
                                 if repaired:
                                     generated_code_content = json.dumps(parsed, indent=2)
+                                # Issue #617: filename mirrors filepath (directory structure preserved)
+                                if isinstance(parsed, list):
+                                    from pdd.architecture_sync import normalize_architecture_filenames
+                                    normalize_architecture_filenames(parsed)
+                                generated_code_content = json.dumps(parsed, indent=2)
                             try:
                                 import jsonschema
                                 jsonschema.validate(instance=parsed, schema=fm_meta.get("output_schema"))

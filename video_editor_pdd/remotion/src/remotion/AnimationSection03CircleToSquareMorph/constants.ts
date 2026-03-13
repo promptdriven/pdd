@@ -1,40 +1,39 @@
-// Component-level constants for AnimationSection03CircleToSquareMorph
-
 export const CANVAS = {
-  width: 1280,
-  height: 720,
-};
+	width: 1920,
+	height: 1080,
+	centerX: 960,
+	centerY: 540,
+} as const;
 
 export const COLORS = {
-  background: '#141921',
-  fromShape: '#3B82F6',
-  toShape: '#22C55E',
-};
+	backgroundCenter: '#1E293B',
+	backgroundEdge: '#0F172A',
+	shapeStart: '#3B82F6',
+	shapeEnd: '#6366F1',
+} as const;
 
-export const DIMENSIONS = {
-  fromSize: 180,
-  toSize: 160,
-  glowBlur: 25,
-};
+export const SHAPE = {
+	size: 120,
+	borderRadiusStart: 60, // 50% of 120 = circle
+	borderRadiusEnd: 12,
+} as const;
 
 export const TIMING = {
-  // Phase 1 (0-15): Hold as blue circle with subtle breathing
-  holdStart: 0,
-  holdEnd: 15,
-  // Phase 2 (15-60): Morph — border-radius, color, rotation, size
-  morphStart: 15,
-  morphEnd: 60,
-  // Phase 3 (60-90): Settle — scale overshoot + glow stabilize
-  settleStart: 60,
-  totalDuration: 90,
-};
+	totalFrames: 36,
+	// Phase 1: Hold as circle (frames 0-5)
+	holdEnd: 6,
+	// Phase 2: Morph (frames 6-29)
+	morphStart: 6,
+	morphEnd: 30,
+	// Phase 3: Settle (frames 30-35)
+	settleStart: 30,
+	settleEnd: 36,
+} as const;
 
-export const MORPH = {
-  rotationDegrees: 90,
-  breathingScale: 1.02,
-  settleOvershootScale: 1.05,
-  glowOpacityMorph: 0.25,
-  glowOpacitySettle: 0.2,
-};
+export const GHOST = {
+	count: 3,
+	opacities: [0.15, 0.1, 0.05] as readonly number[],
+	frameOffsets: [0, 4, 8] as readonly number[],
+} as const;
 
 export const FPS = 30;

@@ -543,7 +543,7 @@ describe("GET /api/pipeline/audit/results", () => {
     expect(mainSection.sectionLabel).toBe("Main Content");
   });
 
-  it("returns 'pending' status for sections with spec files but no audit files", async () => {
+  it("returns 'pending' status and surfaces standalone specs as SKIP when no audit files exist", async () => {
     const mainSpecDir = path.join(tmpDir, "specs", "main");
 
     // Write a non-audit .md spec file
@@ -563,7 +563,12 @@ describe("GET /api/pipeline/audit/results", () => {
       );
       expect(mainSection).toBeDefined();
       expect(mainSection.status).toBe("pending");
-      expect(mainSection.specs).toHaveLength(0);
+      expect(mainSection.specs).toHaveLength(1);
+      expect(mainSection.specs[0]).toMatchObject({
+        specName: "transitions",
+        verdict: "SKIP",
+      });
+      expect(mainSection.specs[0].summary).toMatch(/standalone visual/i);
     } finally {
       fs.unlinkSync(path.join(mainSpecDir, "transitions.md"));
     }

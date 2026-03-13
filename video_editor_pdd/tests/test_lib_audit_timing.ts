@@ -40,6 +40,40 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.sampleSeconds).toBe(76.5);
   });
 
+  it("supports timestamp ranges that use an en dash separator", () => {
+    const spec = `
+**Timestamp:** 0:10 – 0:14
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 20,
+      fps: 30,
+    });
+
+    expect(result.source).toBe("timestamp");
+    expect(result.startSeconds).toBe(10);
+    expect(result.endSeconds).toBe(14);
+    expect(result.sampleSeconds).toBe(13);
+  });
+
+  it("normalizes global timestamp ranges to section-local time when a section offset is provided", () => {
+    const spec = `
+**Timestamp:** 0:10 – 0:14
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 7.344,
+      fps: 30,
+      sectionOffsetSeconds: 7,
+    });
+
+    expect(result.source).toBe("timestamp");
+    expect(result.startSeconds).toBe(3);
+    expect(result.endSeconds).toBe(7);
+    expect(result.sampleSeconds).toBe(6);
+    expect(result.intrinsicSampleSeconds).toBeCloseTo(3, 3);
+  });
+
   it("prefers the final animation-sequence range when timestamp is missing", () => {
     const spec = `
 ## Animation Sequence
@@ -79,6 +113,26 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.startSeconds).toBeCloseTo(65 / 30);
     expect(result.endSeconds).toBeCloseTo(90 / 30);
     expect(result.sampleSeconds).toBeCloseTo(77.5 / 30);
+  });
+
+  it("does not let an opening hold range override a later representative animation range", () => {
+    const spec = `
+**Timestamp:** 0:04 - 0:05
+
+## Animation Sequence
+1. Frame 0-3: Hold square at center.
+2. Frame 3-22: Square slides to the right.
+3. Frame 22-27: Overshoot settle.
+4. Frame 27-33: Guide line fades out and glow appears.
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 7.381,
+      fps: 30,
+    });
+
+    expect(result.source).toBe("frame-range");
+    expect(result.intrinsicSampleFrame).toBe(27);
   });
 
   it("parses bolded markdown frame ranges used in generated specs", () => {
@@ -195,6 +249,31 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.startSeconds).toBeCloseTo(8);
     expect(result.endSeconds).toBeCloseTo(9.999);
     expect(result.sampleSeconds).toBeCloseTo(9.49925);
+  });
+
+  it("ignores impossible global timestamps after section-offset normalization and falls back to intrinsic frame ranges", () => {
+    const spec = `
+**Timestamp:** 0:19 – 0:22
+
+## Animation Sequence
+1. Frame 0-10: Background fades in.
+2. Frame 10-40: Completion ring draws.
+3. Frame 40-55: Checkmark pops in.
+4. Frame 50-70: Label fades in.
+5. Frame 60-80: Hold complete end card.
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 7.488,
+      fps: 30,
+      sectionOffsetSeconds: 7.445333,
+    });
+
+    expect(result.source).toBe("frame-range");
+    expect(result.startSeconds).toBeCloseTo(2);
+    expect(result.endSeconds).toBeCloseTo(80 / 30);
+    expect(result.sampleSeconds).toBeCloseTo((2 + 80 / 30) / 2, 2);
+    expect(result.intrinsicSampleFrame).toBe(69);
   });
 });
 

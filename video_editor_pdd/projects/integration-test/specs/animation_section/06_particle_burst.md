@@ -1,78 +1,78 @@
 [Remotion]
 
-# Section 1.6: Particle Burst Transition
+# Section 1.6: Particle Burst
 
 **Tool:** Remotion
-**Duration:** ~2s
-**Timestamp:** 0:16 - 0:18
+**Duration:** ~1.0s
+**Timestamp:** 0:05.7 - 0:06.7
 
 ## Visual Description
-A burst of colored particles explodes outward from the center of the screen, combining blue and green particles that reference the two shapes from the section. The particles radiate in a circular pattern, fade out as they reach the edges, and the screen transitions to the dark background for the closing card.
+A particle burst effect erupts from the center of the canvas. 40 small circles (4-8px radius) explode outward from a central point in all directions, each following a random radial trajectory. Particles are colored in a palette of blue (#3B82F6), indigo (#6366F1), violet (#8B5CF6), and white (#FFFFFF). Each particle fades from full opacity to 0 as it travels outward. A brief white flash (full-canvas overlay at 15% opacity) precedes the burst. Particles slow down as they spread, simulating deceleration.
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1280x720 (16:9)
-- Background: Charcoal (#141921), transitioning to Dark navy (#0B1120) by end
-- Grid lines: none
+- Resolution: 1920x1080 (16:9)
+- Background: Charcoal #1E293B
+- Grid lines: None
 
 ### Chart/Visual Elements
-- Particle system: 40 particles total, spawning from center point (640, 360)
-- Blue particles (20): circles, 6-12px diameter, fill #3B82F6, random velocities outward
-- Green particles (20): squares, 6-10px, fill #22C55E, random velocities outward
-- Each particle has randomized: angle (0-360°), speed (200-600px/s), size, rotation speed
-- Flash: White (#FFFFFF) circle, 30px, at center, 80% opacity, visible for 3 frames
+- Burst origin: center (960, 540)
+- Particle count: 40
+- Particle radius: randomly 4px to 8px
+- Particle colors: randomly assigned from [#3B82F6, #6366F1, #8B5CF6, #FFFFFF]
+- Particle travel distance: 150px to 500px from origin (random per particle)
+- Particle angles: evenly distributed 0-360 degrees with slight random jitter (+/- 5 degrees)
+- Flash overlay: full canvas, white (#FFFFFF) at 15% opacity
 
 ### Animation Sequence
-1. **Frame 0-3 (0-0.1s):** White center flash appears and fades immediately. All 40 particles spawn at center.
-2. **Frame 3-30 (0.1-1.0s):** Particles travel outward along their radial trajectories. Particles rotate individually. Opacity starts at 100% and begins fading after frame 15.
-3. **Frame 30-50 (1.0-1.67s):** Particles continue outward, opacity fading to 0%. Particles that reach canvas edge disappear. Background begins transitioning from #141921 to #0B1120.
-4. **Frame 50-60 (1.67-2.0s):** All particles gone. Background fully settled at #0B1120. Screen is clear.
+1. **Frame 0-2 (0-0.07s):** White flash overlay appears and fades
+2. **Frame 2-6 (0.07-0.2s):** Particles spawn at center, begin radiating outward rapidly
+3. **Frame 6-24 (0.2-0.8s):** Particles continue outward, decelerating; opacity fades from 1.0 to 0
+4. **Frame 24-30 (0.8-1.0s):** Final particles fade out completely; canvas returns to background only
 
 ### Typography
 - None
 
 ### Easing
-- Particle velocity: `easeOutQuad` (decelerate as they spread)
-- Particle opacity fade: `linear`
-- Center flash: `easeOutExpo`
-- Background transition: `easeInOutSine`
+- Flash: `easeOutExpo`
+- Particle radial movement: `easeOutQuart`
+- Particle opacity fade: `easeInQuad`
 
 ## Narration Sync
-> (No narration — transition beat)
+> "It uses only Remotion animations with no Veo clips."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={60}>
-  <AbsoluteFill>
-    <BackgroundTransition from="#141921" to="#0B1120" start={30} end={50} />
-    <CenterFlash duration={3} color="#FFFFFF" size={30} />
-    <ParticleSystem
+<Sequence from={0} durationInFrames={30}>
+  <Sequence from={0} durationInFrames={6}>
+    <FlashOverlay color="#FFFFFF" peakOpacity={0.15} />
+  </Sequence>
+  <Sequence from={2}>
+    <ParticleBurst
       count={40}
-      particles={[
-        { type: 'circle', color: '#3B82F6', count: 20 },
-        { type: 'square', color: '#22C55E', count: 20 },
-      ]}
-      origin={{ x: 640, y: 360 }}
-      speedRange={[200, 600]}
-      sizeRange={[6, 12]}
-      fadeStart={15}
+      origin={[960, 540]}
+      colors={["#3B82F6", "#6366F1", "#8B5CF6", "#FFFFFF"]}
+      minRadius={4}
+      maxRadius={8}
+      minDistance={150}
+      maxDistance={500}
     />
-  </AbsoluteFill>
+  </Sequence>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "particleCount": 40,
-  "groups": [
-    { "shape": "circle", "color": "#3B82F6", "count": 20 },
-    { "shape": "square", "color": "#22C55E", "count": 20 }
-  ],
-  "origin": { "x": 640, "y": 360 },
-  "speedRange": [200, 600],
-  "sizeRange": [6, 12]
+  "burst": {
+    "origin": [960, 540],
+    "particleCount": 40,
+    "colors": ["#3B82F6", "#6366F1", "#8B5CF6", "#FFFFFF"],
+    "radiusRange": [4, 8],
+    "distanceRange": [150, 500],
+    "seed": 42
+  }
 }
 ```
 

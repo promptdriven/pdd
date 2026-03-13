@@ -661,7 +661,7 @@ describe("audit executor factory", () => {
     );
   });
 
-  it("renders a fresh still when the section has configured compositions even if a rendered mp4 exists", async () => {
+  it("renders the preview composition when a pure component visual has a configured preview", async () => {
     const config = mockProjectConfig();
     config.sections = [
       {
@@ -685,8 +685,174 @@ describe("audit executor factory", () => {
     await executor(jest.fn());
 
     expect(mockRenderStill).toHaveBeenCalledTimes(1);
-    expect(mockRenderStill.mock.calls[0][0]).toBe("AnimationSection");
+    expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+  });
+
+  it("uses the intrinsic sample frame for preview compositions instead of scaling against the 150-frame preview container", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 7.381,
+        offsetSeconds: 0,
+        compositions: ["04_square_slide_right"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["04_square_slide_right.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
+    const slidePath = pathMod.join(specDir, "04_square_slide_right.md");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === slidePath) {
+        return [
+          "**Timestamp:** 0:04 - 0:05",
+          "",
+          "## Animation Sequence",
+          "1. Frame 0-3: Hold square at center.",
+          "2. Frame 3-22: Square slides to the right.",
+          "3. Frame 22-27: Overshoot settle.",
+          "4. Frame 27-33: Guide line fades out and glow appears.",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === slidePath ||
+        candidate === pathMod.join("/project-root", "outputs", "sections", "animation_section.mp4")
+      );
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "animation-section04-square-slide-right",
+      27,
+      pathMod.join("/project-root", "outputs", "audit", "animation_section", "04_square_slide_right_frame.png")
+    );
+  });
+
+  it("extracts frames from a staged per-visual Veo clip when auditing a media-only spec", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+        compositionId: "VeoSection",
+        videoFile: "outputs/sections/veo_section.mp4",
+        durationSeconds: 7.344,
+        offsetSeconds: 7,
+        compositions: ["veo_section_01_title_card"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["01_title_card.md", "02_ocean_wave_broll.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "veo_section");
+    const titleCardPath = pathMod.join(specDir, "01_title_card.md");
+    const brollPath = pathMod.join(specDir, "02_ocean_wave_broll.md");
+    const stagedClipPath = pathMod.join("/project-root", "outputs", "veo", "02_ocean_wave_broll.mp4");
+
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === titleCardPath) {
+        return "**Timestamp:** 0:07 – 0:10\n";
+      }
+      if (candidate === brollPath) {
+        return [
+          "[veo: Ocean wave at sunset]",
+          "",
+          "**Timestamp:** 0:10 – 0:14",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === titleCardPath ||
+        candidate === brollPath ||
+        candidate === stagedClipPath ||
+        candidate === pathMod.join("/project-root", "outputs", "sections", "veo_section.mp4")
+      );
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["veo_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime).toHaveBeenCalledWith(
+      stagedClipPath,
+      3,
+      pathMod.join("/project-root", "outputs", "audit", "veo_section", "02_ocean_wave_broll_frame.png")
+    );
+  });
+
+  it("writes a SKIP audit report when a renderable hybrid visual has no reliable standalone audit source", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+        compositionId: "VeoSection",
+        videoFile: "outputs/sections/veo_section.mp4",
+        durationSeconds: 7.344,
+        compositions: ["05_split_nature_comparison"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["05_split_nature_comparison.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "veo_section");
+    const splitPath = pathMod.join(specDir, "05_split_nature_comparison.md");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === splitPath) {
+        return [
+          "**Timestamp:** 0:14 – 0:18",
+          "",
+          'Split uses "veo/ocean_sunset.mp4" and "veo/aerial_forest.mp4".',
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return candidate === specDir || candidate === splitPath;
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["veo_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).not.toHaveBeenCalled();
+    expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+    expect(mockRunClaudeAudit).not.toHaveBeenCalled();
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      pathMod.join(specDir, "AUDIT_05_split_nature_comparison.md"),
+      expect.stringContaining("## Verdict\nskip\n"),
+      "utf-8"
+    );
   });
 
   it("falls back to renderStill when the rendered section video is unavailable", async () => {
@@ -1204,7 +1370,8 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledTimes(2);
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
-    expect(mockRenderStill.mock.calls[0][1]).toBe(56);
+    expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
+    expect(mockRenderStill.mock.calls[0][1]).toBe(77);
   });
 });
 
@@ -1300,6 +1467,23 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].summary).toBe("Text is clipped on right edge");
     expect(intro.passCount).toBe(0);
     expect(intro.failCount).toBe(1);
+  });
+
+  it("parses skip verdicts from AUDIT_ files without incrementing pass or fail counts", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(["AUDIT_visual.md"]);
+    mockReadFileSync.mockReturnValue(
+      "## Verdict\nskip\n## Summary\nStandalone audit skipped because the spec requires unresolved media aliases.\n"
+    );
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    const intro = body.sections[0];
+    expect(intro.specs[0].verdict).toBe("SKIP");
+    expect(intro.specs[0].summary).toContain("Standalone audit skipped");
+    expect(intro.passCount).toBe(0);
+    expect(intro.failCount).toBe(0);
   });
 
   it("includes specName in each spec result", async () => {

@@ -11,9 +11,36 @@ from __future__ import annotations
 # logging at module level (e.g. llm_invoke.py). This ensures module-level
 # logger.info() calls are suppressed when the user passes --quiet.
 import os as _os
-import sys as _sys
-if '--quiet' in _sys.argv:
+import sys
+if '--quiet' in sys.argv:
     _os.environ.setdefault('PDD_QUIET', '1')
+
+_DEFAULTS = {
+    "__version__": "unknown",
+    "EXTRACTION_STRENGTH": 0.5,
+    "DEFAULT_STRENGTH": 1.0,
+    "DEFAULT_TEMPERATURE": 0.0,
+    "DEFAULT_TIME": 0.25,
+}
+
+
+def _bootstrap_package_defaults() -> None:
+    """Populate package-level defaults when `pdd` is loaded as a namespace package.
+
+    Some subprocess contexts set `PYTHONPATH` to a parent directory that causes
+    `pdd` to resolve as a namespace package. In that mode, `pdd.__init__` is not
+    executed, so imports like `from . import DEFAULT_STRENGTH` fail. Seed
+    missing attributes here before importing command modules.
+    """
+    pkg = sys.modules.get(__package__)
+    if pkg is None:
+        return
+    for key, value in _DEFAULTS.items():
+        if not hasattr(pkg, key):
+            setattr(pkg, key, value)
+
+
+_bootstrap_package_defaults()
 
 from .core.cli import cli
 from .commands import register_commands

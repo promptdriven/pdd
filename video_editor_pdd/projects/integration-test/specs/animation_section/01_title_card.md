@@ -3,53 +3,56 @@
 # Section 1.1: Animation Section Title Card
 
 **Tool:** Remotion
-**Duration:** ~3s
-**Timestamp:** 0:00 - 0:03
+**Duration:** ~1.5s
+**Timestamp:** 0:00 - 0:01.5
 
 ## Visual Description
-A clean title card introducing the Animation Section. The text "Animation Section" fades in letter-by-letter against a dark navy background, with a thin horizontal rule expanding outward from center beneath it. A subtle gradient glow pulses once behind the title.
+A bold title card introduces the Animation Section. The background is a deep navy blue. The title text "Animation Section" fades in from zero opacity while scaling up slightly from 95% to 100%. A thin horizontal accent line (white, 2px) expands outward from the center beneath the title. A subtle subtitle "Integration Test" fades in 0.3s after the title.
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1280x720 (16:9)
-- Background: Dark navy (#0B1120) with radial gradient center glow (#1A2744)
+- Resolution: 1920x1080 (16:9)
+- Background: Deep navy #0F172A
+- Grid lines: None
 
 ### Chart/Visual Elements
-- Title text: "Animation Section" centered horizontally and vertically
-- Horizontal divider line: 200px wide, 2px height, white (#FFFFFF) at 40% opacity, positioned 20px below title baseline
-- Gradient glow: radial gradient circle, 300px radius, centered behind title, #2E4A7A at 30% opacity
+- Title text: centered horizontally and vertically, offset 40px above center
+- Accent line: centered, 200px wide expanding to 400px, 2px height, white (#FFFFFF) at 80% opacity
+- Subtitle: centered, 24px below accent line
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Background fades in from black. Radial glow begins expanding from 0 to 300px radius.
-2. **Frame 15-45 (0.5-1.5s):** Title text appears letter-by-letter with stagger (50ms per character), fading from 0% to 100% opacity with 5px upward translate per letter.
-3. **Frame 45-60 (1.5-2.0s):** Horizontal divider expands from 0px to 200px width, centered. Radial glow pulses brightness from 30% to 50% opacity and back.
-4. **Frame 60-90 (2.0-3.0s):** All elements hold at full visibility. Subtle float animation on title (2px vertical oscillation).
+1. **Frame 0-15 (0-0.5s):** Title text fades in from opacity 0 to 1, scales from 0.95 to 1.0
+2. **Frame 9-24 (0.3-0.8s):** Accent line expands from 0px to 400px width
+3. **Frame 15-30 (0.5-1.0s):** Subtitle fades in from opacity 0 to 1
+4. **Frame 30-45 (1.0-1.5s):** Hold all elements at full visibility
 
 ### Typography
-- Title: Inter Bold, 56px, white (#FFFFFF)
-- Subtitle: none
+- Title: Inter Bold, 72px, white (#FFFFFF)
+- Subtitle: Inter Regular, 28px, slate-300 (#CBD5E1)
 
 ### Easing
-- Letter stagger: `easeOutQuad`
-- Divider expansion: `easeInOutCubic`
-- Glow pulse: `easeInOutSine`
+- Title fade/scale: `easeOutCubic`
+- Line expansion: `easeInOutQuad`
+- Subtitle fade: `easeOutQuad`
 
 ## Narration Sync
-> (No narration — title card plays before first narration segment)
+> "This is the first section of the integration test video."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={90}>
-  <AbsoluteFill style={{ backgroundColor: '#0B1120' }}>
-    <RadialGlow expandTo={300} pulseAt={45} />
+<Sequence from={0} durationInFrames={45}>
+  <TitleCard>
+    <Sequence from={0}>
+      <FadeScale text="Animation Section" />
+    </Sequence>
+    <Sequence from={9}>
+      <ExpandingLine />
+    </Sequence>
     <Sequence from={15}>
-      <StaggeredText text="Animation Section" staggerMs={50} />
+      <FadeIn text="Integration Test" />
     </Sequence>
-    <Sequence from={45}>
-      <ExpandingDivider width={200} />
-    </Sequence>
-  </AbsoluteFill>
+  </TitleCard>
 </Sequence>
 ```
 
@@ -57,9 +60,7 @@ A clean title card introducing the Animation Section. The text "Animation Sectio
 ```json
 {
   "title": "Animation Section",
-  "bgColor": "#0B1120",
-  "glowColor": "#2E4A7A",
-  "dividerWidth": 200
+  "subtitle": "Integration Test"
 }
 ```
 

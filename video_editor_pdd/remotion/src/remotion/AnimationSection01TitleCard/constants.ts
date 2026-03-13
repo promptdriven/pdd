@@ -1,54 +1,56 @@
 // Component-level constants for AnimationSection01TitleCard
+// Duration: ~1.5s (45 frames @ 30fps)
 
 export const CANVAS = {
-  width: 1280,
-  height: 720,
-};
+  width: 1920,
+  height: 1080,
+} as const;
 
 export const COLORS = {
-  background: '#0B1120',
-  glowCenter: '#2E4A7A',
-  gradientCenter: '#1A2744',
-  titleText: '#FFFFFF',
-  divider: '#FFFFFF',
-};
+  background: '#0F172A',
+  titleWhite: '#FFFFFF',
+  subtitleSlate: '#CBD5E1',
+  accentLine: 'rgba(255, 255, 255, 0.8)',
+} as const;
+
+export const TEXT = {
+  title: 'Animation Section',
+  subtitle: 'Integration Test',
+} as const;
 
 export const TYPOGRAPHY = {
   title: {
-    fontSize: 56,
-    fontFamily: 'Inter',
-    fontWeight: 'bold' as const,
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 72,
+    fontWeight: 700 as const,
   },
-};
+  subtitle: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 28,
+    fontWeight: 400 as const,
+  },
+} as const;
 
 export const DIMENSIONS = {
-  dividerWidth: 200,
-  dividerHeight: 2,
-  dividerOpacity: 0.4,
-  dividerOffsetY: 20,
-  glowRadius: 300,
-  glowBaseOpacity: 0.3,
-  glowPulseOpacity: 0.5,
-  floatAmplitude: 2,
-};
+  titleOffsetY: -40,
+  accentLineEndWidth: 400,
+  accentLineHeight: 2,
+  accentLineGap: 16,
+  subtitleGap: 24,
+} as const;
 
 export const ANIMATION_TIMING = {
-  // Frame 0-15: Background fades in, glow expands
-  backgroundFadeStart: 0,
-  backgroundFadeEnd: 15,
-  // Frame 15-45: Title letter-by-letter stagger
-  titleStaggerStart: 15,
-  titleStaggerEnd: 45,
-  letterStaggerFrames: 1.5, // ~50ms per char at 30fps
-  letterTranslateY: 5,
-  // Frame 45-60: Divider expands, glow pulses
-  dividerExpandStart: 45,
-  dividerExpandEnd: 60,
-  glowPulseStart: 45,
-  glowPulseEnd: 60,
-  // Frame 60-90: Hold with float
-  holdStart: 60,
-  totalDuration: 90,
-};
-
-export const TITLE_TEXT = 'Animation Section';
+  // Frame 0-15: Title fades in opacity 0->1, scales 0.95->1.0
+  titleFadeStart: 0,
+  titleFadeEnd: 15,
+  titleScaleStart: 0.95,
+  titleScaleEnd: 1.0,
+  // Frame 9-24: Accent line expands from 0->400px
+  accentLineStart: 9,
+  accentLineEnd: 24,
+  // Frame 15-30: Subtitle fades in opacity 0->1
+  subtitleFadeStart: 15,
+  subtitleFadeEnd: 30,
+  // Frame 30-45: Hold
+  totalDuration: 45,
+} as const;

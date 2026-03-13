@@ -1,4 +1,5 @@
 // Component-level constants for VeoSection01TitleCard
+// Duration: ~3s (90 frames @ 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
@@ -16,23 +17,23 @@ export const COLORS = {
 export const TYPOGRAPHY = {
   title: {
     fontSize: 64,
-    fontFamily: 'Inter',
-    fontWeight: 'bold' as const,
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 700 as const,
   },
 };
 
 export const ANIMATION = {
-  // Background gradient fades in from black
+  // Frame 0-15: Background gradient fades in from black (linear)
   backgroundFadeStart: 0,
   backgroundFadeEnd: 15,
-  // Title text fades in and shifts up 10px
+  // Frame 15-45: Title text fades in with parallax shift (easeOutCubic)
   titleFadeStart: 15,
   titleFadeEnd: 45,
-  // Horizontal rule draws outward from center
+  titleShiftPx: 10,
+  // Frame 30-60: Horizontal rule scales outward from centre (easeInOutQuad)
   ruleFadeStart: 30,
   ruleFadeEnd: 60,
-  // Particle drift runs full duration
-  particleDurationFrames: 90,
+  // Frame 0-90: Particle drift runs continuously
   totalDuration: 90,
 };
 
@@ -43,6 +44,8 @@ export const DIMENSIONS = {
   particleMinRadius: 2,
   particleMaxRadius: 4,
   particleOpacity: 0.15,
+  particleMinSpeed: 1.5,
+  particleMaxSpeed: 4.0,
   titleRuleGap: 24,
 };
 
@@ -57,7 +60,7 @@ export type TitleCardLayout = {
 
 export const resolveTitleCardLayout = (
   width: number,
-  height: number
+  height: number,
 ): TitleCardLayout => {
   const scaleX = width / BASE_CANVAS.width;
   const scaleY = height / BASE_CANVAS.height;
@@ -79,6 +82,8 @@ export const resolveTitleCardLayout = (
       particleMinRadius: Math.max(1.5, DIMENSIONS.particleMinRadius * uniformScale),
       particleMaxRadius: Math.max(3, DIMENSIONS.particleMaxRadius * uniformScale),
       particleOpacity: DIMENSIONS.particleOpacity,
+      particleMinSpeed: DIMENSIONS.particleMinSpeed * uniformScale,
+      particleMaxSpeed: DIMENSIONS.particleMaxSpeed * uniformScale,
       titleRuleGap: DIMENSIONS.titleRuleGap * scaleY,
     },
   };
