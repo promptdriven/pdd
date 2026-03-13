@@ -21,6 +21,7 @@ from pdd.agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
+    substitute_template_variables,
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
     post_step_comment,
@@ -37,15 +38,31 @@ from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_co
 from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
 
+# Initialize console for rich output
+console = Console()
+
+# Per-Step Timeouts (Workflow specific)
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 240.0,   # Docs Comparison
+    3: 340.0,   # Research
+    4: 340.0,   # Clarify
+    5: 340.0,   # Docs Changes
+    6: 340.0,   # Identify Dev Units
+    7: 340.0,   # Architecture Review
+    8: 600.0,   # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 340.0,  # Architecture Update
+    11: 340.0,  # Identify Issues
+    12: 600.0,  # Fix Issues (Complex)
+    13: 340.0,  # Create PR
+}
+
+MAX_REVIEW_ITERATIONS = 5
+
 
 def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
-    """Remove corrupted dependency values from architecture.json after step 10.
-
-    The step 10 LLM agent can write the full content of a prompt file as a
-    dependency string when it confuses example <pdd-dependency> tags in the
-    prompt's instruction text with real tags. Valid dependency values are short
-    .prompt filenames with no newlines.
-    """
+    """Remove corrupted dependency values from architecture.json after step 10."""
     arch_path = worktree_path / "architecture.json"
     if not arch_path.exists():
         return
@@ -69,28 +86,6 @@ def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
                 json.dump(data, f, indent=2)
     except (json.JSONDecodeError, OSError):
         pass
-
-# Initialize console for rich output
-console = Console()
-
-# Per-Step Timeouts (Workflow specific)
-CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 240.0,   # Duplicate Check
-    2: 240.0,   # Docs Comparison
-    3: 340.0,   # Research
-    4: 340.0,   # Clarify
-    5: 340.0,   # Docs Changes
-    6: 340.0,   # Identify Dev Units
-    7: 340.0,   # Architecture Review
-    8: 600.0,   # Analyze Prompt Changes (Complex)
-    9: 1000.0,  # Implement Changes (Most Complex)
-    10: 340.0,  # Architecture Update
-    11: 340.0,  # Identify Issues
-    12: 600.0,  # Fix Issues (Complex)
-    13: 340.0,  # Create PR
-}
-
-MAX_REVIEW_ITERATIONS = 5
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
     """Get repo root via git rev-parse."""
@@ -750,11 +745,7 @@ def run_agentic_change_orchestrator(
         exclude_keys = list(context.keys())
         prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
 
-        # Safe substitution (Issue #549): un-double template literal braces first, then substitute.
-        prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
-        formatted_prompt = prompt_template
-        for key, value in context.items():
-            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
+        formatted_prompt = substitute_template_variables(prompt_template, context)
 
         timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
         step_success, step_output, step_cost, step_model = run_agentic_task(
@@ -910,10 +901,7 @@ def run_agentic_change_orchestrator(
             # Preprocess to escape curly braces in included content
             exclude_keys = list(context.keys())
             s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-            s11_template = s11_template.replace("{{", "{").replace("}}", "}")
-            s11_prompt = s11_template
-            for key, value in context.items():
-                s11_prompt = s11_prompt.replace(f'{{{key}}}', str(value))
+            s11_prompt = substitute_template_variables(s11_template, context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
@@ -930,10 +918,7 @@ def run_agentic_change_orchestrator(
             # Preprocess to escape curly braces in included content
             exclude_keys = list(context.keys())
             s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-            s12_template = s12_template.replace("{{", "{").replace("}}", "}")
-            s12_prompt = s12_template
-            for key, value in context.items():
-                s12_prompt = s12_prompt.replace(f'{{{key}}}', str(value))
+            s12_prompt = substitute_template_variables(s12_template, context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
@@ -999,10 +984,7 @@ def run_agentic_change_orchestrator(
         # Preprocess to escape curly braces in included content
         exclude_keys = list(context.keys())
         s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-        s13_template = s13_template.replace("{{", "{").replace("}}", "}")
-        s13_prompt = s13_template
-        for key, value in context.items():
-            s13_prompt = s13_prompt.replace(f'{{{key}}}', str(value))
+        s13_prompt = substitute_template_variables(s13_template, context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
             instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES,

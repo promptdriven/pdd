@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import click
 import requests
 
-from .. import __version__
+try:
+    from .. import __version__
+except ImportError:
+    # Fallback for environments where `pdd` resolves as a namespace package.
+    __version__ = "unknown"
 from .errors import console, get_core_dump_errors
 
 

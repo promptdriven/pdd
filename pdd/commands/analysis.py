@@ -92,6 +92,7 @@ def detect_change(
                 quiet=obj.get("quiet", False),
                 fail_fast=fail_fast,
                 include_llm_prompts=include_llm,
+                cache_story_prompt_links=True,
             )
             return {"passed": passed, "results": results}, total_cost, model_name
 
