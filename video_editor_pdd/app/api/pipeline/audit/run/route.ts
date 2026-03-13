@@ -196,11 +196,27 @@ function resolveAuditRenderSource(
   }
 
   if (visualType === "hybrid") {
+    if (visual.previewCompositionId) {
+      return {
+        kind: "preview-composition",
+        visualType,
+        compositionId: visual.previewCompositionId,
+      };
+    }
+
+    if (canRenderFreshStill && section.compositionId) {
+      return {
+        kind: "section-composition",
+        visualType,
+        compositionId: section.compositionId,
+      };
+    }
+
     return {
       kind: "skip",
       visualType,
       reason:
-        "Standalone audit skipped because this visual mixes component rendering with media references that are not auditable as a single standalone source.",
+        "Standalone audit skipped because this visual mixes component rendering with media references, but no composed render source is available.",
     };
   }
 

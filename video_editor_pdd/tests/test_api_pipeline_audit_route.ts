@@ -805,7 +805,7 @@ describe("audit executor factory", () => {
     );
   });
 
-  it("writes a SKIP audit report when a renderable hybrid visual has no reliable standalone audit source", async () => {
+  it("audits a hybrid visual from its preview composition instead of skipping it", async () => {
     const config = mockProjectConfig();
     config.sections = [
       {
@@ -845,14 +845,19 @@ describe("audit executor factory", () => {
     );
     await executor(jest.fn());
 
-    expect(mockRenderStill).not.toHaveBeenCalled();
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
-    expect(mockRunClaudeAudit).not.toHaveBeenCalled();
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      pathMod.join(specDir, "AUDIT_05_split_nature_comparison.md"),
-      expect.stringContaining("## Verdict\nskip\n"),
-      "utf-8"
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "veo-section05-split-nature-comparison",
+      expect.any(Number),
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "veo_section",
+        "05_split_nature_comparison_frame.png"
+      )
     );
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(1);
   });
 
   it("audits a composited media visual from the section composition instead of a bare clip", async () => {
