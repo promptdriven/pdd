@@ -855,7 +855,7 @@ describe("audit executor factory", () => {
     );
   });
 
-  it("writes a SKIP audit report when a media visual requires composited overlays instead of a bare clip audit", async () => {
+  it("audits a composited media visual from the section composition instead of a bare clip", async () => {
     const config = mockProjectConfig();
     config.sections = [
       {
@@ -938,11 +938,16 @@ describe("audit executor factory", () => {
       expect.any(Number),
       expect.any(String)
     );
-    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(1);
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      pathMod.join(specDir, "AUDIT_02_veo_ocean_broll.md"),
-      expect.stringContaining("## Verdict\nskip\n"),
-      "utf-8"
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "VeoSection",
+      expect.any(Number),
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "veo_section",
+        "02_veo_ocean_broll_frame.png"
+      )
     );
   });
 

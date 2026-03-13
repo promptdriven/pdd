@@ -103,6 +103,14 @@ GENERIC_VIDEO_REF_RE = re.compile(
     r'(?:"|\b)(video|src)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
     re.IGNORECASE,
 )
+NARRATION_SYNC_RE = re.compile(
+    r'##\s*Narration Sync\s*(?:\r?\n)+>\s*"([^"\n]+)"',
+    re.IGNORECASE,
+)
+NARRATION_JSON_RE = re.compile(
+    r'"narration"\s*:\s*"([^"\n]+)"',
+    re.IGNORECASE,
+)
 VIDEO_EXTENSION_PRIORITY = ('.mp4', '.webm', '.mov', '.m4v')
 
 
@@ -573,6 +581,82 @@ def build_visual_media_manifest(
     return manifest
 
 
+def _extract_narration_text(spec_content: str) -> Optional[str]:
+    """Extract narration text for generic lower-third overlays."""
+    narration_match = NARRATION_SYNC_RE.search(spec_content)
+    if narration_match:
+        return narration_match.group(1).strip()
+
+    narration_json_match = NARRATION_JSON_RE.search(spec_content)
+    if narration_json_match:
+        return narration_json_match.group(1).strip()
+
+    return None
+
+
+def _extract_visual_overlay_config(spec_content: str) -> Optional[Dict[str, Any]]:
+    """Build a generic overlay config for media-plus-overlay specs.
+
+    This is intentionally data-driven and only emits generic overlays that can
+    be rendered consistently across projects without requiring a bespoke
+    generated Remotion component per spec.
+    """
+    normalized = spec_content.lower()
+    config: Dict[str, Any] = {}
+
+    if (
+        'gradientoverlay' in normalized
+        or 'color grade overlay' in normalized
+        or 'linear gradient' in normalized
+    ):
+        config['gradientOverlay'] = 'bottom'
+
+    if (
+        'lightbloomoverlay' in normalized
+        or 'light bloom overlay' in normalized
+        or 'radial gradient at top-right' in normalized
+    ):
+        config['lightBloom'] = True
+
+    if 'lower-third' in normalized or 'lowerthirdbadge' in normalized:
+        narration_text = _extract_narration_text(spec_content)
+        if narration_text:
+            config['lowerThirdText'] = narration_text
+
+    return config or None
+
+
+def build_visual_overlay_manifest(
+    section: Dict[str, Any],
+    project_dir: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Build generic overlay configs for media-based visuals.
+
+    These overlays are used when a spec describes composited media but there is
+    no dedicated Remotion component for that visual.
+    """
+    visual_ids = resolve_section_visual_ids(section, project_dir)
+    if not visual_ids or not project_dir:
+        return {}
+
+    spec_dir = section.get('specDir') or section['id']
+    if not os.path.isabs(spec_dir):
+        spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
+
+    manifest: Dict[str, Dict[str, Any]] = {}
+    for visual_id in visual_ids:
+        spec_base = component_base_name(visual_id, section['id'])
+        spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+        if not os.path.isfile(spec_path):
+            continue
+
+        overlay_config = _extract_visual_overlay_config(_read_text_if_exists(spec_path))
+        if overlay_config:
+            manifest[visual_id] = overlay_config
+
+    return manifest
+
+
 def resolve_component_intrinsic_duration_frames(
     comp_id: str,
     section_id: str,
@@ -919,6 +1003,10 @@ def generate_generated_timeline_wrapper(
         remotion_public,
         direct_video_src if needs_direct_video else None,
     )
+    visual_overlay_manifest = build_visual_overlay_manifest(
+        section,
+        project_dir,
+    )
 
     resolved_components: List[tuple[str, str, str]] = []
     component_durations: Dict[str, int] = {}
@@ -950,6 +1038,8 @@ def generate_generated_timeline_wrapper(
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('import { VISUAL_SEQUENCE } from "./constants";')
     lines.append('import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";')
+    if visual_overlay_manifest:
+        lines.append('import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";')
 
     for _, comp_pascal, import_path in resolved_components:
         lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
@@ -974,49 +1064,63 @@ def generate_generated_timeline_wrapper(
         lines.append(f'  "{visual_id}": {{ {alias_parts} }},')
     lines.append('};')
     lines.append('')
+    lines.append('const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {')
+    for visual_id, config in visual_overlay_manifest.items():
+        overlay_parts: List[str] = []
+        for key, value in config.items():
+            if isinstance(value, bool):
+                serialized = 'true' if value else 'false'
+            else:
+                serialized = json.dumps(str(value))
+            overlay_parts.append(f'{key}: {serialized}')
+        lines.append(f'  "{visual_id}": {{ {", ".join(overlay_parts)} }},')
+    lines.append('};')
+    lines.append('')
     lines.append(f'export const {component_name}: React.FC = () => {{')
     lines.append(f'  const fps = {fps};')
     lines.append(f'  const durationSeconds = {duration_seconds};')
     lines.append('  const frame = useCurrentFrame();')
-    lines.append('  let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;')
-    lines.append('  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {')
-    lines.append('    if (frame >= VISUAL_SEQUENCE[i].start) {')
-    lines.append('      activeVisual = VISUAL_SEQUENCE[i];')
-    lines.append('      break;')
-    lines.append('    }')
-    lines.append('  }')
-    lines.append('  const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;')
-    lines.append('  const activeVisualDuration = activeVisual ? Math.max(1, activeVisual.end - activeVisual.start) : 1;')
-    lines.append('  const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;')
-    lines.append('  const activeVisualMedia = activeVisual ? VISUAL_MEDIA[activeVisual.id] ?? null : null;')
+    lines.append('  const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);')
     lines.append('')
     lines.append('  return (')
     lines.append('    <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>')
     if needs_direct_audio and direct_audio_src is not None:
         lines.append(f'      <Audio src={{staticFile("{direct_audio_src}")}} />')
-    if has_visual_video:
-        if direct_video_src is not None:
-            lines.append(f'      {{activeVisualMedia?.defaultSrc && !ActiveComponent ? (')
-            lines.append('        <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
-            lines.append('      ) : (')
-            lines.append(f'        !ActiveComponent ? <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} /> : null')
-            lines.append('      )}')
+    if needs_direct_video and direct_video_src is not None:
+        lines.append(f'      {{activeVisuals.length === 0 ? <OffthreadVideo src={{staticFile("{direct_video_src}")}} style={{{{ width: "100%", height: "100%" }}}} /> : null}}')
+    lines.append('      {activeVisuals.map((visual) => {')
+    lines.append('        const VisualComponent = COMPONENT_MAP[visual.id] ?? null;')
+    lines.append('        const visualDuration = Math.max(1, visual.end - visual.start);')
+    lines.append('        const intrinsicDurationInFrames = VISUAL_DURATIONS[visual.id] ?? visualDuration;')
+    lines.append('        const visualMedia = VISUAL_MEDIA[visual.id] ?? null;')
+    lines.append('        const visualOverlayConfig = VISUAL_OVERLAYS[visual.id] ?? null;')
+    lines.append('')
+    lines.append('        return (')
+    lines.append('          <Sequence key={visual.id} from={visual.start} durationInFrames={visualDuration}>')
+    lines.append('            {VisualComponent ? (')
+    lines.append('              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
+    lines.append('                <VisualMediaProvider media={visualMedia}>')
+    lines.append('                  <VisualComponent />')
+    lines.append('                </VisualMediaProvider>')
+    lines.append('              </SlotScaledSequence>')
+    if visual_media_manifest:
+        lines.append('            ) : visualMedia?.defaultSrc ? (')
+        lines.append('              <VisualMediaProvider media={visualMedia}>')
+        if visual_overlay_manifest:
+            lines.append('                {visualOverlayConfig ? (')
+            lines.append('                  <GeneratedMediaVisual config={visualOverlayConfig} />')
+            lines.append('                ) : (')
+            lines.append('                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
+            lines.append('                )}')
         else:
-            lines.append('      {activeVisualMedia?.defaultSrc && !ActiveComponent ? (')
-            lines.append('        <OffthreadVideo src={staticFile(activeVisualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
-            lines.append('      ) : null}')
-    lines.append('      {ActiveComponent && activeVisual ? (')
-    lines.append('        <Sequence')
-    lines.append('          from={activeVisual.start}')
-    lines.append('          durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}')
-    lines.append('        >')
-    lines.append('          <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
-    lines.append('            <VisualMediaProvider media={activeVisualMedia}>')
-    lines.append('              <ActiveComponent />')
-    lines.append('            </VisualMediaProvider>')
-    lines.append('          </SlotScaledSequence>')
-    lines.append('        </Sequence>')
-    lines.append('      ) : null}')
+            lines.append('                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
+        lines.append('              </VisualMediaProvider>')
+        lines.append('            ) : null}')
+    else:
+        lines.append('            ) : null}')
+    lines.append('          </Sequence>')
+    lines.append('        );')
+    lines.append('      })}')
     lines.append('    </Sequence>')
     lines.append('  );')
     lines.append('};')

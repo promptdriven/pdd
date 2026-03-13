@@ -162,11 +162,19 @@ function resolveAuditRenderSource(
 
   if (visualType === "media") {
     if (visual.requiresCompositedAudit) {
+      if (canRenderFreshStill && section.compositionId) {
+        return {
+          kind: "section-composition",
+          visualType,
+          compositionId: section.compositionId,
+        };
+      }
+
       return {
         kind: "skip",
         visualType,
         reason:
-          "Standalone audit skipped because this media spec requires composited overlays or UI that cannot be audited from a bare clip.",
+          "Standalone audit skipped because this media spec requires composited overlays or UI, but no composed section render is available.",
       };
     }
 

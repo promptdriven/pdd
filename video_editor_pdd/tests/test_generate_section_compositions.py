@@ -1538,10 +1538,10 @@ class TestGeneratedTimelineWrapper:
         assert 'const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {' in tsx
         assert 'const frame = useCurrentFrame();' in tsx
         assert 'let renderVisual = activeVisual;' not in tsx
-        assert 'const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;' in tsx
+        assert 'const VisualComponent = COMPONENT_MAP[visual.id] ?? null;' in tsx
         assert 'SlotScaledSequence' in tsx
         assert 'VisualMediaProvider' in tsx
-        assert '<ActiveComponent />' in tsx
+        assert '<VisualComponent />' in tsx
         assert 'staticFile("veo_section/narration.wav")' in tsx
         assert 'SectionBase' not in tsx
 
@@ -1642,9 +1642,9 @@ class TestGeneratedTimelineWrapper:
         assert '"02_ocean_wave_sunset": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
         assert '"03_narration_overlay_intro": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
         assert '"03_narration_overlay_intro": 120' in tsx
-        assert 'activeVisualMedia?.defaultSrc && !ActiveComponent' in tsx
+        assert ') : visualMedia?.defaultSrc ? (' in tsx
         assert '<SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>' in tsx
-        assert '<VisualMediaProvider media={activeVisualMedia}>' in tsx
+        assert '<VisualMediaProvider media={visualMedia}>' in tsx
 
     def test_generated_timeline_resolves_outputfile_media_aliases_from_staged_assets(self, tmp_path):
         project_dir = tmp_path
@@ -2000,6 +2000,147 @@ class TestGeneratedTimelineWrapper:
         assert 'leftSrc: "veo/04_veo_broll.mp4"' not in tsx
         assert 'rightSrc: "veo/05_veo_cutaway.mp4"' not in tsx
 
+    def test_generated_timeline_renders_all_active_visual_layers_for_overlap(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        overlay_dir = remotion_src / "VeoSection07NarrationOverlayIntro"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        overlay_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 60, id: "02_veo_ocean_broll", desc: "Ocean" },',
+                    '  { start: 30, end: 90, id: "07_narration_overlay_intro", desc: "Narration Overlay" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (overlay_dir / "index.ts").write_text(
+            "export const VeoSection07NarrationOverlayIntro = () => null;\n"
+            "export default VeoSection07NarrationOverlayIntro;\n",
+            encoding="utf-8",
+        )
+        (overlay_dir / "constants.ts").write_text(
+            "export const ANIMATION_TIMING = { totalDuration: 38 };\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "02_veo_ocean_broll.md").write_text(
+            '[veo:]\n\nsrc={staticFile("veo/02_veo_ocean_broll.mp4")}\n',
+            encoding="utf-8",
+        )
+        (specs_dir / "07_narration_overlay_intro.md").write_text(
+            "**Timestamp:** 0:01 - 0:03\nNarration overlay over the continuing ocean footage.\n",
+            encoding="utf-8",
+        )
+
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_veo_ocean_broll.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 3,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": ["07_narration_overlay_intro"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert "const activeVisuals = VISUAL_SEQUENCE.filter" in tsx
+        assert "activeVisuals.map((visual) => {" in tsx
+        assert "const VisualComponent = COMPONENT_MAP[visual.id] ?? null;" in tsx
+        assert "let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;" not in tsx
+        assert "const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;" not in tsx
+        assert 'key={visual.id}' in tsx
+        assert '<VisualMediaProvider media={visualMedia}>' in tsx
+
+    def test_generated_timeline_builds_generic_media_overlay_config_for_composited_media_specs(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 38, id: "02_veo_ocean_broll", desc: "Ocean" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "02_veo_ocean_broll.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "**Timestamp:** 0:01 - 0:03",
+                    "",
+                    "### Chart/Visual Elements",
+                    "- **Color grade overlay:** Linear gradient from transparent to rgba(10, 22, 40, 0.6), z-index 1",
+                    "- **Lower-third narration badge:** Semi-transparent dark bar at the bottom, z-index 2",
+                    "",
+                    "## Narration Sync",
+                    '> "This is the second section of the integration test video."',
+                    "",
+                    "```typescript",
+                    "<AbsoluteFill>",
+                    '  <OffthreadVideo src={staticFile("veo/02_veo_ocean_broll.mp4")} />',
+                    "  <GradientOverlay direction=\"bottom\" opacity={0.6} />",
+                    "  <LowerThirdBadge><NarrationText text=\"This is the second section of the integration test video.\" /></LowerThirdBadge>",
+                    "</AbsoluteFill>",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_veo_ocean_broll.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 3,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": [],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";' in tsx
+        assert 'const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {' in tsx
+        assert '"02_veo_ocean_broll": { gradientOverlay: "bottom", lowerThirdText: "This is the second section of the integration test video."' in tsx
+        assert '<GeneratedMediaVisual config={visualOverlayConfig} />' in tsx
+
     def test_generated_timeline_does_not_reuse_last_renderable_visual_for_unmapped_slots(self, tmp_path):
         project_dir = tmp_path
         remotion_src = tmp_path
@@ -2059,10 +2200,10 @@ class TestGeneratedTimelineWrapper:
         )
 
         assert "let renderVisual = activeVisual;" not in tsx
-        assert "const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;" in tsx
-        assert "const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;" in tsx
-        assert 'from={activeVisual.start}' in tsx
-        assert 'durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}' in tsx
+        assert "const VisualComponent = COMPONENT_MAP[visual.id] ?? null;" in tsx
+        assert "const intrinsicDurationInFrames = VISUAL_DURATIONS[visual.id] ?? visualDuration;" in tsx
+        assert 'from={visual.start}' in tsx
+        assert 'durationInFrames={visualDuration}' in tsx
 
     def test_generated_timeline_falls_back_when_constants_are_missing(self, tmp_path):
         remotion_src = tmp_path
