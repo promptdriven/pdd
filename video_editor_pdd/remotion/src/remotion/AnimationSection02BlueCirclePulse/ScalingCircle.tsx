@@ -1,2 +1,2 @@
-// Sub-component reserved for ScalingCircle — currently handled inline by AnimatedCircle.tsx
+// Deprecated: replaced by AnimatedTriangle.tsx per annotation update
 export {};

@@ -1,2 +1,2 @@
-// Sub-component reserved for PulseRing — currently handled inline by GlowRing.tsx
+// Deprecated: replaced by AnimatedTriangle.tsx per annotation update
 export {};

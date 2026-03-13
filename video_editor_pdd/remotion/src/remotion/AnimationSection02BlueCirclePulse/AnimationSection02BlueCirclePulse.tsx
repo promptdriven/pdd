@@ -2,7 +2,7 @@ import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { COLORS } from './constants';
 import { GlowRing } from './GlowRing';
-import { AnimatedCircle } from './AnimatedCircle';
+import { AnimatedTriangle } from './AnimatedTriangle';
 
 export const AnimationSection02BlueCirclePulse: React.FC = () => {
   return (
@@ -12,7 +12,7 @@ export const AnimationSection02BlueCirclePulse: React.FC = () => {
       }}
     >
       <GlowRing />
-      <AnimatedCircle />
+      <AnimatedTriangle />
     </AbsoluteFill>
   );
 };

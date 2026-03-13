@@ -17,7 +17,7 @@ export const GlowRing: React.FC = () => {
     }
   );
 
-  // Pulse phase (frames 15-28): glow ring expands 220→280→220
+  // Pulse phase (frames 15-28): glow expands 220→280→220
   const pulseDiameterExpand = interpolate(
     frame,
     [TIMING.pulseStart, TIMING.pulsePeak],
@@ -71,11 +71,7 @@ export const GlowRing: React.FC = () => {
     opacity = mid + amp * Math.sin(breathingProgress);
   }
 
-  // Render as annulus using radial gradient
-  const innerRadius = DIMENSIONS.circleDiameter / 2;
-  const outerRadius = diameter / 2;
-  const innerPct = (innerRadius / outerRadius) * 100;
-
+  // Circular glow halo behind the triangle for visual consistency
   return (
     <div
       style={{
@@ -83,7 +79,7 @@ export const GlowRing: React.FC = () => {
         width: diameter,
         height: diameter,
         borderRadius: '50%',
-        background: `radial-gradient(circle, transparent ${innerPct}%, ${COLORS.circle} 100%)`,
+        backgroundColor: COLORS.triangle,
         opacity,
         filter: `blur(${DIMENSIONS.glowBlur}px)`,
         top: '50%',

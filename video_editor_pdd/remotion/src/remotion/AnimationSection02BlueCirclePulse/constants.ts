@@ -7,12 +7,13 @@ export const CANVAS = {
 
 export const COLORS = {
   background: '#141921',
-  circle: '#3B82F6',
+  triangle: '#3B82F6',
   dropShadow: 'rgba(59, 130, 246, 0.3)',
 } as const;
 
 export const DIMENSIONS = {
-  circleDiameter: 180,
+  /** Side length / bounding box of the equilateral triangle */
+  triangleSize: 180,
   glowMinDiameter: 220,
   glowMaxDiameter: 280,
   glowBlur: 30,
