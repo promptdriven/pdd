@@ -17,11 +17,11 @@ export const VoiceBadge: React.FC = () => {
     },
   );
 
-  // Fade in alongside slide
+  // Fade in alongside slide — start at 0.7 so badge is visible from frame 0
   const opacity = interpolate(
     frame,
     [ANIMATION.badgeSlideStart, ANIMATION.badgeSlideEnd],
-    [0, 1],
+    [0.7, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

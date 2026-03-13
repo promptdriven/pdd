@@ -1,13 +1,7 @@
 import React, { useMemo } from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import {
-  COLORS,
-  PARTICLES,
-  TIMING,
-  BG_RGB,
-  type ParticleData,
-} from './constants';
-import { CenterFlash } from './CenterFlash';
+import { AbsoluteFill } from 'remotion';
+import { CANVAS, COLORS, PARTICLES, type ParticleData } from './constants';
+import { FlashOverlay } from './FlashOverlay';
 import { Particle } from './Particle';
 
 /**
@@ -29,71 +23,49 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+function degToRad(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
 function generateParticles(): ParticleData[] {
-  const rand = mulberry32(42);
+  const rand = mulberry32(PARTICLES.seed);
   const particles: ParticleData[] = [];
+  const baseAngleStep = (2 * Math.PI) / PARTICLES.count;
 
-  // 20 blue circles
-  for (let i = 0; i < PARTICLES.blueCount; i++) {
-    particles.push({
-      id: i,
-      shape: 'circle',
-      color: COLORS.blueParticle,
-      size: lerp(PARTICLES.blueSizeRange[0], PARTICLES.blueSizeRange[1], rand()),
-      angle: rand() * Math.PI * 2,
-      speed: lerp(PARTICLES.speedRange[0], PARTICLES.speedRange[1], rand()),
-      rotationSpeed: lerp(
-        PARTICLES.rotationSpeedRange[0],
-        PARTICLES.rotationSpeedRange[1],
-        rand()
-      ),
-    });
-  }
+  for (let i = 0; i < PARTICLES.count; i++) {
+    // Evenly distributed angles with slight random jitter (+/- 5 degrees)
+    const baseAngle = i * baseAngleStep;
+    const jitter = degToRad((rand() * 2 - 1) * PARTICLES.angleJitter);
+    const angle = baseAngle + jitter;
 
-  // 20 green squares
-  for (let i = 0; i < PARTICLES.greenCount; i++) {
-    particles.push({
-      id: PARTICLES.blueCount + i,
-      shape: 'square',
-      color: COLORS.greenParticle,
-      size: lerp(PARTICLES.greenSizeRange[0], PARTICLES.greenSizeRange[1], rand()),
-      angle: rand() * Math.PI * 2,
-      speed: lerp(PARTICLES.speedRange[0], PARTICLES.speedRange[1], rand()),
-      rotationSpeed: lerp(
-        PARTICLES.rotationSpeedRange[0],
-        PARTICLES.rotationSpeedRange[1],
-        rand()
-      ),
-    });
+    // Random radius between min and max
+    const radius = lerp(PARTICLES.minRadius, PARTICLES.maxRadius, rand());
+
+    // Random travel distance between min and max
+    const distance = lerp(PARTICLES.minDistance, PARTICLES.maxDistance, rand());
+
+    // Random color from palette
+    const colorIndex = Math.floor(rand() * COLORS.particles.length);
+    const color = COLORS.particles[colorIndex];
+
+    particles.push({ id: i, color, radius, angle, distance });
   }
 
   return particles;
 }
 
 export const AnimationSection06ParticleBurst: React.FC = () => {
-  const frame = useCurrentFrame();
   const particles = useMemo(() => generateParticles(), []);
 
-  // Background transition: frames 10-18, easeInOutQuad
-  const bgProgress = interpolate(
-    frame,
-    [TIMING.bgTransitionStart, TIMING.bgTransitionEnd],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
-    }
-  );
-
-  const r = Math.round(lerp(BG_RGB.from.r, BG_RGB.to.r, bgProgress));
-  const g = Math.round(lerp(BG_RGB.from.g, BG_RGB.to.g, bgProgress));
-  const b = Math.round(lerp(BG_RGB.from.b, BG_RGB.to.b, bgProgress));
-  const backgroundColor = `rgb(${r}, ${g}, ${b})`;
-
   return (
-    <AbsoluteFill style={{ backgroundColor }}>
-      <CenterFlash />
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.background,
+        width: CANVAS.width,
+        height: CANVAS.height,
+      }}
+    >
+      <FlashOverlay />
       {particles.map((particle) => (
         <Particle key={particle.id} particle={particle} />
       ))}

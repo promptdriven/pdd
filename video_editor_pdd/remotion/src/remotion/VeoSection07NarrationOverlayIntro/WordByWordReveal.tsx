@@ -7,6 +7,15 @@ export const WordByWordReveal: React.FC = () => {
 
   const { words, framesPerWord, wordFadeDuration } = NARRATION;
 
+  // Which word index is currently being highlighted
+  const activeWordIndex = Math.floor(
+    (frame - ANIMATION.wordRevealStart) / framesPerWord,
+  );
+
+  // All words fully revealed once the last word's reveal completes
+  const allRevealed =
+    frame >= ANIMATION.wordRevealStart + words.length * framesPerWord;
+
   return (
     <div
       style={{
@@ -24,33 +33,47 @@ export const WordByWordReveal: React.FC = () => {
         const wordStartFrame =
           ANIMATION.wordRevealStart + i * framesPerWord;
 
-        // Each word fades from inactive to active over wordFadeDuration frames
-        const wordOpacity = interpolate(
-          frame,
-          [wordStartFrame, wordStartFrame + wordFadeDuration],
-          [0.4, 1.0],
-          {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.out(Easing.quad),
-          },
-        );
-
-        // Subtle scale pop on reveal
-        const wordScale = interpolate(
-          frame,
-          [wordStartFrame, wordStartFrame + wordFadeDuration],
-          [0.97, 1.0],
-          {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.out(Easing.quad),
-          },
-        );
-
-        // Initial appearance: words before reveal start are dim but visible
         const isBeforeReveal = frame < ANIMATION.wordRevealStart;
-        const displayOpacity = isBeforeReveal ? 0.4 : wordOpacity;
+
+        let wordOpacity: number;
+        let wordScale = 1.0;
+
+        if (allRevealed) {
+          // Frame 34+: all narration text fully visible
+          wordOpacity = 1.0;
+        } else if (isBeforeReveal) {
+          // Before frame 6: all words dim
+          wordOpacity = 0.4;
+        } else if (i === activeWordIndex) {
+          // Current word: crossfade from dim (0.4) to bright (1.0)
+          wordOpacity = interpolate(
+            frame,
+            [wordStartFrame, wordStartFrame + wordFadeDuration],
+            [0.4, 1.0],
+            {
+              extrapolateLeft: 'clamp',
+              extrapolateRight: 'clamp',
+              easing: Easing.out(Easing.quad),
+            },
+          );
+          // Subtle scale pop on current word
+          wordScale = interpolate(
+            frame,
+            [wordStartFrame, wordStartFrame + wordFadeDuration],
+            [0.97, 1.0],
+            {
+              extrapolateLeft: 'clamp',
+              extrapolateRight: 'clamp',
+              easing: Easing.out(Easing.quad),
+            },
+          );
+        } else if (i < activeWordIndex) {
+          // Past words stay bright after being highlighted
+          wordOpacity = 1.0;
+        } else {
+          // Future words stay dim
+          wordOpacity = 0.4;
+        }
 
         return (
           <span
@@ -61,11 +84,11 @@ export const WordByWordReveal: React.FC = () => {
               fontWeight: TYPOGRAPHY.narration.fontWeight,
               lineHeight: TYPOGRAPHY.narration.lineHeight,
               color:
-                displayOpacity >= 0.95
+                wordOpacity >= 0.95
                   ? COLORS.activeWord
                   : COLORS.inactiveWord,
-              opacity: displayOpacity,
-              transform: `scale(${isBeforeReveal ? 1 : wordScale})`,
+              opacity: wordOpacity,
+              transform: `scale(${wordScale})`,
               display: 'inline-block',
               whiteSpace: 'nowrap',
             }}

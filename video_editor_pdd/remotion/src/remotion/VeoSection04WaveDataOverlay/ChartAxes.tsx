@@ -5,10 +5,11 @@ import { COLORS, ANIMATION, CHART, type WaveOverlayLayout } from './constants';
 export const ChartAxes: React.FC<{ layout: WaveOverlayLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
+  // Start at 0.2 opacity so axes are partially visible from frame 0
   const opacity = interpolate(
     frame,
     [ANIMATION.gridDrawStart, ANIMATION.gridDrawEnd],
-    [0, 1],
+    [0.2, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

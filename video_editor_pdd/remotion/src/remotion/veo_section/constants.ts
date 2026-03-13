@@ -1,28 +1,28 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 7.424;
+export const SECTION_DURATION_SECONDS = 7.616;
 export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.000),
-  VISUAL_00_END: s2f(0.920),
-  VISUAL_01_START: s2f(0.920),
-  VISUAL_01_END: s2f(2.761),
-  VISUAL_02_START: s2f(2.761),
-  VISUAL_02_END: s2f(3.681),
-  VISUAL_03_START: s2f(3.681),
-  VISUAL_03_END: s2f(4.602),
-  VISUAL_04_START: s2f(4.602),
-  VISUAL_04_END: s2f(4.635),
-  VISUAL_05_START: s2f(4.635),
-  VISUAL_05_END: s2f(4.668),
-  VISUAL_06_START: s2f(4.668),
-  VISUAL_06_END: s2f(5.589),
-  VISUAL_07_START: s2f(5.589),
-  VISUAL_07_END: s2f(7.424),
+  VISUAL_00_END: s2f(0.944),
+  VISUAL_01_START: s2f(0.944),
+  VISUAL_01_END: s2f(2.832),
+  VISUAL_02_START: s2f(2.832),
+  VISUAL_02_END: s2f(3.777),
+  VISUAL_03_START: s2f(3.777),
+  VISUAL_03_END: s2f(4.721),
+  VISUAL_04_START: s2f(4.721),
+  VISUAL_04_END: s2f(4.754),
+  VISUAL_05_START: s2f(4.754),
+  VISUAL_05_END: s2f(4.787),
+  VISUAL_06_START: s2f(4.787),
+  VISUAL_06_END: s2f(5.731),
+  VISUAL_07_START: s2f(5.731),
+  VISUAL_07_END: s2f(7.616),
 };
 
 export const VISUAL_SEQUENCE = [

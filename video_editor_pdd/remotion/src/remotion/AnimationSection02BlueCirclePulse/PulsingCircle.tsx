@@ -17,44 +17,63 @@ export const PulsingCircle: React.FC = () => {
     }
   );
 
-  // Pulse helper: maps a frame range to baseRadius → pulseRadius → baseRadius
-  const getPulseRadius = (
-    start: number,
-    end: number,
-    currentFrame: number
-  ): number => {
-    const mid = (start + end) / 2;
-    if (currentFrame <= mid) {
-      return interpolate(currentFrame, [start, mid], [CIRCLE.baseRadius, CIRCLE.pulseRadius], {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.inOut(Easing.sin),
-      });
-    }
-    return interpolate(currentFrame, [mid, end], [CIRCLE.pulseRadius, CIRCLE.baseRadius], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
-    });
-  };
-
   // Determine current radius based on animation phase
   let radius: number;
   if (frame < TIMING.appearEnd) {
+    // Phase 1: appear from 0 to baseRadius
     radius = CIRCLE.baseRadius * appearScale;
-  } else if (frame < TIMING.pulse1End) {
-    radius = getPulseRadius(TIMING.pulse1Start, TIMING.pulse1End, frame);
-  } else if (frame < TIMING.contract1End) {
-    // Contract phase is integrated into pulse1 already via mid-point logic,
-    // but the spec defines separate contract. Map frames 15-20 as contraction.
-    radius = interpolate(frame, [TIMING.contract1Start, TIMING.contract1End], [CIRCLE.pulseRadius, CIRCLE.baseRadius], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
-    });
+  } else if (frame < TIMING.contract1Start) {
+    // Phase 2 (frames 5-15): First pulse expansion — 60px to 80px
+    radius = interpolate(
+      frame,
+      [TIMING.pulse1Start, TIMING.pulse1End],
+      [CIRCLE.baseRadius, CIRCLE.pulseRadius],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.inOut(Easing.sin),
+      }
+    );
+  } else if (frame < TIMING.pulse2Start) {
+    // Phase 3 (frames 15-20): Contract back from 80px to 60px
+    radius = interpolate(
+      frame,
+      [TIMING.contract1Start, TIMING.contract1End],
+      [CIRCLE.pulseRadius, CIRCLE.baseRadius],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.inOut(Easing.sin),
+      }
+    );
   } else if (frame < TIMING.holdStart) {
-    radius = getPulseRadius(TIMING.pulse2Start, TIMING.pulse2End, frame);
+    // Phase 4 (frames 20-28): Second pulse — expand then contract
+    const mid = (TIMING.pulse2Start + TIMING.pulse2End) / 2;
+    if (frame <= mid) {
+      radius = interpolate(
+        frame,
+        [TIMING.pulse2Start, mid],
+        [CIRCLE.baseRadius, CIRCLE.pulseRadius],
+        {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+          easing: Easing.inOut(Easing.sin),
+        }
+      );
+    } else {
+      radius = interpolate(
+        frame,
+        [mid, TIMING.pulse2End],
+        [CIRCLE.pulseRadius, CIRCLE.baseRadius],
+        {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+          easing: Easing.inOut(Easing.sin),
+        }
+      );
+    }
   } else {
+    // Phase 5 (frames 28-30): Hold at baseRadius
     radius = CIRCLE.baseRadius;
   }
 

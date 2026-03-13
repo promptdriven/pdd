@@ -3,14 +3,16 @@ import { AbsoluteFill, useCurrentFrame, interpolate, useVideoConfig } from 'remo
 import { COLORS, ANIMATION, resolveTitleCardLayout } from './constants';
 import { TitleText } from './TitleText';
 import { HorizontalRule } from './HorizontalRule';
+import { SubtitleText } from './SubtitleText';
 import { ParticleDrift } from './ParticleDrift';
+import { VignetteOverlay } from './VignetteOverlay';
 
 export const VeoSection01TitleCard: React.FC = () => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
   const layout = resolveTitleCardLayout(width, height);
 
-  // Frame 0-15: Background gradient fades in from black (linear clamp)
+  // Frame 0-10: Background gradient fades in from black
   const backgroundOpacity = interpolate(
     frame,
     [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
@@ -29,14 +31,20 @@ export const VeoSection01TitleCard: React.FC = () => {
           opacity: backgroundOpacity,
         }}
       >
-        {/* Particle drift — runs continuously across full duration */}
+        {/* Particle drift — ambient background effect */}
         <ParticleDrift layout={layout} />
 
-        {/* Centred title text with parallax fade-in */}
+        {/* Title text: "VEO SECTION" — fades in frame 0-10 */}
         <TitleText layout={layout} />
 
-        {/* Horizontal rule drawing outward from centre */}
+        {/* Horizontal rule — expands frame 10-22, glow pulse 22-38 */}
         <HorizontalRule layout={layout} />
+
+        {/* Subtitle: "AI-Generated Video Integration" — fades in frame 10-22 */}
+        <SubtitleText layout={layout} />
+
+        {/* Vignette — darkened edges */}
+        <VignetteOverlay />
       </AbsoluteFill>
     </AbsoluteFill>
   );

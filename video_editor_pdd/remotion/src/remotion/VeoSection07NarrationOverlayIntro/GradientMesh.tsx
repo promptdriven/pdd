@@ -5,11 +5,11 @@ import { COLORS, ANIMATION } from './constants';
 export const GradientMesh: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade in over the first 6 frames
+  // Fade in over the first 6 frames — start at 0.6 so content is visible from frame 0
   const opacity = interpolate(
     frame,
     [ANIMATION.meshFadeStart, ANIMATION.meshFadeEnd],
-    [0, 1],
+    [0.6, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

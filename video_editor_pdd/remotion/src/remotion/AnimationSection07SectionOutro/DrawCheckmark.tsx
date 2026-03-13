@@ -1,6 +1,6 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, DIMENSIONS, ANIMATION_TIMING, CHECKMARK_PATH, CHECKMARK_PATH_LENGTH } from './constants';
+import { COLORS, DIMENSIONS, ANIMATION_TIMING, CHECKMARK_PATH, CHECKMARK_PATH_LENGTH } from './constants';
 
 export const DrawCheckmark: React.FC = () => {
   const frame = useCurrentFrame();

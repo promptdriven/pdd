@@ -5,11 +5,11 @@ import { COLORS, ANIMATION, CHART, type WaveOverlayLayout } from './constants';
 export const GridLines: React.FC<{ layout: WaveOverlayLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
-  // Grid lines draw from left to right (easeOutQuad)
+  // Grid lines draw from left to right (easeOutQuad), start at 5% for frame-0 visibility
   const drawProgress = interpolate(
     frame,
     [ANIMATION.gridDrawStart, ANIMATION.gridDrawEnd],
-    [0, 1],
+    [0.05, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

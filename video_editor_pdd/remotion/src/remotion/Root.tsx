@@ -21,11 +21,11 @@ import { VeoSection08SectionEndCard } from "./VeoSection08SectionEndCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "veo_section:veo_section_01_title_card": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
-  "veo_section:04_wave_data_overlay": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4" },
-  "veo_section:05_split_nature_comparison": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4", leftSrc: "veo/04_veo_broll.mp4", rightSrc: "veo/05_veo_cutaway.mp4", revealSrc: "veo/05_veo_cutaway.mp4" },
-  "veo_section:06_veo_pipeline_infographic": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4" },
-  "veo_section:07_narration_overlay_intro": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4" },
-  "veo_section:08_section_end_card": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4" },
+  "veo_section:04_wave_data_overlay": { defaultSrc: "veo/02_veo_ocean_broll.mp4", backgroundSrc: "veo/02_veo_ocean_broll.mp4", outputSrc: "veo/02_veo_ocean_broll.mp4", baseSrc: "veo/02_veo_ocean_broll.mp4" },
+  "veo_section:05_split_nature_comparison": { defaultSrc: "veo/02_veo_ocean_broll.mp4", backgroundSrc: "veo/02_veo_ocean_broll.mp4", outputSrc: "veo/02_veo_ocean_broll.mp4", baseSrc: "veo/02_veo_ocean_broll.mp4", leftSrc: "veo/02_veo_ocean_broll.mp4", rightSrc: "veo/03_veo_forest_cutaway.mp4", revealSrc: "veo/03_veo_forest_cutaway.mp4" },
+  "veo_section:06_veo_pipeline_infographic": { defaultSrc: "veo/02_veo_ocean_broll.mp4", backgroundSrc: "veo/02_veo_ocean_broll.mp4", outputSrc: "veo/02_veo_ocean_broll.mp4", baseSrc: "veo/02_veo_ocean_broll.mp4" },
+  "veo_section:07_narration_overlay_intro": { defaultSrc: "veo/02_veo_ocean_broll.mp4", backgroundSrc: "veo/02_veo_ocean_broll.mp4", outputSrc: "veo/02_veo_ocean_broll.mp4", baseSrc: "veo/02_veo_ocean_broll.mp4" },
+  "veo_section:08_section_end_card": { defaultSrc: "veo/02_veo_ocean_broll.mp4", backgroundSrc: "veo/02_veo_ocean_broll.mp4", outputSrc: "veo/02_veo_ocean_broll.mp4", baseSrc: "veo/02_veo_ocean_broll.mp4" },
 };
 
 const VeoSection01TitleCardPreview: React.FC = () => (
@@ -67,7 +67,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={222}
+        durationInFrames={228}
         fps={30}
         width={1920}
         height={1080}
@@ -75,7 +75,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={223}
+        durationInFrames={229}
         fps={30}
         width={1920}
         height={1080}

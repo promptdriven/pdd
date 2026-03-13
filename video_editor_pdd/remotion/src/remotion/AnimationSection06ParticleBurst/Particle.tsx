@@ -1,6 +1,6 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { TIMING, CANVAS, PARTICLES, type ParticleData } from './constants';
+import { CANVAS, TIMING, type ParticleData } from './constants';
 
 interface ParticleProps {
   particle: ParticleData;
@@ -9,64 +9,67 @@ interface ParticleProps {
 export const Particle: React.FC<ParticleProps> = ({ particle }) => {
   const frame = useCurrentFrame();
 
-  const { angle, speed, size, color, shape, rotationSpeed } = particle;
+  const { angle, distance, radius, color } = particle;
 
-  // Particles only begin moving at particleStartFrame
-  const particleFrame = frame - TIMING.particleStartFrame;
+  // Particles begin at frame 2
+  const particleFrame = frame - TIMING.particleStart;
   if (particleFrame < 0) return null;
 
-  // Linear travel: constant velocity, physics-based
-  // speed is in px/sec, convert to px/frame
-  const speedPerFrame = speed / TIMING.fps;
-  const distance = particleFrame * speedPerFrame;
+  // Total frames for particle movement
+  const moveDuration = TIMING.particleMoveEnd - TIMING.particleStart;
 
-  // Position based on angle and distance from center
-  const x = CANVAS.centerX + Math.cos(angle) * distance;
-  const y = CANVAS.centerY + Math.sin(angle) * distance;
+  // Radial progress with easeOutQuart deceleration
+  const progress = interpolate(
+    particleFrame,
+    [0, moveDuration],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.poly(4)),
+    }
+  );
 
-  // Opacity: full until fadeStart, then easeInCubic fade to 0 by fadeEnd
+  const currentDistance = distance * progress;
+  const x = CANVAS.centerX + Math.cos(angle) * currentDistance;
+  const y = CANVAS.centerY + Math.sin(angle) * currentDistance;
+
+  // Opacity: fade from 1.0 to 0 over particle lifetime, easeInQuad
   const opacity = interpolate(
-    frame,
-    [TIMING.particleFadeStart, TIMING.particleFadeEnd],
+    particleFrame,
+    [0, moveDuration],
     [1, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.cubic),
+      easing: Easing.in(Easing.quad),
     }
   );
 
-  // Linear rotation: constant angular velocity
-  const rotation = particleFrame * rotationSpeed;
-
-  // Don't render if fully faded
   if (opacity <= 0) return null;
 
-  // Don't render if off-screen
+  // Skip off-screen particles
+  const diameter = radius * 2;
   if (
-    x < -size ||
-    x > CANVAS.width + size ||
-    y < -size ||
-    y > CANVAS.height + size
+    x < -diameter ||
+    x > CANVAS.width + diameter ||
+    y < -diameter ||
+    y > CANVAS.height + diameter
   ) {
     return null;
   }
-
-  const borderRadius =
-    shape === 'circle' ? '50%' : PARTICLES.greenBorderRadius;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x - size / 2,
-        top: y - size / 2,
-        width: size,
-        height: size,
+        left: x - radius,
+        top: y - radius,
+        width: diameter,
+        height: diameter,
+        borderRadius: '50%',
         backgroundColor: color,
         opacity,
-        transform: `rotate(${rotation}deg)`,
-        borderRadius,
       }}
     />
   );

@@ -5,7 +5,7 @@ import { COLORS, ANIMATION, type TitleCardLayout } from './constants';
 export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
-  // Frame 15-45: Fade in with easeOutCubic
+  // Frame 0-10: Fade in with easeOutCubic
   const opacity = interpolate(
     frame,
     [ANIMATION.titleFadeStart, ANIMATION.titleFadeEnd],
@@ -17,7 +17,7 @@ export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => 
     },
   );
 
-  // Parallax entrance: slides up 10px → 0px
+  // Slide up 20px → 0px
   const translateY = interpolate(
     frame,
     [ANIMATION.titleFadeStart, ANIMATION.titleFadeEnd],
@@ -33,12 +33,10 @@ export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => 
     <div
       style={{
         position: 'absolute',
-        top: 0,
+        top: layout.dimensions.titleY,
         left: 0,
         width: layout.width,
-        height: layout.height,
         display: 'flex',
-        alignItems: 'center',
         justifyContent: 'center',
       }}
     >
@@ -47,12 +45,14 @@ export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => 
           fontFamily: layout.typography.title.fontFamily,
           fontSize: layout.typography.title.fontSize,
           fontWeight: layout.typography.title.fontWeight,
+          letterSpacing: layout.typography.title.letterSpacing,
           color: COLORS.titleText,
+          textTransform: 'uppercase' as const,
           opacity,
           transform: `translateY(${translateY}px)`,
         }}
       >
-        Veo Section
+        VEO SECTION
       </span>
     </div>
   );

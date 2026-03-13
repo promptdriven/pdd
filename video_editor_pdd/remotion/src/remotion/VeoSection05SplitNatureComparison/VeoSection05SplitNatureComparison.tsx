@@ -11,11 +11,11 @@ export const VeoSection05SplitNatureComparison: React.FC = () => {
   const { width, height } = useVideoConfig();
   const layout = resolveSplitNatureComparisonLayout(width, height);
 
-  const defaultSrc = useVisualMediaSrc('defaultSrc', 'veo/veo_section.mp4');
-  const leftSrc = useVisualMediaSrc('leftSrc', defaultSrc ?? 'veo/veo_section.mp4');
+  const defaultSrc = useVisualMediaSrc('defaultSrc', 'veo/04_veo_broll.mp4');
+  const leftSrc = useVisualMediaSrc('leftSrc', defaultSrc ?? 'veo/04_veo_broll.mp4');
   const rightSrc = useVisualMediaSrc(
     'rightSrc',
-    leftSrc ?? defaultSrc ?? 'veo/veo_section.mp4',
+    'veo/05_veo_cutaway.mp4',
   );
 
   return (

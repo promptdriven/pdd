@@ -30,11 +30,11 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
   // Resolve background video source via visual media hook
   const backgroundSrc = useVisualMediaSrc('backgroundSrc', 'veo/04_veo_broll.mp4');
 
-  // Background fades in over first 8 frames
+  // Background fades in over first 8 frames, starting at 0.4 so content is visible at frame 0
   const bgOpacity = interpolate(
     frame,
     [ANIMATION.gridDrawStart, ANIMATION.gridDrawEnd],
-    [0, 1],
+    [0.4, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -42,11 +42,11 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
     },
   );
 
-  // Title opacity matches grid draw
+  // Title opacity matches grid draw, starts at 0.3 for frame-0 visibility
   const titleOpacity = interpolate(
     frame,
     [ANIMATION.gridDrawStart, ANIMATION.gridDrawEnd],
-    [0, 0.9],
+    [0.3, 0.9],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

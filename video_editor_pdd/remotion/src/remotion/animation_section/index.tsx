@@ -29,37 +29,37 @@ const VISUAL_DURATIONS: Record<string, number> = {
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
 };
 
+const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
+};
+
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.381333;
+  const durationSeconds = 7.594667;
   const frame = useCurrentFrame();
-  let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;
-  for (let i = VISUAL_SEQUENCE.length - 1; i >= 0; i--) {
-    if (frame >= VISUAL_SEQUENCE[i].start) {
-      activeVisual = VISUAL_SEQUENCE[i];
-      break;
-    }
-  }
-  const ActiveComponent = activeVisual ? COMPONENT_MAP[activeVisual.id] ?? null : null;
-  const activeVisualDuration = activeVisual ? Math.max(1, activeVisual.end - activeVisual.start) : 1;
-  const intrinsicDurationInFrames = activeVisual ? VISUAL_DURATIONS[activeVisual.id] ?? activeVisualDuration : activeVisualDuration;
-  const activeVisualMedia = activeVisual ? VISUAL_MEDIA[activeVisual.id] ?? null : null;
+  const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
       <Audio src={staticFile("animation_section/narration.wav")} />
-      {ActiveComponent && activeVisual ? (
-        <Sequence
-          from={activeVisual.start}
-          durationInFrames={Math.max(1, activeVisual.end - activeVisual.start)}
-        >
-          <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
-            <VisualMediaProvider media={activeVisualMedia}>
-              <ActiveComponent />
-            </VisualMediaProvider>
-          </SlotScaledSequence>
-        </Sequence>
-      ) : null}
+      {activeVisuals.map((visual) => {
+        const VisualComponent = COMPONENT_MAP[visual.id] ?? null;
+        const visualDuration = Math.max(1, visual.end - visual.start);
+        const intrinsicDurationInFrames = VISUAL_DURATIONS[visual.id] ?? visualDuration;
+        const visualMedia = VISUAL_MEDIA[visual.id] ?? null;
+        const visualOverlayConfig = VISUAL_OVERLAYS[visual.id] ?? null;
+
+        return (
+          <Sequence key={visual.id} from={visual.start} durationInFrames={visualDuration}>
+            {VisualComponent ? (
+              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
+                <VisualMediaProvider media={visualMedia}>
+                  <VisualComponent />
+                </VisualMediaProvider>
+              </SlotScaledSequence>
+            ) : null}
+          </Sequence>
+        );
+      })}
     </Sequence>
   );
 };

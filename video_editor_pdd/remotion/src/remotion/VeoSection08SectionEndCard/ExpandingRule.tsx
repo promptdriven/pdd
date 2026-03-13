@@ -28,6 +28,7 @@ export const ExpandingRule: React.FC = () => {
         backgroundColor: COLORS.accent,
         borderRadius: DIMENSIONS.ruleHeight / 2,
         transform: `scaleX(${scaleX})`,
+        transformOrigin: 'center',
         opacity: frame >= ANIMATION.textFadeStart ? 1 : 0,
       }}
     />

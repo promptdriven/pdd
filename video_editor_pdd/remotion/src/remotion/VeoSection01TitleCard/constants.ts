@@ -1,5 +1,5 @@
 // Component-level constants for VeoSection01TitleCard
-// Duration: ~3s (90 frames @ 30fps)
+// Duration: ~1.3s (38 frames @ 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
@@ -7,46 +7,61 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
-  gradientTop: '#0B1D3A',
-  gradientBottom: '#162D50',
+  gradientTop: '#0A1628',
+  gradientBottom: '#1B3A5C',
   titleText: '#FFFFFF',
-  rule: '#5B9BD5',
+  rule: '#4DA8DA',
+  subtitleText: '#8EC8E8',
   particle: '#FFFFFF',
 };
 
 export const TYPOGRAPHY = {
   title: {
-    fontSize: 64,
+    fontSize: 72,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 700 as const,
+    letterSpacing: 12,
+  },
+  subtitle: {
+    fontSize: 24,
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 400 as const,
+    letterSpacing: 4,
   },
 };
 
 export const ANIMATION = {
-  // Frame 0-15: Background gradient fades in from black (linear)
+  // Frame 0-10: Background fades in + title fades in with slide-up
   backgroundFadeStart: 0,
-  backgroundFadeEnd: 15,
-  // Frame 15-45: Title text fades in with parallax shift (easeOutCubic)
-  titleFadeStart: 15,
-  titleFadeEnd: 45,
-  titleShiftPx: 10,
-  // Frame 30-60: Horizontal rule scales outward from centre (easeInOutQuad)
-  ruleFadeStart: 30,
-  ruleFadeEnd: 60,
-  // Frame 0-90: Particle drift runs continuously
-  totalDuration: 90,
+  backgroundFadeEnd: 10,
+  titleFadeStart: 0,
+  titleFadeEnd: 10,
+  titleShiftPx: 20,
+  // Frame 10-22: Rule expands + subtitle fades in
+  ruleFadeStart: 10,
+  ruleFadeEnd: 22,
+  subtitleFadeStart: 10,
+  subtitleFadeEnd: 22,
+  // Frame 22-38: Hold with ambient glow pulse on rule
+  glowPulseStart: 22,
+  glowPulseEnd: 38,
+  // Total duration
+  totalDuration: 38,
 };
 
 export const DIMENSIONS = {
-  ruleWidth: 200,
+  ruleWidth: 600,
   ruleHeight: 2,
+  titleY: 440,
+  ruleY: 500,
+  subtitleY: 540,
+  subtitleOpacity: 0.85,
   particleCount: 18,
   particleMinRadius: 2,
   particleMaxRadius: 4,
   particleOpacity: 0.15,
   particleMinSpeed: 1.5,
   particleMaxSpeed: 4.0,
-  titleRuleGap: 24,
 };
 
 export type TitleCardLayout = {
@@ -54,6 +69,7 @@ export type TitleCardLayout = {
   height: number;
   typography: {
     title: typeof TYPOGRAPHY.title;
+    subtitle: typeof TYPOGRAPHY.subtitle;
   };
   dimensions: typeof DIMENSIONS;
 };
@@ -73,18 +89,27 @@ export const resolveTitleCardLayout = (
       title: {
         ...TYPOGRAPHY.title,
         fontSize: Math.max(34, TYPOGRAPHY.title.fontSize * uniformScale),
+        letterSpacing: TYPOGRAPHY.title.letterSpacing * uniformScale,
+      },
+      subtitle: {
+        ...TYPOGRAPHY.subtitle,
+        fontSize: Math.max(16, TYPOGRAPHY.subtitle.fontSize * uniformScale),
+        letterSpacing: TYPOGRAPHY.subtitle.letterSpacing * uniformScale,
       },
     },
     dimensions: {
       ruleWidth: DIMENSIONS.ruleWidth * scaleX,
       ruleHeight: Math.max(1.5, DIMENSIONS.ruleHeight * scaleY),
+      titleY: DIMENSIONS.titleY * scaleY,
+      ruleY: DIMENSIONS.ruleY * scaleY,
+      subtitleY: DIMENSIONS.subtitleY * scaleY,
+      subtitleOpacity: DIMENSIONS.subtitleOpacity,
       particleCount: DIMENSIONS.particleCount,
       particleMinRadius: Math.max(1.5, DIMENSIONS.particleMinRadius * uniformScale),
       particleMaxRadius: Math.max(3, DIMENSIONS.particleMaxRadius * uniformScale),
       particleOpacity: DIMENSIONS.particleOpacity,
       particleMinSpeed: DIMENSIONS.particleMinSpeed * uniformScale,
       particleMaxSpeed: DIMENSIONS.particleMaxSpeed * uniformScale,
-      titleRuleGap: DIMENSIONS.titleRuleGap * scaleY,
     },
   };
 };
