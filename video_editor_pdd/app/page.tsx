@@ -12,6 +12,13 @@ import type {
 import StageSidebar from '@/components/StageSidebar';
 import VideoPlayer from '@/components/VideoPlayer';
 import AnnotationPanel from '@/components/AnnotationPanel';
+import PipelineAdvanceButton from '@/components/PipelineAdvanceButton';
+import {
+  getPipelineAutomationDescription,
+  resolvePipelineRunPlan,
+  resolveRunRemainingButtonLabel,
+  type PipelineRunStep,
+} from '@/lib/client/pipeline-runner';
 
 // Stage panels
 import Stage1ProjectSetup from '@/components/stages/Stage1ProjectSetup';
@@ -43,6 +50,13 @@ type ReviewRenderStatus = {
 type ProjectOption = {
   id: string;
   name: string;
+};
+
+type PipelineRunStepStatus = 'pending' | 'running' | 'done' | 'error';
+
+type PipelineRunStepState = PipelineRunStep & {
+  status: PipelineRunStepStatus;
+  error?: string | null;
 };
 
 const FULL_VIDEO_SRC = '/api/video/outputs/full_video.mp4';
@@ -139,61 +153,61 @@ export default function Page() {
     annotationId: string;
     timestamp: number;
   } | null>(null);
+  const [isRunningRemainingStages, setIsRunningRemainingStages] = useState(false);
+  const [pipelineRunSteps, setPipelineRunSteps] = useState<PipelineRunStepState[]>([]);
+  const [pipelineRunError, setPipelineRunError] = useState<string | null>(null);
+  const [pipelineRunCurrentStepLabel, setPipelineRunCurrentStepLabel] = useState<string | null>(
+    null
+  );
+
+  const loadProjectConfig = useCallback(async () => {
+    setLoadingProject(true);
+    try {
+      let data: ProjectConfig | null = null;
+      let lastError: Error | null = null;
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        try {
+          const res = await fetch('/api/project');
+          if (!res.ok) throw new Error('Failed to load project');
+          const raw = await res.text();
+          if (!raw.trim()) throw new Error('Failed to load project');
+          data = JSON.parse(raw) as ProjectConfig;
+          break;
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error('Failed to load project');
+
+          if (attempt < 4) {
+            await new Promise((resolve) => window.setTimeout(resolve, 500));
+          }
+        }
+      }
+
+      if (!data) {
+        throw lastError ?? new Error('Failed to load project');
+      }
+
+      setProjectConfig(data);
+      const storedSectionId =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(REVIEW_SECTION_STORAGE_KEY)
+          : null;
+      const initialSection =
+        data.sections?.find((section) => section.id === storedSectionId) ?? data.sections?.[0];
+      if (initialSection) {
+        setSelectedSectionId(initialSection.id);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingProject(false);
+    }
+  }, []);
 
   // Load project config on mount
   useEffect(() => {
-    let cancelled = false;
-    const loadProject = async () => {
-      setLoadingProject(true);
-      try {
-        let data: ProjectConfig | null = null;
-        let lastError: Error | null = null;
-
-        for (let attempt = 0; attempt < 5; attempt++) {
-          try {
-            const res = await fetch('/api/project');
-            if (!res.ok) throw new Error('Failed to load project');
-            const raw = await res.text();
-            if (!raw.trim()) throw new Error('Failed to load project');
-            data = JSON.parse(raw) as ProjectConfig;
-            break;
-          } catch (err) {
-            lastError =
-              err instanceof Error ? err : new Error('Failed to load project');
-
-            if (attempt < 4) {
-              await new Promise((resolve) => window.setTimeout(resolve, 500));
-            }
-          }
-        }
-
-        if (!data) {
-          throw lastError ?? new Error('Failed to load project');
-        }
-
-        if (cancelled) return;
-        setProjectConfig(data);
-        const storedSectionId =
-          typeof window !== 'undefined'
-            ? window.localStorage.getItem(REVIEW_SECTION_STORAGE_KEY)
-            : null;
-        const initialSection =
-          data.sections?.find((section) => section.id === storedSectionId) ??
-          data.sections?.[0];
-        if (initialSection) {
-          setSelectedSectionId(initialSection.id);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (!cancelled) setLoadingProject(false);
-      }
-    };
-    loadProject();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    void loadProjectConfig();
+  }, [loadProjectConfig]);
 
   useEffect(() => {
     let cancelled = false;
@@ -229,6 +243,31 @@ export default function Page() {
     if (!projectConfig?.sections?.length) return undefined;
     return projectConfig.sections.find((s) => s.id === selectedSectionId);
   }, [projectConfig, selectedSectionId]);
+
+  const runPlan = useMemo(() => resolvePipelineRunPlan(activeStage), [activeStage]);
+
+  useEffect(() => {
+    if (isRunningRemainingStages) {
+      return;
+    }
+
+    setPipelineRunSteps(
+      runPlan.map((step) => ({
+        ...step,
+        status: 'pending',
+        error: null,
+      }))
+    );
+    setPipelineRunCurrentStepLabel(null);
+  }, [isRunningRemainingStages, runPlan]);
+
+  useEffect(() => {
+    if (isRunningRemainingStages) {
+      return;
+    }
+
+    setPipelineRunError(null);
+  }, [activeStage, isRunningRemainingStages]);
 
   const reviewUsesFreshFullVideo = Boolean(
     reviewRenderStatus?.fullVideo?.exists && !reviewRenderStatus?.fullVideo?.stale
@@ -342,6 +381,236 @@ export default function Page() {
       setReviewRenderStatus(null);
     }
   }, []);
+
+  const markPipelineRunStep = useCallback(
+    (stepId: PipelineRunStep['id'], status: PipelineRunStepStatus, error?: string | null) => {
+      setPipelineRunSteps((prev) =>
+        prev.map((step) => (step.id === stepId ? { ...step, status, error: error ?? null } : step))
+      );
+    },
+    []
+  );
+
+  const consumeSseResponse = useCallback(
+    async (
+      response: Response,
+      onData?: (data: Record<string, unknown>, eventName: string | null) => void
+    ) => {
+      if (!response.body) {
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const processChunk = (chunk: string) => {
+        const lines = chunk.split('\n').filter(Boolean);
+        const eventName =
+          lines.find((line) => line.startsWith('event:'))?.slice(6).trim() ?? null;
+        const dataLine = lines.find((line) => line.startsWith('data:'));
+
+        if (!dataLine) {
+          return;
+        }
+
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = JSON.parse(dataLine.slice(5).trim()) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+
+        onData?.(payload, eventName);
+
+        if (eventName === 'error' || payload.type === 'error') {
+          const message =
+            typeof payload.message === 'string' ? payload.message : 'Pipeline step failed';
+          throw new Error(message);
+        }
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() ?? '';
+
+        for (const part of parts) {
+          processChunk(part);
+        }
+      }
+
+      if (buffer.trim()) {
+        processChunk(buffer);
+      }
+    },
+    []
+  );
+
+  const waitForJobCompletion = useCallback(async (jobId: string) => {
+    while (true) {
+      const res = await fetch(`/api/jobs/${jobId}`);
+      if (!res.ok) {
+        throw new Error(`Failed to poll job ${jobId}`);
+      }
+
+      const job = (await res.json()) as {
+        status?: string;
+        error?: string | null;
+      };
+
+      if (job.status === 'done') {
+        return;
+      }
+
+      if (job.status === 'error') {
+        throw new Error(job.error || `Job ${jobId} failed`);
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+  }, []);
+
+  const executePipelineRunStep = useCallback(
+    async (step: PipelineRunStep) => {
+      if (step.mode === 'setup') {
+        let extractedSections: Section[] | null = null;
+        const response = await fetch(step.endpoint, { method: 'POST' });
+        if (!response.ok) {
+          throw new Error(`Setup request failed (${response.status})`);
+        }
+
+        await consumeSseResponse(response, (data) => {
+          if (data.type === 'sections' && Array.isArray(data.sections)) {
+            extractedSections = data.sections as Section[];
+          }
+        });
+
+        if (!extractedSections) {
+          throw new Error('Section extraction did not return any sections');
+        }
+
+        const projectResponse = await fetch('/api/project');
+        if (!projectResponse.ok) {
+          throw new Error('Failed to load project before saving extracted sections');
+        }
+
+        const latestProject = (await projectResponse.json()) as ProjectConfig;
+        const saveResponse = await fetch('/api/project', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...latestProject,
+            sections: extractedSections,
+          }),
+        });
+
+        if (!saveResponse.ok) {
+          throw new Error('Failed to save extracted sections');
+        }
+
+        await loadProjectConfig();
+        return;
+      }
+
+      if (step.mode === 'job') {
+        const response = await fetch(step.endpoint, {
+          method: 'POST',
+          headers: step.body ? { 'Content-Type': 'application/json' } : undefined,
+          body: step.body ? JSON.stringify(step.body) : undefined,
+        });
+
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          jobId?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(payload.error || `Request failed (${response.status})`);
+        }
+
+        if (!payload.jobId) {
+          throw new Error(`No job ID returned for ${step.label}`);
+        }
+
+        await waitForJobCompletion(payload.jobId);
+      } else {
+        const response = await fetch(step.endpoint, {
+          method: 'POST',
+          headers: step.body ? { 'Content-Type': 'application/json' } : undefined,
+          body: step.body ? JSON.stringify(step.body) : undefined,
+        });
+
+        if (!response.ok) {
+          const message = await response.text().catch(() => '');
+          throw new Error(message || `Request failed (${response.status})`);
+        }
+
+        if (step.mode === 'sse') {
+          await consumeSseResponse(response);
+        } else {
+          await response.json().catch(() => ({}));
+        }
+      }
+
+      if (step.id === 'compositions' || step.id === 'render') {
+        await loadProjectConfig();
+      }
+
+      if (step.id === 'render' || step.id === 'stitch' || step.id === 'audit') {
+        await loadReviewRenderStatus();
+      }
+    },
+    [consumeSseResponse, loadProjectConfig, loadReviewRenderStatus, waitForJobCompletion]
+  );
+
+  const handleRunRemainingStages = useCallback(async () => {
+    if (isRunningRemainingStages) {
+      return;
+    }
+
+    const plan = resolvePipelineRunPlan(activeStage);
+    if (!plan.length) {
+      return;
+    }
+
+    setActiveTab('pipeline');
+    setPipelineRunError(null);
+    setPipelineRunSteps(
+      plan.map((step) => ({
+        ...step,
+        status: 'pending',
+        error: null,
+      }))
+    );
+    setIsRunningRemainingStages(true);
+
+    try {
+      for (const step of plan) {
+        setActiveStage(step.stage);
+        setPipelineRunCurrentStepLabel(step.label);
+        markPipelineRunStep(step.id, 'running');
+
+        try {
+          await executePipelineRunStep(step);
+          markPipelineRunStep(step.id, 'done');
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Pipeline step failed';
+          markPipelineRunStep(step.id, 'error', message);
+          setPipelineRunError(`${step.label} failed: ${message}`);
+          return;
+        }
+      }
+    } finally {
+      setPipelineRunCurrentStepLabel(null);
+      setIsRunningRemainingStages(false);
+    }
+  }, [activeStage, executePipelineRunStep, isRunningRemainingStages, markPipelineRunStep]);
 
   // Load annotations when switching to Review tab or when section changes
   useEffect(() => {
@@ -522,6 +791,13 @@ export default function Page() {
   }, [selectedProjectOptionId]);
 
   const StagePanel = STAGE_PANELS[activeStage];
+  const pipelineRunButtonLabel = resolveRunRemainingButtonLabel({
+    activeStage,
+    isRunning: isRunningRemainingStages,
+    currentStepLabel: pipelineRunCurrentStepLabel,
+    hasError: pipelineRunError != null,
+  });
+  const pipelineAutomationDescription = getPipelineAutomationDescription(activeStage);
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white">
@@ -572,6 +848,62 @@ export default function Page() {
           <>
             <StageSidebar activeStage={activeStage} onStageSelect={setActiveStage} />
             <main className="flex-1 p-6 overflow-y-auto">
+              <section className="mb-6 rounded-xl border border-emerald-900/60 bg-emerald-950/30 p-4 shadow-sm">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-300">
+                      Pipeline Automation
+                    </div>
+                    <h2 className="text-lg font-semibold text-white">Run Remaining Stages</h2>
+                    <p className="max-w-3xl text-sm text-emerald-100/80">
+                      {pipelineAutomationDescription}
+                    </p>
+                  </div>
+                  <PipelineAdvanceButton
+                    onClick={() => void handleRunRemainingStages()}
+                    disabled={loadingProject || isRunningRemainingStages}
+                    label={pipelineRunButtonLabel}
+                    className="self-start rounded-lg"
+                  />
+                </div>
+
+                {pipelineRunError && (
+                  <div className="mt-4 rounded-lg border border-red-900/80 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+                    {pipelineRunError}
+                  </div>
+                )}
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {pipelineRunSteps.map((step) => {
+                    const badgeClassName =
+                      step.status === 'done'
+                        ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200'
+                        : step.status === 'running'
+                        ? 'border-blue-500/60 bg-blue-500/15 text-blue-200'
+                        : step.status === 'error'
+                        ? 'border-red-500/60 bg-red-500/15 text-red-200'
+                        : 'border-slate-700 bg-slate-900/80 text-slate-300';
+                    const statusLabel =
+                      step.status === 'done'
+                        ? 'Done'
+                        : step.status === 'running'
+                        ? 'Running'
+                        : step.status === 'error'
+                        ? 'Error'
+                        : 'Queued';
+
+                    return (
+                      <div
+                        key={step.id}
+                        className={`rounded-full border px-3 py-1.5 text-xs font-medium ${badgeClassName}`}
+                        title={step.error ?? undefined}
+                      >
+                        {step.label} · {statusLabel}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
               {loadingProject && (
                 <div className="text-gray-400 mb-4">Loading project...</div>
               )}

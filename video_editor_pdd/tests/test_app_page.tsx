@@ -57,6 +57,13 @@ describe("module structure", () => {
   it("exports Page as default function", () => {
     expect(sourceCode).toMatch(/export\s+default\s+function\s+Page/);
   });
+
+  it("renders a top-level pipeline automation card", () => {
+    expect(sourceCode).toContain("Pipeline Automation");
+    expect(sourceCode).toContain("Run Remaining Stages");
+    expect(sourceCode).toContain("pipelineAutomationDescription");
+    expect(sourceCode).toContain("pipelineRunButtonLabel");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -97,6 +104,12 @@ describe("state management", () => {
     expect(sourceCode).toContain("projectOptions");
     expect(sourceCode).toContain("selectedProjectOptionId");
   });
+
+  it("tracks pipeline automation execution state", () => {
+    expect(sourceCode).toContain("pipelineRunSteps");
+    expect(sourceCode).toContain("pipelineRunError");
+    expect(sourceCode).toContain("isRunningRemainingStages");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -136,6 +149,11 @@ describe("component imports", () => {
 
   it("imports AnnotationPanel", () => {
     expect(sourceCode).toMatch(/import\s+AnnotationPanel\s+from\s+['"]@\/components\/AnnotationPanel['"]/);
+  });
+
+  it("imports the shared pipeline runner helpers", () => {
+    expect(sourceCode).toContain("resolvePipelineRunPlan");
+    expect(sourceCode).toContain("resolveRunRemainingButtonLabel");
   });
 });
 
