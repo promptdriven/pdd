@@ -572,3 +572,86 @@ def test_async_context_auth_error_references_correct_command(clean_env):
                 "AuthError in async context should reference 'pdd auth login', "
                 f"not 'pdd login'. Got: {printed}"
             )
+
+
+# --- Issue #652: Cloud endpoint registry must include purchase endpoint ---
+
+def test_cloud_endpoints_include_purchase_endpoint():
+    """Test that CLOUD_ENDPOINTS includes the processPddcPurchase endpoint.
+
+    Issue #652: The purchase flow fails because processPddcPurchase is not registered
+    in the CLOUD_ENDPOINTS map, meaning the endpoint URL cannot be properly resolved
+    and requests may be routed incorrectly or use mock handlers instead.
+    """
+    assert "processPddcPurchase" in CLOUD_ENDPOINTS, (
+        f"'processPddcPurchase' must be registered in CLOUD_ENDPOINTS. "
+        f"Available endpoints: {list(CLOUD_ENDPOINTS.keys())}"
+    )
+
+
+def test_purchase_endpoint_url_resolves_to_production(clean_env):
+    """Test that processPddcPurchase resolves to the production cloud function URL.
+
+    Issue #652: The purchase endpoint must resolve to the real cloud function URL,
+    not a mock or missing URL. The expected production URL is:
+    https://us-central1-prompt-driven-development.cloudfunctions.net/processPddcPurchase
+    """
+    url = CloudConfig.get_endpoint_url("processPddcPurchase")
+
+    assert "us-central1-prompt-driven-development.cloudfunctions.net" in url, (
+        f"Purchase endpoint must resolve to production cloud functions URL. Got: {url}"
+    )
+    assert "processPddcPurchase" in url, (
+        f"Purchase endpoint URL must contain 'processPddcPurchase'. Got: {url}"
+    )
+    assert not any(mock_indicator in url.lower() for mock_indicator in ["mock", "localhost", "127.0.0.1"]), (
+        f"Purchase endpoint URL must not contain mock/local indicators. Got: {url}"
+    )
+
+
+def test_purchase_endpoint_not_mock_fallback(clean_env):
+    """Test that processPddcPurchase doesn't fall through to the unknown endpoint default.
+
+    When an endpoint is not in CLOUD_ENDPOINTS, get_endpoint_url() falls back to
+    /{name}. For processPddcPurchase, this means it's not explicitly registered,
+    which is a sign that mock handlers may be used instead of the real endpoint.
+    """
+    # If processPddcPurchase is properly registered, its path should be in CLOUD_ENDPOINTS
+    endpoint_path = CLOUD_ENDPOINTS.get("processPddcPurchase")
+    assert endpoint_path is not None, (
+        "'processPddcPurchase' is not in CLOUD_ENDPOINTS — it falls through to the "
+        "default /{name} pattern, indicating the endpoint is not properly registered. "
+        "This can cause mock handlers to be used in production."
+    )
+    assert endpoint_path == "/processPddcPurchase", (
+        f"processPddcPurchase endpoint path should be '/processPddcPurchase'. Got: {endpoint_path}"
+    )
+
+
+def test_cloud_endpoints_completeness_for_billing():
+    """Test that all billing/payment-related endpoints are registered.
+
+    Issue #652: Mock API handlers were active in production because the payment
+    endpoints were not registered in the CLOUD_ENDPOINTS registry.
+    """
+    billing_endpoints = ["processPddcPurchase"]
+    missing = [ep for ep in billing_endpoints if ep not in CLOUD_ENDPOINTS]
+    assert not missing, (
+        f"Billing endpoints missing from CLOUD_ENDPOINTS: {missing}. "
+        f"Missing endpoints may fall back to mock handlers in production."
+    )
+
+
+def test_environment_detection_defaults_to_production(clean_env):
+    """Test that environment defaults to production when no overrides are set.
+
+    Issue #652: Mock APIs were active in production, suggesting the environment
+    detection may not be defaulting to production correctly.
+    """
+    # Simulate getting JWT token (which triggers _ensure_default_env)
+    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.test.token"}, clear=True):
+        CloudConfig.get_jwt_token()
+        assert os.environ.get("PDD_ENV") == "prod", (
+            f"PDD_ENV should default to 'prod' when no overrides are set. "
+            f"Got: {os.environ.get('PDD_ENV')}"
+        )
