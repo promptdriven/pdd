@@ -10,8 +10,8 @@ import { VeoSection08SectionEndCard } from "../08_section_end_card";
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 7.381333;
-  const durationSeconds = 7.424;
+  const offsetSeconds = 7.594667;
+  const durationSeconds = 7.616;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
