@@ -5,6 +5,7 @@ import path from "path";
 import {
   parseSpecTimestampRange,
   listSectionVisualIds,
+  resolveSpecAuditHints,
   resolveSectionVisualTimings,
   buildSectionConstantsSource,
 } from "../lib/composition-timing";
@@ -298,6 +299,47 @@ describe("lib/composition-timing", () => {
     );
 
     expect(visualIds).toEqual(["animation_section_01_title_card"]);
+  });
+
+  it("derives general audit hints from spec structure for layout, effects, and animation phases", () => {
+    const hints = resolveSpecAuditHints([
+      "# Split Comparison",
+      "",
+      "## Visual Description",
+      "A split-screen comparison placing ocean footage side-by-side with forest footage.",
+      "",
+      "### Chart/Visual Elements",
+      '- **Ocean at Sunset** label sits in the left panel',
+      '- **Forest Canopy** label sits in the right panel',
+      '- **Glowing separator line** divides the two panels',
+      '- **Soft bloom accent** adds subtle polish',
+      "",
+      "### Animation Sequence",
+      "1. **Frame 0–20 (0–0.67s):** Ocean plate holds steady",
+      "2. **Frame 21–40 (0.70–1.33s):** Forest panel fades in",
+    ].join("\n"));
+
+    expect(hints.criticalElements).toEqual(
+      expect.arrayContaining(["Ocean at Sunset", "Forest Canopy"])
+    );
+    expect(hints.decorativeElements).toEqual(
+      expect.arrayContaining(["Glowing separator line", "Soft bloom accent"])
+    );
+    expect(hints.layoutKeywords).toEqual(
+      expect.arrayContaining(["split-screen", "side-by-side", "left panel", "right panel"])
+    );
+    expect(hints.transitionWindows).toEqual([
+      {
+        startFrame: 0,
+        endFrame: 20,
+        description: "Ocean plate holds steady",
+      },
+      {
+        startFrame: 21,
+        endFrame: 40,
+        description: "Forest panel fades in",
+      },
+    ]);
   });
 
   it("sequentializes overlapping spec windows instead of collapsing later visuals into one-frame slots", () => {

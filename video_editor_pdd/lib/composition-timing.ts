@@ -54,6 +54,20 @@ export type ResolvedSectionVisual = {
   previewCompositionId?: string;
   mediaReferences: string[];
   stagedAssetPath?: string;
+  auditHints: AuditHints;
+};
+
+export type AuditTransitionWindow = {
+  startFrame: number;
+  endFrame: number;
+  description: string;
+};
+
+export type AuditHints = {
+  criticalElements: string[];
+  decorativeElements: string[];
+  layoutKeywords: string[];
+  transitionWindows: AuditTransitionWindow[];
 };
 
 type TimingCandidate = {
@@ -122,6 +136,37 @@ const JSX_COMPONENT_TAG_RE = /<([A-Z][A-Za-z0-9]*)\b/g;
 const COMPOSITED_MEDIA_HINT_RE =
   /\b(lower-third|narration badge|narration text|voice badge|caption|subtitle|gradient overlay|light bloom|overlay|badge|label|rule)\b/i;
 const Z_INDEX_OVERLAY_RE = /z-index\s*[1-9]/i;
+const BULLET_BOLD_LABEL_RE =
+  /^\s*(?:[-*]|\d+\.)\s+\*\*(.+?)\*\*(?:\s*[—–-]\s*|:\s*)?(.*)$/gm;
+const ANIMATION_FRAME_RANGE_RE =
+  /Frames?\s+(\d+)\s*[–-]\s*(\d+)(?:\s*\([^)]*\))?\s*:\s*(.+)$/gim;
+const DECORATIVE_HINT_RE =
+  /\b(glow(?:ing)?|shadow|blur|bloom|trail|streak|separator|rule|gradient|flare|accent|particle|halo|grid|texture)\b/i;
+const LAYOUT_PHRASES = [
+  "split-screen",
+  "side-by-side",
+  "centered",
+  "center",
+  "bottom-center",
+  "bottom center",
+  "top-center",
+  "top center",
+  "left panel",
+  "right panel",
+  "lower-third",
+  "overlay",
+  "divider",
+  "full-bleed",
+  "full-frame",
+] as const;
+const AUDIT_HINT_METADATA_LABELS = new Set([
+  "tool",
+  "duration",
+  "timestamp",
+  "resolution",
+  "background",
+  "easing",
+]);
 
 function requiresCompositedMediaAudit(content: string): boolean {
   if (!GENERIC_MEDIA_RE.test(content)) {
@@ -161,6 +206,71 @@ export function extractSpecMediaReferences(content: string): string[] {
   }
 
   return references;
+}
+
+function pushUnique(values: string[], nextValue: string): void {
+  const trimmed = nextValue.trim();
+  if (!trimmed || values.includes(trimmed)) {
+    return;
+  }
+
+  values.push(trimmed);
+}
+
+export function resolveSpecAuditHints(content: string): AuditHints {
+  const criticalElements: string[] = [];
+  const decorativeElements: string[] = [];
+  const layoutKeywords: string[] = [];
+  const transitionWindows: AuditTransitionWindow[] = [];
+
+  for (const match of content.matchAll(BULLET_BOLD_LABEL_RE)) {
+    const label = match[1]?.trim();
+    const detail = match[2]?.trim() ?? "";
+    if (!label) {
+      continue;
+    }
+
+    const normalizedLabel = label.toLowerCase();
+    if (AUDIT_HINT_METADATA_LABELS.has(normalizedLabel)) {
+      continue;
+    }
+
+    const combined = `${label} ${detail}`.trim();
+    if (DECORATIVE_HINT_RE.test(combined)) {
+      pushUnique(decorativeElements, label);
+    } else {
+      pushUnique(criticalElements, label);
+    }
+  }
+
+  const lowerContent = content.toLowerCase();
+  for (const phrase of LAYOUT_PHRASES) {
+    if (lowerContent.includes(phrase)) {
+      pushUnique(layoutKeywords, phrase);
+    }
+  }
+
+  for (const match of content.matchAll(ANIMATION_FRAME_RANGE_RE)) {
+    const startFrame = Number(match[1]);
+    const endFrame = Number(match[2]);
+    const description = match[3]?.replace(/\*\*/g, "").trim();
+    if (Number.isNaN(startFrame) || Number.isNaN(endFrame) || !description) {
+      continue;
+    }
+
+    transitionWindows.push({
+      startFrame,
+      endFrame,
+      description,
+    });
+  }
+
+  return {
+    criticalElements,
+    decorativeElements,
+    layoutKeywords,
+    transitionWindows,
+  };
 }
 
 function listSectionSpecBaseNames(
@@ -219,6 +329,7 @@ function resolveSpecMediaInfo(
   requiresCompositedAudit: boolean;
   mediaReferences: string[];
   stagedAssetPath?: string;
+  auditHints: AuditHints;
 } {
   if (!section.specDir) {
     return {
@@ -226,6 +337,7 @@ function resolveSpecMediaInfo(
       hasSpecReferencedMedia: false,
       requiresCompositedAudit: false,
       mediaReferences: [],
+      auditHints: resolveSpecAuditHints(""),
     };
   }
 
@@ -246,6 +358,7 @@ function resolveSpecMediaInfo(
       requiresCompositedAudit: false,
       mediaReferences: stagedAssetPath ? [`veo/${specBaseName}.mp4`] : [],
       stagedAssetPath,
+      auditHints: resolveSpecAuditHints(""),
     };
   }
 
@@ -266,6 +379,7 @@ function resolveSpecMediaInfo(
         ? [...mediaReferences, `veo/${specBaseName}.mp4`]
         : mediaReferences,
     stagedAssetPath,
+    auditHints: resolveSpecAuditHints(content),
   };
 }
 
@@ -307,6 +421,7 @@ export function resolveSectionVisuals(
           ? mediaInfo.mediaReferences
           : [],
         stagedAssetPath: mediaInfo.stagedAssetPath,
+        auditHints: mediaInfo.auditHints,
       });
       continue;
     }
@@ -324,6 +439,7 @@ export function resolveSectionVisuals(
       requiresCompositedAudit: mediaInfo.requiresCompositedAudit,
       mediaReferences: mediaInfo.mediaReferences,
       stagedAssetPath: mediaInfo.stagedAssetPath,
+      auditHints: mediaInfo.auditHints,
     });
   }
 
@@ -346,6 +462,10 @@ export function resolveSectionVisuals(
       requiresCompositedAudit: false,
       previewCompositionId: resolvePreviewCompositionId(compositionId, section.id),
       mediaReferences: [],
+      auditHints:
+        specPath && fs.existsSync(specPath)
+          ? resolveSpecAuditHints(fs.readFileSync(specPath, "utf-8"))
+          : resolveSpecAuditHints(""),
     });
   }
 

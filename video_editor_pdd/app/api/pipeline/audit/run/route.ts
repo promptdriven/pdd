@@ -8,6 +8,7 @@ import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
 import {
   resolveSectionVisuals,
+  resolveSpecAuditHints,
   type ResolvedSectionVisual,
 } from "@/lib/composition-timing";
 import { normalizeSpecForAudit } from "@/lib/audit-spec-normalization";
@@ -49,6 +50,16 @@ type AuditRenderSource =
     };
 
 const DEFAULT_PREVIEW_DURATION_FRAMES = 150;
+const DECORATIVE_DISCREPANCY_RE =
+  /\b(glow|shadow|blur|bloom|rule|separator|trail|streak|opacity|gradient|halo|flare)\b/i;
+const MILD_DIFFERENCE_RE =
+  /\b(slight|slightly|subtle|subtly|minor|roughly|approximately|faint|dimmer|softer|nearly|almost|just|beginning|starting)\b/i;
+const LAYOUT_DISCREPANCY_RE =
+  /\b(center|centering|offset|drift|position|alignment|aligned|spacing|upward|downward|left|right)\b/i;
+const TRANSITION_DISCREPANCY_RE =
+  /\b(transition|fade|fading|appearing|emerging|stagger|timing|phase|beginning to appear|starting to appear|not yet fully visible|not fully visible)\b/i;
+const HARD_PROBLEM_RE =
+  /\b(missing|wrong subject|wrong scene|off-screen|outside the frame|clipped|cut off|cropped|illegible|unreadable|completely absent|not visible|invisible|far from|significantly|materially)\b/i;
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -135,6 +146,98 @@ function writeAuditReport(
   fs.writeFileSync(auditPath, auditReport, "utf-8");
 }
 
+function formatAuditHints(
+  visual: Pick<ResolvedSectionVisual, "auditHints">,
+): string {
+  const hints = visual.auditHints;
+  const lines = ["Audit hints:"];
+
+  lines.push(
+    `- Critical elements: ${
+      hints.criticalElements.length > 0
+        ? hints.criticalElements.join(", ")
+        : "none inferred from spec"
+    }`
+  );
+  lines.push(
+    `- Decorative elements that may vary slightly without failing: ${
+      hints.decorativeElements.length > 0
+        ? hints.decorativeElements.join(", ")
+        : "none inferred from spec"
+    }`
+  );
+  lines.push(
+    `- Layout intent: ${
+      hints.layoutKeywords.length > 0
+        ? hints.layoutKeywords.join(", ")
+        : "no explicit layout keywords inferred"
+    }`
+  );
+  lines.push(
+    `- Animation phases: ${
+      hints.transitionWindows.length > 0
+        ? hints.transitionWindows
+            .map(
+              (window) =>
+                `${window.startFrame}-${window.endFrame}: ${window.description}`
+            )
+            .join(" | ")
+        : "none inferred from spec"
+    }`
+  );
+
+  return lines.join("\n");
+}
+
+function classifyAuditVerdict(
+  analysis: AnnotationAnalysis,
+  visual: Pick<ResolvedSectionVisual, "auditHints">
+): "pass" | "warn" | "fail" {
+  if (analysis.severity === "pass") {
+    return "pass";
+  }
+
+  if (analysis.severity !== "minor") {
+    return "fail";
+  }
+
+  const assessmentText = [
+    analysis.technicalAssessment,
+    ...(analysis.suggestedFixes ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (HARD_PROBLEM_RE.test(assessmentText)) {
+    return "warn";
+  }
+
+  const decorativeTerms = visual.auditHints.decorativeElements
+    .map((element) => element.toLowerCase())
+    .filter(Boolean);
+  const mentionsDecorativeDifference =
+    DECORATIVE_DISCREPANCY_RE.test(assessmentText) ||
+    decorativeTerms.some((term) => assessmentText.includes(term));
+  const mentionsLayoutDifference = LAYOUT_DISCREPANCY_RE.test(assessmentText);
+  const mentionsTransitionDifference = TRANSITION_DISCREPANCY_RE.test(
+    assessmentText
+  );
+  const mentionsMildDifference = MILD_DIFFERENCE_RE.test(assessmentText);
+
+  if (
+    (mentionsDecorativeDifference && mentionsMildDifference) ||
+    (mentionsLayoutDifference &&
+      mentionsMildDifference &&
+      visual.auditHints.layoutKeywords.length > 0) ||
+    (mentionsTransitionDifference &&
+      visual.auditHints.transitionWindows.length > 0)
+  ) {
+    return "pass";
+  }
+
+  return "warn";
+}
+
 function resolveAuditRenderSource(
   projectDir: string,
   section: Section,
@@ -146,6 +249,7 @@ function resolveAuditRenderSource(
     | "previewCompositionId"
     | "mediaReferences"
     | "stagedAssetPath"
+    | "auditHints"
   >,
   renderedVideoPath: string | null,
   canRenderFreshStill: boolean
@@ -292,6 +396,12 @@ async function auditSection(
             hasExplicitMedia: false,
             requiresCompositedAudit: false,
             mediaReferences: [],
+            auditHints: {
+              criticalElements: [],
+              decorativeElements: [],
+              layoutKeywords: [],
+              transitionWindows: [],
+            },
           } satisfies ResolvedSectionVisual,
         }));
   const project = loadProject();
@@ -308,6 +418,13 @@ async function auditSection(
     const specPath = visual.specPath;
     const specName = visual.specName;
     const specContent = fs.readFileSync(specPath, "utf-8");
+    const auditHints =
+      visual.visual.auditHints.criticalElements.length > 0 ||
+      visual.visual.auditHints.decorativeElements.length > 0 ||
+      visual.visual.auditHints.layoutKeywords.length > 0 ||
+      visual.visual.auditHints.transitionWindows.length > 0
+        ? visual.visual.auditHints
+        : resolveSpecAuditHints(specContent);
     const normalizedSpecContent = normalizeSpecForAudit(
       specContent,
       project.outputResolution
@@ -417,6 +534,7 @@ Rules:
 - Sample time (intrinsic visual): ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s / ${sampleWindow.intrinsicDurationSeconds.toFixed(3)}s
 - Sample frame (intrinsic visual): ${sampleWindow.intrinsicSampleFrame} / ${sampleWindow.intrinsicDurationFrames}
 - Sample progress within intrinsic visual: ${(sampleWindow.normalizedSample * 100).toFixed(1)}%
+${formatAuditHints({ auditHints })}
 - Normalized spec snapshot for audit:
 ${normalizedSpecContent}
 - Frame PNG: ./${path.basename(outputStill)}
@@ -439,12 +557,7 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
       onLog
     )) as AnnotationAnalysis;
 
-    const verdict =
-      analysis.severity === "pass"
-        ? "pass"
-        : analysis.severity === "minor"
-          ? "warn"
-          : "fail";
+    const verdict = classifyAuditVerdict(analysis, { auditHints });
     if (verdict === "pass") passCount++;
     else if (verdict === "warn") warnCount++;
     else if (verdict === "fail") failCount++;

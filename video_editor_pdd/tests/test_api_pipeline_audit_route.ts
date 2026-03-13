@@ -611,6 +611,46 @@ describe("audit executor factory", () => {
     expect(prompt).toContain("Use severity=\"minor\" only when a discrepancy would likely be noticeable during normal playback");
   });
 
+  it("passes structured audit hints to Claude for general layout and transition context", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:03",
+          "",
+          "### Chart/Visual Elements",
+          '- **Centered Title** main text sits in the center',
+          '- **Glowing separator line** provides a subtle accent',
+          "",
+          "### Animation Sequence",
+          "1. **Frame 0-20 (0-0.67s):** Title fades in",
+          "2. **Frame 21-40 (0.70-1.33s):** Separator line glows in",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
+    expect(prompt).toContain("Audit hints:");
+    expect(prompt).toContain("Critical elements: Centered Title");
+    expect(prompt).toContain(
+      "Decorative elements that may vary slightly without failing: Glowing separator line"
+    );
+    expect(prompt).toContain("Layout intent: centered, center");
+    expect(prompt).toContain("Animation phases: 0-20: Title fades in | 21-40: Separator line glows in");
+  });
+
   it("emits 'error' status when auditSection throws", async () => {
     mockReaddirSync.mockImplementation(() => {
       throw new Error("ENOENT: no such directory");
@@ -1125,7 +1165,7 @@ describe("audit executor factory", () => {
     expect(content).toContain("## Verdict\nfail");
   });
 
-  it("writes 'warn' verdict when severity is minor", async () => {
+  it("writes 'warn' verdict when severity is minor for a meaningful missing element", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]];
     mockLoadProject.mockReturnValue(config);
@@ -1133,8 +1173,8 @@ describe("audit executor factory", () => {
     mockRunClaudeAudit.mockResolvedValue({
       severity: "minor",
       fixType: "remotion",
-      technicalAssessment: "Rule is slightly dimmer than spec",
-      suggestedFixes: ["Increase rule contrast slightly"],
+      technicalAssessment: "The speaker badge is missing from the sampled frame",
+      suggestedFixes: ["Restore the missing speaker badge"],
       confidence: 0.73,
     });
 
@@ -1146,6 +1186,82 @@ describe("audit executor factory", () => {
 
     const content = mockWriteFileSync.mock.calls[0][1];
     expect(content).toContain("## Verdict\nwarn");
+  });
+
+  it("writes 'pass' verdict when a minor discrepancy only affects decorative effects", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:03",
+          "",
+          "### Chart/Visual Elements",
+          '- **Centered Circle** remains centered in frame',
+          '- **Glow halo** softly surrounds the circle',
+        ].join("\n");
+      }
+      return "";
+    });
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "minor",
+      fixType: "remotion",
+      technicalAssessment:
+        "The glow halo is slightly dimmer than the spec, but the centered circle remains correct.",
+      suggestedFixes: ["Increase the halo opacity slightly"],
+      confidence: 0.76,
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\npass");
+  });
+
+  it("writes 'pass' verdict when a minor discrepancy is only a transition-phase timing difference", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:03",
+          "",
+          "### Animation Sequence",
+          "1. **Frame 0-20 (0-0.67s):** First badge appears",
+          "2. **Frame 21-40 (0.70-1.33s):** Third badge begins to fade in",
+        ].join("\n");
+      }
+      return "";
+    });
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "minor",
+      fixType: "remotion",
+      technicalAssessment:
+        "The third badge is just beginning to appear on this sampled frame, which reads as slightly early in the transition.",
+      suggestedFixes: ["Let the fade begin a touch earlier if this exact frame matters"],
+      confidence: 0.7,
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\npass");
   });
 
   it("creates output directory with recursive flag", async () => {
