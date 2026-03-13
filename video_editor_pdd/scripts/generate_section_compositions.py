@@ -92,9 +92,14 @@ AUDIO_EXTENSIONS = {'.wav', '.mp3', '.aac', '.m4a', '.ogg'}
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v'}
 NON_COMPONENT_BASENAMES = {'spec', 'veo'}
 VISUAL_MEDIA_KEY_RE = re.compile(
-    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
+    r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|outputFile|filename|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
     re.IGNORECASE,
 )
+STRUCTURED_VIDEO_FIELD_RE = re.compile(
+    r'(?:"|\b)(outputFile|filename|clip_id|clipId)(?:"|\b)\s*[:=]\s*["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+VIDEO_EXTENSION_PRIORITY = ('.mp4', '.webm', '.mov', '.m4v')
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -165,15 +170,21 @@ def _has_renderable_spec_media(
         spec_content = _read_text_if_exists(spec_path)
         if VISUAL_MEDIA_KEY_RE.search(spec_content):
             return True
+        if STRUCTURED_VIDEO_FIELD_RE.search(spec_content):
+            return True
         for rel_path in STATIC_FILE_RE.findall(spec_content):
             if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
                 return True
 
     staged_candidates = [
-        os.path.join(project_dir, 'outputs', 'veo', f'{spec_base}.mp4'),
+        os.path.join(project_dir, 'outputs', 'veo', f'{spec_base}{ext}')
+        for ext in VIDEO_EXTENSION_PRIORITY
     ]
     if remotion_public:
-        staged_candidates.append(os.path.join(remotion_public, 'veo', f'{spec_base}.mp4'))
+        staged_candidates.extend(
+            os.path.join(remotion_public, 'veo', f'{spec_base}{ext}')
+            for ext in VIDEO_EXTENSION_PRIORITY
+        )
 
     return any(os.path.isfile(candidate) for candidate in staged_candidates)
 
@@ -225,10 +236,71 @@ def _resolve_media_static_path(remotion_public: str, rel_path: str) -> Optional[
     return normalized if os.path.isfile(os.path.join(remotion_public, normalized)) else None
 
 
+def _candidate_video_static_paths(raw_value: str) -> List[str]:
+    """Build likely staged staticFile() paths for a structured video reference."""
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    if not normalized:
+        return []
+
+    basename = normalized.split('/')[-1]
+    candidates: List[str] = []
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    if Path(normalized).suffix.lower() in VIDEO_EXTENSIONS:
+        _add(normalized)
+        if not normalized.startswith('veo/'):
+            _add(f'veo/{basename}')
+        _add(basename)
+        return candidates
+
+    for ext in VIDEO_EXTENSION_PRIORITY:
+        _add(f'veo/{basename}{ext}')
+        _add(f'{basename}{ext}')
+
+    return candidates
+
+
+def _resolve_structured_video_static_path(
+    spec_content: str,
+    remotion_public: str,
+) -> Optional[str]:
+    """Resolve a staged video path from structured spec fields like outputFile / clip_id."""
+    if not remotion_public:
+        return None
+
+    for _, raw_value in STRUCTURED_VIDEO_FIELD_RE.findall(spec_content):
+        resolved = _existing_static_path(
+            remotion_public,
+            _candidate_video_static_paths(raw_value),
+        )
+        if resolved is not None:
+            return resolved
+
+    return None
+
+
+def _resolve_generated_spec_basename_video(
+    spec_base: str,
+    remotion_public: str,
+) -> Optional[str]:
+    """Resolve the staged clip generated for a spec basename."""
+    if not remotion_public:
+        return None
+
+    return _existing_static_path(
+        remotion_public,
+        [f'veo/{spec_base}{ext}' for ext in VIDEO_EXTENSION_PRIORITY],
+    )
+
+
 def _extract_visual_media_aliases(
     spec_content: str,
     remotion_public: str,
     inherited_default: Optional[str],
+    spec_base: str,
 ) -> tuple[Dict[str, str], Optional[str], bool]:
     """Extract named Veo asset aliases from a spec file."""
     explicit_sources: List[str] = []
@@ -242,6 +314,8 @@ def _extract_visual_media_aliases(
         'rightclip': 'rightSrc',
         'rightsrc': 'rightSrc',
         'outputsrc': 'outputSrc',
+        'outputfile': 'defaultSrc',
+        'filename': 'defaultSrc',
         'backgroundclip': 'backgroundSrc',
         'backgroundsrc': 'backgroundSrc',
         'baseclip': 'baseSrc',
@@ -261,6 +335,16 @@ def _extract_visual_media_aliases(
         if alias_name:
             aliases[alias_name] = resolved
 
+    structured_default = _resolve_structured_video_static_path(
+        spec_content,
+        remotion_public,
+    )
+    if structured_default is not None:
+        explicit = True
+        if structured_default not in explicit_sources:
+            explicit_sources.append(structured_default)
+        aliases.setdefault('defaultSrc', structured_default)
+
     for rel_path in STATIC_FILE_RE.findall(spec_content):
         if Path(rel_path).suffix.lower() not in VIDEO_EXTENSIONS:
             continue
@@ -270,6 +354,15 @@ def _extract_visual_media_aliases(
         explicit = True
         if resolved not in explicit_sources:
             explicit_sources.append(resolved)
+
+    if not explicit_sources:
+        generated_default = _resolve_generated_spec_basename_video(
+            spec_base,
+            remotion_public,
+        )
+        if generated_default is not None:
+            explicit_sources.append(generated_default)
+            aliases.setdefault('defaultSrc', generated_default)
 
     primary = aliases.get('defaultSrc')
     if primary is None and explicit_sources:
@@ -322,6 +415,7 @@ def build_visual_media_manifest(
                 _read_text_if_exists(spec_path),
                 remotion_public,
                 inherited_default,
+                spec_base,
             )
             if explicit:
                 saw_explicit_source = True

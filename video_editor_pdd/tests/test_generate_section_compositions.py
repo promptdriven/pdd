@@ -1646,6 +1646,160 @@ class TestGeneratedTimelineWrapper:
         assert '<SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>' in tsx
         assert '<VisualMediaProvider media={activeVisualMedia}>' in tsx
 
+    def test_generated_timeline_resolves_outputfile_media_aliases_from_staged_assets(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 30, id: "02_ocean_wave_broll", desc: "Ocean" },',
+                    '  { start: 30, end: 60, id: "04_aerial_forest_broll", desc: "Forest" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (specs_dir / "02_ocean_wave_broll.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "```json",
+                    '{ "outputFile": "veo/ocean_sunset.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "04_aerial_forest_broll.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "```json",
+                    '{ "outputFile": "veo/aerial_forest.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "ocean_sunset.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "aerial_forest.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "veo_section.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 6,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": [],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert '"02_ocean_wave_broll": { defaultSrc: "veo/ocean_sunset.mp4"' in tsx
+        assert '"04_aerial_forest_broll": { defaultSrc: "veo/aerial_forest.mp4"' in tsx
+        assert '"02_ocean_wave_broll": { defaultSrc: "veo/veo_section.mp4"' not in tsx
+        assert '"04_aerial_forest_broll": { defaultSrc: "veo/veo_section.mp4"' not in tsx
+
+    def test_generated_timeline_prefers_staged_spec_basename_clip_over_section_fallback(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 30, id: "02_ocean_wave_broll", desc: "Ocean" },',
+                    '  { start: 30, end: 60, id: "04_aerial_forest_broll", desc: "Forest" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (specs_dir / "02_ocean_wave_broll.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "```json",
+                    '{ "outputFile": "veo/ocean_sunset.mp4" }',
+                    "```",
+                    "",
+                    'src={staticFile("veo/ocean_sunset.mp4")}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "04_aerial_forest_broll.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "```json",
+                    '{ "outputFile": "veo/aerial_forest.mp4" }',
+                    "```",
+                    "",
+                    'src={staticFile("veo/aerial_forest.mp4")}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_ocean_wave_broll.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "04_aerial_forest_broll.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "veo_section.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 6,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": [],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert '"02_ocean_wave_broll": { defaultSrc: "veo/02_ocean_wave_broll.mp4"' in tsx
+        assert '"04_aerial_forest_broll": { defaultSrc: "veo/04_aerial_forest_broll.mp4"' in tsx
+        assert '"02_ocean_wave_broll": { defaultSrc: "veo/veo_section.mp4"' not in tsx
+        assert '"04_aerial_forest_broll": { defaultSrc: "veo/veo_section.mp4"' not in tsx
+
     def test_generated_timeline_does_not_reuse_last_renderable_visual_for_unmapped_slots(self, tmp_path):
         project_dir = tmp_path
         remotion_src = tmp_path
