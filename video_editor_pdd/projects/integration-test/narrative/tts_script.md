@@ -30,3 +30,4 @@ This is the second section of the integration test video.
 [PACE: moderate]
 [EMOTION: calm, matter-of-fact]
 It uses Veo-generated clips with narration overlay.
+[PAUSE: 1.5s]

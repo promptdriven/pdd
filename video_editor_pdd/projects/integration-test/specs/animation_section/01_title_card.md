@@ -1,44 +1,67 @@
 [title:]
-# Animation Section Title Card
+
+# Section 1.1: Animation Section Title Card
 
 **Tool:** Remotion
-**Duration:** ~4s
-**Timestamp:** 0:00 - 0:05
+**Duration:** ~1.5s
+**Timestamp:** 0:00 - 0:01.5
 
 ## Visual Description
-Animation Section appears as a crisp title card with immediate readability.
+A bold title card introduces the Animation Section. The background is a deep navy blue. The title text "Animation Section" fades in from zero opacity while scaling up slightly from 95% to 100%. A thin horizontal accent line (white, 2px) expands outward from the center beneath the title. A subtle subtitle "Integration Test" fades in 0.3s after the title.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #0A1628
+- Background: Deep navy #0F172A
+- Grid lines: None
+
+### Chart/Visual Elements
+- Title text: centered horizontally and vertically, offset 40px above center
+- Accent line: centered, 200px wide expanding to 400px, 2px height, white (#FFFFFF) at 80% opacity
+- Subtitle: centered, 24px below accent line
 
 ### Animation Sequence
-1. Frame 0-30: Establish the composition immediately.
-2. Frame 30-90: Introduce the main motion or layout change.
-3. Frame 90-150: Hold the final state clearly for rendering verification.
+1. **Frame 0-15 (0-0.5s):** Title text fades in from opacity 0 to 1, scales from 0.95 to 1.0
+2. **Frame 9-24 (0.3-0.8s):** Accent line expands from 0px to 400px width
+3. **Frame 15-30 (0.5-1.0s):** Subtitle fades in from opacity 0 to 1
+4. **Frame 30-45 (1.0-1.5s):** Hold all elements at full visibility
+
+### Typography
+- Title: Inter Bold, 72px, white (#FFFFFF)
+- Subtitle: Inter Regular, 28px, slate-300 (#CBD5E1)
+
+### Easing
+- Title fade/scale: `easeOutCubic`
+- Line expansion: `easeInOutQuad`
+- Subtitle fade: `easeOutQuad`
 
 ## Narration Sync
-> "Animation Section appears as a crisp title card with immediate readability."
+> "This is the first section of the integration test video."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={150}>
-  <AbsoluteFill />
+<Sequence from={0} durationInFrames={45}>
+  <TitleCard>
+    <Sequence from={0}>
+      <FadeScale text="Animation Section" />
+    </Sequence>
+    <Sequence from={9}>
+      <ExpandingLine />
+    </Sequence>
+    <Sequence from={15}>
+      <FadeIn text="Integration Test" />
+    </Sequence>
+  </TitleCard>
 </Sequence>
 ```
 
 ## Data Points
 ```json
-{"series":[{"label":"A","value":1},{"label":"B","value":2}]}
+{
+  "title": "Animation Section",
+  "subtitle": "Integration Test"
+}
 ```
 
-<!-- ANNOTATION_UPDATE_START: 73b92e4d-a466-4b57-8fe5-c717293ba494 -->
-## Annotation Update
-Requested change: Change the main background color of this section to bright red (#FF0000). Find all background color values in the animation_section TSX component files under remotion/src/remotion/ and replace them with #FF0000.
-Technical assessment: The animation_section currently renders a dark navy (#0A1628) background with a subtle radial gradient/vignette, as confirmed by the composite frame and the spec files (specs/animation_section/01_title_card.md specifies Background: #0A1628). The annotation requests changing all background colors to bright red (#FF0000). The main section orchestrator files (animation_section/index.tsx and constants.ts) contain no hardcoded color values — the background styling lives inside the generated child components (AnimationSection01TitleCard, AnimationSection02KeyVisual, AnimationSection03SplitSummary) which are resolved at build time from sibling directories (animation_section_01_title_card/, etc.) that do not yet exist on disk. The fix requires either: (1) regenerating those child components with #FF0000 backgrounds, or (2) wrapping the ActiveComponent in the section index.tsx with an AbsoluteFill that forces backgroundColor: '#FF0000', overriding the child background. Approach (2) is the most direct path since the child component source is not available for manual editing.
-- In animation_section/index.tsx, wrap the <ActiveComponent /> render inside an <AbsoluteFill style={{ backgroundColor: '#FF0000' }}> to override the background color across all child visuals in this section.
-- Alternatively, regenerate the child components (01_title_card, 02_key_visual, 03_split_summary) with their background color values changed from #0A1628 to #FF0000.
-- Update all spec files in specs/animation_section/ to change 'Background: #0A1628' to 'Background: #FF0000' so future regenerations use the correct color.
-<!-- ANNOTATION_UPDATE_END: 73b92e4d-a466-4b57-8fe5-c717293ba494 -->
+---
