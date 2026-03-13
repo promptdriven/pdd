@@ -132,8 +132,8 @@ class TestStep8BlocksStructuralTests:
     def test_prompt_provides_bad_good_examples(self, step8_content: str) -> None:
         """Verify Step 8 provides BAD and GOOD test plan examples."""
         content_lower = step8_content.lower()
-        has_bad_example = "bad test plan" in content_lower or "bad" in content_lower and "structural" in content_lower
-        has_good_example = "good test plan" in content_lower or "good" in content_lower and "behavioral" in content_lower
+        has_bad_example = "bad test plan" in content_lower or ("bad" in content_lower and "structural" in content_lower)
+        has_good_example = "good test plan" in content_lower or ("good" in content_lower and "behavioral" in content_lower)
         assert has_bad_example and has_good_example, (
             "Step 8 prompt must provide both BAD (structural) and GOOD (behavioral) "
             "test plan examples to guide the LLM away from shape-testing."

@@ -77,7 +77,6 @@ def _render_prompt(prompt_filename: str, context: dict) -> str:
     return processed
 
 
-@pytest.mark.e2e
 class TestIssue838StructuralTestBlockingE2E:
     """E2E: Verify rendered Step 8/9 prompts block structural anti-patterns."""
 

@@ -79,13 +79,14 @@ class TestStep9BadGoodCodeExamples:
         """
         content_lower = prompt_content.lower()
         has_bad_code = (
-            "bad" in content_lower
+            "import inspect" in content_lower
             and "inspect.signature" in content_lower
-            and "sig.parameters" in content_lower.replace("'", '"')
+            and 'assert "quiet" in sig.parameters' in content_lower.replace("'", '"')
         )
         assert has_bad_code, (
-            "Step 9 prompt must show a BAD code example with inspect.signature() "
-            "and sig.parameters — the exact anti-pattern from issue #838."
+            "Step 9 prompt must show a BAD code snippet with 'import inspect', "
+            "inspect.signature(), and 'assert \"quiet\" in sig.parameters' — "
+            "the exact anti-pattern from issue #838."
         )
 
     def test_prompt_has_good_code_with_mock_patch(self, prompt_content: str) -> None:
