@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame at 80% progress (frame 119/150) satisfies the normalized spec. The background is a dark navy matching #0A1628. A bar chart is clearly visible with strong contrast — alternating cyan/blue and green bars of varying heights rendered against the dark background. The composition shows 4 bars which represent a 'simple animated chart with strong contrast and visible motion' as specified. The title 'Key Visual' is displayed in bold white text in the upper-left corner. At frame 119 (within the 90-150 hold range), the chart appears to be in its final settled state, consistent with the spec requirement to 'hold the final state clearly for rendering verification.' The data series specification lists labels A and B with values 1 and 2 — the chart renders 4 bars with ascending then descending heights, which is a reasonable visual representation with additional data points. Resolution appears correct at 1280x720.

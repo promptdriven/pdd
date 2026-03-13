@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame shows an aerial drone shot over a lush green forest canopy with sunlight filtering through the trees, fully matching the spec. Key observations: (1) Full-bleed video clip with no UI chrome or overlays — confirmed. (2) Rich green palette with warm golden highlights from filtering sunlight — confirmed, the sun creates prominent golden rays and warm highlights on the canopy. (3) Aerial perspective consistent with drone footage — confirmed. (4) No text or data overlay — confirmed. (5) Cinematic quality with natural colour grading — confirmed. (6) At 22.7% progress through the clip, the subtle Ken Burns zoom would be imperceptible at this sampling point (scale ~1.007), consistent with the linear 1.0→1.03 zoom spec. (7) Resolution appears correct at 16:9 aspect ratio. The frame faithfully represents the described 'aerial drone shot of a green forest canopy with sunlight filtering through the leaves'.

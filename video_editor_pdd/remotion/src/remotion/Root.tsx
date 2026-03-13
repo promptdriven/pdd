@@ -6,26 +6,16 @@ import "./_shared/load-inter-font";
 import { AnimationSectionSection } from "./animation_section";
 import { VeoSectionSection } from "./veo_section";
 import { AnimationSection01TitleCard } from "./AnimationSection01TitleCard";
-import { AnimationSection02BlueCirclePulse } from "./AnimationSection02BlueCirclePulse";
-import { AnimationSection03CircleToSquareMorph } from "./AnimationSection03CircleToSquareMorph";
-import { AnimationSection04SquareSlideRight } from "./AnimationSection04SquareSlideRight";
-import { AnimationSection05SplitComparison } from "./AnimationSection05SplitComparison";
-import { AnimationSection06ParticleBurst } from "./AnimationSection06ParticleBurst";
-import { AnimationSection07SectionOutro } from "./AnimationSection07SectionOutro";
+import { AnimationSection02KeyVisual } from "./animation_section_02_key_visual";
+import { AnimationSection03SplitSummary } from "./animation_section_03_split_summary";
 import { VeoSection01TitleCard } from "./VeoSection01TitleCard";
-import { VeoSection03WaveDataOverlay } from "./VeoSection03WaveDataOverlay";
-import { VeoSection05SplitNatureComparison } from "./VeoSection05SplitNatureComparison";
-import { VeoSection06VeoPipelineInfographic } from "./VeoSection06VeoPipelineInfographic";
-import { VeoSection07NarrationOverlayIntro } from "./VeoSection07NarrationOverlayIntro";
-import { VeoSection08SectionEndCard } from "./VeoSection08SectionEndCard";
+import { VeoSection02KeyVisual } from "./veo_section_02_key_visual";
+import { VeoSection03SplitSummary } from "./veo_section_03_split_summary";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "veo_section:veo_section_01_title_card": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
-  "veo_section:03_wave_data_overlay": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
-  "veo_section:05_split_nature_comparison": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4", leftSrc: "veo/02_ocean_wave_broll.mp4", rightSrc: "veo/04_aerial_forest_broll.mp4", revealSrc: "veo/04_aerial_forest_broll.mp4" },
-  "veo_section:06_veo_pipeline_infographic": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
-  "veo_section:07_narration_overlay_intro": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
-  "veo_section:08_section_end_card": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
+  "veo_section:veo_section_01_title_card": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
+  "veo_section:veo_section_02_key_visual": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
+  "veo_section:veo_section_03_split_summary": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
 };
 
 const VeoSection01TitleCardPreview: React.FC = () => (
@@ -33,29 +23,14 @@ const VeoSection01TitleCardPreview: React.FC = () => (
     <VeoSection01TitleCard />
   </VisualMediaProvider>
 );
-const VeoSection03WaveDataOverlayPreview: React.FC = () => (
-  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:03_wave_data_overlay"] ?? null}>
-    <VeoSection03WaveDataOverlay />
+const VeoSection02KeyVisualPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:veo_section_02_key_visual"] ?? null}>
+    <VeoSection02KeyVisual />
   </VisualMediaProvider>
 );
-const VeoSection05SplitNatureComparisonPreview: React.FC = () => (
-  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:05_split_nature_comparison"] ?? null}>
-    <VeoSection05SplitNatureComparison />
-  </VisualMediaProvider>
-);
-const VeoSection06VeoPipelineInfographicPreview: React.FC = () => (
-  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:06_veo_pipeline_infographic"] ?? null}>
-    <VeoSection06VeoPipelineInfographic />
-  </VisualMediaProvider>
-);
-const VeoSection07NarrationOverlayIntroPreview: React.FC = () => (
-  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:07_narration_overlay_intro"] ?? null}>
-    <VeoSection07NarrationOverlayIntro />
-  </VisualMediaProvider>
-);
-const VeoSection08SectionEndCardPreview: React.FC = () => (
-  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:08_section_end_card"] ?? null}>
-    <VeoSection08SectionEndCard />
+const VeoSection03SplitSummaryPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:veo_section_03_split_summary"] ?? null}>
+    <VeoSection03SplitSummary />
   </VisualMediaProvider>
 );
 
@@ -67,7 +42,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={230}
+        durationInFrames={220}
         fps={30}
         width={1280}
         height={720}
@@ -75,7 +50,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={233}
+        durationInFrames={221}
         fps={30}
         width={1280}
         height={720}
@@ -89,48 +64,16 @@ export const RemotionRoot: React.FC = () => {
         height={720}
       />
       <Composition
-        id="animation-section02-blue-circle-pulse"
-        component={AnimationSection02BlueCirclePulse}
+        id="animation-section02-key-visual"
+        component={AnimationSection02KeyVisual}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
         height={720}
       />
       <Composition
-        id="animation-section03-circle-to-square-morph"
-        component={AnimationSection03CircleToSquareMorph}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section04-square-slide-right"
-        component={AnimationSection04SquareSlideRight}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section05-split-comparison"
-        component={AnimationSection05SplitComparison}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section06-particle-burst"
-        component={AnimationSection06ParticleBurst}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="animation-section07-section-outro"
-        component={AnimationSection07SectionOutro}
+        id="animation-section03-split-summary"
+        component={AnimationSection03SplitSummary}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -145,40 +88,16 @@ export const RemotionRoot: React.FC = () => {
         height={720}
       />
       <Composition
-        id="veo-section03-wave-data-overlay"
-        component={VeoSection03WaveDataOverlayPreview}
+        id="veo-section02-key-visual"
+        component={VeoSection02KeyVisualPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
         height={720}
       />
       <Composition
-        id="veo-section05-split-nature-comparison"
-        component={VeoSection05SplitNatureComparisonPreview}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="veo-section06-veo-pipeline-infographic"
-        component={VeoSection06VeoPipelineInfographicPreview}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="veo-section07-narration-overlay-intro"
-        component={VeoSection07NarrationOverlayIntroPreview}
-        durationInFrames={PREVIEW_DURATION}
-        fps={30}
-        width={1280}
-        height={720}
-      />
-      <Composition
-        id="veo-section08-section-end-card"
-        component={VeoSection08SectionEndCardPreview}
+        id="veo-section03-split-summary"
+        component={VeoSection03SplitSummaryPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}

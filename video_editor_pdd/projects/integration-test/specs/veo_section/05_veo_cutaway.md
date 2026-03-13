@@ -1,12 +1,12 @@
-[title:]
-# Veo Section Title Card
+[veo: A complementary cinematic cutaway for Veo Section, gentle movement, rich contrast, polished editorial look]
+# Veo Section Veo Cutaway
 
-**Tool:** Remotion
+**Tool:** Veo
 **Duration:** ~4s
 **Timestamp:** 0:00 - 0:05
 
 ## Visual Description
-Veo Section appears as a crisp title card with immediate readability.
+Veo Section receives a second cinematic cutaway for downstream Veo generation.
 
 ## Technical Specifications
 
@@ -20,7 +20,7 @@ Veo Section appears as a crisp title card with immediate readability.
 3. Frame 90-150: Hold the final state clearly for rendering verification.
 
 ## Narration Sync
-> "Veo Section appears as a crisp title card with immediate readability."
+> "Veo Section receives a second cinematic cutaway for downstream Veo generation."
 
 ## Code Structure (Remotion)
 ```typescript

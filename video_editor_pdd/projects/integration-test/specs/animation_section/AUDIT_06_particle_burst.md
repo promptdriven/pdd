@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame is sampled at frame 22 of 22 (75% of the 1-second sample window, intrinsic progress 75%), which corresponds to the very end of the particle burst animation sequence. According to the spec, by frame 16–22 (0.53–0.73s) all remaining particles should be fully faded and the canvas should rest on the #0B1120 (dark navy) background. The rendered frame shows a uniform dark navy background with no visible particles, no flash, and no other elements — consistent with the spec's expected end state. The background color appears to match #0B1120 (dark navy). No grid lines or typography are present, as specified. The animation has completed its full cycle: the flash has long since faded, all 40 particles have fully faded out, and the background transition from charcoal to dark navy is complete.
