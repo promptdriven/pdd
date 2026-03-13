@@ -425,7 +425,11 @@ Read the frame PNG and compare it against the normalized spec snapshot above. Re
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
 
 Use severity="pass" if the frame fully satisfies the spec.
+Treat small layout drift within roughly 3% of the frame width/height, or slight centering variance that preserves the intended composition, as pass.
+Treat subtle differences in glow, shadow, blur, rule thickness, or opacity as pass when the intended visual effect is still clearly present.
+Treat timing that is within the same intended animation phase and visually reads correctly as pass.
 Use severity="minor" for subtle, non-material differences that do not meaningfully break the intended visual.
+Use severity="minor" only when a discrepancy would likely be noticeable during normal playback or would matter to a reviewer comparing the frame carefully.
 Reserve severity="major" or "critical" for clearly missing, wrong, or materially broken visuals.
 `;
 

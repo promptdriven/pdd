@@ -593,6 +593,24 @@ describe("audit executor factory", () => {
     expect(prompt).toContain("Audit visual type:");
   });
 
+  it("instructs Claude to tolerate subtle layout and effect differences as pass", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
+    expect(prompt).toContain("Treat small layout drift within roughly 3% of the frame");
+    expect(prompt).toContain("Treat subtle differences in glow, shadow, blur, rule thickness, or opacity as pass");
+    expect(prompt).toContain("Use severity=\"minor\" only when a discrepancy would likely be noticeable during normal playback");
+  });
+
   it("emits 'error' status when auditSection throws", async () => {
     mockReaddirSync.mockImplementation(() => {
       throw new Error("ENOENT: no such directory");
