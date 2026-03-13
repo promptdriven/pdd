@@ -250,18 +250,14 @@ def _resolve_video_reference_static_path(
     """Resolve a video reference to a staged static path.
 
     Resolution order:
-      1. Exact staged path as written in the spec.
-      2. Per-section logical alias map, used to translate names like
+      1. Per-section logical alias map, used to translate names like
          `veo/ocean_sunset.mp4` to the actual staged clip for another visual.
+      2. Exact staged path as written in the spec.
       3. Compatibility fallback candidates under remotion/public.
     """
     normalized = raw_value.replace('\\', '/').lstrip('/')
     if not normalized:
         return None
-
-    exact = _resolve_media_static_path(remotion_public, normalized)
-    if exact is not None:
-        return exact
 
     basename = normalized.split('/')[-1]
     if reference_aliases:
@@ -269,6 +265,10 @@ def _resolve_video_reference_static_path(
             resolved = reference_aliases.get(key)
             if resolved and os.path.isfile(os.path.join(remotion_public, resolved)):
                 return resolved
+
+    exact = _resolve_media_static_path(remotion_public, normalized)
+    if exact is not None:
+        return exact
 
     return _existing_static_path(
         remotion_public,
@@ -386,7 +386,7 @@ def _build_section_video_reference_aliases(
                 break
 
         staged_target = _resolve_generated_spec_basename_video(spec_base, remotion_public)
-        canonical_target = direct_target or staged_target
+        canonical_target = staged_target or direct_target
         if canonical_target is None:
             continue
 
