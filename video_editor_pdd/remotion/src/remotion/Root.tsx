@@ -1,5 +1,6 @@
 import React from "react";
 import { Composition } from "remotion";
+import { VisualMediaProvider } from "./_shared/visual-runtime";
 import "./_shared/load-inter-font";
 
 import { AnimationSectionSection } from "./animation_section";
@@ -17,6 +18,46 @@ import { VeoSection05SplitNatureComparison } from "./VeoSection05SplitNatureComp
 import { VeoSection06VeoPipelineInfographic } from "./VeoSection06VeoPipelineInfographic";
 import { VeoSection07NarrationOverlayIntro } from "./VeoSection07NarrationOverlayIntro";
 import { VeoSection08SectionEndCard } from "./VeoSection08SectionEndCard";
+
+const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
+  "veo_section:veo_section_01_title_card": { defaultSrc: "veo/veo_section.mp4", backgroundSrc: "veo/veo_section.mp4", outputSrc: "veo/veo_section.mp4", baseSrc: "veo/veo_section.mp4" },
+  "veo_section:03_wave_data_overlay": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
+  "veo_section:05_split_nature_comparison": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4", leftSrc: "veo/02_ocean_wave_broll.mp4", rightSrc: "veo/04_aerial_forest_broll.mp4", revealSrc: "veo/04_aerial_forest_broll.mp4" },
+  "veo_section:06_veo_pipeline_infographic": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
+  "veo_section:07_narration_overlay_intro": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
+  "veo_section:08_section_end_card": { defaultSrc: "veo/02_ocean_wave_broll.mp4", backgroundSrc: "veo/02_ocean_wave_broll.mp4", outputSrc: "veo/02_ocean_wave_broll.mp4", baseSrc: "veo/02_ocean_wave_broll.mp4" },
+};
+
+const VeoSection01TitleCardPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:veo_section_01_title_card"] ?? null}>
+    <VeoSection01TitleCard />
+  </VisualMediaProvider>
+);
+const VeoSection03WaveDataOverlayPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:03_wave_data_overlay"] ?? null}>
+    <VeoSection03WaveDataOverlay />
+  </VisualMediaProvider>
+);
+const VeoSection05SplitNatureComparisonPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:05_split_nature_comparison"] ?? null}>
+    <VeoSection05SplitNatureComparison />
+  </VisualMediaProvider>
+);
+const VeoSection06VeoPipelineInfographicPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:06_veo_pipeline_infographic"] ?? null}>
+    <VeoSection06VeoPipelineInfographic />
+  </VisualMediaProvider>
+);
+const VeoSection07NarrationOverlayIntroPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:07_narration_overlay_intro"] ?? null}>
+    <VeoSection07NarrationOverlayIntro />
+  </VisualMediaProvider>
+);
+const VeoSection08SectionEndCardPreview: React.FC = () => (
+  <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:08_section_end_card"] ?? null}>
+    <VeoSection08SectionEndCard />
+  </VisualMediaProvider>
+);
 
 const PREVIEW_DURATION = 150; // 5s at 30fps
 
@@ -97,7 +138,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="veo-section01-title-card"
-        component={VeoSection01TitleCard}
+        component={VeoSection01TitleCardPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -105,7 +146,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="veo-section03-wave-data-overlay"
-        component={VeoSection03WaveDataOverlay}
+        component={VeoSection03WaveDataOverlayPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -113,7 +154,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="veo-section05-split-nature-comparison"
-        component={VeoSection05SplitNatureComparison}
+        component={VeoSection05SplitNatureComparisonPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -121,7 +162,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="veo-section06-veo-pipeline-infographic"
-        component={VeoSection06VeoPipelineInfographic}
+        component={VeoSection06VeoPipelineInfographicPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -129,7 +170,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="veo-section07-narration-overlay-intro"
-        component={VeoSection07NarrationOverlayIntro}
+        component={VeoSection07NarrationOverlayIntroPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}
@@ -137,7 +178,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="veo-section08-section-end-card"
-        component={VeoSection08SectionEndCard}
+        component={VeoSection08SectionEndCardPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}

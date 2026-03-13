@@ -1180,13 +1180,44 @@ def generate_root_tsx(
     remotion_dir: str,
     default_width: int = 1920,
     default_height: int = 1080,
+    project_dir: str = '',
 ) -> str:
     """Generate the Root.tsx content that registers all section compositions
     and individual component compositions for preview."""
     lines: List[str] = []
+    remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
+    remotion_public = os.path.join(remotion_dir, 'public') if remotion_dir else ''
+    preview_media_records: List[tuple[str, str, Dict[str, str]]] = []
+    preview_wrapper_names: Dict[str, str] = {}
+
+    for section in sections:
+        if not project_dir or not remotion_public:
+            continue
+
+        fallback_video_src = resolve_direct_video_src(section['id'], remotion_public)
+        visual_media_manifest = build_visual_media_manifest(
+            section,
+            project_dir,
+            remotion_public,
+            fallback_video_src=fallback_video_src,
+        )
+
+        compositions = section.get('compositions', [])
+        for comp in compositions:
+            comp_id = comp if isinstance(comp, str) else comp.get('id', '')
+            if not comp_id:
+                continue
+            media = visual_media_manifest.get(comp_id)
+            if not media:
+                continue
+            comp_pascal, _ = resolve_comp_import(comp_id, section['id'], remotion_src)
+            preview_wrapper_names[comp_pascal] = f'{comp_pascal}Preview'
+            preview_media_records.append((section['id'], comp_id, media))
 
     lines.append('import React from "react";')
     lines.append('import { Composition } from "remotion";')
+    if preview_media_records:
+        lines.append('import { VisualMediaProvider } from "./_shared/visual-runtime";')
     lines.append('import "./_shared/load-inter-font";')
     lines.append('')
 
@@ -1198,7 +1229,6 @@ def generate_root_tsx(
         lines.append(f'import {{ {component_name} }} from "./{section_id}";')
 
     # Import individual components for preview compositions
-    remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
     imported_pascals: set = set()
     for section in sections:
         section_id = section['id']
@@ -1212,6 +1242,35 @@ def generate_root_tsx(
                     imported_pascals.add(comp_pascal)
 
     lines.append('')
+    if preview_media_records:
+        lines.append('const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {')
+        for section_id, comp_id, aliases in preview_media_records:
+            alias_parts = ', '.join(
+                f'{alias_name}: "{alias_value}"'
+                for alias_name, alias_value in aliases.items()
+            )
+            lines.append(f'  "{section_id}:{comp_id}": {{ {alias_parts} }},')
+        lines.append('};')
+        lines.append('')
+        generated_preview_wrappers: set = set()
+        for section in sections:
+            section_id = section['id']
+            compositions = section.get('compositions', [])
+            for comp in compositions:
+                comp_id = comp if isinstance(comp, str) else comp.get('id', '')
+                if not comp_id:
+                    continue
+                comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
+                preview_wrapper_name = preview_wrapper_names.get(comp_pascal)
+                if not preview_wrapper_name or preview_wrapper_name in generated_preview_wrappers:
+                    continue
+                lines.append(f'const {preview_wrapper_name}: React.FC = () => (')
+                lines.append(f'  <VisualMediaProvider media={{PREVIEW_VISUAL_MEDIA["{section_id}:{comp_id}"] ?? null}}>')
+                lines.append(f'    <{comp_pascal} />')
+                lines.append('  </VisualMediaProvider>')
+                lines.append(');')
+                generated_preview_wrappers.add(preview_wrapper_name)
+        lines.append('')
     lines.append('const PREVIEW_DURATION = 150; // 5s at 30fps')
     lines.append('')
     lines.append('export const RemotionRoot: React.FC = () => {')
@@ -1252,12 +1311,13 @@ def generate_root_tsx(
                 comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
                 if comp_pascal in registered:
                     continue
+                preview_component = preview_wrapper_names.get(comp_pascal, comp_pascal)
                 # Use hyphenated comp_pascal as the Remotion composition ID
                 # to ensure uniqueness across sections
                 remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
                 lines.append(f'      <Composition')
                 lines.append(f'        id="{remotion_id}"')
-                lines.append(f'        component={{{comp_pascal}}}')
+                lines.append(f'        component={{{preview_component}}}')
                 lines.append(f'        durationInFrames={{PREVIEW_DURATION}}')
                 lines.append(f'        fps={{{fps}}}')
                 lines.append(f'        width={{{width}}}')
@@ -1279,6 +1339,7 @@ def update_root_tsx(
     remotion_dir: str,
     default_width: int = 1920,
     default_height: int = 1080,
+    project_dir: str = '',
 ) -> None:
     """Update or create Root.tsx to register all section compositions."""
     root_path = os.path.join(remotion_dir, 'src', 'remotion', 'Root.tsx')
@@ -1293,6 +1354,7 @@ def update_root_tsx(
         remotion_dir,
         default_width=default_width,
         default_height=default_height,
+        project_dir=project_dir,
     )
 
     with open(root_path, 'w', encoding='utf-8') as f:
@@ -1585,6 +1647,7 @@ def main() -> None:
         remotion_dir,
         default_width=default_width,
         default_height=default_height,
+        project_dir=project_dir,
     )
 
     sys.exit(0)

@@ -2187,6 +2187,75 @@ class TestCompositionTiming:
         assert 'Part1EconomicsStatCalloutGitclear' in root
         assert 'part1-economics-stat-callout-gitclear' in root
 
+    def test_root_tsx_wraps_preview_compositions_with_visual_media_when_available(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        section_dir = remotion_src / "veo_section"
+        split_dir = remotion_src / "VeoSection05SplitNatureComparison"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir(parents=True)
+        split_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "index.tsx").write_text(
+            "export const VeoSectionSection = () => null;\nexport default VeoSectionSection;\n",
+            encoding="utf-8",
+        )
+        (split_dir / "index.ts").write_text(
+            "export const VeoSection05SplitNatureComparison = () => null;\nexport default VeoSection05SplitNatureComparison;\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "02_ocean_wave_broll.md").write_text(
+            '[veo:]\n```json\n{ "outputFile": "veo/ocean_sunset.mp4" }\n```',
+            encoding="utf-8",
+        )
+        (specs_dir / "04_aerial_forest_broll.md").write_text(
+            '[veo:]\n```json\n{ "outputFile": "veo/aerial_forest.mp4" }\n```',
+            encoding="utf-8",
+        )
+        (specs_dir / "05_split_nature_comparison.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    '<SplitPanel side="left" video="veo/ocean_sunset.mp4" />',
+                    '<SplitPanel side="right" video="veo/aerial_forest.mp4" />',
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_ocean_wave_broll.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "04_aerial_forest_broll.mp4").write_bytes(b"\x00" * 32)
+
+        sections = [{
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 8,
+            "specDir": "veo_section",
+            "compositions": ["05_split_nature_comparison"],
+        }]
+
+        root = generate_root_tsx(
+            sections,
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { VisualMediaProvider } from "./_shared/visual-runtime";' in root
+        assert 'const PREVIEW_VISUAL_MEDIA' in root
+        assert '"veo_section:05_split_nature_comparison": { defaultSrc: "veo/02_ocean_wave_broll.mp4"' in root
+        assert 'leftSrc: "veo/02_ocean_wave_broll.mp4"' in root
+        assert 'rightSrc: "veo/04_aerial_forest_broll.mp4"' in root
+        assert 'const VeoSection05SplitNatureComparisonPreview: React.FC = () => (' in root
+        assert '<VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:05_split_nature_comparison"] ?? null}>' in root
+        assert 'component={VeoSection05SplitNatureComparisonPreview}' in root
+
 
 class TestDigitPrefixedIdentifiers:
     """Tests for digit-prefixed composition IDs producing valid JS identifiers."""
