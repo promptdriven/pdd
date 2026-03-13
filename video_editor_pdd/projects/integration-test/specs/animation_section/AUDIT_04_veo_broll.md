@@ -1,4 +1,4 @@
 ## Verdict
 fail
 ## Summary
-The frame file 04_veo_broll_frame.png is missing from the audit output directory. Only frames for 01_title_card, 02_key_visual, and 03_split_summary exist. The 04_veo_broll scene frame was never captured, so no visual comparison against the spec can be performed. This indicates the render pipeline did not produce a frame sample for this scene.
+The frame file 04_veo_broll_frame.png does not exist in the audit output directory. The corresponding audit spec (AUDIT_04_veo_broll.md) has been deleted from the specs directory. No rendered frame is available to evaluate against the normalized spec snapshot. The veo b-roll visual for Animation Section is entirely absent from the render pipeline.
