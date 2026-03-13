@@ -12,8 +12,9 @@ export const VeoSection08SectionEndCard: React.FC = () => {
   const { width, height } = useVideoConfig();
   const layout = resolveEndCardLayout(width, height);
 
-  // Frame 0-10: Background gradient fades in (opacity 0 → 1)
-  const backgroundOpacity = interpolate(
+  // Frame 0-10: Content fades in over the gradient background
+  // Background gradient is always visible (non-black) from frame 0.
+  const contentOpacity = interpolate(
     frame,
     [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
     [0, 1],
@@ -24,16 +25,15 @@ export const VeoSection08SectionEndCard: React.FC = () => {
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#000000' }}>
-      <AbsoluteFill
-        style={{
-          background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
-          opacity: backgroundOpacity,
-        }}
-      >
-        {/* Bokeh particles — drift continuously across full duration */}
-        <BokehParticles layout={layout} />
+    <AbsoluteFill
+      style={{
+        background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
+      }}
+    >
+      {/* Bokeh particles — drift continuously from frame 0, visible immediately */}
+      <BokehParticles layout={layout} />
 
+      <AbsoluteFill style={{ opacity: contentOpacity }}>
         {/* Completion ring draws clockwise */}
         <CompletionRing layout={layout} />
 

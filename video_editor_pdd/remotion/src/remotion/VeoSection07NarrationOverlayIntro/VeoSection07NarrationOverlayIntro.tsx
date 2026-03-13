@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing, useVideoConfig } from 'remotion';
-import { ANIMATION, NARRATION_TEXT, resolveNarrationOverlayLayout } from './constants';
+import { COLORS, ANIMATION, NARRATION_TEXT, resolveNarrationOverlayLayout } from './constants';
 import { FrostedPill } from './FrostedPill';
 import { ProgressBar } from './ProgressBar';
 
@@ -24,6 +24,7 @@ export const VeoSection07NarrationOverlayIntro: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
+        backgroundColor: COLORS.background,
         pointerEvents: 'none',
       }}
     >

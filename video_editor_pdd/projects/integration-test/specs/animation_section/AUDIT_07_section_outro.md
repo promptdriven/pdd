@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The sampled frame at 3.723s (50% of intrinsic visual, frame 111/223) shows an entirely black canvas. The spec's 22-frame (~0.75s) outro card ends with a full-canvas fade to black (frames 19–22, overlay opacity 0→1). At 3.723s, the composition is well past its final frame, so the fade-to-black overlay is at full opacity. The entirely black frame is the correct and expected visual output for this sample time.
+The frame is sampled at 3.797s (50% of 7.595s intrinsic visual), which is well beyond the component's 22-frame (0.73s) duration. At this point, the fade-to-black overlay (frames 19–22) has long completed, so the expected state is a fully black canvas. The rendered frame shows exactly that — a solid black 1280×720 frame. This is consistent with the spec's final state. Note: the core visual elements (contracting divider, green checkmark stroke animation, 'Complete' label) cannot be verified at this sample time since they are fully occluded by the completed fade-to-black overlay. The end-state rendering is correct per spec.

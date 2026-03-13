@@ -7,6 +7,7 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
+  background: '#0A1628',
   pillFill: 'rgba(11,29,58,0.7)',
   pillBorder: 'rgba(91,155,213,0.3)',
   accentGradientStart: '#5B9BD5',
