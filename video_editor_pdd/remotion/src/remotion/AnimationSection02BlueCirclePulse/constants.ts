@@ -3,41 +3,48 @@
 export const CANVAS = {
   width: 1280,
   height: 720,
-};
+} as const;
 
 export const COLORS = {
   background: '#141921',
   circle: '#3B82F6',
   dropShadow: 'rgba(59, 130, 246, 0.3)',
-};
+} as const;
 
 export const DIMENSIONS = {
   circleDiameter: 180,
-  glowDiameter: 220,
-  glowExpandedDiameter: 280,
+  glowMinDiameter: 220,
+  glowMaxDiameter: 280,
   glowBlur: 30,
-};
+} as const;
 
 export const TIMING = {
-  // Frame 0-20: Circle scales in with spring overshoot
-  scaleInStart: 0,
-  scaleInEnd: 20,
-  // Frame 20-50: Hold steady, glow fades in
-  holdStart: 20,
-  glowFadeEnd: 50,
-  // Frame 50-75: Pulse beat
-  pulseStart: 50,
-  pulseMid: 62,
-  pulseEnd: 75,
-  // Frame 75-120: Rest with gentle glow oscillation
-  restStart: 75,
-  totalDuration: 120,
-};
+  // Phase 1: Spring scale-in with overshoot (frames 0-8)
+  springStart: 0,
+  springEnd: 8,
+
+  // Phase 2: Settle + glow/shadow fade in (frames 8-15)
+  settleStart: 8,
+  settleEnd: 15,
+
+  // Phase 3: Pulse beat (frames 15-28)
+  pulseStart: 15,
+  pulsePeak: 21,
+  pulseEnd: 28,
+
+  // Phase 4: Breathing rest (frames 28-45)
+  breathingStart: 28,
+  breathingEnd: 45,
+  breathingCycleFrames: 15,
+
+  totalDuration: 45,
+} as const;
 
 export const PULSE = {
+  overshootScale: 1.08,
   peakScale: 1.15,
-  glowOpacityMin: 0.15,
-  glowOpacityMax: 0.25,
-  glowOpacityPeak: 0.4,
-  glowOpacityRest: 0.2,
-};
+  breathingScale: 1.02,
+  glowOpacity: 0.15,
+  breathingOpacityMin: 0.12,
+  breathingOpacityMax: 0.18,
+} as const;

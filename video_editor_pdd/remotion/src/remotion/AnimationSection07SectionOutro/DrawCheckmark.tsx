@@ -1,15 +1,14 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
+import { CANVAS, COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
+
+// Checkmark SVG path: M 8,20 L 16,28 L 32,12
+// Left leg ≈ 11.3, right leg ≈ 22.6, total ≈ 34
+const CHECKMARK_PATH = 'M 8 20 L 16 28 L 32 12';
+const TOTAL_PATH_LENGTH = 34;
 
 export const DrawCheckmark: React.FC = () => {
   const frame = useCurrentFrame();
-
-  // The checkmark has two strokes: short left leg and longer right leg
-  // Total path length for a checkmark in a 40px box
-  // Path: M 8,20 L 16,28 L 32,12
-  // Left leg length ≈ 11.3, Right leg length ≈ 22.6, total ≈ 33.9
-  const totalPathLength = 34;
 
   const drawProgress = interpolate(
     frame,
@@ -22,18 +21,17 @@ export const DrawCheckmark: React.FC = () => {
     }
   );
 
-  const dashOffset = totalPathLength * (1 - drawProgress);
+  const dashOffset = TOTAL_PATH_LENGTH * (1 - drawProgress);
 
-  // Only show after line contracts
+  // Only show after divider contracts
   const opacity = frame >= ANIMATION_TIMING.checkmarkDrawStart ? 1 : 0;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: '50%',
-        top: 340,
-        transform: 'translate(-50%, -50%)',
+        left: CANVAS.width / 2 - DIMENSIONS.checkmarkSize / 2,
+        top: DIMENSIONS.checkmarkCenterY - DIMENSIONS.checkmarkSize / 2,
         width: DIMENSIONS.checkmarkSize,
         height: DIMENSIONS.checkmarkSize,
         opacity,
@@ -46,12 +44,12 @@ export const DrawCheckmark: React.FC = () => {
         fill="none"
       >
         <path
-          d="M 8 20 L 16 28 L 32 12"
+          d={CHECKMARK_PATH}
           stroke={COLORS.checkmark}
           strokeWidth={DIMENSIONS.checkmarkStrokeWidth}
           strokeLinecap="round"
           strokeLinejoin="round"
-          strokeDasharray={totalPathLength}
+          strokeDasharray={TOTAL_PATH_LENGTH}
           strokeDashoffset={dashOffset}
         />
       </svg>

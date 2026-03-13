@@ -1,4 +1,5 @@
 // Component-level constants for AnimationSection01TitleCard
+// Duration: ~1.1s (33 frames @ 30fps)
 
 export const CANVAS = {
   width: 1280,
@@ -8,47 +9,51 @@ export const CANVAS = {
 export const COLORS = {
   background: '#0B1120',
   glowCenter: '#2E4A7A',
-  gradientCenter: '#1A2744',
   titleText: '#FFFFFF',
-  divider: '#FFFFFF',
+  divider: 'rgba(255,255,255,0.4)',
 };
 
 export const TYPOGRAPHY = {
   title: {
+    fontFamily: "'Inter', sans-serif",
     fontSize: 56,
-    fontFamily: 'Inter',
-    fontWeight: 'bold' as const,
+    fontWeight: 700 as const,
+    letterSpacing: 2,
   },
 };
 
 export const DIMENSIONS = {
+  glowInitialRadius: 300,
+  glowExpandedRadius: 400,
+  glowPulseRadius: 500,
+  glowRestingRadius: 400,
+  glowInitialOpacity: 0,
+  glowExpandedOpacity: 0.4,
+  glowPulseOpacity: 0.5,
+  glowRestingOpacity: 0.35,
+  titleOffsetY: -20,
   dividerWidth: 200,
   dividerHeight: 2,
-  dividerOpacity: 0.4,
-  dividerOffsetY: 20,
-  glowRadius: 300,
-  glowBaseOpacity: 0.3,
-  glowPulseOpacity: 0.5,
+  dividerOffsetY: 40,
   floatAmplitude: 2,
+  letterTranslateY: 8,
 };
 
 export const ANIMATION_TIMING = {
-  // Frame 0-15: Background fades in, glow expands
+  // Frame 0-5: Background fades in from black, glow begins expanding
   backgroundFadeStart: 0,
-  backgroundFadeEnd: 15,
-  // Frame 15-45: Title letter-by-letter stagger
-  titleStaggerStart: 15,
-  titleStaggerEnd: 45,
-  letterStaggerFrames: 1.5, // ~50ms per char at 30fps
-  letterTranslateY: 5,
-  // Frame 45-60: Divider expands, glow pulses
-  dividerExpandStart: 45,
-  dividerExpandEnd: 60,
-  glowPulseStart: 45,
-  glowPulseEnd: 60,
-  // Frame 60-90: Hold with float
-  holdStart: 60,
-  totalDuration: 90,
+  backgroundFadeEnd: 5,
+  // Frame 5-20: Title text staggers in letter-by-letter
+  titleStaggerStart: 5,
+  framesPerChar: 1.5,
+  // Frame 20-25: Divider expands, glow pulses
+  dividerExpandStart: 20,
+  dividerExpandEnd: 25,
+  glowPulseStart: 20,
+  glowPulseEnd: 25,
+  // Frame 25-33: Hold with gentle float
+  holdStart: 25,
+  totalDuration: 33,
 };
 
 export const TITLE_TEXT = 'Animation Section';

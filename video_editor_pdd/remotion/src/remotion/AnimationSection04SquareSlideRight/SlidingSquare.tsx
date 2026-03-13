@@ -1,60 +1,57 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, spring, Easing } from 'remotion';
-import { COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
-
-const FPS = 30;
+import { COLORS, SQUARE, MOTION, TIMING, FPS } from './constants';
 
 /**
  * The main green square that slides from center to the right.
- * Uses easeInOutCubic for the main slide and spring for the overshoot settle.
+ * Uses easeOutCubic for the main slide and spring for the overshoot settle.
  */
 export const SlidingSquare: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const { startX, endX, overshootX, squareSize, centerY } = DIMENSIONS;
-  const { slideStart, slideEnd, settleStart } = ANIMATION_TIMING;
-
-  // Phase 2: Main slide from startX to overshootX
+  // Phase 2: Main slide from startX to overshootX (frames 3-22)
   const slideX = interpolate(
     frame,
-    [slideStart, slideEnd],
-    [startX, overshootX],
+    [TIMING.slideStart, TIMING.slideEnd],
+    [MOTION.startX, MOTION.overshootX],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
+      easing: Easing.out(Easing.cubic),
+    },
   );
 
-  // Phase 3: Spring settle from overshootX back to endX
+  // Phase 3: Spring settle from overshootX back to targetX (frames 22-27)
   const settleProgress = spring({
-    frame: Math.max(0, frame - settleStart),
+    frame: Math.max(0, frame - TIMING.settleStart),
     fps: FPS,
     config: {
-      damping: 10,
-      stiffness: 160,
+      damping: 16,
+      stiffness: 220,
+      mass: 1,
     },
   });
 
   const settleX = interpolate(
     settleProgress,
     [0, 1],
-    [overshootX, endX],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+    [MOTION.overshootX, MOTION.targetX],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
-  // Combine: use slide position until settle starts, then settle position
-  const x = frame < settleStart ? slideX : settleX;
+  // Use slide position until settle starts, then settle position
+  const x = frame < TIMING.settleStart ? slideX : settleX;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x - squareSize / 2,
-        top: centerY - squareSize / 2,
-        width: squareSize,
-        height: squareSize,
+        left: x - SQUARE.size / 2,
+        top: MOTION.centerY - SQUARE.size / 2,
+        width: SQUARE.size,
+        height: SQUARE.size,
         backgroundColor: COLORS.square,
+        borderRadius: SQUARE.borderRadius,
       }}
     />
   );

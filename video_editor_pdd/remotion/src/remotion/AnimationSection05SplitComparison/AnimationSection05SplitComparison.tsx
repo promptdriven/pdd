@@ -1,5 +1,5 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
+import { AbsoluteFill, useCurrentFrame, interpolate, interpolateColors, Easing } from 'remotion';
 import { CANVAS, COLORS, ANIMATION_TIMING } from './constants';
 import { VerticalDivider } from './VerticalDivider';
 import { AnimatedCircle } from './AnimatedCircle';
@@ -9,22 +9,23 @@ import { FadeInLabel } from './FadeInLabel';
 export const AnimationSection05SplitComparison: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Panel backgrounds tint in during divider draw phase
-  const panelOpacity = interpolate(
+  // Panel backgrounds tint in from base color to their respective colors
+  const leftBg = interpolateColors(
     frame,
     [ANIMATION_TIMING.dividerDrawStart, ANIMATION_TIMING.dividerDrawEnd],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
+    [COLORS.baseBg, COLORS.leftPanelBg]
+  );
+
+  const rightBg = interpolateColors(
+    frame,
+    [ANIMATION_TIMING.dividerDrawStart, ANIMATION_TIMING.dividerDrawEnd],
+    [COLORS.baseBg, COLORS.rightPanelBg]
   );
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#0A1628',
+        backgroundColor: COLORS.baseBg,
       }}
     >
       {/* Left panel background */}
@@ -35,8 +36,7 @@ export const AnimationSection05SplitComparison: React.FC = () => {
           top: 0,
           width: CANVAS.width / 2,
           height: CANVAS.height,
-          backgroundColor: COLORS.leftPanelBg,
-          opacity: panelOpacity,
+          backgroundColor: leftBg,
         }}
       />
 
@@ -48,8 +48,7 @@ export const AnimationSection05SplitComparison: React.FC = () => {
           top: 0,
           width: CANVAS.width / 2,
           height: CANVAS.height,
-          backgroundColor: COLORS.rightPanelBg,
-          opacity: panelOpacity,
+          backgroundColor: rightBg,
         }}
       />
 
@@ -62,9 +61,9 @@ export const AnimationSection05SplitComparison: React.FC = () => {
       {/* Green square on right */}
       <AnimatedSquare />
 
-      {/* Labels */}
-      <FadeInLabel text="Circle" x={320} />
-      <FadeInLabel text="Square" x={960} />
+      {/* Labels with staggered fade-in */}
+      <FadeInLabel text="Circle" x={320} fadeStart={ANIMATION_TIMING.circleLabelFadeStart} />
+      <FadeInLabel text="Square" x={960} fadeStart={ANIMATION_TIMING.squareLabelFadeStart} />
     </AbsoluteFill>
   );
 };

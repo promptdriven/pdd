@@ -1,62 +1,52 @@
-import React, { useMemo } from 'react';
-import { useCurrentFrame, interpolate } from 'remotion';
-import { CANVAS, COLORS, PARTICLES } from './constants';
+import React from 'react';
+import { AbsoluteFill, useCurrentFrame, random } from 'remotion';
+import { COLORS, DIMENSIONS, type EndCardLayout } from './constants';
 
-interface Particle {
+interface BokehParticle {
   x: number;
   y: number;
   radius: number;
   opacity: number;
-  speed: number;
-  phase: number;
-  color: string;
+  speedX: number;
+  speedY: number;
 }
 
-export const BokehParticles: React.FC = () => {
+export const BokehParticles: React.FC<{ layout: EndCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
-  const particles = useMemo<Particle[]>(() => {
-    const seeded: Particle[] = [];
-    for (let i = 0; i < PARTICLES.count; i++) {
-      const seed = (i * 7919 + 13) % 1000;
-      const seed2 = (i * 6271 + 37) % 1000;
-      const seed3 = (i * 4523 + 59) % 1000;
-      seeded.push({
-        x: (seed / 1000) * CANVAS.width,
-        y: (seed2 / 1000) * CANVAS.height,
-        radius:
-          PARTICLES.minRadius +
-          (seed3 / 1000) * (PARTICLES.maxRadius - PARTICLES.minRadius),
-        opacity:
-          PARTICLES.opacityMin +
-          (seed / 1000) * (PARTICLES.opacityMax - PARTICLES.opacityMin),
-        speed: 0.5 + (seed2 / 1000) * PARTICLES.driftSpeed,
-        phase: (seed3 / 1000) * Math.PI * 2,
-        color: i % 2 === 0 ? COLORS.particleColor1 : COLORS.particleColor2,
+  const particles = React.useMemo<BokehParticle[]>(() => {
+    const result: BokehParticle[] = [];
+    for (let i = 0; i < DIMENSIONS.bokehCount; i++) {
+      const radius =
+        DIMENSIONS.bokehMinRadius +
+        random(`bokeh-r-${i}`) * (DIMENSIONS.bokehMaxRadius - DIMENSIONS.bokehMinRadius);
+      const opacity =
+        DIMENSIONS.bokehMinOpacity +
+        random(`bokeh-o-${i}`) * (DIMENSIONS.bokehMaxOpacity - DIMENSIONS.bokehMinOpacity);
+      // Random direction angle for drift
+      const angle = random(`bokeh-a-${i}`) * Math.PI * 2;
+      const speed =
+        DIMENSIONS.bokehMinSpeed +
+        random(`bokeh-s-${i}`) * (DIMENSIONS.bokehMaxSpeed - DIMENSIONS.bokehMinSpeed);
+      result.push({
+        x: random(`bokeh-x-${i}`) * layout.width,
+        y: random(`bokeh-y-${i}`) * layout.height,
+        radius: radius * layout.uniformScale,
+        opacity,
+        speedX: Math.cos(angle) * speed * layout.uniformScale,
+        speedY: Math.sin(angle) * speed * layout.uniformScale,
       });
     }
-    return seeded;
-  }, []);
+    return result;
+  }, [layout]);
 
   return (
-    <>
+    <AbsoluteFill style={{ pointerEvents: 'none' }}>
       {particles.map((p, i) => {
-        const drift = frame * p.speed;
         const px =
-          ((p.x + Math.sin(p.phase + drift * 0.02) * 40) % CANVAS.width +
-            CANVAS.width) %
-          CANVAS.width;
+          ((p.x + p.speedX * frame) % layout.width + layout.width) % layout.width;
         const py =
-          ((p.y - drift * 0.3 + Math.cos(p.phase + drift * 0.015) * 30) %
-            CANVAS.height +
-            CANVAS.height) %
-          CANVAS.height;
-
-        const pulseOpacity = interpolate(
-          Math.sin(p.phase + frame * 0.08),
-          [-1, 1],
-          [p.opacity * 0.6, p.opacity],
-        );
+          ((p.y + p.speedY * frame) % layout.height + layout.height) % layout.height;
 
         return (
           <div
@@ -68,12 +58,13 @@ export const BokehParticles: React.FC = () => {
               width: p.radius * 2,
               height: p.radius * 2,
               borderRadius: '50%',
-              background: `radial-gradient(circle, ${p.color} 0%, transparent 70%)`,
-              opacity: pulseOpacity,
+              backgroundColor: COLORS.bokeh,
+              opacity: p.opacity,
+              filter: `blur(${DIMENSIONS.bokehBlur * layout.uniformScale}px)`,
             }}
           />
         );
       })}
-    </>
+    </AbsoluteFill>
   );
 };

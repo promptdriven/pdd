@@ -18,17 +18,17 @@ export const ParticleDrift: React.FC<{ layout: TitleCardLayout }> = ({ layout })
     for (let i = 0; i < layout.dimensions.particleCount; i++) {
       result.push({
         x: random(`particle-x-${i}`) * layout.width,
-        startY: layout.height + random(`particle-startY-${i}`) * layout.height,
+        startY: random(`particle-startY-${i}`) * layout.height,
         radius:
           layout.dimensions.particleMinRadius +
           random(`particle-r-${i}`) *
-            (layout.dimensions.particleMaxRadius -
-              layout.dimensions.particleMinRadius),
-        speed: 1.5 + random(`particle-speed-${i}`) * 2.5,
+            (layout.dimensions.particleMaxRadius - layout.dimensions.particleMinRadius),
+        speed:
+          layout.dimensions.particleMinSpeed +
+          random(`particle-speed-${i}`) *
+            (layout.dimensions.particleMaxSpeed - layout.dimensions.particleMinSpeed),
         opacity:
-          0.1 +
-          random(`particle-opacity-${i}`) *
-            (layout.dimensions.particleOpacity - 0.1 + 0.05),
+          0.08 + random(`particle-opacity-${i}`) * (layout.dimensions.particleOpacity - 0.05),
       });
     }
     return result;
@@ -37,12 +37,11 @@ export const ParticleDrift: React.FC<{ layout: TitleCardLayout }> = ({ layout })
   return (
     <AbsoluteFill style={{ pointerEvents: 'none' }}>
       {particles.map((p, i) => {
-        const y = p.startY - p.speed * frame;
-        // Wrap particles that have drifted off the top
+        // Particles drift upward; wrap from bottom when they leave the top
+        const totalTravel = p.speed * frame;
+        const y = p.startY - totalTravel;
         const wrappedY =
-          ((y % (layout.height + 40)) + layout.height + 40) %
-            (layout.height + 40) -
-          20;
+          ((y % (layout.height + 40)) + layout.height + 40) % (layout.height + 40) - 20;
 
         return (
           <div

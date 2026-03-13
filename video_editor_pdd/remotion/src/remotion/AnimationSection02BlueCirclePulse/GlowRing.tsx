@@ -5,86 +5,76 @@ import { COLORS, DIMENSIONS, TIMING, PULSE } from './constants';
 export const GlowRing: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Phase 2 (20-50): Fade in glow from 0 to 20% opacity
-  const glowFadeOpacity = interpolate(
+  // Glow fades in during settle phase (frames 8-15)
+  const glowFadeIn = interpolate(
     frame,
-    [TIMING.holdStart, TIMING.glowFadeEnd],
-    [0, PULSE.glowOpacityRest],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-
-  // Phase 3 (50-75): Pulse — expand diameter and peak opacity
-  const pulseDiameterExpand = interpolate(
-    frame,
-    [TIMING.pulseStart, TIMING.pulseMid],
-    [DIMENSIONS.glowDiameter, DIMENSIONS.glowExpandedDiameter],
+    [TIMING.settleStart, TIMING.settleEnd],
+    [0, PULSE.glowOpacity],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Pulse phase (frames 15-28): glow ring expands 220→280→220
+  const pulseDiameterExpand = interpolate(
+    frame,
+    [TIMING.pulseStart, TIMING.pulsePeak],
+    [DIMENSIONS.glowMinDiameter, DIMENSIONS.glowMaxDiameter],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.cubic),
     }
   );
   const pulseDiameterContract = interpolate(
     frame,
-    [TIMING.pulseMid, TIMING.pulseEnd],
-    [DIMENSIONS.glowExpandedDiameter, DIMENSIONS.glowDiameter],
+    [TIMING.pulsePeak, TIMING.pulseEnd],
+    [DIMENSIONS.glowMaxDiameter, DIMENSIONS.glowMinDiameter],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
+      easing: Easing.inOut(Easing.cubic),
     }
   );
 
+  // Breathing phase (frames 28-45): sinusoidal opacity 0.12–0.18
+  const breathingProgress = interpolate(
+    frame,
+    [TIMING.breathingStart, TIMING.breathingEnd],
+    [0, Math.PI * 2],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
+
+  // Determine current diameter
   let diameter: number;
   if (frame < TIMING.pulseStart) {
-    diameter = DIMENSIONS.glowDiameter;
-  } else if (frame <= TIMING.pulseMid) {
+    diameter = DIMENSIONS.glowMinDiameter;
+  } else if (frame <= TIMING.pulsePeak) {
     diameter = pulseDiameterExpand;
   } else if (frame <= TIMING.pulseEnd) {
     diameter = pulseDiameterContract;
   } else {
-    diameter = DIMENSIONS.glowDiameter;
+    diameter = DIMENSIONS.glowMinDiameter;
   }
 
-  // Pulse opacity
-  const pulseOpacityUp = interpolate(
-    frame,
-    [TIMING.pulseStart, TIMING.pulseMid],
-    [PULSE.glowOpacityRest, PULSE.glowOpacityPeak],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  const pulseOpacityDown = interpolate(
-    frame,
-    [TIMING.pulseMid, TIMING.pulseEnd],
-    [PULSE.glowOpacityPeak, PULSE.glowOpacityRest],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-
-  // Phase 4 (75-120): Gentle sinusoidal oscillation between 15%-25%
-  const oscillationProgress = interpolate(
-    frame,
-    [TIMING.restStart, TIMING.totalDuration],
-    [0, Math.PI * 2],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  const oscillationOpacity =
-    (PULSE.glowOpacityMin + PULSE.glowOpacityMax) / 2 +
-    ((PULSE.glowOpacityMax - PULSE.glowOpacityMin) / 2) *
-      Math.sin(oscillationProgress);
-
-  // Compose final opacity across phases
+  // Determine current opacity
   let opacity: number;
-  if (frame < TIMING.holdStart) {
+  if (frame < TIMING.settleStart) {
     opacity = 0;
-  } else if (frame < TIMING.pulseStart) {
-    opacity = glowFadeOpacity;
-  } else if (frame <= TIMING.pulseMid) {
-    opacity = pulseOpacityUp;
-  } else if (frame <= TIMING.pulseEnd) {
-    opacity = pulseOpacityDown;
+  } else if (frame < TIMING.breathingStart) {
+    opacity = glowFadeIn;
   } else {
-    opacity = oscillationOpacity;
+    const mid = (PULSE.breathingOpacityMin + PULSE.breathingOpacityMax) / 2;
+    const amp = (PULSE.breathingOpacityMax - PULSE.breathingOpacityMin) / 2;
+    opacity = mid + amp * Math.sin(breathingProgress);
   }
+
+  // Render as annulus using radial gradient
+  const innerRadius = DIMENSIONS.circleDiameter / 2;
+  const outerRadius = diameter / 2;
+  const innerPct = (innerRadius / outerRadius) * 100;
 
   return (
     <div
@@ -93,7 +83,7 @@ export const GlowRing: React.FC = () => {
         width: diameter,
         height: diameter,
         borderRadius: '50%',
-        backgroundColor: COLORS.circle,
+        background: `radial-gradient(circle, transparent ${innerPct}%, ${COLORS.circle} 100%)`,
         opacity,
         filter: `blur(${DIMENSIONS.glowBlur}px)`,
         top: '50%',

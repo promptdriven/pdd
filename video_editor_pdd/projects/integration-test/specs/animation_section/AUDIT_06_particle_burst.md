@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+Frame 22 of 22 (75% progress at 0.750s into a 1.0s sequence, which maps to intrinsic frame 22 of 30 fps over ~0.73s). At this point in the animation sequence, the spec states: 'Frame 16–22 (0.53–0.73s): All remaining particles fully faded. Canvas rests on #0B1120 background.' The rendered frame shows a uniform dark navy background with no visible particles, no center flash, and no typography — exactly matching the expected end state. The background color is consistent with #0B1120 (dark navy). The background transition from #141921 → #0B1120 should be complete by frame 18, and at frame 22 the canvas should be fully resting on the dark navy color, which is what we observe. No particles are visible, consistent with the spec's requirement that all particles are fully faded by frame 16–22.

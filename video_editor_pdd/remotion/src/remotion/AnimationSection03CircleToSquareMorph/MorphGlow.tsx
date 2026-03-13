@@ -1,63 +1,56 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, interpolateColors, Easing } from 'remotion';
-import { COLORS, DIMENSIONS, TIMING, MORPH } from './constants';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { TIMING, MORPH, DIMENSIONS } from './constants';
 
 export const MorphGlow: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Glow color transitions in sync with the morph
-  const glowColor = interpolateColors(
+  // Glow rises from 0 → 0.25 opacity (frame 5–15)
+  const glowIn = interpolate(
     frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [COLORS.fromShape, COLORS.toShape]
-  );
-
-  // Glow opacity: 25% during morph, settles to 20%
-  const glowOpacity = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd, TIMING.totalDuration],
-    [MORPH.glowOpacityMorph, MORPH.glowOpacityMorph, MORPH.glowOpacitySettle],
+    [TIMING.morphStart, TIMING.glowPeak],
+    [0, MORPH.glowPeakOpacity],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.linear,
+      easing: Easing.out(Easing.quad),
     }
   );
 
-  // Size tracks the shape size loosely (slightly larger for glow spread)
-  const glowSize = interpolate(
+  // Glow fades 0.25 → 0 (frame 15–25)
+  const glowOut = interpolate(
     frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [DIMENSIONS.fromSize + 60, DIMENSIONS.toSize + 60],
+    [TIMING.glowPeak, TIMING.morphEnd],
+    [MORPH.glowPeakOpacity, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
+      easing: Easing.in(Easing.quad),
     }
   );
 
-  // Border-radius morphs along with the shape
-  const glowBorderRadius = interpolate(
-    frame,
-    [TIMING.morphStart, TIMING.morphEnd],
-    [50, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+  let opacity: number;
+  if (frame < TIMING.morphStart) {
+    opacity = 0;
+  } else if (frame <= TIMING.glowPeak) {
+    opacity = glowIn;
+  } else if (frame <= TIMING.morphEnd) {
+    opacity = glowOut;
+  } else {
+    opacity = 0;
+  }
 
   return (
     <div
       style={{
         position: 'absolute',
-        width: glowSize,
-        height: glowSize,
-        borderRadius: `${glowBorderRadius}%`,
-        backgroundColor: glowColor,
-        opacity: glowOpacity,
-        filter: `blur(${DIMENSIONS.glowBlur}px)`,
+        width: DIMENSIONS.glowSpread,
+        height: DIMENSIONS.glowSpread,
+        borderRadius: '50%',
+        background:
+          'radial-gradient(circle, rgba(255, 255, 255, 0.6) 0%, rgba(255, 255, 255, 0.1) 50%, transparent 100%)',
+        opacity,
+        filter: 'blur(40px)',
         top: '50%',
         left: '50%',
         transform: 'translate(-50%, -50%)',

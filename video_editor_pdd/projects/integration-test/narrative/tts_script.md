@@ -4,29 +4,29 @@
 
 ## Animation Section
 
-[TONE: neutral, clear]
+[TONE: informative, welcoming]
 [PACE: moderate]
-[EMOTION: informative]
+[EMOTION: neutral, confident]
 This is the first section of the integration test video.
-[PAUSE: 0.5s]
-
-[TONE: neutral, clear]
-[PACE: moderate]
-[EMOTION: informative]
-It uses only Remotion animations with no Veo clips.
 [PAUSE: 1.0s]
+
+[TONE: explanatory]
+[PACE: moderate]
+[EMOTION: calm]
+It uses only Remotion animations with no Veo clips.
+[PAUSE: 1.5s]
 
 ---
 
 ## Veo Section
 
-[TONE: calm, warm]
-[PACE: slightly slow]
-[EMOTION: contemplative]
+[TONE: warm, descriptive]
+[PACE: slightly slower]
+[EMOTION: calm, appreciative]
 This is the second section of the integration test video.
-[PAUSE: 0.5s]
+[PAUSE: 1.0s]
 
-[TONE: calm, warm]
-[PACE: slightly slow]
-[EMOTION: appreciative]
+[TONE: informative]
+[PACE: moderate]
+[EMOTION: calm, matter-of-fact]
 It uses Veo-generated clips with narration overlay.

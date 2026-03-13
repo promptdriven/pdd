@@ -11,11 +11,11 @@ import { COLORS, DIMENSIONS, TIMING, MORPH, FPS } from './constants';
 export const MorphShape: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // --- Border Radius: 50% (circle) → 0% (square) ---
+  // --- Border Radius: 90px (circle) → 8px (rounded square) ---
   const borderRadius = interpolate(
     frame,
     [TIMING.morphStart, TIMING.morphEnd],
-    [50, 0],
+    [DIMENSIONS.circleBorderRadius, DIMENSIONS.squareBorderRadius],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -27,14 +27,14 @@ export const MorphShape: React.FC = () => {
   const fillColor = interpolateColors(
     frame,
     [TIMING.morphStart, TIMING.morphEnd],
-    [COLORS.fromShape, COLORS.toShape]
+    [COLORS.circleBlue, COLORS.squareGreen]
   );
 
   // --- Size: 180px → 160px ---
   const size = interpolate(
     frame,
     [TIMING.morphStart, TIMING.morphEnd],
-    [DIMENSIONS.fromSize, DIMENSIONS.toSize],
+    [DIMENSIONS.circleSize, DIMENSIONS.squareSize],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -46,7 +46,7 @@ export const MorphShape: React.FC = () => {
   const rotation = interpolate(
     frame,
     [TIMING.morphStart, TIMING.morphEnd],
-    [0, MORPH.rotationDegrees],
+    [0, MORPH.rotationDeg],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -55,35 +55,32 @@ export const MorphShape: React.FC = () => {
   );
 
   // --- Scale ---
-  // Phase 1 (0-15): Subtle breathing 1.0 → 1.02
-  const breathingScale = interpolate(
+  // Phase 1 (frames 0-5): Subtle breathing via sine curve (1.0 → 1.02)
+  const breathingProgress = interpolate(
     frame,
     [TIMING.holdStart, TIMING.holdEnd],
-    [1.0, MORPH.breathingScale],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
-    }
+    [0, Math.PI],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
+  const breathingScale =
+    1 + (MORPH.breathingScale - 1) * Math.sin(breathingProgress);
 
-  // Phase 2 (15-60): Hold at 1.0 during morph
-  // Phase 3 (60-90): Spring settle with overshoot
+  // Phase 3 (frames 25-33): Spring settle with overshoot
   const settleSpring = spring({
     frame: Math.max(0, frame - TIMING.settleStart),
     fps: FPS,
     config: {
       damping: 14,
       stiffness: 200,
+      mass: 1,
     },
   });
-  // Spring goes 0→1, we want overshoot: 1.05 → 1.0
+  // Spring goes 0→1 (with overshoot). Map to scale: 1.05 → 1.0
   const settleScale =
-    MORPH.settleOvershootScale -
-    settleSpring * (MORPH.settleOvershootScale - 1.0);
+    MORPH.overshootScale - settleSpring * (MORPH.overshootScale - 1.0);
 
   let scale: number;
-  if (frame < TIMING.holdEnd) {
+  if (frame < TIMING.morphStart) {
     scale = breathingScale;
   } else if (frame < TIMING.settleStart) {
     scale = 1.0;
@@ -91,11 +88,11 @@ export const MorphShape: React.FC = () => {
     scale = settleScale;
   }
 
-  // --- Drop shadow color blends with shape ---
+  // --- Drop shadow color transitions from blue to green ---
   const shadowColor = interpolateColors(
     frame,
     [TIMING.morphStart, TIMING.morphEnd],
-    ['rgba(59, 130, 246, 0.3)', 'rgba(34, 197, 94, 0.3)']
+    [COLORS.blueShadow, COLORS.greenShadow]
   );
 
   return (
@@ -104,12 +101,12 @@ export const MorphShape: React.FC = () => {
         position: 'absolute',
         width: size,
         height: size,
-        borderRadius: `${borderRadius}%`,
+        borderRadius,
         backgroundColor: fillColor,
-        boxShadow: `0 4px 20px ${shadowColor}`,
+        boxShadow: `0px 0px 40px ${shadowColor}`,
         top: '50%',
         left: '50%',
-        transform: `translate(-50%, -50%) scale(${scale}) rotate(${rotation}deg)`,
+        transform: `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`,
       }}
     />
   );

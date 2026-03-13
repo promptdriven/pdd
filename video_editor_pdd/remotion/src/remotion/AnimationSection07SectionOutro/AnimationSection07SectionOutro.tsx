@@ -11,8 +11,6 @@ export const AnimationSection07SectionOutro: React.FC = () => {
     <AbsoluteFill
       style={{
         backgroundColor: COLORS.background,
-        justifyContent: 'center',
-        alignItems: 'center',
       }}
     >
       <ContractingDivider />

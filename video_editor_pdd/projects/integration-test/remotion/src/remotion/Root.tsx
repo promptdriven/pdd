@@ -15,6 +15,8 @@ import { VeoSection01TitleCard } from "./veo_section_01_title_card";
 import { VeoSection03WaveDataOverlay } from "./03_wave_data_overlay";
 import { VeoSection05SplitNatureComparison } from "./05_split_nature_comparison";
 import { VeoSection06VeoPipelineInfographic } from "./06_veo_pipeline_infographic";
+import { VeoSection07NarrationOverlayIntro } from "./07_narration_overlay_intro";
+import { VeoSection08SectionEndCard } from "./08_section_end_card";
 
 const PREVIEW_DURATION = 150; // 5s at 30fps
 
@@ -120,6 +122,22 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="veo-section06-veo-pipeline-infographic"
         component={VeoSection06VeoPipelineInfographic}
+        durationInFrames={PREVIEW_DURATION}
+        fps={30}
+        width={1280}
+        height={720}
+      />
+      <Composition
+        id="veo-section07-narration-overlay-intro"
+        component={VeoSection07NarrationOverlayIntro}
+        durationInFrames={PREVIEW_DURATION}
+        fps={30}
+        width={1280}
+        height={720}
+      />
+      <Composition
+        id="veo-section08-section-end-card"
+        component={VeoSection08SectionEndCard}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1280}

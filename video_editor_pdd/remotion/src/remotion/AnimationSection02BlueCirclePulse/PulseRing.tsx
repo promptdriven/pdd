@@ -1,2 +1,2 @@
-// This file is deprecated. Use GlowRing.tsx instead.
+// Sub-component reserved for PulseRing — currently handled inline by GlowRing.tsx
 export {};

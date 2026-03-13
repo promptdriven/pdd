@@ -1,47 +1,53 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, FLASH_CONFIG, TIMING, CANVAS } from './constants';
+import { CANVAS, COLORS, FLASH, TIMING } from './constants';
 
 export const CenterFlash: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(
-    frame,
-    [0, TIMING.flashEnd],
-    [FLASH_CONFIG.opacity, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.exp),
-    }
-  );
-
+  // Frame 0-2: scale from 0 to full diameter, easeOutQuad
   const scale = interpolate(
     frame,
-    [0, TIMING.flashEnd],
-    [1, 2.5],
+    [TIMING.flashScaleStart, TIMING.flashScaleEnd],
+    [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.exp),
+      easing: Easing.out(Easing.quad),
     }
   );
 
-  if (frame > TIMING.flashEnd + 2) return null;
+  // Frame 0-2: opacity at peak; Frame 2-3: fade to 0, easeInQuad
+  const opacity =
+    frame <= TIMING.flashFadeStart
+      ? FLASH.peakOpacity
+      : interpolate(
+          frame,
+          [TIMING.flashFadeStart, TIMING.flashFadeEnd],
+          [FLASH.peakOpacity, 0],
+          {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+            easing: Easing.in(Easing.quad),
+          }
+        );
+
+  if (frame > TIMING.flashFadeEnd + 1) return null;
+
+  const diameter = FLASH.diameter * scale;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: CANVAS.width / 2 - FLASH_CONFIG.size / 2,
-        top: CANVAS.height / 2 - FLASH_CONFIG.size / 2,
-        width: FLASH_CONFIG.size,
-        height: FLASH_CONFIG.size,
+        left: CANVAS.centerX - diameter / 2,
+        top: CANVAS.centerY - diameter / 2,
+        width: diameter,
+        height: diameter,
         borderRadius: '50%',
         backgroundColor: COLORS.flash,
         opacity,
-        transform: `scale(${scale})`,
-        boxShadow: `0 0 ${FLASH_CONFIG.size}px ${FLASH_CONFIG.size / 2}px rgba(255,255,255,${opacity * 0.5})`,
+        boxShadow: `0 0 ${diameter}px ${diameter / 2}px rgba(255,255,255,${opacity * 0.4})`,
       }}
     />
   );

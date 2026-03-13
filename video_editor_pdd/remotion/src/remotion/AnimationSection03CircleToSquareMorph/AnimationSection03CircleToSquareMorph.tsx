@@ -9,8 +9,6 @@ export const AnimationSection03CircleToSquareMorph: React.FC = () => {
     <AbsoluteFill
       style={{
         backgroundColor: COLORS.background,
-        justifyContent: 'center',
-        alignItems: 'center',
       }}
     >
       <MorphGlow />

@@ -1,48 +1,46 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
+import { CANVAS, MOTION, TIMING } from './constants';
 
 export const GuideLine: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade in during phase 1
+  // Fade in during frames 0-3 (0 → 0.15 opacity)
   const fadeInOpacity = interpolate(
     frame,
-    [ANIMATION_TIMING.guideFadeInStart, ANIMATION_TIMING.guideFadeInEnd],
-    [0, DIMENSIONS.guideLineOpacity],
+    [0, TIMING.holdEnd],
+    [0, 0.15],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
-    }
+      easing: Easing.inOut(Easing.quad),
+    },
   );
 
-  // Fade out during phase 4
+  // Fade out during frames 27-33 (0.15 → 0 opacity)
   const fadeOutOpacity = interpolate(
     frame,
-    [ANIMATION_TIMING.guideFadeOutStart, ANIMATION_TIMING.guideFadeOutEnd],
-    [DIMENSIONS.guideLineOpacity, 0],
+    [TIMING.fadeStart, TIMING.fadeEnd],
+    [0.15, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.sin),
-    }
+      easing: Easing.inOut(Easing.quad),
+    },
   );
 
-  const opacity = frame < ANIMATION_TIMING.guideFadeOutStart
-    ? fadeInOpacity
-    : fadeOutOpacity;
+  const opacity =
+    frame < TIMING.fadeStart ? fadeInOpacity : fadeOutOpacity;
 
   return (
     <div
       style={{
         position: 'absolute',
-        top: DIMENSIONS.centerY,
+        top: MOTION.centerY,
         left: 0,
         width: CANVAS.width,
-        height: 0,
-        borderTop: `${DIMENSIONS.guideLineWidth}px dashed ${COLORS.guideLine}`,
-        opacity,
+        height: 1,
+        backgroundColor: `rgba(255, 255, 255, ${opacity})`,
       }}
     />
   );

@@ -1,63 +1,38 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, POSITIONS, DIMENSIONS, ANIMATION_TIMING } from './constants';
+import { COLORS, ANIMATION, type EndCardLayout } from './constants';
 
-export const CompletionRing: React.FC = () => {
+export const CompletionRing: React.FC<{ layout: EndCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
-  const { ringRadius, ringStrokeWidth, checkSize } = DIMENSIONS;
+  const { ringRadius, ringStroke, ringCenterX, ringCenterY } = layout.dimensions;
   const circumference = 2 * Math.PI * ringRadius;
 
-  // Ring draws from 0 to full circle
+  // Ring draws clockwise from 0° → 360° (frames 10-40)
   const ringProgress = interpolate(
     frame,
-    [ANIMATION_TIMING.ringDrawStart, ANIMATION_TIMING.ringDrawEnd],
+    [ANIMATION.ringDrawStart, ANIMATION.ringDrawEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
+      easing: Easing.inOut(Easing.cubic),
     },
   );
 
   const strokeDashoffset = circumference * (1 - ringProgress);
 
-  // Checkmark draws in
-  const checkProgress = interpolate(
-    frame,
-    [ANIMATION_TIMING.checkmarkStart, ANIMATION_TIMING.checkmarkEnd],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
-    },
-  );
-
-  // Checkmark path: a simple check shape
-  const checkPathLength = 40;
-  const checkDashoffset = checkPathLength * (1 - checkProgress);
-
-  // Glow pulse after ring completes
-  const glowOpacity = interpolate(
-    frame,
-    [ANIMATION_TIMING.ringDrawEnd, ANIMATION_TIMING.ringDrawEnd + 10],
-    [0, 0.4],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
-
-  const svgSize = (ringRadius + ringStrokeWidth) * 2 + 20;
+  // SVG viewBox sized to fit the ring with padding
+  const padding = ringStroke * 2;
+  const svgSize = (ringRadius + padding) * 2;
   const center = svgSize / 2;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: CANVAS.width / 2 - svgSize / 2,
-        top: POSITIONS.ringCy - svgSize / 2,
+        left: ringCenterX - svgSize / 2,
+        top: ringCenterY - svgSize / 2,
         width: svgSize,
         height: svgSize,
       }}
@@ -67,42 +42,17 @@ export const CompletionRing: React.FC = () => {
         height={svgSize}
         viewBox={`0 0 ${svgSize} ${svgSize}`}
       >
-        {/* Glow behind ring */}
-        <circle
-          cx={center}
-          cy={center}
-          r={ringRadius + 8}
-          fill="none"
-          stroke={COLORS.accentWarm}
-          strokeWidth={6}
-          opacity={glowOpacity}
-          style={{ filter: 'blur(8px)' }}
-        />
-
-        {/* Ring stroke */}
         <circle
           cx={center}
           cy={center}
           r={ringRadius}
           fill="none"
-          stroke={COLORS.ringStroke}
-          strokeWidth={ringStrokeWidth}
+          stroke={COLORS.ring}
+          strokeWidth={ringStroke}
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
           strokeLinecap="round"
           transform={`rotate(-90 ${center} ${center})`}
-        />
-
-        {/* Checkmark */}
-        <path
-          d={`M ${center - checkSize * 0.35} ${center + checkSize * 0.05} L ${center - checkSize * 0.05} ${center + checkSize * 0.35} L ${center + checkSize * 0.4} ${center - checkSize * 0.25}`}
-          fill="none"
-          stroke={COLORS.accentGold}
-          strokeWidth={3}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray={checkPathLength}
-          strokeDashoffset={checkDashoffset}
         />
       </svg>
     </div>

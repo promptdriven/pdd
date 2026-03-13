@@ -10,7 +10,7 @@ export const VeoSection01TitleCard: React.FC = () => {
   const { width, height } = useVideoConfig();
   const layout = resolveTitleCardLayout(width, height);
 
-  // Background gradient fades in from black over frames 0-15
+  // Frame 0-15: Background gradient fades in from black (linear clamp)
   const backgroundOpacity = interpolate(
     frame,
     [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
@@ -22,30 +22,20 @@ export const VeoSection01TitleCard: React.FC = () => {
   );
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: '#0B1D3A',
-      }}
-    >
+    <AbsoluteFill style={{ backgroundColor: '#000000' }}>
       <AbsoluteFill
         style={{
+          background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
           opacity: backgroundOpacity,
         }}
       >
-        {/* Deep ocean-blue gradient background */}
-        <AbsoluteFill
-          style={{
-            background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
-          }}
-        />
-
-        {/* Particle drift layer — runs continuously across full duration */}
+        {/* Particle drift — runs continuously across full duration */}
         <ParticleDrift layout={layout} />
 
-        {/* Centered title text with parallax fade-in */}
+        {/* Centred title text with parallax fade-in */}
         <TitleText layout={layout} />
 
-        {/* Horizontal rule drawing outward from center */}
+        {/* Horizontal rule drawing outward from centre */}
         <HorizontalRule layout={layout} />
       </AbsoluteFill>
     </AbsoluteFill>

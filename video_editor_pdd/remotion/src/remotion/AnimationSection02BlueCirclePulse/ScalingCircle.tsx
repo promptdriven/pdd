@@ -1,2 +1,2 @@
-// This file is deprecated. Use AnimatedCircle.tsx instead.
+// Sub-component reserved for ScalingCircle — currently handled inline by AnimatedCircle.tsx
 export {};

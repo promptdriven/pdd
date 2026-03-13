@@ -1,42 +1,39 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, POSITIONS, DIMENSIONS, ANIMATION_TIMING } from './constants';
+import { COLORS, ANIMATION, type EndCardLayout } from './constants';
 
-export const ExpandingRule: React.FC = () => {
+export const ExpandingRule: React.FC<{ layout: EndCardLayout }> = ({ layout }) => {
   const frame = useCurrentFrame();
 
-  const ruleWidth = interpolate(
-    frame,
-    [ANIMATION_TIMING.ruleExpandStart, ANIMATION_TIMING.ruleExpandEnd],
-    [0, DIMENSIONS.ruleMaxWidth],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
-    },
-  );
+  const { ruleWidth, ruleHeight, labelY, ruleGapBelow } = layout.dimensions;
 
-  const ruleOpacity = interpolate(
+  // Scale outward from centre (scaleX 0 → 1, frames 60-80)
+  const scaleX = interpolate(
     frame,
-    [ANIMATION_TIMING.ruleExpandStart, ANIMATION_TIMING.ruleExpandStart + 6],
+    [ANIMATION.ruleScaleStart, ANIMATION.ruleScaleEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.quad),
     },
   );
+
+  // Position: 16px below the label
+  const ruleTop = labelY + layout.typography.label.fontSize + ruleGapBelow;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: CANVAS.width / 2 - ruleWidth / 2,
-        top: POSITIONS.ruleY,
+        left: layout.width / 2 - ruleWidth / 2,
+        top: ruleTop,
         width: ruleWidth,
-        height: DIMENSIONS.ruleHeight,
-        background: `linear-gradient(90deg, transparent 0%, ${COLORS.ruleColor} 30%, ${COLORS.ruleColor} 70%, transparent 100%)`,
-        opacity: ruleOpacity,
-        borderRadius: DIMENSIONS.ruleHeight / 2,
+        height: ruleHeight,
+        backgroundColor: COLORS.rule,
+        borderRadius: ruleHeight / 2,
+        transform: `scaleX(${scaleX})`,
+        opacity: frame >= ANIMATION.ruleScaleStart ? 1 : 0,
       }}
     />
   );

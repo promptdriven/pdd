@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, interpolate } from 'remotion';
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
 import { COLORS, ANIMATION_TIMING } from './constants';
 
 export const FadeToBlack: React.FC = () => {
@@ -12,17 +12,13 @@ export const FadeToBlack: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.cubic),
     }
   );
 
   return (
-    <div
+    <AbsoluteFill
       style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
         backgroundColor: COLORS.fadeToBlack,
         opacity,
       }}

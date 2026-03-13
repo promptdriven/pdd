@@ -1,37 +1,24 @@
 import React from 'react';
-import { useCurrentFrame, spring, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, spring } from 'remotion';
 import { COLORS, DIMENSIONS, ANIMATION_TIMING, SHAPE_SPRING_CONFIG } from './constants';
 
 export const AnimatedCircle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Spring scale-in starting at circleScaleStart
+  // Spring scale-in starting at circleScaleStart (frame 8)
   const scaleIn = spring({
     frame: frame - ANIMATION_TIMING.circleScaleStart,
     fps: 30,
     config: SHAPE_SPRING_CONFIG,
   });
 
-  // Breathing animation after breathingStart
+  // Breathing animation after breathingStart (frame 20)
   let breathingScale = 1;
   if (frame >= ANIMATION_TIMING.breathingStart) {
-    const breathFrame = (frame - ANIMATION_TIMING.breathingStart) % ANIMATION_TIMING.breathingCycleFrames;
-    const halfCycle = ANIMATION_TIMING.breathingCycleFrames / 2;
-    if (breathFrame <= halfCycle) {
-      breathingScale = interpolate(
-        breathFrame,
-        [0, halfCycle],
-        [ANIMATION_TIMING.breathingScaleMin, ANIMATION_TIMING.breathingScaleMax],
-        { easing: Easing.inOut(Easing.sin) }
-      );
-    } else {
-      breathingScale = interpolate(
-        breathFrame,
-        [halfCycle, ANIMATION_TIMING.breathingCycleFrames],
-        [ANIMATION_TIMING.breathingScaleMax, ANIMATION_TIMING.breathingScaleMin],
-        { easing: Easing.inOut(Easing.sin) }
-      );
-    }
+    const breathFrame = frame - ANIMATION_TIMING.breathingStart;
+    const t = (breathFrame % ANIMATION_TIMING.breathingCycleFrames) / ANIMATION_TIMING.breathingCycleFrames;
+    const amplitude = (ANIMATION_TIMING.breathingScaleMax - ANIMATION_TIMING.breathingScaleMin) / 2;
+    breathingScale = 1 + amplitude * (1 - Math.cos(2 * Math.PI * t));
   }
 
   const finalScale = frame >= ANIMATION_TIMING.circleScaleStart

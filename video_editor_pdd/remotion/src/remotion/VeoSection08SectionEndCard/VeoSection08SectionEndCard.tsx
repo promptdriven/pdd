@@ -1,115 +1,51 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, TYPOGRAPHY, POSITIONS, ANIMATION_TIMING } from './constants';
+import { AbsoluteFill, useCurrentFrame, interpolate, useVideoConfig } from 'remotion';
+import { COLORS, ANIMATION, resolveEndCardLayout } from './constants';
 import { BokehParticles } from './BokehParticles';
 import { CompletionRing } from './CompletionRing';
+import { CheckmarkIcon } from './CheckmarkIcon';
+import { SectionLabel } from './SectionLabel';
 import { ExpandingRule } from './ExpandingRule';
 
 export const VeoSection08SectionEndCard: React.FC = () => {
   const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+  const layout = resolveEndCardLayout(width, height);
 
-  // Title "Veo Section" fades in with upward drift
-  const titleOpacity = interpolate(
+  // Frame 0-10: Background gradient fades in (opacity 0 → 1)
+  const backgroundOpacity = interpolate(
     frame,
-    [ANIMATION_TIMING.titleFadeStart, ANIMATION_TIMING.titleFadeEnd],
+    [ANIMATION.backgroundFadeStart, ANIMATION.backgroundFadeEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
-    },
-  );
-
-  const titleTranslateY = interpolate(
-    frame,
-    [ANIMATION_TIMING.titleFadeStart, ANIMATION_TIMING.titleFadeEnd],
-    [16, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(3)),
-    },
-  );
-
-  // Subtitle "COMPLETE" fades in
-  const subtitleOpacity = interpolate(
-    frame,
-    [ANIMATION_TIMING.subtitleFadeStart, ANIMATION_TIMING.subtitleFadeEnd],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    },
-  );
-
-  // Card fade-out near end
-  const cardFadeOut = interpolate(
-    frame,
-    [ANIMATION_TIMING.cardFadeOutStart, ANIMATION_TIMING.cardFadeOutEnd],
-    [1, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.quad),
     },
   );
 
   return (
-    <AbsoluteFill
-      style={{
-        background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
-        opacity: cardFadeOut,
-      }}
-    >
-      {/* Warm bokeh particles drifting */}
-      <BokehParticles />
-
-      {/* Animated completion ring with checkmark */}
-      <CompletionRing />
-
-      {/* Title text */}
-      <div
+    <AbsoluteFill style={{ backgroundColor: '#000000' }}>
+      <AbsoluteFill
         style={{
-          position: 'absolute',
-          left: 0,
-          top: POSITIONS.titleY,
-          width: CANVAS.width,
-          textAlign: 'center',
-          opacity: titleOpacity,
-          transform: `translateY(${titleTranslateY}px)`,
-          fontFamily: TYPOGRAPHY.title.fontFamily,
-          fontSize: TYPOGRAPHY.title.fontSize,
-          fontWeight: TYPOGRAPHY.title.fontWeight,
-          letterSpacing: TYPOGRAPHY.title.letterSpacing,
-          color: COLORS.titleText,
+          background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
+          opacity: backgroundOpacity,
         }}
       >
-        Veo Section
-      </div>
+        {/* Bokeh particles — drift continuously across full duration */}
+        <BokehParticles layout={layout} />
 
-      {/* Subtitle */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: POSITIONS.subtitleY,
-          width: CANVAS.width,
-          textAlign: 'center',
-          opacity: subtitleOpacity,
-          fontFamily: TYPOGRAPHY.subtitle.fontFamily,
-          fontSize: TYPOGRAPHY.subtitle.fontSize,
-          fontWeight: TYPOGRAPHY.subtitle.fontWeight,
-          letterSpacing: TYPOGRAPHY.subtitle.letterSpacing,
-          textTransform: TYPOGRAPHY.subtitle.textTransform,
-          color: COLORS.subtitleText,
-        }}
-      >
-        COMPLETE
-      </div>
+        {/* Completion ring draws clockwise */}
+        <CompletionRing layout={layout} />
 
-      {/* Expanding horizontal rule */}
-      <ExpandingRule />
+        {/* Checkmark icon pops in with bounce */}
+        <CheckmarkIcon layout={layout} />
+
+        {/* Section label fades in */}
+        <SectionLabel layout={layout} />
+
+        {/* Horizontal rule expands outward from centre */}
+        <ExpandingRule layout={layout} />
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };

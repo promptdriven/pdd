@@ -15,7 +15,7 @@ export const GradientOverlay: React.FC<GradientOverlayProps> = ({ width, height 
 				left: 0,
 				width,
 				height,
-				background: `linear-gradient(to top, rgba(11, 29, 58, ${COLORS.backgroundOpacity}) 0%, rgba(11, 29, 58, ${COLORS.backgroundOpacity}) 60%, rgba(11, 29, 58, 0) 100%)`,
+				background: `linear-gradient(to top, rgba(11, 29, 58, ${COLORS.backgroundOpacity}) 0%, rgba(11, 29, 58, 0) 100%)`,
 			}}
 		/>
 	);

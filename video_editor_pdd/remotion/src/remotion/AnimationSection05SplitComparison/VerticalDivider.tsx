@@ -5,6 +5,7 @@ import { CANVAS, COLORS, DIMENSIONS, ANIMATION_TIMING } from './constants';
 export const VerticalDivider: React.FC = () => {
   const frame = useCurrentFrame();
 
+  // Draws from center outward (y=360, expanding up and down)
   const halfHeight = interpolate(
     frame,
     [ANIMATION_TIMING.dividerDrawStart, ANIMATION_TIMING.dividerDrawEnd],
@@ -12,7 +13,7 @@ export const VerticalDivider: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
+      easing: Easing.inOut(Easing.cubic),
     }
   );
 
