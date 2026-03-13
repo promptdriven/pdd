@@ -10,6 +10,7 @@ Philosophy: Prompts are the source of truth, architecture.json is derived from p
 Validation: Lenient - missing tags are OK, only update fields that have tags present.
 """
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -271,6 +272,195 @@ def register_untracked_prompts(
 
 # --- Architecture Update ---
 
+def _format_signature_param(
+    arg_node: ast.arg,
+    default_node: Optional[ast.expr] = None,
+    *,
+    prefix: str = '',
+) -> str:
+    """Render a single parsed Python parameter back to a signature fragment."""
+    text = f"{prefix}{arg_node.arg}"
+    if arg_node.annotation is not None:
+        text += f": {ast.unparse(arg_node.annotation)}"
+    if default_node is not None:
+        text += f"={ast.unparse(default_node)}"
+    return text
+
+
+def _parse_signature_parameters(signature: str) -> Optional[List[Dict[str, str]]]:
+    """Parse a Python signature string into ordered parameter metadata."""
+    try:
+        func_def = ast.parse(f"def _pdd_sync{signature}: pass").body[0]
+    except SyntaxError:
+        return None
+
+    if not isinstance(func_def, ast.FunctionDef):
+        return None
+
+    args = func_def.args
+    parameters: List[Dict[str, str]] = []
+
+    positional = list(args.posonlyargs) + list(args.args)
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+
+    for index, arg_node in enumerate(args.posonlyargs):
+        parameters.append({
+            'name': arg_node.arg,
+            'kind': 'posonly',
+            'text': _format_signature_param(arg_node, defaults[index]),
+        })
+
+    offset = len(args.posonlyargs)
+    for rel_index, arg_node in enumerate(args.args):
+        parameters.append({
+            'name': arg_node.arg,
+            'kind': 'arg',
+            'text': _format_signature_param(arg_node, defaults[offset + rel_index]),
+        })
+
+    if args.vararg is not None:
+        parameters.append({
+            'name': args.vararg.arg,
+            'kind': 'vararg',
+            'text': _format_signature_param(args.vararg, prefix='*'),
+        })
+
+    for arg_node, default_node in zip(args.kwonlyargs, args.kw_defaults):
+        parameters.append({
+            'name': arg_node.arg,
+            'kind': 'kwonly',
+            'text': _format_signature_param(arg_node, default_node),
+        })
+
+    if args.kwarg is not None:
+        parameters.append({
+            'name': args.kwarg.arg,
+            'kind': 'kwarg',
+            'text': _format_signature_param(args.kwarg, prefix='**'),
+        })
+
+    return parameters
+
+
+def _build_signature_from_parameters(parameters: List[Dict[str, str]]) -> str:
+    """Serialize ordered parameter metadata back to a Python signature string."""
+    posonly = [p['text'] for p in parameters if p['kind'] == 'posonly']
+    args = [p['text'] for p in parameters if p['kind'] == 'arg']
+    vararg = next((p['text'] for p in parameters if p['kind'] == 'vararg'), None)
+    kwonly = [p['text'] for p in parameters if p['kind'] == 'kwonly']
+    kwarg = next((p['text'] for p in parameters if p['kind'] == 'kwarg'), None)
+
+    pieces: List[str] = []
+    pieces.extend(posonly)
+    if posonly:
+        pieces.append('/')
+    pieces.extend(args)
+    if vararg is not None:
+        pieces.append(vararg)
+    elif kwonly:
+        pieces.append('*')
+    pieces.extend(kwonly)
+    if kwarg is not None:
+        pieces.append(kwarg)
+
+    return f"({', '.join(pieces)})"
+
+
+def _merge_function_signature(
+    old_signature: str,
+    new_signature: str,
+    function_name: str,
+) -> tuple[str, List[str]]:
+    """Merge a new function signature with the existing one, preserving old params."""
+    old_params = _parse_signature_parameters(old_signature)
+    new_params = _parse_signature_parameters(new_signature)
+    if old_params is None or new_params is None:
+        return new_signature, []
+
+    old_by_name = {param['name']: param for param in old_params}
+    new_by_name = {param['name']: param for param in new_params}
+
+    dropped = [param['name'] for param in old_params if param['name'] not in new_by_name]
+    merged_order = [param['name'] for param in old_params]
+    merged_order.extend(
+        param['name']
+        for param in new_params
+        if param['name'] not in old_by_name
+    )
+
+    merged_params = [
+        new_by_name[name] if name in new_by_name else old_by_name[name]
+        for name in merged_order
+    ]
+    warnings = [
+        f"Preserved existing parameter '{name}' in function '{function_name}' while merging interface signature."
+        for name in dropped
+    ]
+    return _build_signature_from_parameters(merged_params), warnings
+
+
+def _merge_interface_signatures(
+    old_interface: Optional[Dict[str, Any]],
+    new_interface: Dict[str, Any],
+) -> tuple[Dict[str, Any], List[str]]:
+    """Merge module function signatures while leaving the new interface authoritative."""
+    if (
+        not isinstance(old_interface, dict)
+        or old_interface.get('type') != 'module'
+        or new_interface.get('type') != 'module'
+    ):
+        return new_interface, []
+
+    old_module = old_interface.get('module')
+    new_module = new_interface.get('module')
+    if not isinstance(old_module, dict) or not isinstance(new_module, dict):
+        return new_interface, []
+
+    old_functions = old_module.get('functions')
+    new_functions = new_module.get('functions')
+    if not isinstance(old_functions, list) or not isinstance(new_functions, list):
+        return new_interface, []
+
+    old_by_name = {
+        func.get('name'): func
+        for func in old_functions
+        if isinstance(func, dict) and func.get('name')
+    }
+
+    merged_functions: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    for func in new_functions:
+        if not isinstance(func, dict):
+            merged_functions.append(func)
+            continue
+
+        func_name = func.get('name')
+        old_func = old_by_name.get(func_name)
+        if (
+            func_name
+            and old_func is not None
+            and isinstance(old_func, dict)
+            and isinstance(old_func.get('signature'), str)
+            and isinstance(func.get('signature'), str)
+        ):
+            merged_func = dict(func)
+            merged_signature, merge_warnings = _merge_function_signature(
+                old_func['signature'],
+                func['signature'],
+                func_name,
+            )
+            merged_func['signature'] = merged_signature
+            warnings.extend(merge_warnings)
+            merged_functions.append(merged_func)
+            continue
+
+        merged_functions.append(func)
+
+    merged_interface = json.loads(json.dumps(new_interface))
+    merged_interface['module']['functions'] = merged_functions
+    return merged_interface, warnings
+
 def update_architecture_from_prompt(
     prompt_filename: str,
     prompts_dir: Path = PROMPTS_DIR,
@@ -391,6 +581,7 @@ def update_architecture_from_prompt(
         # 5. Track changes (only update fields with tags present - lenient)
         changes = {}
         updated = False
+        warnings = []
 
         # Check if prompt has ANY PDD tags (used to determine if dependencies should be cleared)
         has_any_pdd_tags = (
@@ -411,9 +602,14 @@ def update_architecture_from_prompt(
         # Update interface if tag present
         if tags['interface'] is not None:
             old_interface = module_entry.get('interface')
-            if old_interface != tags['interface']:
-                changes['interface'] = {'old': old_interface, 'new': tags['interface']}
-                module_entry['interface'] = tags['interface']
+            merged_interface, merge_warnings = _merge_interface_signatures(
+                old_interface,
+                tags['interface'],
+            )
+            warnings.extend(merge_warnings)
+            if old_interface != merged_interface:
+                changes['interface'] = {'old': old_interface, 'new': merged_interface}
+                module_entry['interface'] = merged_interface
                 updated = True
 
         # Update dependencies if:
@@ -442,7 +638,6 @@ def update_architecture_from_prompt(
             )
 
         # Include any parse warnings
-        warnings = []
         if tags.get('interface_parse_error'):
             warnings.append(tags['interface_parse_error'])
 
