@@ -569,27 +569,32 @@ def generate_user_story(
 
     if detect_success and detected_links:
         message_lower = detect_message.lower()
-        if "full prompt set" in message_lower:
-            linked_refs = linked_refs_from_input
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata linked from prompt inputs."
-            )
-        elif "story content" in message_lower:
-            linked_refs = linked_refs_from_input
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata linked from prompt inputs."
-            )
-        else:
+        if "full prompt set" not in message_lower and "story content" not in message_lower:
             linked_refs = detected_links
             status_message = (
                 f"Generated story file: {output_path}. "
                 "Story prompt metadata auto-detected from story content."
             )
+        else:
+            # Detection fell back to full-project or story-text refs.
+            # Rewrite metadata to the explicit input prompts so the file
+            # stays scoped to what the user asked for.
+            linked_refs = linked_refs_from_input
+            latest_story = _read_story(output_path)
+            _upsert_story_prompt_metadata(
+                output_path,
+                latest_story,
+                [path.resolve() for path in resolved_paths],
+                prompts_root,
+            )
+            status_message = (
+                f"Generated story file: {output_path}. "
+                "Story prompt metadata linked from prompt inputs."
+            )
     else:
-        # Preserve deterministic links from prompt inputs when detection
-        # produces no touched prompts or cannot update metadata.
+        # Detection produced no touched prompts or could not update metadata.
+        # Write metadata scoped to the explicit input prompts.
+        linked_refs = linked_refs_from_input
         latest_story = _read_story(output_path)
         _upsert_story_prompt_metadata(
             output_path,

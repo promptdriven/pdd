@@ -1881,7 +1881,6 @@ def test_architecture_postprocess_rewrites_json_pretty(
         if len(call[0][0]) >= 2 and pathlib.Path(call[0][0][1]).name == "render_mermaid.py"
     ]
     assert render_calls, "render_mermaid.py was never invoked"
-
     # Issue #617: filename should mirror filepath in normalized output
     expected_entries = [
         {

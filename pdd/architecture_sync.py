@@ -51,12 +51,16 @@ _EXT_TO_LANGUAGE: Dict[str, str] = {
 }
 
 
-def _language_from_filepath(filepath: str) -> str:
-    """Infer PascalCase language from output filepath extension (Issue #617)."""
+def _language_from_filepath(filepath: str) -> Optional[str]:
+    """Infer PascalCase language from output filepath extension (Issue #617).
+
+    Returns None for extensionless files (e.g. Makefile, Dockerfile) so callers
+    can skip normalization rather than incorrectly defaulting to Python.
+    """
     ext = Path(filepath).suffix.lower()
     if ext and ext.startswith("."):
-        return _EXT_TO_LANGUAGE.get(ext, "Python")  # safe default
-    return "Python"
+        return _EXT_TO_LANGUAGE.get(ext, "Python")  # safe default for known-extension files
+    return None
 
 
 def normalize_architecture_filenames(arch_data: List[Dict[str, Any]]) -> None:
@@ -72,6 +76,9 @@ def normalize_architecture_filenames(arch_data: List[Dict[str, Any]]) -> None:
             continue
         old_fn = entry.get("filename") or ""
         language = _language_from_filepath(filepath)
+        if language is None:
+            # Extensionless file (e.g. Makefile) — leave filename unchanged
+            continue
         new_fn = filepath_to_prompt_filename(filepath, language)
         if old_fn:
             old_to_new[old_fn] = new_fn
@@ -81,7 +88,6 @@ def normalize_architecture_filenames(arch_data: List[Dict[str, Any]]) -> None:
         if not isinstance(deps, list):
             continue
         entry["dependencies"] = [old_to_new.get(d, d) for d in deps]
-
 
 # --- Constants ---
 # Use Path.cwd() instead of __file__ so it works with the user's project directory,
@@ -770,9 +776,16 @@ def get_architecture_entry_for_prompt(
     if normalized.startswith('./'):
         normalized = normalized[2:]
 
+    # Exact path match first
     for entry in arch_data:
         if entry.get('filename') == normalized:
             return entry
+
+    # Basename fallback: call sites may pass just the filename without subdirectory
+    basename = Path(normalized).name
+    candidates = [e for e in arch_data if Path(e.get('filename', '')).name == basename]
+    if len(candidates) == 1:
+        return candidates[0]
 
     return None
 

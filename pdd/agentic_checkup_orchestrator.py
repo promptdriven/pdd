@@ -493,9 +493,6 @@ def run_agentic_checkup_orchestrator(
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
         for step_key, output in step_outputs.items():
             context[f"step{step_key}_output"] = output
-            # Also provide a dotted alias for integer keys (backward compat).
-            if "_" not in step_key and step_key.isdigit():
-                context[f"step{step_key}_output"] = output
 
         # Restore files_to_stage if available
         if changed_files:
