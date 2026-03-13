@@ -360,18 +360,24 @@ def _format_signature_param(
     if arg_node.annotation is not None:
         text += f": {ast.unparse(arg_node.annotation)}"
     if default_node is not None:
-        text += f"={ast.unparse(default_node)}"
+        text += f" = {ast.unparse(default_node)}"
     return text
 
 
-def _parse_signature_parameters(signature: str) -> Optional[List[Dict[str, str]]]:
-    """Parse a Python signature string into ordered parameter metadata."""
+def _parse_signature_parameters(signature: str) -> Optional[Dict[str, Any]]:
+    """Parse a Python signature string into ordered parameter and style metadata."""
+    signature = signature.strip()
     try:
-        func_def = ast.parse(f"def _pdd_sync{signature}: pass").body[0]
+        if signature.startswith('def ') or signature.startswith('async def '):
+            func_def = ast.parse(f"{signature}: pass").body[0]
+            style = 'full'
+        else:
+            func_def = ast.parse(f"def _pdd_sync{signature}: pass").body[0]
+            style = 'bare'
     except SyntaxError:
         return None
 
-    if not isinstance(func_def, ast.FunctionDef):
+    if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return None
 
     args = func_def.args
@@ -416,10 +422,20 @@ def _parse_signature_parameters(signature: str) -> Optional[List[Dict[str, str]]
             'text': _format_signature_param(args.kwarg, prefix='**'),
         })
 
-    return parameters
+    return {
+        'parameters': parameters,
+        'return_annotation': ast.unparse(func_def.returns) if func_def.returns is not None else None,
+        'style': style,
+        'is_async': isinstance(func_def, ast.AsyncFunctionDef),
+        'name': func_def.name,
+    }
 
 
-def _build_signature_from_parameters(parameters: List[Dict[str, str]]) -> str:
+def _build_signature_from_parameters(
+    parameters: List[Dict[str, str]],
+    signature_info: Dict[str, Any],
+    function_name: str,
+) -> str:
     """Serialize ordered parameter metadata back to a Python signature string."""
     posonly = [p['text'] for p in parameters if p['kind'] == 'posonly']
     args = [p['text'] for p in parameters if p['kind'] == 'arg']
@@ -440,7 +456,15 @@ def _build_signature_from_parameters(parameters: List[Dict[str, str]]) -> str:
     if kwarg is not None:
         pieces.append(kwarg)
 
-    return f"({', '.join(pieces)})"
+    signature = f"({', '.join(pieces)})"
+    if signature_info.get('return_annotation'):
+        signature += f" -> {signature_info['return_annotation']}"
+
+    if signature_info.get('style') == 'full':
+        prefix = 'async def' if signature_info.get('is_async') else 'def'
+        name = signature_info.get('name') or function_name
+        return f"{prefix} {name}{signature}"
+    return signature
 
 
 def _merge_function_signature(
@@ -449,15 +473,31 @@ def _merge_function_signature(
     function_name: str,
 ) -> tuple[str, List[str]]:
     """Merge a new function signature with the existing one, preserving old params."""
-    old_params = _parse_signature_parameters(old_signature)
-    new_params = _parse_signature_parameters(new_signature)
-    if old_params is None or new_params is None:
-        return new_signature, []
+    old_info = _parse_signature_parameters(old_signature)
+    new_info = _parse_signature_parameters(new_signature)
+    if new_info is None and old_info is not None:
+        return old_signature, [
+            f"Kept existing signature for function '{function_name}' because the new signature could not be parsed during interface merge."
+        ]
+    if old_info is None and new_info is not None:
+        return new_signature, [
+            f"Used new signature for function '{function_name}' without merge because the existing signature could not be parsed."
+        ]
+    if old_info is None and new_info is None:
+        return new_signature, [
+            f"Used new signature for function '{function_name}' because neither signature could be parsed for merge."
+        ]
+
+    old_params = old_info['parameters']
+    new_params = new_info['parameters']
 
     old_by_name = {param['name']: param for param in old_params}
     new_by_name = {param['name']: param for param in new_params}
 
     dropped = [param['name'] for param in old_params if param['name'] not in new_by_name]
+    if not dropped:
+        return new_signature, []
+
     merged_order = [param['name'] for param in old_params]
     merged_order.extend(
         param['name']
@@ -473,7 +513,14 @@ def _merge_function_signature(
         f"Preserved existing parameter '{name}' in function '{function_name}' while merging interface signature."
         for name in dropped
     ]
-    return _build_signature_from_parameters(merged_params), warnings
+    merged_signature_info = dict(new_info)
+    if not merged_signature_info.get('return_annotation'):
+        merged_signature_info['return_annotation'] = old_info.get('return_annotation')
+    return _build_signature_from_parameters(
+        merged_params,
+        merged_signature_info,
+        function_name,
+    ), warnings
 
 
 def _merge_interface_signatures(

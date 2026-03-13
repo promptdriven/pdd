@@ -16,10 +16,7 @@ These tests FAIL on the buggy code and should PASS once the fix is applied.
 """
 
 import json
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from pdd.architecture_sync import (
     sync_all_prompts_to_architecture,

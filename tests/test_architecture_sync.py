@@ -2218,10 +2218,7 @@ def test_interface_sync_preserves_existing_params_on_merge():
         assert result['success'] is True
         updated_arch = json.loads(arch_file.read_text())
         sig = updated_arch[0]['interface']['module']['functions'][0]['signature']
-        assert 'a' in sig
-        assert 'b' in sig
-        assert 'c' in sig
-        assert 'd' in sig
+        assert sig == "(a, b, c, d=None)"
 
 
 def test_interface_sync_warns_on_param_drop():
@@ -2650,6 +2647,141 @@ def test_interface_sync_dry_run_shows_merged_result():
         assert 'verbose' in merged_sig, (
             f"Dry-run result missing new param 'verbose': {merged_sig}"
         )
+
+
+def test_interface_sync_preserves_return_annotation_and_function_style():
+    """Merged signatures should keep def/async style and return annotations."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "scorer_python.prompt",
+                "filepath": "pdd/scorer.py",
+                "reason": "Scorer",
+                "description": "Scorer",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "compute_score",
+                                "signature": "def compute_score(value: int, threshold: float = 0.5) -> bool",
+                                "returns": "bool",
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "compute_score",
+                        "signature": "def compute_score(value: int, verbose: bool = False) -> bool",
+                        "returns": "bool",
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "scorer_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "scorer_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False,
+        )
+
+        assert result["success"] is True
+        updated_arch = json.loads(arch_file.read_text())
+        sig = updated_arch[0]["interface"]["module"]["functions"][0]["signature"]
+        assert sig == (
+            "def compute_score(value: int, threshold: float = 0.5, "
+            "verbose: bool = False) -> bool"
+        )
+
+
+def test_interface_sync_keeps_existing_signature_when_new_signature_is_unparseable():
+    """Unparseable new signatures should not silently replace existing parseable ones."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "processor_python.prompt",
+                "filepath": "pdd/processor.py",
+                "reason": "Processor",
+                "description": "Processor",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "process",
+                                "signature": "(payload, retries, timeout)",
+                                "returns": "Dict",
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "process",
+                        "signature": "(payload, retries, ...)",
+                        "returns": "Dict",
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "processor_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "processor_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False,
+        )
+
+        assert result["success"] is True
+        updated_arch = json.loads(arch_file.read_text())
+        sig = updated_arch[0]["interface"]["module"]["functions"][0]["signature"]
+        assert sig == "(payload, retries, timeout)"
+        warning_text = " ".join(result.get("warnings", [])).lower()
+        assert "could not be parsed" in warning_text
+
+
 def test_normalize_architecture_filenames_issue617():
     """Issue #617: normalize_architecture_filenames sets filename from filepath (mirror structure)."""
     arch_data = [
