@@ -13,6 +13,7 @@ import {
   filterWordsForSpecTimingWindow,
   parseSpecTimingWindow,
 } from '@/lib/spec-timing-context';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { readSseStartResult } from '../../lib/client/sse-utils';
 import { SseLogPanel } from '../SseLogPanel';
 
@@ -425,12 +426,10 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
           >
             Generate All Specs
           </button>
-          <button
-            className="rounded border border-slate-600 px-3 py-2 text-slate-300 hover:bg-slate-700"
+          <PipelineAdvanceButton
             onClick={onAdvance}
-          >
-            Continue →
-          </button>
+            label="Continue →"
+          />
         </div>
       </div>
 

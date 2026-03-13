@@ -14,7 +14,7 @@
  *      Triggers POST /api/pipeline/render/run with appropriate { sections }.
  *   5. [Stitch Full Video] button: triggers POST /api/pipeline/stitch/run.
  *      Disabled while renders are in progress.
- *   6. Full Video panel: shows file size, duration, [Open in Review →] button that calls onAdvance().
+ *   6. Full Video panel: shows file size, duration, [Continue →] button that calls onAdvance().
  *   7. All progress bars update via SSE stream for the active render job.
  *   8. 'use client' directive.
  */
@@ -294,11 +294,11 @@ describe("Full Video panel", () => {
     expect(sourceCode).toMatch(/fullVideo\.durationSeconds/);
   });
 
-  it("renders Open in Review → button", () => {
-    expect(sourceCode).toContain("Open in Review →");
+  it("renders Continue → button", () => {
+    expect(sourceCode).toContain("Continue →");
   });
 
-  it("Open in Review → calls onAdvance()", () => {
+  it("Continue → calls onAdvance()", () => {
     expect(sourceCode).toMatch(/onClick=\{onAdvance\}/);
   });
 

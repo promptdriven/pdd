@@ -461,11 +461,11 @@ test.describe('Stage 9: Render & Stitch', () => {
     expect(result.contentType).toContain('text/event-stream');
   });
 
-  test('Bug #6: "Open in Review →" navigates to Review tab, not Stage 10 Audit', async ({ page }) => {
+  test('Bug #6: "Continue →" navigates to Review tab, not Stage 10 Audit', async ({ page }) => {
     await expect(page.locator('h2', { hasText: 'Stage 9' })).toBeVisible();
 
-    const openInReviewBtn = page.locator('button', { hasText: 'Open in Review' });
-    await openInReviewBtn.click();
+    const continueBtn = page.locator('button', { hasText: 'Continue' });
+    await continueBtn.click();
     await page.waitForTimeout(500);
 
     // Must NOT navigate to Stage 10 Audit

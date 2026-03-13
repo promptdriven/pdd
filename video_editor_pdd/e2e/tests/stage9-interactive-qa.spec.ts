@@ -514,7 +514,7 @@ test.describe('Stage 9 QA · D: Stitch Button & Full Video Panel', () => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_NONE);
     // The "Full Video" panel has a div with text "Full Video" (not the Stitch button)
     await expect(page.locator('div.font-semibold', { hasText: 'Full Video' })).not.toBeVisible();
-    await expect(page.locator('button', { hasText: 'Open in Review' })).not.toBeVisible();
+    await expect(page.locator('button', { hasText: 'Continue' })).not.toBeVisible();
   });
 
   test('D5: full video panel shows size (formatBytes: "1.50 GB")', async ({ page }) => {
@@ -529,12 +529,12 @@ test.describe('Stage 9 QA · D: Stitch Button & Full Video Panel', () => {
     await expect(page.locator('text=120.50s')).toBeVisible();
   });
 
-  test('D7: "Open in Review →" button present with bg-indigo-600', async ({ page }) => {
+  test('D7: "Continue →" button present with bg-emerald-600', async ({ page }) => {
     await navigateWithMockedStatus(page, ALL_STATUS_SECTIONS, FULL_VIDEO_EXISTS);
-    const btn = page.locator('button', { hasText: 'Open in Review →' });
+    const btn = page.locator('button', { hasText: 'Continue →' });
     await expect(btn).toBeVisible();
     const classes = await btn.getAttribute('class');
-    expect(classes).toContain('bg-indigo-600');
+    expect(classes).toContain('bg-emerald-600');
   });
 
   test('D8: screenshot — full video panel visible', async ({ page }) => {

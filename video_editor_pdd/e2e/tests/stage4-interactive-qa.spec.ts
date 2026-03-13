@@ -101,16 +101,16 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       expect(cls).toContain('bg-slate-700');
     });
 
-    test('A4: Top "Advance →" button visible (first instance)', async ({ page }) => {
+    test('A4: Top "Continue →" button visible (first instance)', async ({ page }) => {
       await navigateToStage4(page);
-      const btn = page.locator('button', { hasText: 'Advance' }).first();
+      const btn = page.locator('button', { hasText: 'Continue' }).first();
       await expect(btn).toBeVisible();
       await expect(btn).toContainText('→');
     });
 
-    test('A5: Bottom "Advance →" button visible (second instance)', async ({ page }) => {
+    test('A5: Bottom "Continue →" button visible (second instance)', async ({ page }) => {
       await navigateToStage4(page);
-      const btn = page.locator('button', { hasText: 'Advance' }).nth(1);
+      const btn = page.locator('button', { hasText: 'Continue' }).nth(1);
       await expect(btn).toBeVisible();
       await expect(btn).toContainText('→');
     });
@@ -1153,37 +1153,37 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
   });
 
   // =========================================================================
-  // Group G: Advance Button & Edge Cases (9 tests)
+  // Group G: Continue Button & Edge Cases (9 tests)
   // =========================================================================
-  test.describe('Group G: Advance button & edge cases', () => {
-    test('G1: Advance disabled when segments list is empty', async ({ page }) => {
+  test.describe('Group G: Continue button & edge cases', () => {
+    test('G1: Continue disabled when segments list is empty', async ({ page }) => {
       await navigateWithMockedSegments(page, []);
-      const btn = page.locator('button', { hasText: 'Advance' }).first();
+      const btn = page.locator('button', { hasText: 'Continue' }).first();
       await expect(btn).toBeDisabled();
     });
 
-    test('G2: Advance disabled when some segments not done', async ({ page }) => {
+    test('G2: Continue disabled when some segments not done', async ({ page }) => {
       await navigateWithMockedSegments(page, [
         { id: 'seg-001', status: 'done', text: 'Done.' },
         { id: 'seg-002', status: 'missing', text: 'Missing.' },
       ]);
-      const btn = page.locator('button', { hasText: 'Advance' }).first();
+      const btn = page.locator('button', { hasText: 'Continue' }).first();
       await expect(btn).toBeDisabled();
     });
 
-    test('G3: Advance enabled when all segments are done', async ({ page }) => {
+    test('G3: Continue enabled when all segments are done', async ({ page }) => {
       await navigateWithMockedSegments(page, [
         { id: 'seg-001', status: 'done', text: 'Done 1.' },
         { id: 'seg-002', status: 'done', text: 'Done 2.' },
       ]);
-      const btn = page.locator('button', { hasText: 'Advance' }).first();
+      const btn = page.locator('button', { hasText: 'Continue' }).first();
       await expect(btn).toBeEnabled();
     });
 
-    test('G4: Enabled advance has bg-emerald-600; disabled has bg-slate-700 text-slate-500', async ({ page }) => {
+    test('G4: Enabled continue has bg-emerald-600; disabled has bg-slate-700 text-slate-500', async ({ page }) => {
       // Test disabled state
       await navigateWithMockedSegments(page, []);
-      const disabledBtn = page.locator('button', { hasText: 'Advance' }).first();
+      const disabledBtn = page.locator('button', { hasText: 'Continue' }).first();
       const disabledCls = await disabledBtn.getAttribute('class') ?? '';
       expect(disabledCls).toContain('bg-slate-700');
       expect(disabledCls).toContain('text-slate-500');
@@ -1192,7 +1192,7 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       await navigateWithMockedSegments(page, [
         { id: 'seg-001', status: 'done', text: 'Done.' },
       ]);
-      const enabledBtn = page.locator('button', { hasText: 'Advance' }).first();
+      const enabledBtn = page.locator('button', { hasText: 'Continue' }).first();
       const enabledCls = await enabledBtn.getAttribute('class') ?? '';
       expect(enabledCls).toContain('bg-emerald-600');
     });
@@ -1237,9 +1237,9 @@ test.describe('Stage 4: Interactive QA - Comprehensive Feature Testing', () => {
       await expect(page.locator('text=seg-raw-001')).toBeVisible();
     });
 
-    test('G7: Both advance button instances (count 2) exist', async ({ page }) => {
+    test('G7: Both continue button instances (count 2) exist', async ({ page }) => {
       await navigateToStage4(page);
-      const btns = page.locator('button', { hasText: 'Advance' });
+      const btns = page.locator('button', { hasText: 'Continue' });
       await expect(btns).toHaveCount(2);
     });
 

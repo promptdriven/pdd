@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { SseLogPanel } from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
@@ -511,12 +512,11 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
 
         {/* Advance */}
         <div className="flex justify-end">
-          <button
+          <PipelineAdvanceButton
             onClick={onAdvance}
-            className="px-5 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-          >
-            Continue →
-          </button>
+            label="Continue →"
+            className="rounded-lg px-5"
+          />
         </div>
       </div>
       </div>

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import WaveSurfer from 'wavesurfer.js';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { SseLogPanel } from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
@@ -252,15 +253,12 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
           </button>
         </div>
 
-        <button
+        <PipelineAdvanceButton
           disabled={!allDone}
           onClick={onAdvance}
-          className={`px-4 py-2 rounded-lg font-semibold ${
-            allDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-700 text-slate-500'
-          }`}
-        >
-          Advance →
-        </button>
+          label="Continue →"
+          className="rounded-lg"
+        />
       </div>
 
       {/* Batch progress bar */}
@@ -397,15 +395,12 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
       {/* Advance button for bottom */}
       <div className="flex justify-end">
-        <button
+        <PipelineAdvanceButton
           disabled={!allDone}
           onClick={onAdvance}
-          className={`px-4 py-2 rounded-lg font-semibold ${
-            allDone ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-700 text-slate-500'
-          }`}
-        >
-          Advance →
-        </button>
+          label="Continue →"
+          className="rounded-lg"
+        />
       </div>
     </div>
   );

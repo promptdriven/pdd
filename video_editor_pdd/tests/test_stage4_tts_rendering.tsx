@@ -561,12 +561,12 @@ describe("toolbar buttons", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 20. Advance button (Req — enabled when all segments done)
+// 20. Continue button (Req — enabled when all segments done)
 // ---------------------------------------------------------------------------
 
-describe("Advance button", () => {
-  it("renders Advance → button text", () => {
-    expect(sourceCode).toMatch(/Advance →/);
+describe("Continue button", () => {
+  it("renders Continue → button text", () => {
+    expect(sourceCode).toMatch(/Continue →/);
   });
 
   it("button calls onAdvance on click", () => {
@@ -577,16 +577,16 @@ describe("Advance button", () => {
     expect(sourceCode).toMatch(/disabled=\{!allDone\}/);
   });
 
-  it("button has enabled styling when allDone is true", () => {
-    expect(sourceCode).toMatch(/bg-emerald-600\s+text-white\s+hover:bg-emerald-700/);
+  it("uses the shared PipelineAdvanceButton component", () => {
+    expect(sourceCode).toMatch(/PipelineAdvanceButton/);
   });
 
-  it("button has disabled styling when allDone is false", () => {
-    expect(sourceCode).toMatch(/bg-slate-700\s+text-slate-500/);
+  it("passes disabled state through to the shared component", () => {
+    expect(sourceCode).toMatch(/disabled=\{!allDone\}/);
   });
 
-  it("conditionally applies styling based on allDone", () => {
-    expect(sourceCode).toMatch(/allDone\s*\?/);
+  it("passes rounded-lg styling to the shared component", () => {
+    expect(sourceCode).toMatch(/className="rounded-lg"/);
   });
 });
 
@@ -816,8 +816,8 @@ describe("layout and structure", () => {
     expect(sourceCode).toMatch(/flex\s+justify-end/);
   });
 
-  it("renders two Advance → buttons (top and bottom)", () => {
-    const matches = sourceCode.match(/Advance →/g);
+  it("renders two Continue → buttons (top and bottom)", () => {
+    const matches = sourceCode.match(/Continue →/g);
     expect(matches).not.toBeNull();
     expect(matches!.length).toBeGreaterThanOrEqual(2);
   });

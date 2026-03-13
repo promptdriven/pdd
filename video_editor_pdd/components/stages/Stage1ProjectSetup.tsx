@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import type { ProjectConfig, Section } from '../../lib/types';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { SseLogPanel } from '../SseLogPanel';
 
 interface Stage1ProjectSetupProps {
@@ -258,14 +259,11 @@ export default function Stage1ProjectSetup({
           >
             Save ✓
           </button>
-          <button
-            type="button"
+          <PipelineAdvanceButton
             onClick={() => onAdvance?.()}
             disabled={!onAdvance}
-            className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Continue →
-          </button>
+            label="Continue →"
+          />
         </div>
       </div>
 

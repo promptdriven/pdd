@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectConfig, Section } from '../../lib/types';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
 
 interface Stage5AudioSyncProps {
@@ -469,12 +470,10 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         </div>
 
         <div className="mt-4 flex justify-end">
-          <button
+          <PipelineAdvanceButton
             onClick={onAdvance}
-            className="rounded-md bg-slate-700 px-4 py-2 text-white text-sm hover:bg-slate-600"
-          >
-            Continue
-          </button>
+            label="Continue →"
+          />
         </div>
       </div>
     </div>

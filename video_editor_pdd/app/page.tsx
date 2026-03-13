@@ -356,7 +356,7 @@ export default function Page() {
   }, [activeTab, annotationScopeSectionId, loadAnnotations, reviewUsesFreshFullVideo]);
 
   const handleAdvanceStage = useCallback(() => {
-    // Stage 9 "Open in Review →" should switch to the Review tab
+    // Stage 9 continue action should switch to the Review tab
     if (activeStage === 'render') {
       setActiveTab('review');
       return;

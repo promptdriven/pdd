@@ -43,8 +43,8 @@ test.describe('Stage 4: TTS Rendering', () => {
     await expect(page.locator('button', { hasText: 'Render Missing' })).toBeVisible();
   });
 
-  test('displays Advance button', async ({ page }) => {
-    await expect(page.locator('button', { hasText: 'Advance' }).first()).toBeVisible();
+  test('displays Continue button', async ({ page }) => {
+    await expect(page.locator('button', { hasText: 'Continue' }).first()).toBeVisible();
   });
 
   test('segment table headers are visible', async ({ page }) => {
@@ -71,17 +71,17 @@ test.describe('Stage 4: TTS Rendering', () => {
     await expect(page.locator('text=Re-render').first()).toBeVisible();
   });
 
-  test('Advance button is disabled when not all segments are done', async ({ page }) => {
-    // With no segments or some missing, Advance should be disabled
-    const advanceBtn = page.locator('button', { hasText: 'Advance' }).first();
-    await expect(advanceBtn).toBeVisible();
+  test('Continue button is disabled when not all segments are done', async ({ page }) => {
+    // With no segments or some missing, Continue should be disabled
+    const continueBtn = page.locator('button', { hasText: 'Continue' }).first();
+    await expect(continueBtn).toBeVisible();
     // When segments list is empty, allDone is false (segments.length > 0 check fails)
-    await expect(advanceBtn).toBeDisabled();
+    await expect(continueBtn).toBeDisabled();
   });
 
-  test('has two Advance buttons (top and bottom)', async ({ page }) => {
-    const advanceBtns = page.locator('button', { hasText: 'Advance' });
-    await expect(advanceBtns).toHaveCount(2);
+  test('has two Continue buttons (top and bottom)', async ({ page }) => {
+    const continueBtns = page.locator('button', { hasText: 'Continue' });
+    await expect(continueBtns).toHaveCount(2);
   });
 
   test('no console errors on load', async ({ page }) => {

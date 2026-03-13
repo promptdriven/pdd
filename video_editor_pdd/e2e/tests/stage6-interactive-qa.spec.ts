@@ -137,12 +137,12 @@ test.describe('Stage 6: Interactive QA - Comprehensive Feature Testing', () => {
       expect(cls).toContain('bg-indigo-600');
     });
 
-    test('A3: "Continue →" button visible with border-slate-600', async ({ page }) => {
+    test('A3: "Continue →" button visible with bg-emerald-600', async ({ page }) => {
       await navigateToStage6(page);
       const btn = page.locator('button', { hasText: 'Continue' });
       await expect(btn).toBeVisible();
       const cls = await btn.getAttribute('class') ?? '';
-      expect(cls).toContain('border-slate-600');
+      expect(cls).toContain('bg-emerald-600');
     });
 
     test('A4: Section accordion cards render from mocked data (2 sections)', async ({ page }) => {

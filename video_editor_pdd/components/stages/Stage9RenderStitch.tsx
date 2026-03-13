@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 
 interface SectionRenderStatus {
   id: string;
@@ -377,12 +378,10 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
               {fullVideo.durationSeconds?.toFixed(2) ?? '—'}s
             </div>
           </div>
-          <button
+          <PipelineAdvanceButton
             onClick={onAdvance}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700"
-          >
-            Open in Review →
-          </button>
+            label="Continue →"
+          />
         </div>
       )}
 

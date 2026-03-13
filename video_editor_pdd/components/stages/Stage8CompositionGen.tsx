@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { SseLogPanel } from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
@@ -327,12 +328,10 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             Generate Remotion compositions, preview stills, and stage VEO assets.
           </p>
         </div>
-        <button
-          className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+        <PipelineAdvanceButton
           onClick={onAdvance}
-        >
-          Continue
-        </button>
+          label="Continue →"
+        />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
