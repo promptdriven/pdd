@@ -73,6 +73,36 @@ def test_caller_uses_correct_parameter():
 - Such tests always pass because the callee was never broken
 - Example of WRONG approach: `pytest.raises(TypeError, lambda: callee(limit=5))`
 
+% Critical: No Structural/Shape Tests — Behavioral Assertions Only
+
+Your generated tests must verify **observable behavior**, not code structure. The following patterns are BLOCKED — do NOT generate test code that uses them:
+
+**BLOCKED patterns:**
+- `inspect.signature()` or `inspect.getfullargspec()` — checking function signatures
+- `hasattr()` or `getattr()` — checking attribute existence
+- `assert "param_name" in sig.parameters` — checking parameter names exist
+- `isinstance()` on functions — checking function types
+- Any assertion that verifies a parameter *exists* rather than what *happens* when it's used
+
+**BAD code (structural — NEVER generate this):**
+```python
+import inspect
+sig = inspect.signature(preprocess)
+assert "quiet" in sig.parameters  # Passes by adding quiet=False without implementing logic
+```
+
+**GOOD code (behavioral — ALWAYS generate this instead):**
+```python
+from unittest.mock import patch
+def test_preprocess_suppresses_output_when_quiet():
+    with patch("module.console") as mock_console:
+        preprocess("Hello", quiet=True)
+        for call in mock_console.print.call_args_list:
+            assert "Starting" not in str(call)
+```
+
+**Self-check:** Before writing each test, ask: "Could this test pass if someone just added `quiet=False` to the function signature without implementing any actual logic?" If yes, the test is structural — rewrite it to verify observable behavior using mocks/patches.
+
 % Critical: Mock Accuracy Validation
 
 Before writing any mock or stub, verify it against the investigation findings:
@@ -162,7 +192,7 @@ Your comment should follow this format:
 
 - The test MUST fail on the current (buggy) code
 - The test should pass once the bug is fixed
-- Focus on testing behavior, not implementation details
+- Focus on testing behavior, not implementation details — do NOT use introspection patterns like `inspect.signature()`, `hasattr()`, or `sig.parameters` to verify code structure
 - Write the test file to disk before posting the comment
 - Always post your findings as a GitHub comment before completing
 
