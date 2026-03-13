@@ -8,7 +8,13 @@ import re
 import click
 from typing import Any, List, Optional, Tuple, TextIO
 
-from .. import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
+try:
+    from .. import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
+except ImportError:
+    # Fallback for environments where `pdd` resolves as a namespace package.
+    DEFAULT_STRENGTH = 1.0
+    DEFAULT_TIME = 0.25
+    __version__ = "unknown"
 from ..auto_update import auto_update
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
@@ -331,6 +337,10 @@ def cli(
         ctx.obj["temperature"] = temperature
     ctx.obj["verbose"] = verbose
     ctx.obj["quiet"] = quiet
+    if quiet:
+        os.environ["PDD_QUIET"] = "1"
+    else:
+        os.environ.pop("PDD_QUIET", None)
     ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
     ctx.obj["local"] = local
@@ -361,7 +371,11 @@ def cli(
     # Suppress verbose if quiet is enabled
     if quiet:
         ctx.obj["verbose"] = False
-        os.environ['PDD_QUIET'] = '1'
+        try:
+            from ..llm_invoke import set_quiet_logging
+            set_quiet_logging()
+        except Exception:
+            pass
 
     # Warn users who have not completed interactive setup unless they are running it now
     if _should_show_onboarding_reminder(ctx):

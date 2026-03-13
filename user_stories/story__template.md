@@ -1,5 +1,7 @@
 # User Story: <short title>
 
+<!-- pdd-story-prompts: prompt_a_python.prompt, prompt_b_python.prompt -->
+
 ## Story
 As a <role>, I want <capability> so that <benefit>.
 

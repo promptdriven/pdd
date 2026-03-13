@@ -26,6 +26,36 @@ except ImportError:
 _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 
 
+def substitute_template_variables(
+    template: Any,
+    context: Dict[str, Any],
+    *,
+    strict_unresolved: bool = False,
+) -> str:
+    """Safely substitute known {placeholders} without raising on unknown keys.
+
+    This intentionally uses iterative ``str.replace`` instead of ``str.format``
+    so unknown placeholders remain intact and context values containing braces
+    (e.g. JSON) are preserved verbatim.
+    """
+    # Compatibility path for tests/mocks that provide template objects with a
+    # .format(**context) method rather than a raw string prompt.
+    if not isinstance(template, str) and hasattr(template, "format") and callable(template.format):
+        return str(template.format(**context))
+
+    if strict_unresolved:
+        for match in re.finditer(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})", template):
+            key = match.group(1)
+            if key not in context:
+                raise KeyError(key)
+
+    rendered = template
+    for key, value in context.items():
+        rendered = rendered.replace("{" + str(key) + "}", str(value))
+
+    return rendered
+
+
 def get_agent_provider_preference() -> List[str]:
     """Return provider preference order, overridable via PDD_AGENTIC_PROVIDER env var.
 

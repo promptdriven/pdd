@@ -71,6 +71,7 @@ def test_detect_stories_success(runner, mock_context_obj):
         assert kwargs["stories_dir"] is None
         assert kwargs["include_llm_prompts"] is False
         assert kwargs["fail_fast"] is True
+        assert kwargs["cache_story_prompt_links"] is True
 
 
 def test_detect_stories_options(runner, mock_context_obj):
@@ -89,6 +90,7 @@ def test_detect_stories_options(runner, mock_context_obj):
         assert kwargs["stories_dir"] == "stories"
         assert kwargs["include_llm_prompts"] is True
         assert kwargs["fail_fast"] is False
+        assert kwargs["cache_story_prompt_links"] is True
 
 
 def test_detect_stories_rejects_files(runner, mock_context_obj):
