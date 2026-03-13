@@ -84,3 +84,13 @@ A single blue circle appears at the center of a dark charcoal canvas, scaling in
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: e18f6be1-b8df-4e5d-be0b-90d8a65a6934 -->
+## Annotation Update
+Requested change: I want this to be a triangle
+Technical assessment: The orange markup circles the blue circle in animation_section scene 02 (Blue Circle Pulse). The scene currently renders a 180px diameter blue circle (#3B82F6) centered at (640, 360) on a dark charcoal background with spring scale-in, pulse beat, and breathing animations. The user wants this shape changed from a circle to a triangle. Since this is a Remotion-rendered SVG/CSS shape (not video footage), the shape can be changed by modifying the Remotion component to render a triangle (e.g., using an SVG polygon or CSS clip-path) instead of a circle, while preserving the existing animation sequence (spring overshoot, pulse beat, breathing oscillation) and glow effects.
+- Replace the PulsingCircle component with a PulsingTriangle component (or parameterize the shape) that renders an equilateral triangle of equivalent visual size (~180px) using an SVG <polygon> element or CSS clip-path: polygon(50% 0%, 0% 100%, 100% 100%)
+- Update the GlowRing to use a triangular glow shape or keep a circular glow as a soft halo behind the triangle for visual consistency
+- Update the spec file 02_blue_circle_pulse.md to reflect the new triangle shape, renaming it appropriately (e.g., 'Blue Triangle Pulse')
+- Preserve all existing animation parameters (spring config, pulse scale 1.15x, breathing oscillation 1.0x–1.02x) — only the rendered shape geometry needs to change
+<!-- ANNOTATION_UPDATE_END: e18f6be1-b8df-4e5d-be0b-90d8a65a6934 -->
