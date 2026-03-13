@@ -855,6 +855,97 @@ describe("audit executor factory", () => {
     );
   });
 
+  it("writes a SKIP audit report when a media visual requires composited overlays instead of a bare clip audit", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+        compositionId: "VeoSection",
+        videoFile: "outputs/sections/veo_section.mp4",
+        durationSeconds: 7.344,
+        compositions: ["veo_section_01_title_card"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue([
+      "01_title_card.md",
+      "02_veo_ocean_broll.md",
+    ]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "veo_section");
+    const titleCardPath = pathMod.join(specDir, "01_title_card.md");
+    const oceanPath = pathMod.join(specDir, "02_veo_ocean_broll.md");
+    const stagedClipPath = pathMod.join(
+      "/project-root",
+      "outputs",
+      "veo",
+      "02_veo_ocean_broll.mp4"
+    );
+
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === titleCardPath) {
+        return "**Timestamp:** 0:00 - 0:01\n";
+      }
+      if (candidate === oceanPath) {
+        return [
+          "[veo:]",
+          "",
+          "**Timestamp:** 0:01 - 0:03",
+          "",
+          "### Chart/Visual Elements",
+          "- **Veo video layer:** Full-bleed `<OffthreadVideo>` component, z-index 0",
+          "- **Gradient overlay:** Linear gradient overlay at z-index 1",
+          "- **Lower-third narration badge:** Semi-transparent bar with narration text, z-index 2",
+          "",
+          "```typescript",
+          "<AbsoluteFill>",
+          '  <OffthreadVideo src={staticFile("veo/02_veo_ocean_broll.mp4")} />',
+          "  <GradientOverlay />",
+          "  <LowerThirdBadge><NarrationText text=\"Hello\" /></LowerThirdBadge>",
+          "</AbsoluteFill>",
+          "```",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === titleCardPath ||
+        candidate === oceanPath ||
+        candidate === stagedClipPath ||
+        candidate === pathMod.join(
+          "/project-root",
+          "outputs",
+          "sections",
+          "veo_section.mp4"
+        )
+      );
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["veo_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime).not.toHaveBeenCalledWith(
+      stagedClipPath,
+      expect.any(Number),
+      expect.any(String)
+    );
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(1);
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      pathMod.join(specDir, "AUDIT_02_veo_ocean_broll.md"),
+      expect.stringContaining("## Verdict\nskip\n"),
+      "utf-8"
+    );
+  });
+
   it("falls back to renderStill when the rendered section video is unavailable", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro
@@ -1004,6 +1095,29 @@ describe("audit executor factory", () => {
 
     const content = mockWriteFileSync.mock.calls[0][1];
     expect(content).toContain("## Verdict\nfail");
+  });
+
+  it("writes 'warn' verdict when severity is minor", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "minor",
+      fixType: "remotion",
+      technicalAssessment: "Rule is slightly dimmer than spec",
+      suggestedFixes: ["Increase rule contrast slightly"],
+      confidence: 0.73,
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\nwarn");
   });
 
   it("creates output directory with recursive flag", async () => {
@@ -1482,6 +1596,23 @@ describe("GET — audit markdown parsing", () => {
     const intro = body.sections[0];
     expect(intro.specs[0].verdict).toBe("SKIP");
     expect(intro.specs[0].summary).toContain("Standalone audit skipped");
+    expect(intro.passCount).toBe(0);
+    expect(intro.failCount).toBe(0);
+  });
+
+  it("parses warn verdicts from AUDIT_ files without incrementing pass or fail counts", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(["AUDIT_visual.md"]);
+    mockReadFileSync.mockReturnValue(
+      "## Verdict\nwarn\n## Summary\nMinor position drift, otherwise correct.\n"
+    );
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    const intro = body.sections[0];
+    expect(intro.specs[0].verdict).toBe("WARN");
+    expect(intro.specs[0].summary).toContain("Minor position drift");
     expect(intro.passCount).toBe(0);
     expect(intro.failCount).toBe(0);
   });

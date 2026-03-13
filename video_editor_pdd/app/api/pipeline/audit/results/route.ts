@@ -13,7 +13,7 @@ import {
 
 type SpecAuditResult = {
   specName: string;
-  verdict: "PASS" | "FAIL" | "SKIP";
+  verdict: "PASS" | "FAIL" | "SKIP" | "WARN";
   summary: string;
   finding?: string;
   specPath?: string;
@@ -35,7 +35,7 @@ type AuditSectionResult = {
 };
 
 function parseAuditMarkdown(content: string): {
-  verdict: "PASS" | "FAIL" | "SKIP";
+  verdict: "PASS" | "FAIL" | "SKIP" | "WARN";
   summary: string;
 } {
   const verdictMatch = content.match(/## Verdict\s+(\w+)/i);
@@ -49,6 +49,8 @@ function parseAuditMarkdown(content: string): {
   const verdict =
     normalizedVerdict === "pass"
       ? ("PASS" as const)
+      : normalizedVerdict === "warn"
+        ? ("WARN" as const)
       : normalizedVerdict === "skip"
         ? ("SKIP" as const)
         : ("FAIL" as const);

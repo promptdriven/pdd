@@ -127,7 +127,7 @@ function resolveVisualMediaAssetPath(
 
 function writeAuditReport(
   auditPath: string,
-  verdict: "pass" | "fail" | "skip",
+  verdict: "pass" | "fail" | "skip" | "warn",
   summary: string
 ): void {
   const auditReport = `## Verdict\n${verdict}\n## Summary\n${summary}\n`;
@@ -140,7 +140,12 @@ function resolveAuditRenderSource(
   section: Section,
   visual: Pick<
     ResolvedSectionVisual,
-    "hasComponent" | "hasExplicitMedia" | "previewCompositionId" | "mediaReferences" | "stagedAssetPath"
+    | "hasComponent"
+    | "hasExplicitMedia"
+    | "requiresCompositedAudit"
+    | "previewCompositionId"
+    | "mediaReferences"
+    | "stagedAssetPath"
   >,
   renderedVideoPath: string | null,
   canRenderFreshStill: boolean
@@ -156,6 +161,15 @@ function resolveAuditRenderSource(
   }
 
   if (visualType === "media") {
+    if (visual.requiresCompositedAudit) {
+      return {
+        kind: "skip",
+        visualType,
+        reason:
+          "Standalone audit skipped because this media spec requires composited overlays or UI that cannot be audited from a bare clip.",
+      };
+    }
+
     const mediaPath = resolveVisualMediaAssetPath(projectDir, visual);
     if (mediaPath) {
       return {
@@ -252,6 +266,7 @@ async function auditSection(
             specPath: path.join(specDir, specFile),
             hasComponent: false,
             hasExplicitMedia: false,
+            requiresCompositedAudit: false,
             mediaReferences: [],
           } satisfies ResolvedSectionVisual,
         }));
@@ -385,6 +400,8 @@ Read the frame PNG and compare it against the normalized spec snapshot above. Re
 { severity, fixType, technicalAssessment, suggestedFixes, confidence }
 
 Use severity="pass" if the frame fully satisfies the spec.
+Use severity="minor" for subtle, non-material differences that do not meaningfully break the intended visual.
+Reserve severity="major" or "critical" for clearly missing, wrong, or materially broken visuals.
 `;
 
     const analysis = (await runClaudeAudit(
@@ -393,9 +410,14 @@ Use severity="pass" if the frame fully satisfies the spec.
       onLog
     )) as AnnotationAnalysis;
 
-    const verdict = analysis.severity === "pass" ? "pass" : "fail";
+    const verdict =
+      analysis.severity === "pass"
+        ? "pass"
+        : analysis.severity === "minor"
+          ? "warn"
+          : "fail";
     if (verdict === "pass") passCount++;
-    else failCount++;
+    else if (verdict === "fail") failCount++;
     writeAuditReport(auditPath, verdict, analysis.technicalAssessment);
   }
 

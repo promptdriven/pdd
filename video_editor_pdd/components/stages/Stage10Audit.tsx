@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 type AuditStatus = 'pending' | 'running' | 'done' | 'error';
 
-type Verdict = 'PASS' | 'FAIL' | 'SKIP';
+type Verdict = 'PASS' | 'FAIL' | 'SKIP' | 'WARN';
 
 type PlaybackWindow = {
   startSeconds: number;
@@ -60,6 +60,7 @@ const verdictClasses: Record<Verdict, string> = {
   PASS: 'bg-green-800 text-green-200',
   FAIL: 'bg-red-800 text-red-200',
   SKIP: 'bg-slate-700 text-slate-200',
+  WARN: 'bg-amber-800 text-amber-200',
 };
 
 export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10AuditProps) {

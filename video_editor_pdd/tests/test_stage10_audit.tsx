@@ -224,6 +224,10 @@ describe("View Report expanded row", () => {
   it("FAIL verdict gets red styling", () => {
     expect(sourceCode).toMatch(/FAIL.*red|red.*FAIL/s);
   });
+
+  it("WARN verdict gets amber styling", () => {
+    expect(sourceCode).toMatch(/WARN.*amber|amber.*WARN/s);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -485,6 +489,10 @@ describe("Verdict badge styles", () => {
     expect(sourceCode).toMatch(/SKIP:\s*['"].*(slate|gray|zinc|stone)/);
   });
 
+  it("WARN verdict has amber styling", () => {
+    expect(sourceCode).toMatch(/WARN:\s*['"].*amber/);
+  });
+
   it("defines verdictClasses record", () => {
     expect(sourceCode).toMatch(/const\s+verdictClasses/);
   });
@@ -543,8 +551,8 @@ describe("Type definitions", () => {
     expect(sourceCode).toMatch(/type\s+AuditStatus\s*=.*pending.*running.*done.*error/s);
   });
 
-  it("defines Verdict type with PASS, FAIL, and SKIP", () => {
-    expect(sourceCode).toMatch(/type\s+Verdict\s*=\s*['"]PASS['"]\s*\|\s*['"]FAIL['"]\s*\|\s*['"]SKIP['"]/);
+  it("defines Verdict type with PASS, FAIL, SKIP, and WARN", () => {
+    expect(sourceCode).toMatch(/type\s+Verdict\s*=\s*['"]PASS['"]\s*\|\s*['"]FAIL['"]\s*\|\s*['"]SKIP['"]\s*\|\s*['"]WARN['"]/);
   });
 
   it("defines SpecVerdict interface", () => {

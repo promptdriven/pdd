@@ -50,6 +50,7 @@ export type ResolvedSectionVisual = {
   specPath?: string;
   hasComponent: boolean;
   hasExplicitMedia: boolean;
+  requiresCompositedAudit: boolean;
   previewCompositionId?: string;
   mediaReferences: string[];
   stagedAssetPath?: string;
@@ -117,6 +118,32 @@ const SPEC_MEDIA_RE =
   /\b(?:clipSource|leftClip|rightClip|leftSrc|rightSrc|outputSrc|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)\b/i;
 const STATIC_FILE_RE = /staticFile\(\s*["'][^"']+\.(?:mp4|webm|mov|m4v)["']\s*\)/i;
 const GENERIC_MEDIA_RE = /\.(?:mp4|webm|mov|m4v)\b/i;
+const JSX_COMPONENT_TAG_RE = /<([A-Z][A-Za-z0-9]*)\b/g;
+const COMPOSITED_MEDIA_HINT_RE =
+  /\b(lower-third|narration badge|narration text|voice badge|caption|subtitle|gradient overlay|light bloom|overlay|badge|label|rule)\b/i;
+const Z_INDEX_OVERLAY_RE = /z-index\s*[1-9]/i;
+
+function requiresCompositedMediaAudit(content: string): boolean {
+  if (!GENERIC_MEDIA_RE.test(content)) {
+    return false;
+  }
+
+  for (const match of content.matchAll(JSX_COMPONENT_TAG_RE)) {
+    const tagName = match[1];
+    if (!tagName) {
+      continue;
+    }
+
+    if (!["AbsoluteFill", "Sequence", "OffthreadVideo", "Audio"].includes(tagName)) {
+      return true;
+    }
+  }
+
+  return (
+    COMPOSITED_MEDIA_HINT_RE.test(content) ||
+    (Z_INDEX_OVERLAY_RE.test(content) && /\b(text|overlay|badge|label|caption|subtitle|bloom|rule)\b/i.test(content))
+  );
+}
 
 export function extractSpecMediaReferences(content: string): string[] {
   const references: string[] = [];
@@ -189,6 +216,7 @@ function resolveSpecMediaInfo(
   specPath?: string;
   hasExplicitMedia: boolean;
   hasSpecReferencedMedia: boolean;
+  requiresCompositedAudit: boolean;
   mediaReferences: string[];
   stagedAssetPath?: string;
 } {
@@ -196,6 +224,7 @@ function resolveSpecMediaInfo(
     return {
       hasExplicitMedia: false,
       hasSpecReferencedMedia: false,
+      requiresCompositedAudit: false,
       mediaReferences: [],
     };
   }
@@ -214,6 +243,7 @@ function resolveSpecMediaInfo(
       specPath: undefined,
       hasExplicitMedia: hasStagedAsset,
       hasSpecReferencedMedia: false,
+      requiresCompositedAudit: false,
       mediaReferences: stagedAssetPath ? [`veo/${specBaseName}.mp4`] : [],
       stagedAssetPath,
     };
@@ -225,10 +255,12 @@ function resolveSpecMediaInfo(
     SPEC_MEDIA_RE.test(content) ||
     STATIC_FILE_RE.test(content) ||
     GENERIC_MEDIA_RE.test(content);
+  const requiresCompositedAudit = requiresCompositedMediaAudit(content);
   return {
     specPath,
     hasExplicitMedia: hasStagedAsset || hasSpecReferencedMedia,
     hasSpecReferencedMedia,
+    requiresCompositedAudit,
     mediaReferences:
       stagedAssetPath && !mediaReferences.includes(`veo/${specBaseName}.mp4`)
         ? [...mediaReferences, `veo/${specBaseName}.mp4`]
@@ -266,6 +298,7 @@ export function resolveSectionVisuals(
         specPath: path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`),
         hasComponent: true,
         hasExplicitMedia: mediaInfo.hasSpecReferencedMedia,
+        requiresCompositedAudit: mediaInfo.requiresCompositedAudit,
         previewCompositionId: resolvePreviewCompositionId(
           matchingCompositionId,
           section.id
@@ -288,6 +321,7 @@ export function resolveSectionVisuals(
       specPath: mediaInfo.specPath,
       hasComponent: false,
       hasExplicitMedia: true,
+      requiresCompositedAudit: mediaInfo.requiresCompositedAudit,
       mediaReferences: mediaInfo.mediaReferences,
       stagedAssetPath: mediaInfo.stagedAssetPath,
     });
@@ -309,6 +343,7 @@ export function resolveSectionVisuals(
       specPath: specPath && fs.existsSync(specPath) ? specPath : undefined,
       hasComponent: true,
       hasExplicitMedia: false,
+      requiresCompositedAudit: false,
       previewCompositionId: resolvePreviewCompositionId(compositionId, section.id),
       mediaReferences: [],
     });
