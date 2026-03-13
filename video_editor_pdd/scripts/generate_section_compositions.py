@@ -99,6 +99,10 @@ STRUCTURED_VIDEO_FIELD_RE = re.compile(
     r'(?:"|\b)(outputFile|filename|clip_id|clipId)(?:"|\b)\s*[:=]\s*["\']([^"\']+)["\']',
     re.IGNORECASE,
 )
+GENERIC_VIDEO_REF_RE = re.compile(
+    r'(?:"|\b)(video|src)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
+    re.IGNORECASE,
+)
 VIDEO_EXTENSION_PRIORITY = ('.mp4', '.webm', '.mov', '.m4v')
 
 
@@ -172,6 +176,8 @@ def _has_renderable_spec_media(
             return True
         if STRUCTURED_VIDEO_FIELD_RE.search(spec_content):
             return True
+        if GENERIC_VIDEO_REF_RE.search(spec_content):
+            return True
         for rel_path in STATIC_FILE_RE.findall(spec_content):
             if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
                 return True
@@ -236,6 +242,40 @@ def _resolve_media_static_path(remotion_public: str, rel_path: str) -> Optional[
     return normalized if os.path.isfile(os.path.join(remotion_public, normalized)) else None
 
 
+def _resolve_video_reference_static_path(
+    remotion_public: str,
+    raw_value: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Resolve a video reference to a staged static path.
+
+    Resolution order:
+      1. Exact staged path as written in the spec.
+      2. Per-section logical alias map, used to translate names like
+         `veo/ocean_sunset.mp4` to the actual staged clip for another visual.
+      3. Compatibility fallback candidates under remotion/public.
+    """
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    if not normalized:
+        return None
+
+    exact = _resolve_media_static_path(remotion_public, normalized)
+    if exact is not None:
+        return exact
+
+    basename = normalized.split('/')[-1]
+    if reference_aliases:
+        for key in (normalized, basename):
+            resolved = reference_aliases.get(key)
+            if resolved and os.path.isfile(os.path.join(remotion_public, resolved)):
+                return resolved
+
+    return _existing_static_path(
+        remotion_public,
+        _candidate_video_static_paths(normalized),
+    )
+
+
 def _candidate_video_static_paths(raw_value: str) -> List[str]:
     """Build likely staged staticFile() paths for a structured video reference."""
     normalized = raw_value.replace('\\', '/').lstrip('/')
@@ -253,7 +293,7 @@ def _candidate_video_static_paths(raw_value: str) -> List[str]:
         _add(normalized)
         if not normalized.startswith('veo/'):
             _add(f'veo/{basename}')
-        _add(basename)
+            _add(basename)
         return candidates
 
     for ext in VIDEO_EXTENSION_PRIORITY:
@@ -266,15 +306,17 @@ def _candidate_video_static_paths(raw_value: str) -> List[str]:
 def _resolve_structured_video_static_path(
     spec_content: str,
     remotion_public: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Resolve a staged video path from structured spec fields like outputFile / clip_id."""
     if not remotion_public:
         return None
 
     for _, raw_value in STRUCTURED_VIDEO_FIELD_RE.findall(spec_content):
-        resolved = _existing_static_path(
+        resolved = _resolve_video_reference_static_path(
             remotion_public,
-            _candidate_video_static_paths(raw_value),
+            raw_value,
+            reference_aliases,
         )
         if resolved is not None:
             return resolved
@@ -296,11 +338,71 @@ def _resolve_generated_spec_basename_video(
     )
 
 
+def _iter_video_reference_values(spec_content: str) -> List[str]:
+    """Collect logical video references declared inside a spec."""
+    values: List[str] = []
+
+    def _add(raw_value: str) -> None:
+        normalized = raw_value.replace('\\', '/').lstrip('/')
+        if normalized and normalized not in values:
+            values.append(normalized)
+
+    for _, raw_value in STRUCTURED_VIDEO_FIELD_RE.findall(spec_content):
+        _add(raw_value)
+    for _, raw_value in GENERIC_VIDEO_REF_RE.findall(spec_content):
+        _add(raw_value)
+    for rel_path in STATIC_FILE_RE.findall(spec_content):
+        if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
+            _add(rel_path)
+
+    return values
+
+
+def _build_section_video_reference_aliases(
+    visual_ids: List[str],
+    spec_dir: str,
+    section_id: str,
+    remotion_public: str,
+) -> Dict[str, str]:
+    """Map logical spec video names to the actual staged clips for this section."""
+    aliases: Dict[str, str] = {}
+    if not spec_dir or not remotion_public:
+        return aliases
+
+    for visual_id in visual_ids:
+        spec_base = component_base_name(visual_id, section_id)
+        spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+        if not os.path.isfile(spec_path):
+            continue
+
+        spec_content = _read_text_if_exists(spec_path)
+        if not spec_content:
+            continue
+
+        direct_target: Optional[str] = None
+        for ref in _iter_video_reference_values(spec_content):
+            direct_target = _resolve_media_static_path(remotion_public, ref)
+            if direct_target is not None:
+                break
+
+        staged_target = _resolve_generated_spec_basename_video(spec_base, remotion_public)
+        canonical_target = direct_target or staged_target
+        if canonical_target is None:
+            continue
+
+        for ref in _iter_video_reference_values(spec_content):
+            aliases.setdefault(ref, canonical_target)
+            aliases.setdefault(ref.split('/')[-1], canonical_target)
+
+    return aliases
+
+
 def _extract_visual_media_aliases(
     spec_content: str,
     remotion_public: str,
     inherited_default: Optional[str],
     spec_base: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
 ) -> tuple[Dict[str, str], Optional[str], bool]:
     """Extract named Veo asset aliases from a spec file."""
     explicit_sources: List[str] = []
@@ -325,7 +427,11 @@ def _extract_visual_media_aliases(
     }
 
     for key, rel_path in VISUAL_MEDIA_KEY_RE.findall(spec_content):
-        resolved = _resolve_media_static_path(remotion_public, rel_path)
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            rel_path,
+            reference_aliases,
+        )
         if resolved is None:
             continue
         explicit = True
@@ -338,6 +444,7 @@ def _extract_visual_media_aliases(
     structured_default = _resolve_structured_video_static_path(
         spec_content,
         remotion_public,
+        reference_aliases,
     )
     if structured_default is not None:
         explicit = True
@@ -345,10 +452,26 @@ def _extract_visual_media_aliases(
             explicit_sources.append(structured_default)
         aliases.setdefault('defaultSrc', structured_default)
 
+    for _, raw_value in GENERIC_VIDEO_REF_RE.findall(spec_content):
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            raw_value,
+            reference_aliases,
+        )
+        if resolved is None:
+            continue
+        explicit = True
+        if resolved not in explicit_sources:
+            explicit_sources.append(resolved)
+
     for rel_path in STATIC_FILE_RE.findall(spec_content):
         if Path(rel_path).suffix.lower() not in VIDEO_EXTENSIONS:
             continue
-        resolved = _resolve_media_static_path(remotion_public, rel_path)
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            rel_path,
+            reference_aliases,
+        )
         if resolved is None:
             continue
         explicit = True
@@ -404,6 +527,12 @@ def build_visual_media_manifest(
     manifest: Dict[str, Dict[str, str]] = {}
     inherited_default: Optional[str] = None
     saw_explicit_source = False
+    reference_aliases = _build_section_video_reference_aliases(
+        visual_ids,
+        spec_dir,
+        section['id'],
+        remotion_public,
+    )
 
     for visual_id in visual_ids:
         spec_base = component_base_name(visual_id, section['id'])
@@ -416,6 +545,7 @@ def build_visual_media_manifest(
                 remotion_public,
                 inherited_default,
                 spec_base,
+                reference_aliases,
             )
             if explicit:
                 saw_explicit_source = True
