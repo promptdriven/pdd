@@ -586,9 +586,11 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                 <SseLogPanel
                   jobId={activeJobId}
                   onDone={() => {
+                    setActiveJobId(null);
                     refreshData();
                   }}
                   onError={() => {
+                    setActiveJobId(null);
                     refreshData();
                   }}
                 />

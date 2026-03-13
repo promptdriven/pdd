@@ -233,6 +233,14 @@ describe("Log Drawer", () => {
   it("passes jobId to SseLogPanel", () => {
     expect(sourceCode).toMatch(/jobId=\{activeJobId\}/);
   });
+
+  it("clears the active job id when SseLogPanel completes", () => {
+    expect(sourceCode).toMatch(/onDone=\{\(\)\s*=>\s*\{[\s\S]*setActiveJobId\(null\);[\s\S]*refreshData\(\);[\s\S]*\}\}/);
+  });
+
+  it("clears the active job id when SseLogPanel errors", () => {
+    expect(sourceCode).toMatch(/onError=\{\(\)\s*=>\s*\{[\s\S]*setActiveJobId\(null\);[\s\S]*refreshData\(\);[\s\S]*\}\}/);
+  });
 });
 
 // ---------------------------------------------------------------------------
