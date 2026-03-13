@@ -19,6 +19,7 @@ import {
   normalizeSpecDir,
   selectCanonicalVeoPromptSpec,
 } from '@/lib/veo-spec-context';
+import { resolveVeoFrameChainPlan } from '../_lib/frame-chains';
 import {
   resolveSectionHasVeoIntent,
   resolveSectionVeoPromptFromScript,
@@ -262,13 +263,26 @@ registerExecutor('veo', (params, send: SseSend) => {
     const model = config.veo.model;
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
       .progress;
-
-    let referenceImagePath: string | null = null;
+    const chainPlan = resolveVeoFrameChainPlan(
+      getProjectDir(),
+      ordered.map((clip) => clip.id),
+      config.veo
+    );
+    const lastFrameByClip = new Map<string, string>();
 
     for (let i = 0; i < ordered.length; i++) {
       const clip = ordered[i];
       const clipId = clip.id;
       const aspectRatio = config.veo.defaultAspectRatio;
+      const clipChain = chainPlan.get(clipId) ?? {
+        previousClipId: null,
+        referenceImagePath: null,
+        needsLastFrame: false,
+      };
+      const referenceImagePath =
+        clipChain.previousClipId
+          ? lastFrameByClip.get(clipChain.previousClipId) ?? null
+          : clipChain.referenceImagePath;
 
       const outputPath = path.join(
         getProjectDir(),
@@ -323,10 +337,10 @@ registerExecutor('veo', (params, send: SseSend) => {
         }
 
         // Frame chaining for next clip
-        if (i < ordered.length - 1) {
+        if (clipChain.needsLastFrame) {
           onLog(`Extracting last frame for chaining: ${clipId}`);
           await extractLastFrame(outputPath, lastFramePath);
-          referenceImagePath = lastFramePath;
+          lastFrameByClip.set(clipId, lastFramePath);
         }
 
         send({ type: 'clip', clipId, status: 'done' });

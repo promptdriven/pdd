@@ -170,6 +170,8 @@ function mockProjectConfig() {
       aspectRatio: "16:9" as const,
       defaultAspectRatio: "16:9" as const,
       referenceImages: {},
+      references: [],
+      frameChains: [],
     },
     render: {
       maxParallelRenders: 3,
@@ -868,7 +870,7 @@ describe("veo executor factory — frame chaining", () => {
     });
   });
 
-  it("extracts last frame of clip N for use in clip N+1", async () => {
+  it("does not chain clips when project.veo.frameChains is empty", async () => {
     const config = mockProjectConfig();
     config.sections = config.sections.slice(0, 2); // intro, main
     mockLoadProject.mockReturnValue(config);
@@ -877,28 +879,43 @@ describe("veo executor factory — frame chaining", () => {
     const executor = registerCallArgs.factory({}, mockSend);
     await executor(jest.fn());
 
-    // extractLastFrame should be called once (for intro, not for the last clip)
-    expect(mockExtractLastFrame).toHaveBeenCalledTimes(1);
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(mockGenerateVeoClip.mock.calls[0][1]).toBeNull();
+    expect(mockGenerateVeoClip.mock.calls[1][1]).toBeNull();
+    expect(mockExtractLastFrame).not.toHaveBeenCalled();
+  });
 
-    // First arg is the clip output path, second is the frame output path
+  it("extracts last frame of an explicitly chained clip for use in the next clip", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockExtractLastFrame).toHaveBeenCalledTimes(1);
     const extractCall = mockExtractLastFrame.mock.calls[0];
     expect(extractCall[0]).toContain("intro.mp4");
     expect(extractCall[1]).toContain("intro_last_frame.png");
   });
 
-  it("passes extracted frame path as referenceImagePath to next clip", async () => {
+  it("passes extracted frame path as referenceImagePath only within an explicit chain", async () => {
     const config = mockProjectConfig();
     config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
     mockLoadProject.mockReturnValue(config);
 
     const mockSend = jest.fn();
     const executor = registerCallArgs.factory({}, mockSend);
     await executor(jest.fn());
 
-    // First clip: null reference
     expect(mockGenerateVeoClip.mock.calls[0][1]).toBeNull();
-
-    // Second clip: should have the last frame path as reference
     const secondRef = mockGenerateVeoClip.mock.calls[1][1];
     expect(secondRef).toContain("intro_last_frame.png");
   });
@@ -931,6 +948,9 @@ describe("veo executor factory — frame chaining", () => {
 
     const config = mockProjectConfig();
     config.sections = config.sections.slice(0, 3);
+    config.veo.frameChains = [
+      { clips: ["intro", "main", "outro"], referenceId: "alex" },
+    ];
     mockLoadProject.mockReturnValue(config);
 
     const mockSend = jest.fn();
@@ -948,6 +968,9 @@ describe("veo executor factory — frame chaining", () => {
   it("frame chain path is outputs/veo/{clipId}_last_frame.png", async () => {
     const config = mockProjectConfig();
     config.sections = config.sections.slice(0, 2);
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
     mockLoadProject.mockReturnValue(config);
 
     const mockSend = jest.fn();
@@ -979,6 +1002,9 @@ describe("veo executor factory — frame chaining", () => {
         label: "Outro Section",
         specDir: "outro_section",
       },
+    ];
+    config.veo.frameChains = [
+      { clips: ["veo_section", "outro_section"], referenceId: "alex" },
     ];
     mockLoadProject.mockReturnValue(config);
 
@@ -1348,6 +1374,9 @@ describe("GET_clips — script-derived Veo eligibility", () => {
         specDir: "outro_section",
       },
     ];
+    config.veo.frameChains = [
+      { clips: ["veo_section", "outro_section"], referenceId: "alex" },
+    ];
     mockLoadProject.mockReturnValue(config);
 
     mockExistsSync.mockImplementation((p: string) => {
@@ -1419,16 +1448,23 @@ describe("GET_clips — status detection", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET_clips — frameChainDeps", () => {
-  it("first clip has no frame chain deps", async () => {
+  it("returns no frame chain deps when project.veo.frameChains is empty", async () => {
     mockExistsSync.mockReturnValue(false);
 
     const response = await GET_clips();
     const data = await response.json();
 
     expect(data.clips[0].frameChainDeps).toEqual([]);
+    expect(data.clips[1].frameChainDeps).toEqual([]);
+    expect(data.clips[2].frameChainDeps).toEqual([]);
   });
 
-  it("non-first clip depends on previous clip's ID", async () => {
+  it("exposes previous clip deps only for explicitly chained clips", async () => {
+    const config = mockProjectConfig();
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
     mockExistsSync.mockReturnValue(false);
 
     const response = await GET_clips();
@@ -1436,9 +1472,15 @@ describe("GET_clips — frameChainDeps", () => {
 
     expect(data.clips[1].frameChainDeps).toHaveLength(1);
     expect(data.clips[1].frameChainDeps[0]).toBe("intro");
+    expect(data.clips[2].frameChainDeps).toEqual([]);
   });
 
   it("deps contain clean clip IDs (not file paths)", async () => {
+    const config = mockProjectConfig();
+    config.veo.frameChains = [
+      { clips: ["intro", "main", "outro"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
     mockExistsSync.mockReturnValue(false);
 
     const response = await GET_clips();
@@ -1455,6 +1497,11 @@ describe("GET_clips — frameChainDeps", () => {
 
 describe("GET_clips — stale detection", () => {
   it("clip is stale when dep has newer mtime than clip", async () => {
+    const config = mockProjectConfig();
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
     mockExistsSync.mockImplementation(
       (candidate: string) =>
         typeof candidate === "string" &&
@@ -1477,6 +1524,11 @@ describe("GET_clips — stale detection", () => {
   });
 
   it("clip is not stale when dep has older mtime", async () => {
+    const config = mockProjectConfig();
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
     mockExistsSync.mockImplementation(
       (candidate: string) =>
         typeof candidate === "string" &&

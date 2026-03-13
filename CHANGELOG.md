@@ -1,3 +1,37 @@
+## v0.0.175 (2026-03-12)
+
+### Feat
+
+- Enhance user story generation with auto-detection of prompt links and fallback mechanism
+- Add support for multistory prompt metadata and caching in user story tests
+- refresh integration fixture remotion outputs
+
+### Fix
+
+- address Copilot review comments on PR #835
+- address review findings in multiprompt user stories PR
+- restore substitute_template_variables after rebase
+- revert rebase merge mistakes
+- Add architecture dependency sanitization and prompt auto-registration functionality
+- validate veo clips across frames
+- tighten stage10 audit sampling
+- stop fake stage8 asset staging jobs
+- prompt filenames mirror output filepath structure (#617) (#834)
+- keep spec timing parsing client-safe
+- generalize stage10 audit source selection
+- align remotion validation and visual media aliases
+- annotation fc600068-1f94-4620-b262-1348c9f30615 Change the main background color of this section t
+- annotation test-batch-ann-1773344206392 Change the primary background accent in Animation
+- refresh remotion bundle for audit renders
+- generalize audit runtime and responsive veo layouts
+- repair audit frame previews and fixture rendering
+- make veo overlays resolution-aware
+- fail stage 8 when generated components are missing
+
+### Refactor
+
+- update Claude audit process with fresh still rendering and refined prompt, simplify Python fixing prompt, and update related tests and integration specs.
+
 ## v0.0.174 (2026-03-11)
 
 ### Feat
