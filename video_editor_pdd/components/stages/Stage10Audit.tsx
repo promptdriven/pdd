@@ -26,6 +26,7 @@ interface SectionAudit {
   sectionId: string;
   sectionLabel: string;
   passCount: number;
+  warnCount: number;
   failCount: number;
   status: AuditStatus;
   specs: SpecVerdict[];
@@ -107,13 +108,14 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
     if (!mountedRef.current) return;
     setSections((prev) =>
       prev.map((section) =>
-        section.sectionId === data.sectionId
-          ? {
-              ...section,
-              passCount: data.passCount ?? section.passCount,
-              failCount: data.failCount ?? section.failCount,
-              status: data.status ?? section.status,
-            }
+            section.sectionId === data.sectionId
+              ? {
+                  ...section,
+                  passCount: data.passCount ?? section.passCount,
+                  warnCount: data.warnCount ?? section.warnCount,
+                  failCount: data.failCount ?? section.failCount,
+                  status: data.status ?? section.status,
+                }
           : section
       )
     );
@@ -253,7 +255,7 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
     sections.forEach((section) => {
       if (!expanded[section.sectionId]) return;
       section.specs.forEach((spec) => {
-        if (spec.verdict !== 'FAIL') return;
+        if (spec.verdict !== 'FAIL' && spec.verdict !== 'WARN') return;
         const key = `${section.sectionId}:${spec.specName}`;
         void loadSpecContent(key, spec.specPath);
       });
@@ -278,6 +280,22 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
     () => sections.map((s) => ({ id: s.sectionId, label: s.sectionLabel })),
     [sections]
   );
+
+  const auditSummary = useMemo(() => {
+    let pass = 0;
+    let warn = 0;
+    let fail = 0;
+    let skip = 0;
+
+    for (const section of sections) {
+      pass += section.passCount;
+      warn += section.warnCount;
+      fail += section.failCount;
+      skip += section.specs.filter((spec) => spec.verdict === 'SKIP').length;
+    }
+
+    return { pass, warn, fail, skip };
+  }, [sections]);
 
   return (
     <div className="space-y-6">
@@ -338,10 +356,27 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
       )}
 
       {!loading && !error && sections.length > 0 && (
-        <div className="border border-white/10 rounded overflow-hidden">
-          <div className="grid grid-cols-6 gap-2 p-3 bg-white/5 text-sm font-medium text-white">
+        <>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="rounded border border-green-500/20 bg-green-900/20 px-3 py-2 text-sm text-green-200">
+              Pass: <span className="font-semibold">{auditSummary.pass}</span>
+            </div>
+            <div className="rounded border border-amber-500/20 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
+              Warn: <span className="font-semibold">{auditSummary.warn}</span>
+            </div>
+            <div className="rounded border border-red-500/20 bg-red-900/20 px-3 py-2 text-sm text-red-200">
+              Fail: <span className="font-semibold">{auditSummary.fail}</span>
+            </div>
+            <div className="rounded border border-slate-500/20 bg-slate-800/60 px-3 py-2 text-sm text-slate-200">
+              Skip: <span className="font-semibold">{auditSummary.skip}</span>
+            </div>
+          </div>
+
+          <div className="border border-white/10 rounded overflow-hidden">
+          <div className="grid grid-cols-7 gap-2 p-3 bg-white/5 text-sm font-medium text-white">
             <div>Section</div>
             <div>Pass</div>
+            <div>Warn</div>
             <div>Fail</div>
             <div>Status</div>
             <div className="col-span-2 text-right">Actions</div>
@@ -349,9 +384,10 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
 
           {sections.map((section) => (
             <div key={section.sectionId} className="border-t border-white/10">
-              <div className="grid grid-cols-6 gap-2 p-3 items-center text-sm text-white">
+              <div className="grid grid-cols-7 gap-2 p-3 items-center text-sm text-white">
                 <div>{section.sectionLabel}</div>
                 <div>{section.passCount}</div>
+                <div>{section.warnCount}</div>
                 <div>{section.failCount}</div>
                 <div>
                   <span
@@ -405,7 +441,7 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                           <div className="col-span-7 text-white/70">{spec.summary}</div>
                         </div>
 
-                        {spec.verdict === 'FAIL' && (
+                        {(spec.verdict === 'FAIL' || spec.verdict === 'WARN') && (
                           <>
                             <div className="grid gap-3 px-2 pb-3 lg:grid-cols-2">
                               <div className="rounded border border-white/10 bg-black/20 p-2">
@@ -496,7 +532,8 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
               )}
             </div>
           ))}
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

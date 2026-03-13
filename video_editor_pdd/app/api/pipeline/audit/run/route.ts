@@ -256,7 +256,7 @@ async function auditSection(
   section: Section,
   send: SseSend,
   onLog: (msg: string) => void
-): Promise<{ passCount: number; failCount: number }> {
+): Promise<{ passCount: number; warnCount: number; failCount: number }> {
   const specDir = resolveSectionSpecDir(section.specDir);
   const rawSpecFiles = fs.existsSync(specDir)
     ? fs
@@ -301,6 +301,7 @@ async function auditSection(
   const renderedVideoPath = resolveSectionRenderedVideoPath(section);
 
   let passCount = 0;
+  let warnCount = 0;
   let failCount = 0;
 
   for (const visual of renderableVisuals) {
@@ -441,11 +442,12 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
           ? "warn"
           : "fail";
     if (verdict === "pass") passCount++;
+    else if (verdict === "warn") warnCount++;
     else if (verdict === "fail") failCount++;
     writeAuditReport(auditPath, verdict, analysis.technicalAssessment);
   }
 
-  return { passCount, failCount };
+  return { passCount, warnCount, failCount };
 }
 
 // Register executor at module load time
@@ -467,11 +469,12 @@ registerExecutor("audit", (params, send) => {
           sectionId: section.id,
           status: "running",
           passCount: 0,
+          warnCount: 0,
           failCount: 0,
         });
 
         try {
-          const { passCount, failCount } = await auditSection(
+          const { passCount, warnCount, failCount } = await auditSection(
             section,
             send,
             onLog
@@ -482,6 +485,7 @@ registerExecutor("audit", (params, send) => {
             sectionId: section.id,
             status: "done",
             passCount,
+            warnCount,
             failCount,
           });
         } catch (err) {
@@ -491,6 +495,7 @@ registerExecutor("audit", (params, send) => {
             sectionId: section.id,
             status: "error",
             passCount: 0,
+            warnCount: 0,
             failCount: 0,
           });
         }

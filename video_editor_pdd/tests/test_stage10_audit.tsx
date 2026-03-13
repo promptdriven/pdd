@@ -7,15 +7,15 @@
  *
  * Spec requirements verified:
  *   1. Props: `onAdvance: () => void`.
- *   2. Section audit table: columns section, pass count, fail count, status badge,
+ *   2. Section audit table: columns section, pass count, warn count, fail count, status badge,
  *      [View Report], [↺ Audit].
  *   3. [Audit All Sections] and [Audit Section ▾] dropdown toolbar buttons.
  *      Trigger `POST /api/pipeline/audit/run`.
  *   4. [View Report] expands the row inline showing per-spec verdict rows:
  *      verdict badge (PASS=green / FAIL=red), spec name, one-line summary.
- *   5. FAIL rows show inline frame/spec previews; [Play Video] swaps the
+ *   5. FAIL and WARN rows show inline frame/spec previews; [Play Video] swaps the
  *      frame preview into an inline section video player, plus [Create Annotation →].
- *   6. Audit run stream shows per-agent progress: `{ type: 'audit-section', sectionId, passCount, failCount }`.
+ *   6. Audit run stream shows per-agent progress: `{ type: 'audit-section', sectionId, passCount, warnCount, failCount }`.
  *   7. `'use client'` directive.
  */
 
@@ -113,6 +113,10 @@ describe("Section audit table", () => {
     expect(sourceCode).toContain("Pass");
   });
 
+  it("renders Warn column header", () => {
+    expect(sourceCode).toContain("Warn");
+  });
+
   it("renders Fail column header", () => {
     expect(sourceCode).toContain("Fail");
   });
@@ -135,6 +139,10 @@ describe("Section audit table", () => {
 
   it("displays fail count for each row", () => {
     expect(sourceCode).toMatch(/section\.failCount/);
+  });
+
+  it("displays warn count for each row", () => {
+    expect(sourceCode).toMatch(/section\.warnCount/);
   });
 
   it("displays status badge for each row", () => {
@@ -234,20 +242,20 @@ describe("View Report expanded row", () => {
 // 8. FAIL Row Actions (Req 5)
 // ---------------------------------------------------------------------------
 
-describe("FAIL row actions", () => {
-  it("FAIL rows are conditionally rendered", () => {
-    expect(sourceCode).toMatch(/spec\.verdict\s*===\s*['"]FAIL['"]/);
+describe("FAIL and WARN row actions", () => {
+  it("FAIL and WARN rows are conditionally rendered", () => {
+    expect(sourceCode).toMatch(/spec\.verdict\s*===\s*['"]FAIL['"][\s\S]*spec\.verdict\s*===\s*['"]WARN['"]/);
   });
 
-  it("renders inline Frame Preview label for FAIL rows", () => {
+  it("renders inline Frame Preview label for FAIL and WARN rows", () => {
     expect(sourceCode).toContain("Frame Preview");
   });
 
-  it("renders inline Spec Preview label for FAIL rows", () => {
+  it("renders inline Spec Preview label for FAIL and WARN rows", () => {
     expect(sourceCode).toContain("Spec Preview");
   });
 
-  it("shows inline frame image beside the summary for FAIL rows", () => {
+  it("shows inline frame image beside the summary for FAIL and WARN rows", () => {
     expect(sourceCode).toMatch(/<img\s+src=\{frame\}/);
   });
 
@@ -255,7 +263,7 @@ describe("FAIL row actions", () => {
     expect(sourceCode).toMatch(/grid[\s\S]*lg:grid-cols-2/);
   });
 
-  it("renders Play Video button for FAIL rows", () => {
+  it("renders Play Video button for FAIL and WARN rows", () => {
     expect(sourceCode).toContain("Play Video");
   });
 
@@ -267,7 +275,7 @@ describe("FAIL row actions", () => {
     expect(sourceCode).not.toContain("View Spec");
   });
 
-  it("renders Create Annotation → button for FAIL rows", () => {
+  it("renders Create Annotation → button for FAIL and WARN rows", () => {
     expect(sourceCode).toContain("Create Annotation →");
   });
 
@@ -289,8 +297,8 @@ describe("FAIL row actions", () => {
 });
 
 describe("Inline spec preview loading", () => {
-  it("prefetches spec content for expanded FAIL rows", () => {
-    expect(sourceCode).toMatch(/loadSpecContent/);
+  it("prefetches spec content for expanded FAIL and WARN rows", () => {
+    expect(sourceCode).toMatch(/spec\.verdict\s*!==\s*['"]FAIL['"][\s\S]*spec\.verdict\s*!==\s*['"]WARN['"]/);
   });
 
   it("shows Loading spec... in the inline preview while fetching", () => {
@@ -427,6 +435,10 @@ describe("Audit run stream progress", () => {
 
   it("updates passCount from SSE events", () => {
     expect(sourceCode).toMatch(/data\.passCount/);
+  });
+
+  it("updates warnCount from SSE events", () => {
+    expect(sourceCode).toMatch(/data\.warnCount/);
   });
 
   it("updates failCount from SSE events", () => {
@@ -597,6 +609,10 @@ describe("Type definitions", () => {
 
   it("SectionAudit includes passCount field", () => {
     expect(sourceCode).toMatch(/passCount:\s*number/);
+  });
+
+  it("SectionAudit includes warnCount field", () => {
+    expect(sourceCode).toMatch(/warnCount:\s*number/);
   });
 
   it("SectionAudit includes failCount field", () => {

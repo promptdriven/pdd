@@ -1573,6 +1573,7 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].summary).toBe("Frame matches spec");
     expect(intro.specs[0].specName).toBe("visual");
     expect(intro.passCount).toBe(1);
+    expect(intro.warnCount).toBe(0);
     expect(intro.failCount).toBe(0);
   });
 
@@ -1590,6 +1591,7 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].verdict).toBe("FAIL");
     expect(intro.specs[0].summary).toBe("Text is clipped on right edge");
     expect(intro.passCount).toBe(0);
+    expect(intro.warnCount).toBe(0);
     expect(intro.failCount).toBe(1);
   });
 
@@ -1607,10 +1609,11 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].verdict).toBe("SKIP");
     expect(intro.specs[0].summary).toContain("Standalone audit skipped");
     expect(intro.passCount).toBe(0);
+    expect(intro.warnCount).toBe(0);
     expect(intro.failCount).toBe(0);
   });
 
-  it("parses warn verdicts from AUDIT_ files without incrementing pass or fail counts", async () => {
+  it("parses warn verdicts from AUDIT_ files and increments warn counts only", async () => {
     mockExistsSync.mockReturnValue(true);
     mockReaddirSync.mockReturnValue(["AUDIT_visual.md"]);
     mockReadFileSync.mockReturnValue(
@@ -1624,6 +1627,7 @@ describe("GET — audit markdown parsing", () => {
     expect(intro.specs[0].verdict).toBe("WARN");
     expect(intro.specs[0].summary).toContain("Minor position drift");
     expect(intro.passCount).toBe(0);
+    expect(intro.warnCount).toBe(1);
     expect(intro.failCount).toBe(0);
   });
 

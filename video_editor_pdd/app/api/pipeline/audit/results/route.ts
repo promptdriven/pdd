@@ -29,6 +29,7 @@ type AuditSectionResult = {
   sectionId: string;
   sectionLabel: string;
   passCount: number;
+  warnCount: number;
   failCount: number;
   status: "done" | "pending" | "error";
   specs: SpecAuditResult[];
@@ -113,6 +114,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
 
       const specResultsByName = new Map<string, SpecAuditResult>();
       let passCount = 0;
+      let warnCount = 0;
       let failCount = 0;
       let missingAuditCount = 0;
 
@@ -131,6 +133,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           const { verdict, summary } = parseAuditMarkdown(content);
 
           if (verdict === "PASS") passCount++;
+          else if (verdict === "WARN") warnCount++;
           else if (verdict === "FAIL") failCount++;
 
           const specSourcePath = visual.specPath;
@@ -204,6 +207,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
         sectionId: section.id,
         sectionLabel: section.label,
         passCount,
+        warnCount,
         failCount,
         status,
         specs,
