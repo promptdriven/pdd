@@ -40,6 +40,7 @@ from pdd.agentic_common import (
     DEFAULT_MAX_RETRIES,
 )
 from pdd.architecture_registry import merge_architecture, record_generation
+from pdd.architecture_sync import normalize_architecture_filenames
 from pdd.load_prompt_template import load_prompt_template
 from pdd.preprocess import preprocess
 # Import render_mermaid dynamically or assume it's available in the package
@@ -250,7 +251,6 @@ def _save_architecture_files(
 
         arch_data = json.loads(clean_content)
         # Issue #617: ensure filename mirrors filepath; handle list or object wrappers safely
-        from pdd.architecture_sync import normalize_architecture_filenames
         arch_list = None
         if isinstance(arch_data, list):
             normalize_architecture_filenames(arch_data)
@@ -959,7 +959,6 @@ def run_agentic_architecture_orchestrator(
 
                     # Post-Step-7 merge: merge new arch with snapshot
                     if existing_arch_snapshot is not None:
-                        from pdd.architecture_sync import normalize_architecture_filenames
                         # Normalize before merge so merge_report added/updated match post-normalization filenames
                         normalize_architecture_filenames(existing_arch_snapshot)
                         normalize_architecture_filenames(arch_data)
@@ -996,8 +995,7 @@ def run_agentic_architecture_orchestrator(
                             target_dir=target_dir,
                         )
                     else:
-                        # Issue #617: ensure filename mirrors filepath before keeping on disk
-                        from pdd.architecture_sync import normalize_architecture_filenames
+                        # Issue #617: ensure filename mirrors filepath before writing
                         normalize_architecture_filenames(arch_data)
                         with open(arch_file, "w", encoding="utf-8") as f:
                             json.dump(arch_data, f, indent=2, ensure_ascii=False)

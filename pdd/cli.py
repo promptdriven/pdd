@@ -7,7 +7,13 @@ generating code, tests, fixing issues, and managing prompts.
 """
 from __future__ import annotations
 
+# Pre-parse --quiet flag from sys.argv BEFORE importing modules that configure
+# logging at module level (e.g. llm_invoke.py). This ensures module-level
+# logger.info() calls are suppressed when the user passes --quiet.
+import os as _os
 import sys
+if '--quiet' in sys.argv:
+    _os.environ.setdefault('PDD_QUIET', '1')
 
 _DEFAULTS = {
     "__version__": "unknown",
