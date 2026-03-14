@@ -419,8 +419,7 @@ def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx
     missing. This test FAILS before the fix, PASSes after.
     """
     expected_output = tmp_path / "tests" / "test_calc.ts"
-    expected_output.parent.mkdir(parents=True, exist_ok=True)
-    # Do NOT create expected_output - simulate agent wrote elsewhere (e.g. __tests__/calc.spec.ts)
+    # Do NOT create expected_output or its parent - verify cmd_test_main creates the directory when missing.
     generated_content = "test('add', () => { expect(1 + 2).toBe(3); });"
 
     mock_agentic = MagicMock(return_value=(generated_content, 0.1, "agentic-cli", True))
@@ -446,6 +445,9 @@ def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx
             merge=False,
         )
 
+    assert expected_output.parent.is_dir(), (
+        "cmd_test_main must create the parent directory for the requested output path if it does not exist."
+    )
     assert expected_output.exists(), (
         "BUG: Non-Python agentic test content must be written to the requested output path. "
         "cmd_test_main currently only writes for Python."
