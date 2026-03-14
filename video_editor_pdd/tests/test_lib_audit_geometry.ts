@@ -170,6 +170,76 @@ describe("lib/audit-geometry", () => {
     );
   });
 
+  it("passes a centered single-shape visual when the rendered shape is centered on the canvas", () => {
+    const pngPath = path.join(tmpDir, "centered-shape.png");
+    writeSolidShapePng(pngPath, 200, 120, [
+      { left: 88, top: 48, width: 24, height: 24, color: "#6366F1" },
+    ]);
+
+    const result = evaluateDeterministicGeometryAudit(
+      [
+        "### Chart/Visual Elements",
+        "- Morphing shape: Centered at (100, 60), 24x24px, fill #6366F1",
+        "",
+        "## Data Points",
+        "```json",
+        [
+          "{",
+          '  "shape": {',
+          '    "size": 24,',
+          '    "colorEnd": "#6366F1"',
+          "  }",
+          "}",
+        ].join("\n"),
+        "```",
+      ].join("\n"),
+      pngPath
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        verdict: "pass",
+        check: "centered-shape",
+      })
+    );
+  });
+
+  it("passes a centered circle visual when the contract uses circle.centerX/centerY/color", () => {
+    const pngPath = path.join(tmpDir, "centered-circle.png");
+    writeSolidShapePng(pngPath, 200, 120, [
+      { left: 88, top: 48, width: 24, height: 24, color: "#3B82F6" },
+    ]);
+
+    const result = evaluateDeterministicGeometryAudit(
+      [
+        "### Chart/Visual Elements",
+        "- Blue circle: Centered at (100, 60), fill #3B82F6",
+        "",
+        "## Data Points",
+        "```json",
+        [
+          "{",
+          '  "circle": {',
+          '    "centerX": 100,',
+          '    "centerY": 60,',
+          '    "baseRadius": 12,',
+          '    "color": "#3B82F6"',
+          "  }",
+          "}",
+        ].join("\n"),
+        "```",
+      ].join("\n"),
+      pngPath
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        verdict: "pass",
+        check: "centered-shape",
+      })
+    );
+  });
+
   it("returns null when the rendered geometry does not satisfy the structured contract", () => {
     const pngPath = path.join(tmpDir, "mismatch.png");
     writeSolidShapePng(pngPath, 200, 120, [

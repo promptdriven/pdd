@@ -11,7 +11,10 @@ import {
   resolveSpecAuditHints,
   type ResolvedSectionVisual,
 } from "@/lib/composition-timing";
-import { normalizeSpecForAudit } from "@/lib/audit-spec-normalization";
+import {
+  buildClaudeAuditSpecSnapshot,
+  normalizeSpecForAudit,
+} from "@/lib/audit-spec-normalization";
 import {
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
@@ -454,6 +457,10 @@ async function auditSection(
       specContent,
       project.outputResolution
     );
+    const claudeSpecSnapshot = buildClaudeAuditSpecSnapshot(
+      specContent,
+      project.outputResolution
+    );
     const rawSampleWindow = resolveAuditSampleWindow(specContent, {
       sectionDurationSeconds: section.durationSeconds,
       fps,
@@ -556,6 +563,8 @@ Rules:
 - Do not inspect, infer, or comment on source code, implementation files, or repository contents.
 - Do not speculate about stale renders or code state.
 - Fail only for visible mismatches in the sampled frame.
+- Treat spatial requirements semantically rather than as exact pixel arithmetic.
+- The spec snapshot below has been rewritten into relative layout language for your review.
 
 - Audit spec name: ${path.basename(specPath)}
 - Audit render source: ${renderSource.kind}
@@ -567,8 +576,8 @@ Rules:
 - Sample frame (intrinsic visual): ${sampleWindow.intrinsicSampleFrame} / ${sampleWindow.intrinsicDurationFrames}
 - Sample progress within intrinsic visual: ${(sampleWindow.normalizedSample * 100).toFixed(1)}%
 ${formatAuditHints({ auditHints })}
-- Normalized spec snapshot for audit:
-${normalizedSpecContent}
+- Claude-facing spec snapshot for audit:
+${claudeSpecSnapshot}
 - Frame PNG: ./${path.basename(outputStill)}
 
 Read the frame PNG and compare it against the normalized spec snapshot above. Return JSON matching AnnotationAnalysis:
@@ -624,6 +633,7 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
         renderSource,
         sampleWindow,
         normalizedSpecSnapshot: normalizedSpecContent,
+        claudeSpecSnapshot,
         auditHints,
         analysis,
         verdict,

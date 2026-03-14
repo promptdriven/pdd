@@ -630,6 +630,7 @@ describe("audit executor factory", () => {
 
     const prompt = mockRunClaudeAudit.mock.calls[0][0] as string;
     expect(prompt).toContain("Render resolution: 1920x1080");
+    expect(prompt).toContain("Treat spatial requirements semantically rather than as exact pixel arithmetic.");
     expect(prompt).toContain("Sample time (section-local):");
     expect(prompt).toContain("Sample time (intrinsic visual):");
     expect(prompt).toContain("Sample frame (intrinsic visual):");
@@ -1149,7 +1150,7 @@ describe("audit executor factory", () => {
     expect(prompt).not.toContain("/project-root/specs/intro/visual.md");
   });
 
-  it("normalizes spec content to the active project resolution before calling Claude", async () => {
+  it("passes a Claude-facing relative spec snapshot instead of exact pixel anchors", async () => {
     const config = mockProjectConfig();
     config.outputResolution = { width: 1280, height: 720 };
     config.sections = [config.sections[0]];
@@ -1171,13 +1172,14 @@ describe("audit executor factory", () => {
     await executor(jest.fn());
 
     const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
-    expect(prompt).toContain("Normalized spec snapshot");
+    expect(prompt).toContain("Claude-facing spec snapshot");
     expect(prompt).toContain("Resolution: 1280x720");
-    expect(prompt).toContain("1280px width");
-    expect(prompt).toContain("y=360");
-    expect(prompt).toContain("x=320");
-    expect(prompt).toContain("x=640");
-    expect(prompt).toContain("x=960");
+    expect(prompt).toContain("full frame width");
+    expect(prompt).toContain("expected vertical anchor");
+    expect(prompt).toContain("expected horizontal anchor");
+    expect(prompt).not.toContain("1280px width");
+    expect(prompt).not.toContain("x=320");
+    expect(prompt).not.toContain("y=360");
     expect(prompt).not.toContain("Resolution: 1920x1080");
   });
 
@@ -1207,7 +1209,7 @@ Technical assessment: Previous review claimed it was at y≈410.
     await executor(jest.fn());
 
     const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
-    expect(prompt).toContain("Shape centered at (960, 540)");
+    expect(prompt).toContain("Shape visually centered on the canvas");
     expect(prompt).not.toContain("## Annotation Update");
     expect(prompt).not.toContain("y≈410");
   });
