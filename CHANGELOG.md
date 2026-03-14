@@ -1,36 +1,79 @@
+## v0.0.176 (2026-03-13)
+
+### Feat
+
+- Adjust section timings, update integration test audit reports, and add new visual components and test files.
+- persist structured visual contracts for compositions
+- persist generated composition manifest
+- add run remaining pipeline automation
+- Introduce new Remotion components, refine existing animation logic and media sources, and add integration test audit specifications for various sections.
+- generalize audit hints for stage10
+- surface warn audits in stage10
+- support layered media overlay composition
+- refresh remotion section visuals
+- Adjust Remotion composition durations, section timings, and update changelog.
+
+### Fix
+
+- annotation test-batch-ann-1773466856521 Change the primary background accent in Animation
+- annotation test-batch-ann-1773466645087 Change the primary background accent in Animation
+- harden stage10 audit sampling and geometry checks
+- update 557 tests to mock _subprocess_run instead of subprocess.run
+- exclude .pdd/e2e-fix-state/ from intermediate file filter
+- PDD fix changes for #824
+- accept empty composition run requests
+- strip narrator markers from section tts text
+- update 557 tests to mock _subprocess_run instead of subprocess.run
+- make pipeline runner freshness-aware
+- Step 9 prompt must mandate control token emission
+- preserve architecture params after change step10
+- preserve signature style during architecture sync
+- merge architecture signatures during sync
+- PDD fix changes for #825
+- address #830 — orchestrator stall, killpg, retry, final comment, skip redundant diagnosis (#832)
+- audit hybrid visuals from composed renders
+- stop stage8 polling after job completion
+- skip unsupported media-overlay audits
+- prefer current staged veo clips in stage8
+- annotation 73b92e4d-a466-4b57-8fe5-c717293ba494 Change the main background color of this section t
+- annotation f399f592-94d8-4233-b2a6-f5a60af87cca Change the main background color of this section t
+- annotation test-batch-ann-1773422512345 Change the primary background accent in Animation
+- preserve visual media in stage8 previews
+- resolve split media aliases in stage8 generator
+- annotation e18f6be1-b8df-4e5d-be0b-90d8a65a6934 I want this to be a triangle
+- resolve staged veo media per visual
+
+### Refactor
+
+- clarify stage2 and stage3 advance actions
+- unify pipeline continue actions
+
 ## v0.0.175 (2026-03-12)
 
 ### Feat
 
-- Enhance user story generation with auto-detection of prompt links and fallback mechanism
-- Add support for multistory prompt metadata and caching in user story tests
-- refresh integration fixture remotion outputs
+- **Prompt filenames mirror output filepath structure (issue #617)**: `architecture.json` `filename` fields now preserve the directory path from `filepath` (e.g. `app/api/route_TypeScript.prompt` instead of `api_route_TypeScript.prompt`). New `normalize_architecture_filenames()` in `architecture_sync.py` rewrites filenames and dependency references automatically. Applied in architecture orchestrator, code generator, and fix prompts. Thanks Vishal Ramvelu!
+- **User story prompt metadata and auto-detection**: stories can declare linked prompts via `<!-- pdd-story-prompts: ... -->` HTML comment metadata. `detect_change` auto-caches story-prompt links. New `pdd test story__*.md` command links metadata, and `pdd test *.prompt ...` generates user stories from prompt files. Thanks Benjamin Knobloch!
+- **`substitute_template_variables` helper**: new centralized template substitution in `agentic_common.py` that uses iterative `str.replace` instead of `str.format`, preserving JSON braces in context values and supporting `strict_unresolved` mode for key validation
+- **Quiet mode improvements**: `PDD_QUIET=1` now consistently suppresses preprocessing banners, `double_curly` messages, and LLM model CSV info-level log lines (downgraded to debug). `set_quiet_logging` checks for attribute existence on litellm before setting
 
 ### Fix
 
-- address Copilot review comments on PR #835
-- address review findings in multiprompt user stories PR
-- restore substitute_template_variables after rebase
-- revert rebase merge mistakes
-- Add architecture dependency sanitization and prompt auto-registration functionality
-- validate veo clips across frames
-- tighten stage10 audit sampling
-- stop fake stage8 asset staging jobs
-- prompt filenames mirror output filepath structure (#617) (#834)
-- keep spec timing parsing client-safe
-- generalize stage10 audit source selection
-- align remotion validation and visual media aliases
-- annotation fc600068-1f94-4620-b262-1348c9f30615 Change the main background color of this section t
-- annotation test-batch-ann-1773344206392 Change the primary background accent in Animation
-- refresh remotion bundle for audit renders
-- generalize audit runtime and responsive veo layouts
-- repair audit frame previews and fixture rendering
-- make veo overlays resolution-aware
-- fail stage 8 when generated components are missing
+- **Prompt filename normalization in `architecture_sync`**: `register_untracked_prompts` uses `rglob` and relative paths; `_find_renamed_prompt_file` searches subdirectories; `get_architecture_entry_for_prompt` tries exact path match first with basename fallback
+- **Architecture dependency sanitization**: `_sanitize_architecture_dependencies` strips corrupted dependency values (full prompt contents mistaken for dependency names) from architecture.json after step 10
+- **Namespace package bootstrap**: `cli.py` seeds missing package-level defaults (`DEFAULT_STRENGTH`, `DEFAULT_TIME`, `__version__`) when `pdd` loads as a namespace package; `core/cli.py` and `core/dump.py` add `ImportError` fallbacks
 
 ### Refactor
 
-- update Claude audit process with fresh still rendering and refined prompt, simplify Python fixing prompt, and update related tests and integration specs.
+- **Simplify fix_main_python.prompt**: rewrite from verbose step-by-step specification (~163 lines) to concise requirements-based format (~87 lines) while preserving all behavioral requirements
+- **Centralize template substitution**: replace inline `str.replace` loops in `agentic_change_orchestrator`, `agentic_checkup_orchestrator`, and `agentic_bug_orchestrator` with `substitute_template_variables`
+- **Update agentic_arch_step13_fix prompt for issue #617**: reverse the "no slashes in filename" rule — filenames must now mirror filepath directory structure; update all examples, cleanup scripts, and .pddrc patterns
+- **Preprocess handles non-string templates**: `preprocess()` accepts non-string template objects (from test mocks) and returns `str(prompt)` instead of crashing
+
+### Build
+
+- New `architecture_sync_helper.py` module with `filepath_to_prompt_filename` utility
+- Story template updated with `pdd-story-prompts` metadata comment example
 
 ## v0.0.174 (2026-03-11)
 
