@@ -1,6 +1,7 @@
 import React from 'react';
 import { AbsoluteFill, useVideoConfig } from 'remotion';
 import { COLORS, resolveSplitNatureComparisonLayout } from './constants';
+import { HeaderText } from './HeaderText';
 import { SplitPanel } from './SplitPanel';
 import { VerticalDivider } from './VerticalDivider';
 import { PanelLabel } from './PanelLabel';
@@ -12,10 +13,13 @@ type SplitSideData = {
 
 type SplitVisualData = {
   background?: string;
+  heading?: string;
+  headingText?: string;
   left?: SplitSideData;
   right?: SplitSideData;
   leftPanel?: SplitSideData;
   rightPanel?: SplitSideData;
+  title?: string;
 };
 
 const asString = (value: unknown): string | null => {
@@ -47,6 +51,10 @@ export const VeoSection05SplitNatureComparison: React.FC = () => {
   const rightSrc = useVisualMediaSrc('rightSrc', defaultSrc ?? undefined);
 
   const backgroundColor = asString(contract?.background) ?? COLORS.background;
+  const headingText =
+    asString(contract?.headingText) ??
+    asString(contract?.heading) ??
+    asString(contract?.title);
   const leftLabel =
     asString(resolvePanelData(contract, 'left')?.label) ?? 'Ocean · Sunset';
   const rightLabel =
@@ -54,6 +62,8 @@ export const VeoSection05SplitNatureComparison: React.FC = () => {
 
   return (
     <AbsoluteFill style={{ backgroundColor }}>
+      {headingText ? <HeaderText layout={layout} text={headingText} /> : null}
+
       {leftSrc ? (
         <SplitPanel side="left" videoSrc={leftSrc} layout={layout} />
       ) : null}

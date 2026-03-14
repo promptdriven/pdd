@@ -21,7 +21,7 @@ export const PipelineArrow: React.FC<PipelineArrowProps> = ({
   animStart,
   animEnd,
   scale = 1,
-  gradientId,
+  gradientId: _gradientId,
 }) => {
   const frame = useCurrentFrame();
   const y = POSITIONS.arrowY;
@@ -37,7 +37,7 @@ export const PipelineArrow: React.FC<PipelineArrowProps> = ({
 
   const totalLength = toX - fromX;
   const lineLength = totalLength - arrowHeadSize;
-  const dashOffset = lineLength * (1 - drawProgress);
+  const visibleLineEndX = Math.min(fromX + lineLength, fromX + lineLength * drawProgress);
 
   // Arrow tip appears at end of draw
   const arrowOpacity = drawProgress >= 0.9 ? 1 : 0;
@@ -54,23 +54,14 @@ export const PipelineArrow: React.FC<PipelineArrowProps> = ({
         pointerEvents: 'none',
       }}
     >
-      <defs>
-        <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor={gradientFrom} />
-          <stop offset="100%" stopColor={gradientTo} />
-        </linearGradient>
-      </defs>
-
-      {/* Line with strokeDashoffset animation */}
       <line
         x1={fromX}
         y1={y}
-        x2={fromX + lineLength}
+        x2={visibleLineEndX}
         y2={y}
-        stroke={`url(#${gradientId})`}
+        stroke={drawProgress >= 0.5 ? gradientTo : gradientFrom}
         strokeWidth={strokeWidth}
-        strokeDasharray={lineLength}
-        strokeDashoffset={dashOffset}
+        strokeLinecap="round"
       />
 
       {/* Arrowhead */}

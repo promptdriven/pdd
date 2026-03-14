@@ -10,11 +10,18 @@ export const COLORS = {
   background: '#000000',
   divider: 'rgba(255, 255, 255, 0.9)',
   dividerGlow: 'rgba(255, 255, 255, 0.35)',
+  headerText: '#FFFFFF',
   labelBackground: 'rgba(11, 17, 32, 0.7)',
   labelText: '#FFFFFF',
 } as const;
 
 export const TYPOGRAPHY = {
+  header: {
+    fontSize: 36,
+    fontFamily: 'Inter, sans-serif',
+    fontWeight: 700 as const,
+    letterSpacing: 0,
+  },
   label: {
     fontSize: 20,
     fontFamily: 'Inter, sans-serif',
@@ -23,6 +30,7 @@ export const TYPOGRAPHY = {
 } as const;
 
 export const DIMENSIONS = {
+  headerY: 72,
   leftPanelX: 0,
   leftPanelY: 0,
   panelWidth: 958,
@@ -70,6 +78,7 @@ export type SplitNatureComparisonLayout = {
   scaleY: number;
   uniformScale: number;
   typography: {
+    header: typeof TYPOGRAPHY.header;
     label: typeof TYPOGRAPHY.label;
   };
 };
@@ -89,6 +98,11 @@ export const resolveSplitNatureComparisonLayout = (
     scaleY,
     uniformScale,
     typography: {
+      header: {
+        ...TYPOGRAPHY.header,
+        fontSize: Math.max(24, TYPOGRAPHY.header.fontSize * uniformScale),
+        letterSpacing: TYPOGRAPHY.header.letterSpacing * uniformScale,
+      },
       label: {
         ...TYPOGRAPHY.label,
         fontSize: Math.max(14, TYPOGRAPHY.label.fontSize * uniformScale),
