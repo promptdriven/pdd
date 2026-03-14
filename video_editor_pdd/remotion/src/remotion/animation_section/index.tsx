@@ -34,7 +34,7 @@ const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
 
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.658667;
+  const durationSeconds = 7.594667;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

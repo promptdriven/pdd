@@ -485,10 +485,10 @@ test.describe('Stage 4: TTS Rendering - Error States', () => {
     const renderAllBtn = page.locator('button', { hasText: 'Render All' });
     await expect(renderAllBtn).toBeVisible();
 
-    // Advance button should be disabled (no segments done)
-    const advanceBtn = page.locator('button', { hasText: 'Advance' }).first();
-    await expect(advanceBtn).toBeVisible();
-    await expect(advanceBtn).toBeDisabled();
+    // Continue button should be disabled when no segments are done
+    const continueBtn = page.locator('button', { hasText: 'Continue' }).first();
+    await expect(continueBtn).toBeVisible();
+    await expect(continueBtn).toBeDisabled();
 
     // No fatal JS errors
     const appErrors = errors.filter(
