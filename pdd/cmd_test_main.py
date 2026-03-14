@@ -140,7 +140,9 @@ def cmd_test_main(
         )
 
         # The agent writes the test file directly, but we still return the content
-        # for consistency with the Python flow
+        # for consistency with the Python flow. Always write to output_test_path when
+        # we have content so sync's canonical path (pdd_files['test']) exists even
+        # when the agent wrote elsewhere (e.g. __tests__/foo.test.ts).
         if generated_content and generated_content.strip():
             # For Python, apply _inject_sys_path_preamble to ensure correct
             # sys.path setup, matching the native Python test generation path.
@@ -148,7 +150,9 @@ def cmd_test_main(
             if detected_language and detected_language.lower() == 'python':
                 from .generate_test import _inject_sys_path_preamble
                 generated_content = _inject_sys_path_preamble(generated_content)
-                output_test_path.write_text(generated_content)
+            # Write to sync-expected path for all languages (fix: non-Python was skipped)
+            output_test_path.parent.mkdir(parents=True, exist_ok=True)
+            output_test_path.write_text(generated_content)
 
             if not ctx.obj.get("quiet", False):
                 console.print(f"[green]Agentic test generation completed.[/green]")
