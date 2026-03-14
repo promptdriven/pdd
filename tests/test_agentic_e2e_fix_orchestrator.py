@@ -1532,6 +1532,24 @@ class TestIsIntermediateFile:
         """Issue reproduction leftovers should be filtered (Issue #824)."""
         assert is_intermediate(path) is True
 
+    # --- .pdd/e2e-fix-state/ must NOT be filtered (state files) ---
+
+    @pytest.mark.parametrize("path", [
+        ".pdd/e2e-fix-state/e2e_fix_state_824.json",
+        ".pdd/e2e-fix-state/e2e_fix_state_830.json",
+        ".pdd/e2e-fix-state/bug_state_824.json",
+    ])
+    def test_pdd_state_files_not_filtered(self, is_intermediate, path):
+        """State files under .pdd/e2e-fix-state/ must NOT be filtered.
+
+        The _is_intermediate_file filter catches .pdd/** artifacts, but
+        state files are needed for workflow resume and must be preserved.
+        """
+        assert is_intermediate(path) is False, (
+            f"State file {path} was incorrectly filtered as intermediate. "
+            f".pdd/e2e-fix-state/ must be excluded from the .pdd/ catch-all."
+        )
+
     # --- Should NOT be filtered (False) — false-positive guards ---
 
     @pytest.mark.parametrize("path", [

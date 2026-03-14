@@ -182,8 +182,11 @@ def _is_intermediate_file(filepath: str) -> bool:
         return True
 
     # Check for .pdd/ directory files (backups, core_dumps, and any future artifacts)
+    # Exclude .pdd/e2e-fix-state/ which contains workflow state needed for resume
     normalized = filepath.replace("\\", "/")
     if normalized.startswith(".pdd/") or "/.pdd/" in normalized:
+        if "/e2e-fix-state/" in normalized or normalized.startswith(".pdd/e2e-fix-state/"):
+            return False
         return True
 
     # Check for *_errors.txt and *_fix_errors.txt files
