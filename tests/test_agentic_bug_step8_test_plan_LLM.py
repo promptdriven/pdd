@@ -29,39 +29,54 @@ def prompt_content() -> str:
 class TestStep8BlocksInspectSignature:
     """Step 8 must explicitly block inspect.signature() anti-pattern."""
 
-    def test_prompt_mentions_inspect_signature_as_blocked(self, prompt_content: str) -> None:
-        """Verify prompt explicitly names inspect.signature() as a blocked pattern.
+    def test_prompt_blocks_reflection_introspection(self, prompt_content: str) -> None:
+        """Verify prompt blocks reflection/introspection patterns.
 
-        This is the exact anti-pattern from issue #838: the LLM generated
-        `sig = inspect.signature(fn); assert 'quiet' in sig.parameters`
-        instead of behavioral tests verifying output suppression.
+        The prompt must block structural anti-patterns like inspect.signature(),
+        hasattr(), sig.parameters — either by naming them explicitly or via a
+        language-agnostic rule covering all reflection/introspection.
         """
         content_lower = prompt_content.lower()
-        assert "inspect.signature()" in content_lower or "inspect.getfullargspec()" in content_lower, (
-            "Step 8 prompt must explicitly block inspect.signature() — "
-            "this was the exact anti-pattern that caused issue #838."
+        has_block = (
+            "reflection" in content_lower
+            or "introspection" in content_lower
+            or "inspect.signature()" in content_lower
+        )
+        assert has_block, (
+            "Step 8 prompt must block reflection/introspection patterns — "
+            "either explicitly or via a language-agnostic rule."
         )
 
-    def test_prompt_mentions_sig_parameters_as_blocked(self, prompt_content: str) -> None:
-        """Verify prompt explicitly blocks sig.parameters pattern.
+    def test_prompt_blocks_existence_checks(self, prompt_content: str) -> None:
+        """Verify prompt blocks existence/shape checks.
 
-        The issue #838 tests used `assert 'quiet' in sig.parameters` which
-        passes by merely adding quiet=False to a function signature.
-        """
-        assert "sig.parameters" in prompt_content.lower(), (
-            "Step 8 prompt must block 'sig.parameters' — the pattern used in "
-            "issue #838 structural tests."
-        )
-
-    def test_prompt_mentions_hasattr_as_blocked(self, prompt_content: str) -> None:
-        """Verify prompt explicitly blocks hasattr()/getattr() checks.
-
-        hasattr() checks are another form of structural testing that verifies
-        code shape rather than behavior.
+        The prompt must block patterns that verify something *exists* rather
+        than testing what *happens* when it's used.
         """
         content_lower = prompt_content.lower()
-        assert "hasattr()" in content_lower or "getattr()" in content_lower, (
-            "Step 8 prompt must block hasattr()/getattr() attribute checks."
+        has_block = (
+            "existence checks" in content_lower
+            or "hasattr()" in content_lower
+            or "attribute/method existence" in content_lower
+        )
+        assert has_block, (
+            "Step 8 prompt must block existence checks (hasattr, getattr, etc.)."
+        )
+
+    def test_prompt_blocks_signature_inspection(self, prompt_content: str) -> None:
+        """Verify prompt blocks signature inspection patterns.
+
+        The issue #838 anti-pattern was inspect.signature() + sig.parameters.
+        The prompt must block this either explicitly or via general rule.
+        """
+        content_lower = prompt_content.lower()
+        has_block = (
+            "signature inspection" in content_lower
+            or "sig.parameters" in content_lower
+            or "inspect.signature()" in content_lower
+        )
+        assert has_block, (
+            "Step 8 prompt must block signature inspection patterns."
         )
 
 
