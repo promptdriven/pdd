@@ -149,6 +149,32 @@ def test_bug_agentic_success(runner, mock_context_obj):
         mock_agentic.assert_called_once()
         assert mock_agentic.call_args[1]['issue_url'] == 'https://github.com/issues/1'
 
+
+def test_bug_agentic_failure_exit_code_1(runner, mock_context_obj):
+    """Test 'bug' agentic mode exits with code 1 when workflow fails (issue #593).
+
+    pdd bug must not exit 0 on failure so CI and 'pdd bug && pdd fix' can detect failure.
+    We assert sys.exit(1) is called (patch builtin sys.exit where analysis uses it).
+    """
+    import sys as sys_module
+    with patch('pdd.commands.analysis.run_agentic_bug') as mock_agentic:
+        with patch.object(sys_module, 'exit') as mock_exit:
+            mock_agentic.return_value = (
+                False,
+                "Issue not found or API error: Failed to fetch issue: gh: Not Found (HTTP 404)",
+                0.0,
+                "",
+                [],
+            )
+            try:
+                runner.invoke(bug, ['https://github.com/promptdriven/pdd/issues/99999'], obj=mock_context_obj)
+            except SystemExit:
+                pass
+            mock_agentic.assert_called_once()
+            # Bug command calls sys.exit(1); Click may then call sys.exit(0) when mock prevents exit
+            mock_exit.assert_any_call(1)
+
+
 def test_bug_agentic_wrong_args(runner, mock_context_obj):
     """Test 'bug' agentic mode fails with wrong number of arguments."""
     result = runner.invoke(bug, ['arg1', 'arg2'], obj=mock_context_obj)
@@ -334,6 +360,19 @@ def test_bug_agentic_mode_v2(mock_agentic, runner, mock_context_obj):
     assert kwargs["issue_url"] == "https://github.com/user/repo/issues/1"
     assert kwargs["timeout_adder"] == 5.0
     assert kwargs["use_github_state"] is False
+
+
+@patch("sys.exit")
+@patch("pdd.commands.analysis.run_agentic_bug")
+def test_bug_agentic_mode_failure_exit_code_1_v2(mock_agentic, mock_sys_exit, runner, mock_context_obj):
+    """Test bug agentic mode exits with 1 on failure, consistent with pdd change (issue #593)."""
+    mock_agentic.return_value = (False, "Workflow failed", 0.0, "", [])
+    try:
+        runner.invoke(bug, ["https://github.com/user/repo/issues/593"], obj=mock_context_obj)
+    except SystemExit:
+        pass
+    # Bug command calls sys.exit(1); Click may then call sys.exit(0) when mock prevents exit
+    mock_sys_exit.assert_any_call(1)
 
 def test_bug_agentic_mode_missing_arg_v2(runner, mock_context_obj):
     """Test bug command fails in agentic mode without URL."""
