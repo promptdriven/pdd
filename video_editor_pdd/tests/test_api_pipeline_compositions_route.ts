@@ -113,13 +113,21 @@ jest.mock("child_process", () => ({
 
 // Mock crypto
 const mockRandomUUID = jest.fn();
+const mockHashUpdate = jest.fn();
+const mockHashDigest = jest.fn(() => "test-generator-fingerprint");
+const mockCreateHash = jest.fn(() => ({
+  update: mockHashUpdate,
+  digest: mockHashDigest,
+}));
 
 jest.mock("crypto", () => ({
   __esModule: true,
   default: {
     randomUUID: (...args: unknown[]) => mockRandomUUID(...args),
+    createHash: (...args: unknown[]) => mockCreateHash(...args),
   },
   randomUUID: (...args: unknown[]) => mockRandomUUID(...args),
+  createHash: (...args: unknown[]) => mockCreateHash(...args),
 }));
 
 // Import after mocking
@@ -311,12 +319,20 @@ beforeEach(() => {
   mockSpawn.mockReset();
   mockExecSync.mockReset();
   mockRandomUUID.mockReset();
+  mockCreateHash.mockReset();
+  mockHashUpdate.mockReset();
+  mockHashDigest.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-compositions-001");
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockLoadProject.mockReturnValue(mockProjectConfig());
   mockRenderStill.mockResolvedValue(undefined);
   mockRandomUUID.mockReturnValue("test-uuid-staging-001");
+  mockCreateHash.mockReturnValue({
+    update: mockHashUpdate,
+    digest: mockHashDigest,
+  });
+  mockHashDigest.mockReturnValue("test-generator-fingerprint");
   mockExecSync.mockReturnValue("");
   mockOpenSync.mockReturnValue(99);
   mockExistsSync.mockImplementation((p: string) => {
@@ -1625,6 +1641,47 @@ describe("GET_CompositionList — response shape", () => {
     expect(data.sections[0].id).toBe("intro");
     expect(data.sections[1].id).toBe("main");
     expect(data.sections[2].id).toBe("outro");
+  });
+
+  it("includes stale artifact metadata when the stored manifest fingerprint is missing", async () => {
+    mockExistsSync.mockImplementation((targetPath: string) => {
+      if (typeof targetPath !== "string") {
+        return false;
+      }
+
+      if (targetPath.endsWith(path.join("outputs", "compositions", "manifest.json"))) {
+        return true;
+      }
+
+      if (
+        targetPath.endsWith(path.join("scripts", "generate_section_compositions.py")) ||
+        targetPath.endsWith(path.join("app", "api", "pipeline", "_lib", "visual-contract-manifest.ts")) ||
+        targetPath.endsWith(path.join("remotion", "src", "remotion", "_shared", "visual-runtime.tsx"))
+      ) {
+        return true;
+      }
+
+      return targetPath.includes("specs");
+    });
+    mockReadFileSync.mockImplementation((targetPath: string) => {
+      if (
+        typeof targetPath === "string" &&
+        targetPath.endsWith(path.join("outputs", "compositions", "manifest.json"))
+      ) {
+        return JSON.stringify({
+          version: 1,
+          updatedAt: "2026-03-14T00:00:00.000Z",
+          sections: [],
+        });
+      }
+
+      return "# Component\n[Remotion]";
+    });
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    expect(data.artifactState?.stale).toBe(true);
   });
 });
 
@@ -3010,6 +3067,7 @@ describe("compositions executor — generated section timelines", () => {
     expect(manifestWrite).toBeDefined();
     expect(String(manifestWrite?.[1])).toContain('"id": "intro"');
     expect(String(manifestWrite?.[1])).toContain('"intro_01_chart"');
+    expect(String(manifestWrite?.[1])).toContain('"generatorFingerprint":');
   });
 });
 

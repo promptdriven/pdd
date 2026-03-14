@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isCompositionArtifactSetStale } from "@/app/api/pipeline/_lib/composition-manifest";
 import { getDb } from "@/lib/db";
 import type { PipelineStage, StageStatus } from "@/lib/types";
 
@@ -9,6 +10,7 @@ type StageStatusEntry = {
   lastJobId: string | null;
   error: string | null;
   updatedAt: string | null;
+  stale?: boolean;
 };
 
 // Canonical ordered list of all pipeline stages
@@ -62,6 +64,13 @@ export async function GET(): Promise<NextResponse> {
           updatedAt: null,
         };
       }
+    }
+
+    if (isCompositionArtifactSetStale()) {
+      stagesMap.compositions = {
+        ...stagesMap.compositions,
+        stale: true,
+      };
     }
 
     return NextResponse.json({ stages: stagesMap });

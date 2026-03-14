@@ -83,6 +83,10 @@ describe("API endpoints", () => {
     expect(sourceCode).toMatch(/['"]\/api\/pipeline\/compositions\/list['"]/);
   });
 
+  it("reads artifactState from the composition list response", () => {
+    expect(sourceCode).toMatch(/artifactState/);
+  });
+
   it("uses GET /api/pipeline/veo/staging-manifest", () => {
     expect(sourceCode).toMatch(/['"]\/api\/pipeline\/veo\/staging-manifest['"]/);
   });
@@ -129,6 +133,10 @@ describe("Left Panel: Component List", () => {
     expect(sourceCode).toMatch(/setPreviewSpecPath/);
   });
 
+  it("tracks stale preview errors for the preview modal", () => {
+    expect(sourceCode).toMatch(/setPreviewError/);
+  });
+
   it("renders an Associated Spec pane beside the preview", () => {
     expect(sourceCode).toContain("Associated Spec");
     expect(sourceCode).toMatch(/previewSpecContent/);
@@ -167,6 +175,11 @@ describe("Section Wrappers", () => {
 describe("Generate All Button", () => {
   it("renders Generate All Compositions button", () => {
     expect(sourceCode).toContain("Generate All Compositions");
+  });
+
+  it("renders a stale artifact warning when generated outputs are out of date", () => {
+    expect(sourceCode).toContain("Generated composition outputs are stale");
+    expect(sourceCode).toContain("Regenerate compositions");
   });
 
   it("triggers runJob with correct endpoint", () => {

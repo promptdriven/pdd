@@ -19,6 +19,7 @@ import path from "path";
 
 const mockLoadProject = jest.fn();
 const mockResolveSectionCompositionIds = jest.fn();
+const mockGetCompositionArtifactState = jest.fn();
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
@@ -27,6 +28,8 @@ jest.mock("@/lib/project", () => ({
 jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
   resolveSectionCompositionIds: (...args: unknown[]) =>
     mockResolveSectionCompositionIds(...args),
+  getCompositionArtifactState: (...args: unknown[]) =>
+    mockGetCompositionArtifactState(...args),
 }));
 
 const mockRenderStill = jest.fn();
@@ -110,6 +113,12 @@ beforeEach(() => {
   mockResolveSectionCompositionIds.mockImplementation((section: { compositions?: string[] }) =>
     section.compositions ?? []
   );
+  mockGetCompositionArtifactState.mockReturnValue({
+    stale: false,
+    manifestFingerprint: "current-fingerprint",
+    currentFingerprint: "current-fingerprint",
+    reason: null,
+  });
   mockRenderStill.mockResolvedValue(undefined);
   mockExistsSync.mockReturnValue(false);
   mockReadFileSync.mockImplementation((filePath: string) => `spec for ${filePath}`);
@@ -133,6 +142,25 @@ describe("GET — missing component param", () => {
 // ---------------------------------------------------------------------------
 
 describe("GET — render still", () => {
+  it("returns 409 when generated composition artifacts are stale", async () => {
+    mockGetCompositionArtifactState.mockReturnValue({
+      stale: true,
+      manifestFingerprint: "old-fingerprint",
+      currentFingerprint: "new-fingerprint",
+      reason: "generator_changed",
+    });
+
+    const res = await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/stale/i);
+    expect(body.stale).toBe(true);
+    expect(mockRenderStill).not.toHaveBeenCalled();
+  });
+
   it("calls renderStill with hyphenated composition ID (underscores invalid in Remotion)", async () => {
     const res = await GET(
       makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")

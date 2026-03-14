@@ -13,7 +13,10 @@ import {
   getProjectDir,
 } from "@/lib/projects";
 import { buildSectionConstantsSource } from "@/lib/composition-timing";
-import { resolveSectionCompositionIds } from "@/app/api/pipeline/_lib/composition-manifest";
+import {
+  isCompositionArtifactSetStale,
+  resolveSectionCompositionIds,
+} from "@/app/api/pipeline/_lib/composition-manifest";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
 const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
@@ -252,6 +255,16 @@ export async function POST(request: NextRequest): Promise<Response> {
     : undefined;
 
   try {
+    if (isCompositionArtifactSetStale()) {
+      return Response.json(
+        {
+          error:
+            "Generated compositions are stale relative to the current generator/runtime. Rerun Stage 8 Generate All Compositions.",
+        },
+        { status: 409 }
+      );
+    }
+
     const jobId = startJobInBackground("render", { sections });
     return Response.json({ jobId });
   } catch (err) {

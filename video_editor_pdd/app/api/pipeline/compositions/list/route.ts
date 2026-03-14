@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
+import { getCompositionArtifactState } from "@/app/api/pipeline/_lib/composition-manifest";
 import { loadProject } from "@/lib/project";
 import { getAppRemotionSrcDir, getProjectDir } from "@/lib/projects";
 
@@ -25,6 +26,11 @@ interface CompositionSection {
   label: string;
   components: CompositionComponent[];
   wrappers: CompositionComponent[];
+}
+
+interface CompositionArtifactStatePayload {
+  stale: boolean;
+  message: string | null;
 }
 
 const getRemotionDir = () => getAppRemotionSrcDir();
@@ -163,7 +169,16 @@ export async function GET(): Promise<NextResponse> {
       };
     });
 
-    return NextResponse.json({ sections });
+    const artifactState = getCompositionArtifactState();
+    return NextResponse.json({
+      sections,
+      artifactState: {
+        stale: artifactState.stale,
+        message: artifactState.stale
+          ? "Generated composition outputs are stale relative to the current generator/runtime. Regenerate compositions before previewing or rendering."
+          : null,
+      } satisfies CompositionArtifactStatePayload,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(

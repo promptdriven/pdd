@@ -1,7 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { createHash } from "crypto";
 
-import { getProjectDir } from "@/lib/projects";
+import { getAppScriptsDir, getAppRemotionSrcDir, getProjectDir } from "@/lib/projects";
 import type { Section } from "@/lib/types";
 
 type SectionCompositionEntry = NonNullable<Section["compositions"]>[number];
@@ -17,8 +18,49 @@ export type GeneratedCompositionManifestSection = {
 type GeneratedCompositionManifest = {
   version: 1;
   updatedAt: string;
+  generatorFingerprint?: string;
   sections: GeneratedCompositionManifestSection[];
 };
+
+type CompositionArtifactState = {
+  stale: boolean;
+  manifestFingerprint: string | null;
+  currentFingerprint: string;
+  reason: "generator_changed" | "missing_manifest_fingerprint" | null;
+};
+
+const COMPOSITION_GENERATOR_FINGERPRINT_VERSION = 1;
+
+function getCompositionGeneratorInputPaths(): string[] {
+  return [
+    path.join(getAppScriptsDir(), "generate_section_compositions.py"),
+    path.join(
+      process.cwd(),
+      "app",
+      "api",
+      "pipeline",
+      "_lib",
+      "visual-contract-manifest.ts"
+    ),
+    path.join(getAppRemotionSrcDir(), "_shared", "visual-runtime.tsx"),
+  ];
+}
+
+export function getCompositionGeneratorFingerprint(): string {
+  const hash = createHash("sha256");
+  hash.update(`composition-generator-v${COMPOSITION_GENERATOR_FINGERPRINT_VERSION}`);
+
+  for (const inputPath of getCompositionGeneratorInputPaths()) {
+    if (!fs.existsSync(inputPath)) {
+      continue;
+    }
+
+    hash.update(path.relative(process.cwd(), inputPath));
+    hash.update(fs.readFileSync(inputPath));
+  }
+
+  return hash.digest("hex");
+}
 
 export function getCompositionManifestPath(projectDir = getProjectDir()): string {
   return path.join(projectDir, "outputs", "compositions", "manifest.json");
@@ -68,12 +110,58 @@ export function mergeCompositionManifest(
   const manifest: GeneratedCompositionManifest = {
     version: 1,
     updatedAt: new Date().toISOString(),
+    generatorFingerprint: getCompositionGeneratorFingerprint(),
     sections: Array.from(mergedById.values()),
   };
 
   const manifestPath = getCompositionManifestPath(projectDir);
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+}
+
+export function getCompositionArtifactState(
+  projectDir = getProjectDir()
+): CompositionArtifactState {
+  const manifest = loadCompositionManifest(projectDir);
+  const currentFingerprint = getCompositionGeneratorFingerprint();
+
+  if (!manifest) {
+    return {
+      stale: false,
+      manifestFingerprint: null,
+      currentFingerprint,
+      reason: null,
+    };
+  }
+
+  const manifestFingerprint =
+    typeof manifest.generatorFingerprint === "string" &&
+    manifest.generatorFingerprint.trim().length > 0
+      ? manifest.generatorFingerprint
+      : null;
+
+  if (!manifestFingerprint) {
+    return {
+      stale: true,
+      manifestFingerprint: null,
+      currentFingerprint,
+      reason: "missing_manifest_fingerprint",
+    };
+  }
+
+  const stale = manifestFingerprint !== currentFingerprint;
+  return {
+    stale,
+    manifestFingerprint,
+    currentFingerprint,
+    reason: stale ? "generator_changed" : null,
+  };
+}
+
+export function isCompositionArtifactSetStale(
+  projectDir = getProjectDir()
+): boolean {
+  return getCompositionArtifactState(projectDir).stale;
 }
 
 export function resolveSectionGeneratedMetadata(

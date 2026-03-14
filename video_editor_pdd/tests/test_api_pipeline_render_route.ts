@@ -58,6 +58,7 @@ jest.mock("@/lib/project", () => ({
 
 const mockBuildSectionConstantsSource = jest.fn();
 const mockResolveSectionCompositionIds = jest.fn();
+const mockIsCompositionArtifactSetStale = jest.fn();
 
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
@@ -74,6 +75,8 @@ jest.mock("@/lib/composition-timing", () => ({
 jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
   resolveSectionCompositionIds: (...args: unknown[]) =>
     mockResolveSectionCompositionIds(...args),
+  isCompositionArtifactSetStale: (...args: unknown[]) =>
+    mockIsCompositionArtifactSetStale(...args),
 }));
 
 const mockMkdir = jest.fn();
@@ -239,6 +242,7 @@ beforeEach(() => {
   mockSaveProject.mockReset();
   mockBuildSectionConstantsSource.mockReset();
   mockResolveSectionCompositionIds.mockReset();
+  mockIsCompositionArtifactSetStale.mockReset();
   mockMkdir.mockReset();
   mockAccess.mockReset();
   mockStat.mockReset();
@@ -262,6 +266,7 @@ beforeEach(() => {
   mockResolveSectionCompositionIds.mockImplementation(
     (section: { compositions?: Array<string> }) => section.compositions ?? []
   );
+  mockIsCompositionArtifactSetStale.mockReturnValue(false);
 
   mockStartJobInBackground.mockReturnValue("test-job-render-001");
   mockRenderSection.mockResolvedValue(undefined);
@@ -417,6 +422,19 @@ describe("POST — body parameter handling", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST — error handling", () => {
+  it("returns 409 when generated compositions are stale", async () => {
+    mockIsCompositionArtifactSetStale.mockReturnValue(true);
+
+    const response = await POST(
+      makeRequest("http://localhost/api/pipeline/render/run") as any
+    );
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error).toMatch(/stale/i);
+    expect(mockStartJobInBackground).not.toHaveBeenCalled();
+  });
+
   it("returns JSON error when background job creation throws Error", async () => {
     mockStartJobInBackground.mockImplementation(() => {
       throw new Error("Render failed");

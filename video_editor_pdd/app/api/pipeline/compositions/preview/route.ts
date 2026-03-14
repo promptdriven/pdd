@@ -6,7 +6,10 @@ import { Readable } from "stream";
 import { loadProject } from "@/lib/project";
 import { renderStill } from "@/lib/render";
 import { getAppRemotionSrcDir, getProjectDir } from "@/lib/projects";
-import { resolveSectionCompositionIds } from "@/app/api/pipeline/_lib/composition-manifest";
+import {
+  getCompositionArtifactState,
+  resolveSectionCompositionIds,
+} from "@/app/api/pipeline/_lib/composition-manifest";
 
 const FPS = 30;
 
@@ -219,6 +222,18 @@ export async function GET(request: NextRequest): Promise<Response> {
     return NextResponse.json(
       { error: "Missing component query parameter" },
       { status: 400 }
+    );
+  }
+
+  const artifactState = getCompositionArtifactState();
+  if (artifactState.stale) {
+    return NextResponse.json(
+      {
+        error:
+          "Generated composition outputs are stale relative to the current generator/runtime. Rerun Stage 8 Generate All Compositions.",
+        stale: true,
+      },
+      { status: 409 }
     );
   }
 

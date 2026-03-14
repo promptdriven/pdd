@@ -23,9 +23,15 @@
 const mockAll = jest.fn();
 const mockPrepare = jest.fn(() => ({ all: mockAll }));
 const mockGetDb = jest.fn(() => ({ prepare: mockPrepare }));
+const mockIsCompositionArtifactSetStale = jest.fn();
 
 jest.mock("@/lib/db", () => ({
   getDb: (...args: unknown[]) => mockGetDb(...args),
+}));
+
+jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
+  isCompositionArtifactSetStale: (...args: unknown[]) =>
+    mockIsCompositionArtifactSetStale(...args),
 }));
 
 // Import after mocking
@@ -69,6 +75,7 @@ beforeEach(() => {
   // Re-wire mockPrepare after resetAllMocks
   mockPrepare.mockReturnValue({ all: mockAll });
   mockGetDb.mockReturnValue({ prepare: mockPrepare });
+  mockIsCompositionArtifactSetStale.mockReturnValue(false);
   // Suppress console.error during tests
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -190,6 +197,24 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
     const { body } = await parseResponse(response);
 
     expect(body.stages["compositions"].updatedAt).toBe("2026-03-13T21:47:24.446Z");
+  });
+
+  it("marks the compositions stage as stale when generated artifacts are out of date", async () => {
+    mockIsCompositionArtifactSetStale.mockReturnValue(true);
+    mockAll.mockReturnValue([
+      {
+        stage: "compositions",
+        status: "done",
+        lastJobId: "job-101",
+        error: null,
+        updatedAt: "2026-03-13T21:47:24.446Z",
+      },
+    ]);
+
+    const response = await GET();
+    const { body } = await parseResponse(response);
+
+    expect(body.stages["compositions"].stale).toBe(true);
   });
 });
 

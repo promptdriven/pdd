@@ -23,6 +23,10 @@ interface CompositionSection {
 interface CompositionListResponse {
   sections: CompositionSection[];
   wrappers?: CompositionComponent[];
+  artifactState?: {
+    stale?: boolean;
+    message?: string | null;
+  };
 }
 
 interface StagingManifestEntry {
@@ -41,6 +45,8 @@ interface PreviewResponse {
   previewUrl?: string | null;
   specPath?: string | null;
   specContent?: string | null;
+  error?: string | null;
+  stale?: boolean;
 }
 
 const COLLAPSE_STORAGE_KEY = 'stage8-collapsed-sections';
@@ -81,6 +87,13 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [manifestError, setManifestError] = useState<string | null>(null);
+  const [artifactState, setArtifactState] = useState<{
+    stale: boolean;
+    message: string | null;
+  }>({
+    stale: false,
+    message: null,
+  });
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -90,6 +103,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
   const [previewName, setPreviewName] = useState<string | null>(null);
   const [previewSpecPath, setPreviewSpecPath] = useState<string | null>(null);
   const [previewSpecContent, setPreviewSpecContent] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const previewDialogRef = useRef<HTMLDialogElement | null>(null);
 
   const [actionBusy, setActionBusy] = useState<Record<string, boolean>>({});
@@ -173,8 +187,13 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       if (!res.ok) throw new Error(`Failed to load compositions (${res.status})`);
       const data = (await res.json()) as CompositionListResponse;
       setSections(data.sections ?? []);
+      setArtifactState({
+        stale: data.artifactState?.stale === true,
+        message: data.artifactState?.message ?? null,
+      });
     } catch (err) {
       setListError(err instanceof Error ? err.message : 'Failed to load compositions');
+      setArtifactState({ stale: false, message: null });
     }
 
     try {
@@ -281,16 +300,22 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     setPreviewUrl(null);
     setPreviewSpecPath(null);
     setPreviewSpecContent(null);
+    setPreviewError(null);
     try {
       const sectionParam = sectionId ? `&section=${encodeURIComponent(sectionId)}` : '';
       const res = await fetch(`/api/pipeline/compositions/preview?component=${encodeURIComponent(componentName)}${sectionParam}`);
-      if (!res.ok) throw new Error(`Preview unavailable (${res.status})`);
-      let url: string | null = null;
+      let previewPayload: PreviewResponse | null = null;
       if (res.headers.get('content-type')?.includes('application/json')) {
-        const data = (await res.json()) as PreviewResponse;
-        url = data.url || data.path || data.previewUrl || null;
-        setPreviewSpecPath(data.specPath ?? null);
-        setPreviewSpecContent(data.specContent ?? null);
+        previewPayload = (await res.json()) as PreviewResponse;
+      }
+      if (!res.ok) {
+        throw new Error(previewPayload?.error ?? `Preview unavailable (${res.status})`);
+      }
+      let url: string | null = null;
+      if (previewPayload) {
+        url = previewPayload.url || previewPayload.path || previewPayload.previewUrl || null;
+        setPreviewSpecPath(previewPayload.specPath ?? null);
+        setPreviewSpecContent(previewPayload.specContent ?? null);
       } else {
         const text = (await res.text()).trim();
         url = (text.startsWith('http') || text.startsWith('/')) ? text : null;
@@ -301,6 +326,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       setPreviewUrl(null);
       setPreviewSpecPath(null);
       setPreviewSpecContent(null);
+      setPreviewError(err instanceof Error ? err.message : 'Preview unavailable.');
     } finally {
       previewDialogRef.current?.showModal();
     }
@@ -312,6 +338,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     setPreviewName(null);
     setPreviewSpecPath(null);
     setPreviewSpecContent(null);
+    setPreviewError(null);
   };
 
   const missingFiles = useMemo(
@@ -373,6 +400,12 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
           {loading && <p className="text-sm text-slate-500">Loading components…</p>}
           {listError && (
             <p className="rounded bg-red-900/50 px-3 py-2 text-sm text-red-300">{listError}</p>
+          )}
+          {artifactState.stale && (
+            <p className="mb-3 rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
+              {artifactState.message ?? 'Generated composition outputs are stale relative to the current generator/runtime. Regenerate compositions before previewing or rendering.'}{' '}
+              Regenerate compositions to refresh Stage 8 artifacts.
+            </p>
           )}
 
           {!loading &&
@@ -621,7 +654,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             {previewUrl ? (
               <img src={previewUrl} alt="Preview still" className="max-h-[60vh] w-auto rounded border border-slate-700" />
             ) : (
-              <p className="text-sm text-slate-500">Preview not available.</p>
+              <p className="text-sm text-slate-500">{previewError ?? 'Preview not available.'}</p>
             )}
           </div>
           <div className="rounded border border-slate-700 bg-slate-950/60 p-3">

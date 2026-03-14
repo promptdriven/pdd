@@ -113,6 +113,42 @@ describe("resolvePipelineRunPlan", () => {
     ).toEqual(["compositions", "render", "stitch", "audit"]);
   });
 
+  it("reruns compositions when the stage is marked stale even if status is done", () => {
+    expect(
+      resolvePipelineRunPlan("compositions", {
+        stageStatuses: makeStatuses({
+          compositions: {
+            status: "done",
+            updatedAt: "2026-03-13T23:50:47.344Z",
+            stale: true,
+          },
+        }),
+      }).map((step) => step.id)
+    ).toEqual(["compositions", "render", "stitch", "audit"]);
+  });
+
+  it("backs up to compositions from render when render depends on stale generated compositions", () => {
+    expect(
+      resolvePipelineRunPlan("render", {
+        stageStatuses: makeStatuses({
+          compositions: {
+            status: "done",
+            updatedAt: "2026-03-13T23:50:47.344Z",
+            stale: true,
+          },
+          render: { status: "done", updatedAt: "2026-03-13T23:55:00.000Z" },
+        }),
+        renderStatus: {
+          fullVideo: {
+            exists: true,
+            stale: false,
+            updatedAtMs: Date.parse("2026-03-13T23:56:00.000Z"),
+          },
+        },
+      }).map((step) => step.id)
+    ).toEqual(["compositions", "render", "stitch", "audit"]);
+  });
+
   it("reruns render when compositions are newer than the last render", () => {
     expect(
       resolvePipelineRunPlan("render", {

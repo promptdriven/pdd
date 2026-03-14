@@ -26,6 +26,7 @@ export type PipelineStageStatusEntry = {
   error?: string | null;
   lastJobId?: string | null;
   updatedAt?: string | null;
+  stale?: boolean;
 };
 
 export type PipelineRenderStatusSnapshot = {
@@ -173,39 +174,94 @@ function getStepUpdatedAtMs(
   return toTimestampMs(stageStatuses?.[step.stage]?.updatedAt);
 }
 
+type StepPendingReason =
+  | "done"
+  | "not_done"
+  | "self_stale"
+  | "dependency_stale";
+
+function getStepPendingReason(
+  step: PipelineRunStep,
+  stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
+  renderStatus?: PipelineRenderStatusSnapshot | null,
+  memo = new Map<PipelineRunStepId, StepPendingReason>(),
+  stack = new Set<PipelineRunStepId>(),
+): StepPendingReason {
+  const cached = memo.get(step.id);
+  if (cached) {
+    return cached;
+  }
+
+  if (stack.has(step.id)) {
+    return "done";
+  }
+
+  stack.add(step.id);
+
+  let reason: StepPendingReason = "done";
+
+  if (step.id === "stitch") {
+    if (!renderStatus?.fullVideo?.exists) {
+      reason = "not_done";
+    } else if (renderStatus.fullVideo?.stale) {
+      reason = "self_stale";
+    }
+  } else {
+    const stageStatus = stageStatuses?.[step.stage];
+    if (stageStatus?.stale) {
+      reason = "self_stale";
+    } else if (stageStatus?.status !== "done") {
+      reason = "not_done";
+    }
+  }
+
+  if (reason === "done") {
+    const currentUpdatedAtMs = getStepUpdatedAtMs(step, stageStatuses, renderStatus);
+    for (const dependencyId of STEP_DEPENDENCIES[step.id] ?? []) {
+      const dependencyStep = PIPELINE_RUN_SEQUENCE.find((candidate) => candidate.id === dependencyId);
+      if (!dependencyStep) {
+        continue;
+      }
+
+      const dependencyReason = getStepPendingReason(
+        dependencyStep,
+        stageStatuses,
+        renderStatus,
+        memo,
+        stack,
+      );
+      if (dependencyReason === "self_stale" || dependencyReason === "dependency_stale") {
+        reason = "dependency_stale";
+        break;
+      }
+
+      const dependencyUpdatedAtMs = getStepUpdatedAtMs(
+        dependencyStep,
+        stageStatuses,
+        renderStatus
+      );
+      if (
+        dependencyUpdatedAtMs != null &&
+        (currentUpdatedAtMs == null || dependencyUpdatedAtMs > currentUpdatedAtMs)
+      ) {
+        reason = "self_stale";
+        break;
+      }
+    }
+  }
+
+  stack.delete(step.id);
+  memo.set(step.id, reason);
+  return reason;
+}
+
 function isStepStale(
   step: PipelineRunStep,
   stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
   renderStatus?: PipelineRenderStatusSnapshot | null
 ): boolean {
-  const dependencyIds = STEP_DEPENDENCIES[step.id];
-  if (!dependencyIds.length) {
-    return false;
-  }
-
-  const currentUpdatedAtMs = getStepUpdatedAtMs(step, stageStatuses, renderStatus);
-
-  return dependencyIds.some((dependencyId) => {
-    const dependencyStep = PIPELINE_RUN_SEQUENCE.find((candidate) => candidate.id === dependencyId);
-    if (!dependencyStep) {
-      return false;
-    }
-
-    const dependencyUpdatedAtMs = getStepUpdatedAtMs(
-      dependencyStep,
-      stageStatuses,
-      renderStatus
-    );
-    if (dependencyUpdatedAtMs == null) {
-      return false;
-    }
-
-    if (currentUpdatedAtMs == null) {
-      return true;
-    }
-
-    return dependencyUpdatedAtMs > currentUpdatedAtMs;
-  });
+  const reason = getStepPendingReason(step, stageStatuses, renderStatus);
+  return reason === "self_stale" || reason === "dependency_stale";
 }
 
 function isStepAlreadyDone(
@@ -213,19 +269,51 @@ function isStepAlreadyDone(
   stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
   renderStatus?: PipelineRenderStatusSnapshot | null
 ): boolean {
-  if (step.id === "stitch") {
-    if (!renderStatus?.fullVideo?.exists || renderStatus.fullVideo?.stale) {
-      return false;
+  return getStepPendingReason(step, stageStatuses, renderStatus) === "done";
+}
+
+function findEarliestRequiredStepIndex(
+  stepId: PipelineRunStepId,
+  stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
+  renderStatus?: PipelineRenderStatusSnapshot | null,
+  memo = new Map<PipelineRunStepId, StepPendingReason>(),
+): number {
+  const currentIndex = PIPELINE_RUN_SEQUENCE.findIndex((step) => step.id === stepId);
+  if (currentIndex === -1) {
+    return 0;
+  }
+
+  const currentStep = PIPELINE_RUN_SEQUENCE[currentIndex];
+  if (
+    getStepPendingReason(currentStep, stageStatuses, renderStatus, memo) !==
+    "dependency_stale"
+  ) {
+    return currentIndex;
+  }
+
+  for (const dependencyId of STEP_DEPENDENCIES[stepId] ?? []) {
+    const dependencyStep = PIPELINE_RUN_SEQUENCE.find((step) => step.id === dependencyId);
+    if (!dependencyStep) {
+      continue;
     }
 
-    return !isStepStale(step, stageStatuses, renderStatus);
+    const dependencyReason = getStepPendingReason(
+      dependencyStep,
+      stageStatuses,
+      renderStatus,
+      memo,
+    );
+    if (dependencyReason === "self_stale" || dependencyReason === "dependency_stale") {
+      return findEarliestRequiredStepIndex(
+        dependencyId,
+        stageStatuses,
+        renderStatus,
+        memo,
+      );
+    }
   }
 
-  if (stageStatuses?.[step.stage]?.status !== "done") {
-    return false;
-  }
-
-  return !isStepStale(step, stageStatuses, renderStatus);
+  return currentIndex;
 }
 
 export function resolvePipelineRunPlan(
@@ -258,7 +346,14 @@ export function resolvePipelineRunPlan(
     return [];
   }
 
-  return sliced.slice(firstPendingIndex);
+  const firstPendingStep = sliced[firstPendingIndex];
+  const requiredStartIndex = findEarliestRequiredStepIndex(
+    firstPendingStep.id,
+    stageStatuses,
+    renderStatus,
+  );
+
+  return PIPELINE_RUN_SEQUENCE.slice(requiredStartIndex);
 }
 
 export function resolveRunRemainingButtonLabel({
