@@ -44,13 +44,19 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@pdd.dev"
+          git config --global user.name "PDD CI"
+          git config --global init.defaultBranch main
+
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 
       - name: Run unit tests
         run: >
           pytest tests/
-          -m "not integration and not e2e and not real"
+          -m "not integration and not e2e and not real and not private_prompt"
           -v --tb=short --timeout=60 -n auto
           --ignore=tests/commands/test_connect.py
           --ignore=tests/test_bug_to_unit_test.py
