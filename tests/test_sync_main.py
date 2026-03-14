@@ -1188,6 +1188,34 @@ class TestSyncSkipsLLMOnlyBasenames:
         assert results["overall_success"] is True
         assert total_cost == 0.0
 
+    def test_sync_main_skips_lowercase_llm_prompt(self, mock_project_dir, mock_construct_paths):
+        """sync_main should also skip basenames with lowercase _llm.prompt files."""
+        (mock_project_dir / "prompts" / "my_step_llm.prompt").write_text("LLM template")
+
+        ctx = create_mock_context({})
+        results, total_cost, model = sync_main(
+            ctx, "my_step", max_attempts=3, budget=10.0, skip_verify=False,
+            skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+        assert results["overall_success"] is True
+        assert total_cost == 0.0
+
+    def test_sync_main_skips_llm_only_with_subdirectory_basename(self, mock_project_dir, mock_construct_paths):
+        """sync_main should correctly skip LLM-only basenames in subdirectories."""
+        subdir = mock_project_dir / "prompts" / "core"
+        subdir.mkdir(parents=True, exist_ok=True)
+        (subdir / "cloud_LLM.prompt").write_text("LLM template")
+
+        ctx = create_mock_context({})
+        results, total_cost, model = sync_main(
+            ctx, "core/cloud", max_attempts=3, budget=10.0, skip_verify=False,
+            skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+        assert results["overall_success"] is True
+        assert total_cost == 0.0
+
     def test_sync_main_still_errors_for_truly_missing_basename(self, mock_project_dir, mock_construct_paths):
         """sync_main should still raise UsageError when no prompt files exist at all."""
         ctx = create_mock_context({})
