@@ -46,9 +46,12 @@ jest.mock("@/lib/render", () => ({
 }));
 
 const mockRunClaudeAudit = jest.fn();
+const mockRunClaudeAuditWithTrace = jest.fn();
 
 jest.mock("@/lib/claude", () => ({
   runClaudeAudit: (...args: unknown[]) => mockRunClaudeAudit(...args),
+  runClaudeAuditWithTrace: (...args: unknown[]) =>
+    mockRunClaudeAuditWithTrace(...args),
 }));
 
 const mockEvaluateDeterministicGeometryAudit = jest.fn();
@@ -237,6 +240,7 @@ beforeEach(() => {
   mockRenderStill.mockReset();
   mockExtractFrameAtTime.mockReset();
   mockRunClaudeAudit.mockReset();
+  mockRunClaudeAuditWithTrace.mockReset();
   mockEvaluateDeterministicGeometryAudit.mockReset();
   mockLoadProject.mockReset();
   mockResolveSectionCompositionIds.mockReset();
@@ -256,6 +260,23 @@ beforeEach(() => {
     suggestedFixes: [],
     confidence: 0.95,
   });
+  mockRunClaudeAuditWithTrace.mockResolvedValue({
+    analysis: {
+      severity: "pass",
+      fixType: "none",
+      technicalAssessment: "Frame matches spec",
+      suggestedFixes: [],
+      confidence: 0.95,
+    },
+    trace: {
+      rawStdout: '{"severity":"pass"}',
+      rawStderr: "Reading frame...\n",
+      stderrLines: ["Reading frame..."],
+      command: "claude",
+      args: ["-p", "test-prompt"],
+      cwd: "/project-root/outputs/audit/intro",
+    },
+  });
   mockLoadProject.mockReturnValue(mockProjectConfig());
   mockEvaluateDeterministicGeometryAudit.mockReturnValue(null);
   mockResolveSectionCompositionIds.mockImplementation(
@@ -270,6 +291,7 @@ beforeEach(() => {
   mockExistsSync.mockReturnValue(true);
   mockMkdirSync.mockReturnValue(undefined);
   mockWriteFileSync.mockReturnValue(undefined);
+  delete process.env.VIDEO_EDITOR_SAVE_AUDIT_TRACES;
 });
 
 // ---------------------------------------------------------------------------
@@ -1159,6 +1181,37 @@ describe("audit executor factory", () => {
     expect(prompt).not.toContain("Resolution: 1920x1080");
   });
 
+  it("omits annotation update blocks from the audit prompt snapshot", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue(`
+### Canvas
+- Resolution: 1920x1080 (16:9)
+
+### Visual Elements
+- Shape centered at (960, 540)
+
+<!-- ANNOTATION_UPDATE_START: demo -->
+## Annotation Update
+Requested change: The shape is vertically off-center.
+Technical assessment: Previous review claimed it was at y≈410.
+<!-- ANNOTATION_UPDATE_END: demo -->
+    `.trim());
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const prompt = String(mockRunClaudeAudit.mock.calls[0][0]);
+    expect(prompt).toContain("Shape centered at (960, 540)");
+    expect(prompt).not.toContain("## Annotation Update");
+    expect(prompt).not.toContain("y≈410");
+  });
+
   it("writes audit report with correct format", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro
@@ -1498,6 +1551,65 @@ describe("audit executor factory", () => {
     expect(mockWriteFileSync.mock.calls[0][0]).toBe(
       pathMod.join("/project-root", "specs", "main", "AUDIT_transition.md")
     );
+  });
+
+  it("writes an audit trace JSON file when VIDEO_EDITOR_SAVE_AUDIT_TRACES=1", async () => {
+    process.env.VIDEO_EDITOR_SAVE_AUDIT_TRACES = "1";
+    const config = mockProjectConfig();
+    config.sections = [config.sections[1]]; // main
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["transition.md"]);
+    mockRunClaudeAuditWithTrace.mockResolvedValue({
+      analysis: {
+        severity: "minor",
+        fixType: "none",
+        technicalAssessment: "Slight difference",
+        suggestedFixes: ["Review the frame."],
+        confidence: 0.61,
+      },
+      trace: {
+        rawStdout: '{"severity":"minor"}',
+        rawStderr: "Reading frame...\nDone.\n",
+        stderrLines: ["Reading frame...", "Done."],
+        command: "claude",
+        args: ["-p", "prompt body", "--model", "claude-opus-4-6"],
+        cwd: "/project-root/outputs/audit/main",
+      },
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["main"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRunClaudeAuditWithTrace).toHaveBeenCalledTimes(1);
+    expect(mockRunClaudeAudit).not.toHaveBeenCalled();
+
+    const pathMod = require("path");
+    const traceWrite = mockWriteFileSync.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] ===
+        pathMod.join(
+          "/project-root",
+          "outputs",
+          "audit_traces",
+          "main",
+          "transition.json"
+        )
+    );
+    expect(traceWrite).toBeDefined();
+    const traceJson = JSON.parse(String(traceWrite?.[1] ?? "{}"));
+    expect(traceJson.specName).toBe("transition");
+    expect(traceJson.sectionId).toBe("main");
+    expect(traceJson.framePath).toBe(
+      pathMod.join("/project-root", "outputs", "audit", "main", "transition_frame.png")
+    );
+    expect(traceJson.analysis.technicalAssessment).toBe("Slight difference");
+    expect(traceJson.trace.rawStdout).toBe('{"severity":"minor"}');
+    expect(traceJson.trace.stderrLines).toEqual(["Reading frame...", "Done."]);
+    expect(traceJson.normalizedSpecSnapshot).toContain("**Timestamp:** 0:00 - 0:03");
+    expect(traceJson.sampleWindow.sampleSeconds).toBeGreaterThanOrEqual(0);
   });
 
   it("writes audit report into section.specDir even when it differs from section.id", async () => {

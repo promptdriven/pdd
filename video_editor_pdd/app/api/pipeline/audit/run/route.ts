@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { extractFrameAtTime, renderStill } from "@/lib/render";
-import { runClaudeAudit } from "@/lib/claude";
+import { runClaudeAudit, runClaudeAuditWithTrace } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
 import {
@@ -148,6 +148,18 @@ function writeAuditReport(
   const auditReport = `## Verdict\n${verdict}\n## Summary\n${summary}\n`;
   fs.mkdirSync(path.dirname(auditPath), { recursive: true });
   fs.writeFileSync(auditPath, auditReport, "utf-8");
+}
+
+function shouldSaveAuditTraces(): boolean {
+  return process.env.VIDEO_EDITOR_SAVE_AUDIT_TRACES === "1";
+}
+
+function writeAuditTrace(
+  tracePath: string,
+  payload: Record<string, unknown>
+): void {
+  fs.mkdirSync(path.dirname(tracePath), { recursive: true });
+  fs.writeFileSync(tracePath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
 }
 
 function formatAuditHints(
@@ -478,6 +490,13 @@ async function auditSection(
       `${specName}_frame.png`
     );
     fs.mkdirSync(path.dirname(outputStill), { recursive: true });
+    const tracePath = path.join(
+      getProjectDir(),
+      "outputs",
+      "audit_traces",
+      section.id,
+      `${specName}.json`
+    );
     const auditPath = resolveSectionSpecFile(
       section.specDir,
       `AUDIT_${specName}.md`
@@ -564,16 +583,24 @@ Use severity="minor" only when a discrepancy would likely be noticeable during n
 Reserve severity="major" or "critical" for clearly missing, wrong, or materially broken visuals.
 `;
 
-    const analysis = (await runClaudeAudit(
-      prompt,
-      path.dirname(outputStill),
-      onLog
-    )) as AnnotationAnalysis;
+    const traceEnabled = shouldSaveAuditTraces();
+    const traceResult = traceEnabled
+      ? await runClaudeAuditWithTrace(prompt, path.dirname(outputStill), onLog)
+      : null;
+    const analysis = traceEnabled
+      ? traceResult!.analysis
+      : ((await runClaudeAudit(
+          prompt,
+          path.dirname(outputStill),
+          onLog
+        )) as AnnotationAnalysis);
     let verdict = classifyAuditVerdict(analysis, { auditHints });
     let summary = analysis.technicalAssessment;
+    let deterministicGeometry: ReturnType<typeof evaluateDeterministicGeometryAudit> =
+      null;
 
     if (verdict !== "pass" && shouldTrustDeterministicGeometry(analysis)) {
-      const deterministicGeometry = evaluateDeterministicGeometryAudit(
+      deterministicGeometry = evaluateDeterministicGeometryAudit(
         specContent,
         outputStill
       );
@@ -587,6 +614,25 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
     else if (verdict === "warn") warnCount++;
     else if (verdict === "fail") failCount++;
     writeAuditReport(auditPath, verdict, summary);
+    if (traceEnabled && traceResult) {
+      writeAuditTrace(tracePath, {
+        sectionId: section.id,
+        specName,
+        specPath,
+        auditPath,
+        framePath: outputStill,
+        renderSource,
+        sampleWindow,
+        normalizedSpecSnapshot: normalizedSpecContent,
+        auditHints,
+        analysis,
+        verdict,
+        summary,
+        deterministicGeometry,
+        trace: traceResult.trace,
+        prompt,
+      });
+    }
   }
 
   return { passCount, warnCount, failCount };

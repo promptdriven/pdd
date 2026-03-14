@@ -54,7 +54,13 @@ jest.mock("child_process", () => ({
 }));
 
 // Must import after jest.mock
-import { runClaudeAnalysis, runClaudeAudit, runClaudeFix, runClaudeFixDryRun } from "../lib/claude";
+import {
+  runClaudeAnalysis,
+  runClaudeAudit,
+  runClaudeAuditWithTrace,
+  runClaudeFix,
+  runClaudeFixDryRun,
+} from "../lib/claude";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -382,6 +388,31 @@ describe("runClaudeAudit — spawn arguments", () => {
       expect(idx).toBeGreaterThan(-1);
       expect(args[idx + 1]).toBe("Read");
     });
+  });
+});
+
+describe("runClaudeAuditWithTrace", () => {
+  beforeEach(() => {
+    mockProc = createMockProc();
+    lastSpawnArgs = null;
+  });
+
+  it("returns parsed analysis plus raw stdout/stderr trace data", async () => {
+    const promise = runClaudeAuditWithTrace("audit this frame", "/tmp/audit-scope");
+    emitAndClose(
+      mockProc,
+      JSON.stringify(sampleAnalysis),
+      "Reading frame...\nDone.\n",
+      0
+    );
+
+    const result = await promise;
+    expect(result.analysis).toEqual(sampleAnalysis);
+    expect(result.trace.rawStdout).toBe(JSON.stringify(sampleAnalysis));
+    expect(result.trace.rawStderr).toBe("Reading frame...\nDone.\n");
+    expect(result.trace.stderrLines).toEqual(["Reading frame...", "Done."]);
+    expect(result.trace.command).toBe("claude");
+    expect(result.trace.cwd).toBe("/tmp/audit-scope");
   });
 });
 

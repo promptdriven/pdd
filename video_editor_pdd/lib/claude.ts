@@ -9,6 +9,15 @@ const FIX_MODEL =
 const FAST_DRY_RUN_MODEL =
   process.env.CLAUDE_DRY_RUN_MODEL ?? 'claude-sonnet-4-5';
 
+export type ClaudeExecutionTrace = {
+  rawStdout: string;
+  rawStderr: string;
+  stderrLines: string[];
+  command: string;
+  args: string[];
+  cwd?: string;
+};
+
 /**
  * Attempts to parse JSON from the Claude CLI output using multiple strategies.
  * Handles cases where the LLM might include conversational text or markdown fences.
@@ -150,6 +159,119 @@ function runClaude(
   });
 }
 
+function runClaudeWithTrace(
+  prompt: string,
+  args: string[],
+  options: { cwd?: string },
+  onLog?: (line: string) => void
+): Promise<{ parsed: any; trace: ClaudeExecutionTrace }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('claude', ['-p', prompt, ...args], {
+      cwd: options.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let stderrBuf = '';
+    const stderrLines: string[] = [];
+
+    const timeout = setTimeout(() => {
+      proc.kill('SIGTERM');
+      reject(new Error('Claude CLI timeout after 600s'));
+    }, TIMEOUT_MS);
+
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+
+      if (onLog) {
+        stderrBuf += text;
+        let idx: number;
+        while ((idx = stderrBuf.indexOf('\n')) !== -1) {
+          const line = stderrBuf.slice(0, idx).replace(/\r$/, '');
+          stderrBuf = stderrBuf.slice(idx + 1);
+          if (line.length > 0) {
+            stderrLines.push(line);
+            onLog(line);
+          }
+        }
+      } else {
+        stderrBuf += text;
+        let idx: number;
+        while ((idx = stderrBuf.indexOf('\n')) !== -1) {
+          const line = stderrBuf.slice(0, idx).replace(/\r$/, '');
+          stderrBuf = stderrBuf.slice(idx + 1);
+          if (line.length > 0) {
+            stderrLines.push(line);
+          }
+        }
+      }
+    });
+
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+
+      if (stderrBuf.trim().length > 0) {
+        const trailingLine = stderrBuf.trim();
+        stderrLines.push(trailingLine);
+        if (onLog) {
+          onLog(trailingLine);
+        }
+      }
+
+      try {
+        const outer = parseJsonWithFallback(stdout);
+        let parsed = outer;
+
+        if (
+          outer &&
+          typeof outer === 'object' &&
+          typeof outer.result === 'string' &&
+          outer.result.trim().length > 0
+        ) {
+          if (outer.is_error) {
+            reject(new Error(`Claude CLI returned error: ${outer.result}`));
+            return;
+          }
+          try {
+            parsed = parseJsonWithFallback(outer.result);
+          } catch {
+            parsed = outer;
+          }
+        }
+
+        resolve({
+          parsed,
+          trace: {
+            rawStdout: stdout,
+            rawStderr: stderr,
+            stderrLines,
+            command: 'claude',
+            args: ['-p', prompt, ...args],
+            cwd: options.cwd,
+          },
+        });
+      } catch (err) {
+        if (code !== 0) {
+          reject(new Error(`Claude CLI failed: ${stderr}`));
+          return;
+        }
+        reject(err);
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
 /**
  * Runs an analysis task using Claude.
  */
@@ -190,6 +312,28 @@ export async function runClaudeAudit(
   ];
 
   return runClaude(prompt, args, { cwd: scopeDir }, onLog) as Promise<AnnotationAnalysis>;
+}
+
+export async function runClaudeAuditWithTrace(
+  prompt: string,
+  scopeDir: string,
+  onLog?: (line: string) => void
+): Promise<{ analysis: AnnotationAnalysis; trace: ClaudeExecutionTrace }> {
+  const args = [
+    '--model',
+    'claude-opus-4-6',
+    '--output-format',
+    'json',
+    '--allowedTools',
+    'Read',
+    '--no-session-persistence',
+  ];
+
+  const result = await runClaudeWithTrace(prompt, args, { cwd: scopeDir }, onLog);
+  return {
+    analysis: result.parsed as AnnotationAnalysis,
+    trace: result.trace,
+  };
 }
 
 /**
