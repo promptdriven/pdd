@@ -63,6 +63,7 @@ def _write_core_dump(
     invoked_subcommands: List[str],
     total_cost: float,
     terminal_output: Optional[str] = None,
+    exit_reason: Optional[str] = None,
 ) -> None:
     """Write a JSON core dump for this run if --core-dump is enabled."""
     if not ctx.obj.get("core_dump"):
@@ -204,6 +205,8 @@ def _write_core_dump(
             "file_contents": file_contents,
             "terminal_output": terminal_output,
         }
+        if exit_reason is not None:
+            payload["exit_reason"] = exit_reason
 
         dump_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

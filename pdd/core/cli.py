@@ -120,12 +120,40 @@ class PDDCLI(click.Group):
             # Handle keyboard interrupt (Ctrl+C) gracefully
             exception_to_handle = e
         except SystemExit as e:
-            # Let successful exits (code 0) pass through, but handle error exits
+            # Let successful exits (code 0) pass through; for non-zero, exit with that code (e.g. intentional sys.exit(1) from a command)
             if e.code == 0 or e.code is None:
                 raise
-            # Convert error exit to exception for proper error handling
-            error_msg = f"Process exited with code {e.code}"
-            exception_to_handle = RuntimeError(error_msg)
+            # Write core dump on intentional failure exit so debugging has a record (same as exception path)
+            try:
+                if ctx.obj is None:
+                    ctx.obj = {}
+                invoked_subcommands = getattr(ctx, "invoked_subcommands", []) or []
+                if not invoked_subcommands and isinstance(ctx.obj, dict):
+                    invoked_subcommands = ctx.obj.get("invoked_subcommands", []) or []
+                total_cost = 0.0
+                terminal_output = None
+                if ctx.obj.get("core_dump"):
+                    stdout_capture = ctx.obj.get("_stdout_capture")
+                    stderr_capture = ctx.obj.get("_stderr_capture")
+                    if stdout_capture or stderr_capture:
+                        captured_parts = []
+                        if stdout_capture:
+                            captured_parts.append("=== STDOUT ===\n" + _strip_ansi_codes(stdout_capture.get_captured_output()))
+                        if stderr_capture:
+                            captured_parts.append("=== STDERR ===\n" + _strip_ansi_codes(stderr_capture.get_captured_output()))
+                        terminal_output = "\n\n".join(captured_parts) if captured_parts else ""
+                        if stdout_capture:
+                            sys.stdout = stdout_capture.original_stream
+                        if stderr_capture:
+                            sys.stderr = stderr_capture.original_stream
+                _write_core_dump(
+                    ctx, [], invoked_subcommands, total_cost, terminal_output,
+                    exit_reason=f"Command exited with code {int(e.code) if e.code is not None else 1} (intentional failure).",
+                )
+            except Exception:
+                pass
+            ctx.exit(int(e.code) if e.code is not None else 1)
+            return
         except click.exceptions.Exit as e:
             # Let successful Click exits pass through, but handle error exits
             if e.exit_code == 0:

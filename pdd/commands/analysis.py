@@ -4,6 +4,7 @@ from __future__ import annotations
 Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import os
+import sys
 import click
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -247,6 +248,8 @@ def bug(
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"
+            if not success:
+                sys.exit(1)
             return result_str, cost, model
 
     except (click.Abort, click.ClickException):
