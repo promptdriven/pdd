@@ -129,14 +129,9 @@ Before finalizing your test plan, cross-reference every planned mock and assumpt
 
 % Critical: Behavioral Tests Only — No Structural/Shape Testing
 
-Your test plan must verify **observable behavior**, not code structure. The following patterns are BLOCKED — do NOT design tests that use them:
+Your test plan must verify **observable behavior**, not code structure.
 
-**BLOCKED anti-patterns:**
-- `inspect.signature()` or `inspect.getfullargspec()` — checking function signatures
-- `hasattr()` or `getattr()` — checking attribute existence
-- `assert "param_name" in sig.parameters` — checking parameter names exist
-- `isinstance()` on functions — checking function types
-- Any test that verifies a parameter *exists* rather than verifying what *happens* when it's used
+**BLOCKED:** Any test that uses reflection, introspection, source code scanning, or existence checks to verify that a function, method, parameter, or property *exists* — rather than verifying what *happens* when it's used. This includes (but is not limited to) signature inspection, source string matching, attribute/method existence checks, parameter counting, and type-checking functions via reflection. These patterns are blocked in every language.
 
 **BAD test plan (structural):** "Test that preprocess() accepts a quiet parameter by inspecting its signature"
 — This passes if someone just adds `quiet=False` to the signature without implementing any suppression logic.
@@ -144,7 +139,7 @@ Your test plan must verify **observable behavior**, not code structure. The foll
 **GOOD test plan (behavioral):** "Test that preprocess(quiet=True) suppresses Rich console output by mocking console.print and asserting it is not called with panel content"
 — This only passes if the function actually implements output suppression.
 
-**Self-check:** Before finalizing each test plan entry, ask yourself: "Could this test pass if someone just added `quiet=False` to the function signature without implementing any actual logic?" If yes, the test is structural — redesign it to verify observable behavior.
+**Self-check:** Before finalizing each test plan entry, ask yourself: "Could this test pass if someone just changed the function signature or added an empty stub without implementing any actual logic?" If yes, the test is structural — redesign it to verify observable behavior.
 
 % Important
 
