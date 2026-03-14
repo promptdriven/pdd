@@ -923,7 +923,7 @@ registerExecutor("compositions", (params, send: SseSend) => {
 // Route handler: POST /api/pipeline/compositions/run
 // ---------------------------------------------------------------------------
 export async function POST(request: NextRequest): Promise<Response> {
-  const body = (await request.json()) as RunBody;
+  const body = (await request.json().catch(() => ({}))) as RunBody;
   const { stream, send, done, error } = createSseStream();
 
   (async () => {

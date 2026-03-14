@@ -498,6 +498,23 @@ describe("POST — sectionId forwarding", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST — body parameter handling", () => {
+  it("works with an empty request body", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/pipeline/compositions/run", {
+        method: "POST",
+      }) as any
+    );
+    await flushPromises();
+
+    expect(response).toBeInstanceOf(Response);
+    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(mockRunPipelineStage).toHaveBeenCalledWith(
+      "compositions",
+      {},
+      expect.any(Function)
+    );
+  });
+
   it("works with no body", async () => {
     const response = await POST(
       makeRequest("http://localhost/api/pipeline/compositions/run") as any
