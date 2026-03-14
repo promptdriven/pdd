@@ -1,4 +1,4 @@
 ## Verdict
 fail
 ## Summary
-The frame PNG for 04_veo_broll does not exist at the expected path (./04_veo_broll_frame.png). The audit directory contains only frames for 01_title_card, 02_key_visual, and 03_split_summary. The veo b-roll frame was never extracted or rendered, making visual audit impossible.
+The frame file 04_veo_broll_frame.png does not exist in the audit output directory. The corresponding spec files (AUDIT_04_veo_broll.md and AUDIT_05_veo_cutaway.md) are also deleted from the repository. No rendered frame is available to audit against the spec. The Veo B-Roll media clip was not generated or captured for this section.
