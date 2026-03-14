@@ -618,6 +618,296 @@ PYEOF
     check_exists "$AUTO_DEPS_CSV" "'auto-deps' dependency CSV"
 fi
 
+# --- Structural Test Anti-Pattern Check Helper ---
+# Validates that pdd bug output does not contain structural/introspection patterns.
+# These patterns indicate the LLM generated tests that check code structure
+# (e.g., function signatures) instead of observable behavior.
+check_no_structural_patterns() {
+    local test_file="$1"
+    local language="$2"
+    local patterns_found=""
+
+    # Language-agnostic structural anti-patterns
+    if grep -qiE "inspect\.(signature|getsource|getfullargspec)" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} inspect.signature/getsource"
+    fi
+    if grep -qE "sig\.parameters|sig\[" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} sig.parameters"
+    fi
+    if grep -qE "hasattr\(.+,\s*['\"]" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} hasattr"
+    fi
+    if grep -qE "reflect\.(TypeOf|ValueOf)" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} reflect.TypeOf/ValueOf"
+    fi
+    if grep -qE "Function\.prototype\.toString" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} Function.prototype.toString"
+    fi
+    if grep -qE "\.getClass\(\)\.getMethod\(|\.getDeclaredMethod\(" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} Java reflection"
+    fi
+    if grep -qE "respond_to\?|method\(:.*\)\.parameters" "$test_file" 2>/dev/null; then
+        patterns_found="${patterns_found} Ruby introspection"
+    fi
+
+    if [ -n "$patterns_found" ]; then
+        log_error "STRUCTURAL ANTI-PATTERNS found in $language bug test output:$patterns_found"
+        log_error "File: $test_file"
+        log_error "pdd bug must generate behavioral tests, not structural/introspection tests"
+        CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
+        return 1
+    else
+        log "No structural anti-patterns in $language bug test output — behavioral tests confirmed"
+        return 0
+    fi
+}
+
+# 9. Bug (Python) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
+    log "========================================"
+    log "9. Testing cloud 'bug' command (Python) — no structural tests"
+    log "========================================"
+
+    # Create Python fixture: quiet flag not suppressing output
+    cat > "bug_py_python.prompt" << 'PYEOF'
+Write a Python module with a preprocess() function that accepts a quiet parameter.
+When quiet=True, the function should suppress all Rich console panel output.
+When quiet=False (default), panels should print normally.
+PYEOF
+
+    cat > "bug_py_code.py" << 'PYEOF'
+from rich.console import Console
+console = Console()
+from rich.panel import Panel
+
+def preprocess(text, quiet=False):
+    """Preprocess text. Bug: quiet parameter is accepted but ignored."""
+    console.print(Panel("Starting preprocessing"))
+    result = text.strip()
+    console.print(Panel("Preprocessing complete"))
+    return result
+PYEOF
+
+    cat > "bug_py_program.py" << 'PYEOF'
+from bug_py_code import preprocess
+result = preprocess("hello world", quiet=True)
+print(result)
+PYEOF
+
+    cat > "bug_py_current.txt" << 'PYEOF'
+╭─────────────────────────╮
+│ Starting preprocessing  │
+╰─────────────────────────╯
+╭─────────────────────────╮
+│ Preprocessing complete  │
+╰─────────────────────────╯
+hello world
+PYEOF
+
+    echo "hello world" > "bug_py_desired.txt"
+
+    BUG_PY_TEST="bug_test_python.py"
+    run_pdd_command bug --manual --output "$BUG_PY_TEST" --language Python \
+                        "bug_py_python.prompt" "bug_py_code.py" \
+                        "bug_py_program.py" \
+                        "bug_py_current.txt" "bug_py_desired.txt"
+    check_exists "$BUG_PY_TEST" "'bug' Python test output"
+    check_no_structural_patterns "$BUG_PY_TEST" "Python"
+fi
+
+# 10. Bug (Go) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
+    log "========================================"
+    log "10. Testing cloud 'bug' command (Go) — no structural tests"
+    log "========================================"
+
+    cat > "bug_go.prompt" << 'PYEOF'
+Write a Go function GetContentType() on a MessageResp struct that safely
+extracts the "type" field from a JSON payload. It should use comma-ok type
+assertions to avoid panics when the field is missing or has the wrong type.
+PYEOF
+
+    cat > "bug_go_code.go" << 'PYEOF'
+package config
+
+import (
+    "encoding/json"
+)
+
+type MessageResp struct {
+    Payload []byte
+}
+
+func (m *MessageResp) GetContentType() int64 {
+    var payloadMap map[string]interface{}
+    decoder := json.NewDecoder(bytes.NewReader(m.Payload))
+    decoder.UseNumber()
+    if err := decoder.Decode(&payloadMap); err != nil {
+        return 0
+    }
+    // BUG: unsafe chained type assertion — panics on missing/wrong type
+    return payloadMap["type"].(json.Number).Int64()
+}
+PYEOF
+
+    cat > "bug_go_program.go" << 'PYEOF'
+package main
+
+import "fmt"
+
+func main() {
+    msg := &MessageResp{Payload: []byte(`{"content": "hello"}`)}
+    fmt.Println(msg.GetContentType())
+}
+PYEOF
+
+    echo 'panic: interface conversion: interface {} is nil, not json.Number' > "bug_go_current.txt"
+    echo '0' > "bug_go_desired.txt"
+
+    BUG_GO_TEST="bug_test_go.go"
+    run_pdd_command bug --manual --output "$BUG_GO_TEST" --language Go \
+                        "bug_go.prompt" "bug_go_code.go" \
+                        "bug_go_program.go" \
+                        "bug_go_current.txt" "bug_go_desired.txt"
+    check_exists "$BUG_GO_TEST" "'bug' Go test output"
+    check_no_structural_patterns "$BUG_GO_TEST" "Go"
+fi
+
+# 11. Bug (Java) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "11" ]; then
+    log "========================================"
+    log "11. Testing cloud 'bug' command (Java) — no structural tests"
+    log "========================================"
+
+    cat > "bug_java.prompt" << 'PYEOF'
+Write a Java class PbjGrpcCall with a receiveRepliesLoop() method that uses
+PbjGrpcDatagramReader to process gRPC responses. The reader should respect
+the maxSize from PbjGrpcClientConfig instead of using a hardcoded 10MB limit.
+PYEOF
+
+    cat > "bug_java_code.java" << 'PYEOF'
+public class PbjGrpcCall {
+    private final PbjGrpcClientConfig config;
+
+    public PbjGrpcCall(PbjGrpcClientConfig config) {
+        this.config = config;
+    }
+
+    public byte[] receiveRepliesLoop(byte[] responseData) {
+        // BUG: does not pass config.getMaxSize() to the reader
+        PbjGrpcDatagramReader reader = new PbjGrpcDatagramReader();
+        return reader.readDatagram(responseData);
+    }
+}
+
+class PbjGrpcDatagramReader {
+    private static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10 MB hardcoded
+
+    public byte[] readDatagram(byte[] data) {
+        if (data.length > MAX_BUFFER_SIZE) {
+            throw new BufferOverflowException();
+        }
+        return data;
+    }
+}
+
+class PbjGrpcClientConfig {
+    private final int maxSize;
+    public PbjGrpcClientConfig(int maxSize) { this.maxSize = maxSize; }
+    public int getMaxSize() { return maxSize; }
+}
+PYEOF
+
+    cat > "bug_java_program.java" << 'PYEOF'
+public class Main {
+    public static void main(String[] args) {
+        PbjGrpcClientConfig config = new PbjGrpcClientConfig(20 * 1024 * 1024);
+        PbjGrpcCall call = new PbjGrpcCall(config);
+        byte[] response = new byte[15 * 1024 * 1024]; // 15 MB
+        call.receiveRepliesLoop(response);
+        System.out.println("Success: 15 MB response processed");
+    }
+}
+PYEOF
+
+    echo 'Exception in thread "main" java.nio.BufferOverflowException' > "bug_java_current.txt"
+    echo 'Success: 15 MB response processed' > "bug_java_desired.txt"
+
+    BUG_JAVA_TEST="bug_test_java.java"
+    run_pdd_command bug --manual --output "$BUG_JAVA_TEST" --language Java \
+                        "bug_java.prompt" "bug_java_code.java" \
+                        "bug_java_program.java" \
+                        "bug_java_current.txt" "bug_java_desired.txt"
+    check_exists "$BUG_JAVA_TEST" "'bug' Java test output"
+    check_no_structural_patterns "$BUG_JAVA_TEST" "Java"
+fi
+
+# 12. Bug (JavaScript) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "12" ]; then
+    log "========================================"
+    log "12. Testing cloud 'bug' command (JavaScript) — no structural tests"
+    log "========================================"
+
+    cat > "bug_js.prompt" << 'PYEOF'
+Write a JavaScript parser module that handles optional chaining (?.) with
+reserved words as property identifiers. Expressions like a?.delete(b) should
+parse the same as a.delete(b) — producing a call_expression, not an ERROR node.
+PYEOF
+
+    cat > "bug_js_code.js" << 'PYEOF'
+// tree-sitter JavaScript parser grammar excerpt
+// BUG: optional_chaining rule does not include reserved words
+// in the property identifier position
+
+function parse(source) {
+    const tree = parser.parse(source);
+    return tree.rootNode;
+}
+
+function getMemberProperty(node) {
+    // Returns the property name from a member expression
+    // Works for a.delete but fails for a?.delete
+    if (node.type === 'member_expression') {
+        return node.namedChildren.find(c => c.type === 'property_identifier');
+    }
+    return null;
+}
+PYEOF
+
+    cat > "bug_js_program.js" << 'PYEOF'
+const { parse } = require('./bug_js_code');
+const tree = parse('a?.delete(b);');
+console.log(tree.toString());
+PYEOF
+
+    cat > "bug_js_current.txt" << 'PYEOF'
+(program
+  (expression_statement
+    (call_expression
+      function: (identifier)
+      arguments: (arguments (identifier)))
+    (ERROR (identifier))))
+PYEOF
+
+    cat > "bug_js_desired.txt" << 'PYEOF'
+(program
+  (expression_statement
+    (call_expression
+      function: (member_expression
+        object: (identifier)
+        property: (property_identifier))
+      arguments: (arguments (identifier)))))
+PYEOF
+
+    BUG_JS_TEST="bug_test_js.js"
+    run_pdd_command bug --manual --output "$BUG_JS_TEST" --language JavaScript \
+                        "bug_js.prompt" "bug_js_code.js" \
+                        "bug_js_program.js" \
+                        "bug_js_current.txt" "bug_js_desired.txt"
+    check_exists "$BUG_JS_TEST" "'bug' JavaScript test output"
+    check_no_structural_patterns "$BUG_JS_TEST" "JavaScript"
+fi
+
 # --- Final Summary ---
 log_timestamped "======== Cloud Regression Tests Completed ========"
 log_timestamped "Cloud Successes: $CLOUD_SUCCESSES"
