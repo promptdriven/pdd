@@ -1510,6 +1510,61 @@ def test_sanitize_architecture_dependencies_no_file_is_noop():
         _sanitize_architecture_dependencies(Path(tmpdir))  # should not raise
 
 
+def test_sanitize_architecture_interfaces_preserves_existing_params():
+    """Step 10 post-check should preserve params dropped by a direct architecture edit."""
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_interfaces
+
+    previous_architecture = [
+        {
+            "filename": "orchestrator_python.prompt",
+            "filepath": "pdd/orchestrator.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {
+                            "name": "run_agentic_e2e_fix_orchestrator",
+                            "signature": "(issue_url, issue_content, use_github_state, protect_tests)",
+                            "returns": "Dict",
+                        }
+                    ]
+                },
+            },
+        }
+    ]
+    current_architecture = [
+        {
+            "filename": "orchestrator_python.prompt",
+            "filepath": "pdd/orchestrator.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {
+                            "name": "run_agentic_e2e_fix_orchestrator",
+                            "signature": "(issue_url, issue_content, use_github_state, ci_retries = 3, skip_ci = False)",
+                            "returns": "Dict",
+                        }
+                    ]
+                },
+            },
+        }
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        arch_path = Path(tmpdir) / "architecture.json"
+        arch_path.write_text(json.dumps(current_architecture, indent=2))
+
+        warnings = _sanitize_architecture_interfaces(Path(tmpdir), previous_architecture)
+
+        result = json.loads(arch_path.read_text())
+        signature = result[0]["interface"]["module"]["functions"][0]["signature"]
+        assert "protect_tests" in signature
+        assert "ci_retries" in signature
+        assert "skip_ci" in signature
+        assert any("protect_tests" in warning for warning in warnings)
+
+
 # --- Tests for issue #566: parse_prompt_tags must ignore tags inside code fences ---
 
 
@@ -2057,6 +2112,729 @@ def test_sync_all_auto_registers_before_syncing():
         assert 'agentic_arch_step5_design_LLM.prompt' in filenames
         assert 'agentic_arch_step4_design_LLM.prompt' not in filenames
         assert 'existing_python.prompt' in filenames
+
+
+# --- Tests for Issue #825: Parameter-drop bug in interface sync ---
+
+
+def test_interface_sync_drops_existing_params_when_adding_new():
+    """
+    Bug reproduction (Issue #825): When a prompt's <pdd-interface> adds new
+    parameters to a function but omits an existing one, the existing parameter
+    is silently dropped because update_architecture_from_prompt does a full
+    replacement instead of merging.
+
+    This test should FAIL on buggy code (full replacement) and PASS once
+    merge logic is added.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        # Existing architecture.json has protect_tests in the signature
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "orchestrator_python.prompt",
+                "filepath": "pdd/orchestrator.py",
+                "reason": "Orchestrates e2e fix",
+                "description": "Orchestrator module",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module", "python"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "run_agentic_e2e_fix_orchestrator",
+                                "signature": "(issue_url, issue_content, use_github_state, protect_tests)",
+                                "returns": "Dict"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # New prompt adds ci_retries and skip_ci but OMITS protect_tests
+        # (simulating the LLM rewriting the tag without preserving all params)
+        prompt_file = prompts_dir / "orchestrator_python.prompt"
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "run_agentic_e2e_fix_orchestrator",
+                        "signature": "(issue_url, issue_content, use_github_state, ci_retries=3, skip_ci=False)",
+                        "returns": "Dict"
+                    }
+                ]
+            }
+        }
+        prompt_file.write_text(
+            f'<pdd-reason>Orchestrates e2e fix</pdd-reason>\n'
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Module Prompt\n'
+        )
+
+        # Run the sync
+        result = update_architecture_from_prompt(
+            "orchestrator_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        assert result['success'] is True
+
+        # Read the updated architecture.json
+        updated_arch = json.loads(arch_file.read_text())
+        updated_sig = updated_arch[0]['interface']['module']['functions'][0]['signature']
+
+        # The merged signature MUST contain protect_tests (existing param)
+        # AND the new params ci_retries, skip_ci
+        assert 'protect_tests' in updated_sig, (
+            f"Existing parameter 'protect_tests' was silently dropped! "
+            f"Got signature: {updated_sig}"
+        )
+        assert 'ci_retries' in updated_sig, (
+            f"New parameter 'ci_retries' missing from signature: {updated_sig}"
+        )
+        assert 'skip_ci' in updated_sig, (
+            f"New parameter 'skip_ci' missing from signature: {updated_sig}"
+        )
+
+
+def test_interface_sync_preserves_existing_params_on_merge():
+    """
+    Happy path: new interface adds parameters while the existing ones
+    are also present in the new tag. All should be preserved.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "mod_python.prompt",
+                "filepath": "pdd/mod.py",
+                "reason": "Test module",
+                "description": "Test",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "do_thing",
+                                "signature": "(a, b, c)",
+                                "returns": "str"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # New tag has all existing params + new one
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "do_thing",
+                        "signature": "(a, b, c, d=None)",
+                        "returns": "str"
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "mod_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "mod_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        assert result['success'] is True
+        updated_arch = json.loads(arch_file.read_text())
+        sig = updated_arch[0]['interface']['module']['functions'][0]['signature']
+        assert sig == "(a, b, c, d=None)"
+
+
+def test_interface_sync_warns_on_param_drop():
+    """
+    When the new interface tag would remove a parameter that existed
+    in the old signature, the result should include a warning.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "mod_python.prompt",
+                "filepath": "pdd/mod.py",
+                "reason": "Test",
+                "description": "Test",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "process",
+                                "signature": "(x, y, z)",
+                                "returns": "bool"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # New tag drops 'z' parameter
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "process",
+                        "signature": "(x, y)",
+                        "returns": "bool"
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "mod_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "mod_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        assert result['success'] is True
+        # Should have a warning about the dropped parameter
+        warnings = result.get('warnings', [])
+        warning_text = ' '.join(warnings).lower()
+        assert 'z' in warning_text or 'drop' in warning_text or 'removed' in warning_text, (
+            f"Expected a warning about dropped parameter 'z', got warnings: {warnings}"
+        )
+
+
+def test_interface_sync_via_sync_all_preserves_params():
+    """
+    Same bug via sync_all_prompts_to_architecture entry point:
+    existing parameters must be preserved when new ones are added.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "worker_python.prompt",
+                "filepath": "pdd/worker.py",
+                "reason": "Worker module",
+                "description": "Worker",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "run_worker",
+                                "signature": "(queue, max_retries, timeout)",
+                                "returns": "None"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # Prompt adds verbose param but omits timeout
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "run_worker",
+                        "signature": "(queue, max_retries, verbose=False)",
+                        "returns": "None"
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "worker_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-reason>Worker module</pdd-reason>\n'
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        assert result['success'] is True
+
+        updated_arch = json.loads(arch_file.read_text())
+        sig = updated_arch[0]['interface']['module']['functions'][0]['signature']
+
+        # timeout must be preserved (existing param)
+        assert 'timeout' in sig, (
+            f"Existing parameter 'timeout' was dropped via sync_all! "
+            f"Got signature: {sig}"
+        )
+        assert 'verbose' in sig
+
+
+def test_interface_sync_new_function_no_conflict():
+    """
+    When the new interface adds an entirely new function (not present
+    in old interface), no merge conflict — just add it.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "mod_python.prompt",
+                "filepath": "pdd/mod.py",
+                "reason": "Test",
+                "description": "Test",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "existing_func",
+                                "signature": "(a, b)",
+                                "returns": "str"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # New interface has existing function + a brand new function
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "existing_func",
+                        "signature": "(a, b)",
+                        "returns": "str"
+                    },
+                    {
+                        "name": "new_func",
+                        "signature": "(x)",
+                        "returns": "int"
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "mod_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "mod_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        assert result['success'] is True
+        updated_arch = json.loads(arch_file.read_text())
+        funcs = updated_arch[0]['interface']['module']['functions']
+        func_names = [f['name'] for f in funcs]
+        assert 'existing_func' in func_names
+        assert 'new_func' in func_names
+
+
+def test_interface_sync_identical_no_update():
+    """
+    When new interface is identical to existing, no update should occur.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "do_thing",
+                        "signature": "(a, b)",
+                        "returns": "str"
+                    }
+                ]
+            }
+        }
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "mod_python.prompt",
+                "filepath": "pdd/mod.py",
+                "reason": "Test",
+                "description": "Test",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": interface
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # Prompt has same interface
+        prompt_file = prompts_dir / "mod_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "mod_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        assert result['success'] is True
+        assert result['updated'] is False  # No changes
+
+
+def test_interface_sync_disk_state_has_merged_result():
+    """
+    Verify that after sync, the architecture.json file on disk contains
+    the merged signature with all parameters.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "svc_python.prompt",
+                "filepath": "pdd/svc.py",
+                "reason": "Service",
+                "description": "Service module",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "serve",
+                                "signature": "(host, port, debug)",
+                                "returns": "None"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        # New tag adds ssl param but drops debug
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "serve",
+                        "signature": "(host, port, ssl=False)",
+                        "returns": "None"
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "svc_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        update_architecture_from_prompt(
+            "svc_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False
+        )
+
+        # Read raw disk content and verify merged result
+        disk_data = json.loads(arch_file.read_text())
+        sig = disk_data[0]['interface']['module']['functions'][0]['signature']
+        assert 'host' in sig
+        assert 'port' in sig
+        assert 'debug' in sig, f"Existing param 'debug' dropped on disk! Got: {sig}"
+        assert 'ssl' in sig, f"New param 'ssl' missing on disk! Got: {sig}"
+
+
+def test_interface_sync_dry_run_shows_merged_result():
+    """
+    Dry-run should show the merged interface in the return value
+    without writing to disk.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        old_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "analyze",
+                        "signature": "(data, threshold)",
+                        "returns": "Dict"
+                    }
+                ]
+            }
+        }
+        arch_data = [
+            {
+                "filename": "analyzer_python.prompt",
+                "filepath": "pdd/analyzer.py",
+                "reason": "Analyzer",
+                "description": "Analyzer",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": old_interface
+            }
+        ]
+        original_content = json.dumps(arch_data, indent=2)
+        arch_file.write_text(original_content)
+
+        # New tag adds verbose but drops threshold
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "analyze",
+                        "signature": "(data, verbose=False)",
+                        "returns": "Dict"
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "analyzer_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "analyzer_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=True
+        )
+
+        assert result['success'] is True
+        assert result['updated'] is True
+
+        # Disk should be unchanged
+        assert arch_file.read_text() == original_content
+
+        # The changes dict should show the merged interface
+        new_iface = result['changes']['interface']['new']
+        merged_sig = new_iface['module']['functions'][0]['signature']
+        assert 'threshold' in merged_sig, (
+            f"Dry-run result missing existing param 'threshold': {merged_sig}"
+        )
+        assert 'verbose' in merged_sig, (
+            f"Dry-run result missing new param 'verbose': {merged_sig}"
+        )
+
+
+def test_interface_sync_preserves_return_annotation_and_function_style():
+    """Merged signatures should keep def/async style and return annotations."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "scorer_python.prompt",
+                "filepath": "pdd/scorer.py",
+                "reason": "Scorer",
+                "description": "Scorer",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "compute_score",
+                                "signature": "def compute_score(value: int, threshold: float = 0.5) -> bool",
+                                "returns": "bool",
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "compute_score",
+                        "signature": "def compute_score(value: int, verbose: bool = False) -> bool",
+                        "returns": "bool",
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "scorer_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "scorer_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False,
+        )
+
+        assert result["success"] is True
+        updated_arch = json.loads(arch_file.read_text())
+        sig = updated_arch[0]["interface"]["module"]["functions"][0]["signature"]
+        assert sig == (
+            "def compute_score(value: int, threshold: float = 0.5, "
+            "verbose: bool = False) -> bool"
+        )
+
+
+def test_interface_sync_keeps_existing_signature_when_new_signature_is_unparseable():
+    """Unparseable new signatures should not silently replace existing parseable ones."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {
+                "filename": "processor_python.prompt",
+                "filepath": "pdd/processor.py",
+                "reason": "Processor",
+                "description": "Processor",
+                "dependencies": [],
+                "priority": 1,
+                "tags": ["module"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "process",
+                                "signature": "(payload, retries, timeout)",
+                                "returns": "Dict",
+                            }
+                        ]
+                    }
+                },
+            }
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        new_interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "process",
+                        "signature": "(payload, retries, ...)",
+                        "returns": "Dict",
+                    }
+                ]
+            }
+        }
+        prompt_file = prompts_dir / "processor_python.prompt"
+        prompt_file.write_text(
+            f'<pdd-interface>{json.dumps(new_interface)}</pdd-interface>\n'
+            f'\n% Prompt\n'
+        )
+
+        result = update_architecture_from_prompt(
+            "processor_python.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            dry_run=False,
+        )
+
+        assert result["success"] is True
+        updated_arch = json.loads(arch_file.read_text())
+        sig = updated_arch[0]["interface"]["module"]["functions"][0]["signature"]
+        assert sig == "(payload, retries, timeout)"
+        warning_text = " ".join(result.get("warnings", [])).lower()
+        assert "could not be parsed" in warning_text
 
 
 def test_normalize_architecture_filenames_issue617():

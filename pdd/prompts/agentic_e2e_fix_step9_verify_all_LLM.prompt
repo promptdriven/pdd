@@ -138,9 +138,10 @@ All bugs fixed successfully in {cycle_number} cycle(s).
 *Workflow stopped - max cycles reached*
 ```
 
-% Important
+% Important — MANDATORY
 
-- The exact strings "ALL_TESTS_PASS", "CONTINUE_CYCLE", or "MAX_CYCLES_REACHED" control the outer loop
+- **You MUST include exactly one of the following control tokens in your response: ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED.** The orchestrator parses your output for these exact strings to decide whether to continue, stop, or start another cycle. If none is present, the workflow stops with an error.
+- Always emit the token inside a `**Status:**` line (e.g., `**Status:** ALL_TESTS_PASS`) as shown in the templates above.
 - Be accurate in test counts - don't round or estimate
 - Include specific failure information for debugging
 - Always post your findings as a GitHub comment before completing

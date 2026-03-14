@@ -154,7 +154,7 @@ class TestAgenticSyncCodexE2E:
              patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
              patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
              patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-             patch("subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_common._subprocess_run") as mock_subprocess, \
              patch("time.sleep"), \
              patch("pdd.agentic_sync._run_dry_run_validation",
                    return_value=(True, {"auth": tmp_path, "payments": tmp_path}, [], 0.0)), \
@@ -227,7 +227,7 @@ class TestAgenticSyncCodexE2E:
              patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
              patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
              patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-             patch("subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_common._subprocess_run") as mock_subprocess, \
              patch("time.sleep"), \
              patch("pdd.agentic_sync._run_dry_run_validation",
                    return_value=(True, {"users": tmp_path}, [], 0.0)), \
@@ -302,7 +302,7 @@ class TestAgenticSyncCodexE2E:
              patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
              patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
              patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-             patch("subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_common._subprocess_run") as mock_subprocess, \
              patch("time.sleep"):
             mock_subprocess.return_value = MagicMock(
                 returncode=0,
@@ -377,7 +377,7 @@ class TestAgenticSyncCodexE2E:
              patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
              patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
              patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-             patch("subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_common._subprocess_run") as mock_subprocess, \
              patch("time.sleep"), \
              patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
             mock_subprocess.return_value = MagicMock(
