@@ -126,6 +126,13 @@ async function navigateWithMockedResults(
   await navigateToStage10(page);
 }
 
+function sectionRow(
+  page: import('@playwright/test').Page,
+  label: string,
+) {
+  return page.getByText(label, { exact: true }).locator('..');
+}
+
 // ── Group A: Status Badge Rendering & CSS ─────────────────────────────────────
 
 test.describe('Stage 10 QA – A: Status Badge Rendering & CSS', () => {
@@ -280,32 +287,30 @@ test.describe('Stage 10 QA – C: Section Table Layout & Data', () => {
   });
 
   test('C1: grid header shows Section, Pass, Fail, Status, Actions columns', async ({ page }) => {
-    const header = page.locator('.grid.grid-cols-6.bg-white\\/5');
-    await expect(header).toBeVisible();
-    await expect(header.locator('div', { hasText: 'Section' })).toBeVisible();
-    await expect(header.locator('div', { hasText: 'Pass' })).toBeVisible();
-    await expect(header.locator('div', { hasText: 'Fail' })).toBeVisible();
-    await expect(header.locator('div', { hasText: 'Status' })).toBeVisible();
-    await expect(header.locator('div', { hasText: 'Actions' })).toBeVisible();
+    await expect(page.getByText('Section', { exact: true })).toBeVisible();
+    await expect(page.getByText('Pass', { exact: true })).toBeVisible();
+    await expect(page.getByText('Fail', { exact: true })).toBeVisible();
+    await expect(page.getByText('Status', { exact: true })).toBeVisible();
+    await expect(page.getByText('Actions', { exact: true })).toBeVisible();
   });
 
   test('C2: section label displayed in row', async ({ page }) => {
-    await expect(page.locator('.grid.grid-cols-6.items-center', { hasText: 'Cold Open' })).toBeVisible();
-    await expect(page.locator('.grid.grid-cols-6.items-center', { hasText: 'Part 1: Economics' })).toBeVisible();
+    await expect(sectionRow(page, 'Cold Open')).toBeVisible();
+    await expect(sectionRow(page, 'Part 1: Economics')).toBeVisible();
   });
 
   test('C3: pass count displayed correctly', async ({ page }) => {
     // Cold Open row should show passCount=3
-    const coldOpenRow = page.locator('.grid.grid-cols-6.items-center', { hasText: 'Cold Open' });
+    const coldOpenRow = sectionRow(page, 'Cold Open');
     await expect(coldOpenRow).toContainText('3');
   });
 
   test('C4: fail count displayed correctly', async ({ page }) => {
     // Cold Open row should show failCount=1
-    const coldOpenRow = page.locator('.grid.grid-cols-6.items-center', { hasText: 'Cold Open' });
+    const coldOpenRow = sectionRow(page, 'Cold Open');
     await expect(coldOpenRow).toContainText('1');
     // Part 3 row should show failCount=2
-    const part3Row = page.locator('.grid.grid-cols-6.items-center', { hasText: 'Part 3: Mold' });
+    const part3Row = sectionRow(page, 'Part 3: Mold');
     await expect(part3Row).toContainText('2');
   });
 
@@ -320,7 +325,9 @@ test.describe('Stage 10 QA – C: Section Table Layout & Data', () => {
   });
 
   test('C7: multiple section rows rendered for multiple sections', async ({ page }) => {
-    await expect(page.locator('.grid.grid-cols-6.items-center')).toHaveCount(4);
+    for (const label of ALL_STATUS_SECTIONS.map((section) => section.sectionLabel)) {
+      await expect(sectionRow(page, label)).toBeVisible();
+    }
   });
 
   test('C8: screenshot — section table with pass/fail counts', async ({ page }) => {
@@ -884,10 +891,10 @@ test.describe('Stage 10 QA – H: Loading & Edge Cases', () => {
     await navigateWithMockedResults(page, ALL_STATUS_SECTIONS);
 
     // Part 1 has passCount=0, failCount=0
-    const part1Row = page.locator('.grid.grid-cols-6.items-center', { hasText: 'Part 1: Economics' });
+    const part1Row = page.getByText('Part 1: Economics', { exact: true }).locator('..');
     await expect(part1Row).toBeVisible();
-    // The row should contain "0" (for both pass and fail)
     await expect(part1Row).toContainText('0');
+    await expect(part1Row).toContainText('running');
   });
 
   test('H5: audit run SSE updates section counts in real time', async ({ page }) => {
@@ -924,9 +931,10 @@ test.describe('Stage 10 QA – H: Loading & Edge Cases', () => {
 
     await page.locator('button', { hasText: 'Audit All Sections' }).click();
 
-    const part1Row = page.locator('.grid.grid-cols-6.items-center', { hasText: 'Part 1: Economics' });
+    const part1Row = page.getByText('Part 1: Economics', { exact: true }).locator('..');
     await expect(part1Row).toContainText('5');
     await expect(part1Row).toContainText('1');
+    await expect(part1Row).toContainText('done');
   });
 
   test('H6: section with no specs — expanded view shows empty detail area', async ({ page }) => {

@@ -48,6 +48,10 @@ async function navigateToStage3(page: import('@playwright/test').Page) {
   await page.waitForTimeout(1500);
 }
 
+async function blurCodeMirror(page: import('@playwright/test').Page) {
+  await page.getByRole('combobox', { name: 'Project' }).click();
+}
+
 /**
  * Navigate to Stage 3 with mocked GET responses for both main and tts scripts.
  * Sets up route mocks BEFORE navigating so they're in place for the fetch.
@@ -352,7 +356,7 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
       await cmContent.click();
       await page.keyboard.type('BLUR_SAVE_TEST');
       // Blur immediately (before debounce fires)
-      await page.locator('h2').click();
+      await blurCodeMirror(page);
       await page.waitForTimeout(500);
 
       expect(postFired).toBe(true);
@@ -385,7 +389,7 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
       await page.keyboard.press('End');
       await page.keyboard.type(' PERSIST_CHECK');
       // Trigger save via blur
-      await page.locator('h2').click();
+      await blurCodeMirror(page);
       await page.waitForTimeout(1000);
 
       // Editor should still show the typed text
@@ -594,7 +598,7 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
 
       const typeTime = Date.now();
       // Blur immediately (before debounce fires)
-      await page.locator('h2').click();
+      await blurCodeMirror(page);
       await page.waitForTimeout(500);
 
       // POST should have fired within ~500ms of blur, not waiting full 1s debounce
@@ -634,7 +638,7 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
       await page.keyboard.type('SAVE_INDICATOR');
 
       // Trigger immediate save via blur
-      await page.locator('h2').click();
+      await blurCodeMirror(page);
 
       // "Saving…" should appear
       await expect(page.locator('text=Saving…')).toBeVisible({ timeout: 2000 });
@@ -679,7 +683,7 @@ test.describe('Stage 3: Interactive QA - Comprehensive Feature Testing', () => {
 
       // Type second batch and blur to trigger immediate save
       await page.keyboard.type(' SECOND_EDIT');
-      await page.locator('h2').click();
+      await blurCodeMirror(page);
       await page.waitForTimeout(2000);
 
       // The last saved body should contain SECOND_EDIT

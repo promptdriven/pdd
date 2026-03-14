@@ -551,13 +551,15 @@ test.describe('Stage 2: Script Editor', () => {
 
     // Click well below the text content in the left pane (middle of pane)
     const editor = page.locator('.cm-editor');
-    const box = await editor.boundingBox();
+    const scroller = page.locator('.cm-scroller');
+    const box = await scroller.boundingBox();
     expect(box).toBeTruthy();
-    // Click at 75% down the editor — should still focus it
-    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height * 0.75);
-    await page.waitForTimeout(300);
-
-    // Editor should gain focus
-    await expect(editor).toHaveClass(/cm-focused/);
+    // Click near the bottom of the scroller and verify the editor accepts typing.
+    await scroller.click({
+      force: true,
+      position: { x: Math.max(12, box!.width / 2), y: Math.max(12, box!.height - 12) },
+    });
+    await page.keyboard.type('FOCUS_CHECK');
+    await expect(editor).toContainText('FOCUS_CHECK');
   });
 });

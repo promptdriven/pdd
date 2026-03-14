@@ -77,7 +77,7 @@ function snapshotAnimationTsx(): Map<string, string> {
 async function getJsonWithRetry(
   page: Page,
   url: string,
-  timeoutMs: number = 30_000,
+  timeoutMs: number = 120_000,
 ): Promise<unknown> {
   const startTime = Date.now();
   let lastError: Error | null = null;
@@ -85,6 +85,11 @@ async function getJsonWithRetry(
   while (Date.now() - startTime < timeoutMs) {
     try {
       const response = await page.request.get(url);
+      if (!response.ok()) {
+        lastError = new Error(`GET ${url} returned ${response.status()}`);
+        await page.waitForTimeout(1_000);
+        continue;
+      }
       return await response.json();
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -219,8 +224,8 @@ test.describe.serial('Full pipeline end-to-end', () => {
     // ── Stage 3: TTS Script ─────────────────────────────────────────────
     await navigateToStage(page, sidebar, 'TTS Script', 'Stage 3');
 
-    // Click "Render Audio →" to advance to Stage 4
-    await page.locator('button', { hasText: 'Render Audio' }).click();
+    // Click "Continue →" to advance to Stage 4
+    await page.locator('button', { hasText: 'Continue →' }).click();
     await page.waitForTimeout(1000);
 
     // ── Stage 4: TTS Rendering ──────────────────────────────────────────

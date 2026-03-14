@@ -4,6 +4,13 @@ import { buildMockAuditResults, loadActiveProjectFixture } from './helpers/proje
 const ACTIVE_PROJECT = loadActiveProjectFixture();
 const PROJECT_SECTIONS = ACTIVE_PROJECT.sections;
 
+function sectionRow(
+  page: import('@playwright/test').Page,
+  label: string,
+) {
+  return page.getByText(label, { exact: true }).locator('..');
+}
+
 test.describe('Stage 10: Audit', () => {
   test.beforeEach(async ({ page }) => {
     await page.route('**/api/pipeline/audit/results', async (route) => {
@@ -76,21 +83,14 @@ test.describe('Stage 10: Audit', () => {
 
   test('section labels are visible in table', async ({ page }) => {
     await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
-    // Section labels appear as divs in the grid rows (not the dropdown buttons)
-    // Target visible text elements that are NOT inside a details/dropdown
-    const tableArea = page.locator('main .grid.grid-cols-6').first();
-    await expect(tableArea).toBeVisible();
-    // The section labels are in the grid rows alongside View Report buttons
-    // Verify by checking that the number of View Report buttons matches expected sections
-    const rows = page.locator('button', { hasText: 'View Report' });
-    await expect(rows).toHaveCount(PROJECT_SECTIONS.length);
+    for (const section of PROJECT_SECTIONS) {
+      await expect(sectionRow(page, section.label)).toBeVisible();
+    }
   });
 
   test('section label text is readable on dark background (dark theme fix)', async ({ page }) => {
     await expect(page.locator('button', { hasText: 'View Report' }).first()).toBeVisible({ timeout: 10000 });
-    // Find a section label div within the table (not from the dropdown)
-    // The grid row has text-white class, so we check the row div color
-    const firstRow = page.locator('.grid.grid-cols-6.items-center').first();
+    const firstRow = sectionRow(page, PROJECT_SECTIONS[0]?.label ?? 'Animation Section');
     await expect(firstRow).toBeVisible();
 
     const isLight = await firstRow.evaluate((el) => {

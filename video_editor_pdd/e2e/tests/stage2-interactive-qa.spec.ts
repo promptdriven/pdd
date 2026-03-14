@@ -204,12 +204,16 @@ test.describe('Stage 2: Interactive QA - Comprehensive Feature Testing', () => {
     test('B6: Clicking empty space below text focuses editor', async ({ page }) => {
       await navigateWithMockedScript(page, 'NARRATOR: Short.');
       const editor = page.locator('.cm-editor');
-      const box = await editor.boundingBox();
+      const scroller = page.locator('.cm-scroller');
+      const box = await scroller.boundingBox();
       expect(box).toBeTruthy();
-      // Click at 75% down the editor (well below the single line of text)
-      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height * 0.75);
-      await page.waitForTimeout(300);
-      await expect(editor).toHaveClass(/cm-focused/);
+      // Click inside the scroller near the bottom to simulate using empty editor space.
+      await scroller.click({
+        force: true,
+        position: { x: Math.max(12, box!.width / 2), y: Math.max(12, box!.height - 12) },
+      });
+      await page.keyboard.type('FOCUS_CHECK');
+      await expect(editor).toContainText('FOCUS_CHECK');
     });
 
     test('B7: screenshot — editor focused with typed content', async ({ page }) => {

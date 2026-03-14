@@ -269,7 +269,7 @@ test.describe('Stage 3: TTS Script Generation', () => {
 
     // Now type second batch and blur to trigger immediate save
     await page.keyboard.type(' SECOND_EDIT');
-    await page.locator('h2').click(); // blur the editor
+    await page.keyboard.press('Tab'); // blur the editor
     await page.waitForTimeout(1500);
 
     // The last saved body should contain SECOND_EDIT — it must not be dropped
