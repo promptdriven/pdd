@@ -283,6 +283,14 @@ class TestBug2GetModifiedAndUntracked:
         """
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
+        subprocess.run(
             ["git", "commit", "--allow-empty", "-m", "init"],
             cwd=tmp_path, capture_output=True, check=True,
         )
@@ -359,6 +367,14 @@ class TestBug2ExtractTestFiles:
         and hash detection is enabled.
         """
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
         subprocess.run(
             ["git", "commit", "--allow-empty", "-m", "init"],
             cwd=tmp_path, capture_output=True, check=True,
