@@ -36,7 +36,7 @@ export const VeoSection03WaveDataOverlay: React.FC = () => {
 	return (
 		<AbsoluteFill
 			style={{
-				backgroundColor: '#0A1628',
+				backgroundColor: '#00FF00',
 				width,
 				height,
 			}}

@@ -24,7 +24,7 @@ export const VeoSection01TitleCard: React.FC = () => {
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#000000' }}>
+    <AbsoluteFill style={{ backgroundColor: '#00FF00' }}>
       <AbsoluteFill
         style={{
           background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,

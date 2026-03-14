@@ -54,7 +54,7 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#0A1628' }}>
+    <AbsoluteFill style={{ backgroundColor: '#00FF00' }}>
       {/* Blurred background video still with dark overlay */}
       {backgroundSrc ? (
         <AbsoluteFill style={{ opacity: bgOpacity }}>
@@ -73,7 +73,7 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
           <AbsoluteFill style={{ backgroundColor: COLORS.background }} />
         </AbsoluteFill>
       ) : (
-        <AbsoluteFill style={{ backgroundColor: '#0A1628', opacity: bgOpacity }} />
+        <AbsoluteFill style={{ backgroundColor: '#00FF00', opacity: bgOpacity }} />
       )}
 
       {/* Chart title: "WAVE ANALYSIS" */}
