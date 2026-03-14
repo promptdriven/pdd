@@ -665,3 +665,14 @@ def test_trace_success(runner):
             kwargs = mock_main.call_args[1]
             assert kwargs["prompt_file"] == "prompt.txt"
             assert kwargs["code_line"] == 42
+
+def test_bug_agentic_mode_failure(runner):
+    """Test 'bug' agentic mode exit code and output on failure."""
+    from pdd.commands.analysis import bug
+    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
+        mock_agentic.return_value = (False, "Quota exceeded", 0.0, "gpt-4", [])
+
+        result = runner.invoke(bug, ["https://github.com/user/repo/issues/1"])
+
+        assert result.exit_code == 1
+        assert "Quota exceeded" in result.output
