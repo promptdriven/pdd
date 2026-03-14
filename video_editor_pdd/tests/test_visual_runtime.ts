@@ -88,4 +88,13 @@ describe("shared Remotion runtime", () => {
     expect(source).toMatch(/relativeFrom:\s*0/);
     expect(source).toMatch(/parentFrom:\s*0/);
   });
+
+  it("exports a visual contract provider alongside media aliases", () => {
+    expect(source).toMatch(/VisualContractProvider/);
+    expect(source).toMatch(/VisualContractContext/);
+  });
+
+  it("exposes a hook for reading structured visual contract data", () => {
+    expect(source).toMatch(/useVisualContractData/);
+  });
 });

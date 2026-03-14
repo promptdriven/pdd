@@ -1640,7 +1640,7 @@ class TestGeneratedTimelineWrapper:
             project_dir=str(project_dir),
         )
 
-        assert 'import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";' in tsx
+        assert 'import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";' in tsx
         assert '"02_ocean_wave_sunset": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
         assert '"03_narration_overlay_intro": { defaultSrc: "veo/ocean_wave_sunset.mp4"' in tsx
         assert '"03_narration_overlay_intro": 120' in tsx
@@ -2225,6 +2225,114 @@ class TestGeneratedTimelineWrapper:
         assert 'baseSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
         assert 'revealSrc: "veo/03_veo_forest_cutaway.mp4"' in tsx
 
+    def test_generated_timeline_resolves_image_style_split_sources_via_structured_refs(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        split_dir = remotion_src / "VeoSection05SplitNatureComparison"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        split_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 30, id: "02_ocean_wave_sunset", desc: "Ocean" },',
+                    '  { start: 30, end: 60, id: "03_aerial_forest_canopy", desc: "Forest" },',
+                    '  { start: 60, end: 90, id: "05_split_nature_comparison", desc: "Split" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (split_dir / "index.ts").write_text(
+            'export const VeoSection05SplitNatureComparison = () => null;\n'
+            'export default VeoSection05SplitNatureComparison;',
+            encoding="utf-8",
+        )
+        (split_dir / "constants.ts").write_text(
+            "export const TIMING = { totalFrames: 30 };\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "02_ocean_wave_sunset.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    '{ "source_file": "ocean_wave_sunset.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "03_aerial_forest_canopy.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    '{ "source_file": "aerial_forest_canopy.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "05_split_nature_comparison.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    "{",
+                    '  "left": {',
+                    '    "label": "Ocean · Sunset",',
+                    '    "source": "ocean_wave_sunset_still.jpg"',
+                    "  },",
+                    '  "right": {',
+                    '    "label": "Forest · Canopy",',
+                    '    "source": "aerial_forest_canopy_still.jpg"',
+                    "  }",
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_ocean_wave_sunset.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "03_aerial_forest_canopy.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 3,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": ["05_split_nature_comparison"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'leftSrc: "veo/02_ocean_wave_sunset.mp4"' in tsx
+        assert 'rightSrc: "veo/03_aerial_forest_canopy.mp4"' in tsx
+        assert 'const VISUAL_CONTRACTS' in tsx
+        assert '<VisualContractProvider contract={visualContract}>' in tsx
+
     def test_writes_visual_contract_manifest_with_data_points_and_media_aliases(self, tmp_path):
         project_dir = tmp_path
         remotion_public = tmp_path / "remotion" / "public"
@@ -2632,12 +2740,14 @@ class TestCompositionTiming:
             project_dir=str(project_dir),
         )
 
-        assert 'import { VisualMediaProvider } from "./_shared/visual-runtime";' in root
+        assert 'import { VisualMediaProvider, VisualContractProvider } from "./_shared/visual-runtime";' in root
         assert 'const PREVIEW_VISUAL_MEDIA' in root
+        assert 'const PREVIEW_VISUAL_CONTRACTS' in root
         assert '"veo_section:05_split_nature_comparison": { defaultSrc: "veo/02_ocean_wave_broll.mp4"' in root
         assert 'leftSrc: "veo/02_ocean_wave_broll.mp4"' in root
         assert 'rightSrc: "veo/04_aerial_forest_broll.mp4"' in root
         assert 'const VeoSection05SplitNatureComparisonPreview: React.FC = () => (' in root
+        assert '<VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:05_split_nature_comparison"] ?? null}>' in root
         assert '<VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:05_split_nature_comparison"] ?? null}>' in root
         assert 'component={VeoSection05SplitNatureComparisonPreview}' in root
 

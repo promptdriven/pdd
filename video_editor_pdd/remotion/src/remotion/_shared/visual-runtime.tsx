@@ -15,7 +15,14 @@ export type VisualMedia = {
   revealSrc?: string;
 };
 
+export type VisualContract = {
+  specBaseName?: string;
+  dataPoints?: Record<string, unknown> | null;
+  overlayConfig?: Record<string, unknown> | null;
+};
+
 const VisualMediaContext = createContext<VisualMedia | null>(null);
+const VisualContractContext = createContext<VisualContract | null>(null);
 
 export const VisualMediaProvider: React.FC<{
   media?: VisualMedia | null;
@@ -28,12 +35,34 @@ export const VisualMediaProvider: React.FC<{
   );
 };
 
+export const VisualContractProvider: React.FC<{
+  contract?: VisualContract | null;
+  children: React.ReactNode;
+}> = ({ contract, children }) => {
+  return (
+    <VisualContractContext.Provider value={contract ?? null}>
+      {children}
+    </VisualContractContext.Provider>
+  );
+};
+
 export const useVisualMediaSrc = (
   key: keyof VisualMedia = "defaultSrc",
   fallback?: string
 ): string | null => {
   const media = useContext(VisualMediaContext);
   return media?.[key] ?? media?.defaultSrc ?? fallback ?? null;
+};
+
+export const useVisualContractData = <
+  T extends Record<string, unknown> = Record<string, unknown>
+>(): T | null => {
+  const contract = useContext(VisualContractContext);
+  const dataPoints = contract?.dataPoints;
+  if (!dataPoints || typeof dataPoints !== "object" || Array.isArray(dataPoints)) {
+    return null;
+  }
+  return dataPoints as T;
 };
 
 export const SlotScaledSequence: React.FC<{

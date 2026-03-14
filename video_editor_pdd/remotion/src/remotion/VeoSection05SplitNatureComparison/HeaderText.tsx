@@ -7,9 +7,10 @@ import {
 
 interface HeaderTextProps {
   layout: SplitNatureComparisonLayout;
+  text: string;
 }
 
-export const HeaderText: React.FC<HeaderTextProps> = ({ layout }) => {
+export const HeaderText: React.FC<HeaderTextProps> = ({ layout, text }) => {
   return (
     <div
       style={{
@@ -25,7 +26,7 @@ export const HeaderText: React.FC<HeaderTextProps> = ({ layout }) => {
         color: COLORS.headerText,
       }}
     >
-      VEO GENERATION RANGE
+      {text}
     </div>
   );
 };

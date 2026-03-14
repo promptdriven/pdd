@@ -1,7 +1,6 @@
 import React from 'react';
 import { OffthreadVideo, staticFile } from 'remotion';
 import {
-  COLORS,
   DIMENSIONS,
   type SplitNatureComparisonLayout,
 } from './constants';
@@ -15,13 +14,14 @@ interface SplitPanelProps {
 export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc, layout }) => {
   const isLeft = side === 'left';
   const panelX = isLeft ? DIMENSIONS.leftPanelX : DIMENSIONS.rightPanelX;
+  const panelY = isLeft ? DIMENSIONS.leftPanelY : DIMENSIONS.rightPanelY;
 
   return (
     <div
       style={{
         position: 'absolute',
         left: panelX * layout.scaleX,
-        top: DIMENSIONS.leftPanelY * layout.scaleY,
+        top: panelY * layout.scaleY,
         width: DIMENSIONS.panelWidth * layout.scaleX,
         height: DIMENSIONS.panelHeight * layout.scaleY,
         borderRadius: DIMENSIONS.panelBorderRadius * layout.uniformScale,
@@ -40,21 +40,6 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc, layout }
           objectFit: 'cover',
         }}
         muted
-      />
-
-      {/* Subtle vignette on divider edge */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          [isLeft ? 'right' : 'left']: 0,
-          width: 20 * layout.uniformScale,
-          height: '100%',
-          background: isLeft
-            ? `linear-gradient(to left, ${COLORS.vignette}, transparent)`
-            : `linear-gradient(to right, ${COLORS.vignette}, transparent)`,
-          pointerEvents: 'none',
-        }}
       />
     </div>
   );

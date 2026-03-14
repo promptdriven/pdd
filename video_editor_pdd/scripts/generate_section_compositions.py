@@ -91,6 +91,7 @@ def load_project_json(project_dir: str) -> Dict[str, Any]:
 STATIC_FILE_RE = re.compile(r'staticFile\(\s*["\']([^"\']+)["\']\s*\)')
 AUDIO_EXTENSIONS = {'.wav', '.mp3', '.aac', '.m4a', '.ogg'}
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mov', '.m4v'}
+IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 NON_COMPONENT_BASENAMES = {'spec', 'veo'}
 VISUAL_MEDIA_KEY_RE = re.compile(
     r'(?:"|\b)(leftClip|rightClip|clipSource|leftSrc|rightSrc|outputSrc|outputFile|filename|backgroundClip|backgroundSrc|baseClip|baseSrc|revealClip|revealSrc)(?:"|\b)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
@@ -146,6 +147,29 @@ PANEL_CONTEXT_ALIAS_MAP = {
     'background': 'backgroundSrc',
     'base': 'baseSrc',
 }
+SOURCE_FIELD_KEYS = {
+    'source',
+    'sourcefile',
+    'videosource',
+    'videosrc',
+    'video',
+    'file',
+    'asset',
+    'assetfile',
+    'clip',
+}
+REFERENCE_SUFFIXES = (
+    '_still',
+    '-still',
+    '_frame',
+    '-frame',
+    '_image',
+    '-image',
+    '_poster',
+    '-poster',
+    '_thumbnail',
+    '-thumbnail',
+)
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -173,20 +197,56 @@ def _is_video_reference(value: str) -> bool:
     return Path(value).suffix.lower() in VIDEO_EXTENSIONS
 
 
-def _iter_data_point_video_values(data_points: Any) -> List[str]:
-    """Collect all video-like string values inside structured Data Points JSON."""
+def _is_media_reference_like(value: str) -> bool:
+    suffix = Path(value).suffix.lower()
+    return suffix in VIDEO_EXTENSIONS or suffix in IMAGE_EXTENSIONS
+
+
+def _normalize_reference_stems(raw_value: str) -> List[str]:
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    if not normalized:
+        return []
+
+    basename = normalized.split('/')[-1]
+    basename_stem = Path(basename).stem
+    normalized_stem = str(Path(normalized))
+    if Path(normalized_stem).suffix:
+        normalized_stem = str(Path(normalized_stem).with_suffix(''))
+
+    candidates: List[str] = []
+
+    def _add(candidate: str) -> None:
+        trimmed = candidate.strip().strip('/').replace('\\', '/')
+        if trimmed and trimmed not in candidates:
+            candidates.append(trimmed)
+
+    for candidate in (normalized, basename, normalized_stem, basename_stem):
+        _add(candidate)
+
+    for suffix in REFERENCE_SUFFIXES:
+        for candidate in list(candidates):
+            if candidate.endswith(suffix):
+                _add(candidate[: -len(suffix)])
+
+    return candidates
+
+
+def _iter_data_point_media_values(data_points: Any) -> List[str]:
+    """Collect media-like string values inside structured Data Points JSON."""
     values: List[str] = []
 
-    def _walk(value: Any) -> None:
+    def _walk(value: Any, key_hint: Optional[str] = None) -> None:
         if isinstance(value, dict):
-            for nested in value.values():
-                _walk(nested)
+            for raw_key, nested in value.items():
+                _walk(nested, str(raw_key).strip().lower().replace('_', '').replace('-', ''))
             return
         if isinstance(value, list):
             for nested in value:
-                _walk(nested)
+                _walk(nested, key_hint)
             return
-        if isinstance(value, str) and _is_video_reference(value):
+        if isinstance(value, str) and (
+            _is_media_reference_like(value) or (key_hint in SOURCE_FIELD_KEYS and value.strip())
+        ):
             normalized = value.replace('\\', '/').lstrip('/')
             if normalized not in values:
                 values.append(normalized)
@@ -221,7 +281,9 @@ def _extract_data_point_media_aliases(
                 key = str(raw_key).strip().lower().replace('_', '').replace('-', '')
                 next_context = PANEL_CONTEXT_ALIAS_MAP.get(key, context_alias)
                 alias_name = MEDIA_ALIAS_KEY_MAP.get(key)
-                if isinstance(nested, str) and _is_video_reference(nested):
+                if isinstance(nested, str) and (
+                    _is_media_reference_like(nested) or (key in SOURCE_FIELD_KEYS and nested.strip())
+                ):
                     effective_alias = next_context or alias_name
                     _assign(effective_alias, nested)
                     continue
@@ -231,7 +293,9 @@ def _extract_data_point_media_aliases(
             for nested in value:
                 _walk(nested, context_alias)
             return
-        if isinstance(value, str) and _is_video_reference(value):
+        if isinstance(value, str) and (
+            _is_media_reference_like(value) or (context_alias is not None and value.strip())
+        ):
             _assign(context_alias, value)
 
     _walk(data_points)
@@ -382,9 +446,8 @@ def _resolve_video_reference_static_path(
     if not normalized:
         return None
 
-    basename = normalized.split('/')[-1]
     if reference_aliases:
-        for key in (normalized, basename):
+        for key in _normalize_reference_stems(normalized):
             resolved = reference_aliases.get(key)
             if resolved and os.path.isfile(os.path.join(remotion_public, resolved)):
                 return resolved
@@ -405,7 +468,6 @@ def _candidate_video_static_paths(raw_value: str) -> List[str]:
     if not normalized:
         return []
 
-    basename = normalized.split('/')[-1]
     candidates: List[str] = []
 
     def _add(candidate: str) -> None:
@@ -414,14 +476,20 @@ def _candidate_video_static_paths(raw_value: str) -> List[str]:
 
     if Path(normalized).suffix.lower() in VIDEO_EXTENSIONS:
         _add(normalized)
+        basename = normalized.split('/')[-1]
         if not normalized.startswith('veo/'):
             _add(f'veo/{basename}')
             _add(basename)
-        return candidates
 
-    for ext in VIDEO_EXTENSION_PRIORITY:
-        _add(f'veo/{basename}{ext}')
-        _add(f'{basename}{ext}')
+    for stem in _normalize_reference_stems(normalized):
+        stem_basename = stem.split('/')[-1]
+        for ext in VIDEO_EXTENSION_PRIORITY:
+            if stem.endswith(ext):
+                _add(stem)
+                _add(stem_basename)
+                continue
+            _add(f'veo/{stem_basename}{ext}')
+            _add(f'{stem_basename}{ext}')
 
     return candidates
 
@@ -479,7 +547,7 @@ def _iter_video_reference_values(spec_content: str) -> List[str]:
             _add(rel_path)
     data_points = _extract_data_points_json(spec_content)
     if data_points is not None:
-        for raw_value in _iter_data_point_video_values(data_points):
+        for raw_value in _iter_data_point_media_values(data_points):
             _add(raw_value)
 
     return values
@@ -520,8 +588,8 @@ def _build_section_video_reference_aliases(
             for ref, resolved in resolved_refs:
                 if resolved is None:
                     continue
-                aliases.setdefault(ref, resolved)
-                aliases.setdefault(ref.split('/')[-1], resolved)
+                for key in _normalize_reference_stems(ref):
+                    aliases.setdefault(key, resolved)
             continue
 
         direct_target = next(
@@ -533,8 +601,8 @@ def _build_section_video_reference_aliases(
             continue
 
         for ref in refs:
-            aliases.setdefault(ref, canonical_target)
-            aliases.setdefault(ref.split('/')[-1], canonical_target)
+            for key in _normalize_reference_stems(ref):
+                aliases.setdefault(key, canonical_target)
 
     return aliases
 
@@ -713,6 +781,27 @@ def write_visual_contract_manifest(
     with open(manifest_path, 'w', encoding='utf-8') as f:
         json.dump(manifest, f, indent=2)
     return manifest_path
+
+
+def build_section_visual_contract_map(
+    section: Dict[str, Any],
+    project_dir: str,
+    remotion_public: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Return a section-local visual contract map keyed by visual id."""
+    manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+    section_entry = next(iter(manifest.get('sections', [])), None)
+    if not section_entry:
+        return {}
+
+    contracts: Dict[str, Dict[str, Any]] = {}
+    for visual in section_entry.get('visuals', []):
+        contracts[visual['id']] = {
+            'specBaseName': visual.get('specBaseName'),
+            'dataPoints': visual.get('dataPoints'),
+            'overlayConfig': visual.get('overlayConfig'),
+        }
+    return contracts
 
 
 def build_visual_media_manifest(
@@ -1205,6 +1294,11 @@ def generate_generated_timeline_wrapper(
         section,
         project_dir,
     )
+    visual_contract_map = build_section_visual_contract_map(
+        section,
+        project_dir,
+        remotion_public,
+    )
 
     resolved_components: List[tuple[str, str, str]] = []
     component_durations: Dict[str, int] = {}
@@ -1235,7 +1329,7 @@ def generate_generated_timeline_wrapper(
     lines.append('import React from "react";')
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('import { VISUAL_SEQUENCE } from "./constants";')
-    lines.append('import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";')
+    lines.append('import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";')
     if visual_overlay_manifest:
         lines.append('import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";')
 
@@ -1274,6 +1368,11 @@ def generate_generated_timeline_wrapper(
         lines.append(f'  "{visual_id}": {{ {", ".join(overlay_parts)} }},')
     lines.append('};')
     lines.append('')
+    lines.append('const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {')
+    for visual_id, contract in visual_contract_map.items():
+        lines.append(f'  "{visual_id}": {json.dumps(contract, ensure_ascii=False)},')
+    lines.append('};')
+    lines.append('')
     lines.append(f'export const {component_name}: React.FC = () => {{')
     lines.append(f'  const fps = {fps};')
     lines.append(f'  const durationSeconds = {duration_seconds};')
@@ -1292,18 +1391,22 @@ def generate_generated_timeline_wrapper(
     lines.append('        const intrinsicDurationInFrames = VISUAL_DURATIONS[visual.id] ?? visualDuration;')
     lines.append('        const visualMedia = VISUAL_MEDIA[visual.id] ?? null;')
     lines.append('        const visualOverlayConfig = VISUAL_OVERLAYS[visual.id] ?? null;')
+    lines.append('        const visualContract = VISUAL_CONTRACTS[visual.id] ?? null;')
     lines.append('')
     lines.append('        return (')
     lines.append('          <Sequence key={visual.id} from={visual.start} durationInFrames={visualDuration}>')
     lines.append('            {VisualComponent ? (')
     lines.append('              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
-    lines.append('                <VisualMediaProvider media={visualMedia}>')
-    lines.append('                  <VisualComponent />')
-    lines.append('                </VisualMediaProvider>')
+    lines.append('                <VisualContractProvider contract={visualContract}>')
+    lines.append('                  <VisualMediaProvider media={visualMedia}>')
+    lines.append('                    <VisualComponent />')
+    lines.append('                  </VisualMediaProvider>')
+    lines.append('                </VisualContractProvider>')
     lines.append('              </SlotScaledSequence>')
     if visual_media_manifest:
         lines.append('            ) : visualMedia?.defaultSrc ? (')
-        lines.append('              <VisualMediaProvider media={visualMedia}>')
+        lines.append('              <VisualContractProvider contract={visualContract}>')
+        lines.append('                <VisualMediaProvider media={visualMedia}>')
         if visual_overlay_manifest:
             lines.append('                {visualOverlayConfig ? (')
             lines.append('                  <GeneratedMediaVisual config={visualOverlayConfig} />')
@@ -1312,7 +1415,8 @@ def generate_generated_timeline_wrapper(
             lines.append('                )}')
         else:
             lines.append('                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
-        lines.append('              </VisualMediaProvider>')
+        lines.append('                </VisualMediaProvider>')
+        lines.append('              </VisualContractProvider>')
         lines.append('            ) : null}')
     else:
         lines.append('            ) : null}')
@@ -1490,7 +1594,25 @@ def generate_root_tsx(
     remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
     remotion_public = os.path.join(remotion_dir, 'public') if remotion_dir else ''
     preview_media_records: List[tuple[str, str, Dict[str, str]]] = []
+    preview_contract_records: List[tuple[str, str, Dict[str, Any]]] = []
     preview_wrapper_names: Dict[str, str] = {}
+    section_contract_lookup: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    if project_dir and remotion_public:
+        visual_contract_manifest = build_visual_contract_manifest(
+            sections,
+            project_dir,
+            remotion_public,
+        )
+        for section_entry in visual_contract_manifest.get('sections', []):
+            section_contract_lookup[section_entry['id']] = {
+                visual['id']: {
+                    'specBaseName': visual.get('specBaseName'),
+                    'dataPoints': visual.get('dataPoints'),
+                    'overlayConfig': visual.get('overlayConfig'),
+                }
+                for visual in section_entry.get('visuals', [])
+            }
 
     for section in sections:
         if not project_dir or not remotion_public:
@@ -1510,16 +1632,24 @@ def generate_root_tsx(
             if not comp_id:
                 continue
             media = visual_media_manifest.get(comp_id)
+            contract = section_contract_lookup.get(section['id'], {}).get(comp_id)
             if not media:
-                continue
+                if not contract:
+                    continue
             comp_pascal, _ = resolve_comp_import(comp_id, section['id'], remotion_src)
             preview_wrapper_names[comp_pascal] = f'{comp_pascal}Preview'
-            preview_media_records.append((section['id'], comp_id, media))
+            if media:
+                preview_media_records.append((section['id'], comp_id, media))
+            if contract:
+                preview_contract_records.append((section['id'], comp_id, contract))
 
     lines.append('import React from "react";')
     lines.append('import { Composition } from "remotion";')
-    if preview_media_records:
-        lines.append('import { VisualMediaProvider } from "./_shared/visual-runtime";')
+    if preview_media_records or preview_contract_records:
+        imports = ['VisualMediaProvider']
+        if preview_contract_records:
+            imports.append('VisualContractProvider')
+        lines.append(f'import {{ {", ".join(imports)} }} from "./_shared/visual-runtime";')
     lines.append('import "./_shared/load-inter-font";')
     lines.append('')
 
@@ -1544,7 +1674,7 @@ def generate_root_tsx(
                     imported_pascals.add(comp_pascal)
 
     lines.append('')
-    if preview_media_records:
+    if preview_media_records or preview_contract_records:
         lines.append('const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {')
         for section_id, comp_id, aliases in preview_media_records:
             alias_parts = ', '.join(
@@ -1552,6 +1682,11 @@ def generate_root_tsx(
                 for alias_name, alias_value in aliases.items()
             )
             lines.append(f'  "{section_id}:{comp_id}": {{ {alias_parts} }},')
+        lines.append('};')
+        lines.append('')
+        lines.append('const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {')
+        for section_id, comp_id, contract in preview_contract_records:
+            lines.append(f'  "{section_id}:{comp_id}": {json.dumps(contract, ensure_ascii=False)},')
         lines.append('};')
         lines.append('')
         generated_preview_wrappers: set = set()
@@ -1567,9 +1702,11 @@ def generate_root_tsx(
                 if not preview_wrapper_name or preview_wrapper_name in generated_preview_wrappers:
                     continue
                 lines.append(f'const {preview_wrapper_name}: React.FC = () => (')
-                lines.append(f'  <VisualMediaProvider media={{PREVIEW_VISUAL_MEDIA["{section_id}:{comp_id}"] ?? null}}>')
-                lines.append(f'    <{comp_pascal} />')
-                lines.append('  </VisualMediaProvider>')
+                lines.append(f'  <VisualContractProvider contract={{PREVIEW_VISUAL_CONTRACTS["{section_id}:{comp_id}"] ?? null}}>')
+                lines.append(f'    <VisualMediaProvider media={{PREVIEW_VISUAL_MEDIA["{section_id}:{comp_id}"] ?? null}}>')
+                lines.append(f'      <{comp_pascal} />')
+                lines.append('    </VisualMediaProvider>')
+                lines.append('  </VisualContractProvider>')
                 lines.append(');')
                 generated_preview_wrappers.add(preview_wrapper_name)
         lines.append('')

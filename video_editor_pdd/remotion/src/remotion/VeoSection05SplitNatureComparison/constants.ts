@@ -7,13 +7,12 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
-  background: '#0D1B2A',
-  divider: '#4DA8DA',
-  dividerGlow: '#4DA8DA',
-  leftLabel: '#FFD4A8',
-  rightLabel: '#A8E6CF',
+  background: '#000000',
+  divider: 'rgba(255, 255, 255, 0.9)',
+  dividerGlow: 'rgba(255, 255, 255, 0.35)',
+  labelBackground: 'rgba(11, 17, 32, 0.7)',
+  labelText: '#FFFFFF',
   headerText: '#FFFFFF',
-  vignette: 'rgba(0, 0, 0, 0.5)',
 };
 
 export const TYPOGRAPHY = {
@@ -31,26 +30,23 @@ export const TYPOGRAPHY = {
 };
 
 export const DIMENSIONS = {
-  // Left panel: 940×810 at (10, 140)
-  leftPanelX: 10,
-  leftPanelY: 140,
-  panelWidth: 940,
-  panelHeight: 810,
-  panelBorderRadius: 8,
-  // Right panel: 940×810 at (970, 140)
-  rightPanelX: 970,
-  rightPanelY: 140,
-  // Center divider at x=960, 2px wide, height 810px
-  dividerX: 960,
-  dividerY: 140,
-  dividerWidth: 2,
-  dividerHeight: 810,
-  dividerGlowRadius: 12,
-  // Labels below panels at y=980
-  labelY: 980,
-  leftLabelCenterX: 480,   // centered under left panel
-  rightLabelCenterX: 1440, // centered under right panel
-  // Header at y=60
+  leftPanelX: 0,
+  leftPanelY: 0,
+  panelWidth: 958,
+  panelHeight: 1080,
+  panelBorderRadius: 0,
+  rightPanelX: 962,
+  rightPanelY: 0,
+  dividerX: 958,
+  dividerY: 0,
+  dividerWidth: 4,
+  dividerHeight: 1080,
+  dividerGlowRadius: 8,
+  labelInsetX: 40,
+  labelBottomOffset: 40,
+  labelPaddingX: 16,
+  labelPaddingY: 8,
+  labelRadius: 20,
   headerY: 60,
 };
 

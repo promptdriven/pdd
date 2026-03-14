@@ -13,23 +13,22 @@ interface PanelLabelProps {
 
 export const PanelLabel: React.FC<PanelLabelProps> = ({ text, side, layout }) => {
   const isLeft = side === 'left';
-  const centerX = isLeft
-    ? DIMENSIONS.leftLabelCenterX * layout.scaleX
-    : DIMENSIONS.rightLabelCenterX * layout.scaleX;
-  const color = isLeft ? COLORS.leftLabel : COLORS.rightLabel;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: centerX,
-        top: DIMENSIONS.labelY * layout.scaleY,
-        transform: 'translateX(-50%)',
+        [isLeft ? 'left' : 'right']: DIMENSIONS.labelInsetX * layout.scaleX,
+        bottom: DIMENSIONS.labelBottomOffset * layout.scaleY,
         fontFamily: layout.typography.label.fontFamily,
         fontWeight: layout.typography.label.fontWeight,
         fontSize: layout.typography.label.fontSize,
-        color,
+        color: COLORS.labelText,
         whiteSpace: 'nowrap',
+        backgroundColor: COLORS.labelBackground,
+        padding: `${DIMENSIONS.labelPaddingY * layout.uniformScale}px ${DIMENSIONS.labelPaddingX * layout.uniformScale}px`,
+        borderRadius: DIMENSIONS.labelRadius * layout.uniformScale,
+        textAlign: isLeft ? 'left' : 'right',
       }}
     >
       {text}
