@@ -321,14 +321,20 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
   }, [expanded, loadSpecContent, sections]);
 
   const handleCreateAnnotation = useCallback(
-    (sectionId: string, finding: string, frameUrl: string) => {
+    (
+      sectionId: string,
+      finding: string,
+      frameUrl: string,
+      timestamp: number,
+      videoFile: string
+    ) => {
       onCreateAnnotation?.({
         text: finding,
         sectionId,
         compositeDataUrl: frameUrl,
-        timestamp: 0,
+        timestamp: timestamp,
         drawingDataUrl: null,
-        videoFile: '',
+        videoFile: videoFile,
       });
     },
     [onCreateAnnotation]
@@ -574,7 +580,9 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                                   handleCreateAnnotation(
                                     section.sectionId,
                                     spec.finding || spec.summary,
-                                    frame
+                                    frame,
+                                    spec.playbackWindow?.sampleSeconds ?? 0,
+                                    sectionVideo
                                   )
                                 }
                               >

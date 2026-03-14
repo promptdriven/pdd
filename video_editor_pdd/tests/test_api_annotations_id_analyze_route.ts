@@ -46,15 +46,26 @@ jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
+const mockGetProjectDir = jest.fn(() => "/tmp/project");
+const mockGetAppDir = jest.fn(() => "/tmp/app");
+const mockGetAppRemotionPublicDir = jest.fn(() => "/tmp/app/remotion/public");
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => mockGetProjectDir(),
+  getAppDir: () => mockGetAppDir(),
+  getAppRemotionPublicDir: () => mockGetAppRemotionPublicDir(),
+}));
+
 // Mock fs for temp file operations
+const actualFs = jest.requireActual("fs");
 const mockWriteFileSync = jest.fn();
 const mockExistsSync = jest.fn();
 const mockUnlinkSync = jest.fn();
+const mockReadFileSync = jest.fn((...args: any[]) => actualFs.readFileSync(...args));
 jest.mock("fs", () => ({
   writeFileSync: (...args: any[]) => mockWriteFileSync(...args),
   existsSync: (...args: any[]) => mockExistsSync(...args),
   unlinkSync: (...args: any[]) => mockUnlinkSync(...args),
-  readFileSync: jest.requireActual("fs").readFileSync,
+  readFileSync: (...args: any[]) => mockReadFileSync(...args),
 }));
 
 // Import after mock setup
@@ -129,9 +140,17 @@ beforeEach(() => {
       { id: "section-2", durationSeconds: 12, offsetSeconds: 11 },
     ],
   });
+  mockGetProjectDir.mockReset();
+  mockGetProjectDir.mockReturnValue("/tmp/project");
+  mockGetAppDir.mockReset();
+  mockGetAppDir.mockReturnValue("/tmp/app");
+  mockGetAppRemotionPublicDir.mockReset();
+  mockGetAppRemotionPublicDir.mockReturnValue("/tmp/app/remotion/public");
   mockWriteFileSync.mockReset();
   mockExistsSync.mockReset();
   mockUnlinkSync.mockReset();
+  mockReadFileSync.mockReset();
+  mockReadFileSync.mockImplementation((...args: any[]) => actualFs.readFileSync(...args));
   jest.spyOn(console, "error").mockImplementation(() => {});
   jest.spyOn(console, "log").mockImplementation(() => {});
   jest.spyOn(console, "warn").mockImplementation(() => {});
@@ -338,6 +357,37 @@ describe("POST — temp file handling", () => {
 
     const [, bufferArg] = mockWriteFileSync.mock.calls[0];
     expect(Buffer.isBuffer(bufferArg)).toBe(true);
+  });
+
+  it("supports internal /api/video/outputs asset URLs for compositeDataUrl", async () => {
+    const initialRow = makeDbRow({
+      compositeDataUrl: "/api/video/outputs/audit/section-1/frame.png",
+      drawingDataUrl: null,
+    });
+    const updatedRow = makeDbRow({
+      compositeDataUrl: "/api/video/outputs/audit/section-1/frame.png",
+      drawingDataUrl: null,
+      analysis: JSON.stringify(SAMPLE_ANALYSIS),
+    });
+    const rawPng = Buffer.from("png-bytes");
+    mockGet.mockReset();
+    mockGet.mockReturnValueOnce(initialRow).mockReturnValueOnce(updatedRow);
+    mockRunClaudeAnalysis.mockResolvedValue(SAMPLE_ANALYSIS);
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockImplementation((filePath: any, ...rest: any[]) => {
+      if (filePath === "/tmp/project/outputs/audit/section-1/frame.png") {
+        return rawPng;
+      }
+      return actualFs.readFileSync(filePath, ...rest);
+    });
+
+    const response = await POST(makeRequest("ann-123"), makeParams("ann-123"));
+
+    expect(response.status).toBe(200);
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("annotation_ann-123_composite.png"),
+      rawPng
+    );
   });
 
   it("cleans up temp file after successful analysis", async () => {
@@ -793,6 +843,11 @@ describe("app/api/annotations/[id]/analyze/route.ts source structure", () => {
   it("splits base64 data from data URL prefix", () => {
     expect(sourceCode).toMatch(/split\(.*,.*\)\[1\]/);
     expect(sourceCode).toMatch(/base64/);
+  });
+
+  it("supports internal /api/video/ asset URLs for composite frames", () => {
+    expect(sourceCode).toMatch(/\/api\/video\//);
+    expect(sourceCode).toMatch(/outputs/);
   });
 
   it("validates Claude output against AnnotationAnalysis shape", () => {

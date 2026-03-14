@@ -7,6 +7,7 @@ import { parseAnnotationAnalysis } from "@/lib/annotation-analysis";
 import { getDb } from "@/lib/db";
 import { runClaudeAnalysis } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
+import { getAppDir, getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 import { resolveAnnotationTarget } from "@/lib/annotation-target";
 import type { Annotation, AnnotationAnalysis } from "@/lib/types";
 
@@ -75,6 +76,62 @@ function mapAnnotationRow(row: any): Annotation {
   };
 }
 
+function decodeDataUrlToBuffer(source: string): Buffer {
+  const encoded = source.split(",")[1];
+  if (!encoded) {
+    throw new Error("Invalid data URL image payload");
+  }
+  return Buffer.from(encoded, "base64");
+}
+
+function resolveInternalVideoAssetPath(source: string): string {
+  const parsed = new URL(source, "http://localhost");
+  if (!parsed.pathname.startsWith("/api/video/")) {
+    throw new Error("Unsupported annotation image URL");
+  }
+
+  const relativePath = parsed.pathname.replace(/^\/api\/video\//, "");
+  const pathSegments = relativePath.split("/").filter(Boolean);
+  if (pathSegments.length === 0) {
+    throw new Error("Unsupported annotation image URL");
+  }
+  if (pathSegments.some((segment) => segment === ".." || segment.includes(".."))) {
+    throw new Error("Forbidden annotation image path");
+  }
+
+  const requestedPath = path.join(...pathSegments);
+  const resolved = requestedPath.startsWith(path.join("remotion", "public"))
+    ? path.resolve(path.join(getAppDir(), requestedPath))
+    : path.resolve(path.join(getProjectDir(), requestedPath));
+
+  const allowedRoots = [
+    path.resolve(path.join(getProjectDir(), "outputs")),
+    path.resolve(getAppRemotionPublicDir()),
+  ];
+
+  if (!allowedRoots.some((root) => resolved === root || resolved.startsWith(root + path.sep))) {
+    throw new Error("Forbidden annotation image path");
+  }
+
+  if (!fs.existsSync(resolved)) {
+    throw new Error("Annotation image file not found");
+  }
+
+  return resolved;
+}
+
+function readAnnotationImageBuffer(source: string): Buffer {
+  if (source.startsWith("data:")) {
+    return decodeDataUrlToBuffer(source);
+  }
+
+  if (source.startsWith("/api/video/")) {
+    return fs.readFileSync(resolveInternalVideoAssetPath(source));
+  }
+
+  throw new Error("Unsupported annotation image source");
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -130,17 +187,11 @@ export async function POST(
       os.tmpdir(),
       `annotation_${id}_composite.png`
     );
-    fs.writeFileSync(
-      tmpPath,
-      Buffer.from(normalizedAnnotation.compositeDataUrl.split(",")[1], "base64")
-    );
+    fs.writeFileSync(tmpPath, readAnnotationImageBuffer(normalizedAnnotation.compositeDataUrl));
 
     if (normalizedAnnotation.drawingDataUrl) {
       overlayTmpPath = path.join(os.tmpdir(), `annotation_${id}_overlay.png`);
-      fs.writeFileSync(
-        overlayTmpPath,
-        Buffer.from(normalizedAnnotation.drawingDataUrl.split(",")[1], "base64")
-      );
+      fs.writeFileSync(overlayTmpPath, readAnnotationImageBuffer(normalizedAnnotation.drawingDataUrl));
     }
 
     // Build prompt for Claude

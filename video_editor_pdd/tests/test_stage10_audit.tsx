@@ -407,6 +407,14 @@ describe("Create Annotation handler", () => {
     expect(sourceCode).toMatch(/compositeDataUrl:\s*frameUrl/);
   });
 
+  it("pre-fill shape includes timestamp from the sampled playback window", () => {
+    expect(sourceCode).toMatch(/timestamp:\s*timestamp/);
+  });
+
+  it("pre-fill shape includes the section video file for downstream review", () => {
+    expect(sourceCode).toMatch(/videoFile:\s*videoFile/);
+  });
+
   it("uses onCreateAnnotation callback", () => {
     expect(sourceCode).toMatch(/onCreateAnnotation\?\.\(/);
   });

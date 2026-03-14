@@ -526,6 +526,26 @@ describe("create annotation from audit stage", () => {
     expect(sourceCode).toMatch(/setActiveTab\s*\(\s*['"]review['"]\s*\)/);
   });
 
+  it("persists audit-created annotations via POST /api/annotations", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/annotations['"]\s*,\s*\{/);
+  });
+
+  it("uses the audit-provided sectionId when creating the annotation", () => {
+    expect(sourceCode).toMatch(/sectionId\s*:\s*data\.sectionId/);
+  });
+
+  it("analyzes the created audit annotation when an id is returned", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/annotations\/\$\{createdAnnotation\.id\}\/analyze`\s*,\s*\{\s*method\s*:\s*['"]POST['"]/);
+  });
+
+  it("refreshes annotations after creating an audit annotation", () => {
+    expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*reviewUsesFreshFullVideo\s*\?\s*undefined\s*:\s*targetSectionId\s*\)/);
+  });
+
+  it("selects the created annotation in Review when an id is returned", () => {
+    expect(sourceCode).toMatch(/setSelectedAnnotationId\s*\(\s*createdAnnotation\.id\s*\)/);
+  });
+
   it("passes onCreateAnnotation prop to StagePanel", () => {
     expect(sourceCode).toMatch(/onCreateAnnotation=\{handleCreateAnnotationFromAudit\}/);
   });
@@ -556,8 +576,10 @@ describe("handleAnnotationCapture", () => {
     expect(sourceCode).toMatch(/sectionId/);
   });
 
-  it("uses annotationScopeSectionId before selectedSectionId when creating annotations", () => {
-    expect(sourceCode).toMatch(/const\s+captureSectionId\s*=\s*annotationScopeSectionId\s*\?\?\s*selectedSectionId/);
+  it("prefers explicit section ids before falling back to annotation scope and selected section", () => {
+    expect(sourceCode).toMatch(
+      /const\s+captureSectionId\s*=\s*options\?\.sectionId\s*\?\?\s*data\.sectionId\s*\?\?\s*annotationScopeSectionId\s*\?\?\s*selectedSectionId/
+    );
     expect(sourceCode).toMatch(/sectionId\s*:\s*effectiveSectionId/);
   });
 

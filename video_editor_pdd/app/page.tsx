@@ -710,18 +710,18 @@ export default function Page() {
     if (next) setActiveStage(next);
   }, [activeStage]);
 
-  const handleCreateAnnotationFromAudit = useCallback(
-    (data: AnnotationCaptureData) => {
-      setAnnotationPreFill(data);
-      setActiveTab('review');
-    },
-    []
-  );
-
-  const handleAnnotationCapture = useCallback(
-    async (data: AnnotationCaptureData) => {
-      const captureSectionId = annotationScopeSectionId ?? selectedSectionId;
+  const persistAnnotation = useCallback(
+    async (
+      data: AnnotationCaptureData & { sectionId?: string },
+      options?: {
+        sectionId?: string;
+        switchToReview?: boolean;
+      }
+    ) => {
+      const captureSectionId = options?.sectionId ?? data.sectionId ?? annotationScopeSectionId ?? selectedSectionId;
       if (!captureSectionId) return;
+
+      const shouldSwitchToReview = options?.switchToReview ?? false;
       const globalTimestamp = reviewUsesFreshFullVideo
         ? reviewCurrentTime ?? data.timestamp
         : undefined;
@@ -735,59 +735,66 @@ export default function Page() {
         reviewUsesFreshFullVideo && globalTimestamp != null && effectiveSection
           ? Math.max(0, globalTimestamp - (effectiveSection.offsetSeconds ?? 0))
           : data.timestamp;
-      try {
-        const createResponse = await fetch('/api/annotations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sectionId: effectiveSectionId,
-            timestamp: sectionTimestamp,
-            globalTimestamp,
-            sectionTimestamp,
-            text: data.text,
-            drawingDataUrl: data.drawingDataUrl,
-            compositeDataUrl: data.compositeDataUrl,
-            videoFile: data.videoFile,
-            inputMethod: data.inputMethod,
-          }),
+
+      const createResponse = await fetch('/api/annotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sectionId: effectiveSectionId,
+          timestamp: sectionTimestamp,
+          globalTimestamp,
+          sectionTimestamp,
+          text: data.text,
+          drawingDataUrl: data.drawingDataUrl,
+          compositeDataUrl: data.compositeDataUrl,
+          videoFile: data.videoFile,
+          inputMethod: data.inputMethod,
+        }),
+      });
+
+      if (!createResponse.ok) {
+        throw new Error('Failed to create annotation');
+      }
+
+      const createdAnnotation = await createResponse.json();
+      const targetSectionId = createdAnnotation?.sectionId ?? effectiveSectionId;
+
+      if (shouldSwitchToReview) {
+        setSelectedSectionId(targetSectionId);
+        setActiveTab('review');
+      } else if (!reviewUsesFreshFullVideo && targetSectionId !== captureSectionId) {
+        setSelectedSectionId(targetSectionId);
+      }
+
+      if (!reviewUsesFreshFullVideo && targetSectionId !== captureSectionId) {
+        setAnnotations([createdAnnotation]);
+      } else {
+        setAnnotations((prev) => [...prev, createdAnnotation]);
+      }
+
+      if (createdAnnotation?.id) {
+        setSelectedAnnotationId(createdAnnotation.id);
+        setAnnotationSeekRequest({
+          annotationId: createdAnnotation.id,
+          timestamp:
+            reviewUsesFreshFullVideo && globalTimestamp != null
+              ? globalTimestamp
+              : sectionTimestamp,
         });
 
-        if (!createResponse.ok) {
-          throw new Error('Failed to create annotation');
+        try {
+          const analyzeResponse = await fetch(`/api/annotations/${createdAnnotation.id}/analyze`, {
+            method: 'POST',
+          });
+          if (!analyzeResponse.ok) {
+            console.error('Failed to analyze annotation', createdAnnotation.id);
+          }
+        } catch (analysisErr) {
+          console.error(analysisErr);
         }
-
-        const createdAnnotation = await createResponse.json();
-        const targetSectionId = createdAnnotation?.sectionId ?? effectiveSectionId;
-
-        if (!reviewUsesFreshFullVideo && targetSectionId !== captureSectionId) {
-          setSelectedSectionId(targetSectionId);
-          setAnnotations([createdAnnotation]);
-        } else {
-          setAnnotations((prev) => [...prev, createdAnnotation]);
-        }
-
-        if (createdAnnotation?.id) {
-          void (async () => {
-            try {
-              const analyzeResponse = await fetch(
-                `/api/annotations/${createdAnnotation.id}/analyze`,
-                { method: 'POST' }
-              );
-
-              if (!analyzeResponse.ok) {
-                console.error('Failed to analyze annotation', createdAnnotation.id);
-              }
-            } catch (analysisErr) {
-              console.error(analysisErr);
-            }
-            await loadAnnotations(reviewUsesFreshFullVideo ? undefined : targetSectionId);
-          })();
-        } else {
-          await loadAnnotations(reviewUsesFreshFullVideo ? undefined : targetSectionId);
-        }
-      } catch (err) {
-        console.error(err);
       }
+
+      await loadAnnotations(reviewUsesFreshFullVideo ? undefined : targetSectionId);
     },
     [
       annotationScopeSectionId,
@@ -797,6 +804,33 @@ export default function Page() {
       reviewUsesFreshFullVideo,
       selectedSectionId,
     ]
+  );
+
+  const handleCreateAnnotationFromAudit = useCallback(
+    async (data: AnnotationCaptureData & { sectionId?: string }) => {
+      setAnnotationPreFill(data);
+      try {
+        await persistAnnotation(data, {
+          sectionId: data.sectionId,
+          switchToReview: true,
+        });
+      } catch (err) {
+        console.error(err);
+        setActiveTab('review');
+      }
+    },
+    [persistAnnotation]
+  );
+
+  const handleAnnotationCapture = useCallback(
+    async (data: AnnotationCaptureData) => {
+      try {
+        await persistAnnotation(data);
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [persistAnnotation]
   );
 
   const handleBatchResolve = useCallback(async (_jobId: string) => {
