@@ -35,6 +35,10 @@ SAMPLE_RATE = 24000  # Qwen TTS models typically output 24kHz audio
 TAG_PATTERN = re.compile(
     r"\[(?:TONE|PACE|PAUSE|EMOTION)\s*:\s*[^\]]*\]", re.IGNORECASE
 )
+NARRATOR_LABEL_PATTERN = re.compile(
+    r"^\s*(?:\*{1,2}|_{1,2})?NARRATOR:(?:\*{1,2}|_{1,2})?\s*",
+    re.IGNORECASE | re.MULTILINE,
+)
 PAUSE_PATTERN = re.compile(
     r"\[PAUSE\s*:\s*([\d.]+)\s*s?\]", re.IGNORECASE
 )
@@ -53,6 +57,13 @@ NARRATOR_PATTERN = re.compile(
     r"^NARRATOR\s*:\s*(.+?)(?=^NARRATOR\s*:|\Z)",
     re.MULTILINE | re.DOTALL,
 )
+
+
+def _normalize_spoken_text(text: str) -> str:
+    """Strip control markup and collapse formatting whitespace for TTS."""
+    stripped = TAG_PATTERN.sub("", text)
+    stripped = NARRATOR_LABEL_PATTERN.sub("", stripped)
+    return re.sub(r"\s+", " ", stripped).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +105,7 @@ class Segment:
         for match in PAUSE_PATTERN.finditer(self.raw_text):
             # Text before the pause
             before = self.raw_text[last_end:match.start()]
-            clean = TAG_PATTERN.sub("", before).strip()
+            clean = _normalize_spoken_text(before)
             if clean:
                 chunks.append({"type": "text", "content": clean})
             # The pause itself
@@ -107,13 +118,13 @@ class Segment:
 
         # Remaining text after last pause
         remaining = self.raw_text[last_end:]
-        clean = TAG_PATTERN.sub("", remaining).strip()
+        clean = _normalize_spoken_text(remaining)
         if clean:
             chunks.append({"type": "text", "content": clean})
 
         # If no chunks were produced (edge case), use full cleaned text
         if not chunks:
-            clean_all = TAG_PATTERN.sub("", self.raw_text).strip()
+            clean_all = _normalize_spoken_text(self.raw_text)
             if clean_all:
                 chunks.append({"type": "text", "content": clean_all})
 
@@ -122,7 +133,7 @@ class Segment:
     @property
     def clean_text(self) -> str:
         """Full text with all annotation tags stripped."""
-        return TAG_PATTERN.sub("", self.raw_text).strip()
+        return _normalize_spoken_text(self.raw_text)
 
 
 def build_segments_manifest(segments: List["Segment"]) -> List[Dict[str, Any]]:
@@ -246,7 +257,7 @@ def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
 
         seg_counter = 0
         for part in parts:
-            clean = TAG_PATTERN.sub("", part).strip()
+            clean = _normalize_spoken_text(part)
             if len(clean) < 10:
                 continue  # Skip trivially short fragments
             seg_counter += 1
@@ -255,7 +266,7 @@ def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
 
         # If no sub-segments were created, use the whole section as one segment
         if seg_counter == 0:
-            clean = TAG_PATTERN.sub("", body).strip()
+            clean = _normalize_spoken_text(body)
             if clean:
                 segments.append(Segment(f"{section_id}_001", body))
 
