@@ -1494,6 +1494,44 @@ class TestIsIntermediateFile:
         """error_output debug files should be filtered (gap fix for #383)."""
         assert is_intermediate(path) is True
 
+    @pytest.mark.parametrize("path", [
+        ".pdd/backups/2026-03-09_123456/module.py",
+        ".pdd/backups/2026-03-09_123456/test_module.py",
+        ".pdd/core_dumps/pdd-core-abc123.json",
+        ".pdd/debug/trace.json",
+    ])
+    def test_pdd_directory_artifacts_filtered(self, is_intermediate, path):
+        """Artifacts under .pdd/ should be filtered (Issue #824)."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "step3_output.md",
+        "step9_output.md",
+        "step12_output.md",
+    ])
+    def test_step_output_files_filtered(self, is_intermediate, path):
+        """Workflow step output files should be filtered (Issue #824)."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "waitlist_fix_errors.txt",
+        "waitlist_test_errors.txt",
+        "module_errors.txt",
+        "auth_fix_errors.txt",
+    ])
+    def test_errors_txt_files_filtered(self, is_intermediate, path):
+        """Workflow error logs ending in _errors.txt should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "test_issue_824_reproduction.py",
+        "test_issue_383_reproduction.py",
+        "test_issue_100_reproduction.py",
+    ])
+    def test_reproduction_test_files_filtered(self, is_intermediate, path):
+        """Issue reproduction leftovers should be filtered (Issue #824)."""
+        assert is_intermediate(path) is True
+
     # --- Should NOT be filtered (False) — false-positive guards ---
 
     @pytest.mark.parametrize("path", [
@@ -1509,6 +1547,11 @@ class TestIsIntermediateFile:
         "README.md",
         "extensions/github_pdd_app/src/models.py",
         "error_output.py",
+        ".pddrc",
+        "pdd/step_handler.py",
+        "tests/test_errors.py",
+        "fixed_point_errors.log",
+        "tests/test_issue_reproduction_helper.py",
     ])
     def test_legitimate_files_not_filtered(self, is_intermediate, path):
         """Legitimate files must NOT be caught by the filter."""
@@ -1529,7 +1572,7 @@ class TestIsIntermediateFile:
 
 
 class TestCommitAndPushIntermediateFileFiltering:
-    """Tests for issue #383: _commit_and_push should filter out intermediate files.
+    """Tests for issue #383/#824 intermediate file filtering in _commit_and_push.
 
     The `pdd fix agentic` command creates intermediate/debug files with suffixes
     like `_fixed.py` during the fix workflow. These files should NOT be committed.
@@ -1711,6 +1754,128 @@ class TestCommitAndPushIntermediateFileFiltering:
         assert "error_output_models.txt" not in staged_files, (
             "error_output_models.txt should NOT be staged"
         )
+
+    def test_commit_and_push_filters_issue824_artifact_files(self, mock_git_repo):
+        """_commit_and_push should filter newer workflow artifacts (Issue #824)."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        artifact_files = [
+            ".pdd/backups/2026-03-09_123456/module.py",
+            ".pdd/core_dumps/pdd-core-abc123.json",
+            "step9_output.md",
+            "waitlist_fix_errors.txt",
+            "waitlist_test_errors.txt",
+            "test_issue_824_reproduction.py",
+        ]
+        legitimate_files = [
+            "module.py",
+            "tests/test_module.py",
+        ]
+
+        for filepath in artifact_files + legitimate_files:
+            full_path = cwd / filepath
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(f"# {full_path.name}\n")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=824,
+                issue_title="Artifact filtering",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        for filepath in legitimate_files:
+            assert filepath in staged_files, f"Legitimate file {filepath} should be staged"
+        for filepath in artifact_files:
+            assert filepath not in staged_files, f"Artifact file {filepath} should NOT be staged"
+
+    def test_commit_and_push_fallback_filters_issue824_artifacts(self, mock_git_repo):
+        """Fallback staging path should apply the same Issue #824 filter."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+
+        cwd = mock_git_repo
+        legitimate_file = "module.py"
+        artifact_files = [
+            "step9_output.md",
+            "waitlist_fix_errors.txt",
+        ]
+
+        for filepath in [legitimate_file] + artifact_files:
+            full_path = cwd / filepath
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(f"# {full_path.name}\n")
+
+        initial_hashes = _get_file_hashes(cwd)
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value={legitimate_file, *artifact_files},
+        ):
+            with patch("subprocess.run", side_effect=mock_run):
+                _commit_and_push(
+                    cwd=cwd,
+                    issue_number=824,
+                    issue_title="Artifact filtering",
+                    repo_owner="test",
+                    repo_name="repo",
+                    initial_file_hashes=initial_hashes,
+                    quiet=True,
+                )
+
+        assert legitimate_file in staged_files, "Legitimate file should be staged via fallback"
+        for filepath in artifact_files:
+            assert filepath not in staged_files, f"Artifact file {filepath} should NOT be staged"
 
 class TestIndependentTestVerification:
     """Tests for issue #588: Independent pytest verification of LLM claims.
@@ -2839,4 +3004,46 @@ class TestIssue830SaveWorkflowStateOrchestratorIntegration:
         assert result is None or result != stale_comment_id, (
             f"save_workflow_state returned stale comment_id {result} when GitHub save failed. "
             f"Should return None to signal failure, not the old id {stale_comment_id}."
+        )
+
+
+class TestStep9PromptRequiresControlToken:
+    """The Step 9 prompt must explicitly require the LLM to emit a control token.
+
+    Without a mandatory instruction, the LLM may write a valid verification
+    summary but skip the control token entirely (as happened on issue #824),
+    causing the orchestrator to treat it as a missing token and stop.
+    """
+
+    def test_step9_prompt_mandates_control_token(self):
+        """The Step 9 prompt must contain a mandatory instruction to always
+        emit exactly one of ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED."""
+        from pdd.load_prompt_template import load_prompt_template
+
+        prompt = load_prompt_template("agentic_e2e_fix_step9_verify_all_LLM")
+        assert prompt is not None, "Could not load Step 9 prompt template"
+
+        prompt_lower = prompt.lower()
+
+        # Must contain a mandatory requirement, not just an informational note
+        has_mandatory_language = any(phrase in prompt_lower for phrase in [
+            "you must emit",
+            "you must include",
+            "you must output",
+            "always emit",
+            "required to emit",
+            "mandatory",
+            "must appear in your output",
+            "must be present in your response",
+            "your response must contain exactly one of",
+            "always include exactly one",
+        ])
+
+        assert has_mandatory_language, (
+            "Step 9 prompt does not contain mandatory language requiring the LLM to emit "
+            "a control token. The current wording ('these strings control the outer loop') "
+            "is informational, not imperative. The LLM can write a valid response without "
+            "emitting any token, causing the orchestrator to stop with 'missing token'. "
+            "Add explicit mandatory instruction like 'You MUST include exactly one of "
+            "ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED in your response.'"
         )
