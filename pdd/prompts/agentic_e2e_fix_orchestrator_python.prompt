@@ -12,7 +12,7 @@ The orchestrator must interpret special status markers in step outputs:
 The orchestrator must treat NOT_A_BUG as a first‑class loop‑control token, alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
 
 % Environment Safety: _check_e2e_environment
-Before running any E2E workflow, the orchestrator must explicitly call or conceptually perform `_check_e2e_environment`.
+Before running any E2E workflow, the orchestrator must explicitly call the `_check_e2e_environment` helper function.
 This verifies that E2E tests can safely run in the current environment (CI or local), including:
 - required tools (Python, Node, browsers, etc.)
 - required environment variables and endpoints
@@ -22,7 +22,7 @@ If the environment is unsafe, the orchestrator stops early with an informative m
 The orchestrator tracks last_completed_step and, when resuming, may skip earlier steps.
 However, it must still preserve and reload previous step outputs so that later steps receive a coherent context.
 This behavior is called `skipped_steps_memory`: even skipped steps contribute their prior stepN_output values into downstream prompts.
-skipped_steps persists across cycles and is NOT cleared when step_outputs is cleared.
+The skipped_steps (or equivalent) state Persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
 
 This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory`
 so tests can assert the orchestrator prompt documents these behaviors.
