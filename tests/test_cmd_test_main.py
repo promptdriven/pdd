@@ -407,6 +407,56 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
         handle.write.assert_called_once_with("unit_test_code")
 
 
+def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx_fixture, mock_files_fixture, tmp_path):
+    """
+    Regression: For non-Python agentic test generation, generated content must be
+    written to the requested output path (sync-expected path).
+
+    Bug: cmd_test_main only calls output_test_path.write_text(generated_content)
+    when detected_language == 'python'. For TypeScript/JavaScript, content
+    returned from run_agentic_test_generate (e.g. when agent wrote to a different
+    path) is never written to output_test_path, so sync's pdd_files['test'] stays
+    missing. This test FAILS before the fix, PASSes after.
+    """
+    expected_output = tmp_path / "tests" / "test_calc.ts"
+    # Do NOT create expected_output or its parent - verify cmd_test_main creates the directory when missing.
+    generated_content = "test('add', () => { expect(1 + 2).toBe(3); });"
+
+    mock_agentic = MagicMock(return_value=(generated_content, 0.1, "agentic-cli", True))
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", mock_agentic):
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(expected_output)},
+            "typescript",
+        )
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.ts",
+            output=str(expected_output),
+            language="typescript",
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+    assert expected_output.parent.is_dir(), (
+        "cmd_test_main must create the parent directory for the requested output path if it does not exist."
+    )
+    assert expected_output.exists(), (
+        "BUG: Non-Python agentic test content must be written to the requested output path. "
+        "cmd_test_main currently only writes for Python."
+    )
+    assert expected_output.read_text() == generated_content, (
+        "Output file content must match generated_content returned by run_agentic_test_generate."
+    )
+
+
 def test_cmd_test_main_uses_safe_ctx_obj_access():
     """
     Regression: cmd_test_main should not raise KeyError if ctx.obj
