@@ -31,6 +31,7 @@ from click.testing import CliRunner
 
 from pdd import cli
 from pdd import auto_include as auto_include_module
+from pdd.auto_include import AutoIncludeResult, NewInclude
 
 
 @pytest.fixture(autouse=True)
@@ -79,9 +80,9 @@ Write clean, well-documented Python code that follows best practices.
         (tmp_path / "test_python.prompt").write_text(prompt_content)
 
         # 2. Create a CSV file for dependencies (normally created by summarize_directory)
-        csv_content = """full_path,file_summary,date
-context/python_preamble.prompt,Python preamble with coding standards,2023-02-02
-context/helper_example.py,Helper utility functions,2023-02-02
+        csv_content = """full_path,file_summary,date,key_exports,dependencies
+context/python_preamble.prompt,Python preamble with coding standards,2023-02-02,,
+context/helper_example.py,Helper utility functions,2023-02-02,"helper_func","
 """
         (tmp_path / "dependencies.csv").write_text(csv_content)
 
@@ -102,31 +103,22 @@ context/helper_example.py,Helper utility functions,2023-02-02
 
         def mock_llm_invoke_for_auto_include(*args, **kwargs):
             """Mock llm_invoke calls in the auto-include flow."""
-            prompt = kwargs.get("prompt", args[0] if args else "")
             input_json = kwargs.get("input_json", {})
 
-            # Detect which prompt template is being used
-            if "auto_include_LLM" in prompt or "available_includes" in input_json:
-                # First LLM call: auto_include_LLM - suggest dependencies
-                return {
-                    "result": "Include python_preamble and helper_example for context",
-                    "cost": 0.001,
-                    "model_name": "mock-model",
-                }
-            elif kwargs.get("output_pydantic"):
+            if kwargs.get("output_pydantic"):
                 pydantic_class = kwargs["output_pydantic"]
                 class_name = pydantic_class.__name__
 
-                if class_name == "AutoIncludeOutput":
-                    # Second LLM call: extract_auto_include_LLM - return wrapped includes
-                    # This simulates the LLM returning a DUPLICATE of the existing include
-                    # wrapped in module tags, plus a non-duplicate include
-                    mock_result = MagicMock()
-                    mock_result.string_of_includes = (
-                        "<context.python_preamble><include>context/python_preamble.prompt"
-                        "</include></context.python_preamble>\n"
-                        "<utils.helper><include>context/helper_example.py"
-                        "</include></utils.helper>"
+                if class_name == "AutoIncludeResult":
+                    # Single LLM call: auto_include_LLM with Pydantic structured output
+                    # Returns a DUPLICATE of the existing include + a non-duplicate
+                    mock_result = AutoIncludeResult(
+                        reasoning="Including python_preamble and helper_example",
+                        new_includes=[
+                            NewInclude(file="context/python_preamble.prompt", module="context.python_preamble"),
+                            NewInclude(file="context/helper_example.py", module="utils.helper"),
+                        ],
+                        existing_include_annotations=[],
                     )
                     return {
                         "result": mock_result,
@@ -134,13 +126,11 @@ context/helper_example.py,Helper utility functions,2023-02-02
                         "model_name": "mock-model",
                     }
                 elif class_name == "InsertIncludesOutput":
-                    # Third LLM call: insert_includes_LLM - insert deps into prompt
-                    # Capture what dependencies were passed to this step
+                    # insert_includes_LLM call - insert deps into prompt
                     deps = input_json.get("actual_dependencies_to_insert", "")
                     captured_dependencies.append(deps)
 
                     mock_result = MagicMock()
-                    # Return prompt with only the deps that were passed
                     mock_result.output_prompt = f"{prompt_content}\n{deps}"
                     return {
                         "result": mock_result,
@@ -220,9 +210,9 @@ Write clean, well-documented Python code that follows best practices.
         (tmp_path / "test_python.prompt").write_text(prompt_content)
 
         # 2. Create CSV and context files
-        csv_content = """full_path,file_summary,date
-context/python_preamble.prompt,Python preamble with coding standards,2023-02-02
-context/helper_example.py,Helper utility functions,2023-02-02
+        csv_content = """full_path,file_summary,date,key_exports,dependencies
+context/python_preamble.prompt,Python preamble with coding standards,2023-02-02,,
+context/helper_example.py,Helper utility functions,2023-02-02,"helper_func","
 """
         (tmp_path / "dependencies.csv").write_text(csv_content)
 
@@ -239,26 +229,20 @@ context/helper_example.py,Helper utility functions,2023-02-02
 
         def mock_llm_invoke_for_auto_include(*args, **kwargs):
             """Mock llm_invoke calls."""
-            prompt = kwargs.get("prompt", args[0] if args else "")
             input_json = kwargs.get("input_json", {})
 
-            if "auto_include_LLM" in prompt or "available_includes" in input_json:
-                return {
-                    "result": "Include both files",
-                    "cost": 0.001,
-                    "model_name": "mock-model",
-                }
-            elif kwargs.get("output_pydantic"):
+            if kwargs.get("output_pydantic"):
                 pydantic_class = kwargs["output_pydantic"]
                 class_name = pydantic_class.__name__
 
-                if class_name == "AutoIncludeOutput":
-                    mock_result = MagicMock()
-                    mock_result.string_of_includes = (
-                        "<context.python_preamble><include>context/python_preamble.prompt"
-                        "</include></context.python_preamble>\n"
-                        "<utils.helper><include>context/helper_example.py"
-                        "</include></utils.helper>"
+                if class_name == "AutoIncludeResult":
+                    mock_result = AutoIncludeResult(
+                        reasoning="Including both files",
+                        new_includes=[
+                            NewInclude(file="context/python_preamble.prompt", module="context.python_preamble"),
+                            NewInclude(file="context/helper_example.py", module="utils.helper"),
+                        ],
+                        existing_include_annotations=[],
                     )
                     return {
                         "result": mock_result,
@@ -344,14 +328,15 @@ Write clean Python code.
             """Mock llm_invoke to return controlled dependencies."""
             if kwargs.get("output_pydantic"):
                 pydantic_class = kwargs["output_pydantic"]
-                if pydantic_class.__name__ == "AutoIncludeOutput":
-                    mock_result = MagicMock()
-                    # Return a wrapped duplicate of the existing include + a non-duplicate
-                    mock_result.string_of_includes = (
-                        "<context.python_preamble><include>context/python_preamble.prompt"
-                        "</include></context.python_preamble>\n"
-                        "<utils.helper><include>context/helper_example.py"
-                        "</include></utils.helper>"
+                if pydantic_class.__name__ == "AutoIncludeResult":
+                    # Return a DUPLICATE of the existing include + a non-duplicate
+                    mock_result = AutoIncludeResult(
+                        reasoning="Including python_preamble and helper_example",
+                        new_includes=[
+                            NewInclude(file="context/python_preamble.prompt", module="context.python_preamble"),
+                            NewInclude(file="context/helper_example.py", module="utils.helper"),
+                        ],
+                        existing_include_annotations=[],
                     )
                     return {
                         "result": mock_result,
@@ -360,15 +345,15 @@ Write clean Python code.
                     }
 
             return {
-                "result": "Step 4: Include python_preamble and helper",
+                "result": "Default mock response",
                 "cost": 0.001,
                 "model_name": "mock-model",
             }
 
         def mock_summarize_directory(*args, **kwargs):
-            csv = """full_path,file_summary,date
-context/python_preamble.prompt,Python preamble,2023-02-02
-context/helper_example.py,Helper utilities,2023-02-02
+            csv = """full_path,file_summary,date,key_exports,dependencies
+context/python_preamble.prompt,Python preamble,2023-02-02,,
+context/helper_example.py,Helper utilities,2023-02-02,"helper_func","
 """
             return (csv, 0.001, "mock-model")
 
