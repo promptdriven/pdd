@@ -36,6 +36,53 @@ interface AuditResultsResponse {
   sections: SectionAudit[];
 }
 
+function normalizeSpecVerdict(spec: Partial<SpecVerdict> | null | undefined): SpecVerdict {
+  return {
+    specName: typeof spec?.specName === 'string' ? spec.specName : 'unknown_spec',
+    verdict:
+      spec?.verdict === 'PASS' ||
+      spec?.verdict === 'FAIL' ||
+      spec?.verdict === 'SKIP' ||
+      spec?.verdict === 'WARN'
+        ? spec.verdict
+        : 'SKIP',
+    summary: typeof spec?.summary === 'string' ? spec.summary : 'No summary available.',
+    finding: typeof spec?.finding === 'string' ? spec.finding : undefined,
+    specPath: typeof spec?.specPath === 'string' ? spec.specPath : undefined,
+    playbackWindow:
+      spec?.playbackWindow &&
+      typeof spec.playbackWindow.startSeconds === 'number' &&
+      typeof spec.playbackWindow.endSeconds === 'number' &&
+      typeof spec.playbackWindow.sampleSeconds === 'number' &&
+      (spec.playbackWindow.source === 'timestamp' ||
+        spec.playbackWindow.source === 'frame-range' ||
+        spec.playbackWindow.source === 'fallback')
+        ? spec.playbackWindow
+        : undefined,
+  };
+}
+
+function normalizeSectionAudit(section: Partial<SectionAudit> | null | undefined): SectionAudit {
+  return {
+    sectionId: typeof section?.sectionId === 'string' ? section.sectionId : 'unknown_section',
+    sectionLabel:
+      typeof section?.sectionLabel === 'string' ? section.sectionLabel : 'Unknown Section',
+    passCount: typeof section?.passCount === 'number' ? section.passCount : 0,
+    warnCount: typeof section?.warnCount === 'number' ? section.warnCount : 0,
+    failCount: typeof section?.failCount === 'number' ? section.failCount : 0,
+    status:
+      section?.status === 'pending' ||
+      section?.status === 'running' ||
+      section?.status === 'done' ||
+      section?.status === 'error'
+        ? section.status
+        : 'pending',
+    specs: Array.isArray(section?.specs)
+      ? section.specs.map((spec) => normalizeSpecVerdict(spec))
+      : [],
+  };
+}
+
 interface Stage10AuditProps {
   onAdvance: () => void;
   projectConfig?: any;
@@ -90,7 +137,12 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
       const res = await fetch('/api/pipeline/audit/results');
       if (!res.ok) throw new Error('Failed to load audit results.');
       const data: AuditResultsResponse = await res.json();
-      if (mountedRef.current) setSections(data.sections || []);
+      if (mountedRef.current) {
+        const normalizedSections = Array.isArray(data.sections)
+          ? data.sections.map((section) => normalizeSectionAudit(section))
+          : [];
+        setSections(normalizedSections);
+      }
     } catch (err: any) {
       if (mountedRef.current) {
         setError(err.message || 'Failed to load audit results.');
@@ -114,7 +166,13 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
                   passCount: data.passCount ?? section.passCount,
                   warnCount: data.warnCount ?? section.warnCount,
                   failCount: data.failCount ?? section.failCount,
-                  status: data.status ?? section.status,
+                  status:
+                    data.status === 'pending' ||
+                    data.status === 'running' ||
+                    data.status === 'done' ||
+                    data.status === 'error'
+                      ? data.status
+                      : section.status,
                 }
           : section
       )
