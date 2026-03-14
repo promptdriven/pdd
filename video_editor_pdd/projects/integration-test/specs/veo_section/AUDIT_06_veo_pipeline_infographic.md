@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-Frame 22/30 (75% progress) shows the pipeline infographic in the expected state for the Arrow 2 drawing phase (frames 20-24). The section title 'How Veo Works' is correctly positioned at top center in white bold text. Node 1 ('Text Prompt') is fully visible with an indigo border and text cursor icon. Node 2 ('Veo Model') is fully visible with a violet border and an AI-themed diamond icon. Arrow 1 between Node 1 and Node 2 shows a small arrowhead, consistent with a completed draw animation. Arrow 2 is in its drawing phase and appears very faint or just starting — arrows are listed as decorative elements with acceptable variance. Node 3 ('Video Output') is correctly absent as it doesn't appear until frames 24-28. The dark charcoal background is consistent with spec. Node positions have minor horizontal drift but preserve the intended left-to-right horizontal flow layout. Overall the frame reads correctly for this animation phase.
