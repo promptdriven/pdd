@@ -1,15 +1,29 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
-import { COLORS, TYPOGRAPHY, POSITIONS, PIPELINE_NODES, PIPELINE_ARROWS } from './constants';
+import { AbsoluteFill, useVideoConfig } from 'remotion';
+import {
+  BASE_CANVAS,
+  COLORS,
+  TYPOGRAPHY,
+  POSITIONS,
+  PIPELINE_NODES,
+  PIPELINE_ARROWS,
+} from './constants';
 import { PipelineNode } from './PipelineNode';
 import { PipelineArrow } from './PipelineArrow';
 import { DotGridPattern } from './DotGridPattern';
 
 export const VeoSection06VeoPipelineInfographic: React.FC = () => {
+  const { width, height } = useVideoConfig();
+  const scaleX = width / BASE_CANVAS.width;
+  const scaleY = height / BASE_CANVAS.height;
+  const uniformScale = Math.min(scaleX, scaleY);
+
   return (
     <AbsoluteFill
       style={{
         backgroundColor: COLORS.background,
+        width,
+        height,
       }}
     >
       {/* Subtle dot-grid pattern */}
@@ -19,14 +33,14 @@ export const VeoSection06VeoPipelineInfographic: React.FC = () => {
       <div
         style={{
           position: 'absolute',
-          top: POSITIONS.titleY,
+          top: POSITIONS.titleY * scaleY,
           left: 0,
           width: '100%',
           textAlign: 'center',
           fontFamily: TYPOGRAPHY.title.fontFamily,
-          fontSize: TYPOGRAPHY.title.fontSize,
+          fontSize: TYPOGRAPHY.title.fontSize * uniformScale,
           fontWeight: TYPOGRAPHY.title.fontWeight,
-          letterSpacing: TYPOGRAPHY.title.letterSpacing,
+          letterSpacing: TYPOGRAPHY.title.letterSpacing * uniformScale,
           color: COLORS.titleText,
         }}
       >
@@ -40,8 +54,9 @@ export const VeoSection06VeoPipelineInfographic: React.FC = () => {
           label={node.label}
           icon={node.icon}
           borderColor={node.borderColor}
-          x={node.x}
-          y={POSITIONS.nodeY}
+          x={node.x * scaleX}
+          y={POSITIONS.nodeY * scaleY}
+          scale={uniformScale}
         />
       ))}
 
@@ -49,9 +64,10 @@ export const VeoSection06VeoPipelineInfographic: React.FC = () => {
       {PIPELINE_ARROWS.map((arrow, i) => (
         <PipelineArrow
           key={i}
-          fromX={arrow.fromX}
-          toX={arrow.toX}
+          fromX={arrow.fromX * scaleX}
+          toX={arrow.toX * scaleX}
           color={arrow.color}
+          scale={uniformScale}
         />
       ))}
     </AbsoluteFill>

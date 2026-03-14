@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame at 92.1% progress (frame 34/38) accurately renders the aerial forest cutaway visual. The full-bleed Veo video shows aerial drone footage of a lush green forest canopy with sunlight filtering through the leaves, matching the spec description. Rich emerald greens contrast with warm golden light shafts. The lower-third narration badge is present at the bottom of the frame with the correct text: 'It uses Veo-generated clips with narration overlay.' The frame is in the crossfade-out phase (frames 32-38) where opacity transitions from 1.0 to 0.8; at 92.1% progress the slight fade is consistent with expected opacity ~0.84. The light bloom/sun glow effect is visible in the upper-left rather than the spec's top-right, but the bloom overlay is classified as decorative and the natural sun position in the Veo-generated footage creates the intended warm glow effect. All critical elements are present and correctly rendered.

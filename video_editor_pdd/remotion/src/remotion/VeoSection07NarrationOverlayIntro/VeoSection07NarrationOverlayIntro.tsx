@@ -1,16 +1,20 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
-import { COLORS } from './constants';
+import { AbsoluteFill, useVideoConfig } from 'remotion';
 import { GradientMesh } from './GradientMesh';
 import { WaveformVisualizer } from './WaveformVisualizer';
 import { WordByWordReveal } from './WordByWordReveal';
 import { VoiceBadge } from './VoiceBadge';
 
 export const VeoSection07NarrationOverlayIntro: React.FC = () => {
+  const { width, height } = useVideoConfig();
+
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.background,
+        width,
+        height,
+        backgroundColor: 'transparent',
+        pointerEvents: 'none',
       }}
     >
       <GradientMesh />

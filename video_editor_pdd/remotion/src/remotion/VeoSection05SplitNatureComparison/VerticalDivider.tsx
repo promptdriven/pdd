@@ -11,7 +11,7 @@ export const VerticalDivider: React.FC<{ layout: SplitNatureComparisonLayout }> 
   const scaledWidth = Math.max(2, DIMENSIONS.dividerWidth * layout.scaleX);
   const scaledHeight = DIMENSIONS.dividerHeight * layout.scaleY;
   const scaledTop = DIMENSIONS.dividerY * layout.scaleY;
-  const scaledLeft = DIMENSIONS.dividerX * layout.scaleX - scaledWidth / 2;
+  const scaledLeft = layout.width / 2 - scaledWidth / 2;
   const glowRadius = DIMENSIONS.dividerGlowRadius * layout.uniformScale;
 
   return (
