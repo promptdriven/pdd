@@ -123,9 +123,18 @@ function listVeoAssets(): string[] {
   return fs.readdirSync(veoPublicDir).filter((f) => f.endsWith(".mp4") || f.endsWith(".webm"));
 }
 
+function extractStructuredDataPoints(spec: string): string | null {
+  const match = spec.match(/##\s*Data Points\s*```json\s*([\s\S]+?)\s*```/i);
+  return match?.[1]?.trim() || null;
+}
+
 function buildComponentPrompt(baseName: string, outputName: string, spec: string, veoAssets: string[]): string {
   const veoSection = veoAssets.length > 0
     ? `\n--- VEO ASSETS ---\nThe following video files are available in remotion/public/veo/.\nUse staticFile("veo/<filename>") to reference them (NOT staticFile("public/veo/...")).\n${veoAssets.map((f) => `- ${f}`).join("\n")}\n--- END VEO ASSETS ---\n`
+    : "";
+  const structuredDataPoints = extractStructuredDataPoints(spec);
+  const dataPointsSection = structuredDataPoints
+    ? `\n--- STRUCTURED DATA POINTS ---\nTreat this JSON as the authoritative visual contract when it conflicts with approximate prose.\n${structuredDataPoints}\n--- END STRUCTURED DATA POINTS ---\n`
     : "";
 
   const exportName = toPascalCase(outputName);
@@ -178,6 +187,7 @@ Use the spec below to implement the component accurately.
 --- SPEC ---
 ${spec || "(spec not found, infer from naming)"}
 --- END SPEC ---
+${dataPointsSection}
 ${veoSection}
 Return valid TypeScript/React code.
 `;

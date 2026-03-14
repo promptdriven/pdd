@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { resolveSectionVisualContract } from "@/app/api/pipeline/_lib/visual-contract-manifest";
 
 import {
   normalizeSpecTimestampRangeToSection,
@@ -331,12 +332,29 @@ function resolveSpecMediaInfo(
   stagedAssetPath?: string;
   auditHints: AuditHints;
 } {
+  const visualContract = resolveSectionVisualContract(
+    section.id,
+    specBaseName,
+    projectDir
+  );
+  const contractMediaReferences = Array.from(
+    new Set(Object.values(visualContract?.mediaAliases ?? {}))
+  );
+  const contractPrimaryMedia = contractMediaReferences[0];
+  const contractStagedAssetPath = contractPrimaryMedia
+    ? path.join(projectDir, "remotion", "public", contractPrimaryMedia)
+    : undefined;
+
   if (!section.specDir) {
     return {
-      hasExplicitMedia: false,
+      hasExplicitMedia: contractMediaReferences.length > 0,
       hasSpecReferencedMedia: false,
-      requiresCompositedAudit: false,
-      mediaReferences: [],
+      requiresCompositedAudit: Boolean(visualContract?.overlayConfig),
+      mediaReferences: contractMediaReferences,
+      stagedAssetPath:
+        contractStagedAssetPath && fs.existsSync(contractStagedAssetPath)
+          ? contractStagedAssetPath
+          : undefined,
       auditHints: resolveSpecAuditHints(""),
     };
   }
@@ -353,11 +371,20 @@ function resolveSpecMediaInfo(
   if (!fs.existsSync(specPath)) {
     return {
       specPath: undefined,
-      hasExplicitMedia: hasStagedAsset,
+      hasExplicitMedia: hasStagedAsset || contractMediaReferences.length > 0,
       hasSpecReferencedMedia: false,
-      requiresCompositedAudit: false,
-      mediaReferences: stagedAssetPath ? [`veo/${specBaseName}.mp4`] : [],
-      stagedAssetPath,
+      requiresCompositedAudit: Boolean(visualContract?.overlayConfig),
+      mediaReferences:
+        contractMediaReferences.length > 0
+          ? contractMediaReferences
+          : stagedAssetPath
+            ? [`veo/${specBaseName}.mp4`]
+            : [],
+      stagedAssetPath:
+        stagedAssetPath ??
+        (contractStagedAssetPath && fs.existsSync(contractStagedAssetPath)
+          ? contractStagedAssetPath
+          : undefined),
       auditHints: resolveSpecAuditHints(""),
     };
   }
@@ -371,14 +398,27 @@ function resolveSpecMediaInfo(
   const requiresCompositedAudit = requiresCompositedMediaAudit(content);
   return {
     specPath,
-    hasExplicitMedia: hasStagedAsset || hasSpecReferencedMedia,
+    hasExplicitMedia:
+      hasStagedAsset ||
+      hasSpecReferencedMedia ||
+      contractMediaReferences.length > 0,
     hasSpecReferencedMedia,
-    requiresCompositedAudit,
-    mediaReferences:
-      stagedAssetPath && !mediaReferences.includes(`veo/${specBaseName}.mp4`)
-        ? [...mediaReferences, `veo/${specBaseName}.mp4`]
-        : mediaReferences,
-    stagedAssetPath,
+    requiresCompositedAudit:
+      requiresCompositedAudit || Boolean(visualContract?.overlayConfig),
+    mediaReferences: Array.from(
+      new Set(
+        [
+          ...mediaReferences,
+          ...contractMediaReferences,
+          stagedAssetPath ? `veo/${specBaseName}.mp4` : null,
+        ].filter((value): value is string => Boolean(value))
+      )
+    ),
+    stagedAssetPath:
+      stagedAssetPath ??
+      (contractStagedAssetPath && fs.existsSync(contractStagedAssetPath)
+        ? contractStagedAssetPath
+        : undefined),
     auditHints: resolveSpecAuditHints(content),
   };
 }
@@ -411,13 +451,13 @@ export function resolveSectionVisuals(
         specBaseName,
         specPath: path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`),
         hasComponent: true,
-        hasExplicitMedia: mediaInfo.hasSpecReferencedMedia,
+        hasExplicitMedia: mediaInfo.hasExplicitMedia,
         requiresCompositedAudit: mediaInfo.requiresCompositedAudit,
         previewCompositionId: resolvePreviewCompositionId(
           matchingCompositionId,
           section.id
         ),
-        mediaReferences: mediaInfo.hasSpecReferencedMedia
+        mediaReferences: mediaInfo.hasExplicitMedia
           ? mediaInfo.mediaReferences
           : [],
         stagedAssetPath: mediaInfo.stagedAssetPath,

@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -103,6 +104,10 @@ GENERIC_VIDEO_REF_RE = re.compile(
     r'(?:"|\b)(video|src)\s*[:=]\s*["\']([^"\']+\.(?:mp4|webm|mov|m4v))["\']',
     re.IGNORECASE,
 )
+DATA_POINTS_JSON_RE = re.compile(
+    r'##\s*Data Points\s*```json\s*([\s\S]+?)\s*```',
+    re.IGNORECASE,
+)
 NARRATION_SYNC_RE = re.compile(
     r'##\s*Narration Sync\s*(?:\r?\n)+>\s*"([^"\n]+)"',
     re.IGNORECASE,
@@ -112,6 +117,35 @@ NARRATION_JSON_RE = re.compile(
     re.IGNORECASE,
 )
 VIDEO_EXTENSION_PRIORITY = ('.mp4', '.webm', '.mov', '.m4v')
+MEDIA_ALIAS_KEY_MAP = {
+    'clipsource': 'defaultSrc',
+    'leftclip': 'leftSrc',
+    'leftsrc': 'leftSrc',
+    'rightclip': 'rightSrc',
+    'rightsrc': 'rightSrc',
+    'outputsrc': 'outputSrc',
+    'outputfile': 'defaultSrc',
+    'filename': 'defaultSrc',
+    'backgroundclip': 'backgroundSrc',
+    'backgroundsrc': 'backgroundSrc',
+    'baseclip': 'baseSrc',
+    'basesrc': 'baseSrc',
+    'revealclip': 'revealSrc',
+    'revealsrc': 'revealSrc',
+    'videosrc': 'defaultSrc',
+}
+PANEL_CONTEXT_ALIAS_MAP = {
+    'left': 'leftSrc',
+    'leftpanel': 'leftSrc',
+    'before': 'leftSrc',
+    'beforepanel': 'leftSrc',
+    'right': 'rightSrc',
+    'rightpanel': 'rightSrc',
+    'after': 'rightSrc',
+    'afterpanel': 'rightSrc',
+    'background': 'backgroundSrc',
+    'base': 'baseSrc',
+}
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -121,6 +155,87 @@ def _read_text_if_exists(path: str) -> str:
             return f.read()
     except OSError:
         return ''
+
+
+def _extract_data_points_json(spec_content: str) -> Optional[Any]:
+    """Return parsed JSON from the spec's Data Points block when present."""
+    match = DATA_POINTS_JSON_RE.search(spec_content)
+    if not match:
+        return None
+
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+
+
+def _is_video_reference(value: str) -> bool:
+    return Path(value).suffix.lower() in VIDEO_EXTENSIONS
+
+
+def _iter_data_point_video_values(data_points: Any) -> List[str]:
+    """Collect all video-like string values inside structured Data Points JSON."""
+    values: List[str] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for nested in value.values():
+                _walk(nested)
+            return
+        if isinstance(value, list):
+            for nested in value:
+                _walk(nested)
+            return
+        if isinstance(value, str) and _is_video_reference(value):
+            normalized = value.replace('\\', '/').lstrip('/')
+            if normalized not in values:
+                values.append(normalized)
+
+    _walk(data_points)
+    return values
+
+
+def _extract_data_point_media_aliases(
+    data_points: Any,
+    remotion_public: str,
+    reference_aliases: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Resolve structured media aliases from Data Points JSON."""
+    aliases: Dict[str, str] = {}
+
+    def _assign(alias_name: Optional[str], raw_value: str) -> None:
+        resolved = _resolve_video_reference_static_path(
+            remotion_public,
+            raw_value,
+            reference_aliases,
+        )
+        if resolved is None:
+            return
+        if alias_name:
+            aliases.setdefault(alias_name, resolved)
+        aliases.setdefault('defaultSrc', resolved)
+
+    def _walk(value: Any, context_alias: Optional[str] = None) -> None:
+        if isinstance(value, dict):
+            for raw_key, nested in value.items():
+                key = str(raw_key).strip().lower().replace('_', '').replace('-', '')
+                next_context = PANEL_CONTEXT_ALIAS_MAP.get(key, context_alias)
+                alias_name = MEDIA_ALIAS_KEY_MAP.get(key)
+                if isinstance(nested, str) and _is_video_reference(nested):
+                    effective_alias = next_context or alias_name
+                    _assign(effective_alias, nested)
+                    continue
+                _walk(nested, next_context)
+            return
+        if isinstance(value, list):
+            for nested in value:
+                _walk(nested, context_alias)
+            return
+        if isinstance(value, str) and _is_video_reference(value):
+            _assign(context_alias, value)
+
+    _walk(data_points)
+    return aliases
 
 
 def _existing_static_path(remotion_public: str, candidates: List[str]) -> Optional[str]:
@@ -362,6 +477,10 @@ def _iter_video_reference_values(spec_content: str) -> List[str]:
     for rel_path in STATIC_FILE_RE.findall(spec_content):
         if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
             _add(rel_path)
+    data_points = _extract_data_points_json(spec_content)
+    if data_points is not None:
+        for raw_value in _iter_data_point_video_values(data_points):
+            _add(raw_value)
 
     return values
 
@@ -387,18 +506,33 @@ def _build_section_video_reference_aliases(
         if not spec_content:
             continue
 
-        direct_target: Optional[str] = None
-        for ref in _iter_video_reference_values(spec_content):
-            direct_target = _resolve_media_static_path(remotion_public, ref)
-            if direct_target is not None:
-                break
-
+        refs = _iter_video_reference_values(spec_content)
         staged_target = _resolve_generated_spec_basename_video(spec_base, remotion_public)
+        resolved_refs = [
+            (ref, _resolve_media_static_path(remotion_public, ref))
+            for ref in refs
+        ]
+        distinct_resolved_targets = {
+            resolved for _, resolved in resolved_refs if resolved is not None
+        }
+
+        if len(distinct_resolved_targets) > 1:
+            for ref, resolved in resolved_refs:
+                if resolved is None:
+                    continue
+                aliases.setdefault(ref, resolved)
+                aliases.setdefault(ref.split('/')[-1], resolved)
+            continue
+
+        direct_target = next(
+            (resolved for _, resolved in resolved_refs if resolved is not None),
+            None,
+        )
         canonical_target = staged_target or direct_target
         if canonical_target is None:
             continue
 
-        for ref in _iter_video_reference_values(spec_content):
+        for ref in refs:
             aliases.setdefault(ref, canonical_target)
             aliases.setdefault(ref.split('/')[-1], canonical_target)
 
@@ -417,23 +551,6 @@ def _extract_visual_media_aliases(
     aliases: Dict[str, str] = {}
     explicit = False
 
-    alias_map = {
-        'clipsource': 'defaultSrc',
-        'leftclip': 'leftSrc',
-        'leftsrc': 'leftSrc',
-        'rightclip': 'rightSrc',
-        'rightsrc': 'rightSrc',
-        'outputsrc': 'outputSrc',
-        'outputfile': 'defaultSrc',
-        'filename': 'defaultSrc',
-        'backgroundclip': 'backgroundSrc',
-        'backgroundsrc': 'backgroundSrc',
-        'baseclip': 'baseSrc',
-        'basesrc': 'baseSrc',
-        'revealclip': 'revealSrc',
-        'revealsrc': 'revealSrc',
-    }
-
     for key, rel_path in VISUAL_MEDIA_KEY_RE.findall(spec_content):
         resolved = _resolve_video_reference_static_path(
             remotion_public,
@@ -445,9 +562,22 @@ def _extract_visual_media_aliases(
         explicit = True
         if resolved not in explicit_sources:
             explicit_sources.append(resolved)
-        alias_name = alias_map.get(key.lower())
+        alias_name = MEDIA_ALIAS_KEY_MAP.get(key.lower())
         if alias_name:
             aliases[alias_name] = resolved
+
+    data_points = _extract_data_points_json(spec_content)
+    if data_points is not None:
+        structured_aliases = _extract_data_point_media_aliases(
+            data_points,
+            remotion_public,
+            reference_aliases,
+        )
+        for alias_name, resolved in structured_aliases.items():
+            explicit = True
+            if resolved not in explicit_sources:
+                explicit_sources.append(resolved)
+            aliases.setdefault(alias_name, resolved)
 
     structured_default = _resolve_structured_video_static_path(
         spec_content,
@@ -515,6 +645,74 @@ def _extract_visual_media_aliases(
         aliases.setdefault('revealSrc', explicit_sources[1])
 
     return aliases, primary, explicit
+
+
+def build_visual_contract_manifest(
+    sections: List[Dict[str, Any]],
+    project_dir: str,
+    remotion_public: str,
+) -> Dict[str, Any]:
+    """Build a persisted structured visual contract manifest for Stage 8+ consumers."""
+    manifest_sections: List[Dict[str, Any]] = []
+
+    for section in sections:
+        visual_ids = resolve_section_visual_ids(section, project_dir, remotion_public)
+        if not visual_ids:
+            continue
+
+        spec_dir = section.get('specDir') or section['id']
+        if not os.path.isabs(spec_dir):
+            spec_dir = os.path.join(
+                project_dir,
+                'specs',
+                str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'),
+            )
+
+        media_manifest = build_visual_media_manifest(
+            section,
+            project_dir,
+            remotion_public,
+        )
+        overlay_manifest = build_visual_overlay_manifest(section, project_dir)
+        visuals: List[Dict[str, Any]] = []
+        for visual_id in visual_ids:
+            spec_base = component_base_name(visual_id, section['id'])
+            spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+            spec_content = _read_text_if_exists(spec_path)
+            data_points = _extract_data_points_json(spec_content) if spec_content else None
+            visuals.append({
+                'id': visual_id,
+                'specBaseName': spec_base,
+                'specPath': os.path.relpath(spec_path, project_dir).replace('\\', '/') if spec_content else None,
+                'dataPoints': data_points,
+                'mediaAliases': media_manifest.get(visual_id, {}),
+                'overlayConfig': overlay_manifest.get(visual_id),
+            })
+
+        manifest_sections.append({
+            'id': section['id'],
+            'visuals': visuals,
+        })
+
+    return {
+        'version': 1,
+        'updatedAt': datetime.now(timezone.utc).isoformat(),
+        'sections': manifest_sections,
+    }
+
+
+def write_visual_contract_manifest(
+    sections: List[Dict[str, Any]],
+    project_dir: str,
+    remotion_public: str,
+) -> str:
+    """Persist the generated visual contract manifest beside composition outputs."""
+    manifest = build_visual_contract_manifest(sections, project_dir, remotion_public)
+    manifest_path = os.path.join(project_dir, 'outputs', 'compositions', 'visual-manifest.json')
+    os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2)
+    return manifest_path
 
 
 def build_visual_media_manifest(
@@ -1752,6 +1950,13 @@ def main() -> None:
         default_width=default_width,
         default_height=default_height,
         project_dir=project_dir,
+    )
+
+    remotion_public = os.path.join(remotion_dir, 'public')
+    write_visual_contract_manifest(
+        sections,
+        project_dir,
+        remotion_public,
     )
 
     sys.exit(0)

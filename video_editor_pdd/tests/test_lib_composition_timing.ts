@@ -6,6 +6,7 @@ import {
   parseSpecTimestampRange,
   listSectionVisualIds,
   resolveSpecAuditHints,
+  resolveSectionVisuals,
   resolveSectionVisualTimings,
   buildSectionConstantsSource,
 } from "../lib/composition-timing";
@@ -299,6 +300,76 @@ describe("lib/composition-timing", () => {
     );
 
     expect(visualIds).toEqual(["animation_section_01_title_card"]);
+  });
+
+  it("uses the generated visual contract manifest for structured media aliases", () => {
+    const specDir = path.join(tmpDir, "specs", "veo_section");
+    const manifestDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "05_split_nature_comparison.md"),
+      [
+        "[split:]",
+        "",
+        "## Data Points",
+        "```json",
+        "{",
+        '  "leftPanel": { "label": "OCEAN — Sunset" },',
+        '  "rightPanel": { "label": "FOREST — Canopy" }',
+        "}",
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "visual-manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-03-14T00:00:00.000Z",
+          sections: [
+            {
+              id: "veo_section",
+              visuals: [
+                {
+                  id: "05_split_nature_comparison",
+                  specBaseName: "05_split_nature_comparison",
+                  mediaAliases: {
+                    leftSrc: "veo/02_veo_ocean_broll.mp4",
+                    rightSrc: "veo/03_veo_forest_cutaway.mp4",
+                    defaultSrc: "veo/02_veo_ocean_broll.mp4",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const visuals = resolveSectionVisuals(
+      tmpDir,
+      {
+        id: "veo_section",
+        specDir: "veo_section",
+        durationSeconds: 6,
+        compositionId: "VeoSection",
+      },
+      ["05_split_nature_comparison"]
+    );
+
+    expect(visuals).toEqual([
+      expect.objectContaining({
+        id: "05_split_nature_comparison",
+        hasExplicitMedia: true,
+        mediaReferences: expect.arrayContaining([
+          "veo/02_veo_ocean_broll.mp4",
+          "veo/03_veo_forest_cutaway.mp4",
+        ]),
+      }),
+    ]);
   });
 
   it("derives general audit hints from spec structure for layout, effects, and animation phases", () => {

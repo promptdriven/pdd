@@ -47,6 +47,8 @@ from generate_section_compositions import (
     ensure_section_asset_aliases,
     resolve_section_visual_ids,
     resolve_section_base_component,
+    build_visual_contract_manifest,
+    write_visual_contract_manifest,
     load_project_json,
     get_fps,
     generate_section_component,
@@ -2140,6 +2142,151 @@ class TestGeneratedTimelineWrapper:
         assert 'const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {' in tsx
         assert '"02_veo_ocean_broll": { gradientOverlay: "bottom", lowerThirdText: "This is the second section of the integration test video."' in tsx
         assert '<GeneratedMediaVisual config={visualOverlayConfig} />' in tsx
+
+    def test_generated_timeline_uses_structured_data_points_for_split_media_aliases(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "veo_section"
+        split_dir = remotion_src / "VeoSection05SplitNatureComparison"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        section_dir.mkdir()
+        split_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 26, id: "05_split_nature_comparison", desc: "Split" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (split_dir / "index.ts").write_text(
+            'export const VeoSection05SplitNatureComparison = () => null;\n'
+            'export default VeoSection05SplitNatureComparison;',
+            encoding="utf-8",
+        )
+        (split_dir / "constants.ts").write_text(
+            "export const TIMING = { totalFrames: 26 };\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "05_split_nature_comparison.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    "{",
+                    '  "leftPanel": {',
+                    '    "videoSrc": "veo/02_veo_ocean_broll.mp4"',
+                    "  },",
+                    '  "rightPanel": {',
+                    '    "videoSrc": "veo/03_veo_forest_cutaway.mp4"',
+                    "  }",
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_veo_ocean_broll.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "03_veo_forest_cutaway.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 3,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": ["05_split_nature_comparison"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert '"05_split_nature_comparison": {' in tsx
+        assert 'leftSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
+        assert 'rightSrc: "veo/03_veo_forest_cutaway.mp4"' in tsx
+        assert 'defaultSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
+        assert 'backgroundSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
+        assert 'outputSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
+        assert 'baseSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
+        assert 'revealSrc: "veo/03_veo_forest_cutaway.mp4"' in tsx
+
+    def test_writes_visual_contract_manifest_with_data_points_and_media_aliases(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        specs_dir.mkdir(parents=True)
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_veo_ocean_broll.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "03_veo_forest_cutaway.mp4").write_bytes(b"\x00" * 32)
+
+        (specs_dir / "05_split_nature_comparison.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    "{",
+                    '  "leftPanel": {',
+                    '    "videoSrc": "veo/02_veo_ocean_broll.mp4",',
+                    '    "label": "OCEAN — Sunset"',
+                    "  },",
+                    '  "rightPanel": {',
+                    '    "videoSrc": "veo/03_veo_forest_cutaway.mp4",',
+                    '    "label": "FOREST — Canopy"',
+                    "  }",
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 3,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": ["05_split_nature_comparison"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        visual = manifest["sections"][0]["visuals"][0]
+        assert visual["id"] == "05_split_nature_comparison"
+        assert visual["dataPoints"]["leftPanel"]["videoSrc"] == "veo/02_veo_ocean_broll.mp4"
+        assert visual["mediaAliases"]["leftSrc"] == "veo/02_veo_ocean_broll.mp4"
+        assert visual["mediaAliases"]["rightSrc"] == "veo/03_veo_forest_cutaway.mp4"
+
+        manifest_path = write_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+        saved = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        assert saved["sections"][0]["visuals"][0]["mediaAliases"]["leftSrc"] == "veo/02_veo_ocean_broll.mp4"
 
     def test_generated_timeline_does_not_reuse_last_renderable_visual_for_unmapped_slots(self, tmp_path):
         project_dir = tmp_path

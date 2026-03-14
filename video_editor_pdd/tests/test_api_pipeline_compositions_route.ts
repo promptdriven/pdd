@@ -852,6 +852,45 @@ describe("compositions executor factory — component generation", () => {
     expect(prompt).toContain("Hero Section Spec");
   });
 
+  it("builds a prompt that includes structured data points when present in the spec", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (
+        p.endsWith(path.join("remotion", "src", "remotion", "intro_hero_section.tsx"))
+      ) {
+        return true;
+      }
+      return p.includes("specs") || p.includes("hero_section.md");
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("hero_section.md")) {
+        return [
+          "# Hero Section Spec",
+          "",
+          "## Data Points",
+          "```json",
+          '{ "startColor": "#3B82F6", "endColor": "#6366F1" }',
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+    mockReaddirSync.mockReturnValue([]);
+    setupMockSpawn(0);
+
+    const executor = registerCallArgs.factory(
+      { components: ["hero_section"], wrappers: [], sectionId: "intro" },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("STRUCTURED DATA POINTS");
+    expect(prompt).toContain('"startColor": "#3B82F6"');
+    expect(prompt).toContain('"endColor": "#6366F1"');
+  });
+
   it("reports progress via onLog.progress callback", async () => {
     mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
