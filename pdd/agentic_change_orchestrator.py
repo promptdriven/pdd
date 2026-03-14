@@ -37,6 +37,7 @@ from pdd.sync_order import (
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
 from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
+from pdd.architecture_sync import _merge_interface_signatures
 
 # Initialize console for rich output
 console = Console()
@@ -86,6 +87,68 @@ def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
                 json.dump(data, f, indent=2)
     except (json.JSONDecodeError, OSError):
         pass
+
+
+def _sanitize_architecture_interfaces(
+    worktree_path: Path,
+    previous_architecture: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Preserve existing interface parameters after Step 10 direct architecture edits."""
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists() or not previous_architecture:
+        return []
+
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            current_architecture = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    old_by_filename = {
+        entry.get("filename"): entry
+        for entry in previous_architecture
+        if isinstance(entry, dict) and entry.get("filename")
+    }
+    old_by_filepath = {
+        entry.get("filepath"): entry
+        for entry in previous_architecture
+        if isinstance(entry, dict) and entry.get("filepath")
+    }
+
+    warnings: List[str] = []
+    changed = False
+
+    for entry in current_architecture:
+        if not isinstance(entry, dict):
+            continue
+
+        old_entry = None
+        filename = entry.get("filename")
+        filepath = entry.get("filepath")
+        if filename:
+            old_entry = old_by_filename.get(filename)
+        if old_entry is None and filepath:
+            old_entry = old_by_filepath.get(filepath)
+        if not isinstance(old_entry, dict):
+            continue
+
+        merged_interface, merge_warnings = _merge_interface_signatures(
+            old_entry.get("interface"),
+            entry.get("interface"),
+        )
+        if merged_interface != entry.get("interface"):
+            entry["interface"] = merged_interface
+            changed = True
+        warnings.extend(merge_warnings)
+
+    if changed:
+        try:
+            with open(arch_path, "w", encoding="utf-8") as f:
+                json.dump(current_architecture, f, indent=2)
+        except OSError:
+            return []
+
+    return warnings
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
     """Get repo root via git rev-parse."""
@@ -696,6 +759,8 @@ def run_agentic_change_orchestrator(
         if step_num < start_step:
             continue
 
+        previous_architecture = None
+
         # Before Step 6, build dependency context to help identify transitively affected modules
         if step_num == 6:
             prompts_dir = cwd / "prompts"
@@ -734,6 +799,15 @@ def run_agentic_change_orchestrator(
 
         if not quiet:
             console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+
+        if step_num == 10 and worktree_path:
+            arch_path = worktree_path / "architecture.json"
+            if arch_path.exists():
+                try:
+                    with open(arch_path, "r", encoding="utf-8") as f:
+                        previous_architecture = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    previous_architecture = None
 
         template_name = f"agentic_change_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
@@ -856,6 +930,19 @@ def run_agentic_change_orchestrator(
             context["files_to_stage"] = ", ".join(changed_files)
             if worktree_path:
                 _sanitize_architecture_dependencies(worktree_path)
+                interface_warnings = _sanitize_architecture_interfaces(
+                    worktree_path,
+                    previous_architecture,
+                )
+                if interface_warnings:
+                    if not quiet:
+                        for warning in interface_warnings:
+                            console.print(f"[yellow]Warning: {warning}[/yellow]")
+                    step_output = (
+                        step_output.rstrip()
+                        + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
+                        + "\n".join(f"- {warning}" for warning in interface_warnings)
+                    )
 
         context[f"step{step_num}_output"] = step_output
         if step_success:

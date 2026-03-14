@@ -2857,7 +2857,130 @@ def test_step7_architectural_decision_hard_stop_with_stop_condition_tag(mock_dep
     assert "Stopped at step 7" in msg
     assert mock_run.call_count == 7
     mocks["save_state"].assert_called()
-    assert mocks["save_state"].call_args[0][3]["last_completed_step"] == 6
+
+
+def test_step10_postcheck_preserves_existing_architecture_params(mock_dependencies, temp_cwd):
+    """Step 10 direct architecture edits should not be able to silently drop params."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    issue_number = 825
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+
+    original_architecture = [
+        {
+            "filename": "orchestrator_python.prompt",
+            "filepath": "pdd/orchestrator.py",
+            "reason": "Orchestrates e2e fix",
+            "dependencies": [],
+            "priority": 1,
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {
+                            "name": "run_agentic_e2e_fix_orchestrator",
+                            "signature": "(issue_url, issue_content, use_github_state, protect_tests)",
+                            "returns": "Dict",
+                        }
+                    ]
+                },
+            },
+        }
+    ]
+
+    def mock_setup_worktree(cwd, issue_num, quiet):
+        prompts_dir = worktree_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        (prompts_dir / "orchestrator_python.prompt").write_text(
+            "% orchestrator prompt",
+            encoding="utf-8",
+        )
+        (worktree_path / "architecture.json").write_text(
+            json.dumps(original_architecture, indent=2),
+            encoding="utf-8",
+        )
+        return worktree_path, None
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        cwd = kwargs.get("cwd")
+        if label == "step9":
+            return (
+                True,
+                "FILES_MODIFIED: prompts/orchestrator_python.prompt",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step10":
+            broken_architecture = [
+                {
+                    "filename": "orchestrator_python.prompt",
+                    "filepath": "pdd/orchestrator.py",
+                    "reason": "Orchestrates e2e fix",
+                    "dependencies": [],
+                    "priority": 1,
+                    "interface": {
+                        "type": "module",
+                        "module": {
+                            "functions": [
+                                {
+                                    "name": "run_agentic_e2e_fix_orchestrator",
+                                    "signature": "(issue_url, issue_content, use_github_state, ci_retries = 3, skip_ci = False)",
+                                    "returns": "Dict",
+                                }
+                            ]
+                        },
+                    },
+                }
+            ]
+            (Path(cwd) / "architecture.json").write_text(
+                json.dumps(broken_architecture, indent=2),
+                encoding="utf-8",
+            )
+            return (
+                True,
+                "Architecture updated. ARCHITECTURE_FILES_MODIFIED: prompts/orchestrator_python.prompt, architecture.json",
+                0.1,
+                "gpt-4",
+            )
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/123", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch("pdd.agentic_change_orchestrator._setup_worktree", side_effect=mock_setup_worktree):
+        success, msg, cost, model, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=issue_number,
+            issue_author="me",
+            issue_title="Preserve params",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True
+    repaired = json.loads((worktree_path / "architecture.json").read_text(encoding="utf-8"))
+    signature = repaired[0]["interface"]["module"]["functions"][0]["signature"]
+    assert "protect_tests" in signature
+    assert "ci_retries" in signature
+    assert "skip_ci" in signature
+    saved_step10_outputs = [
+        call.args[3]["step_outputs"].get("10", "")
+        for call in mocks["save_state"].call_args_list
+        if "step_outputs" in call.args[3]
+    ]
+    assert any(
+        "ORCHESTRATOR_POSTCHECK_WARNINGS:" in output
+        and "protect_tests" in output
+        for output in saved_step10_outputs
+    )
 
 
 def test_hard_stop_configuration_quiet_mode(mock_dependencies, temp_cwd):

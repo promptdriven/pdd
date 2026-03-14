@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import json
 import shutil
@@ -685,6 +686,39 @@ def run_agentic_task(
             except OSError:
                 pass
 
+def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
+                    text=False, timeout=None, start_new_session=False, **kwargs):
+    """Wrapper around subprocess that uses Popen for proper process group cleanup.
+
+    Provides a subprocess.run-compatible interface but uses Popen internally
+    so we can reliably kill the process group on timeout (Issue #830).
+    """
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if input is not None or capture_output else None,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=text,
+        start_new_session=start_new_session,
+    )
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if start_new_session:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+        proc.kill()
+        proc.wait(timeout=5)
+        raise
+
+    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    return result
+
+
 def _run_with_provider(
     provider: str,
     prompt_path: Path,
@@ -799,14 +833,15 @@ def _run_with_provider(
     stdin_content = prompt_content if provider == "anthropic" else None
 
     try:
-        result = subprocess.run(
+        result = _subprocess_run(
             cmd,
             cwd=cwd,
             env=env,
             input=stdin_content,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            start_new_session=True,
         )
     except subprocess.TimeoutExpired:
         return False, "Timeout expired", 0.0
@@ -1282,7 +1317,8 @@ def save_workflow_state(
             return new_id
         else:
             console.print("[dim]Warning: Failed to sync state to GitHub[/dim]")
-            
+            return None
+
     return github_comment_id
 
 def clear_workflow_state(
@@ -1373,4 +1409,66 @@ def post_step_comment(
         return True
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
+        return False
+
+
+def post_final_comment(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    reason: str,
+    total_cost: float,
+    steps_completed: int,
+    total_steps: int,
+    cwd: Path,
+) -> bool:
+    """
+    Post a final status comment when the workflow stops early.
+
+    Unlike post_step_comment (which is for step-level failures where the agent
+    didn't execute), this is for workflow-level outcomes: NOT_A_BUG, max cycles
+    exhausted, missing loop control token, etc.
+
+    Args:
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
+        issue_number: Issue number to comment on
+        reason: Human-readable reason the workflow stopped
+        total_cost: Total LLM cost incurred
+        steps_completed: Last completed step number
+        total_steps: Total number of steps in the workflow
+        cwd: Working directory for subprocess
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    if not shutil.which("gh"):
+        return False
+
+    body = (
+        f"## Workflow Stopped\n\n"
+        f"**Reason:** {reason}\n\n"
+        f"**Progress:** Completed through step {steps_completed}/{total_steps}\n"
+        f"**Total cost:** ${total_cost:.4f}\n\n"
+        f"---\n"
+        f"*Automated status comment — pdd-fix workflow exited early.*"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Warning: Failed to post final comment: {result.stderr}[/yellow]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post final comment: {e}[/yellow]")
         return False
