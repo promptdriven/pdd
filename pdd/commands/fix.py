@@ -103,6 +103,7 @@ def fix(
             
             if not success:
                 console.print(f"[bold red]Agentic fix failed:[/bold red] {message}")
+                raise click.exceptions.Exit(1)
             else:
                 console.print(f"[bold green]Agentic fix completed:[/bold green] {message}")
             
@@ -133,6 +134,7 @@ def fix(
                     console.print(f"[bold green]User story fix completed:[/bold green] {message}")
                 else:
                     console.print(f"[bold red]User story fix failed:[/bold red] {message}")
+                    raise click.exceptions.Exit(1)
                 result_dict = {
                     "success": success,
                     "message": message,
@@ -216,7 +218,7 @@ def fix(
             
             return result_dict, total_cost, last_model
 
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
