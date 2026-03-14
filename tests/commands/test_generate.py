@@ -429,3 +429,13 @@ def test_test_missing_args(runner):
     result = runner.invoke(generate_module.test, [])
     assert result.exit_code != 0
     assert "Missing arguments" in result.output
+
+def test_test_agentic_mode_failure(runner, mock_agentic_test):
+    """Test 'test' command Agentic mode failure exit code and output."""
+    url = "https://github.com/user/repo/issues/1"
+    mock_agentic_test.return_value = (False, "Quota exceeded", 0.0, "gpt-4", [])
+    
+    result = runner.invoke(generate_module.test, [url])
+    
+    assert result.exit_code == 1
+    assert "Quota exceeded" in result.output

@@ -166,9 +166,10 @@ def test_agentic_mode_success(runner, mock_deps):
 
 def test_agentic_mode_failure(runner, mock_deps):
     issue_url = "https://github.com/user/repo/issues/1"
-    mock_deps["run_agentic_e2e_fix"].return_value = (False, "Could not fix", 0.1, "gpt-4", {})
+    mock_deps["run_agentic_e2e_fix"].return_value = (False, "Quota exceeded", 0.1, "gpt-4", {})
     result = runner.invoke(fix, [issue_url])
-    assert "Agentic fix failed" in result.output
+    assert result.exit_code == 1
+    assert "Quota exceeded" in result.output
 
 def test_manual_mode_explicit_flag(runner, mock_deps):
     args = ["https://github.com/file.txt", "code.py", "test.py", "error.txt", "--manual"]
