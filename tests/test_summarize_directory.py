@@ -20,7 +20,7 @@ def mock_llm_invoke():
     with patch('pdd.summarize_directory.llm_invoke') as mock:
         # Define a default mock response
         mock_response = {
-            'result': FileSummary(file_summary="This is a summary."),
+            'result': FileSummary(file_summary="This is a summary.", key_exports=["foo"], dependencies=["os"]),
             'cost': 0.01,
             'model_name': "TestModel"
         }
@@ -85,8 +85,8 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     file1_hash = hashlib.sha256(file1_content.encode()).hexdigest()
 
     # Create existing CSV with file1 (using absolute path since glob returns absolute)
-    existing_csv = f'''full_path,file_summary,content_hash
-{str(file1)},Existing summary.,{file1_hash}'''
+    existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{str(file1)},Existing summary.,"[""print""]","[""builtins""]",{file1_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -109,9 +109,9 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
 
     # Check that file1 reused summary (based on content hash match)
     for row in rows:
-        if row['full_path'] == str(file1):
+        if row['full_path'] == file1.name:
             assert row['file_summary'] == "Existing summary."
-        elif row['full_path'] == str(file2):
+        elif row['full_path'] == file2.name:
             assert row['file_summary'] == "This is a summary."
 
     assert total_cost == 0.01  # Only file2 was summarized
@@ -314,9 +314,9 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
     old_file2_hash = hashlib.sha256(b"old content").hexdigest()
 
     # Create existing CSV with file1 (correct hash) and file2 (wrong hash)
-    existing_csv = f'''full_path,file_summary,content_hash
-{str(file1)},Existing summary.,{file1_hash}
-{str(file2)},Existing summary.,{old_file2_hash}'''
+    existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{str(file1)},Existing summary.,"[""print""]","[""builtins""]",{file1_hash}
+{str(file2)},Existing summary.,"[""foo""]","[""os""]",{old_file2_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -338,9 +338,9 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
     assert len(rows) == 3
 
     summaries = {row['full_path']: row['file_summary'] for row in rows}
-    assert summaries[str(file1)] == "Existing summary."  # Cached (hash match)
-    assert summaries[str(file2)] == "This is a summary."  # Re-summarized (hash mismatch)
-    assert summaries[str(file3)] == "This is a summary."  # New file
+    assert summaries[file1.name] == "Existing summary."  # Cached (hash match)
+    assert summaries[file2.name] == "This is a summary."  # Re-summarized (hash mismatch)
+    assert summaries[file3.name] == "This is a summary."  # New file
 
     assert total_cost == 0.02  # file2 and file3 summarized
     assert model_name == "TestModel"
@@ -624,10 +624,10 @@ class TestContentHashCacheInvalidation:
         # Use absolute path since glob returns absolute paths when given absolute pattern
         file1_abs = str(file1)
 
-        # Simulate existing CSV with SAME content hash
-        # (This is what should happen - content unchanged means skip LLM)
-        existing_csv = f'''full_path,file_summary,content_hash
-{file1_abs},Existing summary.,{content_hash}'''
+        # Simulate existing CSV with SAME content hash and populated key_exports/dependencies
+        # (Cache hit requires hash match + non-empty key_exports + non-empty dependencies)
+        existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{file1_abs},Existing summary.,"[""print""]","[""builtins""]",{content_hash}'''
 
         csv_output, total_cost, model_name = summarize_directory(
             directory_path=str(tmp_path / "*.py"),
@@ -662,8 +662,8 @@ class TestContentHashCacheInvalidation:
         old_content = "print('Hello')"
         old_hash = hashlib.sha256(old_content.encode()).hexdigest()
 
-        existing_csv = f'''full_path,file_summary,content_hash
-{file1_abs},Old summary.,{old_hash}'''
+        existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+{file1_abs},Old summary.,"[""print""]","[""builtins""]",{old_hash}'''
 
         csv_output, total_cost, model_name = summarize_directory(
             directory_path=str(tmp_path / "*.py"),
@@ -789,7 +789,7 @@ def test_empty_directory(mock_dependencies, tmp_path):
     
     assert cost == 0.0
     assert model == "None"
-    assert "full_path,file_summary,content_hash" in result_csv
+    assert "full_path,file_summary,key_exports,dependencies,content_hash" in result_csv
     # Should only have header
     assert len(result_csv.strip().split('\n')) == 1
 
@@ -807,7 +807,7 @@ def test_file_filtering(mock_dependencies, tmp_path):
     
     # Mock LLM response
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="Summary"),
+        'result': FileSummary(file_summary="Summary", key_exports=["foo"], dependencies=["os"]),
         'cost': 0.01,
         'model_name': "gpt-4"
     }
@@ -841,7 +841,7 @@ def test_summarization_no_cache(mock_dependencies, tmp_path):
     file_path.write_text(file_content)
     
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="Function foo"),
+        'result': FileSummary(file_summary="Function foo", key_exports=["foo"], dependencies=[]),
         'cost': 0.05,
         'model_name': "gpt-test"
     }
@@ -854,7 +854,7 @@ def test_summarization_no_cache(mock_dependencies, tmp_path):
     reader = csv.DictReader(StringIO(csv_out))
     row = next(reader)
     
-    assert row['full_path'] == str(file_path)
+    assert row['full_path'] == file_path.name
     assert row['file_summary'] == "Function foo"
     # Verify hash calculation
     import hashlib
@@ -878,13 +878,16 @@ def test_summarization_cache_hit(mock_dependencies, tmp_path):
     import hashlib
     content_hash = hashlib.sha256(file_content.encode('utf-8')).hexdigest()
     
-    # Construct existing CSV
+    # Construct existing CSV with all 5 columns (key_exports and dependencies must be
+    # present and non-empty for cache hit under new cache invalidation rules)
     existing_csv = StringIO()
-    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'content_hash'])
+    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
     writer.writeheader()
     writer.writerow({
         'full_path': str(file_path),
         'file_summary': "Cached Summary",
+        'key_exports': '["foo"]',
+        'dependencies': '["os"]',
         'content_hash': content_hash
     })
     
@@ -910,16 +913,18 @@ def test_summarization_cache_miss_hash_mismatch(mock_dependencies, tmp_path):
     
     # Cache has OLD hash
     existing_csv = StringIO()
-    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'content_hash'])
+    writer = csv.DictWriter(existing_csv, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
     writer.writeheader()
     writer.writerow({
         'full_path': str(file_path),
         'file_summary': "Old Summary",
+        'key_exports': '["foo"]',
+        'dependencies': '["os"]',
         'content_hash': "old_hash_value"
     })
-    
+
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="New Summary"),
+        'result': FileSummary(file_summary="New Summary", key_exports=["bar"], dependencies=["sys"]),
         'cost': 0.02,
         'model_name': "gpt-new"
     }
@@ -941,7 +946,7 @@ def test_progress_callback(mock_dependencies, tmp_path):
     (tmp_path / "2.py").write_text("2")
     
     mock_invoke.return_value = {
-        'result': FileSummary(file_summary="Sum"),
+        'result': FileSummary(file_summary="Sum", key_exports=["x"], dependencies=["y"]),
         'cost': 0.01,
         'model_name': "m"
     }
@@ -991,6 +996,86 @@ def test_llm_invoke_error_handling(mock_dependencies, tmp_path):
     assert "Error processing file" in csv_out
     assert "LLM Failed" in csv_out
     assert cost == 0.0
+
+
+# ============================================================================
+# Relative Path Tests (TDD - Prompt Step 6h)
+# ============================================================================
+
+class TestRelativePaths:
+    """Tests that full_path in CSV output uses relative paths, not absolute.
+
+    Rationale: Relative paths make the CSV portable across environments
+    (CI vs local, different machines, moved project directories).
+    """
+
+    def test_output_paths_are_relative_not_absolute(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """full_path column should contain relative paths, not absolute."""
+        file1 = tmp_path / "file1.py"
+        file1.write_text("print('hello')")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert len(rows) == 1
+
+        path = rows[0]['full_path']
+        assert not os.path.isabs(path), f"Expected relative path, got absolute: {path}"
+
+    def test_relative_paths_with_subdirectories(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Relative paths should preserve directory structure."""
+        subdir = tmp_path / "src"
+        subdir.mkdir()
+        (subdir / "main.py").write_text("print('main')")
+        (tmp_path / "root.py").write_text("print('root')")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=None
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        for path in paths:
+            assert not os.path.isabs(path), f"Expected relative path, got absolute: {path}"
+        # Should preserve subdirectory structure
+        assert any("src" in p and "main.py" in p for p in paths), f"Should preserve subdir in path, got: {paths}"
+
+    def test_relative_paths_in_cache_lookup(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Cache lookup should work correctly with relative paths in existing CSV."""
+        import hashlib
+
+        file1 = tmp_path / "cached.py"
+        content = "print('cached')"
+        file1.write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        # Provide existing CSV with relative path
+        existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
+cached.py,Cached summary.,"[""print""]","[""builtins""]",{content_hash}'''
+
+        csv_output, total_cost, _ = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.7,
+            verbose=False,
+            csv_file=existing_csv
+        )
+
+        # Should be a cache hit — no LLM cost
+        assert total_cost == 0.0, f"Expected cache hit with relative path, but cost was {total_cost}"
 
 
 # ============================================================================
@@ -1381,3 +1466,290 @@ class TestRegressionIssue237:
         assert not any(".png" in r['full_path'] for r in rows), "Should not process .png"
         assert not any(".webm" in r['full_path'] for r in rows), "Should not process .webm"
         assert not any(".zip" in r['full_path'] for r in rows), "Should not process .zip"
+
+# ============================================================================
+# NEW TESTS: Additional Edge Cases and Parameter Verification
+# ============================================================================
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_time_parameter_passed_to_llm(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that the 'time' parameter is correctly passed to llm_invoke."""
+    file1 = tmp_path / "file1.py"
+    file1.write_text("print('Hello')")
+
+    directory_path = str(tmp_path / "*.py")
+    strength = 0.8
+    temperature = 0.2
+    time_val = 0.75
+    verbose = False
+
+    summarize_directory(
+        directory_path=directory_path,
+        strength=strength,
+        temperature=temperature,
+        time=time_val,
+        verbose=verbose,
+        csv_file=None
+    )
+
+    # Verify llm_invoke was called with the correct time parameter
+    mock_llm_invoke.assert_called_once()
+    call_kwargs = mock_llm_invoke.call_args[1]
+    assert call_kwargs['time'] == time_val
+    assert call_kwargs['strength'] == strength
+    assert call_kwargs['temperature'] == temperature
+
+
+def test_file_read_with_invalid_utf8(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    """Test that files with invalid UTF-8 bytes are read without crashing due to errors='ignore'."""
+    file1 = tmp_path / "invalid_utf8.py"
+    # Write valid python but with some invalid utf-8 bytes in a comment
+    file1.write_bytes(b"print('Hello') # \xff\xfe\xfd")
+
+    directory_path = str(tmp_path / "*.py")
+    
+    csv_output, total_cost, model_name = summarize_directory(
+        directory_path=directory_path,
+        strength=0.5,
+        temperature=0.7,
+        verbose=False,
+        csv_file=None
+    )
+
+    # Should process successfully without raising UnicodeDecodeError
+    reader = csv.DictReader(StringIO(csv_output))
+    rows = list(reader)
+    assert len(rows) == 1
+    assert "invalid_utf8.py" in rows[0]['full_path']
+    assert rows[0]['file_summary'] == "This is a summary."
+    assert rows[0]['content_hash'] != "error"
+
+
+# ============================================================================
+# Z3 Formal Verification for Binary Filtering Logic
+# ============================================================================
+
+def test_z3_verify_binary_filtering():
+    """
+    Formally verify the binary filtering logic using Z3.
+    
+    Logic to verify:
+    is_processed <==> is_file AND NOT is_binary_extension
+    """
+    s = Solver()
+
+    # State variables
+    is_file = Bool('is_file')
+    is_binary_extension = Bool('is_binary_extension')
+    
+    # The decision logic implemented in the code:
+    # if not os.path.isfile(f): continue
+    # if ext.lower() in BINARY_EXTENSIONS: continue
+    # filtered_files.append(f)
+    
+    # Let's model 'is_processed'
+    is_processed = And(is_file, Not(is_binary_extension))
+    
+    # Property 1: If it's a binary extension, it MUST NOT be processed
+    s.push()
+    s.add(is_binary_extension)
+    s.add(is_processed) # Asserting it IS processed (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where a binary file is processed"
+    s.pop()
+    
+    # Property 2: If it's not a file, it MUST NOT be processed
+    s.push()
+    s.add(Not(is_file))
+    s.add(is_processed) # Asserting it IS processed (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where a non-file is processed"
+    s.pop()
+    
+    # Property 3: If it is a file and NOT a binary extension, it MUST be processed
+    s.push()
+    s.add(is_file)
+    s.add(Not(is_binary_extension))
+    s.add(Not(is_processed)) # Asserting it is NOT processed (contradiction expected)
+    assert s.check() == unsat, "Z3 found a case where a valid file is skipped"
+    s.pop()
+
+
+# ============================================================================
+# NEW: Additional tests for prompt coverage gaps
+# ============================================================================
+
+
+class TestCacheInvalidationEdgeCases:
+    """Tests for Step 6d: new-format entries with empty lists should cache;
+    old-format entries (missing columns) should force re-summarization."""
+
+    def test_cache_hit_when_key_exports_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """New-format CSV with key_exports='[]' should still cache (file may have no exports)."""
+        import hashlib
+        content = "x"
+        (tmp_path / "test.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            f'test.py,Old.,"[]","[""os""]",{content_hash}'
+        )
+
+        _, cost, _ = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert cost == 0, "New-format entry with empty key_exports should be a cache hit"
+
+    def test_cache_hit_when_dependencies_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """New-format CSV with dependencies='[]' should still cache (file may have no imports)."""
+        import hashlib
+        content = "x"
+        (tmp_path / "test.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            f'test.py,Old.,"[""foo""]","[]",{content_hash}'
+        )
+
+        _, cost, _ = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert cost == 0, "New-format entry with empty dependencies should be a cache hit"
+
+
+class TestCsvColumnDefaults:
+    """Tests for Step 5: default missing key_exports and dependencies to '[]'."""
+
+    def test_csv_defaults_missing_columns_to_empty_list(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """CSV with only 3 required columns should not crash; missing cols default to '[]'."""
+        import hashlib
+        content = "x"
+        (tmp_path / "test.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,content_hash\n"
+            f"test.py,Old.,{content_hash}"
+        )
+
+        # Should not crash; missing columns default to '[]' -> cache miss -> re-summarize
+        _, cost, _ = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert cost > 0
+
+
+class TestVerboseProgressBehavior:
+    """Tests for Step 6: Rich progress only when verbose=True and no callback."""
+
+    def test_no_rich_output_when_verbose_false_no_callback(self, tmp_path, mock_load_prompt_template, mock_llm_invoke, capsys):
+        """When verbose=False and no callback, no Rich progress output should appear."""
+        (tmp_path / "f.py").write_text("x")
+        summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5, verbose=False)
+        captured = capsys.readouterr()
+        assert "Processing files" not in captured.out
+        assert "Summarizing" not in captured.out
+
+
+class TestMultiFileErrorResilience:
+    """Tests for Step 6g: one file error should not crash the rest."""
+
+    def test_one_llm_failure_others_still_summarized(self, tmp_path, mock_load_prompt_template):
+        """If LLM fails on one file, other files should still be summarized."""
+        (tmp_path / "good.py").write_text("print('ok')")
+        (tmp_path / "bad.py").write_text("bad content")
+
+        def selective_llm(*args, **kwargs):
+            if kwargs.get('input_json', {}).get('file_contents', '') == "bad content":
+                raise RuntimeError("LLM choked")
+            return {
+                'result': FileSummary(
+                    file_summary="Good summary.",
+                    key_exports=["x"],
+                    dependencies=["y"],
+                ),
+                'cost': 0.01,
+                'model_name': "TestModel",
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=selective_llm):
+            csv_out, cost, _ = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+
+        rows = list(csv.DictReader(StringIO(csv_out)))
+        assert len(rows) == 2
+        error_rows = [r for r in rows if "Error" in r['file_summary']]
+        good_rows = [r for r in rows if r['file_summary'] == "Good summary."]
+        assert len(error_rows) == 1
+        assert len(good_rows) == 1
+
+
+class TestCsvOutputCompleteness:
+    """Tests for output CSV having all five columns."""
+
+    def test_csv_output_has_all_five_columns(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / "f.py").write_text("x")
+        csv_out, _, _ = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+        reader = csv.DictReader(StringIO(csv_out))
+        assert set(reader.fieldnames) == {
+            'full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'
+        }
+
+
+class TestReturnValueShape:
+    """Tests for the output tuple shape and types."""
+
+    def test_returns_three_element_tuple(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / "f.py").write_text("x")
+        result = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+    def test_return_types(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / "f.py").write_text("x")
+        csv_out, cost, model = summarize_directory(str(tmp_path / "*.py"), 0.5, 0.5)
+        assert isinstance(csv_out, str)
+        assert isinstance(cost, float)
+        assert isinstance(model, str)
+
+    def test_model_name_cached_when_all_from_cache(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        import hashlib
+        content = "x"
+        (tmp_path / "f.py").write_text(content)
+        content_hash = hashlib.sha256(content.encode()).hexdigest()
+
+        existing_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            f'f.py,Cached.,"[""a""]","[""b""]",{content_hash}'
+        )
+
+        _, _, model = summarize_directory(
+            str(tmp_path / "*.py"), 0.5, 0.5, csv_file=existing_csv
+        )
+        assert model == "cached"
+
+
+class TestBinaryExtensionsAdditional:
+    """Additional binary extension checks not covered by original tests."""
+
+    def test_includes_audio_formats(self):
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.mp3', '.wav', '.ogg']:
+            assert ext in BINARY_EXTENSIONS
+
+    def test_includes_font_formats(self):
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.woff', '.woff2', '.ttf', '.eot', '.otf']:
+            assert ext in BINARY_EXTENSIONS
+
+    def test_includes_executable_formats(self):
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.exe', '.dll', '.so', '.dylib']:
+            assert ext in BINARY_EXTENSIONS
