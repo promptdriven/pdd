@@ -2,34 +2,48 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";
+import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { VeoSection01TitleCard } from "../VeoSection01TitleCard";
-import { VeoSection02KeyVisual } from "../veo_section_02_key_visual";
-import { VeoSection03SplitSummary } from "../veo_section_03_split_summary";
+import { VeoSection04WaveDataOverlay } from "../VeoSection04WaveDataOverlay";
+import { VeoSection05SplitNatureComparison } from "../VeoSection05SplitNatureComparison";
+import { VeoSection06VeoPipelineInfographic } from "../VeoSection06VeoPipelineInfographic";
+import { VeoSection07NarrationOverlayIntro } from "../VeoSection07NarrationOverlayIntro";
+import { VeoSection08SectionEndCard } from "../VeoSection08SectionEndCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "veo_section_01_title_card": VeoSection01TitleCard,
-  "veo_section_02_key_visual": VeoSection02KeyVisual,
-  "veo_section_03_split_summary": VeoSection03SplitSummary,
+  "04_wave_data_overlay": VeoSection04WaveDataOverlay,
+  "05_split_nature_comparison": VeoSection05SplitNatureComparison,
+  "06_veo_pipeline_infographic": VeoSection06VeoPipelineInfographic,
+  "07_narration_overlay_intro": VeoSection07NarrationOverlayIntro,
+  "08_section_end_card": VeoSection08SectionEndCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "veo_section_01_title_card": 38,
+  "04_wave_data_overlay": 38,
+  "07_narration_overlay_intro": 38,
+  "08_section_end_card": 37,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "veo_section_01_title_card": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
-  "veo_section_02_key_visual": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
-  "veo_section_03_split_summary": { defaultSrc: "veo_section.mp4", backgroundSrc: "veo_section.mp4", outputSrc: "veo_section.mp4", baseSrc: "veo_section.mp4" },
-  "04_veo_broll": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4" },
-  "05_veo_cutaway": { defaultSrc: "veo/05_veo_cutaway.mp4", backgroundSrc: "veo/05_veo_cutaway.mp4", outputSrc: "veo/05_veo_cutaway.mp4", baseSrc: "veo/05_veo_cutaway.mp4" },
+  "02_ocean_wave_sunset": { defaultSrc: "veo/02_ocean_wave_sunset.mp4", backgroundSrc: "veo/02_ocean_wave_sunset.mp4", outputSrc: "veo/02_ocean_wave_sunset.mp4", baseSrc: "veo/02_ocean_wave_sunset.mp4" },
+  "03_aerial_forest_canopy": { defaultSrc: "veo/03_aerial_forest_canopy.mp4", backgroundSrc: "veo/03_aerial_forest_canopy.mp4", outputSrc: "veo/03_aerial_forest_canopy.mp4", baseSrc: "veo/03_aerial_forest_canopy.mp4" },
+  "04_wave_data_overlay": { defaultSrc: "veo/03_aerial_forest_canopy.mp4", backgroundSrc: "veo/03_aerial_forest_canopy.mp4", outputSrc: "veo/03_aerial_forest_canopy.mp4", baseSrc: "veo/03_aerial_forest_canopy.mp4" },
+  "05_split_nature_comparison": { defaultSrc: "veo/03_aerial_forest_canopy.mp4", backgroundSrc: "veo/03_aerial_forest_canopy.mp4", outputSrc: "veo/03_aerial_forest_canopy.mp4", baseSrc: "veo/03_aerial_forest_canopy.mp4" },
+  "06_veo_pipeline_infographic": { defaultSrc: "veo/03_aerial_forest_canopy.mp4", backgroundSrc: "veo/03_aerial_forest_canopy.mp4", outputSrc: "veo/03_aerial_forest_canopy.mp4", baseSrc: "veo/03_aerial_forest_canopy.mp4" },
+  "07_narration_overlay_intro": { defaultSrc: "veo/03_aerial_forest_canopy.mp4", backgroundSrc: "veo/03_aerial_forest_canopy.mp4", outputSrc: "veo/03_aerial_forest_canopy.mp4", baseSrc: "veo/03_aerial_forest_canopy.mp4" },
+  "08_section_end_card": { defaultSrc: "veo/03_aerial_forest_canopy.mp4", backgroundSrc: "veo/03_aerial_forest_canopy.mp4", outputSrc: "veo/03_aerial_forest_canopy.mp4", baseSrc: "veo/03_aerial_forest_canopy.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
+  "04_wave_data_overlay": { gradientOverlay: "bottom" },
 };
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.344;
+  const durationSeconds = 7.68;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 
@@ -54,7 +68,11 @@ export const VeoSectionSection: React.FC = () => {
               </SlotScaledSequence>
             ) : visualMedia?.defaultSrc ? (
               <VisualMediaProvider media={visualMedia}>
-                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                {visualOverlayConfig ? (
+                  <GeneratedMediaVisual config={visualOverlayConfig} />
+                ) : (
+                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                )}
               </VisualMediaProvider>
             ) : null}
           </Sequence>
