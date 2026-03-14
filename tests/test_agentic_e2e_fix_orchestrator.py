@@ -1494,6 +1494,62 @@ class TestIsIntermediateFile:
         """error_output debug files should be filtered (gap fix for #383)."""
         assert is_intermediate(path) is True
 
+    @pytest.mark.parametrize("path", [
+        ".pdd/backups/2026-03-09_123456/module.py",
+        ".pdd/backups/2026-03-09_123456/test_module.py",
+        ".pdd/core_dumps/pdd-core-abc123.json",
+        ".pdd/debug/trace.json",
+    ])
+    def test_pdd_directory_artifacts_filtered(self, is_intermediate, path):
+        """Artifacts under .pdd/ should be filtered (Issue #824)."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "step3_output.md",
+        "step9_output.md",
+        "step12_output.md",
+    ])
+    def test_step_output_files_filtered(self, is_intermediate, path):
+        """Workflow step output files should be filtered (Issue #824)."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "waitlist_fix_errors.txt",
+        "waitlist_test_errors.txt",
+        "module_errors.txt",
+        "auth_fix_errors.txt",
+    ])
+    def test_errors_txt_files_filtered(self, is_intermediate, path):
+        """Workflow error logs ending in _errors.txt should be filtered."""
+        assert is_intermediate(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "test_issue_824_reproduction.py",
+        "test_issue_383_reproduction.py",
+        "test_issue_100_reproduction.py",
+    ])
+    def test_reproduction_test_files_filtered(self, is_intermediate, path):
+        """Issue reproduction leftovers should be filtered (Issue #824)."""
+        assert is_intermediate(path) is True
+
+    # --- .pdd/e2e-fix-state/ must NOT be filtered (state files) ---
+
+    @pytest.mark.parametrize("path", [
+        ".pdd/e2e-fix-state/e2e_fix_state_824.json",
+        ".pdd/e2e-fix-state/e2e_fix_state_830.json",
+        ".pdd/e2e-fix-state/bug_state_824.json",
+    ])
+    def test_pdd_state_files_not_filtered(self, is_intermediate, path):
+        """State files under .pdd/e2e-fix-state/ must NOT be filtered.
+
+        The _is_intermediate_file filter catches .pdd/** artifacts, but
+        state files are needed for workflow resume and must be preserved.
+        """
+        assert is_intermediate(path) is False, (
+            f"State file {path} was incorrectly filtered as intermediate. "
+            f".pdd/e2e-fix-state/ must be excluded from the .pdd/ catch-all."
+        )
+
     # --- Should NOT be filtered (False) — false-positive guards ---
 
     @pytest.mark.parametrize("path", [
@@ -1509,6 +1565,11 @@ class TestIsIntermediateFile:
         "README.md",
         "extensions/github_pdd_app/src/models.py",
         "error_output.py",
+        ".pddrc",
+        "pdd/step_handler.py",
+        "tests/test_errors.py",
+        "fixed_point_errors.log",
+        "tests/test_issue_reproduction_helper.py",
     ])
     def test_legitimate_files_not_filtered(self, is_intermediate, path):
         """Legitimate files must NOT be caught by the filter."""
@@ -1529,7 +1590,7 @@ class TestIsIntermediateFile:
 
 
 class TestCommitAndPushIntermediateFileFiltering:
-    """Tests for issue #383: _commit_and_push should filter out intermediate files.
+    """Tests for issue #383/#824 intermediate file filtering in _commit_and_push.
 
     The `pdd fix agentic` command creates intermediate/debug files with suffixes
     like `_fixed.py` during the fix workflow. These files should NOT be committed.
@@ -1711,6 +1772,128 @@ class TestCommitAndPushIntermediateFileFiltering:
         assert "error_output_models.txt" not in staged_files, (
             "error_output_models.txt should NOT be staged"
         )
+
+    def test_commit_and_push_filters_issue824_artifact_files(self, mock_git_repo):
+        """_commit_and_push should filter newer workflow artifacts (Issue #824)."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        cwd = mock_git_repo
+        artifact_files = [
+            ".pdd/backups/2026-03-09_123456/module.py",
+            ".pdd/core_dumps/pdd-core-abc123.json",
+            "step9_output.md",
+            "waitlist_fix_errors.txt",
+            "waitlist_test_errors.txt",
+            "test_issue_824_reproduction.py",
+        ]
+        legitimate_files = [
+            "module.py",
+            "tests/test_module.py",
+        ]
+
+        for filepath in artifact_files + legitimate_files:
+            full_path = cwd / filepath
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(f"# {full_path.name}\n")
+
+        initial_hashes = {}
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run):
+            _commit_and_push(
+                cwd=cwd,
+                issue_number=824,
+                issue_title="Artifact filtering",
+                repo_owner="test",
+                repo_name="repo",
+                initial_file_hashes=initial_hashes,
+                quiet=True,
+            )
+
+        for filepath in legitimate_files:
+            assert filepath in staged_files, f"Legitimate file {filepath} should be staged"
+        for filepath in artifact_files:
+            assert filepath not in staged_files, f"Artifact file {filepath} should NOT be staged"
+
+    def test_commit_and_push_fallback_filters_issue824_artifacts(self, mock_git_repo):
+        """Fallback staging path should apply the same Issue #824 filter."""
+        from unittest.mock import MagicMock
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+
+        cwd = mock_git_repo
+        legitimate_file = "module.py"
+        artifact_files = [
+            "step9_output.md",
+            "waitlist_fix_errors.txt",
+        ]
+
+        for filepath in [legitimate_file] + artifact_files:
+            full_path = cwd / filepath
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(f"# {full_path.name}\n")
+
+        initial_hashes = _get_file_hashes(cwd)
+        staged_files = []
+        original_run = __import__("subprocess").run
+
+        def mock_run(args, **kwargs):
+            if args[0] == "git" and args[1] == "add":
+                staged_files.append(args[2])
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "commit":
+                result = MagicMock()
+                result.returncode = 0
+                result.stderr = ""
+                return result
+            if args[0] == "git" and args[1] == "push":
+                result = MagicMock()
+                result.returncode = 1
+                result.stderr = "No remote"
+                return result
+            return original_run(args, **kwargs)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value={legitimate_file, *artifact_files},
+        ):
+            with patch("subprocess.run", side_effect=mock_run):
+                _commit_and_push(
+                    cwd=cwd,
+                    issue_number=824,
+                    issue_title="Artifact filtering",
+                    repo_owner="test",
+                    repo_name="repo",
+                    initial_file_hashes=initial_hashes,
+                    quiet=True,
+                )
+
+        assert legitimate_file in staged_files, "Legitimate file should be staged via fallback"
+        for filepath in artifact_files:
+            assert filepath not in staged_files, f"Artifact file {filepath} should NOT be staged"
 
 class TestIndependentTestVerification:
     """Tests for issue #588: Independent pytest verification of LLM claims.
@@ -2647,4 +2830,238 @@ class TestIssue791SkippedStepsEdgeCases:
         # Cost should reflect only 8 dispatched steps
         assert cost == pytest.approx(0.8, abs=0.01), (
             f"Cost should be ~$0.80 (8 steps at $0.10 each, Step 2 skipped), got ${cost:.4f}"
+        )
+
+
+# ============================================================================
+# Issue #830: Missing Loop Control Token, State Divergence
+#
+# Bug 1: When Step 9 output has no loop control token, the orchestrator
+# prints a warning but falls through to cycle increment (CONTINUE_CYCLE
+# by default), causing an unnecessary Cycle 2.
+# Fix: treat missing token as terminal — break out of the loop.
+#
+# Bug 3 (orchestrator side): save_workflow_state() returning stale
+# github_comment_id when GitHub save fails, masking state divergence.
+# ============================================================================
+
+
+class TestIssue830MissingLoopControlToken:
+    """Tests for issue #830 Bug 1: Step 9 missing loop control token.
+
+    When Step 9 output contains none of the recognized loop control tokens
+    (ALL_TESTS_PASS, CONTINUE_CYCLE, MAX_CYCLES_REACHED), the orchestrator
+    should treat it as a terminal condition and break, not default to
+    CONTINUE_CYCLE.
+    """
+
+    def test_no_loop_control_token_breaks_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 9 with no control token should NOT start Cycle 2.
+
+        Bug: The orchestrator defaults to CONTINUE_CYCLE when no token is
+        found, causing unnecessary Cycle 2. Fix: break the loop.
+        """
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 3
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                # Step 9 output with NO loop control token
+                return (True, "Verification complete. Some output without any token.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should only run 9 steps (1 cycle), NOT 18+ (2+ cycles)
+        assert mock_run.call_count == 9, (
+            f"Expected exactly 9 step calls (1 cycle only) but got {mock_run.call_count}. "
+            f"Missing loop control token should break the loop, not default to CONTINUE_CYCLE."
+        )
+
+    def test_no_loop_control_token_logs_warning(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 9 with no control token should log a warning.
+
+        The orchestrator should clearly indicate that no loop control token
+        was found, rather than silently continuing.
+        """
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Verification complete. No token here.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Verify a warning was logged about the missing token
+        warning_logged = any(
+            "No loop control token" in str(call) or "no loop control token" in str(call).lower()
+            for call in mock_console.print.call_args_list
+        )
+        assert warning_logged, (
+            "Expected a warning about missing loop control token in console output. "
+            f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
+        )
+
+    def test_continue_cycle_token_still_works(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """CONTINUE_CYCLE token should still trigger another cycle.
+
+        Regression guard: explicit CONTINUE_CYCLE should still cause a
+        new cycle to start.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Should run 2 full cycles = 18 steps
+        assert mock_run.call_count == 18, (
+            f"Expected 18 step calls (2 cycles) but got {mock_run.call_count}. "
+            f"CONTINUE_CYCLE should still trigger another cycle."
+        )
+
+    def test_max_cycles_reached_token_still_works(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """MAX_CYCLES_REACHED token should still allow natural loop exit.
+
+        Regression guard: MAX_CYCLES_REACHED is informational and the loop
+        should exit naturally via the max_cycles check.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Max cycles reached. MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should run exactly 9 steps (1 cycle), then exit naturally
+        assert mock_run.call_count == 9, (
+            f"Expected 9 step calls (1 cycle) but got {mock_run.call_count}."
+        )
+
+
+class TestIssue830SaveWorkflowStateOrchestratorIntegration:
+    """Tests for issue #830 Bug 3: save_workflow_state failure masking.
+
+    When save_workflow_state() fails to save to GitHub, it should return
+    None (not the stale comment_id), so the orchestrator can detect the
+    divergence.
+    """
+
+    def test_save_state_github_failure_returns_none_not_stale_id(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When GitHub save fails, save_workflow_state should return None.
+
+        Bug: save_workflow_state returns the old github_comment_id when
+        GitHub save fails, making the caller think the save succeeded.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["use_github_state"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Test the save_workflow_state function directly for this bug
+        from pdd.agentic_common import save_workflow_state, github_save_state
+
+        state = {"last_completed_step": 5, "step_outputs": {}}
+        stale_comment_id = 12345
+
+        with patch("pdd.agentic_common.github_save_state") as mock_gh_save, \
+             patch("pdd.agentic_common._should_use_github_state") as mock_should:
+            mock_should.return_value = True
+            # GitHub save fails — returns None
+            mock_gh_save.return_value = None
+
+            result = save_workflow_state(
+                cwd=e2e_fix_default_args["cwd"],
+                issue_number=1,
+                workflow_type="e2e_fix",
+                state=state,
+                state_dir=e2e_fix_default_args["cwd"] / ".pdd" / "state",
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+                github_comment_id=stale_comment_id,
+            )
+
+        # Bug: returns stale_comment_id (12345) instead of None
+        assert result is None or result != stale_comment_id, (
+            f"save_workflow_state returned stale comment_id {result} when GitHub save failed. "
+            f"Should return None to signal failure, not the old id {stale_comment_id}."
+        )
+
+
+class TestStep9PromptRequiresControlToken:
+    """The Step 9 prompt must explicitly require the LLM to emit a control token.
+
+    Without a mandatory instruction, the LLM may write a valid verification
+    summary but skip the control token entirely (as happened on issue #824),
+    causing the orchestrator to treat it as a missing token and stop.
+    """
+
+    def test_step9_prompt_mandates_control_token(self):
+        """The Step 9 prompt must contain a mandatory instruction to always
+        emit exactly one of ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED."""
+        from pdd.load_prompt_template import load_prompt_template
+
+        prompt = load_prompt_template("agentic_e2e_fix_step9_verify_all_LLM")
+        assert prompt is not None, "Could not load Step 9 prompt template"
+
+        prompt_lower = prompt.lower()
+
+        # Must contain a mandatory requirement, not just an informational note
+        has_mandatory_language = any(phrase in prompt_lower for phrase in [
+            "you must emit",
+            "you must include",
+            "you must output",
+            "always emit",
+            "required to emit",
+            "mandatory",
+            "must appear in your output",
+            "must be present in your response",
+            "your response must contain exactly one of",
+            "always include exactly one",
+        ])
+
+        assert has_mandatory_language, (
+            "Step 9 prompt does not contain mandatory language requiring the LLM to emit "
+            "a control token. The current wording ('these strings control the outer loop') "
+            "is informational, not imperative. The LLM can write a valid response without "
+            "emitting any token, causing the orchestrator to stop with 'missing token'. "
+            "Add explicit mandatory instruction like 'You MUST include exactly one of "
+            "ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED in your response.'"
         )
