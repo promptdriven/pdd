@@ -1,6 +1,6 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, interpolateColors, Easing } from 'remotion';
-import { COLORS, SHAPE, TIMING, GHOST } from './constants';
+import { CANVAS, COLORS, SHAPE, TIMING, GHOST } from './constants';
 
 /**
  * Computes the border radius for a given effective frame.
@@ -67,9 +67,8 @@ export const GhostTrail: React.FC = () => {
 							borderRadius: radius,
 							backgroundColor: color,
 							opacity: baseOpacity * ghostVisibility,
-							top: '50%',
-							left: '50%',
-							transform: 'translate(-50%, -50%)',
+							top: CANVAS.centerY - SHAPE.size / 2,
+							left: CANVAS.centerX - SHAPE.size / 2,
 						}}
 					/>
 				);

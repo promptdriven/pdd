@@ -5,7 +5,7 @@ import {
 	interpolateColors,
 	Easing,
 } from 'remotion';
-import { COLORS, SHAPE, TIMING } from './constants';
+import { CANVAS, COLORS, SHAPE, TIMING } from './constants';
 
 /**
  * The primary morphing shape: a centered 120x120 element that transitions
@@ -77,9 +77,9 @@ export const MorphShape: React.FC = () => {
 				borderRadius,
 				backgroundColor: fillColor,
 				boxShadow: `0 0 30px ${fillColor}`,
-				top: '50%',
-				left: '50%',
-				transform: `translate(-50%, -50%) scale(${scale})`,
+				top: CANVAS.centerY - SHAPE.size / 2,
+				left: CANVAS.centerX - SHAPE.size / 2,
+				transform: `scale(${scale})`,
 			}}
 		/>
 	);

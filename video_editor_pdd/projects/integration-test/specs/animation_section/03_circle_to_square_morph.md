@@ -69,3 +69,12 @@ The blue circle from the previous visual smoothly morphs into a rounded square. 
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: a2cb728e-a228-49ff-8556-bba09d215626 -->
+## Annotation Update
+Requested change: The morphing shape is vertically off-center. The spec requires it centered at (960, 540), but the shape appears positioned roughly at y≈410, approximately 130px above vertical center (~12% of frame height). This significantly exceeds the 3% tolerance. Horizontally, the shape is also slightly left of center but closer to tolerance. The shape's final state (rounded square, indigo fill ~#6366F1, border-radius ~12px) and the settle-phase animation timing are correct. The background gradient and ghost trail glow effect are acceptable.
+Technical assessment: The morphing shape in scene 03_circle_to_square_morph is vertically displaced ~130px above center (y≈410 vs. spec-required y=540). The component code itself correctly uses top:50%/left:50% with translate(-50%,-50%) for centering within its AbsoluteFill container. The offset is likely caused by the parent layout context — the SlotScaledSequence wrapper or the composition's viewport sizing may constrain the AbsoluteFill to less than the full 1080px height, causing the percentage-based centering to resolve against a shorter container. The shape's final visual properties (indigo #6366F1 fill, 12px border-radius, 120x120px size) and animation timing (morph + settle phases) match the spec. The ~12% vertical displacement significantly exceeds the 3% positional tolerance.
+- Replace percentage-based centering (top:50%/left:50%/translate) with absolute pixel positioning using the CANVAS constants: top: CANVAS.centerY - SHAPE.size/2 (480px), left: CANVAS.centerX - SHAPE.size/2 (900px) in both MorphShape.tsx and GhostTrail.tsx
+- Alternatively, wrap the shape container in a div with explicit width:1920px and height:1080px to ensure the percentage centering resolves against the full canvas dimensions
+- Verify that the SlotScaledSequence wrapper in animation_section/index.tsx is not constraining the vertical height of the AbsoluteFill container
+<!-- ANNOTATION_UPDATE_END: a2cb728e-a228-49ff-8556-bba09d215626 -->
