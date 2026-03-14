@@ -1,1 +1,1 @@
-// Deprecated — replaced by WaveformVisualizer, WordByWordReveal, VoiceBadge
+// Deprecated — removed from spec

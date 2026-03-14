@@ -1,15 +1,15 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION, type TitleCardLayout } from './constants';
+import { COLORS, TYPOGRAPHY, ANIMATION, DIMENSIONS } from './constants';
 
-export const HorizontalRule: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
+export const HorizontalRule: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Frame 10-22: Scale outward from centre with easeInOutQuad
-  const scaleX = interpolate(
+  // Frame 10–18: Expand width from 0→400px, center-anchored, easeInOutQuad
+  const width = interpolate(
     frame,
-    [ANIMATION.ruleFadeStart, ANIMATION.ruleFadeEnd],
-    [0, 1],
+    [ANIMATION.ruleExpandStart, ANIMATION.ruleExpandEnd],
+    [0, DIMENSIONS.ruleMaxWidth],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -17,33 +17,22 @@ export const HorizontalRule: React.FC<{ layout: TitleCardLayout }> = ({ layout }
     },
   );
 
-  // Frame 22-38: Ambient glow pulse (opacity 0.8 → 1.0 → 0.8)
-  const glowProgress = interpolate(
-    frame,
-    [ANIMATION.glowPulseStart, ANIMATION.glowPulseEnd],
-    [0, Math.PI * 2],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
-  const glowOpacity = frame >= ANIMATION.glowPulseStart
-    ? 0.8 + 0.2 * Math.sin(glowProgress)
-    : 1;
+  // Position: 40% from top + title line-height offset + 20px gap
+  // Title is at 40% (432px on 1080p), title fontSize=56, lineHeight=1.2 → ~67px tall
+  // Rule sits 20px below the title's bottom edge
+  const titleBottomPx = DIMENSIONS.titleTopPercent * 1080 + TYPOGRAPHY.title.fontSize * 1.2;
+  const ruleTop = titleBottomPx + DIMENSIONS.ruleGap;
 
   return (
     <div
       style={{
         position: 'absolute',
-        top: layout.dimensions.ruleY,
-        left: layout.width / 2 - layout.dimensions.ruleWidth / 2,
-        width: layout.dimensions.ruleWidth,
-        height: layout.dimensions.ruleHeight,
+        top: ruleTop,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width,
+        height: DIMENSIONS.ruleHeight,
         backgroundColor: COLORS.rule,
-        transform: `scaleX(${scaleX})`,
-        transformOrigin: 'center',
-        opacity: glowOpacity,
-        boxShadow: `0 0 ${8 * glowOpacity}px ${COLORS.rule}`,
       }}
     />
   );

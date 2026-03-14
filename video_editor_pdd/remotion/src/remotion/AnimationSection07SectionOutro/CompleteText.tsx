@@ -1,11 +1,11 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, interpolate } from 'remotion';
 import { CANVAS, COLORS, DIMENSIONS, TYPOGRAPHY, ANIMATION_TIMING } from './constants';
 
 export const CompleteText: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Text fades in over frames 6-12 with easeOutQuad
+  // Text fades in over frames 6-12 with linear easing
   const opacity = interpolate(
     frame,
     [ANIMATION_TIMING.textFadeStart, ANIMATION_TIMING.textFadeEnd],
@@ -13,7 +13,6 @@ export const CompleteText: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
     }
   );
 

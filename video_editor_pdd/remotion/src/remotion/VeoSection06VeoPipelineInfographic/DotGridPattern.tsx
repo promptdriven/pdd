@@ -18,7 +18,7 @@ export const DotGridPattern: React.FC = () => {
     >
       <defs>
         <pattern
-          id="dotGrid"
+          id="pipelineDotGrid"
           x="0"
           y="0"
           width={spacing}
@@ -28,7 +28,7 @@ export const DotGridPattern: React.FC = () => {
           <circle cx={spacing / 2} cy={spacing / 2} r={1.5} fill={dotColor} />
         </pattern>
       </defs>
-      <rect width="100%" height="100%" fill="url(#dotGrid)" />
+      <rect width="100%" height="100%" fill="url(#pipelineDotGrid)" />
     </svg>
   );
 };

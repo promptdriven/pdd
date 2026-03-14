@@ -1,9 +1,9 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { WAVEFORM, COLORS, ANIMATION } from './constants';
+import { COLORS, ANIMATION, DIMENSIONS } from './constants';
 
 /**
- * Attempt a simple seeded pseudo-random number from an integer seed.
+ * Seeded pseudo-random number from an integer seed.
  * Returns a value between 0 and 1.
  */
 const seededRandom = (seed: number): number => {
@@ -14,10 +14,24 @@ const seededRandom = (seed: number): number => {
 export const WaveformVisualizer: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Ramp up from 0 to full intensity between waveformStart and waveformRampEnd
+  const {
+    waveformBarCount,
+    waveformBarWidth,
+    waveformBarGap,
+    waveformMinHeight,
+    waveformMaxHeight,
+    waveformY,
+  } = DIMENSIONS;
+
+  // Total width of waveform: (barWidth + barGap) * barCount - barGap
+  const totalWidth =
+    (waveformBarWidth + waveformBarGap) * waveformBarCount - waveformBarGap;
+  const startX = (1920 - totalWidth) / 2;
+
+  // Frame 10–20: Ramp up intensity from 0→1
   const rampUp = interpolate(
     frame,
-    [ANIMATION.waveformStart, ANIMATION.waveformRampEnd],
+    [ANIMATION.waveformStart, ANIMATION.waveformEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -26,86 +40,50 @@ export const WaveformVisualizer: React.FC = () => {
     },
   );
 
-  // Tail off: reduce to minimal heights at the end
-  const tailOff = interpolate(
-    frame,
-    [ANIMATION.waveformTailStart, ANIMATION.waveformTailEnd],
-    [1, 0.1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.quad),
-    },
-  );
-
-  const intensity = rampUp * tailOff;
-
-  const totalBarSpace = WAVEFORM.xEnd - WAVEFORM.xStart;
-  const barPitch = totalBarSpace / WAVEFORM.barCount;
-
-  const bars: { x: number; height: number; phaseOffset: number }[] = [];
-  for (let i = 0; i < WAVEFORM.barCount; i++) {
+  const bars: { x: number; height: number }[] = [];
+  for (let i = 0; i < waveformBarCount; i++) {
     const phaseOffset = seededRandom(i * 7 + 3) * Math.PI * 2;
 
-    // Oscillate bar height with sine wave, phase-shifted per bar
+    // Traveling wave: phase shifts left-to-right based on bar index
+    const travelPhase = (i / waveformBarCount) * Math.PI * 2;
+
+    // Sinusoidal oscillation — continuous pulse
     const oscillation =
       0.5 +
-      0.5 *
-        Math.sin(
-          (frame * 0.3 + phaseOffset) *
-            (0.8 + seededRandom(i * 13 + 5) * 0.4),
-        );
+      0.5 * Math.sin(frame * 0.4 + phaseOffset + travelPhase);
 
+    // Base height randomized per bar (deterministic via seed)
     const baseHeight =
-      WAVEFORM.minHeight +
-      (WAVEFORM.maxHeight - WAVEFORM.minHeight) * seededRandom(i * 17 + 11);
+      waveformMinHeight +
+      (waveformMaxHeight - waveformMinHeight) * seededRandom(i * 17 + 11);
 
+    // Animated height: scales with rampUp intensity
     const animatedHeight =
-      WAVEFORM.minHeight +
-      (baseHeight - WAVEFORM.minHeight) * oscillation * intensity;
+      waveformMinHeight +
+      (baseHeight - waveformMinHeight) * oscillation * rampUp;
 
     bars.push({
-      x: WAVEFORM.xStart + i * barPitch,
+      x: startX + i * (waveformBarWidth + waveformBarGap),
       height: animatedHeight,
-      phaseOffset,
     });
   }
 
   return (
     <>
-      {bars.map((bar, i) => {
-        const barTop = WAVEFORM.baselineY - bar.height;
-        return (
-          <React.Fragment key={i}>
-            {/* Main bar */}
-            <div
-              style={{
-                position: 'absolute',
-                left: bar.x,
-                top: barTop,
-                width: WAVEFORM.barWidth,
-                height: bar.height,
-                borderRadius: WAVEFORM.barWidth / 2,
-                background: `linear-gradient(to top, ${COLORS.waveformBottom}, ${COLORS.waveformTop})`,
-                opacity: COLORS.waveformOpacity,
-              }}
-            />
-            {/* Reflection below baseline */}
-            <div
-              style={{
-                position: 'absolute',
-                left: bar.x,
-                top: WAVEFORM.baselineY,
-                width: WAVEFORM.barWidth,
-                height: bar.height * 0.5,
-                borderRadius: WAVEFORM.barWidth / 2,
-                background: `linear-gradient(to bottom, ${COLORS.waveformBottom}, transparent)`,
-                opacity: COLORS.waveformReflectionOpacity,
-              }}
-            />
-          </React.Fragment>
-        );
-      })}
+      {bars.map((bar, i) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            left: bar.x,
+            top: waveformY - bar.height / 2,
+            width: waveformBarWidth,
+            height: bar.height,
+            borderRadius: waveformBarWidth / 2,
+            backgroundColor: COLORS.waveformBar,
+          }}
+        />
+      ))}
     </>
   );
 };

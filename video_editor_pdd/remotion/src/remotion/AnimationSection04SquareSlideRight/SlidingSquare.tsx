@@ -44,7 +44,7 @@ export const getSquareX = (frame: number): number => {
 			{
 				extrapolateLeft: 'clamp',
 				extrapolateRight: 'clamp',
-				easing: Easing.out(Easing.bounce),
+				easing: Easing.inOut(Easing.sin),
 			},
 		);
 	}

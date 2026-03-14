@@ -17,7 +17,7 @@ export const GlowEffect: React.FC = () => {
       frame,
       [TIMING.appearStart, TIMING.appearEnd],
       [0, baseGlowOpacity * 0.3],
-      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
     );
     glowRadius = restGlowRadius;
   } else if (frame < TIMING.contract1Start) {

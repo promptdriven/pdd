@@ -1,6 +1,6 @@
 import React from 'react';
 
-type IconType = 'document' | 'sparkle' | 'film' | 'layers';
+type IconType = 'text-cursor' | 'brain' | 'play';
 
 interface PipelineIconProps {
   type: IconType;
@@ -8,7 +8,7 @@ interface PipelineIconProps {
   size: number;
 }
 
-const DocumentIcon: React.FC<{ color: string; size: number }> = ({
+const TextCursorIcon: React.FC<{ color: string; size: number }> = ({
   color,
   size,
 }) => (
@@ -22,15 +22,37 @@ const DocumentIcon: React.FC<{ color: string; size: number }> = ({
     strokeLinecap="round"
     strokeLinejoin="round"
   >
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="16" y1="13" x2="8" y2="13" />
-    <line x1="16" y1="17" x2="8" y2="17" />
-    <line x1="10" y1="9" x2="8" y2="9" />
+    <path d="M17 22h-1a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4h1" />
+    <path d="M7 22h1a4 4 0 0 0 4-4V6a4 4 0 0 0-4-4H7" />
+    <line x1="9" y1="12" x2="15" y2="12" />
   </svg>
 );
 
-const SparkleIcon: React.FC<{ color: string; size: number }> = ({
+const BrainIcon: React.FC<{ color: string; size: number }> = ({
+  color,
+  size,
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={color}
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 2a4 4 0 0 1 4 4c1.7 0 3 1.3 3 3 1.1 0 2 .9 2 2s-.9 2-2 2c0 1.7-1.3 3-3 3a4 4 0 0 1-4 4" />
+    <path d="M12 2a4 4 0 0 0-4 4c-1.7 0-3 1.3-3 3-1.1 0-2 .9-2 2s.9 2 2 2c0 1.7 1.3 3 3 3a4 4 0 0 0 4 4" />
+    <line x1="12" y1="2" x2="12" y2="22" />
+    <path d="M8 8h0" />
+    <path d="M16 8h0" />
+    <path d="M8 16h0" />
+    <path d="M16 16h0" />
+  </svg>
+);
+
+const PlayIcon: React.FC<{ color: string; size: number }> = ({
   color,
   size,
 }) => (
@@ -41,52 +63,7 @@ const SparkleIcon: React.FC<{ color: string; size: number }> = ({
     fill={color}
     stroke="none"
   >
-    <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8L12 2z" />
-  </svg>
-);
-
-const FilmIcon: React.FC<{ color: string; size: number }> = ({
-  color,
-  size,
-}) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke={color}
-    strokeWidth={2}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
-    <line x1="7" y1="2" x2="7" y2="22" />
-    <line x1="17" y1="2" x2="17" y2="22" />
-    <line x1="2" y1="12" x2="22" y2="12" />
-    <line x1="2" y1="7" x2="7" y2="7" />
-    <line x1="2" y1="17" x2="7" y2="17" />
-    <line x1="17" y1="7" x2="22" y2="7" />
-    <line x1="17" y1="17" x2="22" y2="17" />
-  </svg>
-);
-
-const LayersIcon: React.FC<{ color: string; size: number }> = ({
-  color,
-  size,
-}) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke={color}
-    strokeWidth={2}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-  >
-    <polygon points="12 2 2 7 12 12 22 7 12 2" />
-    <polyline points="2 17 12 22 22 17" />
-    <polyline points="2 12 12 17 22 12" />
+    <polygon points="5,3 19,12 5,21" />
   </svg>
 );
 
@@ -96,14 +73,12 @@ export const PipelineIcon: React.FC<PipelineIconProps> = ({
   size,
 }) => {
   switch (type) {
-    case 'document':
-      return <DocumentIcon color={color} size={size} />;
-    case 'sparkle':
-      return <SparkleIcon color={color} size={size} />;
-    case 'film':
-      return <FilmIcon color={color} size={size} />;
-    case 'layers':
-      return <LayersIcon color={color} size={size} />;
+    case 'text-cursor':
+      return <TextCursorIcon color={color} size={size} />;
+    case 'brain':
+      return <BrainIcon color={color} size={size} />;
+    case 'play':
+      return <PlayIcon color={color} size={size} />;
     default:
       return null;
   }

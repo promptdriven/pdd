@@ -1,1 +1,1 @@
-// Removed — replaced by ParticleDrift
+// Removed — not used in this component

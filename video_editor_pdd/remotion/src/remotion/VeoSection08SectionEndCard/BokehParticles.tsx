@@ -1,1 +1,1 @@
-// This file is no longer used and can be deleted.
+// Removed — no longer needed per spec

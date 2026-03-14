@@ -5,36 +5,35 @@ import {
   useVideoConfig,
   interpolate,
   Easing,
-  Img,
-  staticFile,
   OffthreadVideo,
+  staticFile,
 } from 'remotion';
 import { useVisualMediaSrc } from '../_shared/visual-runtime';
 import {
   COLORS,
   ANIMATION,
-  DIMENSIONS,
   STAT_BADGES,
+  BADGE_LAYOUT,
   resolveWaveOverlayLayout,
 } from './constants';
-import { GridLines } from './GridLines';
-import { ChartAxes } from './ChartAxes';
-import { SineWaveLine } from './SineWaveLine';
-import { StatCallout } from './StatCallout';
+import { GridOverlay } from './GridOverlay';
+import { WaveformGraph } from './WaveformGraph';
+import { StatBadge } from './StatBadge';
 
 export const VeoSection04WaveDataOverlay: React.FC = () => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
   const layout = resolveWaveOverlayLayout(width, height);
 
-  // Resolve background video source via visual media hook
+  // Resolve background video from visual media context
   const backgroundSrc = useVisualMediaSrc('backgroundSrc', 'veo/04_veo_broll.mp4');
 
-  // Background fades in over first 8 frames, starting at 0.4 so content is visible at frame 0
-  const bgOpacity = interpolate(
+  // Dark overlay fades in: opacity 0 → 60% over frames 0–8, easeOutQuad
+  // Starts at 10% so content is visible from frame 0
+  const overlayOpacity = interpolate(
     frame,
-    [ANIMATION.gridDrawStart, ANIMATION.gridDrawEnd],
-    [0.4, 1],
+    [ANIMATION.overlayFadeStart, ANIMATION.overlayFadeEnd],
+    [0.1, 0.6],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -42,76 +41,56 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
     },
   );
 
-  // Title opacity matches grid draw, starts at 0.3 for frame-0 visibility
-  const titleOpacity = interpolate(
-    frame,
-    [ANIMATION.gridDrawStart, ANIMATION.gridDrawEnd],
-    [0.3, 0.9],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
+  // Badge animation timing per spec
+  const badgeTimings = [
+    { start: ANIMATION.badge1Start, end: ANIMATION.badge1End },
+    { start: ANIMATION.badge2Start, end: ANIMATION.badge2End },
+    { start: ANIMATION.badge3Start, end: ANIMATION.badge3End },
+  ];
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#00FF00' }}>
-      {/* Blurred background video still with dark overlay */}
+    <AbsoluteFill style={{ backgroundColor: '#0B1120' }}>
+      {/* Background Veo footage still */}
       {backgroundSrc ? (
-        <AbsoluteFill style={{ opacity: bgOpacity }}>
+        <AbsoluteFill>
           <OffthreadVideo
             src={staticFile(backgroundSrc)}
             style={{
               width: '100%',
               height: '100%',
               objectFit: 'cover',
-              filter: 'blur(6px) brightness(0.5)',
             }}
             startFrom={15}
             muted
           />
-          {/* Dark overlay */}
-          <AbsoluteFill style={{ backgroundColor: COLORS.background }} />
         </AbsoluteFill>
-      ) : (
-        <AbsoluteFill style={{ backgroundColor: '#00FF00', opacity: bgOpacity }} />
-      )}
+      ) : null}
 
-      {/* Chart title: "WAVE ANALYSIS" */}
-      <div
+      {/* Semi-transparent dark overlay (#0B1120 fading to 60%) */}
+      <AbsoluteFill
         style={{
-          position: 'absolute',
-          left: DIMENSIONS.titleX * layout.scaleX,
-          top: DIMENSIONS.titleY * layout.scaleY,
-          fontFamily: layout.typography.chartTitle.fontFamily,
-          fontSize: layout.typography.chartTitle.fontSize,
-          fontWeight: layout.typography.chartTitle.fontWeight,
-          letterSpacing: layout.typography.chartTitle.letterSpacing,
-          color: COLORS.titleText,
-          opacity: titleOpacity,
+          backgroundColor: '#0B1120',
+          opacity: overlayOpacity,
         }}
-      >
-        WAVE ANALYSIS
-      </div>
+      />
 
-      {/* Grid lines */}
-      <GridLines layout={layout} />
+      {/* Subtle horizontal grid lines at 25% intervals */}
+      <GridOverlay layout={layout} />
 
-      {/* Chart axes with labels */}
-      <ChartAxes layout={layout} />
+      {/* Sinusoidal waveform graph in the lower third */}
+      <WaveformGraph layout={layout} />
 
-      {/* Animated sine wave line with fill */}
-      <SineWaveLine layout={layout} />
-
-      {/* Floating stat callout badges */}
+      {/* Floating stat badges in the upper-right quadrant */}
       {STAT_BADGES.map((badge, i) => (
-        <StatCallout
+        <StatBadge
           key={badge.label}
           layout={layout}
           label={badge.label}
           value={badge.value}
-          x={badge.x}
-          y={badge.y}
-          delayFrames={i * ANIMATION.badgeStagger}
+          icon={badge.icon}
+          y={BADGE_LAYOUT.startY + i * BADGE_LAYOUT.gapY}
+          animStart={badgeTimings[i].start}
+          animEnd={badgeTimings[i].end}
         />
       ))}
     </AbsoluteFill>

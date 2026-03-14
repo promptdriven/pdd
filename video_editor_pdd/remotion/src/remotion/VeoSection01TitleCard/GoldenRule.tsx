@@ -1,1 +1,1 @@
-// Removed — replaced by LightStreak
+// Removed — not used in this component

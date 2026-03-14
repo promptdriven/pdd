@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, interpolate } from 'remotion';
 import { COLORS, DIMENSIONS, ANIMATION_TIMING, CANVAS, TYPOGRAPHY } from './constants';
 
 export const AccentLine: React.FC = () => {
@@ -12,7 +12,6 @@ export const AccentLine: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
     }
   );
 

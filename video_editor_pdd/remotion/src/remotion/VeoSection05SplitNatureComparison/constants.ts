@@ -1,10 +1,10 @@
 // Component-level constants for VeoSection05SplitNatureComparison
-// Single-frame flash card — no animation timing needed.
+// Split-screen comparison: 30 frames (~1.0s at 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
   height: 1080,
-};
+} as const;
 
 export const COLORS = {
   background: '#000000',
@@ -12,43 +12,56 @@ export const COLORS = {
   dividerGlow: 'rgba(255, 255, 255, 0.35)',
   labelBackground: 'rgba(11, 17, 32, 0.7)',
   labelText: '#FFFFFF',
-  headerText: '#FFFFFF',
-};
+} as const;
 
 export const TYPOGRAPHY = {
-  header: {
-    fontSize: 32,
-    fontFamily: 'Inter, sans-serif',
-    fontWeight: 700 as const,
-    letterSpacing: 8,
-  },
   label: {
     fontSize: 20,
     fontFamily: 'Inter, sans-serif',
     fontWeight: 600 as const,
   },
-};
+} as const;
 
 export const DIMENSIONS = {
   leftPanelX: 0,
   leftPanelY: 0,
   panelWidth: 958,
   panelHeight: 1080,
-  panelBorderRadius: 0,
   rightPanelX: 962,
   rightPanelY: 0,
   dividerX: 958,
-  dividerY: 0,
   dividerWidth: 4,
   dividerHeight: 1080,
   dividerGlowRadius: 8,
   labelInsetX: 40,
-  labelBottomOffset: 40,
+  labelBottomOffset: 60,
   labelPaddingX: 16,
   labelPaddingY: 8,
   labelRadius: 20,
-  headerY: 60,
-};
+} as const;
+
+export const ANIMATION = {
+  // Frame 0–8: panels scale from 1.1→1.0 (zoom-out settle)
+  panelZoomStart: 0,
+  panelZoomEnd: 8,
+  panelScaleFrom: 1.1,
+  panelScaleTo: 1.0,
+
+  // Frame 8–18: divider draws top-to-bottom (height 0→1080)
+  dividerDrawStart: 8,
+  dividerDrawEnd: 18,
+
+  // Frame 14–22: left label fades in (opacity 0→1, translateY +10→0)
+  leftLabelStart: 14,
+  leftLabelEnd: 22,
+
+  // Frame 18–26: right label fades in (opacity 0→1, translateY +10→0)
+  rightLabelStart: 18,
+  rightLabelEnd: 26,
+
+  // Frame 26–30: hold
+  labelTranslateY: 10,
+} as const;
 
 export type SplitNatureComparisonLayout = {
   width: number;
@@ -57,7 +70,6 @@ export type SplitNatureComparisonLayout = {
   scaleY: number;
   uniformScale: number;
   typography: {
-    header: typeof TYPOGRAPHY.header;
     label: typeof TYPOGRAPHY.label;
   };
 };
@@ -77,11 +89,6 @@ export const resolveSplitNatureComparisonLayout = (
     scaleY,
     uniformScale,
     typography: {
-      header: {
-        ...TYPOGRAPHY.header,
-        fontSize: Math.max(20, TYPOGRAPHY.header.fontSize * uniformScale),
-        letterSpacing: Math.max(4, TYPOGRAPHY.header.letterSpacing * uniformScale),
-      },
       label: {
         ...TYPOGRAPHY.label,
         fontSize: Math.max(14, TYPOGRAPHY.label.fontSize * uniformScale),

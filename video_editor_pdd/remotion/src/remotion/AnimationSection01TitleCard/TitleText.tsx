@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, interpolate } from 'remotion';
 import { COLORS, TYPOGRAPHY, DIMENSIONS, ANIMATION_TIMING, TEXT, CANVAS } from './constants';
 
 export const TitleText: React.FC = () => {
@@ -12,7 +12,6 @@ export const TitleText: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
     }
   );
 
@@ -23,7 +22,6 @@ export const TitleText: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
     }
   );
 

@@ -1,1 +1,1 @@
-// Removed — replaced by HorizontalRule
+// Removed — not used in this component

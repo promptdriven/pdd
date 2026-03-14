@@ -1,52 +1,11 @@
 ## v0.0.176 (2026-03-13)
 
-### Feat
-
-- Adjust section timings, update integration test audit reports, and add new visual components and test files.
-- persist structured visual contracts for compositions
-- persist generated composition manifest
-- add run remaining pipeline automation
-- Introduce new Remotion components, refine existing animation logic and media sources, and add integration test audit specifications for various sections.
-- generalize audit hints for stage10
-- surface warn audits in stage10
-- support layered media overlay composition
-- refresh remotion section visuals
-- Adjust Remotion composition durations, section timings, and update changelog.
-
 ### Fix
 
-- annotation test-batch-ann-1773466856521 Change the primary background accent in Animation
-- annotation test-batch-ann-1773466645087 Change the primary background accent in Animation
-- harden stage10 audit sampling and geometry checks
-- update 557 tests to mock _subprocess_run instead of subprocess.run
-- exclude .pdd/e2e-fix-state/ from intermediate file filter
-- PDD fix changes for #824
-- accept empty composition run requests
-- strip narrator markers from section tts text
-- update 557 tests to mock _subprocess_run instead of subprocess.run
-- make pipeline runner freshness-aware
-- Step 9 prompt must mandate control token emission
-- preserve architecture params after change step10
-- preserve signature style during architecture sync
-- merge architecture signatures during sync
-- PDD fix changes for #825
-- address #830 — orchestrator stall, killpg, retry, final comment, skip redundant diagnosis (#832)
-- audit hybrid visuals from composed renders
-- stop stage8 polling after job completion
-- skip unsupported media-overlay audits
-- prefer current staged veo clips in stage8
-- annotation 73b92e4d-a466-4b57-8fe5-c717293ba494 Change the main background color of this section t
-- annotation f399f592-94d8-4233-b2a6-f5a60af87cca Change the main background color of this section t
-- annotation test-batch-ann-1773422512345 Change the primary background accent in Animation
-- preserve visual media in stage8 previews
-- resolve split media aliases in stage8 generator
-- annotation e18f6be1-b8df-4e5d-be0b-90d8a65a6934 I want this to be a triangle
-- resolve staged veo media per visual
-
-### Refactor
-
-- clarify stage2 and stage3 advance actions
-- unify pipeline continue actions
+- **Orchestrator stall, killpg, retry, and final comment (issue #830)**: new `_subprocess_run` wrapper kills entire process groups on timeout via `os.killpg`; Step 1 gets an automatic 1.5× timeout retry; missing loop control token in Step 9 now stops the workflow instead of silently continuing; new `post_final_comment` reports workflow stop reason to GitHub; reuses prior pdd-bug analysis to skip redundant diagnosis steps
+- **Architecture interface parameter preservation (issue #825)**: new `_merge_interface_signatures` and `_merge_function_signature` use Python AST parsing to ensure updated signatures are supersets of existing ones — dropped parameters are restored with warnings instead of silently lost
+- **Preserve architecture params after change step10**: new `_sanitize_architecture_interfaces` snapshots architecture.json before Step 10 and merges interface signatures afterward, preventing LLM edits from dropping function parameters
+- **Artifact file filtering (issue #824)**: intermediate file filter expanded to catch `.pdd/` directories (except `e2e-fix-state/`), `*_errors.txt`, `step*_output.md`, and `test_issue_*_reproduction.py` — prevents workflow artifacts from being committed
 
 ## v0.0.175 (2026-03-12)
 

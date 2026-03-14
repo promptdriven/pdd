@@ -1,10 +1,17 @@
 import React from 'react';
-import { AbsoluteFill, useVideoConfig } from 'remotion';
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  useVideoConfig,
+  interpolate,
+  Easing,
+} from 'remotion';
 import {
   BASE_CANVAS,
   COLORS,
   TYPOGRAPHY,
   POSITIONS,
+  ANIMATION,
   PIPELINE_NODES,
   PIPELINE_ARROWS,
 } from './constants';
@@ -13,23 +20,34 @@ import { PipelineArrow } from './PipelineArrow';
 import { DotGridPattern } from './DotGridPattern';
 
 export const VeoSection06VeoPipelineInfographic: React.FC = () => {
+  const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
   const scaleX = width / BASE_CANVAS.width;
   const scaleY = height / BASE_CANVAS.height;
   const uniformScale = Math.min(scaleX, scaleY);
 
+  // Title fade-in with easeOutCubic
+  const titleOpacity = interpolate(
+    frame,
+    [ANIMATION.titleStart, ANIMATION.titleEnd],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.cubic),
+    },
+  );
+
   return (
     <AbsoluteFill
       style={{
         backgroundColor: COLORS.background,
-        width,
-        height,
       }}
     >
       {/* Subtle dot-grid pattern */}
       <DotGridPattern />
 
-      {/* Title: VIDEO GENERATION PIPELINE */}
+      {/* Section title: "How Veo Works" */}
       <div
         style={{
           position: 'absolute',
@@ -40,34 +58,41 @@ export const VeoSection06VeoPipelineInfographic: React.FC = () => {
           fontFamily: TYPOGRAPHY.title.fontFamily,
           fontSize: TYPOGRAPHY.title.fontSize * uniformScale,
           fontWeight: TYPOGRAPHY.title.fontWeight,
-          letterSpacing: TYPOGRAPHY.title.letterSpacing * uniformScale,
           color: COLORS.titleText,
+          opacity: titleOpacity,
         }}
       >
-        VIDEO GENERATION PIPELINE
+        How Veo Works
       </div>
 
       {/* Pipeline nodes */}
       {PIPELINE_NODES.map((node) => (
         <PipelineNode
-          key={node.label}
+          key={node.id}
           label={node.label}
           icon={node.icon}
           borderColor={node.borderColor}
           x={node.x * scaleX}
           y={POSITIONS.nodeY * scaleY}
           scale={uniformScale}
+          animStart={node.animStart}
+          animEnd={node.animEnd}
+          pulse={node.pulse}
         />
       ))}
 
-      {/* Connecting arrows */}
+      {/* Connecting arrows with gradient */}
       {PIPELINE_ARROWS.map((arrow, i) => (
         <PipelineArrow
           key={i}
           fromX={arrow.fromX * scaleX}
           toX={arrow.toX * scaleX}
-          color={arrow.color}
+          gradientFrom={arrow.gradientFrom}
+          gradientTo={arrow.gradientTo}
+          animStart={arrow.animStart}
+          animEnd={arrow.animEnd}
           scale={uniformScale}
+          gradientId={`pipelineGrad${i}`}
         />
       ))}
     </AbsoluteFill>

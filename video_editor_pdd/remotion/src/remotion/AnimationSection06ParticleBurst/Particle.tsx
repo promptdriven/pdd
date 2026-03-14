@@ -11,14 +11,11 @@ export const Particle: React.FC<ParticleProps> = ({ particle }) => {
 
   const { angle, distance, radius, color } = particle;
 
-  // Particles begin at frame 2
-  const particleFrame = frame - TIMING.particleStart;
-  if (particleFrame < 0) return null;
-
-  // Total frames for particle movement
+  // Total frames for particle movement (frames 2-24)
   const moveDuration = TIMING.particleMoveEnd - TIMING.particleStart;
+  const particleFrame = Math.max(0, frame - TIMING.particleStart);
 
-  // Radial progress with easeOutQuart deceleration
+  // Radial progress with easeOutCubic deceleration (stationary before frame 2)
   const progress = interpolate(
     particleFrame,
     [0, moveDuration],
@@ -26,7 +23,7 @@ export const Particle: React.FC<ParticleProps> = ({ particle }) => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.poly(4)),
+      easing: Easing.out(Easing.cubic),
     }
   );
 
@@ -34,17 +31,18 @@ export const Particle: React.FC<ParticleProps> = ({ particle }) => {
   const x = CANVAS.centerX + Math.cos(angle) * currentDistance;
   const y = CANVAS.centerY + Math.sin(angle) * currentDistance;
 
-  // Opacity: fade from 1.0 to 0 over particle lifetime, easeInQuad
-  const opacity = interpolate(
-    particleFrame,
-    [0, moveDuration],
-    [1, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.quad),
-    }
-  );
+  // Opacity: visible at center before detonation, then linear fade 1→0 during travel
+  const opacity = frame < TIMING.particleStart
+    ? 1
+    : interpolate(
+        particleFrame,
+        [0, moveDuration],
+        [1, 0],
+        {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        }
+      );
 
   if (opacity <= 0) return null;
 

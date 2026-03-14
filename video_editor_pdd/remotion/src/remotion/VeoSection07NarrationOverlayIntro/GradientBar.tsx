@@ -1,1 +1,1 @@
-// Deprecated — replaced by GradientMesh
+// Deprecated — replaced by BlurredBackground

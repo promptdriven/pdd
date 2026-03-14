@@ -1,1 +1,1 @@
-// Deprecated — replaced by WaveformVisualizer
+// Deprecated — removed from spec

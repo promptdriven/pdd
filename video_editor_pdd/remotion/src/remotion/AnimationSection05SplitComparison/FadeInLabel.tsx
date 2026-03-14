@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, interpolate } from 'remotion';
 import { COLORS, TYPOGRAPHY } from './constants';
 
 interface FadeInLabelProps {
@@ -22,7 +22,6 @@ export const FadeInLabel: React.FC<FadeInLabelProps> = ({
 	const opacity = interpolate(frame, [fadeStart, fadeEnd], [0, 1], {
 		extrapolateLeft: 'clamp',
 		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
 	});
 
 	return (

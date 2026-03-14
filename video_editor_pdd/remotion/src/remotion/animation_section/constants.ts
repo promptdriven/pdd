@@ -1,26 +1,30 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 7.659;
+export const SECTION_DURATION_SECONDS = 7.723;
 export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.000),
-  VISUAL_00_END: s2f(2.089),
-  VISUAL_01_START: s2f(2.089),
-  VISUAL_01_END: s2f(2.785),
-  VISUAL_02_START: s2f(2.785),
-  VISUAL_02_END: s2f(3.481),
-  VISUAL_03_START: s2f(3.481),
-  VISUAL_03_END: s2f(4.177),
-  VISUAL_04_START: s2f(4.177),
-  VISUAL_04_END: s2f(4.874),
-  VISUAL_05_START: s2f(4.874),
-  VISUAL_05_END: s2f(5.570),
-  VISUAL_06_START: s2f(5.570),
-  VISUAL_06_END: s2f(7.659),
+  VISUAL_00_END: s2f(1.782),
+  VISUAL_01_START: s2f(1.782),
+  VISUAL_01_END: s2f(2.376),
+  VISUAL_02_START: s2f(2.376),
+  VISUAL_02_END: s2f(2.970),
+  VISUAL_03_START: s2f(2.970),
+  VISUAL_03_END: s2f(3.564),
+  VISUAL_04_START: s2f(3.564),
+  VISUAL_04_END: s2f(4.158),
+  VISUAL_05_START: s2f(4.158),
+  VISUAL_05_END: s2f(4.752),
+  VISUAL_06_START: s2f(4.752),
+  VISUAL_06_END: s2f(6.535),
+  VISUAL_07_START: s2f(6.535),
+  VISUAL_07_END: s2f(7.129),
+  VISUAL_08_START: s2f(7.129),
+  VISUAL_08_END: s2f(7.723),
 };
 
 export const VISUAL_SEQUENCE = [
@@ -31,6 +35,8 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_split_comparison", desc: "Section 1.5: Split Comparison" },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_particle_burst", desc: "Section 1.6: Particle Burst" },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_section_outro", desc: "Section 1.7: Section Outro" },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_key_visual", desc: "Section 1.8: Key Visual — Bar Chart" },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_split_summary", desc: "Section 1.9: Split Summary" },
 ];
 
 export const AnimationSectionProps = z.object({

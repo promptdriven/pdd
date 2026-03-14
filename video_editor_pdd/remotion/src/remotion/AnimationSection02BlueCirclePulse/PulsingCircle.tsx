@@ -13,7 +13,7 @@ export const PulsingCircle: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.back(1.7)),
+      easing: Easing.out(Easing.cubic),
     }
   );
 

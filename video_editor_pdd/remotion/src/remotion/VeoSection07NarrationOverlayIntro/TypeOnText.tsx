@@ -1,1 +1,1 @@
-// Deprecated — replaced by WordByWordReveal
+// Deprecated — replaced by WordByWordText

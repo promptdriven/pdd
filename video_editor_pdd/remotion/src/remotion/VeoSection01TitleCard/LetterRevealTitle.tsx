@@ -1,1 +1,1 @@
-// Removed — replaced by TitleText
+// Removed — not used in this component

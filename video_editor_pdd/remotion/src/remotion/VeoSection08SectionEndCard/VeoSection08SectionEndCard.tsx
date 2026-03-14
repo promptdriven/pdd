@@ -1,37 +1,25 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
 import { COLORS } from './constants';
-import { CompletionRing } from './CompletionRing';
-import { CheckmarkIcon } from './CheckmarkIcon';
-import { CompletionText } from './CompletionText';
-import { ExpandingRule } from './ExpandingRule';
-import { TaglineText } from './TaglineText';
-import { FadeToBlack } from './FadeToBlack';
+import { AnimatedCheckmark } from './AnimatedCheckmark';
+import { TitleText } from './TitleText';
+import { HorizontalRule } from './HorizontalRule';
+import { SubtitleText } from './SubtitleText';
 
 export const VeoSection08SectionEndCard: React.FC = () => {
   return (
-    <AbsoluteFill
-      style={{
-        background: `linear-gradient(180deg, ${COLORS.gradientTop} 0%, ${COLORS.gradientBottom} 100%)`,
-      }}
-    >
-      {/* Circle outline draws itself (frames 0-8), fills with green tint (frames 8-16) */}
-      <CompletionRing />
+    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
+      {/* Checkmark icon: scales in with bounce (frames 0-8), path draws simultaneously */}
+      <AnimatedCheckmark />
 
-      {/* Check stroke draws inside circle (frames 8-16) */}
-      <CheckmarkIcon />
+      {/* "Veo Section Complete" fades in + slides up (frames 8-14) */}
+      <TitleText />
 
-      {/* "VEO SECTION COMPLETE" fades in + slides up (frames 16-22) */}
-      <CompletionText />
+      {/* Gold horizontal rule expands from center (frames 14-18) */}
+      <HorizontalRule />
 
-      {/* Horizontal rule expands from center (frames 16-22) */}
-      <ExpandingRule />
-
-      {/* Tagline fades in (frames 22-28) */}
-      <TaglineText />
-
-      {/* Full-screen fade to black (frames 28-37) */}
-      <FadeToBlack />
+      {/* "2 Veo clips · 3 Remotion overlays" fades in (frames 18-22) */}
+      <SubtitleText />
     </AbsoluteFill>
   );
 };

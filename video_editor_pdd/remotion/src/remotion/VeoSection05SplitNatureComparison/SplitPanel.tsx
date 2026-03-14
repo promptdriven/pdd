@@ -1,7 +1,14 @@
 import React from 'react';
-import { OffthreadVideo, staticFile } from 'remotion';
+import {
+  OffthreadVideo,
+  staticFile,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from 'remotion';
 import {
   DIMENSIONS,
+  ANIMATION,
   type SplitNatureComparisonLayout,
 } from './constants';
 
@@ -12,19 +19,30 @@ interface SplitPanelProps {
 }
 
 export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc, layout }) => {
+  const frame = useCurrentFrame();
   const isLeft = side === 'left';
   const panelX = isLeft ? DIMENSIONS.leftPanelX : DIMENSIONS.rightPanelX;
-  const panelY = isLeft ? DIMENSIONS.leftPanelY : DIMENSIONS.rightPanelY;
+
+  // Frame 0–8: scale from 1.1→1.0 (subtle zoom-out settle), easeOutQuad
+  const scale = interpolate(
+    frame,
+    [ANIMATION.panelZoomStart, ANIMATION.panelZoomEnd],
+    [ANIMATION.panelScaleFrom, ANIMATION.panelScaleTo],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
 
   return (
     <div
       style={{
         position: 'absolute',
         left: panelX * layout.scaleX,
-        top: panelY * layout.scaleY,
+        top: 0,
         width: DIMENSIONS.panelWidth * layout.scaleX,
         height: DIMENSIONS.panelHeight * layout.scaleY,
-        borderRadius: DIMENSIONS.panelBorderRadius * layout.uniformScale,
         overflow: 'hidden',
       }}
     >
@@ -34,7 +52,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({ side, videoSrc, layout }
           position: 'absolute',
           top: '50%',
           left: '50%',
-          transform: 'translate(-50%, -50%)',
+          transform: `translate(-50%, -50%) scale(${scale})`,
           minWidth: '100%',
           minHeight: '100%',
           objectFit: 'cover',

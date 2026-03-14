@@ -1,5 +1,5 @@
 // Component-level constants for VeoSection04WaveDataOverlay
-// Duration: ~1.3s (38 frames @ 30fps)
+// Duration: ~1.0s (30 frames @ 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
@@ -7,105 +7,98 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
-  background: 'rgba(10, 22, 40, 0.7)',
-  chartLine: '#4DA8DA',
-  chartFill: 'rgba(77, 168, 218, 0.3)',
-  gridLine: 'rgba(255, 255, 255, 0.08)',
-  badgeBg: 'rgba(77, 168, 218, 0.2)',
-  badgeBorder: '#4DA8DA',
-  titleText: '#FFFFFF',
-  axisLabel: 'rgba(255, 255, 255, 0.5)',
+  /** Semi-transparent dark overlay composited over footage */
+  overlay: 'rgba(11, 17, 32, 0.6)',
+  /** Fallback solid background */
+  fallbackBg: '#0B1120',
+  /** Waveform stroke */
+  waveStroke: '#4FC3F7',
+  /** Waveform glow (30% opacity, blur 8px) */
+  waveGlow: 'rgba(79, 195, 247, 0.3)',
+  /** Waveform fill gradient top */
+  waveFillTop: 'rgba(79, 195, 247, 0.2)',
+  /** Grid line color (5% white) */
+  gridLine: 'rgba(255, 255, 255, 0.05)',
+  /** Badge background */
+  badgeBg: 'rgba(26, 39, 68, 0.8)',
+  /** Badge border */
+  badgeBorder: 'rgba(79, 195, 247, 0.4)',
+  /** Badge label text (muted silver) */
+  badgeLabel: '#A0AEC0',
+  /** Badge value text */
   badgeValue: '#FFFFFF',
-  badgeLabel: '#8EC8E8',
 } as const;
 
 export const TYPOGRAPHY = {
-  chartTitle: {
-    fontSize: 28,
-    fontFamily: "'Inter', sans-serif",
-    fontWeight: 700 as const,
-    letterSpacing: 6,
-  },
-  axisLabel: {
-    fontSize: 14,
-    fontFamily: "'Inter', sans-serif",
-    fontWeight: 400 as const,
-  },
-  badgeValue: {
-    fontSize: 18,
-    fontFamily: "'Inter', sans-serif",
-    fontWeight: 600 as const,
-  },
   badgeLabel: {
     fontSize: 14,
     fontFamily: "'Inter', sans-serif",
-    fontWeight: 400 as const,
+    fontWeight: 500 as const,
+  },
+  badgeValue: {
+    fontSize: 22,
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 700 as const,
   },
 } as const;
 
 export const ANIMATION = {
-  // Frame 0-8: Background, grid lines draw, axes appear
-  gridDrawStart: 0,
-  gridDrawEnd: 8,
-  // Frame 8-28: Sine wave draws from left to right
+  // Frame 0–8: Dark overlay + grid lines fade in
+  overlayFadeStart: 0,
+  overlayFadeEnd: 8,
+  // Frame 8–22: Waveform draws left-to-right (linear)
   waveDrawStart: 8,
-  waveDrawEnd: 28,
-  // Frame 20-34: Stat callout badges pop in (staggered by 4 frames)
-  badgeStartFrame: 20,
-  badgeStagger: 4,
-  badgeFadeDuration: 6,
-  // Total
-  totalDuration: 38,
+  waveDrawEnd: 22,
+  // Frame 8–12: Badge 1 slides in
+  badge1Start: 8,
+  badge1End: 12,
+  // Frame 12–16: Badge 2 slides in
+  badge2Start: 12,
+  badge2End: 16,
+  // Frame 16–20: Badge 3 slides in
+  badge3Start: 16,
+  badge3End: 20,
+  // Frame 22–30: Hold
+  totalDuration: 30,
 } as const;
 
-export const CHART = {
-  // Chart area bounds
-  left: 160,
-  right: 1860,
-  top: 200,
-  bottom: 700,
-  // Axis ranges
-  xMin: 0,
-  xMax: 10,
-  yMin: -1.5,
-  yMax: 1.5,
-  // Grid rows (y positions in data space)
-  gridYValues: [-1.0, -0.5, 0.0, 0.5, 1.0],
-  // X-axis label interval
-  xLabelStep: 2,
-  // Y-axis label interval
-  yLabelStep: 0.5,
-  // Line style
+/** Waveform chart area in the lower third */
+export const WAVEFORM = {
+  left: 100,
+  right: 1820,
+  top: 680,
+  bottom: 980,
   strokeWidth: 3,
+  glowBlur: 8,
+  /** Sine wave parameters from spec */
+  amplitude: 0.8,
+  frequency: 1.2,
+  samples: 120,
 } as const;
 
-export const WAVE_DATA = [
-  { time: 0, height: 0.0 },
-  { time: 1, height: 0.9 },
-  { time: 2, height: 1.2 },
-  { time: 3, height: 0.8 },
-  { time: 4, height: -0.3 },
-  { time: 5, height: -1.0 },
-  { time: 6, height: -1.2 },
-  { time: 7, height: -0.6 },
-  { time: 8, height: 0.4 },
-  { time: 9, height: 1.1 },
-  { time: 10, height: 1.2 },
-] as const;
-
+/** Stat badge definitions — upper-right quadrant */
 export const STAT_BADGES = [
-  { label: 'Wave Height', value: '1.2m', x: 1400, y: 200 },
-  { label: 'Period', value: '8.4s', x: 1500, y: 320 },
-  { label: 'Water Temp', value: '22°C', x: 1450, y: 440 },
+  { label: 'Wave Height', value: '0.8m', icon: 'wave' as const },
+  { label: 'Period', value: '6.2s', icon: 'clock' as const },
+  { label: 'Temperature', value: '22°C', icon: 'thermometer' as const },
 ] as const;
 
-export const DIMENSIONS = {
-  titleX: 80,
-  titleY: 80,
-  badgePaddingX: 20,
-  badgePaddingY: 12,
-  badgeBorderRadius: 8,
-  badgeBorderWidth: 1,
+/** Badge layout — upper-right area y:80–300, x:1400–1840 */
+export const BADGE_LAYOUT = {
+  x: 1440,
+  startY: 80,
+  gapY: 76,
+  width: 380,
+  height: 60,
+  borderRadius: 12,
+  borderWidth: 1,
+  /** Slide-in translateX offset */
+  slideOffset: 40,
+} as const;
+
+/** Grid lines at 25% vertical intervals across the full canvas */
+export const GRID = {
+  intervals: [0.25, 0.50, 0.75],
 } as const;
 
 export type WaveOverlayLayout = {
@@ -113,17 +106,21 @@ export type WaveOverlayLayout = {
   height: number;
   scaleX: number;
   scaleY: number;
-  chart: {
+  uniformScale: number;
+  waveform: {
     left: number;
     right: number;
     top: number;
     bottom: number;
   };
+  badge: {
+    x: number;
+    width: number;
+    height: number;
+  };
   typography: {
-    chartTitle: typeof TYPOGRAPHY.chartTitle;
-    axisLabel: typeof TYPOGRAPHY.axisLabel;
-    badgeValue: typeof TYPOGRAPHY.badgeValue;
-    badgeLabel: typeof TYPOGRAPHY.badgeLabel;
+    badgeLabel: typeof TYPOGRAPHY.badgeLabel & { fontSize: number };
+    badgeValue: typeof TYPOGRAPHY.badgeValue & { fontSize: number };
   };
 };
 
@@ -140,29 +137,26 @@ export const resolveWaveOverlayLayout = (
     height,
     scaleX,
     scaleY,
-    chart: {
-      left: CHART.left * scaleX,
-      right: CHART.right * scaleX,
-      top: CHART.top * scaleY,
-      bottom: CHART.bottom * scaleY,
+    uniformScale,
+    waveform: {
+      left: WAVEFORM.left * scaleX,
+      right: WAVEFORM.right * scaleX,
+      top: WAVEFORM.top * scaleY,
+      bottom: WAVEFORM.bottom * scaleY,
+    },
+    badge: {
+      x: BADGE_LAYOUT.x * scaleX,
+      width: BADGE_LAYOUT.width * scaleX,
+      height: BADGE_LAYOUT.height * scaleY,
     },
     typography: {
-      chartTitle: {
-        ...TYPOGRAPHY.chartTitle,
-        fontSize: Math.max(16, TYPOGRAPHY.chartTitle.fontSize * uniformScale),
-        letterSpacing: TYPOGRAPHY.chartTitle.letterSpacing * uniformScale,
-      },
-      axisLabel: {
-        ...TYPOGRAPHY.axisLabel,
-        fontSize: Math.max(10, TYPOGRAPHY.axisLabel.fontSize * uniformScale),
-      },
-      badgeValue: {
-        ...TYPOGRAPHY.badgeValue,
-        fontSize: Math.max(12, TYPOGRAPHY.badgeValue.fontSize * uniformScale),
-      },
       badgeLabel: {
         ...TYPOGRAPHY.badgeLabel,
         fontSize: Math.max(10, TYPOGRAPHY.badgeLabel.fontSize * uniformScale),
+      },
+      badgeValue: {
+        ...TYPOGRAPHY.badgeValue,
+        fontSize: Math.max(14, TYPOGRAPHY.badgeValue.fontSize * uniformScale),
       },
     },
   };

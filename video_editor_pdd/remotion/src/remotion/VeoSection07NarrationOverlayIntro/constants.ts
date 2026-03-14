@@ -1,5 +1,5 @@
 // Component-level constants for VeoSection07NarrationOverlayIntro
-// Duration: ~1.3s (38 frames @ 30fps)
+// Duration: ~0.8s (24 frames @ 30fps)
 
 export const BASE_CANVAS = {
   width: 1920,
@@ -7,81 +7,71 @@ export const BASE_CANVAS = {
 } as const;
 
 export const COLORS = {
-  background: '#0A1628',
-  gradientMesh: ['#0A1628', '#1B3A5C', '#0D4D4D'] as readonly string[],
-  waveformBottom: '#4DA8DA',
-  waveformTop: '#8EC8E8',
-  waveformOpacity: 0.7,
-  waveformReflectionOpacity: 0.15,
-  activeWord: '#FFFFFF',
-  inactiveWord: 'rgba(255,255,255,0.4)',
-  badgeBackground: 'rgba(77,168,218,0.2)',
-  badgeBorder: '#4DA8DA',
-  badgeText: '#8EC8E8',
+  background: '#0B1120',
+  overlay: 'rgba(11, 17, 32, 0.5)',
+  narrationText: '#FFFFFF',
+  waveformBar: 'rgba(79, 195, 247, 0.8)',
+  accentUnderline: '#C9A84C',
 } as const;
 
 export const TYPOGRAPHY = {
   narration: {
-    fontSize: 36,
+    fontSize: 40,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 500 as const,
     lineHeight: 1.4,
   },
-  badge: {
-    fontSize: 14,
-    fontFamily: "'Inter', sans-serif",
-    fontWeight: 400 as const,
-  },
 } as const;
 
-export const WAVEFORM = {
-  barCount: 64,
-  xStart: 100,
-  xEnd: 1820,
-  baselineY: 700,
-  bottomY: 980,
-  barWidth: 20,
-  barGap: 6,
-  minHeight: 20,
-  maxHeight: 280,
-} as const;
-
-export const NARRATION = {
-  centerX: 960,
-  centerY: 400,
-  maxWidth: 1200,
-  words: ['It', 'uses', 'Veo-generated', 'clips', 'with', 'narration', 'overlay.'] as readonly string[],
-  framesPerWord: 5,
-  wordFadeDuration: 3,
-} as const;
-
-export const BADGE = {
-  x: 1680,
-  y: 40,
-  paddingX: 16,
-  paddingY: 8,
-  borderRadius: 20,
-  text: 'TTS: Qwen3 — Aiden',
-  slideDistance: 40,
-} as const;
-
+// Animation frame ranges (30fps, 24 frames total = ~0.8s)
 export const ANIMATION = {
-  // Frame 0-6: Gradient mesh fades in, badge slides in
-  meshFadeStart: 0,
-  meshFadeEnd: 6,
-  badgeSlideStart: 0,
-  badgeSlideEnd: 6,
+  // Frame 0–4: Background blur + overlay fade in (opacity 0→1)
+  bgFadeStart: 0,
+  bgFadeEnd: 4,
 
-  // Frame 6-10: Waveform bars begin animating
-  waveformStart: 6,
-  waveformRampEnd: 10,
+  // Frame 4–18: Words appear one at a time (~2.8 frames per word, 5 words)
+  wordStart: 4,
+  framesPerWord: 2.8,
+  wordShiftPx: 8,
 
-  // Frame 6-34: Words reveal one by one (~1 word per 5 frames)
-  wordRevealStart: 6,
+  // Frame 10–20: Waveform bars begin pulsing (traveling wave)
+  waveformStart: 10,
+  waveformEnd: 20,
 
-  // Frame 34-38: Waveform tails off
-  waveformTailStart: 34,
-  waveformTailEnd: 38,
+  // Frame 18–22: Accent underline grows from center outward
+  underlineStart: 18,
+  underlineEnd: 22,
 
-  totalDuration: 38,
+  // Frame 22–24: Hold — all visible, waveform continues subtle pulse
+  totalDuration: 24,
 } as const;
+
+export const DIMENSIONS = {
+  // Narration text block (center, y: 440)
+  textY: 440,
+  textMaxWidth: 900,
+
+  // Waveform visualizer (center, y: 560)
+  waveformY: 560,
+  waveformBarCount: 40,
+  waveformBarWidth: 4,
+  waveformBarGap: 6,
+  waveformMinHeight: 10,
+  waveformMaxHeight: 40,
+
+  // Accent underline (y: 530)
+  underlineY: 530,
+  underlineHeight: 2,
+  underlineMaxWidth: 580,
+
+  // Background blur radius
+  backgroundBlur: 20,
+} as const;
+
+export const NARRATION_WORDS = [
+  'Veo-generated',
+  'clips',
+  'with',
+  'narration',
+  'overlay',
+] as const;

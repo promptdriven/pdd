@@ -20,7 +20,7 @@
       "specDir": "animation_section",
       "remotionDir": "S00-AnimationSection",
       "compositionId": "AnimationSection",
-      "durationSeconds": 7.658667,
+      "durationSeconds": 7.786667,
       "offsetSeconds": 0,
       "compositions": [
         "animation_section_01_title_card",
@@ -29,7 +29,9 @@
         "04_square_slide_right",
         "05_split_comparison",
         "06_particle_burst",
-        "07_section_outro"
+        "07_section_outro",
+        "08_key_visual",
+        "09_split_summary"
       ],
       "timelineSource": "generated"
     },
@@ -40,8 +42,8 @@
       "specDir": "veo_section",
       "remotionDir": "S01-VeoSection",
       "compositionId": "VeoSection",
-      "durationSeconds": 7.68,
-      "offsetSeconds": 7.658667,
+      "durationSeconds": 7.829333,
+      "offsetSeconds": 7.786667,
       "compositions": [
         "veo_section_01_title_card",
         "04_wave_data_overlay",

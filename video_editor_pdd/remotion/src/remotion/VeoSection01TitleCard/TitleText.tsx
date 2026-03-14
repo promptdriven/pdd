@@ -1,11 +1,11 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION, type TitleCardLayout } from './constants';
+import { COLORS, TYPOGRAPHY, ANIMATION, DIMENSIONS } from './constants';
 
-export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => {
+export const TitleText: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Frame 0-10: Fade in with easeOutCubic
+  // Frame 0–10: Fade in opacity 0→1, easeOutCubic
   const opacity = interpolate(
     frame,
     [ANIMATION.titleFadeStart, ANIMATION.titleFadeEnd],
@@ -17,7 +17,7 @@ export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => 
     },
   );
 
-  // Slide up 20px → 0px
+  // Frame 0–10: Slide up from +20px → 0px
   const translateY = interpolate(
     frame,
     [ANIMATION.titleFadeStart, ANIMATION.titleFadeEnd],
@@ -33,26 +33,25 @@ export const TitleText: React.FC<{ layout: TitleCardLayout }> = ({ layout }) => 
     <div
       style={{
         position: 'absolute',
-        top: layout.dimensions.titleY,
+        top: `${DIMENSIONS.titleTopPercent * 100}%`,
         left: 0,
-        width: layout.width,
+        width: '100%',
         display: 'flex',
         justifyContent: 'center',
+        opacity,
+        transform: `translateY(${translateY}px)`,
       }}
     >
       <span
         style={{
-          fontFamily: layout.typography.title.fontFamily,
-          fontSize: layout.typography.title.fontSize,
-          fontWeight: layout.typography.title.fontWeight,
-          letterSpacing: layout.typography.title.letterSpacing,
+          fontFamily: TYPOGRAPHY.title.fontFamily,
+          fontSize: TYPOGRAPHY.title.fontSize,
+          fontWeight: TYPOGRAPHY.title.fontWeight,
           color: COLORS.titleText,
-          textTransform: 'uppercase' as const,
-          opacity,
-          transform: `translateY(${translateY}px)`,
+          lineHeight: 1.2,
         }}
       >
-        VEO SECTION
+        Veo Section
       </span>
     </div>
   );

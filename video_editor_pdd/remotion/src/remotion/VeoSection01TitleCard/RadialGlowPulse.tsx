@@ -1,1 +1,1 @@
-// Removed — no longer used
+// Removed — not used in this component

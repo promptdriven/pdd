@@ -1,11 +1,11 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, interpolate } from 'remotion';
 import { COLORS, DIMENSIONS, ANIMATION_TIMING, CHECKMARK_PATH, CHECKMARK_PATH_LENGTH } from './constants';
 
 export const DrawCheckmark: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Stroke draws in over frames 0-9 with easeInOutCubic
+  // Stroke draws in over frames 0-9 with linear easing (constant reveal speed)
   const drawProgress = interpolate(
     frame,
     [ANIMATION_TIMING.checkmarkDrawStart, ANIMATION_TIMING.checkmarkDrawEnd],
@@ -13,7 +13,6 @@ export const DrawCheckmark: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
     }
   );
 

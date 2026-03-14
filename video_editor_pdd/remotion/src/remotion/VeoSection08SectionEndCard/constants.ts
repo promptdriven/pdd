@@ -1,78 +1,70 @@
 // Component-level constants for VeoSection08SectionEndCard
-// Duration: ~1.2s (37 frames @ 30fps)
-
-export const BASE_CANVAS = {
-  width: 1920,
-  height: 1080,
-};
+// Duration: ~0.8s (24 frames @ 30fps)
 
 export const COLORS = {
-  gradientTop: '#0A1628',
-  gradientBottom: '#1B3A5C',
-  checkmark: '#6FCF97',
-  accent: '#4DA8DA',
-  completionText: '#FFFFFF',
-  taglineText: 'rgba(255,255,255,0.7)',
-  fadeToBlack: '#000000',
+  background: '#0B1120',
+  checkmark: '#10B981',
+  titleText: '#FFFFFF',
+  rule: '#C9A84C',
+  subtitleText: '#A0AEC0',
 } as const;
 
 export const TYPOGRAPHY = {
-  completion: {
-    fontSize: 48,
+  title: {
+    fontSize: 42,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 700 as const,
-    letterSpacing: 6,
   },
-  tagline: {
+  subtitle: {
     fontSize: 20,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 400 as const,
-    letterSpacing: 2,
   },
 } as const;
 
 export const DIMENSIONS = {
   // Checkmark circle
-  circleCenterX: 960,
-  circleCenterY: 380,
-  circleRadius: 60,
-  circleStrokeWidth: 4,
-  // Text positions
-  completionTextY: 540,
-  ruleY: 510,
-  ruleWidth: 400,
+  checkmarkCenterX: 960,
+  checkmarkCenterY: 380,
+  checkmarkSize: 80,
+  checkmarkStrokeWidth: 3,
+  // Text positions (absolute Y)
+  titleY: 500,
+  ruleY: 550,
+  ruleMaxWidth: 300,
   ruleHeight: 2,
-  taglineY: 600,
-  // Checkmark path inside circle
-  checkStrokeWidth: 4,
+  subtitleY: 590,
 } as const;
 
-// Approximate total length of the check path "M 36 52 L 50 66 L 76 38"
-// Segment 1: (36,52)→(50,66) = sqrt(14²+14²) ≈ 19.8
-// Segment 2: (50,66)→(76,38) = sqrt(26²+28²) ≈ 38.2
-// Total ≈ 58
-export const CHECK_PATH = 'M 36 52 L 50 66 L 76 38';
-export const CHECK_PATH_LENGTH = 58;
+// Checkmark path in a 0-80 viewBox coordinate system
+export const CHECKMARK_PATH = 'M 22 40 L 35 53 L 58 28';
+// Segment 1: (22,40)->(35,53) = sqrt(13^2+13^2) ~ 18.4
+// Segment 2: (35,53)->(58,28) = sqrt(23^2+25^2) ~ 34.0
+// Total ~ 52.4
+export const CHECKMARK_PATH_LENGTH = 53;
 
-export const COMPLETION_TEXT = 'VEO SECTION COMPLETE';
-export const TAGLINE_TEXT = 'Integration Test — Section 2 of 2';
+// Circle circumference for 80px diameter (r=40): 2*pi*40 ~ 251.3
+export const CIRCLE_CIRCUMFERENCE = 2 * Math.PI * (DIMENSIONS.checkmarkSize / 2);
+
+export const TITLE_TEXT = 'Veo Section Complete';
+export const SUBTITLE_TEXT = '2 Veo clips \u00B7 3 Remotion overlays';
 
 export const ANIMATION = {
-  // Frame 0-8: Circle draws itself (strokeDashoffset, clockwise from top)
-  circleDrawStart: 0,
-  circleDrawEnd: 8,
-  // Frame 8-16: Check stroke draws inside circle; circle fills with green tint
-  checkDrawStart: 8,
-  checkDrawEnd: 16,
-  // Frame 16-22: Completion text fades in + slides up 15px; rule expands
-  textFadeStart: 16,
-  textFadeEnd: 22,
-  textSlideY: 15,
-  // Frame 22-28: Tagline fades in (opacity 0 → 0.7)
-  taglineFadeStart: 22,
-  taglineFadeEnd: 28,
-  // Frame 28-37: Fade to black overlay (opacity 0 → 1)
-  fadeToBlackStart: 28,
-  fadeToBlackEnd: 37,
-  totalDuration: 37,
+  // Frame 0-8: Checkmark icon scales in (easeOutBack) + check path draws
+  checkmarkScaleStart: 0,
+  checkmarkScaleEnd: 8,
+  // Frame 8-14: Title text fades in (opacity 0->1, translateY +15->0)
+  titleFadeStart: 8,
+  titleFadeEnd: 14,
+  titleShiftPx: 15,
+  // Frame 14-18: Horizontal rule expands from center
+  ruleExpandStart: 14,
+  ruleExpandEnd: 18,
+  // Frame 18-22: Subtitle fades in (opacity 0->1)
+  subtitleFadeStart: 18,
+  subtitleFadeEnd: 22,
+  // Frame 22-24: Hold, then all elements fade out in final 2 frames
+  fadeOutStart: 22,
+  fadeOutEnd: 24,
+  totalDuration: 24,
 } as const;
