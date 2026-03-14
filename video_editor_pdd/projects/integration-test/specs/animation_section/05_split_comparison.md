@@ -86,3 +86,10 @@ A split-screen comparison layout slides into view. The left half has a dark blue
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: test-batch-ann-1773466645087 -->
+## Annotation Update
+Requested change: Change the primary background accent in Animation Section to #00FF00.
+Technical assessment: The current color treatment should shift to a clearly visible green accent.
+- Update the background accent color to #00FF00
+<!-- ANNOTATION_UPDATE_END: test-batch-ann-1773466645087 -->
