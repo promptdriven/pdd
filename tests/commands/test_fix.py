@@ -168,6 +168,7 @@ def test_agentic_mode_failure(runner, mock_deps):
     issue_url = "https://github.com/user/repo/issues/1"
     mock_deps["run_agentic_e2e_fix"].return_value = (False, "Could not fix", 0.1, "gpt-4", {})
     result = runner.invoke(fix, [issue_url])
+    assert result.exit_code == 1
     assert "Agentic fix failed" in result.output
 
 def test_manual_mode_explicit_flag(runner, mock_deps):

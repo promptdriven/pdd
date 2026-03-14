@@ -319,6 +319,16 @@ def test_test_agentic_mode_options(runner, mock_agentic_test):
     kwargs = mock_agentic_test.call_args[1]
     assert kwargs["use_github_state"] is False
 
+
+def test_test_agentic_mode_failure(runner):
+    """Test 'test' command exits with 1 when agentic test generation fails (issue #593)."""
+    url = "https://github.com/user/repo/issues/1"
+    with patch("pdd.agentic_test.run_agentic_test") as mock_run:
+        mock_run.return_value = (False, "Quota exceeded", 0.0, "gpt-4", [])
+        result = runner.invoke(generate_module.test, [url])
+    assert result.exit_code == 1
+
+
 def test_test_agentic_mode_arg_error(runner):
     """Test Agentic mode fails if more than 1 argument is provided."""
     url = "https://github.com/user/repo/issues/1"

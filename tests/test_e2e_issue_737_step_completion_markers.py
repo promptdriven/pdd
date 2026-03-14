@@ -1,4 +1,4 @@
-"""
+r"""
 E2E Test for Issue #737: Step completion markers in orchestrators.
 
 Unlike the unit tests in test_issue_737_step_completion_markers.py which mock
