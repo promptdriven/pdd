@@ -166,6 +166,8 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
         console.print(Panel(traceback.format_exc(), title="Error Details", style="red"))
         _dbg(f"Exception: {str(e)}")
         _write_debug_report()
+        # Best-effort behavior: return the (partially) processed prompt instead of raising,
+        # so the CLI and callers can continue with whatever was produced before the error.
         return prompt
 
 def get_file_path(file_name: str) -> str:
@@ -360,7 +362,15 @@ def process_shell_tags(text: str, recursive: bool) -> str:
             )
             return result.stdout
         except subprocess.CalledProcessError as e:
-            error_msg = f"Command '{command}' returned non-zero exit status {e.returncode}."
+            # Do not re-raise: replace the <shell> tag with an inline error so preprocessing
+            # completes and callers (sync/generate/etc.) continue; tests expect this behavior.
+            stdout = (e.stdout or "").strip()
+            stderr = (e.stderr or "").strip()
+            combined_output = " ".join(part for part in (stdout, stderr) if part)
+            error_msg = (
+                f"Command '{command}' returned non-zero exit status {e.returncode}."
+                + (f" Output: {combined_output}" if combined_output else "")
+            )
             console.print(f"[bold red]Error:[/bold red] {error_msg}")
             _dbg(f"Shell command error: {error_msg}")
             return f"Error: {error_msg}"
