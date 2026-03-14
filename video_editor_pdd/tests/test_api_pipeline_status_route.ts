@@ -99,6 +99,7 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
         status: "done",
         lastJobId: `job-${stage}`,
         error: null,
+        updatedAt: "2026-03-13T23:50:47.344Z",
       }))
     );
 
@@ -116,6 +117,7 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
         status: "done",
         lastJobId: `job-${stage}`,
         error: null,
+        updatedAt: "2026-03-13T23:50:47.344Z",
       }))
     );
 
@@ -131,7 +133,13 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
 
   it("maps DB rows to StageStatusEntry shape", async () => {
     mockAll.mockReturnValue([
-      { stage: "render", status: "running", lastJobId: "job-42", error: null },
+      {
+        stage: "render",
+        status: "running",
+        lastJobId: "job-42",
+        error: null,
+        updatedAt: "2026-03-13T23:50:47.344Z",
+      },
     ]);
 
     const response = await GET();
@@ -141,6 +149,7 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
       status: "running",
       lastJobId: "job-42",
       error: null,
+      updatedAt: "2026-03-13T23:50:47.344Z",
     });
   });
 
@@ -151,6 +160,7 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
         status: "error",
         lastJobId: "job-99",
         error: "API rate limit exceeded",
+        updatedAt: "2026-03-13T23:50:47.344Z",
       },
     ]);
 
@@ -161,7 +171,25 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
       status: "error",
       lastJobId: "job-99",
       error: "API rate limit exceeded",
+      updatedAt: "2026-03-13T23:50:47.344Z",
     });
+  });
+
+  it("includes updatedAt from the pipeline_status table", async () => {
+    mockAll.mockReturnValue([
+      {
+        stage: "compositions",
+        status: "done",
+        lastJobId: "job-101",
+        error: null,
+        updatedAt: "2026-03-13T21:47:24.446Z",
+      },
+    ]);
+
+    const response = await GET();
+    const { body } = await parseResponse(response);
+
+    expect(body.stages["compositions"].updatedAt).toBe("2026-03-13T21:47:24.446Z");
   });
 });
 
@@ -182,18 +210,26 @@ describe("GET /api/pipeline/status — missing stages default", () => {
         status: "not_started",
         lastJobId: null,
         error: null,
+        updatedAt: null,
       });
     }
   });
 
   it("fills only missing stages while preserving existing ones", async () => {
     mockAll.mockReturnValue([
-      { stage: "setup", status: "done", lastJobId: "job-1", error: null },
+      {
+        stage: "setup",
+        status: "done",
+        lastJobId: "job-1",
+        error: null,
+        updatedAt: "2026-03-13T21:47:24.446Z",
+      },
       {
         stage: "script",
         status: "error",
         lastJobId: "job-2",
         error: "Script parse error",
+        updatedAt: "2026-03-13T22:47:24.446Z",
       },
     ]);
 
@@ -205,11 +241,13 @@ describe("GET /api/pipeline/status — missing stages default", () => {
       status: "done",
       lastJobId: "job-1",
       error: null,
+      updatedAt: "2026-03-13T21:47:24.446Z",
     });
     expect(body.stages["script"]).toEqual({
       status: "error",
       lastJobId: "job-2",
       error: "Script parse error",
+      updatedAt: "2026-03-13T22:47:24.446Z",
     });
 
     // Missing stages get defaults
@@ -221,13 +259,20 @@ describe("GET /api/pipeline/status — missing stages default", () => {
         status: "not_started",
         lastJobId: null,
         error: null,
+        updatedAt: null,
       });
     }
   });
 
   it("returns all 10 stages even if only one row exists in DB", async () => {
     mockAll.mockReturnValue([
-      { stage: "audit", status: "running", lastJobId: "job-a", error: null },
+      {
+        stage: "audit",
+        status: "running",
+        lastJobId: "job-a",
+        error: null,
+        updatedAt: "2026-03-13T23:50:47.344Z",
+      },
     ]);
 
     const response = await GET();
@@ -470,6 +515,7 @@ describe("app/api/pipeline/status/route.ts source structure", () => {
     expect(sourceCode).toMatch(/status:\s*StageStatus/);
     expect(sourceCode).toMatch(/lastJobId:\s*string\s*\|\s*null/);
     expect(sourceCode).toMatch(/error:\s*string\s*\|\s*null/);
+    expect(sourceCode).toMatch(/updatedAt:\s*string\s*\|\s*null/);
   });
 
   it("GET function has no request parameter", () => {

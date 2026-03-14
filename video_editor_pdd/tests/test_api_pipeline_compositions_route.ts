@@ -2411,7 +2411,9 @@ describe("compositions executor — generated preview validation", () => {
       mockSend
     );
 
-    await expect(executor(jest.fn())).rejects.toThrow("Component validation failed");
+    await expect(executor(jest.fn())).rejects.toThrow(
+      "Component validation failed: 07_stat_callout_gitclear: Runtime render error"
+    );
 
     const errorEvent = mockSend.mock.calls.find(
       (c: any[]) => c[0]?.type === "component" && c[0]?.status === "error"

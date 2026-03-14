@@ -147,6 +147,17 @@ async function refreshSectionTimelineArtifacts(
     : config.sections;
 
   for (const section of sectionsToRefresh) {
+    const componentIds = (section.compositions ?? [])
+      .map((composition) =>
+        typeof composition === "string" ? composition : composition?.id
+      )
+      .filter((compositionId): compositionId is string => Boolean(compositionId));
+
+    if (componentIds.length === 0) {
+      onLog(`Skipped section constants refresh for "${section.id}" because no compositions were discovered.`);
+      continue;
+    }
+
     const constantsDir = path.join(
       getAppRemotionDir(),
       "src",
@@ -157,7 +168,7 @@ async function refreshSectionTimelineArtifacts(
     const constantsSource = buildSectionConstantsSource(
       projectDir,
       section,
-      []
+      componentIds
     );
 
     await fs.mkdir(constantsDir, { recursive: true });

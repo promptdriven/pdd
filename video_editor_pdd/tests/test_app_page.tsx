@@ -109,6 +109,8 @@ describe("state management", () => {
     expect(sourceCode).toContain("pipelineRunSteps");
     expect(sourceCode).toContain("pipelineRunError");
     expect(sourceCode).toContain("isRunningRemainingStages");
+    expect(sourceCode).toContain("pipelineStageStatuses");
+    expect(sourceCode).toContain("pipelineRenderSnapshot");
   });
 });
 
@@ -610,8 +612,12 @@ describe("no polling in page component", () => {
     expect(sourceCode).not.toMatch(/setInterval\s*\(\s*[\s\S]*?\/api\/pipeline\/status/);
   });
 
-  it("does not fetch /api/pipeline/status directly", () => {
-    expect(sourceCode).not.toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/status['"]/);
+  it("fetches pipeline status on demand for pipeline automation planning", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/status['"]/);
+  });
+
+  it("does not poll /api/pipeline/status from the page component", () => {
+    expect(sourceCode).not.toMatch(/setInterval\s*\(\s*[\s\S]*?fetch\s*\(\s*['"]\/api\/pipeline\/status['"]/);
   });
 });
 

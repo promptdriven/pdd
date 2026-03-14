@@ -231,6 +231,7 @@ beforeEach(() => {
   mockStitchFullVideo.mockReset();
   mockLoadProject.mockReset();
   mockSaveProject.mockReset();
+  mockBuildSectionConstantsSource.mockReset();
   mockMkdir.mockReset();
   mockAccess.mockReset();
   mockStat.mockReset();
@@ -933,7 +934,45 @@ describe("rebuildBundle — cache clearing", () => {
 
     expect(constantsCall).toBeDefined();
     expect(mockBuildSectionConstantsSource).toHaveBeenCalled();
+    expect(mockBuildSectionConstantsSource).toHaveBeenCalledWith(
+      process.cwd(),
+      expect.objectContaining({ id: "veo_section" }),
+      ["veo_section_01_title_card", "03_narration_overlay_intro", "05_narration_overlay_forest"]
+    );
     expect(String(constantsCall?.[1])).toContain('id: "02_ocean_wave_sunset"');
     expect(String(constantsCall?.[1])).toContain('id: "04_forest_canopy_aerial"');
+  });
+
+  it("does not clobber section constants when no compositions were discovered", async () => {
+    mockLoadProject.mockReturnValue({
+      ...mockProjectConfig(),
+      sections: [
+        {
+          id: "media_only_section",
+          label: "Media Only Section",
+          videoFile: "outputs/sections/media_only_section.mp4",
+          specDir: "media_only_section",
+          remotionDir: "remotion/media_only_section",
+          compositionId: "MediaOnlySection",
+          durationSeconds: 8.0,
+          offsetSeconds: 0,
+          compositions: [],
+        },
+      ],
+    });
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(onLog);
+
+    expect(mockBuildSectionConstantsSource).not.toHaveBeenCalled();
+    expect(
+      mockWriteFile.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("remotion/src/remotion/media_only_section/constants.ts")
+      )
+    ).toBe(false);
+    expect(onLog).toHaveBeenCalledWith(
+      'Skipped section constants refresh for "media_only_section" because no compositions were discovered.'
+    );
   });
 });

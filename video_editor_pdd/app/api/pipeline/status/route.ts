@@ -8,6 +8,7 @@ type StageStatusEntry = {
   status: StageStatus;
   lastJobId: string | null;
   error: string | null;
+  updatedAt: string | null;
 };
 
 // Canonical ordered list of all pipeline stages
@@ -36,6 +37,7 @@ export async function GET(): Promise<NextResponse> {
       status: StageStatus;
       lastJobId: string | null;
       error: string | null;
+      updatedAt: string | null;
     }>;
 
     const stagesMap = {} as Record<PipelineStage, StageStatusEntry>;
@@ -46,6 +48,7 @@ export async function GET(): Promise<NextResponse> {
         status: row.status,
         lastJobId: row.lastJobId ?? null,
         error: row.error ?? null,
+        updatedAt: row.updatedAt ?? null,
       };
     }
 
@@ -56,6 +59,7 @@ export async function GET(): Promise<NextResponse> {
           status: "not_started",
           lastJobId: null,
           error: null,
+          updatedAt: null,
         };
       }
     }

@@ -15,9 +15,11 @@ import AnnotationPanel from '@/components/AnnotationPanel';
 import PipelineAdvanceButton from '@/components/PipelineAdvanceButton';
 import {
   getPipelineAutomationDescription,
+  type PipelineRenderStatusSnapshot,
   resolvePipelineRunPlan,
   resolveRunRemainingButtonLabel,
   type PipelineRunStep,
+  type PipelineStageStatusEntry,
 } from '@/lib/client/pipeline-runner';
 
 // Stage panels
@@ -159,6 +161,11 @@ export default function Page() {
   const [pipelineRunCurrentStepLabel, setPipelineRunCurrentStepLabel] = useState<string | null>(
     null
   );
+  const [pipelineStageStatuses, setPipelineStageStatuses] = useState<
+    Partial<Record<PipelineStage, PipelineStageStatusEntry>>
+  >({});
+  const [pipelineRenderSnapshot, setPipelineRenderSnapshot] =
+    useState<PipelineRenderStatusSnapshot | null>(null);
 
   const loadProjectConfig = useCallback(async () => {
     setLoadingProject(true);
@@ -244,7 +251,14 @@ export default function Page() {
     return projectConfig.sections.find((s) => s.id === selectedSectionId);
   }, [projectConfig, selectedSectionId]);
 
-  const runPlan = useMemo(() => resolvePipelineRunPlan(activeStage), [activeStage]);
+  const runPlan = useMemo(
+    () =>
+      resolvePipelineRunPlan(activeStage, {
+        stageStatuses: pipelineStageStatuses,
+        renderStatus: pipelineRenderSnapshot,
+      }),
+    [activeStage, pipelineRenderSnapshot, pipelineStageStatuses]
+  );
 
   useEffect(() => {
     if (isRunningRemainingStages) {
@@ -376,10 +390,45 @@ export default function Page() {
       if (!res.ok) throw new Error('Failed to load render status');
       const data = (await res.json()) as ReviewRenderStatus;
       setReviewRenderStatus(data);
+      setPipelineRenderSnapshot(data);
     } catch (err) {
       console.error(err);
       setReviewRenderStatus(null);
+      setPipelineRenderSnapshot(null);
     }
+  }, []);
+
+  const loadPipelineAutomationContext = useCallback(async () => {
+    let stageStatuses: Partial<Record<PipelineStage, PipelineStageStatusEntry>> = {};
+    let renderSnapshot: PipelineRenderStatusSnapshot | null = null;
+
+    try {
+      const [statusRes, renderRes] = await Promise.all([
+        fetch('/api/pipeline/status'),
+        fetch('/api/pipeline/render/status'),
+      ]);
+
+      if (statusRes.ok) {
+        const statusPayload = (await statusRes.json()) as {
+          stages?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>;
+        };
+        stageStatuses = statusPayload.stages ?? {};
+        setPipelineStageStatuses(stageStatuses);
+      }
+
+      if (renderRes.ok) {
+        const renderPayload = (await renderRes.json()) as ReviewRenderStatus;
+        renderSnapshot = renderPayload;
+        setPipelineRenderSnapshot(renderPayload);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+
+    return {
+      stageStatuses,
+      renderStatus: renderSnapshot,
+    };
   }, []);
 
   const markPipelineRunStep = useCallback(
@@ -565,8 +614,16 @@ export default function Page() {
       if (step.id === 'render' || step.id === 'stitch' || step.id === 'audit') {
         await loadReviewRenderStatus();
       }
+
+      await loadPipelineAutomationContext();
     },
-    [consumeSseResponse, loadProjectConfig, loadReviewRenderStatus, waitForJobCompletion]
+    [
+      consumeSseResponse,
+      loadPipelineAutomationContext,
+      loadProjectConfig,
+      loadReviewRenderStatus,
+      waitForJobCompletion,
+    ]
   );
 
   const handleRunRemainingStages = useCallback(async () => {
@@ -574,8 +631,14 @@ export default function Page() {
       return;
     }
 
-    const plan = resolvePipelineRunPlan(activeStage);
+    const latestContext = await loadPipelineAutomationContext();
+
+    const plan = resolvePipelineRunPlan(activeStage, {
+      stageStatuses: latestContext.stageStatuses,
+      renderStatus: latestContext.renderStatus,
+    });
     if (!plan.length) {
+      setPipelineRunSteps([]);
       return;
     }
 
@@ -610,13 +673,24 @@ export default function Page() {
       setPipelineRunCurrentStepLabel(null);
       setIsRunningRemainingStages(false);
     }
-  }, [activeStage, executePipelineRunStep, isRunningRemainingStages, markPipelineRunStep]);
+  }, [
+    activeStage,
+    executePipelineRunStep,
+    isRunningRemainingStages,
+    loadPipelineAutomationContext,
+    markPipelineRunStep,
+  ]);
 
   // Load annotations when switching to Review tab or when section changes
   useEffect(() => {
     if (activeTab !== 'review') return;
     loadReviewRenderStatus();
   }, [activeTab, loadReviewRenderStatus]);
+
+  useEffect(() => {
+    if (activeTab !== 'pipeline') return;
+    void loadPipelineAutomationContext();
+  }, [activeStage, activeTab, loadPipelineAutomationContext]);
 
   useEffect(() => {
     if (activeTab !== 'review') return;
@@ -796,6 +870,7 @@ export default function Page() {
     isRunning: isRunningRemainingStages,
     currentStepLabel: pipelineRunCurrentStepLabel,
     hasError: pipelineRunError != null,
+    hasRemainingSteps: runPlan.length > 0,
   });
   const pipelineAutomationDescription = getPipelineAutomationDescription(activeStage);
 
@@ -861,7 +936,7 @@ export default function Page() {
                   </div>
                   <PipelineAdvanceButton
                     onClick={() => void handleRunRemainingStages()}
-                    disabled={loadingProject || isRunningRemainingStages}
+                    disabled={loadingProject || isRunningRemainingStages || runPlan.length === 0}
                     label={pipelineRunButtonLabel}
                     className="self-start rounded-lg"
                   />

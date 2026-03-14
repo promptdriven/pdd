@@ -1,4 +1,4 @@
-import type { PipelineStage } from "@/lib/types";
+import type { PipelineStage, StageStatus } from "@/lib/types";
 
 export type PipelineRunStepId =
   | "setup"
@@ -19,6 +19,21 @@ export type PipelineRunStep = {
   mode: "setup" | "sse" | "job" | "sync";
   endpoint: string;
   body?: Record<string, unknown>;
+};
+
+export type PipelineStageStatusEntry = {
+  status: StageStatus;
+  error?: string | null;
+  lastJobId?: string | null;
+  updatedAt?: string | null;
+};
+
+export type PipelineRenderStatusSnapshot = {
+  fullVideo?: {
+    exists: boolean;
+    stale?: boolean;
+    updatedAtMs?: number;
+  };
 };
 
 const PIPELINE_RUN_SEQUENCE: PipelineRunStep[] = [
@@ -120,7 +135,106 @@ const STAGE_LABELS: Record<PipelineStage, string> = {
   audit: "Audit",
 };
 
-export function resolvePipelineRunPlan(activeStage: PipelineStage): PipelineRunStep[] {
+const STEP_DEPENDENCIES: Record<PipelineRunStepId, PipelineRunStepId[]> = {
+  setup: [],
+  "tts-script": ["setup"],
+  "tts-render": ["tts-script"],
+  "audio-sync": ["tts-render"],
+  specs: ["tts-script", "audio-sync"],
+  veo: ["specs"],
+  compositions: ["audio-sync", "specs", "veo"],
+  render: ["compositions"],
+  stitch: ["render"],
+  audit: ["render"],
+};
+
+function toTimestampMs(value: string | number | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function getStepUpdatedAtMs(
+  step: PipelineRunStep,
+  stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
+  renderStatus?: PipelineRenderStatusSnapshot | null
+): number | null {
+  if (step.id === "stitch") {
+    return toTimestampMs(renderStatus?.fullVideo?.updatedAtMs);
+  }
+
+  return toTimestampMs(stageStatuses?.[step.stage]?.updatedAt);
+}
+
+function isStepStale(
+  step: PipelineRunStep,
+  stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
+  renderStatus?: PipelineRenderStatusSnapshot | null
+): boolean {
+  const dependencyIds = STEP_DEPENDENCIES[step.id];
+  if (!dependencyIds.length) {
+    return false;
+  }
+
+  const currentUpdatedAtMs = getStepUpdatedAtMs(step, stageStatuses, renderStatus);
+
+  return dependencyIds.some((dependencyId) => {
+    const dependencyStep = PIPELINE_RUN_SEQUENCE.find((candidate) => candidate.id === dependencyId);
+    if (!dependencyStep) {
+      return false;
+    }
+
+    const dependencyUpdatedAtMs = getStepUpdatedAtMs(
+      dependencyStep,
+      stageStatuses,
+      renderStatus
+    );
+    if (dependencyUpdatedAtMs == null) {
+      return false;
+    }
+
+    if (currentUpdatedAtMs == null) {
+      return true;
+    }
+
+    return dependencyUpdatedAtMs > currentUpdatedAtMs;
+  });
+}
+
+function isStepAlreadyDone(
+  step: PipelineRunStep,
+  stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>,
+  renderStatus?: PipelineRenderStatusSnapshot | null
+): boolean {
+  if (step.id === "stitch") {
+    if (!renderStatus?.fullVideo?.exists || renderStatus.fullVideo?.stale) {
+      return false;
+    }
+
+    return !isStepStale(step, stageStatuses, renderStatus);
+  }
+
+  if (stageStatuses?.[step.stage]?.status !== "done") {
+    return false;
+  }
+
+  return !isStepStale(step, stageStatuses, renderStatus);
+}
+
+export function resolvePipelineRunPlan(
+  activeStage: PipelineStage,
+  options?: {
+    stageStatuses?: Partial<Record<PipelineStage, PipelineStageStatusEntry>>;
+    renderStatus?: PipelineRenderStatusSnapshot | null;
+  }
+): PipelineRunStep[] {
   const startId = START_STEP_BY_STAGE[activeStage];
   const startIndex = PIPELINE_RUN_SEQUENCE.findIndex((step) => step.id === startId);
 
@@ -128,7 +242,23 @@ export function resolvePipelineRunPlan(activeStage: PipelineStage): PipelineRunS
     return PIPELINE_RUN_SEQUENCE;
   }
 
-  return PIPELINE_RUN_SEQUENCE.slice(startIndex);
+  const sliced = PIPELINE_RUN_SEQUENCE.slice(startIndex);
+  const stageStatuses = options?.stageStatuses;
+  const renderStatus = options?.renderStatus;
+
+  if (!stageStatuses && !renderStatus) {
+    return sliced;
+  }
+
+  const firstPendingIndex = sliced.findIndex(
+    (step) => !isStepAlreadyDone(step, stageStatuses, renderStatus)
+  );
+
+  if (firstPendingIndex === -1) {
+    return [];
+  }
+
+  return sliced.slice(firstPendingIndex);
 }
 
 export function resolveRunRemainingButtonLabel({
@@ -136,11 +266,13 @@ export function resolveRunRemainingButtonLabel({
   isRunning,
   currentStepLabel,
   hasError,
+  hasRemainingSteps = true,
 }: {
   activeStage: PipelineStage;
   isRunning: boolean;
   currentStepLabel: string | null;
   hasError: boolean;
+  hasRemainingSteps?: boolean;
 }): string {
   if (isRunning) {
     return currentStepLabel ? `Running ${currentStepLabel}…` : "Running Pipeline…";
@@ -148,6 +280,10 @@ export function resolveRunRemainingButtonLabel({
 
   if (hasError) {
     return `Resume From ${STAGE_LABELS[activeStage]} →`;
+  }
+
+  if (!hasRemainingSteps) {
+    return "All Remaining Stages Complete";
   }
 
   return "Run Remaining Stages →";
