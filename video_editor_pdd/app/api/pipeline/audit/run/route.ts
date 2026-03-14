@@ -484,6 +484,7 @@ async function auditSection(
       canRenderFreshStill
     );
     const sampleWindow =
+      renderSource.kind === "preview-composition" ||
       renderSource.kind === "section-composition" ||
       renderSource.kind === "section-video"
         ? renderedSampleWindow

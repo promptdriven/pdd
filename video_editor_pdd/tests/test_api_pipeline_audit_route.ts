@@ -877,6 +877,67 @@ describe("audit executor factory", () => {
     );
   });
 
+  it("uses the rendered preview sample window when a preview composition spec timestamp is global to the full section timeline", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[1],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+        compositionId: "VeoSection",
+        videoFile: "outputs/sections/veo_section.mp4",
+        durationSeconds: 7.829333,
+        offsetSeconds: 7.786667,
+        compositions: ["08_section_end_card"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["08_section_end_card.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "veo_section");
+    const specPath = pathMod.join(specDir, "08_section_end_card.md");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === specPath) {
+        return [
+          "[title:]",
+          "",
+          "**Timestamp:** 0:15.8 – 0:16.6",
+          "",
+          "## Animation Sequence",
+          "1. **Frame 0–8 (0–0.27s):** Checkmark icon scales in.",
+          "2. **Frame 8–14 (0.27–0.47s):** Title fades in.",
+          "3. **Frame 14–18 (0.47–0.6s):** Rule expands.",
+          "4. **Frame 18–22 (0.6–0.73s):** Subtitle fades in.",
+          "5. **Frame 22–24 (0.73–0.8s):** Hold.",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return candidate === specDir || candidate === specPath;
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["veo_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "veo-section08-section-end-card",
+      17,
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "veo_section",
+        "08_section_end_card_frame.png"
+      )
+    );
+  });
+
   it("extracts frames from a staged per-visual Veo clip when auditing a media-only spec", async () => {
     const config = mockProjectConfig();
     config.sections = [
@@ -2311,6 +2372,81 @@ describe("GET — specPath must start with specs/ for specs/file route compatibi
     expect(playbackWindow.endSeconds).toBeCloseTo(8);
     expect(playbackWindow.sampleSeconds).toBeCloseTo(6.75);
     expect(playbackWindow.source).toBe("timestamp");
+  });
+
+  it("returns a playbackWindow aligned to the rendered preview slot for audit-created annotations", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[1],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+        compositionId: "VeoSection",
+        durationSeconds: 7.829333,
+        offsetSeconds: 7.786667,
+        compositions: [
+          "veo_section_01_title_card",
+          "04_wave_data_overlay",
+          "05_split_nature_comparison",
+          "06_veo_pipeline_infographic",
+          "07_narration_overlay_intro",
+          "08_section_end_card",
+        ],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "veo_section");
+    const auditPath = pathMod.join(specDir, "AUDIT_06_veo_pipeline_infographic.md");
+    const specs = {
+      "01_title_card.md": "**Timestamp:** 0:07.8 - 0:08.4\n",
+      "04_wave_data_overlay.md": "**Timestamp:** 0:12 - 0:13\n",
+      "05_split_nature_comparison.md": "**Timestamp:** 0:13 - 0:14\n",
+      "06_veo_pipeline_infographic.md": "**Timestamp:** 0:14 - 0:15\n",
+      "07_narration_overlay_intro.md": "**Timestamp:** 0:15 - 0:15.8\n",
+      "08_section_end_card.md": "**Timestamp:** 0:15.8 - 0:16.6\n",
+    } as Record<string, string>;
+
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === auditPath ||
+        Object.keys(specs).some(
+          (name) => candidate === pathMod.join(specDir, name)
+        )
+      );
+    });
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return ["AUDIT_06_veo_pipeline_infographic.md", ...Object.keys(specs)];
+      }
+      throw new Error(`Unexpected directory read: ${candidate}`);
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === auditPath) {
+        return "## Verdict\nfail\n## Summary\nArrow missing\n";
+      }
+      for (const [name, content] of Object.entries(specs)) {
+        if (candidate === pathMod.join(specDir, name)) {
+          return content;
+        }
+      }
+      throw new Error(`Unexpected file read: ${candidate}`);
+    });
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    const infographic = body.sections[0].specs.find(
+      (spec: { specName: string }) => spec.specName === "06_veo_pipeline_infographic"
+    );
+    expect(infographic).toBeDefined();
+    expect(infographic.playbackWindow).toBeDefined();
+    expect(infographic.playbackWindow.source).toBe("timestamp");
+    expect(infographic.playbackWindow.sampleSeconds).toBeCloseTo(3.2509, 2);
+    expect(infographic.playbackWindow.sampleSeconds).toBeLessThan(4);
   });
 });
 

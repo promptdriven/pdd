@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import { loadProject } from "@/lib/project";
 import { resolveSectionVisuals } from "@/lib/composition-timing";
-import { resolveAuditSampleWindow } from "@/lib/audit-timing";
+import { resolveRenderedAuditSampleWindow } from "@/lib/audit-timing";
 import { getProjectDir } from "@/lib/projects";
 import {
   resolveSectionSpecDir,
@@ -137,12 +137,14 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           const safeSpecPath = toSectionSpecPath(section.specDir, `${specName}.md`);
           const specExists = fs.existsSync(specSourcePath);
           const playbackWindow = specExists
-            ? resolveAuditSampleWindow(
+            ? resolveRenderedAuditSampleWindow(
                 fs.readFileSync(specSourcePath, "utf-8"),
                 {
+                  projectDir: getProjectDir(),
+                  specPath: specSourcePath,
+                  section,
                   sectionDurationSeconds: section.durationSeconds,
                   fps,
-                  sectionOffsetSeconds: section.offsetSeconds ?? 0,
                 }
               )
             : undefined;
