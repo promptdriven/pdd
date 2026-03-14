@@ -1,32 +1,24 @@
 import React from "react";
-import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider } from "../_shared/visual-runtime";
 import { AnimationSection01TitleCard } from "../AnimationSection01TitleCard";
-import { AnimationSection02BlueCirclePulse } from "../AnimationSection02BlueCirclePulse";
-import { AnimationSection03CircleToSquareMorph } from "../AnimationSection03CircleToSquareMorph";
-import { AnimationSection04SquareSlideRight } from "../AnimationSection04SquareSlideRight";
-import { AnimationSection05SplitComparison } from "../AnimationSection05SplitComparison";
-import { AnimationSection06ParticleBurst } from "../AnimationSection06ParticleBurst";
-import { AnimationSection07SectionOutro } from "../AnimationSection07SectionOutro";
+import { AnimationSection02KeyVisual } from "../animation_section_02_key_visual";
+import { AnimationSection03SplitSummary } from "../animation_section_03_split_summary";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "animation_section_01_title_card": AnimationSection01TitleCard,
-  "02_blue_circle_pulse": AnimationSection02BlueCirclePulse,
-  "03_circle_to_square_morph": AnimationSection03CircleToSquareMorph,
-  "04_square_slide_right": AnimationSection04SquareSlideRight,
-  "05_split_comparison": AnimationSection05SplitComparison,
-  "06_particle_burst": AnimationSection06ParticleBurst,
-  "07_section_outro": AnimationSection07SectionOutro,
+  "animation_section_02_key_visual": AnimationSection02KeyVisual,
+  "animation_section_03_split_summary": AnimationSection03SplitSummary,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "animation_section_01_title_card": 45,
-  "02_blue_circle_pulse": 30,
-  "07_section_outro": 21,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
+  "04_veo_broll": { defaultSrc: "veo/04_veo_broll.mp4", backgroundSrc: "veo/04_veo_broll.mp4", outputSrc: "veo/04_veo_broll.mp4", baseSrc: "veo/04_veo_broll.mp4" },
+  "05_veo_cutaway": { defaultSrc: "veo/05_veo_cutaway.mp4", backgroundSrc: "veo/05_veo_cutaway.mp4", outputSrc: "veo/05_veo_cutaway.mp4", baseSrc: "veo/05_veo_cutaway.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
@@ -34,7 +26,7 @@ const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
 
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.594667;
+  const durationSeconds = 7.32;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 
@@ -56,6 +48,10 @@ export const AnimationSectionSection: React.FC = () => {
                   <VisualComponent />
                 </VisualMediaProvider>
               </SlotScaledSequence>
+            ) : visualMedia?.defaultSrc ? (
+              <VisualMediaProvider media={visualMedia}>
+                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+              </VisualMediaProvider>
             ) : null}
           </Sequence>
         );
