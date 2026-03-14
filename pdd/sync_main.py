@@ -608,6 +608,13 @@ def sync_main(
     # Returns Dict[str, Path] mapping language -> prompt file path
     lang_to_path = _detect_languages_with_context(basename, prompts_dir, context_name=context_override)
     if not lang_to_path:
+        # Check if this basename has only LLM template files (not syncable)
+        name_part = basename.rsplit('/', 1)[-1] if '/' in basename else basename
+        llm_files = list(prompts_dir.glob(f"**/{name_part}_LLM.prompt")) if prompts_dir.is_dir() else []
+        if llm_files:
+            if not quiet:
+                rprint(f"[dim]Skipping '{basename}': only LLM template files found (not syncable)[/dim]")
+            return {"overall_success": True, "results_by_language": {}, "total_cost": 0.0, "primary_model": ""}, 0.0, ""
         raise click.UsageError(
             f"No prompt files found for basename '{basename}' in directory '{prompts_dir}'.\n"
             f"Expected files with format: '{basename}_<language>.prompt'"

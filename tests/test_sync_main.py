@@ -1140,3 +1140,81 @@ class TestDetectLanguagesWithContextExpanded:
 
         languages = _detect_languages_with_context("my_module", prompts_dir)
         assert "kotlin" in languages, f"Expected 'kotlin' in detected languages, got: {list(languages.keys())}"
+
+
+# --- Tests for sync skipping LLM-only basenames ---
+
+
+class TestSyncSkipsLLMOnlyBasenames:
+    """pdd sync should skip basenames that only have _LLM.prompt files instead of erroring."""
+
+    def test_detect_languages_returns_empty_for_llm_only(self, tmp_path):
+        """_detect_languages should return empty dict for basenames with only _LLM.prompt files."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "my_step_LLM.prompt").write_text("LLM template")
+
+        result = _detect_languages("my_step", prompts_dir)
+        assert result == {}, f"Expected empty dict for LLM-only basename, got: {result}"
+
+    def test_detect_languages_with_context_returns_empty_for_llm_only(self, tmp_path, monkeypatch):
+        """_detect_languages_with_context should return empty dict for LLM-only basenames."""
+        from pdd.sync_main import _detect_languages_with_context
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "my_step_LLM.prompt").write_text("LLM template")
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    paths: ["**"]\n')
+
+        result = _detect_languages_with_context("my_step", prompts_dir)
+        assert result == {}, f"Expected empty dict for LLM-only basename, got: {result}"
+
+    def test_sync_main_skips_llm_only_basename_without_error(self, mock_project_dir, mock_construct_paths):
+        """sync_main should skip gracefully (not raise UsageError) for LLM-only basenames."""
+        # Create only an LLM prompt file
+        (mock_project_dir / "prompts" / "my_step_LLM.prompt").write_text("LLM template")
+
+        ctx = create_mock_context({})
+        # This should NOT raise UsageError — it should skip gracefully
+        results, total_cost, model = sync_main(
+            ctx, "my_step", max_attempts=3, budget=10.0, skip_verify=False,
+            skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+        assert results["overall_success"] is True
+        assert total_cost == 0.0
+
+    def test_sync_main_still_errors_for_truly_missing_basename(self, mock_project_dir, mock_construct_paths):
+        """sync_main should still raise UsageError when no prompt files exist at all."""
+        ctx = create_mock_context({})
+        with pytest.raises(click.UsageError, match="No prompt files found"):
+            sync_main(
+                ctx, "totally_nonexistent", max_attempts=3, budget=10.0,
+                skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
+            )
+
+    def test_sync_main_processes_real_language_when_llm_also_present(self, mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+        """When both _LLM.prompt and _python.prompt exist, sync should process python normally."""
+        (mock_project_dir / "prompts" / "my_module_LLM.prompt").write_text("LLM template")
+        (mock_project_dir / "prompts" / "my_module_python.prompt").write_text("python prompt")
+
+        mock_sync_orchestration.return_value = {
+            "success": True,
+            "total_cost": 0.5,
+            "model_name": "gpt-4",
+            "summary": "Done.",
+        }
+
+        ctx = create_mock_context({})
+        results, total_cost, model = sync_main(
+            ctx, "my_module", max_attempts=3, budget=10.0, skip_verify=False,
+            skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+        assert results["overall_success"] is True
+        assert "python" in results["results_by_language"]
+        assert total_cost == pytest.approx(0.5)
