@@ -15,6 +15,7 @@ import AnnotationPanel from '@/components/AnnotationPanel';
 import PipelineAdvanceButton from '@/components/PipelineAdvanceButton';
 import {
   getPipelineAutomationDescription,
+  getPipelineAutomationPlanSummary,
   type PipelineRenderStatusSnapshot,
   resolvePipelineRunPlan,
   resolveRunRemainingButtonLabel,
@@ -873,6 +874,7 @@ export default function Page() {
     hasRemainingSteps: runPlan.length > 0,
   });
   const pipelineAutomationDescription = getPipelineAutomationDescription(activeStage);
+  const pipelineAutomationPlanSummary = getPipelineAutomationPlanSummary(runPlan);
 
   return (
     <div className="flex flex-col h-screen bg-gray-950 text-white">
@@ -932,6 +934,9 @@ export default function Page() {
                     <h2 className="text-lg font-semibold text-white">Run Remaining Stages</h2>
                     <p className="max-w-3xl text-sm text-emerald-100/80">
                       {pipelineAutomationDescription}
+                    </p>
+                    <p className="max-w-3xl text-sm text-emerald-200/90">
+                      {pipelineAutomationPlanSummary}
                     </p>
                   </div>
                   <PipelineAdvanceButton

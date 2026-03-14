@@ -1,4 +1,6 @@
 import {
+  getPipelineAutomationDescription,
+  getPipelineAutomationPlanSummary,
   resolvePipelineRunPlan,
   resolveRunRemainingButtonLabel,
   type PipelineStageStatusEntry,
@@ -174,5 +176,45 @@ describe("resolveRunRemainingButtonLabel", () => {
         hasRemainingSteps: false,
       })
     ).toBe("All Remaining Stages Complete");
+  });
+});
+
+describe("getPipelineAutomationDescription", () => {
+  it("explains that setup automation extracts and saves sections before continuing", () => {
+    expect(getPipelineAutomationDescription("setup")).toContain(
+      "Extracts sections from the script, saves them to the project"
+    );
+  });
+
+  it("explains that script-stage automation does not rerun setup extraction", () => {
+    expect(getPipelineAutomationDescription("script")).toContain(
+      "Setup extraction is not rerun"
+    );
+  });
+
+  it("keeps later-stage automation focused on remaining steps", () => {
+    expect(getPipelineAutomationDescription("compositions")).toBe(
+      "Runs the remaining automated stages from here and stops on the first hard error."
+    );
+  });
+});
+
+describe("getPipelineAutomationPlanSummary", () => {
+  it("shows the actual setup-first run plan", () => {
+    const plan = resolvePipelineRunPlan("setup");
+    expect(getPipelineAutomationPlanSummary(plan)).toBe(
+      "Will run: Extract Sections -> Generate TTS Script -> Render Audio -> Run Audio Sync -> Generate Specs -> Generate Veo Clips -> Generate Compositions -> Render Sections -> Stitch Full Video -> Audit All Sections"
+    );
+  });
+
+  it("shows a later-stage plan without setup when resuming from script", () => {
+    const plan = resolvePipelineRunPlan("script");
+    expect(getPipelineAutomationPlanSummary(plan)).toBe(
+      "Will run: Generate TTS Script -> Render Audio -> Run Audio Sync -> Generate Specs -> Generate Veo Clips -> Generate Compositions -> Render Sections -> Stitch Full Video -> Audit All Sections"
+    );
+  });
+
+  it("reports when nothing remains to run", () => {
+    expect(getPipelineAutomationPlanSummary([])).toBe("Nothing to run.");
   });
 });

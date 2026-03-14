@@ -291,12 +291,20 @@ export function resolveRunRemainingButtonLabel({
 
 export function getPipelineAutomationDescription(activeStage: PipelineStage): string {
   if (activeStage === "setup") {
-    return "Runs the remaining automated stages from here using the current script and project configuration.";
+    return "Extracts sections from the script, saves them to the project, then runs the remaining automated stages from the current script and project configuration.";
   }
 
   if (activeStage === "script") {
-    return "Runs the remaining automated stages from here using the current script. Manual review-only stops are skipped.";
+    return "Runs the remaining automated stages from here using the current script. Setup extraction is not rerun, and manual review-only stops are skipped.";
   }
 
   return "Runs the remaining automated stages from here and stops on the first hard error.";
+}
+
+export function getPipelineAutomationPlanSummary(plan: PipelineRunStep[]): string {
+  if (!plan.length) {
+    return "Nothing to run.";
+  }
+
+  return `Will run: ${plan.map((step) => step.label).join(" -> ")}`;
 }

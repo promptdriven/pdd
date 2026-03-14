@@ -62,6 +62,7 @@ describe("module structure", () => {
     expect(sourceCode).toContain("Pipeline Automation");
     expect(sourceCode).toContain("Run Remaining Stages");
     expect(sourceCode).toContain("pipelineAutomationDescription");
+    expect(sourceCode).toContain("pipelineAutomationPlanSummary");
     expect(sourceCode).toContain("pipelineRunButtonLabel");
   });
 });
