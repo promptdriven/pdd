@@ -52,9 +52,15 @@ jest.mock("@/lib/claude", () => ({
 }));
 
 const mockLoadProject = jest.fn();
+const mockResolveSectionCompositionIds = jest.fn();
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
+}));
+
+jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
+  resolveSectionCompositionIds: (...args: unknown[]) =>
+    mockResolveSectionCompositionIds(...args),
 }));
 
 const mockGetProjectDir = jest.fn();
@@ -225,6 +231,7 @@ beforeEach(() => {
   mockExtractFrameAtTime.mockReset();
   mockRunClaudeAudit.mockReset();
   mockLoadProject.mockReset();
+  mockResolveSectionCompositionIds.mockReset();
   mockReaddirSync.mockReset();
   mockReadFileSync.mockReset();
   mockWriteFileSync.mockReset();
@@ -242,6 +249,12 @@ beforeEach(() => {
     confidence: 0.95,
   });
   mockLoadProject.mockReturnValue(mockProjectConfig());
+  mockResolveSectionCompositionIds.mockImplementation(
+    (section: { compositions?: Array<string | { id: string }> }) =>
+      (section.compositions ?? []).map((composition) =>
+        typeof composition === "string" ? composition : composition.id
+      )
+  );
   mockGetProjectDir.mockReturnValue("/project-root");
   mockReaddirSync.mockReturnValue([]);
   mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
@@ -745,6 +758,35 @@ describe("audit executor factory", () => {
     expect(mockRenderStill).toHaveBeenCalledTimes(1);
     expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+  });
+
+  it("renders the preview composition from generated composition metadata when project sections omit compositions", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 6,
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockResolveSectionCompositionIds.mockReturnValue([
+      "animation_section_01_title_card",
+    ]);
+    mockReaddirSync.mockReturnValue(["01_title_card.md"]);
+    mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledTimes(1);
+    expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
   });
 
   it("uses the intrinsic sample frame for preview compositions instead of scaling against the 150-frame preview container", async () => {

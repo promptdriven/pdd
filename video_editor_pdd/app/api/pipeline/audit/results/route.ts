@@ -10,6 +10,7 @@ import {
   resolveSectionSpecFile,
   toSectionSpecPath,
 } from "../_lib/spec-paths";
+import { resolveSectionCompositionIds } from "@/app/api/pipeline/_lib/composition-manifest";
 
 type SpecAuditResult = {
   specName: string;
@@ -74,11 +75,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
       const auditFiles = files.filter(
         (f) => f.endsWith(".md") && f.startsWith("AUDIT_")
       );
-      const configuredCompositionIds = (section.compositions ?? [])
-        .map((composition) =>
-          typeof composition === "string" ? composition : composition?.id
-        )
-        .filter((compositionId): compositionId is string => Boolean(compositionId));
+      const configuredCompositionIds = resolveSectionCompositionIds(section);
       const renderableVisuals =
         configuredCompositionIds.length > 0
           ? resolveSectionVisuals(

@@ -57,6 +57,7 @@ jest.mock("@/lib/project", () => ({
 }));
 
 const mockBuildSectionConstantsSource = jest.fn();
+const mockResolveSectionCompositionIds = jest.fn();
 
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
@@ -68,6 +69,11 @@ jest.mock("@/lib/projects", () => ({
 jest.mock("@/lib/composition-timing", () => ({
   buildSectionConstantsSource: (...args: unknown[]) =>
     mockBuildSectionConstantsSource(...args),
+}));
+
+jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
+  resolveSectionCompositionIds: (...args: unknown[]) =>
+    mockResolveSectionCompositionIds(...args),
 }));
 
 const mockMkdir = jest.fn();
@@ -232,6 +238,7 @@ beforeEach(() => {
   mockLoadProject.mockReset();
   mockSaveProject.mockReset();
   mockBuildSectionConstantsSource.mockReset();
+  mockResolveSectionCompositionIds.mockReset();
   mockMkdir.mockReset();
   mockAccess.mockReset();
   mockStat.mockReset();
@@ -251,6 +258,9 @@ beforeEach(() => {
   mockBuildSectionConstantsSource.mockImplementation(
     (_projectDir: string, section: { id: string }) =>
       `// constants for ${section.id}\nexport const VISUAL_SEQUENCE = [];\n`
+  );
+  mockResolveSectionCompositionIds.mockImplementation(
+    (section: { compositions?: Array<string> }) => section.compositions ?? []
   );
 
   mockStartJobInBackground.mockReturnValue("test-job-render-001");
@@ -973,6 +983,37 @@ describe("rebuildBundle — cache clearing", () => {
     ).toBe(false);
     expect(onLog).toHaveBeenCalledWith(
       'Skipped section constants refresh for "media_only_section" because no compositions were discovered.'
+    );
+  });
+
+  it("uses the generated composition manifest when project sections are missing compositions", async () => {
+    mockLoadProject.mockReturnValue({
+      ...mockProjectConfig(),
+      sections: [
+        {
+          id: "veo_section",
+          label: "Veo Section",
+          videoFile: "outputs/sections/veo_section.mp4",
+          specDir: "veo_section",
+          remotionDir: "remotion/veo_section",
+          compositionId: "VeoSection",
+          durationSeconds: 11.584,
+          offsetSeconds: 0,
+        },
+      ],
+    });
+    mockResolveSectionCompositionIds.mockReturnValue([
+      "veo_section_01_title_card",
+      "03_wave_data_overlay",
+    ]);
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockBuildSectionConstantsSource).toHaveBeenCalledWith(
+      process.cwd(),
+      expect.objectContaining({ id: "veo_section" }),
+      ["veo_section_01_title_card", "03_wave_data_overlay"]
     );
   });
 });

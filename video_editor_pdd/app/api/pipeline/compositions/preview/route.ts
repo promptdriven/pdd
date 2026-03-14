@@ -5,7 +5,8 @@ import { Readable } from "stream";
 
 import { loadProject } from "@/lib/project";
 import { renderStill } from "@/lib/render";
-import { getProjectDir } from "@/lib/projects";
+import { getAppRemotionSrcDir, getProjectDir } from "@/lib/projects";
+import { resolveSectionCompositionIds } from "@/app/api/pipeline/_lib/composition-manifest";
 
 const FPS = 30;
 
@@ -13,11 +14,66 @@ type PreviewSection = {
   id: string;
   compositionId: string;
   specDir?: string;
-  compositions?: Array<string | Record<string, unknown>>;
+  compositions?: Array<string | { id: string; [key: string]: unknown }>;
 };
 
 function toPascalCase(s: string): string {
   return s.replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
+}
+
+function componentArtifactExists(
+  sectionId: string,
+  componentName: string
+): { resolvedId: string; compositionId: string } | null {
+  const remotionSrc = getAppRemotionSrcDir();
+  const scopedName = `${sectionId}_${componentName}`;
+  const candidates: Array<{ resolvedId: string; filePath: string }> = [
+    {
+      resolvedId: scopedName,
+      filePath: path.join(remotionSrc, `${scopedName}.tsx`),
+    },
+    {
+      resolvedId: componentName,
+      filePath: path.join(remotionSrc, `${componentName}.tsx`),
+    },
+  ];
+
+  const nnMatch = componentName.match(/^(\d{2})_/);
+  if (nnMatch) {
+    const strippedPascal = toPascalCase(componentName.slice(nnMatch[0].length));
+    const dashedDirName = `${nnMatch[1]}-${strippedPascal}`;
+    const sectionPascal = toPascalCase(sectionId);
+    const prefixedDirName = `${sectionPascal}${nnMatch[1]}${strippedPascal}`;
+    candidates.push(
+      {
+        resolvedId: componentName,
+        filePath: path.join(remotionSrc, dashedDirName, "index.ts"),
+      },
+      {
+        resolvedId: componentName,
+        filePath: path.join(remotionSrc, prefixedDirName, "index.ts"),
+      }
+    );
+  } else {
+    const plainDirName = toPascalCase(componentName);
+    candidates.push({
+      resolvedId: componentName,
+      filePath: path.join(remotionSrc, plainDirName, "index.ts"),
+    });
+  }
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate.filePath)) {
+      continue;
+    }
+
+    return {
+      resolvedId: candidate.resolvedId,
+      compositionId: compToRemotionId(candidate.resolvedId, sectionId),
+    };
+  }
+
+  return null;
 }
 
 /**
@@ -56,10 +112,7 @@ function resolvePreviewTarget(
     : config.sections;
 
   for (const section of sections as PreviewSection[]) {
-    const comps: string[] = (section.compositions ?? []).map(
-      (comp: string | Record<string, unknown>) =>
-        typeof comp === "string" ? comp : (comp as Record<string, unknown>).id as string
-    );
+    const comps = resolveSectionCompositionIds(section);
     // Check if the section-scoped name is in compositions — return its
     // Remotion composition ID (PascalCase → kebab-case to match Root.tsx).
     const scopedName = `${section.id}_${componentName}`;
@@ -86,6 +139,14 @@ function resolvePreviewTarget(
       componentName === `${section.id}Wrapper`
     ) {
       return { compositionId: section.compositionId, section };
+    }
+
+    const artifactMatch = componentArtifactExists(section.id, componentName);
+    if (artifactMatch) {
+      return {
+        compositionId: artifactMatch.compositionId,
+        section,
+      };
     }
   }
   return null;

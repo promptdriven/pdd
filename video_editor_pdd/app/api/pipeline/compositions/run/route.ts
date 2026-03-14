@@ -16,6 +16,7 @@ import {
   getAppScriptsDir,
   getProjectDir,
 } from "@/lib/projects";
+import { mergeCompositionManifest } from "@/app/api/pipeline/_lib/composition-manifest";
 import { renderStill } from "@/lib/render";
 import type { Section, SseSend } from "@/lib/types";
 import {
@@ -756,6 +757,23 @@ registerExecutor("compositions", (params, send: SseSend) => {
       if (compositionsUpdated) {
         saveProject(freshConfig);
         onLog("[compositions] Updated project.json with discovered compositions.");
+      }
+
+      const manifestSections = freshConfig.sections
+        .filter((section) => Array.isArray(section.compositions) && section.compositions.length > 0)
+        .map((section) => ({
+          id: section.id,
+          compositionId: section.compositionId,
+          specDir: section.specDir,
+          timelineSource:
+            typeof section.timelineSource === "string"
+              ? section.timelineSource
+              : undefined,
+          compositions: section.compositions as SectionComposition[],
+        }));
+      if (manifestSections.length > 0) {
+        mergeCompositionManifest(manifestSections, getProjectDir());
+        onLog("[compositions] Updated generated composition manifest.");
       }
 
       // Generate section constants and section composition for each section

@@ -14,6 +14,41 @@ function methodNotAllowed(): NextResponse {
   return NextResponse.json({ error: "Method not allowed" }, { status: 405 });
 }
 
+function shouldPreserveGeneratedSectionState(
+  existingSection: ProjectConfig["sections"][number],
+  incomingSection: ProjectConfig["sections"][number]
+): boolean {
+  return (
+    existingSection.id === incomingSection.id &&
+    existingSection.specDir === incomingSection.specDir &&
+    existingSection.remotionDir === incomingSection.remotionDir &&
+    existingSection.compositionId === incomingSection.compositionId
+  );
+}
+
+function mergeSections(
+  existingSections: ProjectConfig["sections"],
+  incomingSections: ProjectConfig["sections"]
+): ProjectConfig["sections"] {
+  const existingById = new Map(existingSections.map((section) => [section.id, section]));
+
+  return incomingSections.map((incomingSection) => {
+    const existingSection = existingById.get(incomingSection.id);
+    if (!existingSection) {
+      return incomingSection;
+    }
+
+    if (!shouldPreserveGeneratedSectionState(existingSection, incomingSection)) {
+      return incomingSection;
+    }
+
+    return {
+      ...existingSection,
+      ...incomingSection,
+    };
+  });
+}
+
 /**
  * GET /api/project
  * Loads project.json and returns the full ProjectConfig.
@@ -55,7 +90,16 @@ export async function PUT(request: Request): Promise<NextResponse> {
 
   try {
     const existing = loadProject();
-    const merged = { ...existing, ...body };
+    const merged = {
+      ...existing,
+      ...body,
+      sections: body.sections
+        ? mergeSections(
+            existing.sections,
+            body.sections as ProjectConfig["sections"]
+          )
+        : existing.sections,
+    };
     const validated = validateProjectConfig(merged);
 
     saveProject(validated);

@@ -13,6 +13,7 @@ import {
   getProjectDir,
 } from "@/lib/projects";
 import { buildSectionConstantsSource } from "@/lib/composition-timing";
+import { resolveSectionCompositionIds } from "@/app/api/pipeline/_lib/composition-manifest";
 import type { RenderProgress, SseSend } from "@/lib/types";
 
 const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
@@ -147,11 +148,7 @@ async function refreshSectionTimelineArtifacts(
     : config.sections;
 
   for (const section of sectionsToRefresh) {
-    const componentIds = (section.compositions ?? [])
-      .map((composition) =>
-        typeof composition === "string" ? composition : composition?.id
-      )
-      .filter((compositionId): compositionId is string => Boolean(compositionId));
+    const componentIds = resolveSectionCompositionIds(section);
 
     if (componentIds.length === 0) {
       onLog(`Skipped section constants refresh for "${section.id}" because no compositions were discovered.`);

@@ -2930,6 +2930,31 @@ describe("compositions executor — generated section timelines", () => {
     );
     expect(compositionCall).toBeUndefined();
   });
+
+  it("writes a generated composition manifest after discovery", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].specDir = "specs/intro";
+    mockLoadProject.mockReturnValue(config);
+    setupDiscoveryMocks();
+    setupMockSpawn(0);
+
+    const executor = registerCallArgs.factory(
+      { components: ["01_chart"], wrappers: [], sectionId: "intro" },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const manifestWrite = mockWriteFileSync.mock.calls.find(
+      (call: unknown[]) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).endsWith(
+          path.join("outputs", "compositions", "manifest.json")
+        )
+    );
+    expect(manifestWrite).toBeDefined();
+    expect(String(manifestWrite?.[1])).toContain('"id": "intro"');
+    expect(String(manifestWrite?.[1])).toContain('"intro_01_chart"');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3000,7 +3025,7 @@ describe("compositions preview — handles timing objects in compositions", () =
   });
 
   it("preview route extracts string IDs from mixed compositions", () => {
-    // preview/route.ts must handle timing objects in section.compositions
-    expect(previewSourceCode).toMatch(/typeof comp === ["']string["']/);
+    // preview/route.ts now delegates mixed composition handling to the shared manifest resolver
+    expect(previewSourceCode).toMatch(/resolveSectionCompositionIds/);
   });
 });

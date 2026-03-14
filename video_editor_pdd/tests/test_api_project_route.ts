@@ -297,6 +297,68 @@ describe("PUT /api/project", () => {
     expect(mockSaveProject).toHaveBeenCalledWith(validated);
   });
 
+  it("preserves generated section metadata when a stale sections payload updates the same section ids", async () => {
+    const existing = {
+      ...validConfig(),
+      sections: [
+        {
+          ...validConfig().sections[0],
+          compositions: ["intro_title_card"],
+          timelineSource: "generated",
+        },
+      ],
+    };
+    mockLoadProject.mockReturnValue(existing);
+    mockValidateProjectConfig.mockImplementation((value) => value);
+
+    await PUT(
+      makePutRequest({
+        sections: [
+          {
+            ...validConfig().sections[0],
+            label: "Updated Introduction",
+          },
+        ],
+      })
+    );
+
+    const mergedArg = mockValidateProjectConfig.mock.calls[0][0];
+    expect(mergedArg.sections[0].label).toBe("Updated Introduction");
+    expect(mergedArg.sections[0].compositions).toEqual(["intro_title_card"]);
+    expect(mergedArg.sections[0].timelineSource).toBe("generated");
+  });
+
+  it("drops generated section metadata when the section identity changes", async () => {
+    const existing = {
+      ...validConfig(),
+      sections: [
+        {
+          ...validConfig().sections[0],
+          compositions: ["intro_title_card"],
+          timelineSource: "generated",
+        },
+      ],
+    };
+    mockLoadProject.mockReturnValue(existing);
+    mockValidateProjectConfig.mockImplementation((value) => value);
+
+    await PUT(
+      makePutRequest({
+        sections: [
+          {
+            ...validConfig().sections[0],
+            compositionId: "IntroCompositionV2",
+          },
+        ],
+      })
+    );
+
+    const mergedArg = mockValidateProjectConfig.mock.calls[0][0];
+    expect(mergedArg.sections[0].compositionId).toBe("IntroCompositionV2");
+    expect(mergedArg.sections[0].compositions).toBeUndefined();
+    expect(mergedArg.sections[0].timelineSource).toBeUndefined();
+  });
+
   it("returns the validated config in the response body", async () => {
     const existing = validConfig();
     const validated = { ...existing, name: "Final" };

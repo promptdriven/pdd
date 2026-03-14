@@ -20,6 +20,7 @@ import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
 } from "../_lib/spec-paths";
+import { resolveSectionCompositionIds } from "@/app/api/pipeline/_lib/composition-manifest";
 import type { AnnotationAnalysis, Section, SseSend } from "@/lib/types";
 import { getProjectDir } from "@/lib/projects";
 
@@ -367,11 +368,7 @@ async function auditSection(
         .readdirSync(specDir)
         .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
     : [];
-  const configuredCompositionIds = (section.compositions ?? [])
-    .map((composition) =>
-      typeof composition === "string" ? composition : composition?.id
-    )
-    .filter((compositionId): compositionId is string => Boolean(compositionId));
+  const configuredCompositionIds = resolveSectionCompositionIds(section);
   const renderableVisuals =
     configuredCompositionIds.length > 0
       ? resolveSectionVisuals(

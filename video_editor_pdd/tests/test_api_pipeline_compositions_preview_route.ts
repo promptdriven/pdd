@@ -18,9 +18,15 @@ import path from "path";
 // ---------------------------------------------------------------------------
 
 const mockLoadProject = jest.fn();
+const mockResolveSectionCompositionIds = jest.fn();
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
+}));
+
+jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
+  resolveSectionCompositionIds: (...args: unknown[]) =>
+    mockResolveSectionCompositionIds(...args),
 }));
 
 const mockRenderStill = jest.fn();
@@ -101,6 +107,9 @@ const DEFAULT_PROJECT = {
 beforeEach(() => {
   jest.clearAllMocks();
   mockLoadProject.mockReturnValue(DEFAULT_PROJECT);
+  mockResolveSectionCompositionIds.mockImplementation((section: { compositions?: string[] }) =>
+    section.compositions ?? []
+  );
   mockRenderStill.mockResolvedValue(undefined);
   mockExistsSync.mockReturnValue(false);
   mockReadFileSync.mockImplementation((filePath: string) => `spec for ${filePath}`);
@@ -184,6 +193,27 @@ describe("GET — render still", () => {
       makeRequest("http://localhost/api/pipeline/compositions/preview?component=ColdOpenSectionWrapper")
     );
     expect(mockRenderStill.mock.calls[0][0]).toBe("ColdOpenSection");
+  });
+
+  it("resolves previews from generated composition metadata when project sections do not carry compositions", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [
+        {
+          id: "cold_open",
+          label: "Cold Open",
+          compositionId: "ColdOpenSection",
+          specDir: "cold_open",
+        },
+      ],
+    });
+    mockResolveSectionCompositionIds.mockReturnValue(["cold_open_title_card"]);
+
+    const res = await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card&section=cold_open")
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockRenderStill.mock.calls[0][0]).toBe("cold-open-title-card");
   });
 });
 
