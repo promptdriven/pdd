@@ -152,7 +152,7 @@ def cmd_test_main(
                 generated_content = _inject_sys_path_preamble(generated_content)
             # Write to sync-expected path for all languages (fix: non-Python was skipped)
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
-            output_test_path.write_text(generated_content)
+            output_test_path.write_text(generated_content, encoding="utf-8")
 
             if not ctx.obj.get("quiet", False):
                 console.print(f"[green]Agentic test generation completed.[/green]")
