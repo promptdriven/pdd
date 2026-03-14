@@ -115,6 +115,30 @@ describe("resolveAuditSampleWindow", () => {
     expect(result.sampleSeconds).toBeCloseTo(77.5 / 30);
   });
 
+  it("maps intrinsic preview sampling to the selected local frame range when timestamp and animation ranges are both present", () => {
+    const spec = `
+**Timestamp:** 0:04 - 0:05
+
+## Animation Sequence
+1. **Frame 0-8 (0-0.27s):** Background still fades in.
+2. **Frame 8-28 (0.27-0.93s):** Wave line draws progressively.
+3. **Frame 20-34 (0.67-1.13s):** Stat callout badges pop in sequentially.
+4. **Frame 34-38 (1.13-1.27s):** All elements hold steady.
+`;
+
+    const result = resolveAuditSampleWindow(spec, {
+      sectionDurationSeconds: 10,
+      fps: 30,
+    });
+
+    expect(result.source).toBe("frame-range");
+    expect(result.startSeconds).toBeCloseTo(4.8947, 3);
+    expect(result.endSeconds).toBeCloseTo(5, 3);
+    expect(result.intrinsicDurationFrames).toBe(38);
+    expect(result.intrinsicSampleFrame).toBe(35);
+    expect(result.intrinsicSampleSeconds).toBeCloseTo(35.9995 / 30, 3);
+  });
+
   it("does not let an opening hold range override a later representative animation range", () => {
     const spec = `
 **Timestamp:** 0:04 - 0:05
@@ -132,7 +156,7 @@ describe("resolveAuditSampleWindow", () => {
     });
 
     expect(result.source).toBe("frame-range");
-    expect(result.intrinsicSampleFrame).toBe(27);
+    expect(result.intrinsicSampleFrame).toBe(29);
   });
 
   it("parses bolded markdown frame ranges used in generated specs", () => {

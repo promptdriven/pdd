@@ -113,6 +113,33 @@ describe("lib/audit-geometry", () => {
     );
   });
 
+  it("passes a horizontal slide visual when the contract uses nested slide data and the shape color is only present in spec prose", () => {
+    const pngPath = path.join(tmpDir, "nested-slide.png");
+    writeSolidShapePng(pngPath, 200, 120, [
+      { left: 132, top: 40, width: 24, height: 24, color: "#6366F1" },
+    ]);
+
+    const result = evaluateDeterministicGeometryAudit(
+      [
+        "### Chart/Visual Elements",
+        "- Square: 24x24px, fill #6366F1",
+        "",
+        "## Data Points",
+        "```json",
+        '{ "slide": { "toX": 144, "y": 60 } }',
+        "```",
+      ].join("\n"),
+      pngPath
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        verdict: "pass",
+        check: "horizontal-slide",
+      })
+    );
+  });
+
   it("passes a split-panel visual when both shape centroids are in the expected halves", () => {
     const pngPath = path.join(tmpDir, "split.png");
     writeSolidShapePng(pngPath, 200, 120, [

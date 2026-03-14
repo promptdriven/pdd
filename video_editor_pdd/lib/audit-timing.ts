@@ -152,10 +152,13 @@ export function resolveAuditSampleWindow(
     );
     const clampedStart = Math.min(startSeconds, clampedEnd);
     const sampleSeconds = midpointSample(clampedStart, clampedEnd);
-    const intrinsicDurationSeconds = Math.max(rawWindowDuration, FRAME_SAMPLE_EPSILON_SECONDS);
-    const intrinsicSampleSeconds = Math.max(
-      0,
-      sampleSeconds - timestampWindow.start
+    const intrinsicDurationSeconds = Math.max(
+      localFrameDuration / options.fps,
+      FRAME_SAMPLE_EPSILON_SECONDS
+    );
+    const intrinsicSampleSeconds = midpointSample(
+      selectedRange.start / options.fps,
+      selectedRange.end / options.fps
     );
     const intrinsicDurationFrames = Math.max(localFrameDuration, 1);
     const normalizedSample = Math.min(

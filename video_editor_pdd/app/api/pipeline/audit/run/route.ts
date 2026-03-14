@@ -16,6 +16,7 @@ import {
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
 } from "@/lib/audit-timing";
+import { evaluateDeterministicGeometryAudit } from "@/lib/audit-geometry";
 import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
@@ -61,6 +62,8 @@ const TRANSITION_DISCREPANCY_RE =
   /\b(transition|fade|fading|appearing|emerging|stagger|timing|phase|beginning to appear|starting to appear|not yet fully visible|not fully visible)\b/i;
 const HARD_PROBLEM_RE =
   /\b(missing|wrong subject|wrong scene|off-screen|outside the frame|clipped|cut off|cropped|illegible|unreadable|completely absent|not visible|invisible|far from|significantly|materially)\b/i;
+const GEOMETRY_DISCREPANCY_RE =
+  /\b(center|centering|offset|drift|position|alignment|aligned|spacing|left|right|panel|split|x=|y=|undersized|oversized|size|width|height)\b/i;
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -237,6 +240,19 @@ function classifyAuditVerdict(
   }
 
   return "warn";
+}
+
+function shouldTrustDeterministicGeometry(
+  analysis: AnnotationAnalysis
+): boolean {
+  const assessmentText = [
+    analysis.technicalAssessment,
+    ...(analysis.suggestedFixes ?? []),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return GEOMETRY_DISCREPANCY_RE.test(assessmentText);
 }
 
 function resolveAuditRenderSource(
@@ -553,12 +569,24 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
       path.dirname(outputStill),
       onLog
     )) as AnnotationAnalysis;
+    let verdict = classifyAuditVerdict(analysis, { auditHints });
+    let summary = analysis.technicalAssessment;
 
-    const verdict = classifyAuditVerdict(analysis, { auditHints });
+    if (verdict !== "pass" && shouldTrustDeterministicGeometry(analysis)) {
+      const deterministicGeometry = evaluateDeterministicGeometryAudit(
+        specContent,
+        outputStill
+      );
+      if (deterministicGeometry?.verdict === "pass") {
+        verdict = "pass";
+        summary = deterministicGeometry.summary;
+      }
+    }
+
     if (verdict === "pass") passCount++;
     else if (verdict === "warn") warnCount++;
     else if (verdict === "fail") failCount++;
-    writeAuditReport(auditPath, verdict, analysis.technicalAssessment);
+    writeAuditReport(auditPath, verdict, summary);
   }
 
   return { passCount, warnCount, failCount };

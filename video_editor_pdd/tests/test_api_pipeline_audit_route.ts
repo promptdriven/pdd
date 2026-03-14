@@ -51,6 +51,13 @@ jest.mock("@/lib/claude", () => ({
   runClaudeAudit: (...args: unknown[]) => mockRunClaudeAudit(...args),
 }));
 
+const mockEvaluateDeterministicGeometryAudit = jest.fn();
+
+jest.mock("@/lib/audit-geometry", () => ({
+  evaluateDeterministicGeometryAudit: (...args: unknown[]) =>
+    mockEvaluateDeterministicGeometryAudit(...args),
+}));
+
 const mockLoadProject = jest.fn();
 const mockResolveSectionCompositionIds = jest.fn();
 
@@ -230,6 +237,7 @@ beforeEach(() => {
   mockRenderStill.mockReset();
   mockExtractFrameAtTime.mockReset();
   mockRunClaudeAudit.mockReset();
+  mockEvaluateDeterministicGeometryAudit.mockReset();
   mockLoadProject.mockReset();
   mockResolveSectionCompositionIds.mockReset();
   mockReaddirSync.mockReset();
@@ -249,6 +257,7 @@ beforeEach(() => {
     confidence: 0.95,
   });
   mockLoadProject.mockReturnValue(mockProjectConfig());
+  mockEvaluateDeterministicGeometryAudit.mockReturnValue(null);
   mockResolveSectionCompositionIds.mockImplementation(
     (section: { compositions?: Array<string | { id: string }> }) =>
       (section.compositions ?? []).map((composition) =>
@@ -840,7 +849,7 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledWith(
       "animation-section04-square-slide-right",
-      27,
+      29,
       pathMod.join("/project-root", "outputs", "audit", "animation_section", "04_square_slide_right_frame.png")
     );
   });
@@ -1304,6 +1313,55 @@ describe("audit executor factory", () => {
 
     const content = mockWriteFileSync.mock.calls[0][1];
     expect(content).toContain("## Verdict\npass");
+  });
+
+  it("writes 'pass' verdict when deterministic geometry confirms a layout-sensitive visual despite a coordinate-only Claude failure", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:01",
+          "",
+          "### Chart/Visual Elements",
+          "- Square: 120x120px, fill #6366F1",
+          "",
+          "## Data Points",
+          "```json",
+          '{ "slide": { "toX": 1440, "y": 540 } }',
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "major",
+      fixType: "remotion",
+      technicalAssessment:
+        "The square appears too far left relative to the expected endpoint.",
+      suggestedFixes: ["Move the square farther right"],
+      confidence: 0.84,
+    });
+    mockEvaluateDeterministicGeometryAudit.mockReturnValue({
+      verdict: "pass",
+      check: "horizontal-slide",
+      summary:
+        "Deterministic geometry check confirmed the primary shape is centered near (1440, 540).",
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\npass");
+    expect(content).toContain("Deterministic geometry check confirmed");
   });
 
   it("creates output directory with recursive flag", async () => {
