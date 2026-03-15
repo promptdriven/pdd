@@ -1,37 +1,44 @@
 export const COLORS = {
   background: '#0A1628',
-  heading: '#F8FAFC',
   cyan: '#38BDF8',
   green: '#22C55E',
-  barShadow: 'rgba(15, 23, 42, 0.45)',
+  white: '#FFFFFF',
+  gridLine: 'rgba(255, 255, 255, 0.05)',
+  barShadow: 'rgba(0, 0, 0, 0.3)',
 };
+
+export const BARS = [
+  { height: 300, color: COLORS.cyan, label: 'A' },
+  { height: 420, color: COLORS.green, label: 'B' },
+  { height: 260, color: COLORS.cyan, label: 'C' },
+  { height: 500, color: COLORS.green, label: 'D' },
+];
 
 export const DIMENSIONS = {
   canvasWidth: 1920,
   canvasHeight: 1080,
   barWidth: 120,
-  barGap: 36,
-  containerHeight: 420,
-  barBaseHeight: 360,
-  barRadius: 24,
+  barGap: 30,
+  maxHeight: 500,
+  containerWidth: 600,
+  containerBottomY: 880,
+  barBorderRadius: '8px 8px 0 0',
 };
 
-export const BARS = [
-  { value: 0.60, maxHeight: 300, color: COLORS.cyan },
-  { value: 0.84, maxHeight: 420, color: COLORS.green },
-  { value: 0.52, maxHeight: 260, color: COLORS.cyan },
-  { value: 1.0, maxHeight: 500, color: COLORS.green },
-];
-
 export const TIMING = {
-  barGrowDuration: 20,
-  barStaggerDelay: 10,
+  labelFadeStart: 0,
+  labelFadeEnd: 4,
+  barGrowFrames: 8,
+  barStaggerFrames: 3,
+  pulseStart: 19,
+  totalFrames: 24,
 };
 
 export const TYPOGRAPHY = {
-  headingSize: 52,
-  headingWeight: 700 as const,
-  headingX: 72,
-  headingY: 72,
   fontFamily: 'Inter, sans-serif',
+  labelSize: 20,
+  labelWeight: 600 as const,
+  labelX: 80,
+  labelY: 60,
+  labelOpacity: 0.7,
 };

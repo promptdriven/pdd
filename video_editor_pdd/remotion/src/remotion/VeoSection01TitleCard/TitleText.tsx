@@ -49,6 +49,7 @@ export const TitleText: React.FC = () => {
           fontWeight: TYPOGRAPHY.title.fontWeight,
           color: COLORS.titleText,
           lineHeight: 1.2,
+          textShadow: `0 2px 8px ${COLORS.titleShadow}`,
         }}
       >
         Veo Section

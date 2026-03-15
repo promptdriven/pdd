@@ -1,4 +1,5 @@
 // AnimationSection09SplitSummary – visual constants
+// Authoritative data contract for the split summary card
 
 export const CANVAS = {
   width: 1920,
@@ -9,22 +10,45 @@ export const CANVAS = {
 export const DIVIDER = {
   startX: 640,
   endX: 720,
-  width: 6,
   color: '#38BDF8',
-} as const;
-
-export const PANELS = {
-  left: { background: '#0F172A', label: 'Before' },
-  right: { background: '#111827', label: 'After' },
+  width: 3,
+  glowBlur: 24,
+  glowOpacity: 0.3,
+  glowWidth: 20,
 } as const;
 
 export const COLORS = {
-  text: '#E2E8F0',
+  leftBackground: '#0F172A',
+  leftOpacity: 0.9,
+  rightBackground: '#020617',
+  rightOpacity: 1.0,
+  labelColor: '#FFFFFF',
+  labelOpacity: 0.7,
+} as const;
+
+export const LABEL = {
+  text: 'Split Summary',
+  x: 80,
+  y: 60,
 } as const;
 
 export const TYPOGRAPHY = {
-  panelLabel: { fontSize: 46, fontWeight: 700 as const },
-  title: { fontSize: 54, fontWeight: 700 as const },
+  label: {
+    fontFamily: 'Inter, sans-serif',
+    fontSize: 20,
+    fontWeight: 600 as const,
+  },
 } as const;
 
-export const INTRINSIC_FRAMES = 90;
+export const TIMING = {
+  // Frame 0-6: Card fades in (opacity 0→1)
+  fadeInStart: 0,
+  fadeInEnd: 6,
+  // Frame 6-18: Divider drifts from startX to endX
+  driftStart: 6,
+  driftEnd: 18,
+  // Frame 18-22: Label fades in, divider settles
+  labelFadeStart: 18,
+  labelFadeEnd: 22,
+  totalFrames: 22,
+} as const;

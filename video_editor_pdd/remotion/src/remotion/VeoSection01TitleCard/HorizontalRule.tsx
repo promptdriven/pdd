@@ -5,7 +5,7 @@ import { COLORS, TYPOGRAPHY, ANIMATION, DIMENSIONS } from './constants';
 export const HorizontalRule: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Frame 10–18: Expand width from 0→400px, center-anchored, easeInOutQuad
+  // Frame 10–18: Expand width from 0→320px, center-anchored, easeInOutCubic
   const width = interpolate(
     frame,
     [ANIMATION.ruleExpandStart, ANIMATION.ruleExpandEnd],
@@ -13,13 +13,24 @@ export const HorizontalRule: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
+      easing: Easing.inOut(Easing.cubic),
     },
   );
 
+  // Frame 26–51: Gentle ambient glow pulse (opacity 0.8–1.0 cycle), easeInOutSine
+  const glowOpacity = frame >= ANIMATION.glowPulseStart
+    ? interpolate(
+        (frame - ANIMATION.glowPulseStart) % 25,
+        [0, 12, 25],
+        [0.8, 1.0, 0.8],
+        {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        },
+      )
+    : 1;
+
   // Position: 40% from top + title line-height offset + 20px gap
-  // Title is at 40% (432px on 1080p), title fontSize=56, lineHeight=1.2 → ~67px tall
-  // Rule sits 20px below the title's bottom edge
   const titleBottomPx = DIMENSIONS.titleTopPercent * 1080 + TYPOGRAPHY.title.fontSize * 1.2;
   const ruleTop = titleBottomPx + DIMENSIONS.ruleGap;
 
@@ -33,6 +44,8 @@ export const HorizontalRule: React.FC = () => {
         width,
         height: DIMENSIONS.ruleHeight,
         backgroundColor: COLORS.rule,
+        opacity: glowOpacity,
+        boxShadow: `0 0 12px ${COLORS.rule}`,
       }}
     />
   );

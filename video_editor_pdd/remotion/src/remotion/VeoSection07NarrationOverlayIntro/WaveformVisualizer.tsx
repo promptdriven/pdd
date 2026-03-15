@@ -1,37 +1,14 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION, DIMENSIONS } from './constants';
-
-/**
- * Seeded pseudo-random number from an integer seed.
- * Returns a value between 0 and 1.
- */
-const seededRandom = (seed: number): number => {
-  const x = Math.sin(seed * 12.9898 + seed * 78.233) * 43758.5453;
-  return x - Math.floor(x);
-};
+import { COLORS, ANIMATION, WAVEFORM } from './constants';
 
 export const WaveformVisualizer: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const {
-    waveformBarCount,
-    waveformBarWidth,
-    waveformBarGap,
-    waveformMinHeight,
-    waveformMaxHeight,
-    waveformY,
-  } = DIMENSIONS;
-
-  // Total width of waveform: (barWidth + barGap) * barCount - barGap
-  const totalWidth =
-    (waveformBarWidth + waveformBarGap) * waveformBarCount - waveformBarGap;
-  const startX = (1920 - totalWidth) / 2;
-
-  // Frame 10–20: Ramp up intensity from 0→1
-  const rampUp = interpolate(
+  // Ramp up from frame 8 onward
+  const intensity = interpolate(
     frame,
-    [ANIMATION.waveformStart, ANIMATION.waveformEnd],
+    [ANIMATION.waveformStart, ANIMATION.waveformStart + 4],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -40,50 +17,56 @@ export const WaveformVisualizer: React.FC = () => {
     },
   );
 
+  const totalWidth =
+    WAVEFORM.barCount * WAVEFORM.barWidth +
+    (WAVEFORM.barCount - 1) * WAVEFORM.barGap;
+
   const bars: { x: number; height: number }[] = [];
-  for (let i = 0; i < waveformBarCount; i++) {
-    const phaseOffset = seededRandom(i * 7 + 3) * Math.PI * 2;
 
-    // Traveling wave: phase shifts left-to-right based on bar index
-    const travelPhase = (i / waveformBarCount) * Math.PI * 2;
+  // Each bar oscillates at a different phase to simulate audio waveform
+  const phaseOffsets = [0, 1.2, 0.5, 1.8, 0.9];
 
-    // Sinusoidal oscillation — continuous pulse
-    const oscillation =
-      0.5 +
-      0.5 * Math.sin(frame * 0.4 + phaseOffset + travelPhase);
+  for (let i = 0; i < WAVEFORM.barCount; i++) {
+    const phase = phaseOffsets[i];
 
-    // Base height randomized per bar (deterministic via seed)
-    const baseHeight =
-      waveformMinHeight +
-      (waveformMaxHeight - waveformMinHeight) * seededRandom(i * 17 + 11);
+    // easeInOutSine oscillation per bar
+    const t = (Math.sin(frame * 0.3 + phase * Math.PI * 2) + 1) / 2;
+    const easedT = 0.5 - 0.5 * Math.cos(Math.PI * t);
 
-    // Animated height: scales with rampUp intensity
-    const animatedHeight =
-      waveformMinHeight +
-      (baseHeight - waveformMinHeight) * oscillation * rampUp;
+    const height =
+      WAVEFORM.minHeight +
+      (WAVEFORM.maxHeight - WAVEFORM.minHeight) * easedT * intensity;
 
     bars.push({
-      x: startX + i * (waveformBarWidth + waveformBarGap),
-      height: animatedHeight,
+      x: i * (WAVEFORM.barWidth + WAVEFORM.barGap),
+      height,
     });
   }
 
   return (
-    <>
+    <div
+      style={{
+        position: 'absolute',
+        left: WAVEFORM.left,
+        bottom: WAVEFORM.bottom,
+        width: totalWidth,
+        height: WAVEFORM.maxHeight,
+        display: 'flex',
+        alignItems: 'flex-end',
+        gap: WAVEFORM.barGap,
+      }}
+    >
       {bars.map((bar, i) => (
         <div
           key={i}
           style={{
-            position: 'absolute',
-            left: bar.x,
-            top: waveformY - bar.height / 2,
-            width: waveformBarWidth,
+            width: WAVEFORM.barWidth,
             height: bar.height,
-            borderRadius: waveformBarWidth / 2,
-            backgroundColor: COLORS.waveformBar,
+            borderRadius: WAVEFORM.barWidth / 2,
+            backgroundColor: COLORS.gold,
           }}
         />
       ))}
-    </>
+    </div>
   );
 };

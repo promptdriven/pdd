@@ -9,7 +9,7 @@ import { FadeInLabel } from './FadeInLabel';
 export const AnimationSection05SplitComparison: React.FC = () => {
 	const frame = useCurrentFrame();
 
-	// Entire layout slides up from y=1080 to y=0
+	// Entire layout slides up from y=1080 to y=0 over frames 0-12
 	const slideY = interpolate(
 		frame,
 		[TIMING.slideUpStart, TIMING.slideUpEnd],

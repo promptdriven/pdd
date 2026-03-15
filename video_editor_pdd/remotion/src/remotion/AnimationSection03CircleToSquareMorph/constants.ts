@@ -1,3 +1,5 @@
+// Component-level constants for AnimationSection03CircleToSquareMorph
+
 export const CANVAS = {
 	width: 1920,
 	height: 1080,
@@ -6,15 +8,16 @@ export const CANVAS = {
 } as const;
 
 export const COLORS = {
-	backgroundCenter: '#1E293B',
-	backgroundEdge: '#0F172A',
+	backgroundCenter: '#0F172A',
+	backgroundEdge: '#020617',
 	shapeStart: '#3B82F6',
 	shapeEnd: '#6366F1',
 } as const;
 
 export const SHAPE = {
-	size: 120,
-	borderRadiusStart: 60, // 50% of 120 = circle
+	startSize: 120,
+	endSize: 130,
+	borderRadiusStart: 60,
 	borderRadiusEnd: 12,
 } as const;
 
@@ -25,15 +28,12 @@ export const TIMING = {
 	// Phase 2: Morph (frames 6-29)
 	morphStart: 6,
 	morphEnd: 30,
-	// Phase 3: Settle (frames 30-35)
+	// Phase 3: Settle / ghost fade-out (frames 30-35)
 	settleStart: 30,
 	settleEnd: 36,
 } as const;
 
 export const GHOST = {
-	count: 3,
-	opacities: [0.15, 0.1, 0.05] as readonly number[],
-	frameOffsets: [0, 4, 8] as readonly number[],
+	opacities: [0.6, 0.35, 0.15] as readonly number[],
+	lagFrames: 3,
 } as const;
-
-export const FPS = 30;

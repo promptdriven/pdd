@@ -1,46 +1,68 @@
 [title:]
-# Animation Section Title Card
+
+# Section 1.1: Title Card
 
 **Tool:** Remotion
-**Duration:** ~4s
-**Timestamp:** 0:00 - 0:05
+**Duration:** ~1.5s (45 frames @ 30fps)
+**Timestamp:** 0:00 - 0:01
 
 ## Visual Description
-Animation Section appears as a crisp title card with immediate readability.
+A cinematic title card introducing the Animation Section. The title "Animation Section" fades in and scales up from center, followed by a thin horizontal accent line expanding outward beneath it, then the subtitle "Integration Test" drifts upward into view. All elements are centered on a deep navy background.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #0A1628
+- Background: Dark slate `#0F172A` (solid fill)
+- Grid lines: None
+
+### Chart/Visual Elements
+- **Title Text:** "Animation Section" — white `#FFFFFF`, centered at Y=440px
+- **Accent Line:** Thin horizontal rule — `rgba(255, 255, 255, 0.8)`, centered at Y=500px, 320px wide x 2px tall
+- **Subtitle Text:** "Integration Test" — muted slate `#94A3B8`, centered at Y=560px
 
 ### Animation Sequence
-1. Frame 0-30: Establish the composition immediately.
-2. Frame 30-90: Introduce the main motion or layout change.
-3. Frame 90-150: Hold the final state clearly for rendering verification.
+1. **Frame 0-15 (0-0.5s):** Title text fades in (opacity 0→1) and scales up (0.85→1.0) from center
+2. **Frame 12-30 (0.4-1.0s):** Accent line expands from 0px to 320px width, centered horizontally
+3. **Frame 20-40 (0.67-1.33s):** Subtitle fades in (opacity 0→1) with a 10px upward drift
+4. **Frame 40-45 (1.33-1.5s):** Hold — all elements at final state
+
+### Typography
+- Title: Inter, 72px, bold (700), `#FFFFFF`
+- Subtitle: Inter, 28px, regular (400), `#94A3B8`
+
+### Easing
+- Title fade/scale: `easeOut(quad)`
+- Accent line expand: `easeOut(cubic)`
+- Subtitle fade/drift: `easeOut(quad)`
 
 ## Narration Sync
-> "Animation Section appears as a crisp title card with immediate readability."
+> "This is the first section of the integration test video."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={150}>
-  <AbsoluteFill />
+<Sequence from={0} durationInFrames={45}>
+  <TitleText text="Animation Section" />
+  <Sequence from={12}>
+    <AccentLine targetWidth={320} />
+  </Sequence>
+  <Sequence from={20}>
+    <SubtitleText text="Integration Test" />
+  </Sequence>
 </Sequence>
 ```
 
 ## Data Points
 ```json
-{"series":[{"label":"A","value":1},{"label":"B","value":2}]}
+{
+  "title": "Animation Section",
+  "subtitle": "Integration Test",
+  "accentLineWidth": 320,
+  "backgroundColor": "#0F172A",
+  "titleColor": "#FFFFFF",
+  "subtitleColor": "#94A3B8",
+  "accentLineColor": "rgba(255, 255, 255, 0.8)"
+}
 ```
 
-<!-- ANNOTATION_UPDATE_START: 71e7fb48-83c9-4f7d-949f-6d1fb65bf4a1 -->
-## Annotation Update
-Requested change: Change the main background color of this section to bright red (#FF0000). Find all background color values in the animation_section TSX component files under remotion/src/remotion/ and replace them with #FF0000.
-Technical assessment: The animation_section uses dark navy/blue background colors across all three sub-components. The title card (01_title_card) uses '#0F172A' defined in constants.ts, the key visual (02) uses '#0A1628', and the split summary (03) uses '#020617' as the main background with '#0F172A' and '#111827' for its left/right panels. The composite frame confirms the current dark navy appearance. All these background color values need to be replaced with '#FF0000' (bright red) as requested.
-- In remotion/src/remotion/AnimationSection01TitleCard/constants.ts line 10, change background: '#0F172A' to background: '#FF0000'
-- In remotion/src/remotion/animation_section_02_key_visual.tsx line 10, change backgroundColor: '#0A1628' to backgroundColor: '#FF0000'
-- In remotion/src/remotion/animation_section_03_split_summary.tsx line 9, change backgroundColor: '#020617' to backgroundColor: '#FF0000'
-- In remotion/src/remotion/animation_section_03_split_summary.tsx line 11, change backgroundColor: '#0F172A' to backgroundColor: '#FF0000'
-- In remotion/src/remotion/animation_section_03_split_summary.tsx line 14, change backgroundColor: '#111827' to backgroundColor: '#FF0000'
-<!-- ANNOTATION_UPDATE_END: 71e7fb48-83c9-4f7d-949f-6d1fb65bf4a1 -->
+---

@@ -12,7 +12,7 @@ export const VerticalDivider: React.FC = () => {
 		{
 			extrapolateLeft: 'clamp',
 			extrapolateRight: 'clamp',
-			easing: Easing.inOut(Easing.quad),
+			easing: Easing.out(Easing.cubic),
 		},
 	);
 

@@ -1,21 +1,22 @@
 // Component-level constants for VeoSection01TitleCard
-// Duration: ~1.0s (30 frames @ 30fps)
+// Duration: ~1.7s (51 frames @ 30fps)
 
 export const COLORS = {
   background: '#0B1120',
   titleText: '#FFFFFF',
+  titleShadow: 'rgba(201, 168, 76, 0.3)',
   rule: '#C9A84C',
-  subtitleText: '#A0AEC0',
+  subtitleText: '#FFFFFFCC',
 };
 
 export const TYPOGRAPHY = {
   title: {
-    fontSize: 56,
+    fontSize: 72,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 700 as const,
   },
   subtitle: {
-    fontSize: 24,
+    fontSize: 28,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 400 as const,
   },
@@ -32,13 +33,14 @@ export const ANIMATION = {
   // Frame 18–26: Subtitle fades in with slide-up
   subtitleFadeStart: 18,
   subtitleFadeEnd: 26,
-  subtitleShiftPx: 10,
-  // Frame 26–30: Hold
-  totalDuration: 30,
+  subtitleShiftPx: 12,
+  // Frame 26–51: Hold + glow pulse on rule
+  glowPulseStart: 26,
+  totalDuration: 51,
 };
 
 export const DIMENSIONS = {
-  ruleMaxWidth: 400,
+  ruleMaxWidth: 320,
   ruleHeight: 2,
   // Title at 40% from top
   titleTopPercent: 0.4,

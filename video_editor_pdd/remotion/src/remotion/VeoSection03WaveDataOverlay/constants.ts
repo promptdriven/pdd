@@ -6,119 +6,70 @@ export const BASE_CANVAS = {
 };
 
 export const COLORS = {
-	background: '#0B1D3A',
-	backgroundOpacity: 0.85,
-	waveStroke: '#5B9BD5',
-	accentDot: '#5B9BD5',
-	filmReelIcon: '#E8967A',
-	sparkleIcon: '#D4A843',
-	labelText: '#FFFFFF',
+	background: '#0A1628',
+	goldAccent: '#C9A84C',
+	waveStroke: '#C9A84C',
+	waveFill: 'rgba(201, 168, 76, 0.15)',
+	gridLine: 'rgba(255, 255, 255, 0.08)',
+	badgeBackground: 'rgba(11, 17, 32, 0.85)',
+	badgeBorder: 'rgba(201, 168, 76, 0.4)',
+	labelText: 'rgba(255, 255, 255, 0.6)',
+	valueText: '#FFFFFF',
 };
 
-export const WAVE = {
-	amplitude: 40,
-	wavelength: 200,
-	strokeWidth: 3,
-	centerY: 540,
+export const WAVEFORM = {
+	amplitude: 0.8,
+	frequency: 1.2,
+	samples: 120,
+	strokeWidth: 2,
+	yStart: 720,
+	yEnd: 980,
 };
 
-export const DOTS = {
-	radius: 6,
-	positions: [480, 960, 1440],
+export const BADGE = {
+	width: 200,
+	height: 60,
+	borderRadius: 8,
+	rightOffset: 60,
+	topStart: 120,
+	gap: 16,
 };
 
 export const TYPOGRAPHY = {
-	labelFontSize: 28,
-	labelFontFamily: 'Inter, sans-serif',
+	labelFontSize: 12,
+	labelFontFamily: "'Inter', sans-serif",
 	labelFontWeight: 500 as const,
-	iconSize: 24,
+	valueFontSize: 22,
+	valueFontWeight: 700 as const,
 };
 
-export const STAT_CALLOUTS = [
-	{ icon: 'film-reel' as const, label: 'Cinematic Footage', color: '#E8967A', y: 700 },
-	{ icon: 'sparkle' as const, label: 'AI-Generated', color: '#D4A843', y: 760 },
-];
+export const ANIMATION = {
+	// Phase 1: Dark overlay fade (frames 0-8)
+	overlayFadeStart: 0,
+	overlayFadeEnd: 8,
 
-export const STAT_X = 300;
+	// Phase 2: Waveform draws left-to-right (frames 4-30)
+	waveDrawStart: 4,
+	waveDrawEnd: 30,
 
-export const ANIMATION_TIMING = {
-	// Phase 1: Sine wave draws left-to-right (frames 0-45)
-	waveDrawStart: 0,
-	waveDrawEnd: 45,
+	// Phase 3-5: Stat badges stagger in (6 frames each)
+	badge1Start: 8,
+	badge1End: 14,
+	badge2Start: 12,
+	badge2End: 18,
+	badge3Start: 16,
+	badge3End: 22,
 
-	// Phase 2: Accent dots scale in (frames 30-45)
-	dotsScaleStart: 30,
-	dotsScaleEnd: 45,
+	// Phase 6: Waveform oscillation (frames 22+)
+	oscillationStart: 22,
 
-	// Phase 3: Stat callout 1 fades in (frames 45-75)
-	stat1FadeStart: 45,
-	stat1FadeEnd: 75,
-
-	// Phase 4: Stat callout 2 fades in (frames 60-90)
-	stat2FadeStart: 60,
-	stat2FadeEnd: 90,
-
-	// Phase 5: Hold then fade out (frames 90-120)
-	fadeOutStart: 105,
-	fadeOutEnd: 120,
-
-	totalDuration: 120,
+	totalDuration: 52,
 };
 
-export interface WaveDataOverlayLayout {
-	width: number;
-	height: number;
-	wave: {
-		amplitude: number;
-		wavelength: number;
-		strokeWidth: number;
-		centerY: number;
-	};
-	dots: {
-		radius: number;
-		positions: number[];
-	};
-	typography: {
-		labelFontSize: number;
-		labelFontFamily: string;
-		labelFontWeight: typeof TYPOGRAPHY.labelFontWeight;
-		iconSize: number;
-	};
-	statCallouts: Array<(typeof STAT_CALLOUTS)[number] & { y: number }>;
-	statX: number;
-}
+export const GRID_ROWS = 4;
 
-export const resolveWaveDataOverlayLayout = (
-	width: number,
-	height: number
-): WaveDataOverlayLayout => {
-	const scaleX = width / BASE_CANVAS.width;
-	const scaleY = height / BASE_CANVAS.height;
-	const uniformScale = Math.min(scaleX, scaleY);
-
-	return {
-		width,
-		height,
-		wave: {
-			amplitude: WAVE.amplitude * scaleY,
-			wavelength: WAVE.wavelength * scaleX,
-			strokeWidth: Math.max(2, WAVE.strokeWidth * uniformScale),
-			centerY: WAVE.centerY * scaleY,
-		},
-		dots: {
-			radius: Math.max(4, DOTS.radius * uniformScale),
-			positions: DOTS.positions.map((position) => position * scaleX),
-		},
-		typography: {
-			labelFontSize: Math.max(18, TYPOGRAPHY.labelFontSize * uniformScale),
-			labelFontFamily: TYPOGRAPHY.labelFontFamily,
-			labelFontWeight: TYPOGRAPHY.labelFontWeight,
-			iconSize: Math.max(16, TYPOGRAPHY.iconSize * uniformScale),
-		},
-		statCallouts: STAT_CALLOUTS.map((callout) => ({
-			...callout,
-			y: callout.y * scaleY,
-		})),
-		statX: STAT_X * scaleX,
-	};
+export const DATA = {
+	waveHeight: { label: 'Wave Height', value: '0.8 m' },
+	wavePeriod: { label: 'Wave Period', value: '6.2 s' },
+	waterTemp: { label: 'Water Temp', value: '22\u00B0C' },
 };

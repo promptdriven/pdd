@@ -1,30 +1,19 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, DIMENSIONS, ANIMATION } from './constants';
+import { COLORS, RULE, TIMING } from './constants';
 
 export const HorizontalRule: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Frame 14-18: Expand from center (width 0->300px) with easeInOutQuad
+  // Frames 24-30: Expand from center (0 -> 240px) with easeInOutCubic
   const width = interpolate(
     frame,
-    [ANIMATION.ruleExpandStart, ANIMATION.ruleExpandEnd],
-    [0, DIMENSIONS.ruleMaxWidth],
+    [TIMING.ruleStart, TIMING.ruleEnd],
+    [0, RULE.maxWidth],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
-    },
-  );
-
-  // Frame 22-24: Fade out with all elements
-  const fadeOutOpacity = interpolate(
-    frame,
-    [ANIMATION.fadeOutStart, ANIMATION.fadeOutEnd],
-    [1, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.cubic),
     },
   );
 
@@ -33,12 +22,12 @@ export const HorizontalRule: React.FC = () => {
       style={{
         position: 'absolute',
         left: '50%',
-        top: DIMENSIONS.ruleY,
+        top: RULE.y,
         transform: 'translateX(-50%)',
         width,
-        height: DIMENSIONS.ruleHeight,
-        backgroundColor: COLORS.rule,
-        opacity: frame >= ANIMATION.ruleExpandStart ? fadeOutOpacity : 0,
+        height: RULE.height,
+        backgroundColor: COLORS.accent,
+        opacity: frame >= TIMING.ruleStart ? 1 : 0,
       }}
     />
   );

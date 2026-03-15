@@ -1,26 +1,26 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, ANIMATION_TIMING } from './constants';
+import { COLORS, TIMING } from './constants';
 
 export const FadeToBlack: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade to black over frames 15-21 with easeInQuad
+  // Fade to black over frames 28-45 with easeInCubic
   const opacity = interpolate(
     frame,
-    [ANIMATION_TIMING.fadeOutStart, ANIMATION_TIMING.fadeOutEnd],
+    [TIMING.fadeStart, TIMING.fadeEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.quad),
+      easing: Easing.in(Easing.cubic),
     }
   );
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.fadeToBlack,
+        backgroundColor: COLORS.fadeTarget,
         opacity,
       }}
     />

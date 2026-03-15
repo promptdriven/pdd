@@ -1,67 +1,49 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
-import { CANVAS, PANELS, COLORS, TYPOGRAPHY } from './constants';
-import { DividerLine } from './DividerLine';
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
+import { CANVAS, DIVIDER, TIMING } from './constants';
+import { SplitBackground } from './SplitBackground';
+import { GlowingDivider } from './GlowingDivider';
+import { SplitLabel } from './SplitLabel';
 
 export const defaultAnimationSection09SplitSummaryProps = {};
 
 export const AnimationSection09SplitSummary: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  // Card fade-in: opacity 0→1 over frames 0-6, easeOutQuad
+  const cardOpacity = interpolate(
+    frame,
+    [TIMING.fadeInStart, TIMING.fadeInEnd],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  // Divider X position (also needed for background split)
+  const dividerX = interpolate(
+    frame,
+    [TIMING.driftStart, TIMING.driftEnd],
+    [DIVIDER.startX, DIVIDER.endX],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.sin),
+    },
+  );
+
   return (
     <AbsoluteFill
       style={{
         backgroundColor: CANVAS.background,
-        fontFamily: 'sans-serif',
-        color: COLORS.text,
+        opacity: cardOpacity,
       }}
     >
-      {/* Split panels */}
-      <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
-        {/* Left – Before */}
-        <div
-          style={{
-            flex: 1,
-            backgroundColor: PANELS.left.background,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
-          <div style={{ fontSize: TYPOGRAPHY.panelLabel.fontSize, fontWeight: TYPOGRAPHY.panelLabel.fontWeight }}>
-            {PANELS.left.label}
-          </div>
-        </div>
-
-        {/* Right – After */}
-        <div
-          style={{
-            flex: 1,
-            backgroundColor: PANELS.right.background,
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }}
-        >
-          <div style={{ fontSize: TYPOGRAPHY.panelLabel.fontSize, fontWeight: TYPOGRAPHY.panelLabel.fontWeight }}>
-            {PANELS.right.label}
-          </div>
-        </div>
-      </div>
-
-      {/* Glowing cyan divider */}
-      <DividerLine />
-
-      {/* Title label */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 64,
-          left: 64,
-          fontSize: TYPOGRAPHY.title.fontSize,
-          fontWeight: TYPOGRAPHY.title.fontWeight,
-        }}
-      >
-        Split Summary
-      </div>
+      <SplitBackground dividerX={dividerX} />
+      <GlowingDivider />
+      <SplitLabel />
     </AbsoluteFill>
   );
 };

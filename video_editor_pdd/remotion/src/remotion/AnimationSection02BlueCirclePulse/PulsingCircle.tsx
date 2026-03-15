@@ -5,76 +5,72 @@ import { CANVAS, COLORS, CIRCLE, TIMING } from './constants';
 export const PulsingCircle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Phase 1 (frames 0-5): Scale in from 0 to baseRadius with easeOutBack
-  const appearScale = interpolate(
+  // Phase 1 (frames 0-5): Fade in with opacity 0→1, radius stays at baseRadius
+  const opacity = interpolate(
     frame,
-    [TIMING.appearStart, TIMING.appearEnd],
+    [TIMING.fadeInStart, TIMING.fadeInEnd],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
+      easing: Easing.out(Easing.quad),
     }
   );
 
   // Determine current radius based on animation phase
   let radius: number;
-  if (frame < TIMING.appearEnd) {
-    // Phase 1: appear from 0 to baseRadius
-    radius = CIRCLE.baseRadius * appearScale;
-  } else if (frame < TIMING.contract1Start) {
-    // Phase 2 (frames 5-15): First pulse expansion — 60px to 80px
-    radius = interpolate(
-      frame,
-      [TIMING.pulse1Start, TIMING.pulse1End],
-      [CIRCLE.baseRadius, CIRCLE.pulseRadius],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.inOut(Easing.sin),
-      }
-    );
-  } else if (frame < TIMING.pulse2Start) {
-    // Phase 3 (frames 15-20): Contract back from 80px to 60px
-    radius = interpolate(
-      frame,
-      [TIMING.contract1Start, TIMING.contract1End],
-      [CIRCLE.pulseRadius, CIRCLE.baseRadius],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.inOut(Easing.sin),
-      }
-    );
-  } else if (frame < TIMING.holdStart) {
-    // Phase 4 (frames 20-28): Second pulse — expand then contract
-    const mid = (TIMING.pulse2Start + TIMING.pulse2End) / 2;
-    if (frame <= mid) {
-      radius = interpolate(
-        frame,
-        [TIMING.pulse2Start, mid],
-        [CIRCLE.baseRadius, CIRCLE.pulseRadius],
-        {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.inOut(Easing.sin),
-        }
-      );
-    } else {
-      radius = interpolate(
-        frame,
-        [mid, TIMING.pulse2End],
-        [CIRCLE.pulseRadius, CIRCLE.baseRadius],
-        {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.inOut(Easing.sin),
-        }
-      );
-    }
-  } else {
-    // Phase 5 (frames 28-30): Hold at baseRadius
+
+  if (frame <= TIMING.pulse1ExpandStart) {
+    // Phase 1: constant baseRadius during fade-in
     radius = CIRCLE.baseRadius;
+  } else if (frame <= TIMING.pulse1ExpandEnd) {
+    // Phase 2 (frames 5-12): First pulse expand — 60px → 80px
+    radius = interpolate(
+      frame,
+      [TIMING.pulse1ExpandStart, TIMING.pulse1ExpandEnd],
+      [CIRCLE.baseRadius, CIRCLE.pulse1Radius],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.out(Easing.sin),
+      }
+    );
+  } else if (frame <= TIMING.pulse1ContractEnd) {
+    // Phase 3 (frames 12-18): First pulse contract — 80px → 60px
+    radius = interpolate(
+      frame,
+      [TIMING.pulse1ContractStart, TIMING.pulse1ContractEnd],
+      [CIRCLE.pulse1Radius, CIRCLE.baseRadius],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.in(Easing.sin),
+      }
+    );
+  } else if (frame <= TIMING.pulse2ExpandEnd) {
+    // Phase 4 (frames 18-24): Second pulse expand — 60px → 78px
+    radius = interpolate(
+      frame,
+      [TIMING.pulse2ExpandStart, TIMING.pulse2ExpandEnd],
+      [CIRCLE.baseRadius, CIRCLE.pulse2Radius],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.out(Easing.sin),
+      }
+    );
+  } else {
+    // Phase 5 (frames 24-30): Second pulse contract — 78px → 60px
+    radius = interpolate(
+      frame,
+      [TIMING.pulse2ContractStart, TIMING.pulse2ContractEnd],
+      [CIRCLE.pulse2Radius, CIRCLE.baseRadius],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.in(Easing.sin),
+      }
+    );
   }
 
   const diameter = radius * 2;
@@ -87,6 +83,7 @@ export const PulsingCircle: React.FC = () => {
         height: diameter,
         borderRadius: '50%',
         backgroundColor: COLORS.circleFill,
+        opacity,
         top: CANVAS.centerY - radius,
         left: CANVAS.centerX - radius,
       }}

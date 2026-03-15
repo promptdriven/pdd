@@ -1,5 +1,5 @@
 // Component-level constants for AnimationSection07SectionOutro
-// Duration: ~0.7s (21 frames @ 30fps)
+// Duration: 45 frames @ 30fps (~1.5s)
 
 export const CANVAS = {
   width: 1920,
@@ -7,43 +7,65 @@ export const CANVAS = {
 } as const;
 
 export const COLORS = {
-  background: '#1E293B',
-  fadeToBlack: '#000000',
+  background: '#020617',
+  fadeTarget: '#000000',
   checkmark: '#22C55E',
-  text: '#CBD5E1',
+  glow: '#22C55E',
+  text: '#FFFFFF',
 } as const;
 
-export const TYPOGRAPHY = {
-  text: {
-    fontFamily: "'Inter', sans-serif",
-    fontSize: 28,
-    fontWeight: 500 as const,
-  },
+export const CHECKMARK = {
+  cx: 960,
+  cy: 500,
+  strokeWidth: 6,
+  /** Total path length for dashoffset animation */
+  totalPathLength: 180,
+  /** Short downstroke leg (45deg, ~40px) */
+  shortLegLength: 60, // approximate SVG units for the short leg path segment
+  /** Long upstroke leg (315deg, ~80px) */
+  longLegLength: 120, // approximate SVG units for the long leg path segment
+  /** SVG viewBox size */
+  viewBoxSize: 100,
+  /** Glow blur radius */
+  glowBlur: 20,
+  /** Glow opacity */
+  glowOpacity: 0.2,
 } as const;
 
-export const DIMENSIONS = {
-  checkmarkSize: 48,
-  checkmarkStrokeWidth: 3,
-  checkmarkCenterX: 960,
-  checkmarkCenterY: 480,
-  textCenterY: 560,
+/**
+ * Checkmark SVG path: short downstroke then long upstroke.
+ * Coordinates within a 100x100 viewBox, centered roughly at (50,50).
+ * Short leg: from (25,45) to (42,62) — 45deg downstroke, ~24 SVG units
+ * Long leg: from (42,62) to (75,28) — 315deg upstroke, ~46 SVG units
+ * Total stroke ~ 70 SVG units, but we use pathLength attribute = 180 for animation.
+ */
+export const CHECKMARK_PATH = 'M 25 45 L 42 62 L 75 28';
+
+export const TEXT = {
+  content: 'Section Complete',
+  y: 600,
+  fontSize: 32,
+  fontWeight: 500 as const,
+  fontFamily: "'Inter', sans-serif",
+  maxOpacity: 0.9,
+  scaleFrom: 0.95,
+  scaleTo: 1.0,
 } as const;
 
-export const ANIMATION_TIMING = {
-  // Frame 0-9: Checkmark SVG stroke draws in
-  checkmarkDrawStart: 0,
-  checkmarkDrawEnd: 9,
-  // Frame 6-12: "Section Complete" text fades in
-  textFadeStart: 6,
-  textFadeEnd: 12,
-  // Frame 12-15: Hold at full visibility
-  // Frame 15-21: All elements fade out; background fades to black
-  fadeOutStart: 15,
-  fadeOutEnd: 21,
-  totalDuration: 21,
+export const TIMING = {
+  fps: 30,
+  totalFrames: 45,
+  // Checkmark stroke draw: frames 0-18
+  checkmarkStart: 0,
+  checkmarkEnd: 18,
+  // Short leg draws: frames 0-7
+  shortLegEnd: 7,
+  // Long leg draws: frames 7-18
+  longLegStart: 7,
+  // Text fade-in: frames 18-28
+  textStart: 18,
+  textEnd: 28,
+  // Fade to black: frames 28-45
+  fadeStart: 28,
+  fadeEnd: 45,
 } as const;
-
-// Checkmark SVG path and approximate total stroke length
-export const CHECKMARK_PATH = 'M8 24 L20 36 L40 12';
-// Left leg (8,24)->(20,36): sqrt(12^2+12^2) ≈ 17, Right leg (20,36)->(40,12): sqrt(20^2+24^2) ≈ 31, total ≈ 48
-export const CHECKMARK_PATH_LENGTH = 48;

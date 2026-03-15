@@ -1,33 +1,38 @@
 import React from 'react';
-import { AbsoluteFill, useVideoConfig } from 'remotion';
-import { BlurredBackground } from './BlurredBackground';
-import { WordByWordText } from './WordByWordText';
+import { AbsoluteFill, OffthreadVideo, staticFile } from 'remotion';
+import { useVisualMediaSrc } from '../_shared/visual-runtime';
+import { COLORS } from './constants';
+import { FrostedPanel } from './FrostedPanel';
+import { GoldAccentLine } from './GoldAccentLine';
+import { TypewriterCaption } from './TypewriterCaption';
 import { WaveformVisualizer } from './WaveformVisualizer';
-import { AccentUnderline } from './AccentUnderline';
 
 export const VeoSection07NarrationOverlayIntro: React.FC = () => {
-  const { width, height } = useVideoConfig();
+  const backgroundSrc = useVisualMediaSrc(
+    'backgroundSrc',
+    'veo/05_veo_cutaway.mp4',
+  );
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: 'transparent',
-        width,
-        height,
-        pointerEvents: 'none',
-      }}
-    >
-      {/* Blurred Veo footage still + dark overlay — fades in frame 0–4 */}
-      <BlurredBackground />
+    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
+      {/* Background Veo footage continuing underneath */}
+      {backgroundSrc ? (
+        <AbsoluteFill>
+          <OffthreadVideo
+            src={staticFile(backgroundSrc)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            startFrom={51}
+            muted
+          />
+        </AbsoluteFill>
+      ) : null}
 
-      {/* Words appear one at a time with fade-up — frame 4–18 */}
-      <WordByWordText />
-
-      {/* 40 waveform bars with traveling wave pulse — frame 10+ */}
-      <WaveformVisualizer />
-
-      {/* Gold accent underline grows from center — frame 18–22 */}
-      <AccentUnderline />
+      {/* Lower-third frosted glass panel with narration overlay */}
+      <FrostedPanel>
+        <GoldAccentLine />
+        <TypewriterCaption />
+        <WaveformVisualizer />
+      </FrostedPanel>
     </AbsoluteFill>
   );
 };

@@ -17,7 +17,7 @@ export const SubtitleText: React.FC = () => {
     },
   );
 
-  // Frame 18–26: Slide up from +10px → 0px
+  // Frame 18–26: Slide up from +12px → 0px
   const translateY = interpolate(
     frame,
     [ANIMATION.subtitleFadeStart, ANIMATION.subtitleFadeEnd],
@@ -30,9 +30,6 @@ export const SubtitleText: React.FC = () => {
   );
 
   // Position: below title + rule
-  // Title bottom: 40% * 1080 + 56 * 1.2 = 432 + 67.2 = ~499px
-  // Rule: +20px gap + 2px height = ~521px
-  // Subtitle: +30px gap below rule = ~551px
   const titleBottomPx = DIMENSIONS.titleTopPercent * 1080 + TYPOGRAPHY.title.fontSize * 1.2;
   const ruleBottom = titleBottomPx + DIMENSIONS.ruleGap + DIMENSIONS.ruleHeight;
   const subtitleTop = ruleBottom + DIMENSIONS.subtitleGap;

@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame shows aerial drone footage of a dense green forest canopy with sunlight filtering through, creating golden highlights across the foliage. The image is full-bleed at 1920x1080 with no text overlays, matching the spec's requirement for pure cinematic B-roll. Deep emerald greens dominate with warm golden sun flares visible, consistent with the specified color grade. The camera angle shows an elevated/aerial perspective over the treetops with visible parallax between canopy layers. The frame is sampled at 75% progress (frame 89 of 120), placing it squarely within the main footage phase (Frame 10–100), where the spec calls for continuous aerial drift over forest canopy with sunlight playing across leaf surfaces — which is exactly what is visible. The video fills the entire canvas with object-fit: cover behavior, no grid lines or background are visible. All critical spec elements are satisfied.

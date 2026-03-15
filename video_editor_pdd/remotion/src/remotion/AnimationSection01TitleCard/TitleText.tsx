@@ -1,6 +1,6 @@
 import React from 'react';
-import { useCurrentFrame, interpolate } from 'remotion';
-import { COLORS, TYPOGRAPHY, DIMENSIONS, ANIMATION_TIMING, TEXT, CANVAS } from './constants';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { COLORS, TYPOGRAPHY, ANIMATION_TIMING, TEXT, CANVAS, POSITIONS } from './constants';
 
 export const TitleText: React.FC = () => {
   const frame = useCurrentFrame();
@@ -12,6 +12,7 @@ export const TitleText: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.cubic),
     }
   );
 
@@ -22,6 +23,7 @@ export const TitleText: React.FC = () => {
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.cubic),
     }
   );
 
@@ -35,7 +37,8 @@ export const TitleText: React.FC = () => {
         height: CANVAS.height,
         display: 'flex',
         justifyContent: 'center',
-        alignItems: 'center',
+        alignItems: 'flex-start',
+        paddingTop: POSITIONS.titleY - TYPOGRAPHY.title.fontSize * 0.6,
       }}
     >
       <div
@@ -46,7 +49,7 @@ export const TitleText: React.FC = () => {
           color: COLORS.titleWhite,
           lineHeight: 1.2,
           opacity,
-          transform: `scale(${scale}) translateY(${DIMENSIONS.titleOffsetY}px)`,
+          transform: `scale(${scale})`,
         }}
       >
         {TEXT.title}

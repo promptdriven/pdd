@@ -2,106 +2,111 @@ import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   COLORS,
-  DIMENSIONS,
-  ANIMATION,
+  CHECKMARK,
   CHECKMARK_PATH,
   CHECKMARK_PATH_LENGTH,
   CIRCLE_CIRCUMFERENCE,
+  TIMING,
 } from './constants';
-
-/**
- * easeOutBack: overshoot bounce on scale-in.
- * t => 1 + c3 * (t-1)^3 + c1 * (t-1)^2
- */
-const easeOutBack = (t: number): number => {
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-};
 
 export const AnimatedCheckmark: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const { checkmarkCenterX, checkmarkCenterY, checkmarkSize, checkmarkStrokeWidth } =
-    DIMENSIONS;
-  const radius = checkmarkSize / 2;
+  const { cx, cy, size, strokeWidth, circleRadius } = CHECKMARK;
+  const halfSize = size / 2;
 
-  // Frame 0-8: Scale from 0.15 to 1 with easeOutBack (bounce overshoot)
-  // Starts at 0.15 so the element is visible from frame 0
-  const scale = interpolate(
+  // Circle draws via stroke-dashoffset: frames 6-12 with easeInOutCubic
+  const circleProgress = interpolate(
     frame,
-    [ANIMATION.checkmarkScaleStart, ANIMATION.checkmarkScaleEnd],
-    [0.15, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: easeOutBack,
-    },
-  );
-
-  // Frame 0-8: Checkmark path draws via strokeDashoffset (easeInOutQuad)
-  const drawProgress = interpolate(
-    frame,
-    [ANIMATION.checkmarkScaleStart, ANIMATION.checkmarkScaleEnd],
+    [TIMING.checkmarkStart, TIMING.circleSplitFrame],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
+      easing: Easing.inOut(Easing.cubic),
     },
   );
+  const circleDashOffset = CIRCLE_CIRCUMFERENCE * (1 - circleProgress);
 
-  const checkDashOffset = CHECKMARK_PATH_LENGTH * (1 - drawProgress);
-
-  // Frame 22-24: Fade out with all elements
-  const fadeOutOpacity = interpolate(
+  // Check path draws: frames 12-16 with easeInOutCubic
+  const checkProgress = interpolate(
     frame,
-    [ANIMATION.fadeOutStart, ANIMATION.fadeOutEnd],
-    [1, 0],
+    [TIMING.circleSplitFrame, TIMING.checkmarkEnd],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.cubic),
+    },
+  );
+  const checkDashOffset = CHECKMARK_PATH_LENGTH * (1 - checkProgress);
+
+  // Glow fades in as checkmark draws
+  const glowOpacity = interpolate(
+    frame,
+    [TIMING.checkmarkStart, TIMING.checkmarkEnd],
+    [0, CHECKMARK.glowOpacity],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
     },
   );
 
-  // SVG viewBox matches checkmarkSize
-  const viewBox = `0 0 ${checkmarkSize} ${checkmarkSize}`;
+  const viewBox = `0 0 ${size} ${size}`;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        left: checkmarkCenterX - checkmarkSize / 2,
-        top: checkmarkCenterY - checkmarkSize / 2,
-        width: checkmarkSize,
-        height: checkmarkSize,
-        transform: `scale(${scale})`,
-        transformOrigin: 'center',
-        opacity: fadeOutOpacity,
-      }}
-    >
-      <svg width={checkmarkSize} height={checkmarkSize} viewBox={viewBox} fill="none">
-        {/* Circle outline */}
-        <circle
-          cx={radius}
-          cy={radius}
-          r={radius - checkmarkStrokeWidth}
-          fill="none"
-          stroke={COLORS.checkmark}
-          strokeWidth={checkmarkStrokeWidth}
-        />
-        {/* Checkmark path with draw animation */}
-        <path
-          d={CHECKMARK_PATH}
-          stroke={COLORS.checkmark}
-          strokeWidth={checkmarkStrokeWidth}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fill="none"
-          strokeDasharray={CHECKMARK_PATH_LENGTH}
-          strokeDashoffset={checkDashOffset}
-        />
-      </svg>
-    </div>
+    <>
+      {/* Glow layer behind checkmark */}
+      <div
+        style={{
+          position: 'absolute',
+          left: cx - size,
+          top: cy - size,
+          width: size * 2,
+          height: size * 2,
+          borderRadius: '50%',
+          background: `radial-gradient(circle, ${COLORS.glow} 0%, transparent 70%)`,
+          opacity: glowOpacity,
+          filter: `blur(${CHECKMARK.glowBlur}px)`,
+          pointerEvents: 'none',
+        }}
+      />
+      {/* Checkmark SVG */}
+      <div
+        style={{
+          position: 'absolute',
+          left: cx - halfSize,
+          top: cy - halfSize,
+          width: size,
+          height: size,
+        }}
+      >
+        <svg width={size} height={size} viewBox={viewBox} fill="none">
+          {/* Circle outline — 40% opacity accent, drawn first */}
+          <circle
+            cx={halfSize}
+            cy={halfSize}
+            r={circleRadius}
+            fill="none"
+            stroke={COLORS.accent}
+            strokeWidth={strokeWidth}
+            opacity={0.4}
+            strokeDasharray={CIRCLE_CIRCUMFERENCE}
+            strokeDashoffset={circleDashOffset}
+          />
+          {/* Checkmark path — draws after circle */}
+          <path
+            d={CHECKMARK_PATH}
+            stroke={COLORS.accent}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+            strokeDasharray={CHECKMARK_PATH_LENGTH}
+            strokeDashoffset={checkDashOffset}
+          />
+        </svg>
+      </div>
+    </>
   );
 };

@@ -1,1 +1,1 @@
-// Deprecated: replaced by CompleteText.tsx
+// Removed: no longer used

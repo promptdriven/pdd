@@ -4,53 +4,55 @@ import { COLORS, SHAPE, SLIDE, TIMING } from './constants';
 import { getSquareX } from './SlidingSquare';
 
 /**
- * Horizontal gradient streak trailing the square during the slide.
- * The streak is a bar from the square's trailing edge back up to 200px,
- * fading from the square's color at 30% opacity to transparent.
- * It fades out during the bounce/settle phases.
+ * Horizontal motion streak trailing behind the square during peak velocity.
+ * 6px tall bar centered on the square's vertical position, with an indigo
+ * gradient at 40% opacity fading to transparent on the left.
+ * Visible during frames 10-18, fades out with easeOutExpo.
  */
 export const MotionStreak: React.FC = () => {
 	const frame = useCurrentFrame();
 
-	// Only show streak during and shortly after the slide
-	if (frame < TIMING.slideStart) return null;
+	// Only render during slide and bounce phases
+	if (frame < TIMING.streakAppear) return null;
+	if (frame > TIMING.bounceEnd) return null;
 
 	const squareX = getSquareX(frame);
 	const squareLeftEdge = squareX - SHAPE.size / 2;
 
-	// How far the square has traveled from its start position
-	const traveled = squareX - (SLIDE.fromX - SLIDE.anticipationOffset);
-	const streakLength = Math.min(Math.max(traveled, 0), SLIDE.streakMaxLength);
+	// Velocity-proportional width: peak during mid-slide, taper at edges
+	const velocityFactor = interpolate(
+		frame,
+		[TIMING.streakAppear, 14, TIMING.streakFade],
+		[0.3, 1.0, 0.5],
+		{ extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+	);
+	const streakWidth = SLIDE.streakMaxWidth * velocityFactor;
 
-	if (streakLength <= 0) return null;
-
-	// Streak starts at the left edge of the square and extends left
-	const streakLeft = squareLeftEdge - streakLength;
-
-	// Streak opacity fades out during bounce and settle (frames 21-30)
+	// Opacity: appears during streak range, fades out after
 	const streakOpacity = interpolate(
 		frame,
-		[TIMING.bounceStart, TIMING.settleEnd],
-		[1, 0],
+		[TIMING.streakAppear, TIMING.streakAppear + 2, TIMING.streakFade, TIMING.bounceEnd],
+		[0, COLORS.streakOpacity, COLORS.streakOpacity, 0],
 		{
 			extrapolateLeft: 'clamp',
 			extrapolateRight: 'clamp',
-			easing: Easing.out(Easing.quad),
+			easing: Easing.out(Easing.poly(4)),
 		},
 	);
 
-	if (streakOpacity <= 0) return null;
+	if (streakOpacity <= 0.01) return null;
 
 	return (
 		<div
 			style={{
 				position: 'absolute',
-				left: streakLeft,
-				top: SLIDE.y - SHAPE.size / 2,
-				width: streakLength,
-				height: SHAPE.size,
+				left: squareLeftEdge - streakWidth,
+				top: SLIDE.y - SLIDE.streakHeight / 2,
+				width: streakWidth,
+				height: SLIDE.streakHeight,
 				background: `linear-gradient(to right, transparent, ${COLORS.streakColor})`,
 				opacity: streakOpacity,
+				borderRadius: SLIDE.streakHeight / 2,
 				pointerEvents: 'none' as const,
 			}}
 		/>

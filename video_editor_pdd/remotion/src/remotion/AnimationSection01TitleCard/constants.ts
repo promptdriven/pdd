@@ -9,7 +9,7 @@ export const CANVAS = {
 export const COLORS = {
   background: '#0F172A',
   titleWhite: '#FFFFFF',
-  subtitleSlate: '#CBD5E1',
+  subtitleSlate: '#94A3B8',
   accentLine: 'rgba(255, 255, 255, 0.8)',
 } as const;
 
@@ -31,26 +31,30 @@ export const TYPOGRAPHY = {
   },
 } as const;
 
+export const POSITIONS = {
+  titleY: 440,
+  accentLineY: 500,
+  subtitleY: 560,
+  subtitleDrift: 10,
+} as const;
+
 export const DIMENSIONS = {
-  titleOffsetY: -40,
-  accentLineEndWidth: 400,
+  accentLineEndWidth: 320,
   accentLineHeight: 2,
-  accentLineGap: 16,
-  subtitleGap: 24,
 } as const;
 
 export const ANIMATION_TIMING = {
-  // Frame 0-15: Title fades in opacity 0->1, scales 0.95->1.0
+  // Frame 0-15: Title fades in opacity 0->1, scales 0.85->1.0
   titleFadeStart: 0,
   titleFadeEnd: 15,
-  titleScaleStart: 0.95,
+  titleScaleStart: 0.85,
   titleScaleEnd: 1.0,
-  // Frame 9-24: Accent line expands from 0->400px
-  accentLineStart: 9,
-  accentLineEnd: 24,
-  // Frame 15-30: Subtitle fades in opacity 0->1
-  subtitleFadeStart: 15,
-  subtitleFadeEnd: 30,
-  // Frame 30-45: Hold
+  // Frame 12-30: Accent line expands from 0->320px
+  accentLineStart: 12,
+  accentLineEnd: 30,
+  // Frame 20-40: Subtitle fades in opacity 0->1 with 10px upward drift
+  subtitleFadeStart: 20,
+  subtitleFadeEnd: 40,
+  // Frame 40-45: Hold
   totalDuration: 45,
 } as const;

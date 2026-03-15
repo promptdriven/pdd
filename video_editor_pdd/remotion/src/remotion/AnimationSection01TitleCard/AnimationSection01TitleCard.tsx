@@ -12,17 +12,17 @@ export const AnimationSection01TitleCard: React.FC = () => {
         backgroundColor: COLORS.background,
       }}
     >
-      {/* Frame 0-15: Title fades in and scales up */}
+      {/* Frame 0-15: Title fades in and scales from 0.85 to 1.0 */}
       <Sequence from={ANIMATION_TIMING.titleFadeStart} durationInFrames={ANIMATION_TIMING.totalDuration}>
         <TitleText />
       </Sequence>
 
-      {/* Frame 9-24: Accent line expands outward from center */}
+      {/* Frame 12-30: Accent line expands outward from center */}
       <Sequence from={ANIMATION_TIMING.accentLineStart} durationInFrames={ANIMATION_TIMING.totalDuration - ANIMATION_TIMING.accentLineStart}>
         <AccentLine />
       </Sequence>
 
-      {/* Frame 15-30: Subtitle fades in */}
+      {/* Frame 20-40: Subtitle fades in with upward drift */}
       <Sequence from={ANIMATION_TIMING.subtitleFadeStart} durationInFrames={ANIMATION_TIMING.totalDuration - ANIMATION_TIMING.subtitleFadeStart}>
         <SubtitleText />
       </Sequence>

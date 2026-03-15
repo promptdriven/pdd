@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { AbsoluteFill } from 'remotion';
-import { CANVAS, COLORS, PARTICLES, type ParticleData } from './constants';
-import { FlashOverlay } from './FlashOverlay';
+import { CANVAS, COLORS, PARTICLES, TIMING, type ParticleData } from './constants';
+import { CentralFlash } from './CentralFlash';
 import { Particle } from './Particle';
 
 /**
@@ -23,32 +23,35 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-function degToRad(deg: number): number {
-  return (deg * Math.PI) / 180;
-}
-
+/**
+ * Generate 40 deterministic particles with random angle, speed, radius, and color.
+ * Larger particles move slightly slower per the spec.
+ */
 function generateParticles(): ParticleData[] {
   const rand = mulberry32(PARTICLES.seed);
   const particles: ParticleData[] = [];
-  const baseAngleStep = (2 * Math.PI) / PARTICLES.count;
 
   for (let i = 0; i < PARTICLES.count; i++) {
-    // Evenly distributed angles with slight random jitter (+/- 5 degrees)
-    const baseAngle = i * baseAngleStep;
-    const jitter = degToRad((rand() * 2 - 1) * PARTICLES.angleJitter);
-    const angle = baseAngle + jitter;
+    // Random angle 0-360 degrees (full circle)
+    const angle = rand() * 2 * Math.PI;
 
-    // Random radius between min and max
+    // Random radius between 3-8px
     const radius = lerp(PARTICLES.minRadius, PARTICLES.maxRadius, rand());
 
-    // Random travel distance between min and max
-    const distance = lerp(PARTICLES.minDistance, PARTICLES.maxDistance, rand());
+    // Speed inversely scaled by radius — larger particles move slightly slower
+    const radiusNorm = (radius - PARTICLES.minRadius) / (PARTICLES.maxRadius - PARTICLES.minRadius);
+    const baseSpeed = lerp(PARTICLES.minSpeed, PARTICLES.maxSpeed, rand());
+    const speed = baseSpeed * (1 - radiusNorm * 0.3); // up to 30% slower for largest
 
-    // Random color from palette
-    const colorIndex = Math.floor(rand() * COLORS.particles.length);
+    // Max distance capped at 300px per spec
+    const moveDuration = (TIMING.particleMoveEnd - TIMING.particleStart) / TIMING.fps;
+    const maxDistance = Math.min(PARTICLES.maxDistance, speed * moveDuration);
+
+    // Color distributed evenly across palette
+    const colorIndex = i % COLORS.particles.length;
     const color = COLORS.particles[colorIndex];
 
-    particles.push({ id: i, color, radius, angle, distance });
+    particles.push({ id: i, color, radius, angle, speed, maxDistance });
   }
 
   return particles;
@@ -65,7 +68,7 @@ export const AnimationSection06ParticleBurst: React.FC = () => {
         height: CANVAS.height,
       }}
     >
-      <FlashOverlay />
+      <CentralFlash />
       {particles.map((particle) => (
         <Particle key={particle.id} particle={particle} />
       ))}

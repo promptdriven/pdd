@@ -1,87 +1,80 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, COLORS, CIRCLE, TIMING } from './constants';
+import { CANVAS, COLORS, CIRCLE, TIMING, GLOW_OPACITY } from './constants';
 
 export const GlowEffect: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const baseGlowOpacity = 0.2;
-  const restGlowRadius = CIRCLE.baseRadius + 20; // 80px at rest
-
-  let glowOpacity: number;
+  // Glow radius tracks circle radius + 20px offset
   let glowRadius: number;
+  let glowOpacity: number;
 
-  if (frame < TIMING.pulse1Start) {
-    // Phase 1 (frames 0-5): Glow fades in during circle appear
-    glowOpacity = interpolate(
+  if (frame <= TIMING.fadeInEnd) {
+    // Phase 1 (frames 0-5): Glow fades in with circle
+    const fadeProgress = interpolate(
       frame,
-      [TIMING.appearStart, TIMING.appearEnd],
-      [0, baseGlowOpacity * 0.3],
-      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+      [TIMING.fadeInStart, TIMING.fadeInEnd],
+      [0, 1],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
     );
-    glowRadius = restGlowRadius;
-  } else if (frame < TIMING.contract1Start) {
-    // Phase 2 (frames 5-15): Glow expands from 80px to 120px with pulse
+    glowRadius = CIRCLE.baseRadius + CIRCLE.glowOffsetRadius;
+    glowOpacity = GLOW_OPACITY.afterFadeIn * fadeProgress;
+  } else if (frame <= TIMING.pulse1ExpandEnd) {
+    // Phase 2 (frames 5-12): Glow brightens to 40%, radius expands
     glowOpacity = interpolate(
       frame,
-      [TIMING.pulse1Start, TIMING.pulse1End],
-      [baseGlowOpacity * 0.3, baseGlowOpacity],
+      [TIMING.pulse1ExpandStart, TIMING.pulse1ExpandEnd],
+      [GLOW_OPACITY.afterFadeIn, GLOW_OPACITY.pulse1Peak],
       { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
     );
     glowRadius = interpolate(
       frame,
-      [TIMING.pulse1Start, TIMING.pulse1End],
-      [restGlowRadius, CIRCLE.glowRadius],
-      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
+      [TIMING.pulse1ExpandStart, TIMING.pulse1ExpandEnd],
+      [CIRCLE.baseRadius + CIRCLE.glowOffsetRadius, CIRCLE.pulse1Radius + CIRCLE.glowOffsetRadius],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.sin) }
     );
-  } else if (frame < TIMING.pulse2Start) {
-    // Phase 3 (frames 15-20): Glow contracts and fades
+  } else if (frame <= TIMING.pulse1ContractEnd) {
+    // Phase 3 (frames 12-18): Glow fades to 15%, radius contracts
     glowOpacity = interpolate(
       frame,
-      [TIMING.contract1Start, TIMING.contract1End],
-      [baseGlowOpacity, baseGlowOpacity * 0.3],
+      [TIMING.pulse1ContractStart, TIMING.pulse1ContractEnd],
+      [GLOW_OPACITY.pulse1Peak, GLOW_OPACITY.afterPulse1],
       { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
     );
     glowRadius = interpolate(
       frame,
-      [TIMING.contract1Start, TIMING.contract1End],
-      [CIRCLE.glowRadius, restGlowRadius],
+      [TIMING.pulse1ContractStart, TIMING.pulse1ContractEnd],
+      [CIRCLE.pulse1Radius + CIRCLE.glowOffsetRadius, CIRCLE.baseRadius + CIRCLE.glowOffsetRadius],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.in(Easing.sin) }
+    );
+  } else if (frame <= TIMING.pulse2ExpandEnd) {
+    // Phase 4 (frames 18-24): Second pulse glow brightens to 35%, radius expands
+    glowOpacity = interpolate(
+      frame,
+      [TIMING.pulse2ExpandStart, TIMING.pulse2ExpandEnd],
+      [GLOW_OPACITY.afterPulse1, GLOW_OPACITY.pulse2Peak],
       { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
     );
-  } else if (frame < TIMING.holdStart) {
-    // Phase 4 (frames 20-28): Second pulse glow — expand then contract
-    const mid = (TIMING.pulse2Start + TIMING.pulse2End) / 2;
-    if (frame <= mid) {
-      glowOpacity = interpolate(
-        frame,
-        [TIMING.pulse2Start, mid],
-        [baseGlowOpacity * 0.3, baseGlowOpacity],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
-      );
-      glowRadius = interpolate(
-        frame,
-        [TIMING.pulse2Start, mid],
-        [restGlowRadius, CIRCLE.glowRadius],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
-      );
-    } else {
-      glowOpacity = interpolate(
-        frame,
-        [mid, TIMING.pulse2End],
-        [baseGlowOpacity, baseGlowOpacity * 0.3],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
-      );
-      glowRadius = interpolate(
-        frame,
-        [mid, TIMING.pulse2End],
-        [CIRCLE.glowRadius, restGlowRadius],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
-      );
-    }
+    glowRadius = interpolate(
+      frame,
+      [TIMING.pulse2ExpandStart, TIMING.pulse2ExpandEnd],
+      [CIRCLE.baseRadius + CIRCLE.glowOffsetRadius, CIRCLE.pulse2Radius + CIRCLE.glowOffsetRadius],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.sin) }
+    );
   } else {
-    // Phase 5 (frames 28-30): Hold at rest
-    glowOpacity = baseGlowOpacity * 0.3;
-    glowRadius = restGlowRadius;
+    // Phase 5 (frames 24-30): Glow settles at 20%, radius contracts
+    glowOpacity = interpolate(
+      frame,
+      [TIMING.pulse2ContractStart, TIMING.pulse2ContractEnd],
+      [GLOW_OPACITY.pulse2Peak, GLOW_OPACITY.final],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
+    );
+    glowRadius = interpolate(
+      frame,
+      [TIMING.pulse2ContractStart, TIMING.pulse2ContractEnd],
+      [CIRCLE.pulse2Radius + CIRCLE.glowOffsetRadius, CIRCLE.baseRadius + CIRCLE.glowOffsetRadius],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.in(Easing.sin) }
+    );
   }
 
   const glowDiameter = glowRadius * 2;
@@ -93,8 +86,9 @@ export const GlowEffect: React.FC = () => {
         width: glowDiameter,
         height: glowDiameter,
         borderRadius: '50%',
-        background: `radial-gradient(circle, ${COLORS.circleFill} 0%, transparent 70%)`,
+        backgroundColor: COLORS.circleFill,
         opacity: glowOpacity,
+        filter: `blur(${CIRCLE.glowBlur}px)`,
         top: CANVAS.centerY - glowRadius,
         left: CANVAS.centerX - glowRadius,
         pointerEvents: 'none',

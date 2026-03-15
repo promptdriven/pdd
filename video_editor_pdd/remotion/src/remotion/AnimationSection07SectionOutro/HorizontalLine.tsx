@@ -1,1 +1,1 @@
-// Deprecated: replaced by ContractingDivider.tsx
+// Removed: no longer used
