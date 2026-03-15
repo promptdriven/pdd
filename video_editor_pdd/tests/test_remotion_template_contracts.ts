@@ -66,6 +66,14 @@ describe("reusable animation template defaults", () => {
     process.cwd(),
     "remotion/src/remotion/AnimationSection09SplitSummary/GlowingDivider.tsx"
   );
+  const infographicPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection05VeoPipelineInfographic/VeoSection05VeoPipelineInfographic.tsx"
+  );
+  const infographicConstantsPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection05VeoPipelineInfographic/constants.ts"
+  );
 
   it("keeps split comparison labels above centered shapes at the spec positions", () => {
     const source = fs.readFileSync(splitConstantsPath, "utf8");
@@ -118,5 +126,18 @@ describe("reusable animation template defaults", () => {
     expect(source).toContain("dividerX");
     expect(source).toContain("DIVIDER.endX");
     expect(source).toContain("backgroundColor: DIVIDER.color");
+  });
+
+  it("drives infographic node sizing and positioning from the structured contract instead of hardcoded demo dimensions", () => {
+    const source = fs.readFileSync(infographicPath, "utf8");
+    const constantsSource = fs.readFileSync(infographicConstantsPath, "utf8");
+
+    expect(source).toMatch(/useVisualContractData/);
+    expect(source).toMatch(/resolvePipelineNodes/);
+    expect(constantsSource).toContain("nodeWidth: 160");
+    expect(constantsSource).toContain("nodeHeight: 160");
+    expect(constantsSource).toContain('node1X: 330');
+    expect(constantsSource).toContain('node2X: 870');
+    expect(constantsSource).toContain('node3X: 1410');
   });
 });

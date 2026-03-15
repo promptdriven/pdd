@@ -16,7 +16,12 @@ type DecodedPng = {
 export type DeterministicGeometryAuditResult = {
   verdict: "pass";
   summary: string;
-  check: "horizontal-slide" | "split-panels" | "centered-shape" | "vertical-divider";
+  check:
+    | "horizontal-slide"
+    | "split-panels"
+    | "centered-shape"
+    | "vertical-divider"
+    | "pipeline-nodes";
 };
 
 const PNG_SIGNATURE = Buffer.from([
@@ -28,6 +33,8 @@ const COLOR_IN_SPEC_RE =
   /\b(?:fill|stroke|color)\s*(?:=|:)?\s*["']?(#(?:[0-9a-f]{6}))["']?/gi;
 const CENTER_COORDINATE_RE =
   /centered\s+at\s*\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)/i;
+const PIPELINE_NODE_CENTER_RE =
+  /\*\*Node\s+\d+[^:]*:\*\*[\s\S]*?centered\s+at\s+x=(\d+(?:\.\d+)?),\s*y=(\d+(?:\.\d+)?)/gi;
 
 const extractDataPoints = (specContent: string): unknown | null => {
   const match = specContent.match(DATA_POINTS_RE);
@@ -277,6 +284,85 @@ const findColorCentroid = (
   };
 };
 
+const luminance = (r: number, g: number, b: number): number =>
+  0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+const estimateCornerBackgroundLuminance = (decoded: DecodedPng): number => {
+  const sampleSize = Math.max(2, Math.min(12, Math.floor(Math.min(decoded.width, decoded.height) * 0.05)));
+  const corners = [
+    { startX: 0, startY: 0 },
+    { startX: Math.max(0, decoded.width - sampleSize), startY: 0 },
+    { startX: 0, startY: Math.max(0, decoded.height - sampleSize) },
+    {
+      startX: Math.max(0, decoded.width - sampleSize),
+      startY: Math.max(0, decoded.height - sampleSize),
+    },
+  ];
+
+  let total = 0;
+  let count = 0;
+  for (const corner of corners) {
+    for (let y = corner.startY; y < corner.startY + sampleSize; y += 1) {
+      for (let x = corner.startX; x < corner.startX + sampleSize; x += 1) {
+        const offset = (y * decoded.width + x) * 4;
+        total += luminance(
+          decoded.rgba[offset] ?? 0,
+          decoded.rgba[offset + 1] ?? 0,
+          decoded.rgba[offset + 2] ?? 0
+        );
+        count += 1;
+      }
+    }
+  }
+
+  return count > 0 ? total / count : 0;
+};
+
+const findLuminousClusterInBox = (
+  decoded: DecodedPng,
+  bounds: { left: number; right: number; top: number; bottom: number }
+): { x: number; y: number; count: number } | null => {
+  const backgroundLuminance = estimateCornerBackgroundLuminance(decoded);
+  const threshold = backgroundLuminance + 28;
+  let weightedX = 0;
+  let weightedY = 0;
+  let count = 0;
+
+  for (let y = Math.max(0, bounds.top); y < Math.min(decoded.height, bounds.bottom); y += 1) {
+    for (let x = Math.max(0, bounds.left); x < Math.min(decoded.width, bounds.right); x += 1) {
+      const offset = (y * decoded.width + x) * 4;
+      const alpha = decoded.rgba[offset + 3] ?? 0;
+      if (alpha < 32) {
+        continue;
+      }
+
+      const lum = luminance(
+        decoded.rgba[offset] ?? 0,
+        decoded.rgba[offset + 1] ?? 0,
+        decoded.rgba[offset + 2] ?? 0
+      );
+      if (lum < threshold) {
+        continue;
+      }
+
+      const weight = Math.max(1, lum - backgroundLuminance);
+      weightedX += x * weight;
+      weightedY += y * weight;
+      count += weight;
+    }
+  }
+
+  if (count < 20) {
+    return null;
+  }
+
+  return {
+    x: weightedX / count,
+    y: weightedY / count,
+    count,
+  };
+};
+
 const resolveExpectedCenter = (
   specContent: string,
   dataPoints: Record<string, unknown>,
@@ -515,6 +601,87 @@ const evaluateVerticalDivider = (
   return null;
 };
 
+const resolvePipelineAnchors = (
+  specContent: string,
+  dataPoints: Record<string, unknown>,
+  decoded: DecodedPng
+): Array<{ x: number; y: number }> => {
+  const steps = Array.isArray(dataPoints.pipeline_steps) ? dataPoints.pipeline_steps : [];
+  const proseCenters = [...specContent.matchAll(PIPELINE_NODE_CENTER_RE)].map((match) => ({
+    x: Number(match[1]),
+    y: Number(match[2]),
+  }));
+
+  return steps
+    .map((step, index) => {
+      if (!step || typeof step !== "object" || Array.isArray(step)) {
+        return null;
+      }
+      const record = step as Record<string, unknown>;
+      const x = typeof record.x === "number" ? record.x : null;
+      const y =
+        typeof record.y === "number"
+          ? record.y
+          : proseCenters[index]?.y ?? decoded.height * 0.45;
+      if (x == null) {
+        return null;
+      }
+      return { x, y };
+    })
+    .filter((anchor): anchor is { x: number; y: number } => anchor !== null);
+};
+
+const evaluatePipelineNodes = (
+  specContent: string,
+  dataPoints: Record<string, unknown>,
+  decoded: DecodedPng
+): DeterministicGeometryAuditResult | null => {
+  const anchors = resolvePipelineAnchors(specContent, dataPoints, decoded);
+  if (anchors.length < 3) {
+    return null;
+  }
+
+  const gaps = anchors.slice(1).map((anchor, index) => anchor.x - anchors[index].x);
+  const minGap = gaps.length > 0 ? Math.min(...gaps) : decoded.width / 4;
+  const halfWidth = Math.max(24, Math.round(minGap * 0.28));
+  const halfHeight = Math.max(24, Math.round(decoded.height * 0.12));
+  const toleranceX = Math.max(decoded.width * 0.04, 36);
+  const toleranceY = Math.max(decoded.height * 0.08, 42);
+
+  const clusters = anchors.map((anchor) =>
+    findLuminousClusterInBox(decoded, {
+      left: Math.round(anchor.x - halfWidth),
+      right: Math.round(anchor.x + halfWidth),
+      top: Math.round(anchor.y - halfHeight),
+      bottom: Math.round(anchor.y + halfHeight),
+    })
+  );
+
+  if (clusters.some((cluster) => cluster == null)) {
+    return null;
+  }
+
+  const allClusters = clusters as Array<{ x: number; y: number; count: number }>;
+  const aligned = allClusters.every((cluster, index) => {
+    const anchor = anchors[index];
+    return (
+      Math.abs(cluster.x - anchor.x) <= toleranceX &&
+      Math.abs(cluster.y - anchor.y) <= toleranceY
+    );
+  });
+
+  if (!aligned) {
+    return null;
+  }
+
+  return {
+    verdict: "pass",
+    check: "pipeline-nodes",
+    summary:
+      "Deterministic geometry check confirmed the infographic nodes are distributed at the expected left, center, and right anchors.",
+  };
+};
+
 export function evaluateDeterministicGeometryAudit(
   specContent: string,
   pngPath: string
@@ -531,6 +698,7 @@ export function evaluateDeterministicGeometryAudit(
 
   return (
     evaluateSplitPanels(dataPoints as Record<string, unknown>, decoded) ??
+    evaluatePipelineNodes(specContent, dataPoints as Record<string, unknown>, decoded) ??
     evaluateVerticalDivider(dataPoints as Record<string, unknown>, decoded) ??
     evaluateHorizontalSlide(specContent, dataPoints as Record<string, unknown>, decoded) ??
     evaluateCenteredShape(specContent, dataPoints as Record<string, unknown>, decoded)

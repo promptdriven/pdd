@@ -95,4 +95,35 @@ Technical assessment: The previous review thought the shape sat at y≈410.
     expect(snapshot).not.toContain("x=480");
     expect(snapshot).not.toContain("y=540");
   });
+
+  it("strips machine-oriented code structure and data-point coordinate blocks from the Claude-facing snapshot", () => {
+    const spec = `
+### Canvas
+- Resolution: 1920x1080 (16:9)
+
+### Chart/Visual Elements
+- Node 1 centered at x=330, y=480
+
+## Code Structure
+\`\`\`typescript
+<PipelineNode x={330} />
+\`\`\`
+
+## Data Points
+\`\`\`json
+{ "pipeline_steps": [{ "label": "Prompt", "x": 330 }] }
+\`\`\`
+`.trim();
+
+    const snapshot = buildClaudeAuditSpecSnapshot(spec, {
+      width: 1920,
+      height: 1080,
+    });
+
+    expect(snapshot).toContain("expected horizontal anchor");
+    expect(snapshot).not.toContain("<PipelineNode x={330} />");
+    expect(snapshot).not.toContain('"x": 330');
+    expect(snapshot).not.toContain("## Code Structure");
+    expect(snapshot).not.toContain("## Data Points");
+  });
 });

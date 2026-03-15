@@ -8,6 +8,8 @@ interface PipelineNodeProps {
   icon: 'text' | 'sparkle' | 'film';
   x: number;
   y: number;
+  width: number;
+  height: number;
   scale?: number;
   animStart: number;
   animEnd: number;
@@ -19,6 +21,8 @@ export const PipelineNode: React.FC<PipelineNodeProps> = ({
   icon,
   x,
   y,
+  width,
+  height,
   scale = 1,
   animStart,
   animEnd,
@@ -26,10 +30,9 @@ export const PipelineNode: React.FC<PipelineNodeProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  const { nodeWidth, nodeHeight, nodeBorderRadius, nodeBorderWidth, iconSize } =
-    DIMENSIONS;
-  const scaledWidth = nodeWidth * scale;
-  const scaledHeight = nodeHeight * scale;
+  const { nodeBorderRadius, nodeBorderWidth, iconSize } = DIMENSIONS;
+  const scaledWidth = width;
+  const scaledHeight = height;
   const scaledRadius = nodeBorderRadius * scale;
   const scaledBorderWidth = Math.max(1, nodeBorderWidth * scale);
   const scaledIconSize = iconSize * scale;
@@ -71,7 +74,7 @@ export const PipelineNode: React.FC<PipelineNodeProps> = ({
       style={{
         position: 'absolute',
         left: x - (scaledWidth / 2),
-        top: y,
+        top: y - (scaledHeight / 2),
         width: scaledWidth,
         height: scaledHeight,
         borderRadius: scaledRadius,

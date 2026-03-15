@@ -7,7 +7,6 @@ type Dimensions = {
 
 const ANNOTATION_UPDATE_BLOCK_RE =
   /<!--\s*ANNOTATION_UPDATE_START:[\s\S]*?<!--\s*ANNOTATION_UPDATE_END:[\s\S]*?-->\s*/gi;
-
 function roundScaled(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
 }
@@ -93,8 +92,13 @@ export function buildClaudeAuditSpecSnapshot(
   targetResolution: OutputResolution
 ): string {
   const normalized = normalizeSpecForAudit(specContent, targetResolution);
+  const strippedForClaude = normalized
+    .split(/\n(?=##\s+)/)
+    .filter((section) => !/^##\s*(Code Structure|Data Points)\b/i.test(section.trim()))
+    .join("\n")
+    .trim();
 
-  let relativized = normalized.replace(
+  let relativized = strippedForClaude.replace(
     /\bcentered\s+at\s*\(\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*\)/gi,
     "visually centered on the canvas"
   );

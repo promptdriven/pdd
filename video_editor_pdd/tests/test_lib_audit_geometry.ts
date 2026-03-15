@@ -201,6 +201,41 @@ describe("lib/audit-geometry", () => {
     );
   });
 
+  it("passes a pipeline-nodes visual when three bright node clusters align to the expected anchors", () => {
+    const pngPath = path.join(tmpDir, "pipeline-nodes.png");
+    writeSolidShapePng(pngPath, 200, 120, [
+      { left: 20, top: 35, width: 20, height: 30, color: "#C9A84C" },
+      { left: 90, top: 35, width: 20, height: 30, color: "#C9A84C" },
+      { left: 160, top: 35, width: 20, height: 30, color: "#C9A84C" },
+    ]);
+
+    const result = evaluateDeterministicGeometryAudit(
+      [
+        "## Data Points",
+        "```json",
+        [
+          "{",
+          '  "pipeline_steps": [',
+          '    { "label": "Prompt", "x": 30 },',
+          '    { "label": "Veo AI", "x": 100 },',
+          '    { "label": "Clip", "x": 170 }',
+          "  ],",
+          '  "arrow_style": { "stroke": "#C9A84C" }',
+          "}",
+        ].join("\n"),
+        "```",
+      ].join("\n"),
+      pngPath
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        verdict: "pass",
+        check: "pipeline-nodes",
+      })
+    );
+  });
+
   it("passes a centered single-shape visual when the rendered shape is centered on the canvas", () => {
     const pngPath = path.join(tmpDir, "centered-shape.png");
     writeSolidShapePng(pngPath, 200, 120, [

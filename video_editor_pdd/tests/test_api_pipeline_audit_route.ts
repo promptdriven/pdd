@@ -1480,6 +1480,57 @@ Technical assessment: Previous review claimed it was at y≈410.
     expect(content).toContain("Deterministic geometry check confirmed");
   });
 
+  it("writes 'pass' verdict when deterministic geometry confirms infographic node distribution despite Claude coordinate complaints", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:02",
+          "",
+          "### Chart/Visual Elements",
+          '- Node 1 — Prompt: centered at x=330, y=480',
+          '- Node 2 — Veo AI: centered at x=870, y=480',
+          '- Node 3 — Clip: centered at x=1410, y=480',
+          "",
+          "## Data Points",
+          "```json",
+          '{ "pipeline_steps": [{"label":"Prompt","x":330},{"label":"Veo AI","x":870},{"label":"Clip","x":1410}], "arrow_style": { "stroke": "#C9A84C" } }',
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "major",
+      fixType: "remotion",
+      technicalAssessment:
+        "The entire pipeline appears shifted left and compressed relative to the expected node anchors.",
+      suggestedFixes: ["Move the nodes farther right"],
+      confidence: 0.82,
+    });
+    mockEvaluateDeterministicGeometryAudit.mockReturnValue({
+      verdict: "pass",
+      check: "pipeline-nodes",
+      summary:
+        "Deterministic geometry check confirmed the infographic nodes are distributed at the expected left, center, and right anchors.",
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\npass");
+    expect(content).toContain("infographic nodes are distributed");
+  });
+
   it("creates output directory with recursive flag", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro

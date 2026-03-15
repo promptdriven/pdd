@@ -20,33 +20,28 @@ export const COLORS = {
 
 export const TYPOGRAPHY = {
   nodeLabel: {
-    fontSize: 18,
+    fontSize: 20,
     fontFamily: "'Inter', sans-serif",
     fontWeight: 600 as const,
   },
 } as const;
 
 export const DIMENSIONS = {
-  nodeWidth: 180,
-  nodeHeight: 120,
+  nodeWidth: 160,
+  nodeHeight: 160,
   nodeBorderRadius: 12,
-  nodeBorderWidth: 1.5,
-  iconSize: 24,
+  nodeBorderWidth: 1,
+  iconSize: 48,
   arrowStrokeWidth: 2,
   arrowHeadSize: 10,
-  pulseRadius: 4,
+  pulseRadius: 3,
 } as const;
 
 export const POSITIONS = {
-  nodeY: 490,
-  nodeCenterY: 540,
+  nodeCenterY: 480,
   node1X: 330,
   node2X: 870,
   node3X: 1410,
-  arrow1FromX: 510,
-  arrow1ToX: 780,
-  arrow2FromX: 1050,
-  arrow2ToX: 1320,
 } as const;
 
 // Animation frame ranges (30fps, 1.0s total)
@@ -83,6 +78,7 @@ export const PIPELINE_NODES = [
     label: 'Prompt',
     icon: 'text' as const,
     x: POSITIONS.node1X,
+    y: POSITIONS.nodeCenterY,
     animStart: ANIMATION.node1Start,
     animEnd: ANIMATION.node1End,
   },
@@ -91,6 +87,7 @@ export const PIPELINE_NODES = [
     label: 'Veo AI',
     icon: 'sparkle' as const,
     x: POSITIONS.node2X,
+    y: POSITIONS.nodeCenterY,
     animStart: ANIMATION.node2Start,
     animEnd: ANIMATION.node2End,
   },
@@ -99,26 +96,83 @@ export const PIPELINE_NODES = [
     label: 'Clip',
     icon: 'film' as const,
     x: POSITIONS.node3X,
+    y: POSITIONS.nodeCenterY,
     animStart: ANIMATION.node3Start,
     animEnd: ANIMATION.node3End,
   },
 ] as const;
 
-export const PIPELINE_ARROWS = [
-  {
-    fromX: POSITIONS.arrow1FromX,
-    toX: POSITIONS.arrow1ToX,
-    animStart: ANIMATION.arrow1Start,
-    animEnd: ANIMATION.arrow1End,
-    pulseStart: ANIMATION.pulse1Start,
-    pulseEnd: ANIMATION.pulse1End,
-  },
-  {
-    fromX: POSITIONS.arrow2FromX,
-    toX: POSITIONS.arrow2ToX,
-    animStart: ANIMATION.arrow2Start,
-    animEnd: ANIMATION.arrow2End,
-    pulseStart: ANIMATION.pulse2Start,
-    pulseEnd: ANIMATION.pulse2End,
-  },
-] as const;
+export type PipelineNodeConfig = {
+  id: string;
+  label: string;
+  icon: 'text' | 'sparkle' | 'film';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  animStart: number;
+  animEnd: number;
+  ambientGlow?: boolean;
+};
+
+type PipelineContractData = Record<string, unknown> | null;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+export const resolvePipelineNodes = (
+  contractData: PipelineContractData,
+): PipelineNodeConfig[] => {
+  const contractSteps = Array.isArray(contractData?.pipeline_steps)
+    ? contractData.pipeline_steps
+    : [];
+
+  return PIPELINE_NODES.map((fallbackNode, index) => {
+    const contractStep = contractSteps[index];
+    const step = isRecord(contractStep) ? contractStep : null;
+
+    return {
+      id: fallbackNode.id,
+      label:
+        typeof step?.label === 'string' ? step.label : fallbackNode.label,
+      icon:
+        step?.icon === 'text' || step?.icon === 'sparkle' || step?.icon === 'film'
+          ? step.icon
+          : fallbackNode.icon,
+      x: typeof step?.x === 'number' ? step.x : fallbackNode.x,
+      y: typeof step?.y === 'number' ? step.y : fallbackNode.y,
+      width:
+        typeof step?.width === 'number' ? step.width : DIMENSIONS.nodeWidth,
+      height:
+        typeof step?.height === 'number' ? step.height : DIMENSIONS.nodeHeight,
+      animStart: fallbackNode.animStart,
+      animEnd: fallbackNode.animEnd,
+      ambientGlow: fallbackNode.id === 'veo_ai',
+    };
+  });
+};
+
+export const resolvePipelineArrows = (
+  nodes: PipelineNodeConfig[],
+) => {
+  return [
+    {
+      fromX: nodes[0].x + nodes[0].width / 2,
+      toX: nodes[1].x - nodes[1].width / 2,
+      y: nodes[0].y,
+      animStart: ANIMATION.arrow1Start,
+      animEnd: ANIMATION.arrow1End,
+      pulseStart: ANIMATION.pulse1Start,
+      pulseEnd: ANIMATION.pulse1End,
+    },
+    {
+      fromX: nodes[1].x + nodes[1].width / 2,
+      toX: nodes[2].x - nodes[2].width / 2,
+      y: nodes[1].y,
+      animStart: ANIMATION.arrow2Start,
+      animEnd: ANIMATION.arrow2End,
+      pulseStart: ANIMATION.pulse2Start,
+      pulseEnd: ANIMATION.pulse2End,
+    },
+  ] as const;
+};
