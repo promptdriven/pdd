@@ -1,3 +1,40 @@
+## v0.0.177 (2026-03-14)
+
+### Feat
+
+- update Remotion components, add Stage10 audit, and refresh e2e screenshots and build artifacts.**
+- Introduce new Remotion animation and Veo section components, along with updated integration tests and e2e screenshots.
+- add opt-in audit trace persistence
+- drive split visuals from structured contracts
+- clarify pipeline automation plan
+
+### Fix
+
+- catch OSError in _get_current_branch and _get_pr_number
+- resolve Step 9 loop control token recognition and Step 10 fallthrough bugs
+- harden reusable audit template contracts
+- strip non-spoken labels from tts scripts
+- annotation 9a5e525b-8c26-47a0-9640-6fe3910f31b3 I want this to be a triangle instead
+- generalize composition media contract rendering
+- stabilize full test suite
+- annotation 71e7fb48-83c9-4f7d-949f-6d1fb65bf4a1 Change the main background color of this section t
+- annotation cf4f95ee-3eb6-4119-984b-599329e9e5b4 Change the main background color of this section t
+- annotation test-batch-ann-1773531622980 Change the primary background accent in Animation
+- annotation test-batch-ann-1773531454328 Change the primary background accent in Animation
+- annotation test-batch-ann-1773531287657 Change the primary background accent in Animation
+- address PR review — case-insensitive LLM match, no recursive glob
+- pdd sync skips LLM-only basenames instead of erroring
+- align audit review timestamps and background media
+- reduce claude pixel-coordinate audit drift
+- mark private prompt tests so public CI can skip them
+- add git identity config for CI test environments
+- invalidate stale generated compositions
+- annotation a2cb728e-a228-49ff-8556-bba09d215626 The morphing shape is vertically off-center. The s
+- support audit annotations in review analysis
+- normalize partial stage10 audit results
+- annotation b7958929-04d1-47ff-ac5d-68e682da70cc Change the main background color of this section t
+- annotation 4cf63f2a-0b5d-4621-9ef2-74d240c5a217 Change the main background color of this section t
+
 ## v0.0.176 (2026-03-13)
 
 ### Fix
