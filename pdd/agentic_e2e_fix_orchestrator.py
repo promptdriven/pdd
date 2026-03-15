@@ -759,7 +759,7 @@ def _get_current_branch(cwd: Path) -> str:
         cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
         result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
         return result.stdout.strip()
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
         return ""
 
 
@@ -777,7 +777,7 @@ def _get_pr_number(cwd: Path, branch_name: str, repo_owner: str, repo_name: str)
         out = result.stdout.strip()
         if out and out != "null":
             return int(out)
-    except (subprocess.CalledProcessError, ValueError):
+    except (subprocess.CalledProcessError, ValueError, OSError):
         pass
     return None
 
