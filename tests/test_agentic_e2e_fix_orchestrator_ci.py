@@ -8,18 +8,21 @@ def mock_gh_and_agent():
     with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_task, \
          patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run, \
          patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_load, \
-         patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
-        
+         patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e:
+
         # Default mock behavior
         mock_task.return_value = (True, "LOCAL_TESTS_PASS", 0.0, "gpt-4")
         mock_run.return_value = MagicMock(returncode=0, stdout="822")
         mock_load.return_value = "Mock Prompt Template"
-        
+        mock_check_e2e.return_value = (True, "")
+
         yield {
             "task": mock_task,
             "run": mock_run,
             "load": mock_load,
-            "save": mock_save
+            "save": mock_save,
+            "check_e2e": mock_check_e2e
         }
 
 def test_step10_skips_if_no_pr(mock_gh_and_agent, tmp_path):

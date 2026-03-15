@@ -753,6 +753,16 @@ def _commit_and_push(
         return False, f"Push failed: {push_err}"
 
 
+def _get_current_branch(cwd: Path) -> str:
+    """Get the current git branch name for a given directory."""
+    try:
+        cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return ""
+
+
 def _get_pr_number(cwd: Path, branch_name: str, repo_owner: str, repo_name: str) -> Optional[int]:
     """Find the PR number for the given branch."""
     cmd = [
@@ -825,7 +835,7 @@ def run_agentic_e2e_fix_orchestrator(
     protect_tests: bool = False
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 9-step agentic e2e fix workflow.
+    Orchestrator for the 10-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -1260,7 +1270,7 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Loop Control (Step 9)
                 if step_num == 9:
-                    if "LOCAL_TESTS_PASS" in step_output:
+                    if "LOCAL_TESTS_PASS" in step_output or "ALL_TESTS_PASS" in step_output:
                         # Independent verification: don't trust LLM output alone
                         test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                         if test_files:
@@ -1273,7 +1283,7 @@ def run_agentic_e2e_fix_orchestrator(
                                 step_output = f"VERIFICATION_FAILED: LLM claimed LOCAL_TESTS_PASS but pytest failed.\n{verify_output}"
                                 step_outputs[str(step_num)] = f"FAILED: {step_output}"
                                 last_completed_step = step_num - 1
-                                # Don't break — fall through to cycle increment
+                                break  # Verification failed — go to next cycle
                         else:
                             console.print("[green]LOCAL_TESTS_PASS detected in Step 9. Proceeding to CI validation.[/green]")
                             # Don't break — proceed to Step 10
@@ -1281,7 +1291,9 @@ def run_agentic_e2e_fix_orchestrator(
                         console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
                         final_message = "Max cycles reached."
                         break
-                    elif "CONTINUE_CYCLE" not in step_output:
+                    elif "CONTINUE_CYCLE" in step_output:
+                        break  # Break inner loop — outer loop will start next cycle
+                    else:
                         console.print("[yellow]Warning: No loop control token found in Step 9. Stopping workflow — missing token treated as terminal condition.[/yellow]")
                         final_message = "Workflow stopped: no loop control token in Step 9 output."
                         break
