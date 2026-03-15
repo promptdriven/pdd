@@ -9,6 +9,35 @@ import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
 import type { SseSend } from "@/lib/types";
 import { getAppScriptsDir, getProjectDir } from "@/lib/projects";
 
+function pruneOrphanSegmentAudio(currentSegmentIds: string[]): void {
+  if (currentSegmentIds.length === 0) {
+    return;
+  }
+
+  const outputDir = path.join(getProjectDir(), "outputs", "tts");
+  if (!fs.existsSync(outputDir)) {
+    return;
+  }
+
+  const currentSet = new Set(currentSegmentIds);
+  const wavFiles = fs
+    .readdirSync(outputDir)
+    .filter((file) => file.endsWith(".wav"));
+
+  for (const wavFile of wavFiles) {
+    const segmentId = wavFile.replace(/\.wav$/, "");
+    if (currentSet.has(segmentId)) {
+      continue;
+    }
+
+    try {
+      fs.unlinkSync(path.join(outputDir, wavFile));
+    } catch {
+      // Ignore cleanup failures so rerender can continue.
+    }
+  }
+}
+
 /**
  * Spawn render_tts.py and stream stdout/stderr via onLog.
  */
@@ -86,6 +115,10 @@ registerExecutor("tts-render", (params, send) => {
     const segments = Array.isArray(params.segments)
       ? (params.segments as string[])
       : undefined;
+
+    if (!segments || segments.length === 0) {
+      pruneOrphanSegmentAudio(parseSegmentsFromScript().map((segment) => segment.id));
+    }
 
     const success = await executeTtsRender(segments, send, onLog);
 

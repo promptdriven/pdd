@@ -91,23 +91,12 @@ export async function GET(): Promise<NextResponse> {
   for (const seg of scriptSegments) {
     const filePath = path.join(outputDir, `${seg.id}.wav`);
     const exists = wavSet.has(seg.id);
-    if (exists) wavSet.delete(seg.id);
 
     segments.push({
       id: seg.id,
       status: exists ? "done" : "missing",
       duration: exists ? getWavDuration(filePath) : undefined,
       text: seg.text,
-    });
-  }
-
-  // Extra WAVs not in script
-  for (const id of wavSet) {
-    const filePath = path.join(outputDir, `${id}.wav`);
-    segments.push({
-      id,
-      status: "done",
-      duration: getWavDuration(filePath),
     });
   }
 

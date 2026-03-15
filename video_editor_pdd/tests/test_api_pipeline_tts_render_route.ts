@@ -56,6 +56,7 @@ const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
 const mockReaddirSync = jest.fn();
 const mockStatSync = jest.fn();
+const mockUnlinkSync = jest.fn();
 
 jest.mock("fs", () => ({
   __esModule: true,
@@ -64,11 +65,13 @@ jest.mock("fs", () => ({
     readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
     readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
     statSync: (...args: unknown[]) => mockStatSync(...args),
+    unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
   },
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
   readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
   readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
   statSync: (...args: unknown[]) => mockStatSync(...args),
+  unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
 }));
 
 // Mock crypto
@@ -185,6 +188,7 @@ beforeEach(() => {
   mockReadFileSync.mockReset();
   mockReaddirSync.mockReset();
   mockStatSync.mockReset();
+  mockUnlinkSync.mockReset();
   mockRunPipelineStage.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
@@ -526,6 +530,34 @@ describe("GET /api/pipeline/tts-render/segments manifest behavior", () => {
     expect(body.segments).toHaveLength(1);
     expect(body.segments[0].text).toContain("[INSTRUCT:");
   });
+
+  it("does not append orphan WAVs that are no longer present in the current script manifest", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) return true;
+      if (p.includes("tts_script.md")) return false;
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      return false;
+    });
+
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return JSON.stringify({
+          segments: [
+            { id: "closing_001", text: "[TONE: calm]\nCurrent closing line." },
+          ],
+        });
+      }
+      return Buffer.alloc(44);
+    });
+
+    mockReaddirSync.mockReturnValue(["closing_001.wav", "closing_006.wav"]);
+
+    const response = await GETSegments();
+    const body = await response.json();
+
+    expect(body.segments).toHaveLength(1);
+    expect(body.segments[0].id).toBe("closing_001");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -787,6 +819,57 @@ describe("executor — spawn command", () => {
     const [, args] = mockSpawn.mock.calls[0];
     // Only the script path, no --segment flags
     expect(args.includes("--segment")).toBe(false);
+  });
+
+  it("prunes orphan WAVs before a full rerender when the current segment set changes", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts") && !p.endsWith(".wav")) return true;
+      if (p.includes("segments.json")) return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return JSON.stringify({
+          segments: [
+            { id: "closing_001", text: "Current closing line." },
+            { id: "closing_002", text: "Current closing line 2." },
+          ],
+        });
+      }
+      return Buffer.alloc(44);
+    });
+    mockReaddirSync.mockReturnValue(["closing_001.wav", "closing_002.wav", "closing_006.wav"]);
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    expect(mockUnlinkSync).toHaveBeenCalledWith(
+      path.join(process.cwd(), "outputs", "tts", "closing_006.wav")
+    );
+  });
+
+  it("does not prune WAVs during a targeted rerender", async () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("outputs") && p.includes("tts") && !p.endsWith(".wav")) return true;
+      if (p.includes("segments.json")) return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return JSON.stringify({
+          segments: [{ id: "closing_001", text: "Current closing line." }],
+        });
+      }
+      return Buffer.alloc(44);
+    });
+    mockReaddirSync.mockReturnValue(["closing_001.wav", "closing_006.wav"]);
+
+    const executor = registerCallArgs.factory({ segments: ["closing_001"] }, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    expect(mockUnlinkSync).not.toHaveBeenCalled();
   });
 });
 
