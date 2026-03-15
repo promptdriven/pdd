@@ -109,11 +109,19 @@ def insert_includes(
                 # This handles cases where the prompt has a bare filename
                 # (e.g. "file.py") but the update block has a qualified path
                 # (e.g. "dir/file.py"), or vice-versa.
+                # Only apply basename fallback when it uniquely matches a single
+                # include in the prompt, to avoid nondeterministic replacements
+                # when multiple files share the same basename (e.g. a/utils.py
+                # vs b/utils.py).
                 if new_prompt == output_prompt:
                     basename = os.path.basename(file_path)
                     escaped_basename = re.escape(basename)
                     pattern = r'<include[^>]*>\s*(?:[^\s<]*/)*' + escaped_basename + r'\s*</include>'
-                    new_prompt = re.sub(pattern, update_block.strip(), output_prompt)
+                    matches = re.findall(pattern, output_prompt)
+                    if len(matches) == 1:
+                        new_prompt = re.sub(pattern, update_block.strip(), output_prompt)
+                    elif len(matches) > 1 and verbose:
+                        print(f"[yellow]Warning: basename '{basename}' matches {len(matches)} includes; skipping ambiguous update[/yellow]")
                 output_prompt = new_prompt
 
         if not update_blocks and not new_blocks and dependencies.strip():
