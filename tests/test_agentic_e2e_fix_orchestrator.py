@@ -2342,12 +2342,16 @@ class TestIssue797TypeScriptTestFiles:
 # ============================================================================
 
 
+@pytest.mark.private_prompt
 class TestIssue791PromptVerification:
     """Tests 1-2: Verify prompt specifies E2E pre-flight check and cross-cycle memory.
 
     Issue #791: The prompt should now include requirements for:
     1. _check_e2e_environment pre-flight check before Step 2
     2. skipped_steps cross-cycle memory to avoid retrying failed steps
+
+    These tests check the full private _python.prompt (not synced to public repo).
+    Marked private_prompt so public CI can skip them.
     """
 
     def test_prompt_specifies_check_e2e_environment(self):
