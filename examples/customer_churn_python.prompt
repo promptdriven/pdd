@@ -1,0 +1,76 @@
+# Customer Churn Prediction Module
+# Language: Python
+# Author: Darius Rowser (Drowser2430)
+# Description: A prompt-driven ML module for predicting customer churn
+#              using logistic regression with scikit-learn.
+
+## Purpose
+Create a Python module that trains a binary classification model to predict
+customer churn. The module should:
+
+1. Accept a dataset (as a pandas DataFrame or CSV path) with customer features
+2. Preprocess the data (handle missing values, encode categoricals, scale numerics)
+3. Train a LogisticRegression model using scikit-learn
+4. Evaluate and return accuracy, precision, recall, and F1 score
+5. Expose a predict() function that accepts a single customer's feature dict
+   and returns a churn probability (float between 0.0 and 1.0)
+6. Expose a train() function that accepts a DataFrame and returns a fitted model
+
+## Input Features (expected columns in DataFrame)
+- tenure: int — number of months customer has been with company
+- monthly_charges: float — monthly bill amount in USD
+- total_charges: float — total amount charged to date
+- contract_type: str — one of ["Month-to-month", "One year", "Two year"]
+- payment_method: str — one of ["Electronic check", "Mailed check", "Bank transfer", "Credit card"]
+- num_support_tickets: int — number of support tickets opened in last 12 months
+- has_tech_support: bool — whether customer has tech support add-on
+- churn: int — target label: 1 = churned, 0 = retained (only present in training data)
+
+## Output
+- train(df: pd.DataFrame) -> dict: Returns a dict with keys:
+    - "model": fitted sklearn Pipeline
+    - "accuracy": float
+    - "precision": float
+    - "recall": float
+    - "f1": float
+    - "feature_importances": dict mapping feature name to coefficient value
+
+- predict(model_pipeline, customer: dict) -> float:
+    Returns churn probability between 0.0 and 1.0
+
+## Technical Requirements
+- Use sklearn Pipeline with ColumnTransformer for preprocessing
+- Use LogisticRegression with max_iter=1000
+- Use train_test_split with test_size=0.2 and random_state=42
+- Handle missing values: median for numeric, mode for categorical
+- One-hot encode categorical features
+- Standard scale numeric features
+- All functions must include type hints
+- Include docstrings for all public functions
+
+## Error Handling
+- Raise ValueError if required columns are missing from the DataFrame
+- Raise ValueError if DataFrame has fewer than 10 rows
+- Return 0.0 for predict() if model pipeline is None
+
+## Example Usage
+```python
+import pandas as pd
+from customer_churn import train, predict
+
+df = pd.read_csv("customer_data.csv")
+result = train(df)
+print(f"Accuracy: {result['accuracy']:.2%}")
+
+new_customer = {
+    "tenure": 3,
+    "monthly_charges": 85.50,
+    "total_charges": 256.50,
+    "contract_type": "Month-to-month",
+    "payment_method": "Electronic check",
+    "num_support_tickets": 4,
+    "has_tech_support": False
+}
+churn_prob = predict(result["model"], new_customer)
+print(f"Churn probability: {churn_prob:.2%}")
+```
