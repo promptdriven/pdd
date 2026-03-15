@@ -81,7 +81,7 @@ export const PulsingCircle: React.FC = () => {
         position: 'absolute',
         width: diameter,
         height: diameter,
-        borderRadius: '50%',
+        clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)',
         backgroundColor: COLORS.circleFill,
         opacity,
         top: CANVAS.centerY - radius,

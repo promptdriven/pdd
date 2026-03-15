@@ -77,3 +77,14 @@ A single blue circle appears at the center of a radial-gradient dark background,
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: 9a5e525b-8c26-47a0-9640-6fe3910f31b3 -->
+## Annotation Update
+Requested change: I want this to be a triangle instead
+Technical assessment: The orange markup circles the pulsing blue circle in scene 02 (AnimationSection02BlueCirclePulse). The user requests changing this shape from a circle to a triangle. The current implementation renders the shape using a <div> with borderRadius: '50%' in PulsingCircle.tsx. The fix requires replacing the circular CSS styling with a triangular shape — either via CSS clip-path: polygon(50% 0%, 0% 100%, 100% 100%) or an SVG polygon element. The pulse animation (radius expansion/contraction) would need to be adapted to scale a triangle instead. The GlowEffect component would also need updating to produce a triangular glow halo. The spec file 02_blue_circle_pulse.md must be updated to reflect the new shape (title, visual description, data points). Constants and component names should ideally be renamed from 'Circle' to 'Triangle' for clarity.
+- In PulsingCircle.tsx, replace borderRadius: '50%' with clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' to render a triangle shape, and remove borderRadius entirely
+- Update the GlowEffect.tsx component to produce a triangular glow halo matching the new shape (use matching clip-path or SVG filter on a triangle)
+- Update the spec file 02_blue_circle_pulse.md to describe a pulsing blue triangle instead of a circle, including updated visual description, data points, and code structure
+- Adapt the pulse animation logic to scale the triangle uniformly (the interpolated 'radius' can become a 'size' parameter controlling the bounding box of the triangle)
+- Consider renaming the component directory and files from BlueCirclePulse/PulsingCircle to BlueTrianglePulse/PulsingTriangle for consistency
+<!-- ANNOTATION_UPDATE_END: 9a5e525b-8c26-47a0-9640-6fe3910f31b3 -->

@@ -85,7 +85,7 @@ export const GlowEffect: React.FC = () => {
         position: 'absolute',
         width: glowDiameter,
         height: glowDiameter,
-        borderRadius: '50%',
+        clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)',
         backgroundColor: COLORS.circleFill,
         opacity: glowOpacity,
         filter: `blur(${CIRCLE.glowBlur}px)`,
