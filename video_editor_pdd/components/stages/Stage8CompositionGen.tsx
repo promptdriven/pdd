@@ -654,7 +654,12 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             {previewUrl ? (
               <img src={previewUrl} alt="Preview still" className="max-h-[60vh] w-auto rounded border border-slate-700" />
             ) : (
-              <p className="text-sm text-slate-500">{previewError ?? 'Preview not available.'}</p>
+              <div className="space-y-2">
+                <p className="text-sm text-slate-500">Preview not available.</p>
+                {previewError && previewError !== 'Preview not available.' ? (
+                  <p className="text-xs text-slate-400">{previewError}</p>
+                ) : null}
+              </div>
             )}
           </div>
           <div className="rounded border border-slate-700 bg-slate-950/60 p-3">

@@ -145,6 +145,8 @@ beforeAll(() => {
     }
   );
 
+  fs.rmSync(path.join(REMOTION_DIR, "build"), { recursive: true, force: true });
+
   execSync("npx remotion bundle src/index.ts --out build", {
     cwd: REMOTION_DIR,
     stdio: "pipe",
@@ -300,7 +302,7 @@ describe("renderSection", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Step 4 — preview-fixes API returns real Claude output (~30s)
+// Step 4 — preview-fixes API returns real Claude output (can exceed 90s)
 // ---------------------------------------------------------------------------
 
 describe("preview-fixes API", () => {
@@ -391,7 +393,7 @@ describe("preview-fixes API", () => {
         db.prepare("DELETE FROM annotations WHERE id = ?").run(annId);
       }
     },
-    90_000 // 90s timeout for Claude CLI call
+    180_000 // Real Claude dry-run previews can take longer under load
   );
 });
 

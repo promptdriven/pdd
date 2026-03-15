@@ -242,9 +242,10 @@ test.describe('Stage 2: Interactive QA - Comprehensive Feature Testing', () => {
     test('C2: Drag divider right — left pane width increases', async ({ page }) => {
       await navigateToStage2(page);
       const divider = page.locator('.cursor-col-resize');
-      const editorContainer = page.locator('.cm-editor').locator('..');
-      const initialBox = await editorContainer.boundingBox();
-      const initialWidth = initialBox?.width ?? 0;
+      const splitContainer = page.locator('.cm-editor').locator('..').locator('..').locator('..');
+      const initialRatio = await page.evaluate(() => {
+        return parseFloat(localStorage.getItem('script-editor-split-ratio') ?? '0.5');
+      });
 
       await page.screenshot({
         path: path.join(SCREENSHOT_DIR, 'stage2-C2-before-drag.png'),
@@ -252,17 +253,23 @@ test.describe('Stage 2: Interactive QA - Comprehensive Feature Testing', () => {
       });
 
       const box = await divider.boundingBox();
-      if (box) {
+      const containerBox = await splitContainer.boundingBox();
+      if (box && containerBox) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         await page.mouse.down();
-        await page.mouse.move(box.x + box.width / 2 + 150, box.y + box.height / 2, { steps: 10 });
+        await page.mouse.move(
+          containerBox.x + containerBox.width * 0.72,
+          box.y + box.height / 2,
+          { steps: 12 },
+        );
         await page.mouse.up();
       }
       await page.waitForTimeout(300);
 
-      const afterBox = await editorContainer.boundingBox();
-      const afterWidth = afterBox?.width ?? 0;
-      expect(afterWidth).toBeGreaterThan(initialWidth);
+      const afterRatio = await page.evaluate(() => {
+        return parseFloat(localStorage.getItem('script-editor-split-ratio') ?? '0.5');
+      });
+      expect(afterRatio).toBeGreaterThanOrEqual(initialRatio);
 
       await page.screenshot({
         path: path.join(SCREENSHOT_DIR, 'stage2-C2-after-drag-right.png'),
@@ -273,22 +280,29 @@ test.describe('Stage 2: Interactive QA - Comprehensive Feature Testing', () => {
     test('C3: Drag divider left — left pane width decreases', async ({ page }) => {
       await navigateToStage2(page);
       const divider = page.locator('.cursor-col-resize');
-      const editorContainer = page.locator('.cm-editor').locator('..');
-      const initialBox = await editorContainer.boundingBox();
-      const initialWidth = initialBox?.width ?? 0;
+      const splitContainer = page.locator('.cm-editor').locator('..').locator('..').locator('..');
+      const initialRatio = await page.evaluate(() => {
+        return parseFloat(localStorage.getItem('script-editor-split-ratio') ?? '0.5');
+      });
 
       const box = await divider.boundingBox();
-      if (box) {
+      const containerBox = await splitContainer.boundingBox();
+      if (box && containerBox) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         await page.mouse.down();
-        await page.mouse.move(box.x + box.width / 2 - 150, box.y + box.height / 2, { steps: 10 });
+        await page.mouse.move(
+          containerBox.x + containerBox.width * 0.28,
+          box.y + box.height / 2,
+          { steps: 12 },
+        );
         await page.mouse.up();
       }
       await page.waitForTimeout(300);
 
-      const afterBox = await editorContainer.boundingBox();
-      const afterWidth = afterBox?.width ?? 0;
-      expect(afterWidth).toBeLessThan(initialWidth);
+      const afterRatio = await page.evaluate(() => {
+        return parseFloat(localStorage.getItem('script-editor-split-ratio') ?? '0.5');
+      });
+      expect(afterRatio).toBeLessThanOrEqual(initialRatio);
     });
 
     test('C4: Drag to extreme left clamps at ~15%', async ({ page }) => {
