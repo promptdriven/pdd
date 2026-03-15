@@ -1,68 +1,44 @@
 % You are an expert Python engineer. Your goal is to write `pdd/commands/fix.py`.
 
 % Role & Scope
-  This module contains the `fix` command, which supports three modes:
-  - Agentic E2E Fix mode: Takes a GitHub issue URL and orchestrates a 9-step workflow to fix e2e tests across multiple dev units.
-  - User story fix mode: Takes a single `story__*.md` file and updates affected prompt(s) via user story workflow.
-  - Manual mode: Takes explicit file arguments to fix code based on unit test errors for a single dev unit.
+  This module implements the `fix` command with three modes:
+  - Agentic E2E Fix: Orchestrates a multi-step GitHub issue fix.
+  - User Story Fix: Updates multiple prompts from a single `story__*.md` file.
+  - Manual Mode: Iteratively fixes code and unit tests from explicit paths.
 
 <include>context/python_preamble.prompt</include>
 
-% Program Specification (README.md):
-    <README.md>
-    <include>./README.md</include>
-    </README.md>
-
 % Requirements
-  - **fix**: Route by argument pattern and flags in this order:
-    - Agentic mode (first arg looks like a URL): Call `run_agentic_e2e_fix(issue_url, timeout_adder=..., max_cycles=..., resume=..., force=..., verbose=..., quiet=..., use_github_state=...)`.
-    - User story mode: when `not manual` and exactly one arg that is an existing markdown file named `story__*.md`, call `run_user_story_fix(...)`.
-      - Pass through `ctx`, `story_file`, `prompts_dir`, `strength`, `temperature`, `time`, `budget`, `verbose`, `quiet`.
-      - Return a result dict with `success`, `message`, and `changed_files`.
-    - Manual mode (`--manual` flag): Call `fix_main(ctx, prompt_file, code_file, unit_test_file, error_file, ...)`.
-    - Use `nargs=-1` for `args` argument to accept variable arguments.
-    - Detect URL by checking if first arg starts with "http" or "github.com".
-    - In manual mode, validate that exactly 4+ arguments are provided (prompt, code, unit_test(s), error).
-    - Options:
-      - `--manual`: Use manual mode with explicit file arguments.
-      - `--timeout-adder FLOAT`: (Agentic) Additional seconds per step timeout (default: 0.0).
-      - `--max-cycles INT`: (Agentic) Maximum outer loop cycles (default: 5).
-      - `--resume/--no-resume`: (Agentic) Resume from saved state (default: True).
-      - `--force`: (Agentic) Override branch mismatch safety check (default: False).
-      - `--no-github-state`: (Agentic) Disable GitHub issue comment-based state persistence (default: enabled).
-      - `--output-test`, `--output-code`, `--output-results`: (Manual) Output locations.
-      - `--loop`, `--verification-program`, `--max-attempts`, `--budget`: (Manual) Loop options.
-      - `--auto-submit`: (Manual) Auto-submit on success.
-      - `--agentic-fallback/--no-agentic-fallback`: (Manual) Enable agentic fallback in loop mode.
-      - `--protect-tests/--no-protect-tests`: (Both modes) When enabled, prevents the LLM from modifying test files. Useful when tests created by `pdd bug` are known to be correct and only the code should be fixed. Default: False.
-    - Track cost using `@track_cost`.
-    - Log operation using `@log_operation(operation="fix", clears_run_report=True)`.
-    - Return appropriate result tuple.
+  - **Routing**: Use `nargs=-1` for `args`. Route in this order:
+    1) Agentic mode (not `--manual` and first arg is a GitHub/HTTP URL):
+       Call `run_agentic_e2e_fix(issue_url, timeout_adder, max_cycles, resume, force, verbose, quiet, use_github_state, protect_tests)`.
+       Result: `{"success": success, "message": message, "changed_files": changed_files}`.
+    2) User story mode (not `--manual`, exactly one arg matches `story__*.md`):
+       Call `run_user_story_fix(...)` with keyword arguments using `ctx`, `story_file`, and values from `ctx.obj`.
+       Result: `{"success": success, "message": message, "changed_files": changed_files}`.
+    3) Manual mode (`--manual` or other args):
+       Loop Mode (`--loop`): `unit_test_files = args[2:]`, `error_file = None`.
+       Non-Loop Mode: `unit_test_files = args[2:-1]`, `error_file = args[-1]`.
+       Iterate over `unit_test_files`, calling `fix_main(..., protect_tests=protect_tests)` for each.
+       Result: `{"success": all_success, "fixed_unit_test": (first fixed), "fixed_unit_tests": (all fixed), "fixed_code": ..., "attempts": ..., "message": ...}`.
+  - **Console Output**: Use `Console(file=sys.stdout)` for compatibility. Print bold green/red success/failure messages for each mode.
+  - **Options**:
+    - Agentic: `--timeout-adder`, `--max-cycles`, `--resume/--no-resume` (T), `--force`, `--no-github-state` (sets `use_github_state=False`).
+    - Manual: `--output-test`, `--output-code`, `--output-results`, `--loop`, `--verification-program`, `--max-attempts` (3), `--budget` (5.0), `--auto-submit`, `--agentic-fallback/--no-agentic-fallback` (T).
+    - Both: `--protect-tests/--no-protect-tests` (F).
+  - **Technical Details**:
+    - Decorate with `@log_operation(operation="fix", clears_run_report=True)` and `@track_cost`.
+    - Use deferred imports inside the command for mode-specific functions.
+    - Return `Optional[Tuple[result_dict, cost, model]]`.
+    - Re-raise Click exceptions; use `handle_error(e, "fix", quiet)` for others.
 
 % Dependencies
   <include>context/command_logging.prompt</include>
-  <fix_main_example>
   <pdd.fix_main><include>context/fix_main_example.py</include></pdd.fix_main>
-  </fix_main_example>
-  <run_agentic_e2e_fix_example>
   <pdd.agentic_e2e_fix><include>context/agentic_e2e_fix_example.py</include></pdd.agentic_e2e_fix>
-  </run_agentic_e2e_fix_example>
-  - Import and use `run_user_story_fix` from `..user_story_tests` for story mode.
-  <track_cost_example>
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
-  </track_cost_example>
-
-% Here are examples of how to use internal modules:
-<internal_example_modules>
-</internal_example_modules>
-
-% Instructions
-  - Use `handle_error` for all exceptions except `click.Abort`.
-  - Re-raise `click.Abort` to allow user cancellation to propagate.
-  - Apply `@track_cost` decorator.
-  - Access context flags via `ctx.obj.get("key", default)`.
-  - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
-  - Return `None` when an error is handled.
+  - Import `run_user_story_fix` from `..user_story_tests`.
+  - Import `handle_error` from `..core.errors`.
 
 % Deliverables
   - Code: `pdd/commands/fix.py`
