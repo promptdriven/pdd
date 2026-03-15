@@ -2111,14 +2111,6 @@ You are an expert Python engineer. Write the User data model.'''
 # ============================================================================
 
 
-import sys
-from pathlib import Path
-
-# Add project root to sys.path to ensure local code is prioritized
-# This allows testing local changes without installing the package
-project_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(project_root))
-
 def test_parse_attrs_internal() -> None:
     """Test the internal _parse_attrs function for correct attribute extraction."""
     from pdd.preprocess import _parse_attrs

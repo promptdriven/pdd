@@ -82,7 +82,7 @@ Write clean, well-documented Python code that follows best practices.
         # 2. Create a CSV file for dependencies (normally created by summarize_directory)
         csv_content = """full_path,file_summary,date,key_exports,dependencies
 context/python_preamble.prompt,Python preamble with coding standards,2023-02-02,,
-context/helper_example.py,Helper utility functions,2023-02-02,"helper_func","
+context/helper_example.py,Helper utility functions,2023-02-02,"helper_func",""
 """
         (tmp_path / "dependencies.csv").write_text(csv_content)
 
@@ -212,7 +212,7 @@ Write clean, well-documented Python code that follows best practices.
         # 2. Create CSV and context files
         csv_content = """full_path,file_summary,date,key_exports,dependencies
 context/python_preamble.prompt,Python preamble with coding standards,2023-02-02,,
-context/helper_example.py,Helper utility functions,2023-02-02,"helper_func","
+context/helper_example.py,Helper utility functions,2023-02-02,"helper_func",""
 """
         (tmp_path / "dependencies.csv").write_text(csv_content)
 
@@ -353,7 +353,7 @@ Write clean Python code.
         def mock_summarize_directory(*args, **kwargs):
             csv = """full_path,file_summary,date,key_exports,dependencies
 context/python_preamble.prompt,Python preamble,2023-02-02,,
-context/helper_example.py,Helper utilities,2023-02-02,"helper_func","
+context/helper_example.py,Helper utilities,2023-02-02,"helper_func",""
 """
             return (csv, 0.001, "mock-model")
 
