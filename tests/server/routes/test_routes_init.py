@@ -43,6 +43,7 @@ def test_routes_module_exports():
     mock_architecture_module = MagicMock()
     mock_auth_module = MagicMock()
     mock_config_module = MagicMock()
+    mock_extracts_module = MagicMock()
     mock_files_module = MagicMock()
     mock_commands_module = MagicMock()
     mock_websocket_module = MagicMock()
@@ -52,6 +53,7 @@ def test_routes_module_exports():
     mock_architecture_router = MagicMock(name="architecture_router_obj")
     mock_auth_router = MagicMock(name="auth_router_obj")
     mock_config_router = MagicMock(name="config_router_obj")
+    mock_extracts_router = MagicMock(name="extracts_router_obj")
     mock_files_router = MagicMock(name="files_router_obj")
     mock_commands_router = MagicMock(name="commands_router_obj")
     mock_websocket_router = MagicMock(name="websocket_router_obj")
@@ -60,6 +62,7 @@ def test_routes_module_exports():
     mock_architecture_module.router = mock_architecture_router
     mock_auth_module.router = mock_auth_router
     mock_config_module.router = mock_config_router
+    mock_extracts_module.router = mock_extracts_router
     mock_files_module.router = mock_files_router
     mock_commands_module.router = mock_commands_router
     mock_websocket_module.router = mock_websocket_router
@@ -71,6 +74,7 @@ def test_routes_module_exports():
         "pdd.server.routes.architecture": mock_architecture_module,
         "pdd.server.routes.auth": mock_auth_module,
         "pdd.server.routes.config": mock_config_module,
+        "pdd.server.routes.extracts": mock_extracts_module,
         "pdd.server.routes.files": mock_files_module,
         "pdd.server.routes.commands": mock_commands_module,
         "pdd.server.routes.websocket": mock_websocket_module,
@@ -97,6 +101,9 @@ def test_routes_module_exports():
         assert hasattr(routes_module, "config_router")
         assert routes_module.config_router is mock_config_router
 
+        assert hasattr(routes_module, "extracts_router")
+        assert routes_module.extracts_router is mock_extracts_router
+
         assert hasattr(routes_module, "files_router")
         assert routes_module.files_router is mock_files_router
 
@@ -111,7 +118,7 @@ def test_routes_module_exports():
 
         # Verify __all__ definition
         assert hasattr(routes_module, "__all__")
-        expected_all = ["architecture", "auth", "config", "files", "commands", "prompts", "architecture_router", "auth_router", "config_router", "files_router", "commands_router", "websocket_router", "prompts_router"]
+        expected_all = ["architecture", "auth", "config", "extracts", "files", "commands", "prompts", "architecture_router", "auth_router", "config_router", "extracts_router", "files_router", "commands_router", "websocket_router", "prompts_router"]
         assert sorted(routes_module.__all__) == sorted(expected_all)
 
 def test_routes_import_failure():
@@ -126,6 +133,7 @@ def test_routes_import_failure():
         "pdd.server.routes.architecture": MagicMock(),
         "pdd.server.routes.auth": bad_mock_module,
         "pdd.server.routes.config": MagicMock(),
+        "pdd.server.routes.extracts": MagicMock(),
         "pdd.server.routes.files": MagicMock(),
         # We don't strictly need the others for this specific failure test
         "pdd.server.routes.commands": MagicMock(),

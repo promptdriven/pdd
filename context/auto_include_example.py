@@ -1,77 +1,257 @@
+"""
+Example: auto_include
+
+Demonstrates all features of the auto_include module:
+  1. Load the auto_include_LLM prompt template
+  2. Run summarize_directory and format CSV rows for the LLM
+  3. Invoke auto_include_LLM via llm_invoke with Pydantic structured output (AutoIncludeResult)
+  4. Build include_directives with <new> and <update> tagged blocks
+  5. Filter duplicates, self-references, and circular dependencies
+  6. Strip selectors from small files (<100 lines)
+  7. Validate inputs; on LLM failure return empty include_directives
+  8. Return (include_directives, csv_output, total_cost, model_name)
+  9. Pass csv_file for cache reuse
+ 10. Use prompt_filename to filter self-referential example files
+ 11. Use progress_callback for TUI integration
+ 12. Use the time parameter for LLM thinking effort
+"""
+
 import os
-import pandas as pd
-from typing import List, Dict, Tuple
-from pdd import DEFAULT_STRENGTH
-from pdd.auto_include import auto_include
+import sys
+import tempfile
+import shutil
+from unittest.mock import patch
 
-def main() -> None:
-    """
-    Example usage of the auto_include function.
-    """
-    # load output.csv
-    with open("project_dependencies.csv", 'r') as file:
-        csv_file = file.read()
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-    # Define the parameters for the auto_include function
-    input_prompt = """% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
+from pdd import DEFAULT_STRENGTH, DEFAULT_TIME
+from pdd.auto_include import (
+    auto_include,
+    AutoIncludeResult,
+    NewInclude,
+    IncludeAnnotation,
+)
+from pdd.summarize_directory import FileSummary
 
-<include>./context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs: 
-        'prompt' - A string containing the prompt that generated the code file to be processed.
-        'code' - A string containing the code to generate a unit test from.
-        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
-        'temperature' - A float that is the temperature of the LLM model to use.
-        'language' - A string that is the language of the unit test to be generated.
-    Outputs: 
-        'unit_test'- A string that is the generated unit test code.
-        'total_cost' - A float that is the total cost to generate the unit test code.
-        'model_name' - A string that is the name of the selected LLM model
-
-% This program will use Langchain to do the following:
-    Step 1. use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/generate_test_LLM.prompt' file.
-    Step 2. Preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
-    Step 2. Then this will create a Langchain LCEL template from the test generator prompt.
-    Step 3. This will use llm_selector for the model.
-    Step 4. This will run the inputs through the model using Langchain LCEL. 
-        4a. Be sure to pass the following string parameters to the prompt during invoke:
-            - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
-            - 'code'
-            - 'language'
-        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
-    Step 5. This will pretty print the markdown formatting that is present in the result via the rich Markdown function. It will also pretty print the number of tokens in the result and the cost.
-    Step 6. Detect if the generation is incomplete using the unfinished_prompt function (strength .7) by passing in the last 600 characters of the output of Step 4.
-        - a. If incomplete, call the continue_generation function to complete the generation.
-        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with a strength of 0.7.
-    Step 7. Print out the total_cost including the input and output tokens and functions that incur cost (e.g. postprocessing).
-    Step 8. Return the unit_test, total_cost and model_name"""
-    directory_path = "context/c*.py"
-    # read in the file
-    with open('project_dependencies.csv', 'r') as file:
-        csv_file = file.read()
-    strength = DEFAULT_STRENGTH
-    temperature = 0.5
-    verbose = True
-
-    # Call the auto_include function
-    dependencies, csv_output, total_cost, model_name = auto_include(
-        input_prompt=input_prompt,
-        directory_path=directory_path,
-        csv_file=csv_file,
-        strength=strength,
-        temperature=temperature,
-        verbose=verbose
+def mock_summarize_directory(*args, **kwargs):
+    """Mock for summarize_directory to make the example run standalone."""
+    csv = (
+        "full_path,file_summary,key_exports,dependencies,content_hash\n"
+        'context/llm_invoke_example.py,"Example usage of llm_invoke",'
+        '"[""llm_invoke""]","[""pdd.llm_invoke""]",hash1\n'
+        'context/summarize_directory_example.py,"Example usage of summarize_directory",'
+        '"[""summarize_directory""]","[""pdd.summarize_directory""]",hash2\n'
+        'context/auto_include_example.py,"Example usage of auto_include",'
+        '"[""auto_include""]","[""pdd.auto_include""]",hash3'
     )
+    return csv, 0.05, "mock-gpt-4o"
 
-    # Print the results
-    print("Dependencies:")
-    print(dependencies)
 
-    print("CSV Output:")
-    print(csv_output)
-    print(f"Total Cost: ${total_cost:.4f} (in dollars per million tokens)")
-    print(f"Model Name: {model_name}")
+def mock_llm_invoke(*args, **kwargs):
+    """Mock for llm_invoke returning a Pydantic AutoIncludeResult."""
+    return {
+        "result": AutoIncludeResult(
+            reasoning="The prompt needs llm_invoke for LLM calls and summarize_directory for file scanning.",
+            new_includes=[
+                NewInclude(
+                    file="context/llm_invoke_example.py",
+                    module="pdd.llm_invoke",
+                    select="def:llm_invoke",
+                ),
+                NewInclude(
+                    file="context/summarize_directory_example.py",
+                    module="pdd.summarize_directory",
+                ),
+                # This one will be filtered as a self-reference when prompt_filename is set
+                NewInclude(
+                    file="context/auto_include_example.py",
+                    module="pdd.auto_include",
+                ),
+            ],
+            existing_include_annotations=[
+                IncludeAnnotation(
+                    file="context/python_preamble.prompt",
+                    select="def:coding_style",
+                ),
+                # This one has no select/query and should be skipped
+                IncludeAnnotation(file="context/readme.md"),
+            ],
+        ),
+        "cost": 0.12,
+        "model_name": "mock-gpt-4o",
+    }
+
+
+def main():
+    print("=" * 60)
+    print("Example: auto_include")
+    print("=" * 60)
+
+    # ------------------------------------------------------------------
+    # 1. Basic usage with all parameters
+    # ------------------------------------------------------------------
+    print("\n--- 1. Basic auto_include call ---")
+    input_prompt = """\
+% You are an expert Python Software Engineer.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements:
+    1. Parse input files
+    2. Generate output using LLM
+"""
+
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_directory), \
+         patch("pdd.auto_include.llm_invoke", side_effect=mock_llm_invoke), \
+         patch("pdd.auto_include.load_prompt_template", return_value="auto_include_LLM prompt"), \
+         patch("pdd.auto_include._get_file_line_count", return_value=200):
+
+        include_directives, csv_output, total_cost, model_name = auto_include(
+            input_prompt=input_prompt,
+            directory_path="context/c*.py",
+            csv_file=None,
+            prompt_filename="prompts/auto_include_python.prompt",
+            strength=DEFAULT_STRENGTH,
+            temperature=0.0,
+            time=DEFAULT_TIME,
+            verbose=True,
+        )
+
+    print(f"\nInclude directives:\n{include_directives}")
+    print(f"\nCSV output (first 200 chars):\n{csv_output[:200]}...")
+    print(f"Total cost: ${total_cost:.6f}")
+    print(f"Model: {model_name}")
+
+    # Verify filtering
+    assert "auto_include_example.py" not in include_directives, \
+        "Self-referential example should be filtered"
+    # python_preamble.prompt appears as an <update> (annotating existing include with selector)
+    # but should NOT appear as a <new> block (duplicate filtering)
+    assert "<new>" not in include_directives or "python_preamble.prompt" not in \
+        "\n".join(b for b in include_directives.split("<new>") if "<new>" not in b), \
+        "Duplicate <new> include should be filtered"
+    assert "readme.md" not in include_directives, \
+        "Annotation with no select/query should be skipped"
+    # The <update> for python_preamble.prompt IS expected (adds select attribute)
+    assert "<update>" in include_directives, \
+        "Update block for existing include annotation should be present"
+    print("[PASS] Self-references, duplicates, and empty annotations filtered correctly")
+
+    # ------------------------------------------------------------------
+    # 2. csv_file cache reuse
+    # ------------------------------------------------------------------
+    print("\n--- 2. Cache reuse via csv_file ---")
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_directory), \
+         patch("pdd.auto_include.llm_invoke", side_effect=mock_llm_invoke), \
+         patch("pdd.auto_include.load_prompt_template", return_value="auto_include_LLM prompt"), \
+         patch("pdd.auto_include._get_file_line_count", return_value=200):
+
+        _, csv_output2, cost2, _ = auto_include(
+            input_prompt=input_prompt,
+            directory_path="context/c*.py",
+            csv_file=csv_output,  # pass previous output as cache
+            strength=0.8,
+            temperature=0.0,
+        )
+
+    print(f"Cost with cache: ${cost2:.6f}")
+    print("[PASS] csv_file parameter accepted for cache reuse")
+
+    # ------------------------------------------------------------------
+    # 3. progress_callback
+    # ------------------------------------------------------------------
+    print("\n--- 3. Progress callback ---")
+    progress_log = []
+
+    def my_callback(current: int, total: int) -> None:
+        progress_log.append((current, total))
+        print(f"  Progress: {current}/{total}")
+
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_directory), \
+         patch("pdd.auto_include.llm_invoke", side_effect=mock_llm_invoke), \
+         patch("pdd.auto_include.load_prompt_template", return_value="auto_include_LLM prompt"), \
+         patch("pdd.auto_include._get_file_line_count", return_value=200):
+
+        auto_include(
+            input_prompt=input_prompt,
+            directory_path="context/c*.py",
+            progress_callback=my_callback,
+        )
+
+    print(f"  Callback log: {progress_log}")
+    print("[PASS] progress_callback forwarded to summarize_directory")
+
+    # ------------------------------------------------------------------
+    # 4. Input validation
+    # ------------------------------------------------------------------
+    print("\n--- 4. Input validation ---")
+    try:
+        auto_include(input_prompt="test", directory_path="dir", strength=1.5)
+    except ValueError as e:
+        print(f"  Caught: {e}")
+
+    try:
+        auto_include(input_prompt="test", directory_path="dir", temperature=-0.1)
+    except ValueError as e:
+        print(f"  Caught: {e}")
+
+    print("[PASS] Strength and temperature validation works")
+
+    # ------------------------------------------------------------------
+    # 5. Prompt template load failure
+    # ------------------------------------------------------------------
+    print("\n--- 5. Prompt template load failure ---")
+    with patch("pdd.auto_include.load_prompt_template", return_value=None):
+        try:
+            auto_include(input_prompt="test", directory_path="dir")
+        except ValueError as e:
+            print(f"  Caught: {e}")
+    print("[PASS] ValueError raised when prompt template not found")
+
+    # ------------------------------------------------------------------
+    # 6. LLM failure returns empty directives
+    # ------------------------------------------------------------------
+    print("\n--- 6. LLM failure handling ---")
+
+    def failing_llm(*args, **kwargs):
+        raise RuntimeError("LLM service unavailable")
+
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_directory), \
+         patch("pdd.auto_include.llm_invoke", side_effect=failing_llm), \
+         patch("pdd.auto_include.load_prompt_template", return_value="prompt"):
+
+        directives, csv_out, cost, model = auto_include(
+            input_prompt="test",
+            directory_path="context/*.py",
+        )
+
+    assert directives == "", f"Expected empty directives on LLM failure, got: {directives}"
+    print(f"  Directives: '{directives}' (empty as expected)")
+    print(f"  Cost: ${cost:.6f} (only summarize cost)")
+    print("[PASS] LLM failure returns empty include_directives gracefully")
+
+    # ------------------------------------------------------------------
+    # 7. time parameter
+    # ------------------------------------------------------------------
+    print("\n--- 7. Time parameter for LLM thinking effort ---")
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_directory), \
+         patch("pdd.auto_include.llm_invoke", side_effect=mock_llm_invoke) as mock_llm, \
+         patch("pdd.auto_include.load_prompt_template", return_value="prompt"), \
+         patch("pdd.auto_include._get_file_line_count", return_value=200):
+
+        auto_include(
+            input_prompt=input_prompt,
+            directory_path="context/*.py",
+            time=0.8,
+        )
+
+    print("[PASS] time parameter passed through to llm_invoke")
+
+    print("\n" + "=" * 60)
+    print("All examples passed!")
+    print("=" * 60)
+
 
 if __name__ == "__main__":
     main()

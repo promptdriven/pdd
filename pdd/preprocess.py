@@ -19,33 +19,34 @@ console = Console()
 # Diamond includes converge quickly; true cycles never converge.
 _MAX_INCLUDE_ITERATIONS = 50
 
-# Debug/Instrumentation controls
-_DEBUG_PREPROCESS = str(os.getenv("PDD_PREPROCESS_DEBUG", "")).lower() in ("1", "true", "yes", "on")
-_DEBUG_OUTPUT_FILE = os.getenv("PDD_PREPROCESS_DEBUG_FILE")  # Optional path to write a debug report
 _DEBUG_EVENTS: List[str] = []
 
+def _is_debug() -> bool:
+    return str(os.getenv("PDD_PREPROCESS_DEBUG", "")).lower() in ("1", "true", "yes", "on")
 
 def _is_quiet_mode() -> bool:
     return os.getenv("PDD_QUIET") == "1"
 
 def _dbg(msg: str) -> None:
-    if _DEBUG_PREPROCESS:
+    if _is_debug():
         console.print(f"[dim][PPD][preprocess][/dim] {escape(msg)}")
         _DEBUG_EVENTS.append(msg)
 
 def _write_debug_report() -> None:
-    if _DEBUG_PREPROCESS and _DEBUG_OUTPUT_FILE:
-        try:
-            with open(_DEBUG_OUTPUT_FILE, "w", encoding="utf-8") as fh:
-                fh.write("Preprocess Debug Report\n\n")
-                for line in _DEBUG_EVENTS:
-                    fh.write(line + "\n")
-            console.print(f"[green]Debug report written to:[/green] {_DEBUG_OUTPUT_FILE}")
-        except Exception as e:
-            # Report the error so users know why the log file wasn't written
-            console.print(f"[yellow]Warning: Could not write debug report to {_DEBUG_OUTPUT_FILE}: {e}[/yellow]")
-    elif _DEBUG_PREPROCESS and not _DEBUG_OUTPUT_FILE:
-        console.print("[dim]Debug mode enabled but PDD_PREPROCESS_DEBUG_FILE not set (output shown in console only)[/dim]")
+    if _is_debug():
+        output_file = os.getenv("PDD_PREPROCESS_DEBUG_FILE")
+        if output_file:
+            try:
+                with open(output_file, "w", encoding="utf-8") as fh:
+                    fh.write("Preprocess Debug Report\n\n")
+                    for line in _DEBUG_EVENTS:
+                        fh.write(line + "\n")
+                console.print(f"[green]Debug report written to:[/green] {output_file}")
+            except Exception as e:
+                # Report the error so users know why the log file wasn't written
+                console.print(f"[yellow]Warning: Could not write debug report to {output_file}: {e}[/yellow]")
+        else:
+            console.print("[dim]Debug mode enabled but PDD_PREPROCESS_DEBUG_FILE not set (output shown in console only)[/dim]")
 
 def _extract_fence_spans(text: str) -> List[Tuple[int, int]]:
     """Return list of (start, end) spans for fenced code blocks (``` or ~~~).
@@ -232,12 +233,58 @@ def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None) ->
     text = process_web_tags(text, recursive)
     return text
 
+def _parse_attrs(attr_str: str) -> dict:
+    if not attr_str:
+        return {}
+    attrs = {}
+    # Simple attribute parser: key="value" or key='value'
+    for match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']*)["\']', attr_str):
+        attrs[match.group(1)] = match.group(2)
+    return attrs
+
 def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
-    pattern = r'<include>(.*?)</include>'
+    # Support both <include>path</include> and <include path="path" attrs... />
+    pattern = r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+    
     def replace_include(match):
-        file_path = match.group(1).strip()
+        attrs_str = match.group('attrs') or match.group('attrs_self') or ""
+        attrs = _parse_attrs(attrs_str)
+
+        # Content between tags (used as path for bare <include>path</include>)
+        content = match.group('content') if match.group('content') is not None else ""
+
+        file_path = attrs.get('path') or content.strip()
+        if not file_path:
+            return match.group(0)
+
+        file_path = file_path.strip()
+
+        # Handle query attribute — semantic LLM extraction
+        # When both select= and query= are present, prefer select= (deterministic)
+        # and only fall back to query= if select fails.
+        query = attrs.get('query')
+        selectors_str = attrs.get('select')
+        if query and selectors_str:
+            _dbg(f"Both select= and query= on <include> for {file_path}; preferring select=")
+            query = None  # Will be used as fallback below if select fails
+
+        if query:
+            if recursive:
+                return match.group(0)
+            try:
+                resolved_path = get_file_path(file_path)
+                from pdd.include_query_extractor import IncludeQueryExtractor
+                extractor = IncludeQueryExtractor()
+                return extractor.extract(file_path=resolved_path, query=query)
+            except ImportError:
+                console.print("[yellow]Warning: pdd.include_query_extractor not found. Cannot perform semantic query.[/yellow]")
+                return f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+            except Exception as e:
+                console.print(f"[bold red]Error in semantic query:[/bold red] {e}")
+                return f"[Error in semantic query from {file_path}: {e}]"
+
         try:
             full_path = get_file_path(file_path)
             resolved = os.path.realpath(full_path)
@@ -245,7 +292,7 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
             ext = os.path.splitext(file_path)[1].lower()
             image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']
-            
+
             if ext in image_extensions:
                 console.print(f"Processing image include: [cyan]{full_path}[/cyan]")
                 from PIL import Image
@@ -287,6 +334,61 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as file:
                     content = file.read()
+                    
+                    # Apply selectors if any
+                    selectors_str = attrs.get('select')
+                    lines_str = attrs.get('lines')
+                    mode = attrs.get('mode', 'full')
+
+                    if selectors_str or lines_str or mode != 'full':
+                        selectors = []
+                        if selectors_str:
+                            selectors.extend([s.strip() for s in selectors_str.split(',')])
+                        if lines_str:
+                            selectors.append(f"lines:{lines_str}")
+                        
+                        try:
+                            from pdd.content_selector import ContentSelector
+                            selector = ContentSelector()
+                            content = selector.select(
+                                content=content,
+                                selectors=selectors,
+                                file_path=full_path,
+                                mode=mode,
+                            )
+                        except ImportError:
+                            # Fall back to query if originally present, otherwise full file
+                            fallback_query = attrs.get('query')
+                            if fallback_query:
+                                console.print(f"[yellow]Warning: ContentSelector not available; falling back to query= for {full_path}[/yellow]")
+                                try:
+                                    from pdd.include_query_extractor import IncludeQueryExtractor
+                                    return IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
+                                except Exception:
+                                    pass
+                            import warnings
+                            warnings.warn(
+                                f"ContentSelector not importable for select=\"{selectors_str}\" "
+                                f"on file {full_path}. Including full file content."
+                            )
+                            console.print(f"[yellow]Warning: pdd.content_selector not found for select=\"{selectors_str}\" on {full_path}. Including full content.[/yellow]")
+                        except Exception as e:
+                            # Fall back to query if originally present, otherwise full file
+                            fallback_query = attrs.get('query')
+                            if fallback_query:
+                                console.print(f"[yellow]Warning: ContentSelector failed for select=\"{selectors_str}\"; falling back to query= for {full_path}[/yellow]")
+                                try:
+                                    from pdd.include_query_extractor import IncludeQueryExtractor
+                                    return IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
+                                except Exception:
+                                    pass
+                            import warnings
+                            warnings.warn(
+                                f"ContentSelector failed for select=\"{selectors_str}\" "
+                                f"on file {full_path}: {e}. Including full file content."
+                            )
+                            console.print(f"[yellow]Warning: ContentSelector failed for select=\"{selectors_str}\" on {full_path}: {e}. Including full content.[/yellow]")
+                    
                     if recursive:
                         child_seen = _seen | {resolved}
                         content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)

@@ -1110,10 +1110,10 @@ def test_fstring_curly_brackets_outside_code_blocks() -> None:
     print(f"Output Cost per Million Tokens: {output_cost}")
 
     # Example usage of the token counter function
-    sample_text: str = "This is a sample text to count tokens."
-    token_count: int = token_counter(sample_text)
-    print(f"Token Count for Sample Text: {token_count}")
-    print(f"model_name: {model_name}")'''
+sample_text: str = "This is a sample text to count tokens."
+token_count: int = token_counter(sample_text)
+print(f"Token Count for Sample Text: {token_count}")
+print(f"model_name: {model_name}")'''
 
     # Expected output after preprocessing
     expected_output = '''    # Print the details of the selected LLM model
@@ -1122,10 +1122,10 @@ def test_fstring_curly_brackets_outside_code_blocks() -> None:
     print(f"Output Cost per Million Tokens: {{output_cost}}")
 
     # Example usage of the token counter function
-    sample_text: str = "This is a sample text to count tokens."
-    token_count: int = token_counter(sample_text)
-    print(f"Token Count for Sample Text: {{token_count}}")
-    print(f"model_name: {{model_name}}")'''
+sample_text: str = "This is a sample text to count tokens."
+token_count: int = token_counter(sample_text)
+print(f"Token Count for Sample Text: {{token_count}}")
+print(f"model_name: {{model_name}}")'''
 
     # Process the test string
     result = preprocess(test_string, recursive=False, double_curly_brackets=True)
@@ -2079,3 +2079,373 @@ You are an expert Python engineer. Write the User data model.'''
     assert '{"name": "User"' in formatted
     assert '<pdd-interface>' in formatted
     assert '</pdd-interface>' in formatted
+
+
+# ============================================================================
+# DETAILED TEST PLAN
+# ============================================================================
+# 1. Attribute Parsing (_parse_attrs):
+#    - Unit test: Verify that `_parse_attrs` correctly extracts key-value pairs
+#      from XML-like attribute strings, handling both single and double quotes.
+# 2. Semantic Query Extraction (<include query="...">):
+#    - Unit test: Mock `IncludeQueryExtractor` to verify that when the `query`
+#      attribute is present, the extraction is delegated to the extractor and
+#      bypasses standard file reading.
+# 3. Content Selection (<include select="..." lines="...">):
+#    - Unit test: Mock `ContentSelector` to verify that `select`, `lines`, and
+#      `mode` attributes are correctly parsed and passed to the selector.
+# 4. Self-Closing Include Tags (<include path="..." />):
+#    - Unit test: Verify that self-closing tags are correctly matched and processed
+#      using the `path` attribute.
+# 5. Debug Report Generation (_write_debug_report):
+#    - Unit test: Set `PDD_PREPROCESS_DEBUG` and `PDD_PREPROCESS_DEBUG_FILE` env
+#      vars, run preprocess, and verify the debug file is written to disk.
+#
+# Note on Z3 Formal Verification:
+# The core string manipulation properties (PDD tag removal, curly brace doubling,
+# exclude keys) are already covered by Z3 tests in the existing suite. The new
+# features being tested here (attribute parsing, delegating to external classes
+# like ContentSelector/IncludeQueryExtractor) involve side-effects, mocking, and
+# dictionary manipulations which are better suited for standard unit tests rather
+# than symbolic execution.
+# ============================================================================
+
+
+def test_parse_attrs_internal() -> None:
+    """Test the internal _parse_attrs function for correct attribute extraction."""
+    from pdd.preprocess import _parse_attrs
+    
+    # Test empty string
+    assert _parse_attrs("") == {}
+    
+    # Test double quotes
+    assert _parse_attrs('path="file.txt" select="def:main"') == {'path': 'file.txt', 'select': 'def:main'}
+    
+    # Test single quotes
+    assert _parse_attrs("path='file.txt' mode='interface'") == {'path': 'file.txt', 'mode': 'interface'}
+    
+    # Test mixed quotes and spacing
+    assert _parse_attrs('  path="a.txt"   query=\'find stuff\' ') == {'path': 'a.txt', 'query': 'find stuff'}
+
+def test_process_include_with_semantic_query(monkeypatch) -> None:
+    """Test that <include query="..."> delegates to IncludeQueryExtractor."""
+    prompt = '<include query="extract the main logic">source.py</include>'
+    expected_output = "Extracted semantic content"
+    
+    # Create a mock extractor class
+    class MockExtractor:
+        def extract(self, file_path, query):
+            assert query == "extract the main logic"
+            assert "source.py" in file_path
+            return expected_output
+            
+    # Mock the import of IncludeQueryExtractor
+    mock_module = MagicMock()
+    mock_module.IncludeQueryExtractor = MockExtractor
+    monkeypatch.setitem(sys.modules, 'pdd.include_query_extractor', mock_module)
+    
+    # Mock get_file_path to just return the filename
+    monkeypatch.setattr(sys.modules['pdd.preprocess'], 'get_file_path', lambda x: x)
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == expected_output
+
+def test_process_include_with_content_selector(monkeypatch) -> None:
+    """Test that <include select="..." lines="..."> delegates to ContentSelector."""
+    prompt = '<include select="def:main,class:App" lines="10-20" mode="interface">source.py</include>'
+    mock_file_content = "Full file content"
+    expected_output = "Selected content only"
+    
+    # Create a mock selector class
+    class MockSelector:
+        def select(self, content, selectors, file_path, mode):
+            assert content == mock_file_content
+            assert "def:main" in selectors
+            assert "class:App" in selectors
+            assert "lines:10-20" in selectors
+            assert mode == "interface"
+            return expected_output
+            
+    # Mock the import of ContentSelector
+    mock_module = MagicMock()
+    mock_module.ContentSelector = MockSelector
+    monkeypatch.setitem(sys.modules, 'pdd.content_selector', mock_module)
+    
+    # Mock file reading
+    monkeypatch.setattr('builtins.open', mock_open(read_data=mock_file_content))
+    monkeypatch.setattr(sys.modules['pdd.preprocess'], 'get_file_path', lambda x: x)
+    monkeypatch.setattr('os.path.realpath', lambda x: x)
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == expected_output
+
+def test_process_self_closing_include_tag(monkeypatch) -> None:
+    """Test that self-closing <include path="..." /> tags are processed correctly."""
+    prompt = 'Prefix <include path="target.txt" /> Suffix'
+    mock_file_content = "Target Content"
+    
+    monkeypatch.setattr('builtins.open', mock_open(read_data=mock_file_content))
+    monkeypatch.setattr(sys.modules['pdd.preprocess'], 'get_file_path', lambda x: x)
+    monkeypatch.setattr('os.path.realpath', lambda x: x)
+    
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == f"Prefix {mock_file_content} Suffix"
+
+def test_debug_report_generation(monkeypatch, tmp_path) -> None:
+    """Test that setting debug environment variables generates a debug report file."""
+    debug_file = tmp_path / "preprocess_debug.log"
+    
+    # Enable debug mode and set output file
+    monkeypatch.setenv("PDD_PREPROCESS_DEBUG", "1")
+    monkeypatch.setenv("PDD_PREPROCESS_DEBUG_FILE", str(debug_file))
+    
+    prompt = "Simple prompt with {var}"
+    
+    # Run preprocess
+    preprocess(prompt, recursive=False, double_curly_brackets=True)
+    
+    # Verify the debug file was created and contains expected content
+    assert debug_file.exists()
+    content = debug_file.read_text(encoding="utf-8")
+    assert "Preprocess Debug Report" in content
+    assert "Start preprocess" in content
+    assert "Initial length" in content
+    assert "Final length" in content
+
+
+# ===================================================================
+# Tests for <include select="..." mode="..."> (ContentSelector)
+# ===================================================================
+
+def test_include_select_delegates_to_content_selector(tmp_path, monkeypatch) -> None:
+    """<include select="def:foo"> should delegate to ContentSelector.select()."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("def foo():\n    return 42\n\ndef bar():\n    return 99\n")
+
+    prompt = '<include select="def:foo">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "def foo():\n    return 42"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockCS.return_value.select.assert_called_once()
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['def:foo']
+    assert call_kwargs.kwargs['mode'] == 'full'
+    assert result == "def foo():\n    return 42"
+
+
+def test_include_select_with_mode_interface(tmp_path, monkeypatch) -> None:
+    """<include select="class:Foo" mode="interface"> should pass mode to ContentSelector."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("class Foo:\n    def method(self): ...\n")
+
+    prompt = '<include select="class:Foo" mode="interface">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "class Foo:\n    def method(self): ..."
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['mode'] == 'interface'
+
+
+def test_include_select_multiple_selectors(tmp_path, monkeypatch) -> None:
+    """Comma-separated selectors should all be passed to ContentSelector."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("def a(): ...\ndef b(): ...\n")
+
+    prompt = '<include select="def:a,def:b">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "def a(): ...\ndef b(): ..."
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['def:a', 'def:b']
+
+
+def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
+    """If ContentSelector can't be imported, fall back to full file content with a warning."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    full_content = "def foo():\n    return 42\n"
+    src.write_text(full_content)
+
+    prompt = '<include select="def:foo">module.py</include>'
+
+    with patch.dict('sys.modules', {'pdd.content_selector': None}):
+        with pytest.warns(UserWarning, match="ContentSelector not importable.*def:foo.*module.py"):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == full_content
+
+
+def test_include_select_fallback_on_selector_error(tmp_path, monkeypatch) -> None:
+    """If ContentSelector raises, fall back to full file content with a warning."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    full_content = "def foo():\n    return 42\n"
+    src.write_text(full_content)
+
+    prompt = '<include select="def:nonexistent">module.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.side_effect = ValueError("function 'nonexistent' not found")
+        with pytest.warns(UserWarning, match="ContentSelector failed.*def:nonexistent.*module.py"):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == full_content
+
+
+def test_include_select_inside_code_block_not_processed(tmp_path, monkeypatch) -> None:
+    """<include select=...> inside a fenced code block should NOT be processed."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "module.py"
+    src.write_text("content")
+
+    prompt = '```xml\n<include select="def:foo">module.py</include>\n```'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockCS.assert_not_called()
+    assert result == prompt
+
+
+# ===================================================================
+# Tests for <include query="..."> (IncludeQueryExtractor)
+# ===================================================================
+
+def test_include_query_delegates_to_extractor(tmp_path, monkeypatch) -> None:
+    """<include query="...">file</include> should delegate to IncludeQueryExtractor.extract()."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What does x do?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        MockExt.return_value.extract.return_value = "x is set to 1."
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockExt.return_value.extract.assert_called_once()
+    call_kwargs = MockExt.return_value.extract.call_args
+    assert call_kwargs.kwargs['query'] == 'What does x do?'
+    assert 'data.py' in call_kwargs.kwargs['file_path']
+    assert result == "x is set to 1."
+
+
+def test_include_query_deferred_when_recursive(tmp_path, monkeypatch) -> None:
+    """When recursive=True, <include query=...> should be left intact (deferred)."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What does x do?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+
+    MockExt.return_value.extract.assert_not_called()
+    assert result == prompt
+
+
+def test_include_query_executed_on_second_pass(tmp_path, monkeypatch) -> None:
+    """Deferred query tag should execute on the non-recursive second pass."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What does x do?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        MockExt.return_value.extract.return_value = "x is set to 1."
+        first = preprocess(prompt, recursive=True, double_curly_brackets=False)
+        assert first == prompt
+        second = preprocess(first, recursive=False, double_curly_brackets=False)
+
+    assert second == "x is set to 1."
+    MockExt.return_value.extract.assert_called_once()
+
+
+def test_include_query_import_error_returns_error_message(tmp_path, monkeypatch) -> None:
+    """If IncludeQueryExtractor can't be imported, return an error placeholder."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What is x?">data.py</include>'
+
+    with patch.dict('sys.modules', {'pdd.include_query_extractor': None}):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error" in result
+    assert "include_query_extractor" in result
+
+
+def test_include_query_extractor_exception_returns_error(tmp_path, monkeypatch) -> None:
+    """If IncludeQueryExtractor.extract() raises, return an error placeholder."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '<include query="What is x?">data.py</include>'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        MockExt.return_value.extract.side_effect = RuntimeError("LLM unavailable")
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert "Error" in result
+    assert "LLM unavailable" in result
+
+
+def test_include_query_inside_code_block_not_processed(tmp_path, monkeypatch) -> None:
+    """<include query=...> inside a fenced code block should NOT be processed."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "data.py"
+    src.write_text("x = 1\n")
+
+    prompt = '```xml\n<include query="What is x?">data.py</include>\n```'
+
+    with patch('pdd.include_query_extractor.IncludeQueryExtractor') as MockExt:
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    MockExt.assert_not_called()
+    assert result == prompt
+
+
+# ===================================================================
+# Tests for processing order (pdd → include → include-many → shell → web)
+# ===================================================================
+
+def test_pdd_tags_processed_before_includes(tmp_path, monkeypatch) -> None:
+    """PDD tags should be stripped before include tags are resolved."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "file.txt"
+    src.write_text("included content")
+
+    # The pdd tag wraps an include — the include should NOT be processed
+    prompt = "<pdd><include>file.txt</include></pdd>After"
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == "After"
+
+
+def test_includes_processed_before_shell(tmp_path, monkeypatch) -> None:
+    """Include tags are resolved before shell tags execute."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "cmd.txt"
+    src.write_text("echo included")
+
+    prompt = "<shell><include>cmd.txt</include></shell>"
+    with patch('subprocess.run') as mock_run:
+        mock_run.return_value.stdout = "included\n"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    # The include should resolve first, then shell should execute the result
+    # (Though shell sees "echo included" as the command after include resolves)
+    mock_run.assert_called_once()
+    assert "included" in result

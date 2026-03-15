@@ -196,7 +196,7 @@ class TestCacheSharing:
         def counting_llm(*args, **kwargs):
             call_count[0] += 1
             return {
-                'result': FileSummary(file_summary="Test summary"),
+                'result': FileSummary(file_summary="Test summary", key_exports=["test_func"], dependencies=[]),
                 'cost': 0.01,
                 'model_name': "test"
             }

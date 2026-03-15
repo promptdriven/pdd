@@ -1,8 +1,10 @@
 from __future__ import annotations
+import os
 from typing import Callable, Optional, Tuple
 from pathlib import Path
 from rich import print
 from pydantic import BaseModel, Field
+import re
 
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
@@ -48,25 +50,11 @@ def insert_includes(
             - model_name: Name of the LLM model used
     """
     try:
-        # Step 1: Load the prompt template
+        # Step 1: Load and preprocess the prompt template
         insert_includes_prompt = load_prompt_template("insert_includes_LLM")
         if not insert_includes_prompt:
             raise ValueError("Failed to load insert_includes_LLM.prompt template")
 
-        if verbose:
-            print("[blue]Loaded insert_includes_LLM prompt template[/blue]")
-
-        # Step 2: Read the CSV file
-        try:
-            with open(csv_filename, 'r') as file:
-                csv_content = file.read()
-        except FileNotFoundError:
-            if verbose:
-                print(f"[yellow]CSV file {csv_filename} not found. Creating empty CSV.[/yellow]")
-            csv_content = "full_path,file_summary,content_hash\n"
-            Path(csv_filename).write_text(csv_content)
-
-        # Step 3: Preprocess the prompt template
         processed_prompt = preprocess(
             insert_includes_prompt,
             recursive=False,
@@ -75,9 +63,19 @@ def insert_includes(
         )
 
         if verbose:
-            print("[blue]Preprocessed prompt template[/blue]")
+            print("[blue]Loaded and preprocessed insert_includes_LLM prompt template[/blue]")
 
-        # Step 4: Get dependencies using auto_include
+        # Step 2: Read the CSV file (create with header if missing)
+        try:
+            with open(csv_filename, 'r') as file:
+                csv_content = file.read()
+        except FileNotFoundError:
+            if verbose:
+                print(f"[yellow]CSV file {csv_filename} not found. Creating empty CSV.[/yellow]")
+            csv_content = "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            Path(csv_filename).write_text(csv_content)
+
+        # Step 3: Get dependencies using auto_include
         dependencies, csv_output, auto_include_cost, auto_include_model = auto_include(
             input_prompt=input_prompt,
             directory_path=directory_path,
@@ -87,41 +85,87 @@ def insert_includes(
             temperature=temperature,
             time=time,
             verbose=verbose,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            csv_path=csv_filename,
         )
 
         if verbose:
             print("[blue]Retrieved dependencies using auto_include[/blue]")
             print(f"Dependencies found: {dependencies}")
 
-        # Step 5: Run llm_invoke with the insert includes prompt
-        response = llm_invoke(
-            prompt=processed_prompt,
-            input_json={
-                "actual_prompt_to_update": input_prompt,
-                "actual_dependencies_to_insert": dependencies
-            },
-            strength=strength,
-            temperature=temperature,
-            time=time,
-            verbose=verbose,
-            output_pydantic=InsertIncludesOutput
-        )
+        # Step 4: Apply <update> blocks deterministically
+        update_blocks = re.findall(r'<update>(.*?)</update>', dependencies, re.DOTALL)
+        new_blocks = re.findall(r'<new>(.*?)</new>', dependencies, re.DOTALL)
 
-        if not response or 'result' not in response:
-            raise ValueError("Failed to get valid response from LLM model")
+        output_prompt = input_prompt
+        for update_block in update_blocks:
+            match = re.search(r'<include[^>]*>(.*?)</include>', update_block, re.DOTALL)
+            if match:
+                file_path = match.group(1).strip()
+                escaped_path = re.escape(file_path)
+                pattern = r'<include[^>]*>\s*' + escaped_path + r'\s*</include>'
+                new_prompt = re.sub(pattern, update_block.strip(), output_prompt)
+                # If the full path didn't match, try matching by basename.
+                # This handles cases where the prompt has a bare filename
+                # (e.g. "file.py") but the update block has a qualified path
+                # (e.g. "dir/file.py"), or vice-versa.
+                # Only apply basename fallback when it uniquely matches a single
+                # include in the prompt, to avoid nondeterministic replacements
+                # when multiple files share the same basename (e.g. a/utils.py
+                # vs b/utils.py).
+                if new_prompt == output_prompt:
+                    basename = os.path.basename(file_path)
+                    escaped_basename = re.escape(basename)
+                    pattern = r'<include[^>]*>\s*(?:[^\s<]*/)*' + escaped_basename + r'\s*</include>'
+                    matches = re.findall(pattern, output_prompt)
+                    if len(matches) == 1:
+                        new_prompt = re.sub(pattern, update_block.strip(), output_prompt)
+                    elif len(matches) > 1 and verbose:
+                        print(f"[yellow]Warning: basename '{basename}' matches {len(matches)} includes; skipping ambiguous update[/yellow]")
+                output_prompt = new_prompt
 
-        result: InsertIncludesOutput = response['result']
-        model_name = response['model_name']
-        total_cost = response['cost'] + auto_include_cost
+        if not update_blocks and not new_blocks and dependencies.strip():
+            new_dependencies_str = dependencies
+            has_new = True
+        else:
+            new_dependencies_str = "\n".join([f"<new>{block}</new>" for block in new_blocks])
+            has_new = bool(new_blocks)
 
-        if verbose:
-            print("[green]Successfully inserted includes into prompt[/green]")
-            print(f"Total cost: ${total_cost:.6f}")
-            print(f"Model used: {model_name}")
+        # Steps 5 & 6: Invoke LLM if <new> blocks exist, otherwise skip
+        if has_new:
+            response = llm_invoke(
+                prompt=processed_prompt,
+                input_json={
+                    "actual_prompt_to_update": output_prompt,
+                    "actual_dependencies_to_insert": new_dependencies_str
+                },
+                strength=strength,
+                temperature=temperature,
+                time=time,
+                verbose=verbose,
+                output_pydantic=InsertIncludesOutput
+            )
+
+            if not response or 'result' not in response:
+                raise ValueError("Failed to get valid response from LLM model")
+
+            result: InsertIncludesOutput = response['result']
+            model_name = response['model_name']
+            total_cost = response['cost'] + auto_include_cost
+            output_prompt = result.output_prompt
+
+            if verbose:
+                print("[green]Successfully inserted includes into prompt[/green]")
+                print(f"Total cost: ${total_cost:.6f}")
+                print(f"Model used: {model_name}")
+        else:
+            model_name = auto_include_model
+            total_cost = auto_include_cost
+            if verbose:
+                print("[green]No new includes to insert, skipping LLM call[/green]")
 
         return (
-            result.output_prompt,
+            output_prompt,
             csv_output,
             total_cost,
             model_name
