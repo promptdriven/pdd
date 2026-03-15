@@ -30,9 +30,7 @@ export const BADGE = {
 	width: 200,
 	height: 60,
 	borderRadius: 8,
-	rightOffset: 60,
-	topStart: 120,
-	gap: 16,
+	slideOffsetY: 24,
 };
 
 export const TYPOGRAPHY = {
@@ -69,7 +67,58 @@ export const ANIMATION = {
 export const GRID_ROWS = 4;
 
 export const DATA = {
-	waveHeight: { label: 'Wave Height', value: '0.8 m' },
-	wavePeriod: { label: 'Wave Period', value: '6.2 s' },
+	waveHeight: { label: 'Wave Height', value: '0.8m' },
+	wavePeriod: { label: 'Wave Period', value: '6.2s' },
 	waterTemp: { label: 'Water Temp', value: '22\u00B0C' },
+};
+
+export const DEFAULT_BADGE_SLOTS = [
+	{ x: 120, y: 680 },
+	{ x: 860, y: 680 },
+	{ x: 1600, y: 680 },
+] as const;
+
+export type WaveBadgeIcon = 'wave' | 'clock' | 'thermometer';
+
+export type ResolvedWaveOverlayBadge = {
+	label: string;
+	value: string;
+	icon: WaveBadgeIcon;
+	x: number;
+	y: number;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+const DEFAULT_BADGES: readonly ResolvedWaveOverlayBadge[] = [
+	{ ...DEFAULT_BADGE_SLOTS[0], ...DATA.waveHeight, icon: 'wave' },
+	{ ...DEFAULT_BADGE_SLOTS[1], ...DATA.wavePeriod, icon: 'clock' },
+	{ ...DEFAULT_BADGE_SLOTS[2], ...DATA.waterTemp, icon: 'thermometer' },
+] as const;
+
+export const resolveWaveOverlayBadges = (
+	dataPoints: Record<string, unknown> | null,
+): ResolvedWaveOverlayBadge[] => {
+	const stats = Array.isArray(dataPoints?.stats) ? dataPoints.stats : [];
+
+	return DEFAULT_BADGES.map((fallbackBadge, index) => {
+		const candidate = stats[index];
+		if (!isRecord(candidate)) {
+			return { ...fallbackBadge };
+		}
+
+		return {
+			label:
+				typeof candidate.label === 'string' ? candidate.label : fallbackBadge.label,
+			value:
+				typeof candidate.value === 'string' ? candidate.value : fallbackBadge.value,
+			icon:
+				candidate.icon === 'wave' || candidate.icon === 'clock' || candidate.icon === 'thermometer'
+					? candidate.icon
+					: fallbackBadge.icon,
+			x: typeof candidate.x === 'number' ? candidate.x : fallbackBadge.x,
+			y: typeof candidate.y === 'number' ? candidate.y : fallbackBadge.y,
+		};
+	});
 };

@@ -170,6 +170,37 @@ describe("lib/audit-geometry", () => {
     );
   });
 
+  it("passes a vertical-divider visual when the rendered divider centroid is at the expected resting x-position", () => {
+    const pngPath = path.join(tmpDir, "vertical-divider.png");
+    writeSolidShapePng(pngPath, 200, 120, [
+      { left: 108, top: 0, width: 4, height: 120, color: "#38BDF8" },
+    ]);
+
+    const result = evaluateDeterministicGeometryAudit(
+      [
+        "## Data Points",
+        "```json",
+        [
+          "{",
+          '  "divider": {',
+          '    "endX": 110,',
+          '    "color": "#38BDF8"',
+          "  }",
+          "}",
+        ].join("\n"),
+        "```",
+      ].join("\n"),
+      pngPath
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        verdict: "pass",
+        check: "vertical-divider",
+      })
+    );
+  });
+
   it("passes a centered single-shape visual when the rendered shape is centered on the canvas", () => {
     const pngPath = path.join(tmpDir, "centered-shape.png");
     writeSolidShapePng(pngPath, 200, 120, [

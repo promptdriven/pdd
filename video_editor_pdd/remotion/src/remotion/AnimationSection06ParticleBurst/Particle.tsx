@@ -1,6 +1,7 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { CANVAS, PARTICLES, TIMING, type ParticleData } from './constants';
+import { CANVAS, TIMING, type ParticleData } from './constants';
+import { resolveParticleOpacity } from './motion';
 
 interface ParticleProps {
   particle: ParticleData;
@@ -39,40 +40,7 @@ export const Particle: React.FC<ParticleProps> = ({ particle }) => {
   const x = CANVAS.centerX + Math.cos(angle) * currentDistance;
   const y = CANVAS.centerY + Math.sin(angle) * currentDistance;
 
-  // Opacity: full until 60% of travel, then fade to 0 with easeInQuad
-  const fadeStartDistance = maxDistance * PARTICLES.fadeStartRatio;
-  let opacity: number;
-
-  if (currentDistance <= fadeStartDistance) {
-    opacity = 1;
-  } else {
-    const fadeProgress = (currentDistance - fadeStartDistance) / (maxDistance - fadeStartDistance);
-    opacity = interpolate(
-      fadeProgress,
-      [0, 1],
-      [1, 0],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.in(Easing.quad),
-      },
-    );
-  }
-
-  // After move phase, any remaining particles continue fading (frames 22-30)
-  if (frame > TIMING.particleMoveEnd) {
-    const tailFade = interpolate(
-      frame,
-      [TIMING.particleMoveEnd, TIMING.totalEnd],
-      [opacity, 0],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.in(Easing.quad),
-      },
-    );
-    opacity = tailFade;
-  }
+  const opacity = resolveParticleOpacity({ frame, currentDistance, maxDistance });
 
   if (opacity <= 0) return null;
 

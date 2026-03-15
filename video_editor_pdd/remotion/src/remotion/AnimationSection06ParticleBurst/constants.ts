@@ -29,6 +29,7 @@ export const PARTICLES = {
   maxDistance: 300,
   seed: 42,
   fadeStartRatio: 0.6, // begin fading at 60% of travel distance
+  tailStartOpacity: 0.35,
 } as const;
 
 export const TIMING = {

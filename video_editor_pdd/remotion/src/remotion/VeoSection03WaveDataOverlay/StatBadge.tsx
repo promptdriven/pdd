@@ -1,12 +1,14 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, BADGE, TYPOGRAPHY, ANIMATION } from './constants';
+import { COLORS, BADGE, TYPOGRAPHY, ANIMATION, type WaveBadgeIcon } from './constants';
 
 interface StatBadgeProps {
 	label: string;
 	value: string;
-	icon: 'wave' | 'clock' | 'thermometer';
+	icon: WaveBadgeIcon;
 	index: number;
+	x: number;
+	y: number;
 }
 
 const WaveIcon: React.FC<{ size: number }> = ({ size }) => (
@@ -51,6 +53,8 @@ export const StatBadge: React.FC<StatBadgeProps> = ({
 	value,
 	icon,
 	index,
+	x,
+	y,
 }) => {
 	const frame = useCurrentFrame();
 
@@ -65,21 +69,20 @@ export const StatBadge: React.FC<StatBadgeProps> = ({
 		easing: Easing.out(Easing.cubic),
 	});
 
-	const translateX = interpolate(frame, [startFrame, endFrame], [40, 0], {
+	const translateY = interpolate(frame, [startFrame, endFrame], [BADGE.slideOffsetY, 0], {
 		extrapolateLeft: 'clamp',
 		extrapolateRight: 'clamp',
 		easing: Easing.out(Easing.cubic),
 	});
 
 	const IconComponent = ICONS[icon];
-	const top = BADGE.topStart + index * (BADGE.height + BADGE.gap);
 
 	return (
 		<div
 			style={{
 				position: 'absolute',
-				right: BADGE.rightOffset,
-				top,
+				left: x,
+				top: y,
 				width: BADGE.width,
 				height: BADGE.height,
 				borderRadius: BADGE.borderRadius,
@@ -90,7 +93,7 @@ export const StatBadge: React.FC<StatBadgeProps> = ({
 				padding: '0 14px',
 				gap: 10,
 				opacity,
-				transform: `translateX(${translateX}px)`,
+				transform: `translateY(${translateY}px)`,
 			}}
 		>
 			<IconComponent size={20} />

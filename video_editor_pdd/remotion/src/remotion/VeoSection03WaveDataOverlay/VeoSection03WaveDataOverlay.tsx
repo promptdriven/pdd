@@ -4,8 +4,8 @@ import {
 	OffthreadVideo,
 	staticFile,
 } from 'remotion';
-import { useVisualMediaSrc } from '../_shared/visual-runtime';
-import { COLORS, DATA } from './constants';
+import { useVisualContractData, useVisualMediaSrc } from '../_shared/visual-runtime';
+import { COLORS, resolveWaveOverlayBadges } from './constants';
 import { GradientOverlay } from './GradientOverlay';
 import { GridOverlay } from './GridOverlay';
 import { WaveformGraph } from './WaveformGraph';
@@ -13,6 +13,8 @@ import { StatBadge } from './StatBadge';
 
 export const VeoSection03WaveDataOverlay: React.FC = () => {
 	const backgroundSrc = useVisualMediaSrc('backgroundSrc', 'veo/04_veo_broll.mp4');
+	const contractData = useVisualContractData<Record<string, unknown>>();
+	const badges = resolveWaveOverlayBadges(contractData);
 
 	return (
 		<AbsoluteFill style={{ backgroundColor: COLORS.background }}>
@@ -41,25 +43,18 @@ export const VeoSection03WaveDataOverlay: React.FC = () => {
 			{/* Sinusoidal waveform in lower third */}
 			<WaveformGraph />
 
-			{/* Stat badges staggering in from the right */}
-			<StatBadge
-				label={DATA.waveHeight.label}
-				value={DATA.waveHeight.value}
-				icon="wave"
-				index={0}
-			/>
-			<StatBadge
-				label={DATA.wavePeriod.label}
-				value={DATA.wavePeriod.value}
-				icon="clock"
-				index={1}
-			/>
-			<StatBadge
-				label={DATA.waterTemp.label}
-				value={DATA.waterTemp.value}
-				icon="thermometer"
-				index={2}
-			/>
+			{/* Stat badges distributed across the lower data area */}
+			{badges.map((badge, index) => (
+				<StatBadge
+					key={`${badge.label}-${index}`}
+					label={badge.label}
+					value={badge.value}
+					icon={badge.icon}
+					index={index}
+					x={badge.x}
+					y={badge.y}
+				/>
+			))}
 		</AbsoluteFill>
 	);
 };

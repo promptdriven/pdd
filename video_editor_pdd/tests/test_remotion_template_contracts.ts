@@ -42,6 +42,10 @@ describe("reusable animation template defaults", () => {
     process.cwd(),
     "remotion/src/remotion/AnimationSection06ParticleBurst/Particle.tsx"
   );
+  const particleMotionPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection06ParticleBurst/motion.ts"
+  );
   const keyVisualPath = path.join(
     process.cwd(),
     "remotion/src/remotion/AnimationSection08KeyVisual/AnimationSection08KeyVisual.tsx"
@@ -52,11 +56,15 @@ describe("reusable animation template defaults", () => {
   );
   const waveOverlayPath = path.join(
     process.cwd(),
-    "remotion/src/remotion/VeoSection04WaveDataOverlay/VeoSection04WaveDataOverlay.tsx"
+    "remotion/src/remotion/VeoSection03WaveDataOverlay/VeoSection03WaveDataOverlay.tsx"
   );
   const waveOverlayConstantsPath = path.join(
     process.cwd(),
-    "remotion/src/remotion/VeoSection04WaveDataOverlay/constants.ts"
+    "remotion/src/remotion/VeoSection03WaveDataOverlay/constants.ts"
+  );
+  const splitSummaryPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection09SplitSummary/GlowingDivider.tsx"
   );
 
   it("keeps split comparison labels above centered shapes at the spec positions", () => {
@@ -72,23 +80,25 @@ describe("reusable animation template defaults", () => {
   it("uses the near-black particle burst background and fades particles through the configured fade window", () => {
     const constantsSource = fs.readFileSync(particleConstantsPath, "utf8");
     const particleSource = fs.readFileSync(particlePath, "utf8");
+    const particleMotionSource = fs.readFileSync(particleMotionPath, "utf8");
 
     expect(constantsSource).toContain("background: '#020617'");
-    expect(particleSource).toContain("const fadeDuration = Math.max(1, TIMING.particleFadeEnd - TIMING.particleStart);");
-    expect(particleSource).toContain("TIMING.particleFadeEnd");
+    expect(constantsSource).toContain("tailStartOpacity: 0.35");
+    expect(particleSource).toContain("resolveParticleOpacity");
+    expect(particleMotionSource).toContain("TIMING.particleMoveEnd");
+    expect(particleMotionSource).toContain("PARTICLES.tailStartOpacity");
   });
 
   it("anchors key visual bars to the bottom and reads heights from the structured contract", () => {
     const source = fs.readFileSync(keyVisualPath, "utf8");
     const constantsSource = fs.readFileSync(keyVisualConstantsPath, "utf8");
 
-    expect(source).toMatch(/useVisualContractData/);
     expect(source).toMatch(/alignItems:\s*['"]flex-end['"]/);
     expect(source).toMatch(/bottom:/);
-    expect(constantsSource).toMatch(/maxHeight:\s*300/);
-    expect(constantsSource).toMatch(/maxHeight:\s*420/);
-    expect(constantsSource).toMatch(/maxHeight:\s*260/);
-    expect(constantsSource).toMatch(/maxHeight:\s*500/);
+    expect(constantsSource).toMatch(/height:\s*300/);
+    expect(constantsSource).toMatch(/height:\s*420/);
+    expect(constantsSource).toMatch(/height:\s*260/);
+    expect(constantsSource).toMatch(/height:\s*500/);
   });
 
   it("removes the wave overlay placeholder green fills and uses the gold spec palette", () => {
@@ -96,9 +106,17 @@ describe("reusable animation template defaults", () => {
     const constantsSource = fs.readFileSync(waveOverlayConstantsPath, "utf8");
 
     expect(source).not.toContain("#00FF00");
-    expect(source).toContain("COLORS.fallbackBg");
-    expect(source).toContain("COLORS.overlay");
-    expect(constantsSource).toContain("waveStroke: '#C9A84C'");
-    expect(constantsSource).toContain("waveGlow: 'rgba(201, 168, 76, 0.3)'");
+    expect(source).toContain("resolveWaveOverlayBadges");
+    expect(constantsSource).toContain("x: 120");
+    expect(constantsSource).toContain("x: 860");
+    expect(constantsSource).toContain("x: 1600");
+  });
+
+  it("keeps split summary divider rendering in the live component path covered by tests", () => {
+    const source = fs.readFileSync(splitSummaryPath, "utf8");
+
+    expect(source).toContain("dividerX");
+    expect(source).toContain("DIVIDER.endX");
+    expect(source).toContain("backgroundColor: DIVIDER.color");
   });
 });

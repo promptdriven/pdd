@@ -16,7 +16,7 @@ type DecodedPng = {
 export type DeterministicGeometryAuditResult = {
   verdict: "pass";
   summary: string;
-  check: "horizontal-slide" | "split-panels" | "centered-shape";
+  check: "horizontal-slide" | "split-panels" | "centered-shape" | "vertical-divider";
 };
 
 const PNG_SIGNATURE = Buffer.from([
@@ -477,6 +477,44 @@ const evaluateCenteredShape = (
   return null;
 };
 
+const evaluateVerticalDivider = (
+  dataPoints: Record<string, unknown>,
+  decoded: DecodedPng
+): DeterministicGeometryAuditResult | null => {
+  const divider =
+    dataPoints.divider && typeof dataPoints.divider === "object"
+      ? (dataPoints.divider as Record<string, unknown>)
+      : null;
+  const endX =
+    divider && typeof divider.endX === "number" ? divider.endX : null;
+  const color =
+    divider && typeof divider.color === "string"
+      ? parseHexColor(divider.color)
+      : null;
+
+  if (!endX || !color) {
+    return null;
+  }
+
+  const centroid = findColorCentroid(decoded, color);
+  if (!centroid) {
+    return null;
+  }
+
+  const toleranceX = Math.max(decoded.width * 0.03, 24);
+  if (Math.abs(centroid.x - endX) <= toleranceX) {
+    return {
+      verdict: "pass",
+      check: "vertical-divider",
+      summary: `Deterministic geometry check confirmed the divider is resting near x=${endX.toFixed(
+        0
+      )}.`,
+    };
+  }
+
+  return null;
+};
+
 export function evaluateDeterministicGeometryAudit(
   specContent: string,
   pngPath: string
@@ -493,6 +531,7 @@ export function evaluateDeterministicGeometryAudit(
 
   return (
     evaluateSplitPanels(dataPoints as Record<string, unknown>, decoded) ??
+    evaluateVerticalDivider(dataPoints as Record<string, unknown>, decoded) ??
     evaluateHorizontalSlide(specContent, dataPoints as Record<string, unknown>, decoded) ??
     evaluateCenteredShape(specContent, dataPoints as Record<string, unknown>, decoded)
   );
