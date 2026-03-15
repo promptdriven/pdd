@@ -1,0 +1,113 @@
+{
+  "name": "PDD Explainer",
+  "outputResolution": {
+    "width": 1920,
+    "height": 1080
+  },
+  "tts": {
+    "engine": "qwen3-tts",
+    "modelPath": "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "tokenizerPath": "models/Qwen3-TTS-Tokenizer-12Hz",
+    "speaker": "Aiden",
+    "speakingRate": 0.95,
+    "sampleRate": 24000
+  },
+  "sections": [
+    {
+      "id": "cold_open",
+      "label": "Cold Open",
+      "videoFile": "cold_open.mp4",
+      "specDir": "cold_open",
+      "remotionDir": "S00-ColdOpen",
+      "compositionId": "ColdOpenSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part1_economics",
+      "label": "Part 1: The Economics of Darning",
+      "videoFile": "part1_economics.mp4",
+      "specDir": "part1_economics",
+      "remotionDir": "S01-Part1Economics",
+      "compositionId": "Part1EconomicsSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part2_paradigm_shift",
+      "label": "Part 2: The Paradigm Shift",
+      "videoFile": "part2_paradigm_shift.mp4",
+      "specDir": "part2_paradigm_shift",
+      "remotionDir": "S02-Part2ParadigmShift",
+      "compositionId": "Part2ParadigmShiftSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part3_mold_three_parts",
+      "label": "Part 3: The Mold Has Three Parts",
+      "videoFile": "part3_mold_three_parts.mp4",
+      "specDir": "part3_mold_three_parts",
+      "remotionDir": "S03-Part3MoldThreeParts",
+      "compositionId": "Part3MoldThreePartsSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part4_precision_tradeoff",
+      "label": "Part 4: The Precision Tradeoff",
+      "videoFile": "part4_precision_tradeoff.mp4",
+      "specDir": "part4_precision_tradeoff",
+      "remotionDir": "S04-Part4PrecisionTradeoff",
+      "compositionId": "Part4PrecisionTradeoffSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "part5_compound_returns",
+      "label": "Part 5: Compound Returns",
+      "videoFile": "part5_compound_returns.mp4",
+      "specDir": "part5_compound_returns",
+      "remotionDir": "S05-Part5CompoundReturns",
+      "compositionId": "Part5CompoundReturnsSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "where_to_start",
+      "label": "Where to Start",
+      "videoFile": "where_to_start.mp4",
+      "specDir": "where_to_start",
+      "remotionDir": "S06-WhereToStart",
+      "compositionId": "WhereToStartSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    },
+    {
+      "id": "closing",
+      "label": "Closing",
+      "videoFile": "closing.mp4",
+      "specDir": "closing",
+      "remotionDir": "S07-Closing",
+      "compositionId": "ClosingSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
+    }
+  ],
+  "audioSync": {
+    "sectionGroups": {},
+    "silenceGapDefault": 0.3
+  },
+  "veo": {
+    "model": "veo-3.1-generate-preview",
+    "defaultAspectRatio": "16:9",
+    "maxConcurrentGenerations": 4,
+    "references": [],
+    "frameChains": []
+  },
+  "render": {
+    "maxParallelRenders": 3,
+    "useLambda": false,
+    "lambdaRegion": "us-east-1"
+  }
+}

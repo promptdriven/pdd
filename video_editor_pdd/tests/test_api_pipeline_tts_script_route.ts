@@ -19,6 +19,10 @@
  *  11. No authentication required
  */
 
+import fs from "fs";
+import os from "os";
+import path from "path";
+
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
 // ---------------------------------------------------------------------------
@@ -45,9 +49,14 @@ jest.mock("@/lib/jobs", () => ({
 }));
 
 const mockRunClaudeFix = jest.fn();
+const mockLoadProject = jest.fn();
 
 jest.mock("@/lib/claude", () => ({
   runClaudeFix: (...args: unknown[]) => mockRunClaudeFix(...args),
+}));
+
+jest.mock("@/lib/project", () => ({
+  loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
 jest.mock("@/lib/projects", () => ({
@@ -81,6 +90,8 @@ function flushPromises(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+const originalCwd = process.cwd();
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -91,7 +102,49 @@ beforeEach(() => {
   mockError.mockClear();
   mockRunPipelineStage.mockReset();
   mockRunClaudeFix.mockReset();
+  mockLoadProject.mockReset();
   mockRunPipelineStage.mockResolvedValue("test-job-id");
+  mockLoadProject.mockReturnValue({
+    name: "demo",
+    outputResolution: { width: 1920, height: 1080 },
+    tts: {
+      engine: "qwen3-tts",
+      modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+      tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+      speaker: "Aiden",
+      speakingRate: 0.95,
+      sampleRate: 24000,
+    },
+    sections: [
+      {
+        id: "intro",
+        label: "Intro",
+        videoFile: "intro.mp4",
+        specDir: "intro",
+        remotionDir: "S00-Intro",
+        compositionId: "IntroSection",
+        durationSeconds: 0,
+        offsetSeconds: 0,
+      },
+    ],
+    audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+    veo: {
+      model: "veo-3.1-generate-preview",
+      defaultAspectRatio: "16:9",
+      maxConcurrentGenerations: 4,
+      references: [],
+      frameChains: [],
+    },
+    render: {
+      maxParallelRenders: 3,
+      useLambda: false,
+      lambdaRegion: "us-east-1",
+    },
+  });
+});
+
+afterEach(() => {
+  process.chdir(originalCwd);
 });
 
 // ---------------------------------------------------------------------------
@@ -199,6 +252,17 @@ describe("tts-script executor", () => {
     expect(mockRunClaudeFix.mock.calls[0][0]).toContain("NARRATOR");
   });
 
+  it("passes prompt requiring a stable section-based machine-readable format", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    mockRunClaudeFix.mockResolvedValue(undefined);
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain("stable machine-readable");
+    expect(prompt).toContain("## section headings");
+    expect(prompt).toContain("preserve the spoken-block order");
+  });
+
   it("passes prompt forbidding non-spoken block and scene labels", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     mockRunClaudeFix.mockResolvedValue(undefined);
@@ -236,6 +300,110 @@ describe("tts-script executor", () => {
     mockRunClaudeFix.mockRejectedValue(new Error("Claude failed"));
 
     await expect(executor(jest.fn())).rejects.toThrow("Claude failed");
+  });
+
+  it("normalizes Claude output into canonical section headings after generation", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-script-canonical-"));
+    process.chdir(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, "narrative"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "project.json"),
+      "{}",
+      "utf-8"
+    );
+    mockLoadProject.mockReturnValue({
+      name: "demo",
+      outputResolution: { width: 1920, height: 1080 },
+      tts: {
+        engine: "qwen3-tts",
+        modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+        speaker: "Aiden",
+        speakingRate: 0.95,
+        sampleRate: 24000,
+      },
+      sections: [
+        {
+          id: "intro",
+          label: "Intro",
+          videoFile: "intro.mp4",
+          specDir: "intro",
+          remotionDir: "S00-Intro",
+          compositionId: "IntroSection",
+          durationSeconds: 0,
+          offsetSeconds: 0,
+        },
+        {
+          id: "outro",
+          label: "Outro",
+          videoFile: "outro.mp4",
+          specDir: "outro",
+          remotionDir: "S01-Outro",
+          compositionId: "OutroSection",
+          durationSeconds: 0,
+          offsetSeconds: 0,
+        },
+      ],
+      audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+      veo: {
+        model: "veo-3.1-generate-preview",
+        defaultAspectRatio: "16:9",
+        maxConcurrentGenerations: 4,
+        references: [],
+        frameChains: [],
+      },
+      render: {
+        maxParallelRenders: 3,
+        useLambda: false,
+        lambdaRegion: "us-east-1",
+      },
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, "narrative", "main_script.md"),
+      [
+        "## Intro",
+        "",
+        "**NARRATOR:**",
+        "Hello from the intro.",
+        "",
+        "## Outro",
+        "",
+        "**NARRATOR:**",
+        "Goodbye from the outro.",
+        "",
+      ].join("\n"),
+      "utf-8"
+    );
+
+    mockRunClaudeFix.mockImplementation(async () => {
+      fs.writeFileSync(
+        path.join(tmpDir, "narrative", "tts_script.md"),
+        [
+          "# TTS Script",
+          "",
+          "[TONE: warm]",
+          "Hello from the intro.",
+          "",
+          "[PAUSE: 1.0s]",
+          "[TONE: calm]",
+          "Goodbye from the outro.",
+          "",
+        ].join("\n"),
+        "utf-8"
+      );
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const savedScript = fs.readFileSync(
+      path.join(tmpDir, "narrative", "tts_script.md"),
+      "utf-8"
+    );
+    expect(savedScript).toContain("## Intro");
+    expect(savedScript).toContain("## Outro");
+    expect(savedScript).toContain("Hello from the intro.");
+    expect(savedScript).toContain("Goodbye from the outro.");
   });
 });
 
@@ -513,7 +681,7 @@ describe("source file structure", () => {
 
   it("scopes runClaudeFix to narrative/ directory via getProjectDir()", () => {
     expect(sourceCode).toMatch(
-      /path\.join\s*\(\s*getProjectDir\(\)\s*,\s*["']narrative["']\s*\)/
+      /path\.join\s*\(\s*(projectDir|getProjectDir\(\))\s*,\s*["']narrative["']\s*\)/
     );
   });
 });

@@ -1,10 +1,12 @@
 // app/api/pipeline/tts-script/run/route.ts
+import fs from "fs";
 import path from "path";
 import { createSseStream } from "@/lib/sse";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { getProjectDir } from "@/lib/projects";
+import { buildCanonicalTtsScript } from "@/lib/tts-script-format";
 import {
   isDeterministicPipelineMode,
   writeDeterministicTtsScript,
@@ -32,6 +34,10 @@ Instructions:
 5. Keep the result clean and readable in Markdown.
 6. Do not include non-spoken labels such as Block 1, Scene 2, Section headings, or editorial numbering in the spoken narration.
 7. Do not include markdown emphasis markers or other formatting punctuation in spoken lines. Output only spoken narration text plus TTS annotation tags.
+8. The final file must use a stable machine-readable section-based format:
+   - preserve the spoken-block order from the source script
+   - emit ## section headings for each project section
+   - under each section, emit annotation tags plus only the spoken narration text
 
 You are allowed to read/write files ONLY in the narrative/ directory.
 `;
@@ -42,17 +48,37 @@ You are allowed to read/write files ONLY in the narrative/ directory.
  */
 registerExecutor("tts-script", (_params, _send) => {
   return async (onLog) => {
+    const projectDir = getProjectDir();
+    const project = loadProject();
     if (isDeterministicPipelineMode()) {
-      const project = loadProject();
-      writeDeterministicTtsScript(getProjectDir(), project.sections, onLog);
+      writeDeterministicTtsScript(projectDir, project.sections, onLog);
       return;
     }
 
     await runClaudeFix(
       TTS_SCRIPT_PROMPT,
-      path.join(getProjectDir(), "narrative"),
+      path.join(projectDir, "narrative"),
       onLog
     );
+
+    const narrativeDir = path.join(projectDir, "narrative");
+    const mainScriptPath = path.join(narrativeDir, "main_script.md");
+    const ttsScriptPath = path.join(narrativeDir, "tts_script.md");
+    const mainScript = fs.existsSync(mainScriptPath)
+      ? fs.readFileSync(mainScriptPath, "utf-8")
+      : "";
+    const rawTtsScript = fs.existsSync(ttsScriptPath)
+      ? fs.readFileSync(ttsScriptPath, "utf-8")
+      : "";
+
+    const canonicalScript = buildCanonicalTtsScript(
+      mainScript,
+      rawTtsScript,
+      project.sections,
+    );
+    fs.mkdirSync(narrativeDir, { recursive: true });
+    fs.writeFileSync(ttsScriptPath, canonicalScript, "utf-8");
+    onLog("[tts-script] Normalized tts_script.md to canonical section format.");
   };
 });
 
