@@ -41,7 +41,6 @@ STEP_NAMES = {
     7: "verify_tests",
     8: "run_pdd_fix",
     9: "verify_all",
-    10: "ci_validation",
 }
 
 STEP_DESCRIPTIONS = {
@@ -53,11 +52,10 @@ STEP_DESCRIPTIONS = {
     6: "Creating unit tests",
     7: "Verifying tests detect bugs",
     8: "Running pdd fix",
-    9: "Final verification (local)",
-    10: "CI Validation (remote)",
+    9: "Final verification",
 }
 
-# Per-step timeouts for the 10-step agentic e2e fix workflow
+# Per-step timeouts for the 9-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -68,7 +66,6 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     7: 600.0,   # Verify unit tests detect bugs (Complex)
     8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
     9: 240.0,   # Final verification, loop control
-    10: 600.0,  # CI Validation polling and fixing (Complex)
 }
 
 console = Console()
@@ -753,69 +750,6 @@ def _commit_and_push(
         return False, f"Push failed: {push_err}"
 
 
-def _get_current_branch(cwd: Path) -> str:
-    """Get the current git branch name for a given directory."""
-    try:
-        cmd = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
-        return result.stdout.strip()
-    except (subprocess.CalledProcessError, OSError):
-        return ""
-
-
-def _get_pr_number(cwd: Path, branch_name: str, repo_owner: str, repo_name: str) -> Optional[int]:
-    """Find the PR number for the given branch."""
-    cmd = [
-        "gh", "pr", "list",
-        "--repo", f"{repo_owner}/{repo_name}",
-        "--head", branch_name,
-        "--json", "number",
-        "--jq", ".[0].number"
-    ]
-    try:
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
-        out = result.stdout.strip()
-        if out and out != "null":
-            return int(out)
-    except (subprocess.CalledProcessError, ValueError, OSError):
-        pass
-    return None
-
-
-def _poll_ci_checks(cwd: Path, repo_owner: str, repo_name: str, pr_number: int) -> Tuple[bool, str]:
-    """Poll CI checks for a PR until they pass or fail."""
-    cmd = [
-        "gh", "pr", "checks", str(pr_number),
-        "--repo", f"{repo_owner}/{repo_name}",
-        "--required",
-        "--watch",
-        "--interval", "10"
-    ]
-    try:
-        # We use a timeout to prevent infinite hanging
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=1200)
-        return result.returncode == 0, result.stdout
-    except subprocess.TimeoutExpired:
-        return False, "CI polling timed out after 20 minutes."
-    except subprocess.CalledProcessError as e:
-        return False, e.stdout + e.stderr
-
-
-def _get_ci_failure_logs(cwd: Path, repo_owner: str, repo_name: str, pr_number: int) -> str:
-    """Retrieve failure logs for the given PR."""
-    cmd = [
-        "gh", "run", "view",
-        "--repo", f"{repo_owner}/{repo_name}",
-        "--pr", str(pr_number),
-        "--log-failed"
-    ]
-    try:
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        return result.stdout
-    except Exception as e:
-        return f"Failed to retrieve CI logs: {str(e)}"
-
-
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -835,7 +769,7 @@ def run_agentic_e2e_fix_orchestrator(
     protect_tests: bool = False
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 10-step agentic e2e fix workflow.
+    Orchestrator for the 9-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -940,22 +874,22 @@ def run_agentic_e2e_fix_orchestrator(
         while current_cycle <= max_cycles:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
             
-            # Inner Loop (Steps 1-10)
-            for step_num in range(1, 11):
+            # Inner Loop (Steps 1-9)
+            for step_num in range(1, 10):
                 if step_num <= last_completed_step:
                     continue # Skip already completed steps in this cycle
 
                 # Skip steps that failed for environmental/timeout reasons in previous cycles
                 if step_num in skipped_steps:
                     skip_reason = skipped_steps[step_num]
-                    console.print(f"[bold][Step {step_num}/10] Skipped (remembered): {skip_reason}[/bold]")
+                    console.print(f"[bold][Step {step_num}/9] Skipped (remembered): {skip_reason}[/bold]")
                     step_outputs[str(step_num)] = f"E2E_SKIP: {skip_reason}"
                     last_completed_step = step_num
                     continue
 
                 # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
                 if str(step_num) in bug_step_outputs and current_cycle == 1:
-                    console.print(f"[bold][Step {step_num}/10] Reusing pdd-bug analysis[/bold]")
+                    console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
                     last_completed_step = step_num
                     continue
 
@@ -966,118 +900,13 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 2:
                     e2e_available, e2e_reason = _check_e2e_environment(cwd)
                     if not e2e_available:
-                        console.print(f"[bold][Step 2/10] E2E test skipped: {e2e_reason}[/bold]")
+                        console.print(f"[bold][Step 2/9] E2E test skipped: {e2e_reason}[/bold]")
                         step_outputs[str(step_num)] = f"E2E_SKIP: {e2e_reason}"
                         skipped_steps[step_num] = e2e_reason
                         last_completed_step = step_num
                         continue
 
-                console.print(f"[bold][Step {step_num}/10] {description}...[/bold]")
-
-                # Step 10: CI Validation Loop (Internal Retries)
-                if step_num == 10:
-                    current_branch = _get_current_branch(cwd)
-                    pr_number = _get_pr_number(cwd, current_branch, repo_owner, repo_name)
-                    
-                    if not pr_number:
-                        console.print(f"   [yellow]No PR found for branch '{current_branch}'. Skipping CI validation.[/yellow]")
-                        step_output = "CI_SKIP: No PR found for branch."
-                        step_outputs["10"] = step_output
-                        last_completed_step = 10
-                        success = True
-                        final_message = "All tests passed locally (Step 10 skipped: no PR found)."
-                        break
-
-                    ci_retries = 3
-                    ci_success = False
-                    ci_output = ""
-
-                    for attempt in range(1, ci_retries + 1):
-                        console.print(f"   [Step 10/10] CI Validation Attempt {attempt}/{ci_retries}...")
-                        
-                        # Commit and push current changes
-                        push_success, push_msg = _commit_and_push(
-                            cwd=cwd, issue_number=issue_number, issue_title=issue_title,
-                            repo_owner=repo_owner, repo_name=repo_name,
-                            initial_file_hashes=initial_file_hashes, quiet=quiet
-                        )
-                        if not push_success:
-                            console.print(f"   [red]Push failed: {push_msg}[/red]")
-                            ci_output = f"PUSH_FAILED: {push_msg}"
-                            break
-
-                        # Wait for CI status
-                        console.print(f"   Waiting for required CI checks for PR #{pr_number}...")
-                        passed, checks_out = _poll_ci_checks(cwd, repo_owner, repo_name, pr_number)
-                        
-                        if passed:
-                            console.print("   [green]Required CI checks PASSED![/green]")
-                            ci_success = True
-                            ci_output = "ALL_TESTS_PASS"
-                            break
-                        else:
-                            console.print("   [yellow]CI checks FAILED. Retrieving logs...[/yellow]")
-                            logs = _get_ci_failure_logs(cwd, repo_owner, repo_name, pr_number)
-                            
-                            # Run Step 10 agent to get fixes
-                            template_name = "agentic_e2e_fix_step10_ci_validation_LLM"
-                            prompt_template = load_prompt_template(template_name)
-                            if not prompt_template:
-                                console.print("   [red]Missing Step 10 prompt template.[/red]")
-                                break
-
-                            step10_context = context.copy()
-                            step10_context.update({
-                                "pr_checks_output": checks_out,
-                                "failure_logs": logs,
-                                "step9_output": step_outputs.get("9", "")
-                            })
-                            
-                            # Preprocess and format prompt
-                            exclude_keys = list(step10_context.keys())
-                            prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-                            prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
-                            formatted_prompt = prompt_template
-                            for key, value in step10_context.items():
-                                formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
-
-                            step_success, step_output, step_cost, step_model = run_agentic_task(
-                                instruction=formatted_prompt, cwd=cwd, verbose=verbose, quiet=quiet,
-                                timeout=600.0 + timeout_adder, label=f"cycle{current_cycle}_step10_retry{attempt}"
-                            )
-                            total_cost += step_cost
-                            model_used = step_model if step_model else model_used
-                            
-                            if not step_success:
-                                console.print(f"   [red]Step 10 agent failed: {step_output}[/red]")
-                                break
-                            
-                            # Apply fixes (the agent should have produced them)
-                            new_files = _parse_changed_files(step_output)
-                            for f in new_files:
-                                if f not in changed_files:
-                                    changed_files.append(f)
-                            
-                            if "CI_PASS" in step_output:
-                                # Agent thinks it's fixed (maybe it was a flaky test)
-                                # Next iteration of internal loop will verify
-                                pass
-                            elif "CI_FAIL_RETRY" in step_output:
-                                # Agent identified fixes, will apply and retry
-                                pass
-                            else:
-                                console.print("   [yellow]Agent produced no CI fix tokens. Retrying anyway...[/yellow]")
-
-                    if ci_success:
-                        step_outputs["10"] = "ALL_TESTS_PASS"
-                        last_completed_step = 10
-                        success = True
-                        final_message = "All tests passed (locally and in CI)."
-                        break
-                    else:
-                        step_outputs["10"] = f"FAILED: {ci_output}"
-                        # Fall through to cycle end logic
-                        break
+                console.print(f"[bold][Step {step_num}/9] {description}...[/bold]")
 
                 # 1. Load Prompt
                 template_name = f"agentic_e2e_fix_step{step_num}_{step_name}_LLM"
@@ -1270,30 +1099,32 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Loop Control (Step 9)
                 if step_num == 9:
-                    if "LOCAL_TESTS_PASS" in step_output or "ALL_TESTS_PASS" in step_output:
+                    if "ALL_TESTS_PASS" in step_output:
                         # Independent verification: don't trust LLM output alone
                         test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                         if test_files:
                             verified, verify_output = _verify_tests_independently(test_files, cwd)
                             if verified:
-                                console.print("[green]LOCAL_TESTS_PASS verified by independent pytest run (Step 9). Proceeding to CI validation.[/green]")
-                                # Don't break — proceed to Step 10
+                                console.print("[green]ALL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
+                                success = True
+                                final_message = "All tests passed after fixes (independently verified)."
+                                break
                             else:
-                                console.print("[bold red]LLM claimed LOCAL_TESTS_PASS at Step 9 but independent verification FAILED.[/bold red]")
-                                step_output = f"VERIFICATION_FAILED: LLM claimed LOCAL_TESTS_PASS but pytest failed.\n{verify_output}"
+                                console.print("[bold red]LLM claimed ALL_TESTS_PASS at Step 9 but independent verification FAILED.[/bold red]")
+                                step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
                                 step_outputs[str(step_num)] = f"FAILED: {step_output}"
                                 last_completed_step = step_num - 1
-                                break  # Verification failed — go to next cycle
+                                # Don't break — fall through to cycle increment
                         else:
-                            console.print("[green]LOCAL_TESTS_PASS detected in Step 9. Proceeding to CI validation.[/green]")
-                            # Don't break — proceed to Step 10
+                            console.print("[green]ALL_TESTS_PASS detected in Step 9.[/green]")
+                            success = True
+                            final_message = "All tests passed after fixes."
+                            break
                     elif "MAX_CYCLES_REACHED" in step_output:
                         console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
                         final_message = "Max cycles reached."
                         break
-                    elif "CONTINUE_CYCLE" in step_output:
-                        break  # Break inner loop — outer loop will start next cycle
-                    else:
+                    elif "CONTINUE_CYCLE" not in step_output:
                         console.print("[yellow]Warning: No loop control token found in Step 9. Stopping workflow — missing token treated as terminal condition.[/yellow]")
                         final_message = "Workflow stopped: no loop control token in Step 9 output."
                         break

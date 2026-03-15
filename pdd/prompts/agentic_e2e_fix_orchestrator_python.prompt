@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures.</pdd-reason>
+<pdd-reason>Orchestrates the 9-step agentic E2E fix workflow for resolving end-to-end test failures.</pdd-reason>
 
 <pdd-interface>
 {{
@@ -20,60 +20,49 @@
 Write the `pdd/agentic_e2e_fix_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass (locally and in CI), and supports state persistence (GitHub + local) for resumption. This workflow fixes bugs by running unit tests, e2e tests, \`pdd fix\` sequentially on failing dev units, and finally validating against remote CI checks.
+Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence (GitHub + local) for resumption. This workflow fixes bugs by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units.
 
 % Requirements
-1. Function: \`run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False) -> Tuple[bool, str, float, str, List[str]]\`
+1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run an outer loop (max \`max_cycles\` iterations) that executes steps 1-10 until all tests pass.
+3. Run an outer loop (max `max_cycles` iterations) that executes steps 1-9 until all tests pass.
 4. Accumulate step outputs to pass as context to subsequent steps. Track total cost.
 5. Track per-dev-unit state (fixed/attempts) and skipped steps (environmental failures) across cycles.
-   - \`skipped_steps\` Persists across cycles and is NOT cleared when \`step_outputs\` is cleared between cycles.
-6. Support \`--protect-tests\` by passing \`protect_tests\` boolean and \`protect_tests_flag\` string context to steps.
-7. **Step 10: CI Validation Loop**:
-   - If Step 9 emits \`LOCAL_TESTS_PASS\`, proceed to Step 10.
-   - Step 10 implements an internal iterative loop (up to 3 retries):
-     a. Commit and push current changes using \`_commit_and_push\`.
-     b. Poll CI status using \`gh pr checks --required --watch\`.
-     c. If CI passes, emit \`ALL_TESTS_PASS\` and finish.
-     d. If CI fails, retrieve logs via \`gh run view --log-failed\`, pass logs to Step 10 agent to get fixes, apply fixes, and retry.
-     e. If CI still fails after 3 retries, emit \`CONTINUE_CYCLE\` to start a full new cycle from Step 1 (if cycles remain).
-   - If no PR is found for the current branch, skip Step 10 with a warning and treat as success if Step 9 passed.
-8. On successful completion (\`ALL_TESTS_PASS\`):
-   - Perform independent verification using \`pytest\` if test files are found.
+   - `skipped_steps` Persists across cycles and is NOT cleared when `step_outputs` is cleared between cycles.
+6. Support `--protect-tests` by passing `protect_tests` boolean and `protect_tests_flag` string context to steps.
+7. On successful completion (`ALL_TESTS_PASS`):
+   - Perform independent verification using `pytest` if test files are found.
    - Detect actual file changes via content hashes (MD5) to avoid false summaries.
-   - Commit and push changed files (excluding intermediate artifacts like \`_fixed.py\`, \`.bak\`, \`.pdd/\` except state).
-   - Handle push auth failures by retrying with \`PDD_GH_TOKEN_FILE\` if available.
-9. On failure/incomplete: Post final status comment to GitHub via \`post_final_comment\`.
+   - Commit and push changed files (excluding intermediate artifacts like `_fixed.py`, `.bak`, `.pdd/` except state).
+   - Handle push auth failures by retrying with `PDD_GH_TOKEN_FILE` if available.
+8. On failure/incomplete: Post final status comment to GitHub via `post_final_comment`.
 
 % Helper Functions
-- \`_check_e2e_environment(cwd: Path) -> Tuple[bool, str]\`: Check for \`npx\` and \`playwright.config.*\`.
-- \`_is_test_file(filename: str) -> bool\`: Identify Python (\`test_*.py\`) and TS/JS (\`*.test.ts\`, \`*.spec.ts\`) test files.
-- \`_extract_test_files(...) -> List[str]\`: Find relevant test files from issue content and changed files.
-- \`_verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]\`: Run \`pytest\` and capture output.
-- \`_is_intermediate_file(filepath: str) -> bool\`: Filter out \`_fixed\`, \`.bak\`, \`.tmp\`, \`error_output*.txt\`, \`.pdd/\` (except state).
-- \`_commit_and_push(...) -> Tuple[bool, str]\`: Stage hash-detected changes, commit (\`fix: {title}\n\nFixes #{number}\`), and push with retry.
+- `_check_e2e_environment(cwd: Path) -> Tuple[bool, str]`: Check for `npx` and `playwright.config.*`.
+- `_is_test_file(filename: str) -> bool`: Identify Python (`test_*.py`) and TS/JS (`*.test.ts`, `*.spec.ts`) test files.
+- `_extract_test_files(...) -> List[str]`: Find relevant test files from issue content and changed files.
+- `_verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]`: Run `pytest` and capture output.
+- `_is_intermediate_file(filepath: str) -> bool`: Filter out `_fixed`, `.bak`, `.tmp`, `error_output*.txt`, `.pdd/` (except state).
+- `_commit_and_push(...) -> Tuple[bool, str]`: Stage hash-detected changes, commit (`fix: {title}\n\nFixes #{number}`), and push with retry.
 
 % Step Execution & Logic
-- **Step Mapping**: 1:unit_tests, 2:e2e_tests, 3:root_cause, 4:fix_e2e_tests, 5:identify_devunits, 6:create_unit_tests, 7:verify_tests, 8:run_pdd_fix, 9:verify_all, 10:ci_validation.
-- **Timeouts**: Define \`E2E_FIX_STEP_TIMEOUTS\` (Step 8 is 1000s, Step 10 is 600s, others 240-600s). Step 1 retries once with 1.5x timeout if it times out.
-- **Pre-flight (Step 2)**: Skip if \`_check_e2e_environment\` returns False. Store as \`E2E_SKIP\` in \`skipped_steps\` and \`step_outputs\`.
-- **Bug Analysis Reuse**: Check \`_bug_state_candidates\` (e.g., \`.pdd/bug-state/bug_state_{issue_number}.json\`) for successful Step 2/3 outputs to skip redundant diagnosis in Cycle 1.
-- **Resumption**: Load state via \`load_workflow_state\`. Use \`validate_cached_state\` to find the last *successful* step. Check staleness via \`_check_staleness\`.
+- **Step Mapping**: 1:unit_tests, 2:e2e_tests, 3:root_cause, 4:fix_e2e_tests, 5:identify_devunits, 6:create_unit_tests, 7:verify_tests, 8:run_pdd_fix, 9:verify_all.
+- **Timeouts**: Define `E2E_FIX_STEP_TIMEOUTS` (Step 8 is 1000s, others 240-600s). Step 1 retries once with 1.5x timeout if it times out.
+- **Pre-flight (Step 2)**: Skip if `_check_e2e_environment` returns False. Store as `E2E_SKIP` in `skipped_steps` and `step_outputs`.
+- **Bug Analysis Reuse**: Check `_bug_state_candidates` (e.g., `.pdd/bug-state/bug_state_{issue_number}.json`) for successful Step 2/3 outputs to skip redundant diagnosis in Cycle 1.
+- **Resumption**: Load state via `load_workflow_state`. Use `validate_cached_state` to find the last *successful* step. Check staleness via `_check_staleness`.
 - **Loop Control Tokens**:
-  - \`LOCAL_TESTS_PASS\`: Proceed to Step 10 (Step 9).
-  - \`ALL_TESTS_PASS\`: Break loop (success). Checked in Step 2 and Step 10.
-  - \`NOT_A_BUG\`: Step 3 determined it's not a bug, break workflow early.
-  - \`CONTINUE_CYCLE\`: Increment cycle and continue (Step 9 or 10).
-  - \`MAX_CYCLES_REACHED\`: Informational, loop exits naturally (Step 9).
-  - **Missing Token**: Treat as terminal error — log warning and \`break\` (Step 9 or 10).
+  - `ALL_TESTS_PASS`: Break loop (success). Checked in Step 2 and Step 9.
+  - `NOT_A_BUG`: Step 3 determined it's not a bug, break workflow early.
+  - `CONTINUE_CYCLE`: Increment cycle and continue (Step 9).
+  - `MAX_CYCLES_REACHED`: Informational, loop exits naturally (Step 9).
+  - **Missing Token**: Treat as terminal error — log warning and `break` (Step 9).
 
 % Context Variables
-- Common: \`issue_url\`, \`repo_owner\`, \`repo_name\`, \`issue_number\`, \`cycle_number\`, \`max_cycles\`, \`issue_content\`, \`protect_tests\`, \`protect_tests_flag\`.
-- Step-specific: Previous \`stepN_output\`.
-- Step 10 specific: \`pr_checks_output\`, \`failure_logs\`.
-- Parsed: \`dev_units_identified\` (Step 5 -> 6, 8), \`failing_dev_units\` (Step 8), \`next_cycle\` (Step 9).
-- Append \`E2E_SKIP\` notes to context if any previous steps were skipped.
+- Common: `issue_url`, `repo_owner`, `repo_name`, `issue_number`, `cycle_number`, `max_cycles`, `issue_content`, `protect_tests`, `protect_tests_flag`.
+- Step-specific: Previous `stepN_output`.
+- Parsed: `dev_units_identified` (Step 5 -> 6, 8), `failing_dev_units` (Step 8), `next_cycle` (Step 9).
+- Append `E2E_SKIP` notes to context if any previous steps were skipped.
 
 % Deliverables
-- Code: \`pdd/agentic_e2e_fix_orchestrator.py\`
+- Code: `pdd/agentic_e2e_fix_orchestrator.py`
