@@ -41,9 +41,36 @@ describe("lib/tts-script-format", () => {
     expect(output).toContain("## Outro");
     expect(output).toContain("[TONE: warm]");
     expect(output).toContain("[TONE: calm]");
+    expect(output).toContain("[INSTRUCT:");
     expect(output).toContain("Hello from the intro.");
     expect(output).toContain("Goodbye from the outro.");
     expect(output).toContain("[PAUSE: 1.2s]");
+  });
+
+  it("preserves explicit [INSTRUCT:] lines from generated output", () => {
+    const mainScript = [
+      "## Intro",
+      "",
+      "**NARRATOR:**",
+      "Hello from the intro.",
+      "",
+    ].join("\n");
+
+    const rawTtsScript = [
+      "[TONE: warm]",
+      "[PACE: moderate]",
+      "[INSTRUCT: Speak warmly and reassuringly.]",
+      "Hello from the intro.",
+      "",
+    ].join("\n");
+
+    const output = buildCanonicalTtsScript(
+      mainScript,
+      rawTtsScript,
+      [{ id: "intro", label: "Intro" }],
+    );
+
+    expect(output).toContain("[INSTRUCT: Speak warmly and reassuringly.]");
   });
 
   it("maps generated blocks into the correct sections when source headings include subtitles and time ranges", () => {
@@ -110,10 +137,12 @@ describe("lib/tts-script-format", () => {
         "## Cold Open",
         "",
         "[TONE: bright]",
+        "[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a bright tone.]",
         "Cold open line one.",
         "[PAUSE: 0.8s]",
         "",
         "[TONE: bright]",
+        "[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a bright tone.]",
         "Cold open line two.",
       ].join("\n"),
     );
@@ -122,10 +151,12 @@ describe("lib/tts-script-format", () => {
         "## Part 1: The Economics of Darning",
         "",
         "[TONE: explanatory]",
+        "[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a explanatory tone.]",
         "Part one line one.",
         "[PAUSE: 1.0s]",
         "",
         "[TONE: explanatory]",
+        "[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a explanatory tone.]",
         "Part one line two.",
       ].join("\n"),
     );
@@ -134,6 +165,7 @@ describe("lib/tts-script-format", () => {
         "## Closing",
         "",
         "[TONE: final]",
+        "[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a final tone.]",
         "Closing line one.",
       ].join("\n"),
     );
@@ -202,6 +234,7 @@ describe("lib/tts-script-format", () => {
     expect(output).toContain("[TONE: explanatory]");
     expect(output).toContain("[PACE: moderate]");
     expect(output).toContain("[EMOTION: calm]");
+    expect(output).toContain("[INSTRUCT:");
     expect(output).toContain("This is the only line.");
   });
 });

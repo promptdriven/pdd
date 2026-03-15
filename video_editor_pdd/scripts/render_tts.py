@@ -33,7 +33,7 @@ SAMPLE_RATE = 24000  # Qwen TTS models typically output 24kHz audio
 
 # Annotation tag patterns
 TAG_PATTERN = re.compile(
-    r"\[(?:TONE|PACE|PAUSE|EMOTION)\s*:\s*[^\]]*\]", re.IGNORECASE
+    r"\[(?:TONE|PACE|PAUSE|EMOTION|INSTRUCT)\s*:\s*[^\]]*\]", re.IGNORECASE
 )
 NARRATOR_LABEL_PATTERN = re.compile(
     r"^\s*(?:\*{1,2}|_{1,2})?NARRATOR:(?:\*{1,2}|_{1,2})?\s*",
@@ -57,6 +57,9 @@ PACE_PATTERN = re.compile(
 )
 EMOTION_PATTERN = re.compile(
     r"\[EMOTION\s*:\s*([^\]]+)\]", re.IGNORECASE
+)
+INSTRUCT_PATTERN = re.compile(
+    r"\[INSTRUCT\s*:\s*([^\]]+)\]", re.IGNORECASE
 )
 
 # Pattern to match NARRATOR: blocks
@@ -105,6 +108,9 @@ class Segment:
         emotion_match = EMOTION_PATTERN.search(self.raw_text)
         if emotion_match:
             annotations["emotion"] = emotion_match.group(1).strip()
+        instruct_match = INSTRUCT_PATTERN.search(self.raw_text)
+        if instruct_match:
+            annotations["instruct"] = instruct_match.group(1).strip()
         return annotations
 
     def _split_by_pauses(self) -> List[Dict[str, Any]]:
@@ -503,16 +509,30 @@ PACE_MAP = {
 BASE_INSTRUCTION = "Speak with a confident, authoritative tone like a knowledgeable educator"
 
 
+def _normalize_annotation_value(value: Optional[str]) -> Optional[str]:
+    """Normalize annotation strings for stable instruction lookup."""
+    if value is None:
+        return None
+    normalized = re.sub(r"\s+", " ", value).strip().lower()
+    return normalized or None
+
+
 def build_instruction(tone: Optional[str] = None, pace: Optional[str] = None,
                       emotion: Optional[str] = None) -> str:
     """Build a voice instruction string from annotation values."""
     parts: List[str] = []
+    normalized_tone = _normalize_annotation_value(tone)
+    normalized_pace = _normalize_annotation_value(pace)
 
-    if tone and tone in TONE_MAP:
-        parts.append(TONE_MAP[tone])
+    if normalized_tone:
+        mapped_tone = TONE_MAP.get(normalized_tone)
+        if mapped_tone:
+            parts.append(mapped_tone)
+        else:
+            parts.append(f"with a {normalized_tone} tone")
 
-    if pace and pace in PACE_MAP and PACE_MAP[pace]:
-        parts.append(PACE_MAP[pace])
+    if normalized_pace and normalized_pace in PACE_MAP and PACE_MAP[normalized_pace]:
+        parts.append(PACE_MAP[normalized_pace])
 
     if emotion:
         parts.append(f"with {emotion} emotion")
@@ -579,10 +599,15 @@ class TTSEngine:
         if not text.strip():
             return generate_silence(0.1)
 
-        instruct = build_instruction(
-            tone=kwargs.get("tone"),
-            pace=kwargs.get("pace"),
-            emotion=kwargs.get("emotion"),
+        explicit_instruct = kwargs.get("instruct")
+        instruct = (
+            explicit_instruct.strip()
+            if isinstance(explicit_instruct, str) and explicit_instruct.strip()
+            else build_instruction(
+                tone=kwargs.get("tone"),
+                pace=kwargs.get("pace"),
+                emotion=kwargs.get("emotion"),
+            )
         )
 
         wavs, sr = self.model.generate_custom_voice(
@@ -710,6 +735,7 @@ def render_segment(
                     tone=segment.annotations.get("tone"),
                     pace=segment.annotations.get("pace"),
                     emotion=segment.annotations.get("emotion"),
+                    instruct=segment.annotations.get("instruct"),
                 )
                 audio_chunks.append(_audio_to_pcm_bytes(synthesized))
 

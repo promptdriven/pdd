@@ -46,14 +46,18 @@ Instructions:
    - [PACE: ...]
    - [PAUSE: ...]
    - [EMOTION: ...]
-4. Write the final TTS script to: narrative/tts_script.md
-5. Keep the result clean and readable in Markdown.
-6. Do not include non-spoken labels such as Block 1, Scene 2, Section headings, or editorial numbering in the spoken narration.
-7. Do not include markdown emphasis markers or other formatting punctuation in spoken lines. Output only spoken narration text plus TTS annotation tags.
-8. The final file must use a stable machine-readable section-based format:
+   - [INSTRUCT: ...]
+4. [INSTRUCT:] must be a single-line natural-language voice instruction intended for Qwen TTS.
+   It should describe delivery directly, not editorial metadata.
+5. Write the final TTS script to: narrative/tts_script.md
+6. Keep the result clean and readable in Markdown.
+7. Do not include non-spoken labels such as Block 1, Scene 2, Section headings, or editorial numbering in the spoken narration.
+8. Do not include markdown emphasis markers or other formatting punctuation in spoken lines. Output only spoken narration text plus TTS annotation tags.
+9. The final file must use a stable machine-readable section-based format:
    - preserve the spoken-block order from the source script
    - emit ## section headings for each project section
    - under each section, emit annotation tags plus only the spoken narration text
+   - every spoken block must include an [INSTRUCT:] line
 
 You are allowed to read/write files ONLY in the narrative/ directory.
 `;

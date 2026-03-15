@@ -18,7 +18,20 @@ interface TtsSegment {
 
 function ensureSegmentsManifest(outputDir: string): void {
   const manifestPath = path.join(outputDir, "segments.json");
-  if (fs.existsSync(manifestPath)) {
+  const scriptPath = path.join(getProjectDir(), "narrative", "tts_script.md");
+  const manifestExists = fs.existsSync(manifestPath);
+  const scriptExists = fs.existsSync(scriptPath);
+
+  let shouldRefresh = !manifestExists;
+  if (!shouldRefresh && manifestExists && scriptExists) {
+    try {
+      shouldRefresh = fs.statSync(scriptPath).mtimeMs > fs.statSync(manifestPath).mtimeMs;
+    } catch {
+      shouldRefresh = false;
+    }
+  }
+
+  if (!shouldRefresh) {
     return;
   }
 

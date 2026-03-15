@@ -13,7 +13,7 @@
  *   5. On error: calls error(message) on the SSE stream
  *   6. registerExecutor('tts-script', ...) called at module load time
  *   7. Executor calls runClaudeFix with TTS_SCRIPT_PROMPT scoped to narrative/
- *   8. TTS_SCRIPT_PROMPT includes [TONE:], [PACE:], [PAUSE:], [EMOTION:] annotation markers
+ *   8. TTS_SCRIPT_PROMPT includes [TONE:], [PACE:], [PAUSE:], [EMOTION:], [INSTRUCT:] annotation markers
  *   9. TTS_SCRIPT_PROMPT references main_script.md and tts_script.md
  *  10. export const dynamic = 'force-dynamic'
  *  11. No authentication required
@@ -330,6 +330,14 @@ describe("tts-script executor", () => {
     expect(mockRunClaudeFix.mock.calls[0][0]).toContain("[EMOTION:");
   });
 
+  it("passes prompt with [INSTRUCT:] annotation marker", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    mockRunClaudeFix.mockResolvedValue(undefined);
+    await executor(jest.fn());
+
+    expect(mockRunClaudeFix.mock.calls[0][0]).toContain("[INSTRUCT:");
+  });
+
   it("passes prompt mentioning NARRATOR blocks", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     mockRunClaudeFix.mockResolvedValue(undefined);
@@ -488,6 +496,7 @@ describe("tts-script executor", () => {
     );
     expect(savedScript).toContain("## Intro");
     expect(savedScript).toContain("## Outro");
+    expect(savedScript).toContain("[INSTRUCT:");
     expect(savedScript).toContain("Hello from the intro.");
     expect(savedScript).toContain("Goodbye from the outro.");
   });

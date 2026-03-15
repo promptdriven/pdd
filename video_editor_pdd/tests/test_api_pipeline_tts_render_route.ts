@@ -55,6 +55,7 @@ jest.mock("child_process", () => ({
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
 const mockReaddirSync = jest.fn();
+const mockStatSync = jest.fn();
 
 jest.mock("fs", () => ({
   __esModule: true,
@@ -62,10 +63,12 @@ jest.mock("fs", () => ({
     existsSync: (...args: unknown[]) => mockExistsSync(...args),
     readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
     readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+    statSync: (...args: unknown[]) => mockStatSync(...args),
   },
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
   readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
   readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+  statSync: (...args: unknown[]) => mockStatSync(...args),
 }));
 
 // Mock crypto
@@ -181,6 +184,7 @@ beforeEach(() => {
   mockExistsSync.mockReset();
   mockReadFileSync.mockReset();
   mockReaddirSync.mockReset();
+  mockStatSync.mockReset();
   mockRunPipelineStage.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
@@ -462,6 +466,65 @@ describe("GET /api/pipeline/tts-render/segments manifest behavior", () => {
       "animation_section_001",
       "animation_section_002",
     ]);
+  });
+
+  it("rebuilds the manifest when tts_script.md is newer than outputs/tts/segments.json", async () => {
+    let manifestVersion: "stale" | "fresh" = "stale";
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) return true;
+      if (p.includes("render_tts.py")) return true;
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("outputs") && p.includes("tts")) return true;
+      if (p.includes("project.json")) return false;
+      return false;
+    });
+
+    mockStatSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return { mtimeMs: 100 } as any;
+      }
+      if (p.includes("tts_script.md")) {
+        return { mtimeMs: 200 } as any;
+      }
+      return { mtimeMs: 0 } as any;
+    });
+
+    mockSpawnSync.mockImplementation(() => {
+      manifestVersion = "fresh";
+      return { status: 0, stdout: "", stderr: "" };
+    });
+
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("segments.json")) {
+        return JSON.stringify({
+          segments:
+            manifestVersion === "fresh"
+              ? [
+                  {
+                    id: "cold_open_001",
+                    text: "[TONE: warm]\n[INSTRUCT: Speak warmly and reassuringly.]\nHello.",
+                  },
+                ]
+              : [
+                  {
+                    id: "cold_open_001",
+                    text: "[TONE: warm]\nHello.",
+                  },
+                ],
+        });
+      }
+      return Buffer.alloc(44);
+    });
+
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GETSegments();
+    const body = await response.json();
+
+    expect(mockSpawnSync).toHaveBeenCalled();
+    expect(body.segments).toHaveLength(1);
+    expect(body.segments[0].text).toContain("[INSTRUCT:");
   });
 });
 

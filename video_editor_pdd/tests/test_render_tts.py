@@ -50,11 +50,13 @@ from render_tts import (
     PAUSE_PATTERN,
     SAMPLE_RATE,
     TAG_PATTERN,
+    TTSEngine,
     TONE_PATTERN,
     PACE_PATTERN,
     EMOTION_PATTERN,
     SEGMENTS_MANIFEST_FILENAME,
     Segment,
+    build_instruction,
     build_parser,
     concatenate_pcm,
     generate_silence_wav_bytes,
@@ -178,6 +180,9 @@ class TestTagPatterns:
     def test_tag_pattern_matches_emotion(self):
         assert TAG_PATTERN.search("[EMOTION: excitement]")
 
+    def test_tag_pattern_matches_instruct(self):
+        assert TAG_PATTERN.search("[INSTRUCT: Speak warmly and reassuringly.]")
+
     def test_tag_pattern_case_insensitive(self):
         assert TAG_PATTERN.search("[tone: warm]")
         assert TAG_PATTERN.search("[Pace: Fast]")
@@ -214,10 +219,11 @@ class TestSegment:
         assert seg.raw_text == "Hello world."
 
     def test_clean_text_strips_all_tags(self):
-        raw = "[TONE: dramatic] [PACE: slow] The storm was coming. [PAUSE: 1.5s] Thunder."
+        raw = "[TONE: dramatic] [PACE: slow] [INSTRUCT: Speak with urgency.] The storm was coming. [PAUSE: 1.5s] Thunder."
         seg = Segment("seg_001", raw)
         assert "[TONE" not in seg.clean_text
         assert "[PACE" not in seg.clean_text
+        assert "[INSTRUCT" not in seg.clean_text
         assert "[PAUSE" not in seg.clean_text
         assert "The storm was coming." in seg.clean_text
         assert "Thunder." in seg.clean_text
@@ -250,11 +256,12 @@ class TestSegment:
         assert seg.annotations.get("emotion") == "excitement"
 
     def test_annotations_multiple(self):
-        raw = "[TONE: warm] [PACE: fast] [EMOTION: joy] Happy day!"
+        raw = "[TONE: warm] [PACE: fast] [EMOTION: joy] [INSTRUCT: Speak with bright delight.] Happy day!"
         seg = Segment("seg_001", raw)
         assert seg.annotations["tone"] == "warm"
         assert seg.annotations["pace"] == "fast"
         assert seg.annotations["emotion"] == "joy"
+        assert seg.annotations["instruct"] == "Speak with bright delight."
 
     def test_no_annotations(self):
         seg = Segment("seg_001", "Just plain text.")
@@ -293,6 +300,45 @@ class TestSegment:
         for chunk in text_chunks:
             assert "[TONE" not in chunk["content"]
             assert "[EMOTION" not in chunk["content"]
+
+
+class TestBuildInstruction:
+    """Verify tone annotations influence Qwen voice instructions."""
+
+    def test_known_tone_uses_mapped_instruction(self):
+        instruction = build_instruction(tone="explanatory")
+        assert "clearly and instructively" in instruction
+
+    def test_known_tone_is_normalized_before_lookup(self):
+        instruction = build_instruction(tone=" Explanatory ")
+        assert "clearly and instructively" in instruction
+
+    def test_unknown_tone_falls_back_to_generic_style_instruction(self):
+        instruction = build_instruction(tone="warm, affirming")
+        assert "warm, affirming tone" in instruction
+
+
+class TestQwenInstructionOverride:
+    """Verify explicit [INSTRUCT:] text is passed through to Qwen."""
+
+    def test_explicit_instruct_overrides_tag_translation(self):
+        engine = TTSEngine.__new__(TTSEngine)
+        engine.speaker = "Aiden"
+        engine.language = "English"
+        engine.sample_rate = SAMPLE_RATE
+        engine.model = mock.MagicMock()
+        engine.model.generate_custom_voice.return_value = ([b""], SAMPLE_RATE)
+
+        engine.synthesize(
+            "Hello.",
+            tone="warm",
+            pace="slow",
+            emotion="joy",
+            instruct="Speak warmly and reassuringly.",
+        )
+
+        call = engine.model.generate_custom_voice.call_args.kwargs
+        assert call["instruct"] == "Speak warmly and reassuringly."
 
 
 # ===========================================================================
@@ -531,11 +577,15 @@ class TestRenderSegment:
         assert mock_engine.synthesize.call_count == 2
 
     def test_passes_annotations_to_synthesize(self, mock_engine, output_dir):
-        seg = Segment("seg_001", "[TONE: dramatic] [PACE: slow] Hello.")
+        seg = Segment(
+            "seg_001",
+            "[TONE: dramatic] [PACE: slow] [INSTRUCT: Speak urgently.] Hello.",
+        )
         render_segment(mock_engine, seg, str(output_dir))
         call_kwargs = mock_engine.synthesize.call_args[1]
         assert call_kwargs.get("tone") == "dramatic"
         assert call_kwargs.get("pace") == "slow"
+        assert call_kwargs.get("instruct") == "Speak urgently."
 
     def test_error_returns_error_status(self, output_dir):
         """Spec: On error, return {"segmentId": ..., "status": "error", "error": "..."}."""
