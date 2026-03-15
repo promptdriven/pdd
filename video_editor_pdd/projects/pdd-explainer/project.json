@@ -6,7 +6,7 @@
   },
   "tts": {
     "engine": "qwen3-tts",
-    "modelPath": "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "modelPath": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
     "tokenizerPath": "models/Qwen3-TTS-Tokenizer-12Hz",
     "speaker": "Aiden",
     "speakingRate": 0.95,
@@ -20,7 +20,7 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 0,
+      "durationSeconds": 0.085333,
       "offsetSeconds": 0
     },
     {
@@ -30,8 +30,8 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 0.085333,
+      "offsetSeconds": 0.085333
     },
     {
       "id": "part2_paradigm_shift",
@@ -41,7 +41,11 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 0,
-      "offsetSeconds": 0
+      "offsetSeconds": 0.170666,
+      "compositions": [
+        "part2_paradigm_shift_main"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "part3_mold_three_parts",
@@ -51,7 +55,7 @@
       "remotionDir": "S03-Part3MoldThreeParts",
       "compositionId": "Part3MoldThreePartsSection",
       "durationSeconds": 0,
-      "offsetSeconds": 0
+      "offsetSeconds": 0.170666
     },
     {
       "id": "part4_precision_tradeoff",
@@ -61,7 +65,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 0,
-      "offsetSeconds": 0
+      "offsetSeconds": 0.170666
     },
     {
       "id": "part5_compound_returns",
@@ -71,7 +75,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 0,
-      "offsetSeconds": 0
+      "offsetSeconds": 0.170666
     },
     {
       "id": "where_to_start",
@@ -81,7 +85,7 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 0,
-      "offsetSeconds": 0
+      "offsetSeconds": 0.170666
     },
     {
       "id": "closing",
@@ -91,7 +95,7 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 0,
-      "offsetSeconds": 0
+      "offsetSeconds": 0.170666
     }
   ],
   "audioSync": {

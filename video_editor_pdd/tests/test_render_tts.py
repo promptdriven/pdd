@@ -59,6 +59,7 @@ from render_tts import (
     build_instruction,
     build_parser,
     concatenate_pcm,
+    generate_silence,
     generate_silence_wav_bytes,
     parse_tts_script,
     render_segment,
@@ -340,6 +341,35 @@ class TestQwenInstructionOverride:
         call = engine.model.generate_custom_voice.call_args.kwargs
         assert call["instruct"] == "Speak warmly and reassuringly."
 
+    def test_qwen_generation_kwargs_are_forwarded(self):
+        engine = TTSEngine.__new__(TTSEngine)
+        engine.speaker = "Aiden"
+        engine.language = "English"
+        engine.sample_rate = SAMPLE_RATE
+        engine.speaking_rate = 1.0
+        engine.generation_kwargs = {
+            "temperature": 0.6,
+            "top_p": 0.85,
+            "top_k": 24,
+            "repetition_penalty": 1.1,
+            "do_sample": True,
+            "max_new_tokens": 512,
+            "non_streaming_mode": False,
+        }
+        engine.model = mock.MagicMock()
+        engine.model.generate_custom_voice.return_value = ([b""], SAMPLE_RATE)
+
+        engine.synthesize("Hello.")
+
+        call = engine.model.generate_custom_voice.call_args.kwargs
+        assert call["temperature"] == 0.6
+        assert call["top_p"] == 0.85
+        assert call["top_k"] == 24
+        assert call["repetition_penalty"] == 1.1
+        assert call["do_sample"] is True
+        assert call["max_new_tokens"] == 512
+        assert call["non_streaming_mode"] is False
+
 
 # ===========================================================================
 # Tests: parse_tts_script
@@ -614,6 +644,40 @@ class TestRenderSegment:
         if "." in duration_str:
             decimals = len(duration_str.split(".")[1])
             assert decimals <= 2
+
+
+class TestSpeakingRate:
+    """Verify speakingRate changes the rendered audio duration."""
+
+    def test_rate_above_one_shortens_audio(self, tmp_path):
+        engine = TTSEngine.__new__(TTSEngine)
+        engine.speaker = "Aiden"
+        engine.language = "English"
+        engine.sample_rate = SAMPLE_RATE
+        engine.speaking_rate = 1.25
+        engine.generation_kwargs = {}
+        engine.model = mock.MagicMock()
+        one_second = generate_silence(1.0)
+        engine.model.generate_custom_voice.return_value = ([one_second], SAMPLE_RATE)
+
+        audio = engine.synthesize("Hello.")
+
+        assert len(audio) == pytest.approx(int(len(one_second) / 1.25), rel=0.01)
+
+    def test_rate_below_one_lengthens_audio(self, tmp_path):
+        engine = TTSEngine.__new__(TTSEngine)
+        engine.speaker = "Aiden"
+        engine.language = "English"
+        engine.sample_rate = SAMPLE_RATE
+        engine.speaking_rate = 0.8
+        engine.generation_kwargs = {}
+        engine.model = mock.MagicMock()
+        one_second = generate_silence(1.0)
+        engine.model.generate_custom_voice.return_value = ([one_second], SAMPLE_RATE)
+
+        audio = engine.synthesize("Hello.")
+
+        assert len(audio) == pytest.approx(int(len(one_second) / 0.8), rel=0.01)
 
 
 # ===========================================================================
@@ -896,6 +960,60 @@ class TestMain:
         assert error_data["status"] == "error"
         assert error_data["segmentId"] == "global"
         assert "Model not found" in error_data["error"]
+
+    def test_uses_project_config_model_path_and_sampling_controls(self, tmp_project):
+        output_dir = tmp_project / "outputs" / "tts"
+        project_json = {
+            "tts": {
+                "modelPath": "models/local-qwen",
+                "speaker": "Ada",
+                "language": "English",
+                "speakingRate": 1.15,
+                "temperature": 0.7,
+                "topP": 0.9,
+                "topK": 32,
+                "repetitionPenalty": 1.05,
+                "doSample": True,
+                "maxNewTokens": 384,
+                "nonStreamingMode": False,
+            }
+        }
+        (tmp_project / "project.json").write_text(json.dumps(project_json), encoding="utf-8")
+
+        with mock.patch("render_tts.TTSEngine") as MockEngine:
+            instance = MockEngine.return_value
+            instance.sample_rate = SAMPLE_RATE
+            num_samples = int(SAMPLE_RATE * 0.5)
+            instance.synthesize.return_value = struct.pack(
+                f"<{num_samples}h", *([100] * num_samples)
+            )
+
+            with mock.patch(
+                "sys.argv",
+                ["render_tts.py",
+                 "--project-dir", str(tmp_project),
+                 "--output-dir", str(output_dir)],
+            ):
+                from render_tts import main
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 0
+
+        MockEngine.assert_called_once_with(
+            "models/local-qwen",
+            speaker="Ada",
+            language="English",
+            speaking_rate=1.15,
+            generation_kwargs={
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "top_k": 32,
+                "repetition_penalty": 1.05,
+                "do_sample": True,
+                "max_new_tokens": 384,
+                "non_streaming_mode": False,
+            },
+        )
 
     def test_model_and_edge_failures_use_deterministic_fallback_when_allowed(
         self, tmp_project, capsys

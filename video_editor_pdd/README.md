@@ -43,6 +43,7 @@ The Review tab provides the core annotation/fix loop:
 ## Prerequisites
 
 - Node.js 20+
+- Conda or Miniforge for an isolated Python env
 - Python 3.11+ with `faster-whisper` and `qwen_tts` installed
 - ffmpeg in PATH
 - `claude` CLI (`npm install -g @anthropic-ai/claude-code`)
@@ -52,24 +53,51 @@ The Review tab provides the core annotation/fix loop:
 ## Setup
 
 ```bash
-# 1. Install Node.js dependencies
+# 1. Create and activate the recommended Python env
+conda create -n video_editor python=3.12 -y
+conda activate video_editor
+
+# Keep the env isolated from global/user Python packages.
+# This avoids pulling in unrelated editable installs from the parent pdd repo.
+conda env config vars set -n video_editor PYTHONNOUSERSITE=1 PYTHONPATH=
+conda deactivate
+conda activate video_editor
+
+# 2. Install Node.js dependencies
 npm install
 
-# 2. Install Python dependencies
-pip install faster-whisper google-genai soundfile
+# 3. Install Python dependencies
+pip install -r requirements.txt
 
-# 3. Download Qwen3-TTS model weights (first time only)
+# If Qwen import fails with a huggingface-hub 1.x error, pin it back to the
+# transformers-compatible range used by Stage 4:
+pip install "huggingface-hub<1.0,>=0.34.0"
+
+# 4. Download Qwen3-TTS model weights (first time only)
 # See: https://huggingface.co/Qwen/Qwen3-TTS-1.7B
 # Place under models/Qwen3-TTS-12Hz-1.7B-CustomVoice/ and models/Qwen3-TTS-Tokenizer-12Hz/
 
-# 4. Set environment variables
+# 5. Set environment variables
 cp .env.example .env.local
 # Edit .env.local with your GOOGLE_API_KEY and paths
 ```
 
+### Verify Stage 4 TTS
+
+```bash
+conda activate video_editor
+python -c "import qwen_tts, torch; print({'qwen_tts': qwen_tts.__file__, 'cuda': torch.cuda.is_available(), 'mps': bool(getattr(getattr(torch, 'backends', None), 'mps', None) and torch.backends.mps.is_available())})"
+```
+
+Expected behavior:
+- If `qwen_tts` imports successfully, Stage 4 uses local Qwen3-TTS.
+- On Apple Silicon, Qwen should use `mps`.
+- If Qwen import fails, Stage 4 falls back to `EdgeTTS`, which does not use the local GPU.
+
 ## Running Locally
 
 ```bash
+conda activate video_editor
 npm run dev
 ```
 

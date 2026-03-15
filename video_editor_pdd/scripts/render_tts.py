@@ -420,6 +420,147 @@ def read_wav_float32(filepath: str) -> "np.ndarray":
     return audio
 
 
+def apply_speaking_rate(audio: Any, speaking_rate: float) -> "np.ndarray":
+    """Apply simple time scaling to mono audio while preserving sample rate."""
+    import numpy as np
+
+    try:
+        rate = float(speaking_rate)
+    except (TypeError, ValueError):
+        rate = 1.0
+
+    if rate <= 0:
+        rate = 1.0
+
+    if isinstance(audio, (bytes, bytearray)):
+        array = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+    else:
+        array = np.asarray(audio, dtype=np.float32)
+
+    if array.size == 0 or abs(rate - 1.0) < 1e-6:
+        return array.astype(np.float32)
+
+    if array.ndim > 1:
+        array = array.mean(axis=1)
+
+    target_length = max(1, int(round(len(array) / rate)))
+    source_positions = np.arange(len(array), dtype=np.float32)
+    target_positions = np.linspace(0, len(array) - 1, target_length, dtype=np.float32)
+    return np.interp(target_positions, source_positions, array).astype(np.float32)
+
+
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _resolve_model_reference(model_ref: str, project_dir: str) -> str:
+    """Resolve local model paths against the project or app root when present."""
+    if not model_ref:
+        return model_ref
+
+    if os.path.isabs(model_ref):
+        return model_ref
+
+    app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidates = [
+        os.path.join(project_dir, model_ref),
+        os.path.join(app_root, model_ref),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return os.path.abspath(candidate)
+
+    return model_ref
+
+
+def _extract_qwen_generation_kwargs(tts_config: Dict[str, Any]) -> Dict[str, Any]:
+    """Map project.json TTS tuning fields to qwen_tts generation kwargs."""
+    specs = {
+        "do_sample": (("doSample", "do_sample"), _coerce_bool),
+        "top_k": (("topK", "top_k"), int),
+        "top_p": (("topP", "top_p"), float),
+        "temperature": (("temperature",), float),
+        "repetition_penalty": (("repetitionPenalty", "repetition_penalty"), float),
+        "max_new_tokens": (("maxNewTokens", "max_new_tokens"), int),
+        "non_streaming_mode": (("nonStreamingMode", "non_streaming_mode"), _coerce_bool),
+    }
+
+    generation_kwargs: Dict[str, Any] = {}
+    for output_key, (input_keys, coercer) in specs.items():
+        raw_value = None
+        for input_key in input_keys:
+            if input_key in tts_config:
+                raw_value = tts_config[input_key]
+                break
+        if raw_value is None:
+            continue
+        try:
+            coerced = coercer(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if coerced is None:
+            continue
+        generation_kwargs[output_key] = coerced
+
+    return generation_kwargs
+
+
+def load_tts_runtime_config(project_dir: str, cli_model: str) -> Dict[str, Any]:
+    """Load Stage 4 runtime config from project.json with safe defaults."""
+    config: Dict[str, Any] = {
+        "model_id": cli_model,
+        "speaker": "Aiden",
+        "language": "English",
+        "speaking_rate": 1.0,
+        "generation_kwargs": {},
+    }
+
+    project_json_path = os.path.join(project_dir, "project.json")
+    if not os.path.exists(project_json_path):
+        return config
+
+    with open(project_json_path, encoding="utf-8") as f:
+        project_config = json.load(f)
+
+    tts_config = project_config.get("tts", {})
+    if not isinstance(tts_config, dict):
+        return config
+
+    speaker = tts_config.get("speaker")
+    if isinstance(speaker, str) and speaker.strip():
+        config["speaker"] = speaker.strip()
+
+    language = tts_config.get("language")
+    if isinstance(language, str) and language.strip():
+        config["language"] = language.strip()
+
+    try:
+        speaking_rate = float(tts_config.get("speakingRate", 1.0))
+        if speaking_rate > 0:
+            config["speaking_rate"] = speaking_rate
+    except (TypeError, ValueError):
+        pass
+
+    model_path = tts_config.get("modelPath")
+    if (
+        isinstance(model_path, str)
+        and model_path.strip()
+        and cli_model == DEFAULT_MODEL
+    ):
+        config["model_id"] = _resolve_model_reference(model_path.strip(), project_dir)
+
+    config["generation_kwargs"] = _extract_qwen_generation_kwargs(tts_config)
+    return config
+
+
 # ---------------------------------------------------------------------------
 # Voice instruction mapping (from 3blue1brown demo)
 # ---------------------------------------------------------------------------
@@ -554,10 +695,19 @@ class TTSEngine:
     Returns numpy float32 arrays (native model output).
     """
 
-    def __init__(self, model_id: str, speaker: str = "Aiden", language: str = "English"):
+    def __init__(
+        self,
+        model_id: str,
+        speaker: str = "Aiden",
+        language: str = "English",
+        speaking_rate: float = 1.0,
+        generation_kwargs: Optional[Dict[str, Any]] = None,
+    ):
         self.model_id = model_id
         self.speaker = speaker
         self.language = language
+        self.speaking_rate = speaking_rate
+        self.generation_kwargs = generation_kwargs or {}
         self.model = None
         self.sample_rate = SAMPLE_RATE
         self._load_model()
@@ -610,17 +760,19 @@ class TTSEngine:
             )
         )
 
+        generation_kwargs = dict(getattr(self, "generation_kwargs", {}))
         wavs, sr = self.model.generate_custom_voice(
             text=text,
             speaker=self.speaker,
             language=self.language,
             instruct=instruct,
+            **generation_kwargs,
         )
 
         if sr and sr != self.sample_rate:
             self.sample_rate = sr
 
-        return wavs[0]
+        return apply_speaking_rate(wavs[0], getattr(self, "speaking_rate", 1.0))
 
 
 class EdgeTTSEngine:
@@ -629,8 +781,13 @@ class EdgeTTSEngine:
     No model download required — uses Microsoft's online API.
     """
 
-    def __init__(self, voice: str = "en-US-AndrewMultilingualNeural"):
+    def __init__(
+        self,
+        voice: str = "en-US-AndrewMultilingualNeural",
+        speaking_rate: float = 1.0,
+    ):
         self.voice = voice
+        self.speaking_rate = speaking_rate
         self.sample_rate = SAMPLE_RATE
         try:
             import edge_tts  # type: ignore
@@ -670,7 +827,10 @@ class EdgeTTSEngine:
 
         loop = asyncio.new_event_loop()
         try:
-            return loop.run_until_complete(_synth())
+            return apply_speaking_rate(
+                loop.run_until_complete(_synth()),
+                self.speaking_rate,
+            )
         finally:
             loop.close()
 
@@ -678,8 +838,9 @@ class EdgeTTSEngine:
 class DeterministicFallbackTTSEngine:
     """Offline fallback engine that emits deterministic placeholder audio."""
 
-    def __init__(self):
+    def __init__(self, speaking_rate: float = 1.0):
         self.sample_rate = SAMPLE_RATE
+        self.speaking_rate = speaking_rate
 
     def synthesize(self, text: str, **kwargs: Any) -> "np.ndarray":
         import numpy as np
@@ -696,7 +857,7 @@ class DeterministicFallbackTTSEngine:
         # get deterministic non-empty audio even when online engines are absent.
         envelope = np.clip(np.linspace(0.0, 1.0, num_samples), 0.0, 1.0)
         tone = 0.08 * np.sin(2 * np.pi * 220 * timeline) * envelope
-        return tone.astype(np.float32)
+        return apply_speaking_rate(tone.astype(np.float32), self.speaking_rate)
 
 
 # ---------------------------------------------------------------------------
@@ -854,18 +1015,17 @@ def main() -> None:
         # No segments to render — this is not an error, just nothing to do
         sys.exit(0)
 
-    # Read speaker config from project.json
-    speaker = "Aiden"
-    project_json_path = os.path.join(project_dir, "project.json")
-    if os.path.exists(project_json_path):
-        with open(project_json_path, encoding="utf-8") as f:
-            proj_config = json.load(f)
-        tts_config = proj_config.get("tts", {})
-        speaker = tts_config.get("speaker", speaker)
+    runtime_config = load_tts_runtime_config(project_dir, args.model)
 
     # Load the TTS engine
     try:
-        engine = TTSEngine(args.model, speaker=speaker)
+        engine = TTSEngine(
+            runtime_config["model_id"],
+            speaker=runtime_config["speaker"],
+            language=runtime_config["language"],
+            speaking_rate=runtime_config["speaking_rate"],
+            generation_kwargs=runtime_config["generation_kwargs"],
+        )
     except Exception as e:
         allow_edge_fallback = os.environ.get("RENDER_TTS_ALLOW_EDGE_FALLBACK") == "1"
         if not allow_edge_fallback:
@@ -882,7 +1042,7 @@ def main() -> None:
             flush=True,
         )
         try:
-            engine = EdgeTTSEngine()
+            engine = EdgeTTSEngine(speaking_rate=runtime_config["speaking_rate"])
             print("Using EdgeTTS engine", file=sys.stderr, flush=True)
         except Exception as e2:
             print(
@@ -890,7 +1050,9 @@ def main() -> None:
                 file=sys.stderr,
                 flush=True,
             )
-            engine = DeterministicFallbackTTSEngine()
+            engine = DeterministicFallbackTTSEngine(
+                speaking_rate=runtime_config["speaking_rate"]
+            )
 
     # Render each segment
     has_errors = False

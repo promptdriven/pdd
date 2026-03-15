@@ -1,17 +1,15 @@
 import React from "react";
-import { Sequence, OffthreadVideo, staticFile } from "remotion";
-
-import { Part1Economics as Part1EconomicsSectionBase } from "./Part1Economics";
+import { Sequence, Audio, staticFile } from "remotion";
 
 export const Part1EconomicsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 15.744;
-  const durationSeconds = 382.314667;
+  const offsetSeconds = 0;
+  const durationSeconds = 0;
 
   return (
-    <Sequence from={0} durationInFrames={Math.ceil(durationSeconds * fps)}>
-      <OffthreadVideo src={staticFile("veo/part1_economics.mp4")} style={{ width: "100%", height: "100%" }} />
-      <Part1EconomicsSectionBase />
+    <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
+      <Audio src={staticFile("part1_economics/narration.wav")} />
+      {/* Sub-compositions will be added here */}
     </Sequence>
   );
 };

@@ -237,6 +237,34 @@ describe("ttsConfigSchema", () => {
     expect(typeof result.sampleRate).toBe("number");
   });
 
+  it("accepts optional qwen generation controls", () => {
+    const result = ttsConfigSchema.parse({
+      engine: "qwen3-tts",
+      modelPath: "m",
+      tokenizerPath: "t",
+      speaker: "Aiden",
+      speakingRate: 0.95,
+      sampleRate: 24000,
+      language: "English",
+      doSample: true,
+      topK: "24",
+      topP: "0.92",
+      temperature: "0.7",
+      repetitionPenalty: "1.1",
+      maxNewTokens: "512",
+      nonStreamingMode: false,
+    });
+
+    expect(result.language).toBe("English");
+    expect(result.doSample).toBe(true);
+    expect(result.topK).toBe(24);
+    expect(result.topP).toBe(0.92);
+    expect(result.temperature).toBe(0.7);
+    expect(result.repetitionPenalty).toBe(1.1);
+    expect(result.maxNewTokens).toBe(512);
+    expect(result.nonStreamingMode).toBe(false);
+  });
+
   it("rejects missing engine", () => {
     expect(() =>
       ttsConfigSchema.parse({ speaker: "Aiden", speakingRate: 1 })
