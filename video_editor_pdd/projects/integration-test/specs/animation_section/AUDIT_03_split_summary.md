@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame correctly renders a balanced split-screen composition at 1280x720. The background is a dark navy (#0A1628 range). A vertical cyan/blue divider line runs down the center, cleanly splitting the canvas into left and right halves. The left half displays 'Before' centered vertically, and the right half displays 'After' centered vertically — both in large white bold text. A 'Split Summary' title appears in the upper-left corner. The layout intent of 'split-screen' is clearly achieved. At frame 119/150 (80% progress), the composition is in the final hold phase (frame 90-150), showing the completed state clearly for rendering verification. The data points A=1 and B=2 map semantically to the Before/After labels. All elements are properly positioned and visually clean.
