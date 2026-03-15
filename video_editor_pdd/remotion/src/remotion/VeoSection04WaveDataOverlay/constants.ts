@@ -12,17 +12,17 @@ export const COLORS = {
   /** Fallback solid background */
   fallbackBg: '#0B1120',
   /** Waveform stroke */
-  waveStroke: '#4FC3F7',
+  waveStroke: '#C9A84C',
   /** Waveform glow (30% opacity, blur 8px) */
-  waveGlow: 'rgba(79, 195, 247, 0.3)',
+  waveGlow: 'rgba(201, 168, 76, 0.3)',
   /** Waveform fill gradient top */
-  waveFillTop: 'rgba(79, 195, 247, 0.2)',
+  waveFillTop: 'rgba(201, 168, 76, 0.15)',
   /** Grid line color (5% white) */
   gridLine: 'rgba(255, 255, 255, 0.05)',
   /** Badge background */
   badgeBg: 'rgba(26, 39, 68, 0.8)',
   /** Badge border */
-  badgeBorder: 'rgba(79, 195, 247, 0.4)',
+  badgeBorder: 'rgba(201, 168, 76, 0.4)',
   /** Badge label text (muted silver) */
   badgeLabel: '#A0AEC0',
   /** Badge value text */

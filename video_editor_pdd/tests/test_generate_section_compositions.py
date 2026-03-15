@@ -47,6 +47,7 @@ from generate_section_compositions import (
     ensure_section_asset_aliases,
     resolve_section_visual_ids,
     resolve_section_base_component,
+    build_visual_media_manifest,
     build_visual_contract_manifest,
     write_visual_contract_manifest,
     load_project_json,
@@ -2395,6 +2396,81 @@ class TestGeneratedTimelineWrapper:
         )
         saved = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         assert saved["sections"][0]["visuals"][0]["mediaAliases"]["leftSrc"] == "veo/02_veo_ocean_broll.mp4"
+
+    def test_media_aliases_prefer_current_staged_clip_over_prior_split_placeholder_refs(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "veo_section"
+
+        specs_dir.mkdir(parents=True)
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "02_ocean_wave_sunset.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "04_veo_broll.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "05_veo_cutaway.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "06_aerial_forest_canopy.mp4").write_bytes(b"\x00" * 32)
+
+        (specs_dir / "02_ocean_wave_sunset.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    '{ "source_file": "veo/04_veo_broll.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "04_split_nature_comparison.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    "{",
+                    '  "left": { "label": "Ocean · Sunset", "source": "veo/04_veo_broll.mp4" },',
+                    '  "right": { "label": "Forest · Canopy", "source": "veo/05_veo_cutaway.mp4" }',
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "06_aerial_forest_canopy.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points",
+                    "```json",
+                    '{ "source_file": "veo/05_veo_cutaway.mp4" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "veo_section",
+            "compositionId": "VeoSection",
+            "durationSeconds": 6,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "veo_section",
+            "compositions": [],
+        }
+
+        manifest = build_visual_media_manifest(
+            section,
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["04_split_nature_comparison"]["leftSrc"] == "veo/02_ocean_wave_sunset.mp4"
+        assert manifest["04_split_nature_comparison"]["rightSrc"] == "veo/06_aerial_forest_canopy.mp4"
+        assert manifest["06_aerial_forest_canopy"]["defaultSrc"] == "veo/06_aerial_forest_canopy.mp4"
 
     def test_generated_timeline_does_not_reuse_last_renderable_visual_for_unmapped_slots(self, tmp_path):
         project_dir = tmp_path

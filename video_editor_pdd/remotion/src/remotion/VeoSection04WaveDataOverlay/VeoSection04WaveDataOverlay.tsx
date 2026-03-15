@@ -49,7 +49,7 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
   ];
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#00FF00' }}>
+    <AbsoluteFill style={{ backgroundColor: COLORS.fallbackBg }}>
       {/* Background Veo footage still */}
       {backgroundSrc ? (
         <AbsoluteFill>
@@ -69,7 +69,7 @@ export const VeoSection04WaveDataOverlay: React.FC = () => {
       {/* Semi-transparent dark overlay (#0B1120 fading to 60%) */}
       <AbsoluteFill
         style={{
-          backgroundColor: '#00FF00',
+          backgroundColor: COLORS.overlay,
           opacity: overlayOpacity,
         }}
       />

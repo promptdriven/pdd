@@ -1,0 +1,104 @@
+import fs from "fs";
+import path from "path";
+
+describe("shared generated media renderer", () => {
+  const generatedMediaVisualPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/_shared/GeneratedMediaVisual.tsx"
+  );
+  const veoSectionPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/veo_section/index.tsx"
+  );
+
+  it("supports split media layouts from shared visual aliases instead of only a single defaultSrc", () => {
+    const source = fs.readFileSync(generatedMediaVisualPath, "utf8");
+
+    expect(source).toMatch(/const\s+leftSrc\s*=\s*useVisualMediaSrc\(\s*["']leftSrc["']/);
+    expect(source).toMatch(/const\s+rightSrc\s*=\s*useVisualMediaSrc\(\s*["']rightSrc["']/);
+    expect(source).toMatch(/leftSrc\s*&&\s*rightSrc/);
+    expect(source).toMatch(/borderRadius/);
+    expect(source).toMatch(/Ocean · Sunset|resolvePanelLabel|leftLabel/);
+  });
+
+  it("routes split media visuals through GeneratedMediaVisual when left/right aliases exist", () => {
+    const source = fs.readFileSync(veoSectionPath, "utf8");
+
+    expect(source).toMatch(/visualOverlayConfig\s*\|\|\s*visualMedia\?\.leftSrc\s*\|\|\s*visualMedia\?\.rightSrc/);
+    expect(source).toMatch(/<GeneratedMediaVisual config=\{visualOverlayConfig\} \/>/);
+  });
+});
+
+describe("reusable animation template defaults", () => {
+  const splitConstantsPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection05SplitComparison/constants.ts"
+  );
+  const particleConstantsPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection06ParticleBurst/constants.ts"
+  );
+  const particlePath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection06ParticleBurst/Particle.tsx"
+  );
+  const keyVisualPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection08KeyVisual/AnimationSection08KeyVisual.tsx"
+  );
+  const keyVisualConstantsPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/AnimationSection08KeyVisual/constants.ts"
+  );
+  const waveOverlayPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection04WaveDataOverlay/VeoSection04WaveDataOverlay.tsx"
+  );
+  const waveOverlayConstantsPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/VeoSection04WaveDataOverlay/constants.ts"
+  );
+
+  it("keeps split comparison labels above centered shapes at the spec positions", () => {
+    const source = fs.readFileSync(splitConstantsPath, "utf8");
+
+    expect(source).toMatch(/circleCenterY:\s*540/);
+    expect(source).toMatch(/squareCenterY:\s*540/);
+    expect(source).toMatch(/circleRadius:\s*50/);
+    expect(source).toMatch(/squareSize:\s*100/);
+    expect(source).toMatch(/labelY:\s*420/);
+  });
+
+  it("uses the near-black particle burst background and fades particles through the configured fade window", () => {
+    const constantsSource = fs.readFileSync(particleConstantsPath, "utf8");
+    const particleSource = fs.readFileSync(particlePath, "utf8");
+
+    expect(constantsSource).toContain("background: '#020617'");
+    expect(particleSource).toContain("const fadeDuration = Math.max(1, TIMING.particleFadeEnd - TIMING.particleStart);");
+    expect(particleSource).toContain("TIMING.particleFadeEnd");
+  });
+
+  it("anchors key visual bars to the bottom and reads heights from the structured contract", () => {
+    const source = fs.readFileSync(keyVisualPath, "utf8");
+    const constantsSource = fs.readFileSync(keyVisualConstantsPath, "utf8");
+
+    expect(source).toMatch(/useVisualContractData/);
+    expect(source).toMatch(/alignItems:\s*['"]flex-end['"]/);
+    expect(source).toMatch(/bottom:/);
+    expect(constantsSource).toMatch(/maxHeight:\s*300/);
+    expect(constantsSource).toMatch(/maxHeight:\s*420/);
+    expect(constantsSource).toMatch(/maxHeight:\s*260/);
+    expect(constantsSource).toMatch(/maxHeight:\s*500/);
+  });
+
+  it("removes the wave overlay placeholder green fills and uses the gold spec palette", () => {
+    const source = fs.readFileSync(waveOverlayPath, "utf8");
+    const constantsSource = fs.readFileSync(waveOverlayConstantsPath, "utf8");
+
+    expect(source).not.toContain("#00FF00");
+    expect(source).toContain("COLORS.fallbackBg");
+    expect(source).toContain("COLORS.overlay");
+    expect(constantsSource).toContain("waveStroke: '#C9A84C'");
+    expect(constantsSource).toContain("waveGlow: 'rgba(201, 168, 76, 0.3)'");
+  });
+});

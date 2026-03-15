@@ -9,38 +9,40 @@ export const CANVAS = {
 } as const;
 
 export const COLORS = {
-  background: '#1E293B',
+  background: '#020617',
   flash: '#FFFFFF',
-  particles: ['#3B82F6', '#6366F1', '#8B5CF6', '#FFFFFF'] as readonly string[],
+  particles: ['#3B82F6', '#6366F1', '#8B5CF6', '#E2E8F0'] as readonly string[],
 } as const;
 
 export const FLASH = {
-  peakOpacity: 0.15,
+  maxRadius: 120,
+  contractedRadius: 60,
+  peakOpacity: 0.8,
 } as const;
 
 export const PARTICLES = {
   count: 40,
-  minRadius: 4,
+  minRadius: 3,
   maxRadius: 8,
-  minDistance: 150,
-  maxDistance: 500,
-  angleJitter: 5, // degrees of random jitter
+  minSpeed: 200, // px/s
+  maxSpeed: 600, // px/s
+  maxDistance: 300,
   seed: 42,
+  fadeStartRatio: 0.6, // begin fading at 60% of travel distance
 } as const;
 
 export const TIMING = {
   fps: 30,
   totalFrames: 30,
-  // Flash: frames 0-2
-  flashStart: 0,
-  flashEnd: 2,
-  // Particles spawn at frame 2
-  particleStart: 2,
-  // Particles travel and decelerate: frames 2-24
-  particleMoveEnd: 24,
-  // Particles fully faded by frame 24
-  particleFadeEnd: 24,
-  // Final fade-out: frames 24-30
+  // Flash expand: frames 0-3
+  flashExpandEnd: 3,
+  // Flash contract+fade: frames 3-6
+  flashFadeEnd: 6,
+  // Particles begin at frame 3
+  particleStart: 3,
+  // Particles travel: frames 3-22
+  particleMoveEnd: 22,
+  // Remaining particles fade: frames 22-30
   totalEnd: 30,
 } as const;
 
@@ -49,5 +51,6 @@ export type ParticleData = {
   color: string;
   radius: number;
   angle: number; // radians
-  distance: number; // max travel distance from origin
+  speed: number; // px/s — larger particles move slightly slower
+  maxDistance: number; // max travel distance from origin
 };

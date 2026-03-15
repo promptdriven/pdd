@@ -32,11 +32,12 @@ export const Particle: React.FC<ParticleProps> = ({ particle }) => {
   const y = CANVAS.centerY + Math.sin(angle) * currentDistance;
 
   // Opacity: visible at center before detonation, then linear fade 1→0 during travel
+  const fadeDuration = Math.max(1, TIMING.particleFadeEnd - TIMING.particleStart);
   const opacity = frame < TIMING.particleStart
     ? 1
     : interpolate(
         particleFrame,
-        [0, moveDuration],
+        [0, fadeDuration],
         [1, 0],
         {
           extrapolateLeft: 'clamp',

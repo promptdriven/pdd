@@ -24,12 +24,14 @@ export const LAYOUT = {
 
 export const SHAPES = {
 	circleCenterX: 480,
-	circleCenterY: 440,
-	circleRadius: 80,
+	circleCenterY: 540,
+	circleRadius: 50,
 	squareCenterX: 480, // relative to right panel
-	squareCenterY: 440,
-	squareSize: 120,
+	squareCenterY: 540,
+	squareSize: 100,
 	squareBorderRadius: 12,
+	floatAmplitude: 5,
+	floatPeriod: 20,
 } as const;
 
 export const TYPOGRAPHY = {
@@ -37,19 +39,20 @@ export const TYPOGRAPHY = {
 	fontSize: 24,
 	fontWeight: 600 as const,
 	labelOpacity: 0.9,
-	labelY: 580,
+	labelY: 420,
 } as const;
 
 export const TIMING = {
-	// Frame 0-15: Slide up from y=1080 to y=0
+	// Frame 0-12: Slide up from y=1080 to y=0
 	slideUpStart: 0,
-	slideUpEnd: 15,
-	// Frame 12-22: "Before" label fades in
-	beforeLabelStart: 12,
-	beforeLabelEnd: 22,
-	// Frame 15-25: "After" label fades in
-	afterLabelStart: 15,
-	afterLabelEnd: 25,
-	// Frame 25-30: Hold
+	slideUpEnd: 12,
+	// Frame 8-18: "Before" label fades in
+	beforeLabelStart: 8,
+	beforeLabelEnd: 18,
+	// Frame 12-22: "After" label fades in
+	afterLabelStart: 12,
+	afterLabelEnd: 22,
+	// Frame 15-30: Floating bob begins
+	floatStart: 15,
 	totalFrames: 30,
 } as const;

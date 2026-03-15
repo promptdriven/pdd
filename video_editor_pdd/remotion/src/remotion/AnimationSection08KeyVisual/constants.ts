@@ -17,10 +17,10 @@ export const DIMENSIONS = {
 };
 
 export const BARS = [
-  { value: 0.35, maxHeight: 126, color: COLORS.cyan },
-  { value: 0.55, maxHeight: 198, color: COLORS.green },
-  { value: 0.80, maxHeight: 288, color: COLORS.cyan },
-  { value: 0.60, maxHeight: 216, color: COLORS.green },
+  { value: 0.60, maxHeight: 300, color: COLORS.cyan },
+  { value: 0.84, maxHeight: 420, color: COLORS.green },
+  { value: 0.52, maxHeight: 260, color: COLORS.cyan },
+  { value: 1.0, maxHeight: 500, color: COLORS.green },
 ];
 
 export const TIMING = {

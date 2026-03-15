@@ -365,6 +365,9 @@ def _has_renderable_spec_media(
             return True
         if GENERIC_VIDEO_REF_RE.search(spec_content):
             return True
+        data_points = _extract_data_points_json(spec_content)
+        if data_points is not None and _iter_data_point_media_values(data_points):
+            return True
         for rel_path in STATIC_FILE_RE.findall(spec_content):
             if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
                 return True
@@ -602,7 +605,7 @@ def _build_section_video_reference_aliases(
 
         for ref in refs:
             for key in _normalize_reference_stems(ref):
-                aliases.setdefault(key, canonical_target)
+                aliases[key] = canonical_target
 
     return aliases
 
@@ -1408,7 +1411,7 @@ def generate_generated_timeline_wrapper(
         lines.append('              <VisualContractProvider contract={visualContract}>')
         lines.append('                <VisualMediaProvider media={visualMedia}>')
         if visual_overlay_manifest:
-            lines.append('                {visualOverlayConfig ? (')
+            lines.append('                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (')
             lines.append('                  <GeneratedMediaVisual config={visualOverlayConfig} />')
             lines.append('                ) : (')
             lines.append('                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />')
