@@ -39,6 +39,13 @@ NARRATOR_LABEL_PATTERN = re.compile(
     r"^\s*(?:\*{1,2}|_{1,2})?NARRATOR:(?:\*{1,2}|_{1,2})?\s*",
     re.IGNORECASE | re.MULTILINE,
 )
+MARKDOWN_FORMATTING_PATTERN = re.compile(r"(\*\*|__|~~|`)")
+CONTROL_HEADING_PATTERN = re.compile(
+    r"^(?:#{1,6}\s*)?(?:[-*+]\s*)?"
+    r"(?:block|beat|scene|section|segment|shot|part|chapter)\s+"
+    r"(?:\d+[a-z]?|[ivxlcdm]+|[a-z])(?:\s*[-–—:]\s*.+)?\:?\s*$",
+    re.IGNORECASE,
+)
 PAUSE_PATTERN = re.compile(
     r"\[PAUSE\s*:\s*([\d.]+)\s*s?\]", re.IGNORECASE
 )
@@ -63,6 +70,13 @@ def _normalize_spoken_text(text: str) -> str:
     """Strip control markup and collapse formatting whitespace for TTS."""
     stripped = TAG_PATTERN.sub("", text)
     stripped = NARRATOR_LABEL_PATTERN.sub("", stripped)
+    kept_lines = []
+    for line in stripped.splitlines():
+        line_without_formatting = MARKDOWN_FORMATTING_PATTERN.sub("", line).strip()
+        if CONTROL_HEADING_PATTERN.match(line_without_formatting):
+            continue
+        kept_lines.append(line_without_formatting)
+    stripped = "\n".join(kept_lines)
     return re.sub(r"\s+", " ", stripped).strip()
 
 

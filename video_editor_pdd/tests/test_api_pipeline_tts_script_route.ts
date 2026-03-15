@@ -199,6 +199,27 @@ describe("tts-script executor", () => {
     expect(mockRunClaudeFix.mock.calls[0][0]).toContain("NARRATOR");
   });
 
+  it("passes prompt forbidding non-spoken block and scene labels", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    mockRunClaudeFix.mockResolvedValue(undefined);
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain("Do not include non-spoken labels");
+    expect(prompt).toContain("Block 1");
+    expect(prompt).toContain("Scene 2");
+  });
+
+  it("passes prompt forbidding markdown emphasis markers in spoken lines", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    mockRunClaudeFix.mockResolvedValue(undefined);
+    await executor(jest.fn());
+
+    expect(mockRunClaudeFix.mock.calls[0][0]).toContain(
+      "Do not include markdown emphasis markers"
+    );
+  });
+
   it("scopes runClaudeFix to process.cwd()/narrative", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     mockRunClaudeFix.mockResolvedValue(undefined);

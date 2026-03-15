@@ -222,6 +222,21 @@ class TestSegment:
         assert "The storm was coming." in seg.clean_text
         assert "Thunder." in seg.clean_text
 
+    def test_clean_text_strips_markdown_formatting_tokens(self):
+        seg = Segment("seg_001", "**Hello** __world__ `again`.")
+        assert seg.clean_text == "Hello world again."
+        assert seg.text_chunks[0]["content"] == "Hello world again."
+
+    def test_clean_text_keeps_spoken_part_one_sentence(self):
+        seg = Segment("seg_001", "Part one. [PAUSE: 1s] Part two.")
+        assert [chunk["type"] for chunk in seg.text_chunks] == [
+            "text",
+            "pause",
+            "text",
+        ]
+        assert seg.text_chunks[0]["content"] == "Part one."
+        assert seg.text_chunks[2]["content"] == "Part two."
+
     def test_annotations_extracted_tone(self):
         seg = Segment("seg_001", "[TONE: dramatic] Hello.")
         assert seg.annotations.get("tone") == "dramatic"
@@ -369,6 +384,41 @@ class TestParseTtsScript:
         assert segments[1].clean_text == "This is the second sentence."
         assert segments[0].text_chunks[0]["content"] == "This is the first sentence."
         assert segments[1].text_chunks[0]["content"] == "This is the second sentence."
+
+    def test_section_based_scripts_strip_block_control_markers(self, tmp_path):
+        """Standalone block headings are editorial structure and must not be spoken."""
+        narrative_dir = tmp_path / "narrative"
+        narrative_dir.mkdir()
+        (tmp_path / "project.json").write_text(
+            json.dumps(
+                {
+                    "sections": [
+                        {"id": "animation_section", "label": "Animation Section"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (narrative_dir / "tts_script.md").write_text(
+            "# Demo\n\n"
+            "## Animation Section\n\n"
+            "**Block 1:**\n"
+            "**NARRATOR:**\n"
+            "[TONE: neutral]\n"
+            "This is the first section.\n",
+            encoding="utf-8",
+        )
+
+        segments = parse_tts_script(
+            str(narrative_dir / "tts_script.md"),
+            str(tmp_path),
+        )
+
+        assert [segment.segment_id for segment in segments] == [
+            "animation_section_001",
+        ]
+        assert segments[0].clean_text == "This is the first section."
+        assert segments[0].text_chunks[0]["content"] == "This is the first section."
 
 
 # ===========================================================================
@@ -981,6 +1031,78 @@ class TestMain:
         manifest = json.loads((output_dir / SEGMENTS_MANIFEST_FILENAME).read_text())
         assert manifest["segments"][0]["cleanText"] == "This is the first sentence."
         assert manifest["segments"][1]["cleanText"] == "This is the second sentence."
+
+    def test_manifest_only_strips_block_control_markers_from_clean_text(self, tmp_path):
+        """Section manifests should not preserve standalone block control headings."""
+        narrative_dir = tmp_path / "narrative"
+        narrative_dir.mkdir()
+        (tmp_path / "project.json").write_text(
+            json.dumps(
+                {
+                    "sections": [
+                        {"id": "animation_section", "label": "Animation Section"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (narrative_dir / "tts_script.md").write_text(
+            "# Demo\n\n"
+            "## Animation Section\n\n"
+            "**Block 1:**\n"
+            "**NARRATOR:**\n"
+            "This is the first section.\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "outputs" / "tts"
+
+        with mock.patch(
+            "sys.argv",
+            [
+                "render_tts.py",
+                "--project-dir",
+                str(tmp_path),
+                "--output-dir",
+                str(output_dir),
+                "--manifest-only",
+            ],
+        ):
+            from render_tts import main
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+        manifest = json.loads((output_dir / SEGMENTS_MANIFEST_FILENAME).read_text())
+        assert manifest["segments"][0]["cleanText"] == "This is the first section."
+
+    def test_manifest_only_strips_markdown_formatting_tokens_from_clean_text(self, tmp_path):
+        """Manifest cleanText should not preserve markdown punctuation as speech."""
+        narrative_dir = tmp_path / "narrative"
+        narrative_dir.mkdir()
+        (narrative_dir / "tts_script.md").write_text(
+            "NARRATOR: **Hello** __world__ `again`.\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "outputs" / "tts"
+
+        with mock.patch(
+            "sys.argv",
+            [
+                "render_tts.py",
+                "--project-dir",
+                str(tmp_path),
+                "--output-dir",
+                str(output_dir),
+                "--manifest-only",
+            ],
+        ):
+            from render_tts import main
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+        manifest = json.loads((output_dir / SEGMENTS_MANIFEST_FILENAME).read_text())
+        assert manifest["segments"][0]["cleanText"] == "Hello world again."
 
     def test_json_error_format(self, tmp_project, capsys):
         """Spec: Error format: {"segmentId": "seg_001", "status": "error", "error": "..."}"""

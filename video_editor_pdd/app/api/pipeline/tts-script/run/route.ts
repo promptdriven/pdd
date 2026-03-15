@@ -30,6 +30,8 @@ Instructions:
    - [EMOTION: ...]
 4. Write the final TTS script to: narrative/tts_script.md
 5. Keep the result clean and readable in Markdown.
+6. Do not include non-spoken labels such as Block 1, Scene 2, Section headings, or editorial numbering in the spoken narration.
+7. Do not include markdown emphasis markers or other formatting punctuation in spoken lines. Output only spoken narration text plus TTS annotation tags.
 
 You are allowed to read/write files ONLY in the narrative/ directory.
 `;
