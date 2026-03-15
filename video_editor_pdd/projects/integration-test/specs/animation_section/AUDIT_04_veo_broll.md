@@ -1,4 +1,4 @@
 ## Verdict
 fail
 ## Summary
-The frame file 04_veo_broll_frame.png does not exist in the audit output directory. Only title_card, key_visual, and split_summary frames (01-03) were rendered. The Veo B-Roll sequence at frame 119/150 (section-local time 3.999s) was never captured, indicating the render pipeline did not produce this visual.
+The frame file 04_veo_broll_frame.png does not exist in the audit output directory. Only frames 01 (title_card), 02 (key_visual), and 03 (split_summary) were rendered for the animation_section. The AUDIT_04_veo_broll.md spec itself appears to have been deleted from the specs directory (shown as 'D' in git status), meaning this visual is no longer part of the animation_section composition. No rendered frame exists to evaluate against the spec.
