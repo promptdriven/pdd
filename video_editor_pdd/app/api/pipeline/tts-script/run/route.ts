@@ -14,6 +14,22 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const BASE_TTS_SCRIPT_TIMEOUT_MS = 600_000;
+const MAX_TTS_SCRIPT_TIMEOUT_MS = 1_200_000;
+
+function estimateTtsScriptTimeoutMs(mainScript: string): number {
+  const narratorBlockCount = (mainScript.match(/\*\*NARRATOR:\*\*/g) ?? []).length;
+  const extraNarratorBlocks = Math.max(0, narratorBlockCount - 4);
+  const extraChars = Math.max(0, mainScript.length - 20_000);
+  const extraCharBuckets = Math.floor(extraChars / 10_000);
+  const scaledTimeoutMs =
+    BASE_TTS_SCRIPT_TIMEOUT_MS +
+    extraNarratorBlocks * 30_000 +
+    extraCharBuckets * 60_000;
+
+  return Math.min(MAX_TTS_SCRIPT_TIMEOUT_MS, scaledTimeoutMs);
+}
+
 /**
  * Prompt instructing Claude to generate narrative/tts_script.md
  * from narrative/main_script.md by extracting narrator blocks and
@@ -50,23 +66,26 @@ registerExecutor("tts-script", (_params, _send) => {
   return async (onLog) => {
     const projectDir = getProjectDir();
     const project = loadProject();
-    if (isDeterministicPipelineMode()) {
-      writeDeterministicTtsScript(projectDir, project.sections, onLog);
-      return;
-    }
-
-    await runClaudeFix(
-      TTS_SCRIPT_PROMPT,
-      path.join(projectDir, "narrative"),
-      onLog
-    );
-
     const narrativeDir = path.join(projectDir, "narrative");
     const mainScriptPath = path.join(narrativeDir, "main_script.md");
     const ttsScriptPath = path.join(narrativeDir, "tts_script.md");
     const mainScript = fs.existsSync(mainScriptPath)
       ? fs.readFileSync(mainScriptPath, "utf-8")
       : "";
+
+    if (isDeterministicPipelineMode()) {
+      writeDeterministicTtsScript(projectDir, project.sections, onLog);
+      return;
+    }
+
+    const timeoutMs = estimateTtsScriptTimeoutMs(mainScript);
+    await runClaudeFix(
+      TTS_SCRIPT_PROMPT,
+      narrativeDir,
+      onLog,
+      { timeoutMs },
+    );
+
     const rawTtsScript = fs.existsSync(ttsScriptPath)
       ? fs.readFileSync(ttsScriptPath, "utf-8")
       : "";

@@ -9,6 +9,11 @@ const FIX_MODEL =
 const FAST_DRY_RUN_MODEL =
   process.env.CLAUDE_DRY_RUN_MODEL ?? 'claude-sonnet-4-5';
 
+type ClaudeRunOptions = {
+  cwd?: string;
+  timeoutMs?: number;
+};
+
 export type ClaudeExecutionTrace = {
   rawStdout: string;
   rawStderr: string;
@@ -71,14 +76,16 @@ export function parseJsonWithFallback(stdout: string): any {
 function runClaude(
   prompt: string,
   args: string[],
-  options: { cwd?: string },
+  options: ClaudeRunOptions,
   onLog?: (line: string) => void
 ): Promise<any> {
   return new Promise((resolve, reject) => {
+    const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     const proc = spawn('claude', ['-p', prompt, ...args], {
       cwd: options.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+      timeoutMs,
+    } as any);
 
     let stdout = '';
     let stderr = '';
@@ -86,8 +93,8 @@ function runClaude(
 
     const timeout = setTimeout(() => {
       proc.kill('SIGTERM');
-      reject(new Error('Claude CLI timeout after 600s'));
-    }, TIMEOUT_MS);
+      reject(new Error(`Claude CLI timeout after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
 
     proc.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
@@ -162,14 +169,16 @@ function runClaude(
 function runClaudeWithTrace(
   prompt: string,
   args: string[],
-  options: { cwd?: string },
+  options: ClaudeRunOptions,
   onLog?: (line: string) => void
 ): Promise<{ parsed: any; trace: ClaudeExecutionTrace }> {
   return new Promise((resolve, reject) => {
+    const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     const proc = spawn('claude', ['-p', prompt, ...args], {
       cwd: options.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
+      timeoutMs,
+    } as any);
 
     let stdout = '';
     let stderr = '';
@@ -178,8 +187,8 @@ function runClaudeWithTrace(
 
     const timeout = setTimeout(() => {
       proc.kill('SIGTERM');
-      reject(new Error('Claude CLI timeout after 600s'));
-    }, TIMEOUT_MS);
+      reject(new Error(`Claude CLI timeout after ${Math.round(timeoutMs / 1000)}s`));
+    }, timeoutMs);
 
     proc.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
@@ -362,7 +371,8 @@ export async function runClaudeExtract<T>(
 export async function runClaudeFix(
   prompt: string,
   scopeDir: string,
-  onLog?: (line: string) => void
+  onLog?: (line: string) => void,
+  options: { timeoutMs?: number } = {},
 ): Promise<ClaudeFixResult> {
   const args = [
     '--model',
@@ -374,7 +384,12 @@ export async function runClaudeFix(
     '--no-session-persistence',
   ];
 
-  return runClaude(prompt, args, { cwd: scopeDir }, onLog) as Promise<ClaudeFixResult>;
+  return runClaude(
+    prompt,
+    args,
+    { cwd: scopeDir, timeoutMs: options.timeoutMs },
+    onLog,
+  ) as Promise<ClaudeFixResult>;
 }
 
 /**

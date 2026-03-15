@@ -478,6 +478,15 @@ describe("runClaudeFix — spawn arguments", () => {
       expect(lastSpawnArgs!.args).toContain("--no-session-persistence");
     });
   });
+
+  it("accepts a custom timeout for slower fix tasks", () => {
+    const promise = runClaudeFix("fix", "/dir", undefined, { timeoutMs: 900_000 });
+    emitAndClose(mockProc, JSON.stringify(sampleFixResult), "", 0);
+
+    return promise.then(() => {
+      expect(lastSpawnArgs!.options.timeoutMs).toBe(900_000);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -690,6 +699,17 @@ describe("timeout behavior", () => {
     await promise;
     expect(clearSpy).toHaveBeenCalled();
     clearSpy.mockRestore();
+  });
+
+  it("uses a custom timeout for fix tasks when provided", async () => {
+    const promise = runClaudeFix("fix", "/dir", undefined, { timeoutMs: 900_000 });
+
+    jest.advanceTimersByTime(600_000);
+    expect(mockProc.kill).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(300_000);
+
+    await expect(promise).rejects.toThrow("Claude CLI timeout after 900s");
   });
 });
 

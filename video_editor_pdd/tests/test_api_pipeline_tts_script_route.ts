@@ -194,6 +194,92 @@ describe("tts-script executor", () => {
     expect(logFn).toBe(onLog);
   });
 
+  it("scales the Claude timeout for large scripts", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-script-timeout-"));
+    process.chdir(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, "narrative"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "project.json"), "{}", "utf-8");
+    mockLoadProject.mockReturnValue({
+      name: "demo",
+      outputResolution: { width: 1920, height: 1080 },
+      tts: {
+        engine: "qwen3-tts",
+        modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+        speaker: "Aiden",
+        speakingRate: 0.95,
+        sampleRate: 24000,
+      },
+      sections: [
+        {
+          id: "part1",
+          label: "Part 1",
+          videoFile: "part1.mp4",
+          specDir: "part1",
+          remotionDir: "S00-Part1",
+          compositionId: "Part1Section",
+          durationSeconds: 0,
+          offsetSeconds: 0,
+        },
+        {
+          id: "part2",
+          label: "Part 2",
+          videoFile: "part2.mp4",
+          specDir: "part2",
+          remotionDir: "S01-Part2",
+          compositionId: "Part2Section",
+          durationSeconds: 0,
+          offsetSeconds: 0,
+        },
+      ],
+      audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+      veo: {
+        model: "veo-3.1-generate-preview",
+        defaultAspectRatio: "16:9",
+        maxConcurrentGenerations: 4,
+        references: [],
+        frameChains: [],
+      },
+      render: {
+        maxParallelRenders: 3,
+        useLambda: false,
+        lambdaRegion: "us-east-1",
+      },
+    });
+
+    const longNarration = "A".repeat(20_000);
+    const longerNarration = "B".repeat(20_000);
+    fs.writeFileSync(
+      path.join(tmpDir, "narrative", "main_script.md"),
+      [
+        "## Part 1",
+        "",
+        "**NARRATOR:**",
+        longNarration,
+        "",
+        "## Part 2",
+        "",
+        "**NARRATOR:**",
+        longerNarration,
+        "",
+      ].join("\n"),
+      "utf-8"
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "narrative", "tts_script.md"),
+      "[TONE: warm]\nExisting output.\n",
+      "utf-8"
+    );
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    mockRunClaudeFix.mockResolvedValue(undefined);
+    await executor(jest.fn());
+
+    const timeoutOptions = mockRunClaudeFix.mock.calls[0][3];
+    expect(timeoutOptions.timeoutMs).toBeGreaterThan(600_000);
+    expect(timeoutOptions.timeoutMs).toBeLessThanOrEqual(1_200_000);
+  });
+
   it("passes prompt that references main_script.md", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     mockRunClaudeFix.mockResolvedValue(undefined);
