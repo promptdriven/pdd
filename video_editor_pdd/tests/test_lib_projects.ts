@@ -122,4 +122,56 @@ describe("lib/projects", () => {
     );
     expect(getCurrentProjectWorkspace().name).toBe("scratch_workspace");
   });
+
+  it("creates a new project workspace with project.json and a starter script", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "video-editor-create-project-"));
+    process.chdir(root);
+
+    const { createProjectWorkspace } = await import("../lib/projects");
+    const { loadProject } = await import("../lib/project");
+
+    const workspace = createProjectWorkspace({
+      projectId: "my-new-video",
+      config: {
+        name: "My New Video",
+        outputResolution: { width: 1920, height: 1080 },
+        tts: {
+          engine: "qwen3-tts",
+          modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+          tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+          speaker: "Aiden",
+          speakingRate: 0.95,
+          sampleRate: 24000,
+        },
+        sections: [],
+        audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+        veo: {
+          model: "veo-3.1-generate-preview",
+          defaultAspectRatio: "16:9",
+          maxConcurrentGenerations: 4,
+          references: [],
+          frameChains: [],
+        },
+        render: {
+          maxParallelRenders: 3,
+          useLambda: false,
+          lambdaRegion: "us-east-1",
+        },
+      },
+      mainScriptContent: "# My New Video Script\n",
+    });
+
+    expect(workspace.id).toBe("my-new-video");
+    expect(fs.existsSync(path.join(root, "projects", "my-new-video", "project.json"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(root, "projects", "my-new-video", "narrative", "main_script.md"))
+    ).toBe(true);
+    expect(loadProject(path.join(root, "projects", "my-new-video")).name).toBe("My New Video");
+    expect(
+      fs.readFileSync(
+        path.join(root, "projects", "my-new-video", "narrative", "main_script.md"),
+        "utf-8"
+      )
+    ).toBe("# My New Video Script\n");
+  });
 });

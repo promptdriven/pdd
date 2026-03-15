@@ -55,6 +55,14 @@ type ProjectOption = {
   name: string;
 };
 
+const slugifyProjectId = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-');
+
 type PipelineRunStepStatus = 'pending' | 'running' | 'done' | 'error';
 
 type PipelineRunStepState = PipelineRunStep & {
@@ -148,6 +156,12 @@ export default function Page() {
   const [projectOptions, setProjectOptions] = useState<ProjectOption[]>([]);
   const [selectedProjectOptionId, setSelectedProjectOptionId] = useState<string | null>(null);
   const [switchingProject, setSwitchingProject] = useState(false);
+  const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectId, setNewProjectId] = useState('');
+  const [createProjectError, setCreateProjectError] = useState<string | null>(null);
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [newProjectIdTouched, setNewProjectIdTouched] = useState(false);
   const [loadingAnnotations, setLoadingAnnotations] = useState<boolean>(false);
   const [reviewRenderStatus, setReviewRenderStatus] =
     useState<ReviewRenderStatus | null>(null);
@@ -219,10 +233,21 @@ export default function Page() {
     void loadProjectConfig();
   }, [loadProjectConfig]);
 
+  const loadProjects = useCallback(async () => {
+    const res = await fetch('/api/projects');
+    if (!res.ok) {
+      throw new Error('Failed to load project list');
+    }
+
+    const data = await res.json();
+    setProjectOptions(data.projects ?? []);
+    setSelectedProjectOptionId(data.selectedProjectId ?? null);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
-    const loadProjects = async () => {
+    const loadProjectOptions = async () => {
       try {
         const res = await fetch('/api/projects');
         if (!res.ok) {
@@ -237,7 +262,7 @@ export default function Page() {
       }
     };
 
-    void loadProjects();
+    void loadProjectOptions();
 
     return () => {
       cancelled = true;
@@ -905,6 +930,75 @@ export default function Page() {
     }
   }, [selectedProjectOptionId]);
 
+  const closeCreateProjectModal = useCallback(() => {
+    setShowCreateProjectModal(false);
+    setNewProjectName('');
+    setNewProjectId('');
+    setCreateProjectError(null);
+    setNewProjectIdTouched(false);
+  }, []);
+
+  const handleCreateProject = useCallback(async () => {
+    const name = newProjectName.trim();
+    const projectId = slugifyProjectId(newProjectId || newProjectName);
+
+    if (!name) {
+      setCreateProjectError('Project name is required.');
+      return;
+    }
+
+    if (!projectId) {
+      setCreateProjectError('Project id must contain letters or numbers.');
+      return;
+    }
+
+    setIsCreatingProject(true);
+    setCreateProjectError(null);
+
+    try {
+      const res = await fetch('/api/projects/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, projectId }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof data?.error === 'string' ? data.error : 'Failed to create project'
+        );
+      }
+
+      await Promise.all([loadProjects(), loadProjectConfig()]);
+      setSelectedProjectOptionId(data.project?.id ?? projectId);
+      setProjectConfig(null);
+      setAnnotations([]);
+      setSelectedAnnotationId(null);
+      setSelectedSectionId(null);
+      setReviewRenderStatus(null);
+      setPipelineStageStatuses({});
+      setPipelineRenderSnapshot(null);
+      setPipelineRunSteps([]);
+      setPipelineRunError(null);
+      setActiveTab('pipeline');
+      setActiveStage('script');
+      closeCreateProjectModal();
+      await loadProjectConfig();
+    } catch (err) {
+      setCreateProjectError(
+        err instanceof Error ? err.message : 'Failed to create project'
+      );
+    } finally {
+      setIsCreatingProject(false);
+    }
+  }, [
+    closeCreateProjectModal,
+    loadProjectConfig,
+    loadProjects,
+    newProjectId,
+    newProjectName,
+  ]);
+
   const StagePanel = STAGE_PANELS[activeStage];
   const pipelineRunButtonLabel = resolveRunRemainingButtonLabel({
     activeStage,
@@ -942,21 +1036,30 @@ export default function Page() {
             Review
           </button>
         </div>
-        <label className="flex items-center gap-2 text-xs text-gray-400">
-          <span>Project</span>
-          <select
-            value={selectedProjectOptionId ?? ''}
-            onChange={(event) => void handleProjectSelection(event.target.value)}
-            disabled={switchingProject || projectOptions.length <= 1}
-            className="rounded border border-border bg-gray-900 px-2 py-1 text-sm text-white disabled:opacity-60"
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-gray-400">
+            <span>Project</span>
+            <select
+              value={selectedProjectOptionId ?? ''}
+              onChange={(event) => void handleProjectSelection(event.target.value)}
+              disabled={switchingProject || projectOptions.length <= 1}
+              className="rounded border border-border bg-gray-900 px-2 py-1 text-sm text-white disabled:opacity-60"
+            >
+              {projectOptions.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowCreateProjectModal(true)}
+            className="rounded border border-emerald-700 bg-emerald-950/40 px-3 py-1.5 text-sm font-medium text-emerald-200 hover:bg-emerald-900/50"
           >
-            {projectOptions.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </label>
+            New Project
+          </button>
+        </div>
       </div>
 
       {/* Two-column layout */}
@@ -1069,6 +1172,76 @@ export default function Page() {
           </>
         )}
       </div>
+
+      {showCreateProjectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-gray-950 p-6 shadow-2xl">
+            <div className="space-y-2">
+              <h2 className="text-lg font-semibold text-white">New Project</h2>
+              <p className="text-sm text-gray-400">
+                Create a new project workspace under <code>projects/</code> and open
+                it in the script editor.
+              </p>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <label className="block space-y-2 text-sm text-gray-300">
+                <span>Project Name</span>
+                <input
+                  value={newProjectName}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setNewProjectName(value);
+                    if (!newProjectIdTouched) {
+                      setNewProjectId(slugifyProjectId(value));
+                    }
+                  }}
+                  placeholder="My New Video"
+                  className="w-full rounded border border-border bg-gray-900 px-3 py-2 text-white outline-none focus:border-emerald-500"
+                />
+              </label>
+
+              <label className="block space-y-2 text-sm text-gray-300">
+                <span>Project ID</span>
+                <input
+                  value={newProjectId}
+                  onChange={(event) => {
+                    setNewProjectId(event.target.value);
+                    setNewProjectIdTouched(true);
+                  }}
+                  placeholder="my-new-video"
+                  className="w-full rounded border border-border bg-gray-900 px-3 py-2 text-white outline-none focus:border-emerald-500"
+                />
+              </label>
+
+              {createProjectError && (
+                <div className="rounded border border-red-900/80 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+                  {createProjectError}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeCreateProjectModal}
+                disabled={isCreatingProject}
+                className="rounded border border-border px-3 py-2 text-sm text-gray-300 hover:bg-gray-900 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCreateProject()}
+                disabled={isCreatingProject}
+                className="rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
+              >
+                {isCreatingProject ? 'Creating…' : 'Create Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

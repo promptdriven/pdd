@@ -106,6 +106,13 @@ describe("state management", () => {
     expect(sourceCode).toContain("selectedProjectOptionId");
   });
 
+  it("tracks new project creation modal state", () => {
+    expect(sourceCode).toContain("showCreateProjectModal");
+    expect(sourceCode).toContain("newProjectName");
+    expect(sourceCode).toContain("newProjectId");
+    expect(sourceCode).toContain("createProjectError");
+  });
+
   it("tracks pipeline automation execution state", () => {
     expect(sourceCode).toContain("pipelineRunSteps");
     expect(sourceCode).toContain("pipelineRunError");
@@ -320,6 +327,10 @@ describe("tab bar", () => {
     expect(sourceCode).toMatch(/<select/);
   });
 
+  it("renders a New Project button in the top bar", () => {
+    expect(sourceCode).toMatch(/>[\s]*New Project[\s]*</);
+  });
+
   it("Pipeline button sets activeTab to 'pipeline'", () => {
     expect(sourceCode).toMatch(/onClick=\{?\(\)\s*=>\s*setActiveTab\s*\(\s*['"]pipeline['"]\s*\)/);
   });
@@ -446,6 +457,10 @@ describe("project config load on mount", () => {
 
   it("posts to /api/projects/select when switching projects", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/projects\/select['"]/);
+  });
+
+  it("posts to /api/projects/create when creating a new project", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/projects\/create['"]/);
   });
 });
 
