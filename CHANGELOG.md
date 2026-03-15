@@ -1,52 +1,48 @@
-## v0.0.176 (2026-03-13)
+## v0.0.177 (2026-03-14)
 
 ### Feat
 
-- Adjust section timings, update integration test audit reports, and add new visual components and test files.
-- persist structured visual contracts for compositions
-- persist generated composition manifest
-- add run remaining pipeline automation
-- Introduce new Remotion components, refine existing animation logic and media sources, and add integration test audit specifications for various sections.
-- generalize audit hints for stage10
-- surface warn audits in stage10
-- support layered media overlay composition
-- refresh remotion section visuals
-- Adjust Remotion composition durations, section timings, and update changelog.
+- update Remotion components, add Stage10 audit, and refresh e2e screenshots and build artifacts.**
+- Introduce new Remotion animation and Veo section components, along with updated integration tests and e2e screenshots.
+- add opt-in audit trace persistence
+- drive split visuals from structured contracts
+- clarify pipeline automation plan
 
 ### Fix
 
-- annotation test-batch-ann-1773466856521 Change the primary background accent in Animation
-- annotation test-batch-ann-1773466645087 Change the primary background accent in Animation
-- harden stage10 audit sampling and geometry checks
-- update 557 tests to mock _subprocess_run instead of subprocess.run
-- exclude .pdd/e2e-fix-state/ from intermediate file filter
-- PDD fix changes for #824
-- accept empty composition run requests
-- strip narrator markers from section tts text
-- update 557 tests to mock _subprocess_run instead of subprocess.run
-- make pipeline runner freshness-aware
-- Step 9 prompt must mandate control token emission
-- preserve architecture params after change step10
-- preserve signature style during architecture sync
-- merge architecture signatures during sync
-- PDD fix changes for #825
-- address #830 — orchestrator stall, killpg, retry, final comment, skip redundant diagnosis (#832)
-- audit hybrid visuals from composed renders
-- stop stage8 polling after job completion
-- skip unsupported media-overlay audits
-- prefer current staged veo clips in stage8
-- annotation 73b92e4d-a466-4b57-8fe5-c717293ba494 Change the main background color of this section t
-- annotation f399f592-94d8-4233-b2a6-f5a60af87cca Change the main background color of this section t
-- annotation test-batch-ann-1773422512345 Change the primary background accent in Animation
-- preserve visual media in stage8 previews
-- resolve split media aliases in stage8 generator
-- annotation e18f6be1-b8df-4e5d-be0b-90d8a65a6934 I want this to be a triangle
-- resolve staged veo media per visual
+- catch OSError in _get_current_branch and _get_pr_number
+- resolve Step 9 loop control token recognition and Step 10 fallthrough bugs
+- harden reusable audit template contracts
+- strip non-spoken labels from tts scripts
+- annotation 9a5e525b-8c26-47a0-9640-6fe3910f31b3 I want this to be a triangle instead
+- generalize composition media contract rendering
+- stabilize full test suite
+- annotation 71e7fb48-83c9-4f7d-949f-6d1fb65bf4a1 Change the main background color of this section t
+- annotation cf4f95ee-3eb6-4119-984b-599329e9e5b4 Change the main background color of this section t
+- annotation test-batch-ann-1773531622980 Change the primary background accent in Animation
+- annotation test-batch-ann-1773531454328 Change the primary background accent in Animation
+- annotation test-batch-ann-1773531287657 Change the primary background accent in Animation
+- address PR review — case-insensitive LLM match, no recursive glob
+- pdd sync skips LLM-only basenames instead of erroring
+- align audit review timestamps and background media
+- reduce claude pixel-coordinate audit drift
+- mark private prompt tests so public CI can skip them
+- add git identity config for CI test environments
+- invalidate stale generated compositions
+- annotation a2cb728e-a228-49ff-8556-bba09d215626 The morphing shape is vertically off-center. The s
+- support audit annotations in review analysis
+- normalize partial stage10 audit results
+- annotation b7958929-04d1-47ff-ac5d-68e682da70cc Change the main background color of this section t
+- annotation 4cf63f2a-0b5d-4621-9ef2-74d240c5a217 Change the main background color of this section t
 
-### Refactor
+## v0.0.176 (2026-03-13)
 
-- clarify stage2 and stage3 advance actions
-- unify pipeline continue actions
+### Fix
+
+- **Orchestrator stall, killpg, retry, and final comment (issue #830)**: new `_subprocess_run` wrapper kills entire process groups on timeout via `os.killpg`; Step 1 gets an automatic 1.5× timeout retry; missing loop control token in Step 9 now stops the workflow instead of silently continuing; new `post_final_comment` reports workflow stop reason to GitHub; reuses prior pdd-bug analysis to skip redundant diagnosis steps
+- **Architecture interface parameter preservation (issue #825)**: new `_merge_interface_signatures` and `_merge_function_signature` use Python AST parsing to ensure updated signatures are supersets of existing ones — dropped parameters are restored with warnings instead of silently lost
+- **Preserve architecture params after change step10**: new `_sanitize_architecture_interfaces` snapshots architecture.json before Step 10 and merges interface signatures afterward, preventing LLM edits from dropping function parameters
+- **Artifact file filtering (issue #824)**: intermediate file filter expanded to catch `.pdd/` directories (except `e2e-fix-state/`), `*_errors.txt`, `step*_output.md`, and `test_issue_*_reproduction.py` — prevents workflow artifacts from being committed
 
 ## v0.0.175 (2026-03-12)
 

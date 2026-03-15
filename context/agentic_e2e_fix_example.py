@@ -1,60 +1,103 @@
 """
 Example usage of the agentic_e2e_fix module.
 
-This script demonstrates how to invoke the `run_agentic_e2e_fix` function,
-which is the entry point for the agentic e2e fix workflow. It parses a GitHub
-issue URL, fetches the issue content, and orchestrates the 9-step fix process.
+This script demonstrates how to invoke the `run_agentic_e2e_fix` function.
+Since the function relies on the GitHub CLI (`gh`) and interacts with real GitHub issues,
+this example mocks the internal GitHub fetching functions to simulate a successful
+E2E fix workflow without requiring actual API calls or a real issue.
 
-Cross-machine support:
-- If run on same machine as `pdd bug`: automatically finds the worktree
-- If run on different machine: detects the branch from issue comments and
-  warns if you're not on the correct branch (aborts unless --force is used)
+Scenario:
+    We simulate fetching data for a GitHub issue reporting an E2E test failure.
+    The function will determine the working directory, fetch (mocked) issue content,
+    and invoke the orchestrator to perform the fix.
 """
 
-from pdd.agentic_e2e_fix import run_agentic_e2e_fix
+import sys
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+# Ensure the project root is in sys.path so we can import the module
+# Adjust this path based on your actual project structure relative to this script
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
+
+try:
+    # Import the module to be tested
+    # Note: We assume the file is at pdd/agentic_e2e_fix.py
+    from pdd.agentic_e2e_fix import run_agentic_e2e_fix
+except ImportError:
+    print("Error: Could not import 'pdd.agentic_e2e_fix'.")
+    print("Ensure your PYTHONPATH is set correctly or the file structure matches.")
+    sys.exit(1)
 
 
-def main():
-    """Main function demonstrating agentic e2e fix usage."""
-    # Example GitHub issue URL (typically created by pdd bug)
-    #
-    # Same machine as pdd bug:
-    #   - Automatically finds worktree at .pdd/worktrees/fix-issue-42/
-    #   - Uses that directory as cwd for all operations
-    #
-    # Different machine:
-    #   - Parses issue comments to find branch name (e.g., fix/issue-42)
-    #   - Compares against current git branch
-    #   - If mismatch: aborts with suggestion to checkout correct branch
-    #   - Use force=True to override the safety check
-    #   - Falls back to current directory if no worktree found
-    issue_url = "https://github.com/myorg/myrepo/issues/42"
+def mock_check_gh_cli() -> bool:
+    """Mock gh CLI check to always return True."""
+    return True
 
-    # Run the agentic e2e fix workflow
-    success, message, total_cost, model_used, changed_files = run_agentic_e2e_fix(
-        issue_url=issue_url,
-        timeout_adder=30.0,      # Add 30 seconds to each step's timeout
-        max_cycles=5,            # Maximum outer loop cycles
-        resume=True,             # Resume from saved state if available
-        force=False,             # Abort if branch mismatch detected (safety check)
-        verbose=True,            # Show detailed output
-        quiet=False              # Don't suppress output
-    )
 
-    # Handle results
-    if success:
-        print(f"E2E fix completed successfully!")
-        print(f"Total cost: ${total_cost:.4f}")
-        print(f"Model used: {model_used}")
-        print(f"Files changed: {', '.join(changed_files)}")
-    else:
-        # Common failure cases:
-        # - "Branch mismatch - use --force to override" (wrong branch)
-        # - "gh CLI not found" (gh not installed)
-        # - "Invalid GitHub URL" (malformed URL)
-        # - "Max cycles (5) reached without all tests passing"
-        print(f"E2E fix failed: {message}")
-        print(f"Cost incurred: ${total_cost:.4f}")
+def mock_parse_github_url(url: str) -> tuple:
+    """Mock URL parsing to return fixed owner, repo, number."""
+    return "example-owner", "example-repo", 123
+
+
+def mock_fetch_issue_data(owner: str, repo: str, number: int) -> tuple:
+    """Mock fetching issue data."""
+    issue_data = {
+        "title": "E2E Test Failure in User Login Flow",
+        "body": "The login E2E test fails intermittently due to timing issues.",
+        "user": {"login": "test-author"},
+        "comments_url": "https://api.github.com/repos/example-owner/example-repo/issues/123/comments"
+    }
+    return issue_data, None
+
+
+def mock_fetch_issue_comments(comments_url: str) -> str:
+    """Mock fetching comments."""
+    return "--- Comment by test-author ---\nAdditional details: Happens on Chrome but not Firefox.\n"
+
+
+def mock_find_working_directory(issue_number: int, issue_comments: str, quiet: bool, force: bool) -> tuple:
+    """Mock working directory detection to return current directory with no abort."""
+    return Path.cwd(), None, False
+
+
+def main() -> None:
+    """Main function to run the agentic E2E fix simulation."""
+    # Define example parameters
+    issue_url = "https://github.com/example-owner/example-repo/issues/123"
+
+    print("Starting Agentic E2E Fix Simulation...")
+    print("-" * 60)
+
+    # Patch the internal functions
+    # We patch where they are used in the agentic_e2e_fix module
+    with patch("pdd.agentic_e2e_fix._check_gh_cli", mock_check_gh_cli), \
+         patch("pdd.agentic_e2e_fix._parse_github_url", mock_parse_github_url), \
+         patch("pdd.agentic_e2e_fix._fetch_issue_data", mock_fetch_issue_data), \
+         patch("pdd.agentic_e2e_fix._fetch_issue_comments", mock_fetch_issue_comments), \
+         patch("pdd.agentic_e2e_fix._find_working_directory", mock_find_working_directory):
+
+        # Run the E2E fix function
+        success, final_msg, total_cost, model, changed_files = run_agentic_e2e_fix(
+            issue_url=issue_url,
+            timeout_adder=0.0,
+            max_cycles=1,  # Limit for demo
+            resume=False,
+            force=True,
+            verbose=True,
+            quiet=False,
+            use_github_state=False,
+            protect_tests=True
+        )
+
+    print("-" * 60)
+    print("Simulation Complete.")
+    print(f"Success: {success}")
+    print(f"Final Message: {final_msg}")
+    print(f"Total Cost: ${total_cost:.2f}")
+    print(f"Model Used: {model}")
+    print(f"Changed Files: {changed_files}")
 
 
 if __name__ == "__main__":
