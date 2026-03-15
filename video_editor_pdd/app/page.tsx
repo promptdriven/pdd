@@ -119,6 +119,7 @@ const STAGE_ORDER: PipelineStage[] = [
 type StagePanelProps = {
   onAdvance: () => void;
   projectConfig: ProjectConfig | null;
+  auditResultsRefreshToken?: number;
   onCreateAnnotation?: (data: AnnotationCaptureData) => void;
 };
 
@@ -162,6 +163,7 @@ export default function Page() {
   const [pipelineRunCurrentStepLabel, setPipelineRunCurrentStepLabel] = useState<string | null>(
     null
   );
+  const [auditResultsRefreshToken, setAuditResultsRefreshToken] = useState<number>(0);
   const [pipelineStageStatuses, setPipelineStageStatuses] = useState<
     Partial<Record<PipelineStage, PipelineStageStatusEntry>>
   >({});
@@ -616,6 +618,10 @@ export default function Page() {
         await loadReviewRenderStatus();
       }
 
+      if (step.id === 'audit') {
+        setAuditResultsRefreshToken((current) => current + 1);
+      }
+
       await loadPipelineAutomationContext();
     },
     [
@@ -1024,6 +1030,7 @@ export default function Page() {
               <StagePanel
                 onAdvance={handleAdvanceStage}
                 projectConfig={projectConfig}
+                auditResultsRefreshToken={auditResultsRefreshToken}
                 onCreateAnnotation={handleCreateAnnotationFromAudit}
               />
             </main>

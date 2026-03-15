@@ -86,6 +86,7 @@ function normalizeSectionAudit(section: Partial<SectionAudit> | null | undefined
 interface Stage10AuditProps {
   onAdvance: () => void;
   projectConfig?: any;
+  auditResultsRefreshToken?: number;
   /** Optional callback to prefill annotation form in parent (mapped from onCreateAnnotation) */
   onCreateAnnotation?: (data: {
     text: string;
@@ -111,7 +112,11 @@ const verdictClasses: Record<Verdict, string> = {
   WARN: 'bg-amber-800 text-amber-200',
 };
 
-export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10AuditProps) {
+export default function Stage10Audit({
+  onAdvance,
+  onCreateAnnotation,
+  auditResultsRefreshToken = 0,
+}: Stage10AuditProps) {
   const [sections, setSections] = useState<SectionAudit[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [specContent, setSpecContent] = useState<Record<string, string>>({});
@@ -155,6 +160,11 @@ export default function Stage10Audit({ onAdvance, onCreateAnnotation }: Stage10A
   useEffect(() => {
     void refreshResults(true);
   }, [refreshResults]);
+
+  useEffect(() => {
+    if (auditResultsRefreshToken <= 0) return;
+    void refreshResults();
+  }, [auditResultsRefreshToken, refreshResults]);
 
   const applyAuditEvent = useCallback((data: Partial<SectionAudit> & { sectionId: string }) => {
     if (!mountedRef.current) return;

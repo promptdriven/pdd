@@ -113,6 +113,11 @@ describe("state management", () => {
     expect(sourceCode).toContain("pipelineStageStatuses");
     expect(sourceCode).toContain("pipelineRenderSnapshot");
   });
+
+  it("tracks an audit results refresh token for Stage 10 after automation completes", () => {
+    expect(sourceCode).toContain("auditResultsRefreshToken");
+    expect(sourceCode).toMatch(/useState\s*<\s*number\s*>\s*\(\s*0\s*\)/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -549,6 +554,10 @@ describe("create annotation from audit stage", () => {
   it("passes onCreateAnnotation prop to StagePanel", () => {
     expect(sourceCode).toMatch(/onCreateAnnotation=\{handleCreateAnnotationFromAudit\}/);
   });
+
+  it("passes auditResultsRefreshToken to StagePanel", () => {
+    expect(sourceCode).toMatch(/auditResultsRefreshToken=\{auditResultsRefreshToken\}/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -623,6 +632,22 @@ describe("handleAnnotationCapture", () => {
 
   it("refreshes annotations after saving", () => {
     expect(sourceCode).toMatch(/await\s+loadAnnotations\s*\(\s*reviewUsesFreshFullVideo\s*\?\s*undefined\s*:\s*targetSectionId\s*\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17b. Pipeline automation audit refresh bridge
+// ---------------------------------------------------------------------------
+
+describe("pipeline automation audit refresh bridge", () => {
+  it("defines auditResultsRefreshToken in StagePanelProps", () => {
+    expect(sourceCode).toMatch(/auditResultsRefreshToken\?\s*:\s*number/);
+  });
+
+  it("bumps the audit results refresh token after the audit automation step succeeds", () => {
+    expect(sourceCode).toMatch(
+      /if\s*\(\s*step\.id\s*===\s*['"]audit['"]\s*\)\s*\{\s*setAuditResultsRefreshToken\(\s*\(current\)\s*=>\s*current\s*\+\s*1\s*\);\s*\}/
+    );
   });
 });
 

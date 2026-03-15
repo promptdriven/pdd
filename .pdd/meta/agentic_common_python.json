@@ -1,14 +1,11 @@
 {
-  "pdd_version": "0.0.166",
-  "timestamp": "2026-03-05T05:23:43.589932+00:00",
-  "command": "update",
-  "prompt_hash": "29c9c47bc5712d55bcba76003c5f25db9e1d71d9a2c5ce8e6d3ec3ce4f68b2b2",
-  "code_hash": "4092f436e4133f457107bbd36e7d5a14dc140d06342ef789e7131fdad918d922",
+  "pdd_version": "0.0.176",
+  "timestamp": "2026-03-15T01:16:32.610412+00:00",
+  "command": "example",
+  "prompt_hash": null,
+  "code_hash": null,
   "example_hash": null,
   "test_hash": null,
   "test_files": null,
-  "include_deps": {
-    "context/llm_invoke_example.py": "88e1071cf088837c1adb6738f0a1f8e5134efd4a44370758dd19d0719475ac48",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
-  }
+  "include_deps": null
 }

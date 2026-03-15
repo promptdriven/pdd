@@ -56,7 +56,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const VeoSectionSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 7.957333;
+  const durationSeconds = 8.021333;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

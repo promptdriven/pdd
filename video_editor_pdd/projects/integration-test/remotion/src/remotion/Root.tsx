@@ -15,9 +15,9 @@ import { AnimationSection07SectionOutro } from "./07_section_outro";
 import { AnimationSection08KeyVisual } from "./08_key_visual";
 import { AnimationSection09SplitSummary } from "./09_split_summary";
 import { VeoSection01TitleCard } from "./veo_section_01_title_card";
-import { VeoSection04WaveDataOverlay } from "./04_wave_data_overlay";
-import { VeoSection05SplitNatureComparison } from "./05_split_nature_comparison";
-import { VeoSection06VeoPipelineInfographic } from "./06_veo_pipeline_infographic";
+import { VeoSection03WaveDataOverlay } from "./03_wave_data_overlay";
+import { VeoSection04SplitNatureComparison } from "./04_split_nature_comparison";
+import { VeoSection05VeoPipelineInfographic } from "./05_veo_pipeline_infographic";
 import { VeoSection07NarrationOverlayIntro } from "./07_narration_overlay_intro";
 import { VeoSection08SectionEndCard } from "./08_section_end_card";
 
@@ -25,21 +25,21 @@ const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
 };
 
 const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "animation_section:animation_section_01_title_card": {"specBaseName": "01_title_card", "dataPoints": {"title": "Animation Section", "subtitle": "Integration Test"}, "overlayConfig": null},
-  "animation_section:02_blue_circle_pulse": {"specBaseName": "02_blue_circle_pulse", "dataPoints": {"circle": {"centerX": 960, "centerY": 540, "baseRadius": 60, "pulseRadius": 80, "color": "#3B82F6"}, "glow": {"radius": 120, "color": "rgba(59, 130, 246, 0.2)"}}, "overlayConfig": null},
-  "animation_section:03_circle_to_square_morph": {"specBaseName": "03_circle_to_square_morph", "dataPoints": {"shape": {"size": 120, "borderRadiusStart": 60, "borderRadiusEnd": 12, "colorStart": "#3B82F6", "colorEnd": "#6366F1"}, "ghostTrail": {"count": 3, "opacities": [0.15, 0.1, 0.05], "frameOffsets": [0, 4, 8]}}, "overlayConfig": null},
-  "animation_section:04_square_slide_right": {"specBaseName": "04_square_slide_right", "dataPoints": {"slide": {"fromX": 960, "toX": 1440, "y": 540, "anticipationOffset": -10, "overshoot": 20, "streakMaxLength": 200}, "square": {"size": 120, "borderRadius": 12, "color": "#6366F1"}}, "overlayConfig": null},
-  "animation_section:05_split_comparison": {"specBaseName": "05_split_comparison", "dataPoints": {"layout": {"panelWidth": 960, "dividerWidth": 2, "dividerMaxOpacity": 0.6}, "shapes": {"circle": {"x": 480, "y": 440, "radius": 80, "color": "#3B82F6"}, "square": {"x": 480, "y": 440, "size": 120, "borderRadius": 12, "color": "#6366F1"}}}, "overlayConfig": null},
-  "animation_section:06_particle_burst": {"specBaseName": "06_particle_burst", "dataPoints": {"particles": {"count": 40, "minRadius": 4, "maxRadius": 8, "minDistance": 150, "maxDistance": 500, "angleJitter": 5, "seed": 42}, "flash": {"peakOpacity": 0.15}, "colorPalette": ["#3B82F6", "#6366F1", "#8B5CF6", "#FFFFFF"]}, "overlayConfig": null},
-  "animation_section:07_section_outro": {"specBaseName": "07_section_outro", "dataPoints": {"checkmark": {"path": "M8 24 L20 36 L40 12", "pathLength": 48, "strokeColor": "#22C55E", "strokeWidth": 3, "size": 48, "centerX": 960, "centerY": 480}, "text": {"content": "Section Complete", "centerY": 560}}, "overlayConfig": null},
-  "animation_section:08_key_visual": {"specBaseName": "08_key_visual", "dataPoints": {"bars": [{"value": 0.35, "maxHeight": 126, "color": "#38BDF8"}, {"value": 0.55, "maxHeight": 198, "color": "#22C55E"}, {"value": 0.8, "maxHeight": 288, "color": "#38BDF8"}, {"value": 0.6, "maxHeight": 216, "color": "#22C55E"}], "barWidth": 120, "barGap": 36, "containerHeight": 420, "barBaseHeight": 360}, "overlayConfig": null},
-  "animation_section:09_split_summary": {"specBaseName": "09_split_summary", "dataPoints": {"divider": {"startX": 640, "endX": 720, "width": 6, "color": "#38BDF8"}, "panels": {"left": {"background": "#0F172A", "label": "Before"}, "right": {"background": "#111827", "label": "After"}}}, "overlayConfig": null},
+  "animation_section:animation_section_01_title_card": {"specBaseName": "01_title_card", "dataPoints": {"title": "Animation Section", "subtitle": "Integration Test", "accentLineWidth": 320, "backgroundColor": "#0F172A", "titleColor": "#FFFFFF", "subtitleColor": "#94A3B8", "accentLineColor": "rgba(255, 255, 255, 0.8)"}, "overlayConfig": null},
+  "animation_section:02_blue_circle_pulse": {"specBaseName": "02_blue_circle_pulse", "dataPoints": {"center": [960, 540], "baseRadius": 60, "pulseRadii": [80, 78], "color": "#3B82F6", "glowBlur": 30, "glowOffsetRadius": 20, "pulseCount": 2, "backgroundGradient": {"center": "#0F172A", "edge": "#020617"}}, "overlayConfig": null},
+  "animation_section:03_circle_to_square_morph": {"specBaseName": "03_circle_to_square_morph", "dataPoints": {"center": [960, 540], "startShape": {"size": 120, "borderRadius": 60, "color": "#3B82F6"}, "endShape": {"size": 130, "borderRadius": 12, "color": "#6366F1"}, "ghostTrails": {"opacities": [0.6, 0.35, 0.15], "lagFrames": 3}}, "overlayConfig": null},
+  "animation_section:04_square_slide_right": {"specBaseName": "04_square_slide_right", "dataPoints": {"startX": 960, "endX": 1440, "y": 540, "anticipationPx": 20, "overshootPx": 30, "shapeSize": 130, "borderRadius": 12, "shapeColor": "#6366F1", "streakMaxWidth": 280, "streakHeight": 6, "streakOpacity": 0.4, "scaleFactors": {"anticipation": 0.97, "slideStretch": 1.03, "normal": 1.0}}, "overlayConfig": null},
+  "animation_section:05_split_comparison": {"specBaseName": "05_split_comparison", "dataPoints": {"leftPanel": {"background": "#1E3A5F", "shape": "circle", "shapeColor": "#3B82F6", "radius": 50, "label": "Before"}, "rightPanel": {"background": "#312E81", "shape": "roundedSquare", "shapeColor": "#6366F1", "size": 100, "borderRadius": 12, "label": "After"}, "divider": {"color": "#FFFFFF", "opacity": 0.6, "width": 2}, "float": {"amplitude": 5, "period": 20}}, "overlayConfig": null},
+  "animation_section:06_particle_burst": {"specBaseName": "06_particle_burst", "dataPoints": {"origin": [960, 540], "particleCount": 40, "seed": 42, "colors": ["#3B82F6", "#6366F1", "#8B5CF6", "#E2E8F0"], "radiusRange": [3, 8], "speedRange": [200, 600], "maxDistance": 300, "fadeStartRatio": 0.6, "flash": {"maxRadius": 120, "contractedRadius": 60, "peakOpacity": 0.8, "color": "#FFFFFF"}}, "overlayConfig": null},
+  "animation_section:07_section_outro": {"specBaseName": "07_section_outro", "dataPoints": {"checkmark": {"center": [960, 500], "path": "M 25 45 L 42 62 L 75 28", "color": "#22C55E", "strokeWidth": 6, "pathLength": 180, "shortLeg": 60, "longLeg": 120, "glowBlur": 20, "glowOpacity": 0.2}, "text": {"content": "Section Complete", "y": 600, "fontSize": 32, "fontWeight": 500, "maxOpacity": 0.9, "scaleFrom": 0.95}, "fadeToBlack": {"startFrame": 28, "targetColor": "#000000"}}, "overlayConfig": null},
+  "animation_section:08_key_visual": {"specBaseName": "08_key_visual", "dataPoints": {"bars": [{"label": "A", "height": 300, "color": "#38BDF8"}, {"label": "B", "height": 420, "color": "#22C55E"}, {"label": "C", "height": 260, "color": "#38BDF8"}, {"label": "D", "height": 500, "color": "#22C55E"}], "barWidth": 120, "barGap": 30, "maxHeight": 500, "containerWidth": 600, "containerBottomY": 880, "barBorderRadius": "8px 8px 0 0", "staggerFrames": 3, "growDuration": 8, "backgroundColor": "#0A1628"}, "overlayConfig": null},
+  "animation_section:09_split_summary": {"specBaseName": "09_split_summary", "dataPoints": {"leftBackground": "#0F172A", "leftOpacity": 0.9, "rightBackground": "#020617", "rightOpacity": 1.0, "divider": {"startX": 640, "endX": 720, "color": "#38BDF8", "width": 3, "glowBlur": 24, "glowOpacity": 0.3, "glowWidth": 20}, "label": {"text": "Split Summary", "x": 80, "y": 60, "fontSize": 20, "fontWeight": 600, "color": "#FFFFFF", "opacity": 0.7}}, "overlayConfig": null},
   "veo_section:veo_section_01_title_card": {"specBaseName": "01_title_card", "dataPoints": {"title": "Veo Section", "subtitle": "AI-Generated Cinematic Footage", "background": "#0B1120", "accent": "#C9A84C"}, "overlayConfig": null},
-  "veo_section:04_wave_data_overlay": {"specBaseName": "04_wave_data_overlay", "dataPoints": {"wave_height_m": 0.8, "wave_period_s": 6.2, "water_temp_c": 22, "waveform": {"amplitude": 0.8, "frequency": 1.2, "samples": 120}}, "overlayConfig": {"gradientOverlay": "bottom"}},
-  "veo_section:05_split_nature_comparison": {"specBaseName": "05_split_nature_comparison", "dataPoints": {"left": {"label": "Ocean · Sunset", "source": "ocean_wave_sunset_still.jpg", "scene": "beach at golden hour"}, "right": {"label": "Forest · Canopy", "source": "aerial_forest_canopy_still.jpg", "scene": "aerial forest with dappled light"}}, "overlayConfig": null},
-  "veo_section:06_veo_pipeline_infographic": {"specBaseName": "06_veo_pipeline_infographic", "dataPoints": {"pipeline_steps": [{"id": "prompt", "label": "Text Prompt", "color": "#6366F1", "icon": "text-cursor"}, {"id": "model", "label": "Veo Model", "color": "#8B5CF6", "icon": "brain"}, {"id": "output", "label": "Video Output", "color": "#10B981", "icon": "play"}], "arrows": [{"from": "prompt", "to": "model"}, {"from": "model", "to": "output"}]}, "overlayConfig": null},
-  "veo_section:07_narration_overlay_intro": {"specBaseName": "07_narration_overlay_intro", "dataPoints": {"narration_text": "Veo-generated clips with narration overlay", "word_count": 6, "waveform_bars": 40, "accent_color": "#C9A84C", "background_source": "ocean_wave_sunset_still.jpg"}, "overlayConfig": null},
-  "veo_section:08_section_end_card": {"specBaseName": "08_section_end_card", "dataPoints": {"title": "Veo Section Complete", "subtitle": "2 Veo clips · 3 Remotion overlays", "stats": {"veo_clips": 2, "remotion_overlays": 3}, "background": "#0B1120", "accent": "#C9A84C", "checkmark_color": "#10B981"}, "overlayConfig": null},
+  "veo_section:03_wave_data_overlay": {"specBaseName": "03_wave_data_overlay", "dataPoints": {"waveform": {"amplitude": 0.8, "frequency": 1.2, "samples": 120}, "stats": [{"label": "Wave Height", "value": "0.8m", "icon": "wave"}, {"label": "Wave Period", "value": "6.2s", "icon": "clock"}, {"label": "Water Temp", "value": "22°C", "icon": "thermometer"}]}, "overlayConfig": {"gradientOverlay": "bottom"}},
+  "veo_section:04_split_nature_comparison": {"specBaseName": "04_split_nature_comparison", "dataPoints": {"panels": [{"side": "left", "label": "Ocean · Sunset", "source": "veo/04_veo_broll.mp4"}, {"side": "right", "label": "Forest · Canopy", "source": "veo/05_veo_cutaway.mp4"}], "divider_color": "#C9A84C"}, "overlayConfig": null},
+  "veo_section:05_veo_pipeline_infographic": {"specBaseName": "05_veo_pipeline_infographic", "dataPoints": {"pipeline_steps": [{"label": "Prompt", "icon": "text", "x": 330}, {"label": "Veo AI", "icon": "sparkle", "x": 870}, {"label": "Clip", "icon": "film", "x": 1410}], "arrow_style": {"stroke": "#C9A84C", "dash_pattern": "8 4", "particle_count": 2}}, "overlayConfig": {"gradientOverlay": "bottom"}},
+  "veo_section:07_narration_overlay_intro": {"specBaseName": "07_narration_overlay_intro", "dataPoints": {"caption": "It uses Veo-generated clips with narration overlay.", "words": ["It", "uses", "Veo-generated", "clips", "with", "narration", "overlay."], "word_timings_frames": [10, 17, 24, 31, 38, 45, 52], "waveform_bars": 5, "panel_height": 200, "active_color": "#C9A84C", "inactive_color": "rgba(255,255,255,0.5)"}, "overlayConfig": {"lowerThirdText": "It uses Veo-generated clips with narration overlay."}},
+  "veo_section:08_section_end_card": {"specBaseName": "08_section_end_card", "dataPoints": {"title": "Veo Section Complete", "icon": "checkmark", "background": "#0B1120", "accent": "#C9A84C", "checkmark_size": 80, "rule_width": 200}, "overlayConfig": null},
 };
 
 const AnimationSection01TitleCardPreview: React.FC = () => (
@@ -112,24 +112,24 @@ const VeoSection01TitleCardPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const VeoSection04WaveDataOverlayPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:04_wave_data_overlay"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:04_wave_data_overlay"] ?? null}>
-      <VeoSection04WaveDataOverlay />
+const VeoSection03WaveDataOverlayPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:03_wave_data_overlay"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:03_wave_data_overlay"] ?? null}>
+      <VeoSection03WaveDataOverlay />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const VeoSection05SplitNatureComparisonPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:05_split_nature_comparison"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:05_split_nature_comparison"] ?? null}>
-      <VeoSection05SplitNatureComparison />
+const VeoSection04SplitNatureComparisonPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:04_split_nature_comparison"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:04_split_nature_comparison"] ?? null}>
+      <VeoSection04SplitNatureComparison />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const VeoSection06VeoPipelineInfographicPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:06_veo_pipeline_infographic"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:06_veo_pipeline_infographic"] ?? null}>
-      <VeoSection06VeoPipelineInfographic />
+const VeoSection05VeoPipelineInfographicPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["veo_section:05_veo_pipeline_infographic"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["veo_section:05_veo_pipeline_infographic"] ?? null}>
+      <VeoSection05VeoPipelineInfographic />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -156,7 +156,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="AnimationSection"
         component={AnimationSectionSection}
-        durationInFrames={232}
+        durationInFrames={238}
         fps={30}
         width={1920}
         height={1080}
@@ -164,7 +164,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="VeoSection"
         component={VeoSectionSection}
-        durationInFrames={233}
+        durationInFrames={239}
         fps={30}
         width={1920}
         height={1080}
@@ -250,24 +250,24 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="veo-section04-wave-data-overlay"
-        component={VeoSection04WaveDataOverlayPreview}
+        id="veo-section03-wave-data-overlay"
+        component={VeoSection03WaveDataOverlayPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="veo-section05-split-nature-comparison"
-        component={VeoSection05SplitNatureComparisonPreview}
+        id="veo-section04-split-nature-comparison"
+        component={VeoSection04SplitNatureComparisonPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="veo-section06-veo-pipeline-infographic"
-        component={VeoSection06VeoPipelineInfographicPreview}
+        id="veo-section05-veo-pipeline-infographic"
+        component={VeoSection05VeoPipelineInfographicPreview}
         durationInFrames={PREVIEW_DURATION}
         fps={30}
         width={1920}

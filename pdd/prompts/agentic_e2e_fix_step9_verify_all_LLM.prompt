@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 9 of 9 in an agentic e2e fix workflow. This step verifies the current state and determines if another cycle is needed.
+You are working on step 9 of 10 in an agentic e2e fix workflow. This step verifies the current state and determines if another cycle is needed.
 
 % Inputs
 
@@ -62,7 +62,7 @@ You are working on step 9 of 9 in an agentic e2e fix workflow. This step verifie
    - Are there new failures?
 
 3. **Determine next action**
-   - If all tests pass: Workflow complete
+   - If all tests pass locally: Proceed to Step 10 for CI validation
    - If tests still fail and cycle < max_cycles: Another cycle needed
    - If tests still fail and cycle >= max_cycles: Max cycles reached, report status
 
@@ -74,24 +74,24 @@ After completing your analysis, use `gh issue comment` to post your findings to 
 gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
-**If all tests pass:**
+**If all tests pass locally:**
 ```markdown
 ## Step 9: Final Verification (Cycle {cycle_number})
 
-**Status:** ALL_TESTS_PASS
+**Status:** LOCAL_TESTS_PASS
 
 ### Test Results
 - Unit tests: {{N}}/{{M}} pass
 - E2E tests: {{N}}/{{M}} pass
 
 ### Summary
-All bugs fixed successfully in {cycle_number} cycle(s).
+All bugs fixed successfully locally in {cycle_number} cycle(s). Proceeding to Step 10 for CI validation.
 
 ### Files Changed (Total)
 {{list_of_all_files_modified}}
 
 ---
-*Workflow complete - all tests passing*
+*Workflow proceeding to Step 10: CI Validation*
 ```
 
 **If more cycles needed:**
@@ -140,8 +140,8 @@ All bugs fixed successfully in {cycle_number} cycle(s).
 
 % Important — MANDATORY
 
-- **You MUST include exactly one of the following control tokens in your response: ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED.** The orchestrator parses your output for these exact strings to decide whether to continue, stop, or start another cycle. If none is present, the workflow stops with an error.
-- Always emit the token inside a `**Status:**` line (e.g., `**Status:** ALL_TESTS_PASS`) as shown in the templates above.
+- **You MUST include exactly one of the following control tokens in your response: LOCAL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED.** The orchestrator parses your output for these exact strings to decide whether to continue, stop, or start another cycle. If none is present, the workflow stops with an error.
+- Always emit the token inside a `**Status:**` line (e.g., `**Status:** LOCAL_TESTS_PASS`) as shown in the templates above.
 - Be accurate in test counts - don't round or estimate
 - Include specific failure information for debugging
 - Always post your findings as a GitHub comment before completing

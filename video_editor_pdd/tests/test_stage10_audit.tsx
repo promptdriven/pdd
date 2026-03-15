@@ -74,6 +74,10 @@ describe("Stage10Audit props", () => {
   it("destructures onAdvance from props", () => {
     expect(sourceCode).toMatch(/\{\s*onAdvance/);
   });
+
+  it("accepts an optional audit results refresh token from the parent page", () => {
+    expect(sourceCode).toMatch(/auditResultsRefreshToken\?\s*:\s*number/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -459,6 +463,12 @@ describe("Audit run stream progress", () => {
 
   it("refreshes audit results after the stream completes", () => {
     expect(sourceCode).toMatch(/await\s+refreshResults\(\)/);
+  });
+
+  it("refreshes audit results again when the parent audit refresh token changes", () => {
+    expect(sourceCode).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{\s*if\s*\(\s*auditResultsRefreshToken\s*<=\s*0\s*\)\s*return;[\s\S]*?void\s+refreshResults\(\);[\s\S]*?\},\s*\[\s*auditResultsRefreshToken,\s*refreshResults\s*\]\)/
+    );
   });
 
   it("cancels the reader after consuming the stream", () => {

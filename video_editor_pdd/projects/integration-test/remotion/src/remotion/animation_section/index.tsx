@@ -14,7 +14,7 @@ import { AnimationSection09SplitSummary } from "../09_split_summary";
 export const AnimationSectionSection: React.FC = () => {
   const fps = 30;
   const offsetSeconds = 0;
-  const durationSeconds = 7.722667;
+  const durationSeconds = 7.914667;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
