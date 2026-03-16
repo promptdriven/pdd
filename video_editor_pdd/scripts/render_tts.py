@@ -561,6 +561,77 @@ def load_tts_runtime_config(project_dir: str, cli_model: str) -> Dict[str, Any]:
     return config
 
 
+def apply_qwen_decode_warmup_patch(
+    model: Any,
+    sample_rate: int = SAMPLE_RATE,
+    warmup_seconds: float = 0.25,
+) -> bool:
+    """Patch Qwen speech-tokenizer decode to reduce cold-start onset artifacts."""
+    if os.environ.get("RENDER_TTS_DISABLE_QWEN_WARMUP_PATCH") == "1":
+        return False
+
+    speech_tokenizer = getattr(getattr(model, "model", None), "speech_tokenizer", None)
+    if speech_tokenizer is None:
+        return False
+    if getattr(speech_tokenizer, "_video_editor_warmup_patch_applied", False):
+        return False
+    if not hasattr(speech_tokenizer, "encode") or not hasattr(speech_tokenizer, "decode"):
+        return False
+
+    try:
+        import numpy as np
+        import torch
+
+        silence_audio = np.zeros(int(sample_rate * warmup_seconds), dtype=np.float32)
+        silence_encoding = speech_tokenizer.encode(silence_audio, sr=sample_rate)
+        silence_codes_list = getattr(silence_encoding, "audio_codes", None)
+        if not silence_codes_list:
+            return False
+
+        silence_codes = silence_codes_list[0]
+        if hasattr(silence_codes, "cpu"):
+            silence_codes = silence_codes.cpu()
+        silence_codes = torch.as_tensor(silence_codes)
+        if silence_codes.ndim == 0 or silence_codes.shape[0] <= 0:
+            return False
+
+        original_decode = speech_tokenizer.decode
+        trim_seconds = float(warmup_seconds)
+
+        def decode_with_warmup(encoded_list: Any, **kwargs: Any) -> Tuple[List[Any], int]:
+            patched_list = []
+            for item in encoded_list:
+                if not isinstance(item, dict) or "audio_codes" not in item:
+                    patched_list.append(item)
+                    continue
+
+                audio_codes = torch.as_tensor(item["audio_codes"])
+                silence_prefix = silence_codes.to(device=audio_codes.device, dtype=audio_codes.dtype)
+                patched_item = dict(item)
+                patched_item["audio_codes"] = torch.cat([silence_prefix, audio_codes], dim=0)
+                patched_list.append(patched_item)
+
+            wavs, fs = original_decode(patched_list, **kwargs)
+            trim_samples = max(0, int(round(trim_seconds * fs)))
+            if trim_samples == 0:
+                return wavs, fs
+
+            trimmed_wavs = []
+            for wav in wavs:
+                array = np.asarray(wav)
+                if trim_samples >= len(array):
+                    trimmed_wavs.append(array[:0].astype(np.float32))
+                else:
+                    trimmed_wavs.append(array[trim_samples:].astype(np.float32))
+            return trimmed_wavs, fs
+
+        speech_tokenizer.decode = decode_with_warmup
+        speech_tokenizer._video_editor_warmup_patch_applied = True
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Voice instruction mapping (from 3blue1brown demo)
 # ---------------------------------------------------------------------------
@@ -736,6 +807,7 @@ class TTSEngine:
             dtype=dtype,
             attn_implementation=attn_impl,
         )
+        apply_qwen_decode_warmup_patch(self.model, sample_rate=self.sample_rate)
         self.sample_rate = SAMPLE_RATE
 
     def synthesize(self, text: str, **kwargs: Any) -> "np.ndarray":

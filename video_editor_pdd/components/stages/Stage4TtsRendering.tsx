@@ -40,6 +40,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
   const [segments, setSegments] = useState<TtsSegment[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [audioReloadVersion, setAudioReloadVersion] = useState<number>(0);
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [batchJobId, setBatchJobId] = useState<string | null>(null);
@@ -53,6 +54,21 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
   const batchEventSource = useRef<EventSource | null>(null);
 
   const allDone = useMemo(() => segments.length > 0 && segments.every((s) => s.status === 'done'), [segments]);
+
+  const invalidateWaveform = useCallback((segmentId?: string) => {
+    if (segmentId) {
+      const ws = wavesurferMap.current.get(segmentId);
+      if (ws) {
+        ws.destroy();
+        wavesurferMap.current.delete(segmentId);
+      }
+    } else {
+      wavesurferMap.current.forEach((ws) => ws.destroy());
+      wavesurferMap.current.clear();
+    }
+
+    setAudioReloadVersion((prev) => prev + 1);
+  }, []);
 
   const fetchSegments = useCallback(async () => {
     setLoading(true);
@@ -88,7 +104,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
     const ws = WaveSurfer.create({
       container,
-      url: `/api/audio/tts/${expandedId}.wav`,
+      url: `/api/audio/tts/${expandedId}.wav?v=${audioReloadVersion}`,
       height: 64,
       waveColor: '#4ade80',
       progressColor: '#166534',
@@ -107,7 +123,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
     return () => {
       // Keep instance cached for reuse or cleanup if necessary
     };
-  }, [expandedId]);
+  }, [audioReloadVersion, expandedId]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -191,6 +207,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
       es.addEventListener('done', () => {
         batchEventSource.current?.close();
         setBatchJobId(null);
+        invalidateWaveform();
         fetchSegments();
       });
 
@@ -377,10 +394,12 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
                         jobId={rowJobIds[seg.id] ?? null}
                         onDone={() => {
                           setRowJobIds((prev) => ({ ...prev, [seg.id]: null }));
+                          invalidateWaveform(seg.id);
                           fetchSegments();
                         }}
                         onError={() => {
                           setRowJobIds((prev) => ({ ...prev, [seg.id]: null }));
+                          invalidateWaveform(seg.id);
                           fetchSegments();
                         }}
                       />

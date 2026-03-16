@@ -178,6 +178,11 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/useState\s*<\s*string\s*\|\s*null\s*>\s*\(\s*null\s*\)/);
   });
 
+  it("tracks audioReloadVersion state for waveform refreshes", () => {
+    expect(sourceCode).toMatch(/\[\s*audioReloadVersion\s*,\s*setAudioReloadVersion\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*<\s*number\s*>\s*\(\s*0\s*\)/);
+  });
+
   it("tracks expandedId state as string | null", () => {
     expect(sourceCode).toMatch(/\[\s*expandedId\s*,\s*setExpandedId\s*\]/);
   });
@@ -210,6 +215,14 @@ describe("ref management", () => {
 
   it("stores batch EventSource in a ref", () => {
     expect(sourceCode).toMatch(/batchEventSource\s*=\s*useRef\s*<\s*EventSource\s*\|\s*null\s*>/);
+  });
+
+  it("defines invalidateWaveform helper to destroy cached waveform instances", () => {
+    expect(sourceCode).toMatch(/const\s+invalidateWaveform\s*=\s*useCallback/);
+    expect(sourceCode).toMatch(/wavesurferMap\.current\.get\s*\(\s*segmentId\s*\)/);
+    expect(sourceCode).toMatch(/ws\.destroy\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/wavesurferMap\.current\.delete\s*\(\s*segmentId\s*\)/);
+    expect(sourceCode).toMatch(/setAudioReloadVersion\s*\(\s*\(prev\)\s*=>\s*prev\s*\+\s*1\s*\)/);
   });
 });
 
@@ -297,7 +310,7 @@ describe("WaveSurfer initialization on expand", () => {
   it("creates WaveSurfer with correct container and url", () => {
     expect(sourceCode).toMatch(/WaveSurfer\.create\s*\(\s*\{/);
     expect(sourceCode).toMatch(/container/);
-    expect(sourceCode).toMatch(/url\s*:\s*`\/api\/audio\/(?:tts\/)?\$\{expandedId\}\.wav`/);
+    expect(sourceCode).toMatch(/url\s*:\s*`\/api\/audio\/(?:tts\/)?\$\{expandedId\}\.wav\?v=\$\{audioReloadVersion\}`/);
   });
 
   it("sets WaveSurfer height to 64", () => {
@@ -314,6 +327,10 @@ describe("WaveSurfer initialization on expand", () => {
 
   it("stores WaveSurfer instance in wavesurferMap", () => {
     expect(sourceCode).toMatch(/wavesurferMap\.current\.set\s*\(\s*expandedId\s*,\s*ws\s*\)/);
+  });
+
+  it("recreates expanded waveform when audioReloadVersion changes", () => {
+    expect(sourceCode).toMatch(/\[\s*audioReloadVersion\s*,\s*expandedId\s*\]/);
   });
 });
 
@@ -457,6 +474,10 @@ describe("SSE event handling", () => {
 
   it("re-fetches segments after batch done", () => {
     expect(sourceCode).toMatch(/['"]done['"][\s\S]*?fetchSegments\s*\(\s*\)/);
+  });
+
+  it("invalidates cached waveforms after batch done", () => {
+    expect(sourceCode).toMatch(/['"]done['"][\s\S]*?invalidateWaveform\s*\(\s*\)/);
   });
 
   it("listens for 'error' event", () => {
@@ -782,6 +803,11 @@ describe("inline SseLogPanel for per-row re-render", () => {
 
   it("calls fetchSegments on SseLogPanel error", () => {
     expect(sourceCode).toMatch(/onError[\s\S]*?fetchSegments\s*\(\s*\)/);
+  });
+
+  it("invalidates the row waveform on SseLogPanel done and error", () => {
+    expect(sourceCode).toMatch(/onDone[\s\S]*?invalidateWaveform\s*\(\s*seg\.id\s*\)/);
+    expect(sourceCode).toMatch(/onError[\s\S]*?invalidateWaveform\s*\(\s*seg\.id\s*\)/);
   });
 });
 

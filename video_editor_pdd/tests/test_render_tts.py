@@ -58,6 +58,7 @@ from render_tts import (
     Segment,
     build_instruction,
     build_parser,
+    apply_qwen_decode_warmup_patch,
     concatenate_pcm,
     generate_silence,
     generate_silence_wav_bytes,
@@ -369,6 +370,71 @@ class TestQwenInstructionOverride:
         assert call["do_sample"] is True
         assert call["max_new_tokens"] == 512
         assert call["non_streaming_mode"] is False
+
+
+class TestQwenDecodeWarmupPatch:
+    """Verify the upstream cold-start decode warmup workaround."""
+
+    def test_prepends_silence_codes_and_trims_output(self):
+        torch = pytest.importorskip("torch")
+
+        class FakeEncodeResult:
+            def __init__(self):
+                self.audio_codes = [torch.tensor([[0, 0], [0, 0]], dtype=torch.int64)]
+
+        class FakeSpeechTokenizer:
+            def __init__(self):
+                self.decode_calls = []
+
+            def encode(self, _wav, sr):
+                assert sr == SAMPLE_RATE
+                return FakeEncodeResult()
+
+            def decode(self, encoded_list, **_kwargs):
+                self.decode_calls.append(encoded_list)
+                frames = int(encoded_list[0]["audio_codes"].shape[0])
+                wav = generate_silence(frames / 12.0, sample_rate=12)
+                for i in range(frames):
+                    wav[i] = float(i)
+                return [wav], 12
+
+        tokenizer = FakeSpeechTokenizer()
+        fake_model = mock.Mock()
+        fake_model.model.speech_tokenizer = tokenizer
+
+        assert apply_qwen_decode_warmup_patch(fake_model, sample_rate=SAMPLE_RATE, warmup_seconds=0.25) is True
+
+        original_codes = torch.tensor([[1, 1], [2, 2], [3, 3]], dtype=torch.int64)
+        wavs, fs = tokenizer.decode([{"audio_codes": original_codes}])
+
+        assert fs == 12
+        patched_codes = tokenizer.decode_calls[0][0]["audio_codes"]
+        assert patched_codes.shape[0] == 5
+        assert wavs[0].tolist() == pytest.approx([3.0, 4.0])
+
+    def test_is_idempotent(self):
+        torch = pytest.importorskip("torch")
+
+        class FakeEncodeResult:
+            def __init__(self):
+                self.audio_codes = [torch.tensor([[0, 0]], dtype=torch.int64)]
+
+        class FakeSpeechTokenizer:
+            def encode(self, _wav, sr):
+                assert sr == SAMPLE_RATE
+                return FakeEncodeResult()
+
+            def decode(self, encoded_list, **_kwargs):
+                return [generate_silence(len(encoded_list[0]["audio_codes"]) / 12.0, sample_rate=12)], 12
+
+        tokenizer = FakeSpeechTokenizer()
+        fake_model = mock.Mock()
+        fake_model.model.speech_tokenizer = tokenizer
+
+        assert apply_qwen_decode_warmup_patch(fake_model, sample_rate=SAMPLE_RATE, warmup_seconds=0.25) is True
+        first_decode = tokenizer.decode
+        assert apply_qwen_decode_warmup_patch(fake_model, sample_rate=SAMPLE_RATE, warmup_seconds=0.25) is False
+        assert tokenizer.decode is first_decode
 
 
 # ===========================================================================
