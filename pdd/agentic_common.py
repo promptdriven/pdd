@@ -30,7 +30,7 @@ _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
-    *,
+    *, 
     strict_unresolved: bool = False,
 ) -> str:
     """Safely substitute known {placeholders} without raising on unknown keys.
@@ -45,7 +45,7 @@ def substitute_template_variables(
         return str(template.format(**context))
 
     if strict_unresolved:
-        for match in re.finditer(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})", template):
+        for match in re.finditer(r"(?<![{])[{]([A-Za-z_][A-Za-z0-9_]*)[}](?![}])", template):
             key = match.group(1)
             if key not in context:
                 raise KeyError(key)
@@ -1409,6 +1409,49 @@ def post_step_comment(
         return True
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
+        return False
+
+
+def post_pr_comment(
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    body: str,
+    cwd: Path,
+) -> bool:
+    """
+    Post a comment on a pull request.
+
+    Args:
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
+        pr_number: Pull request number to comment on
+        body: Comment body
+        cwd: Working directory for subprocess
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    if not shutil.which("gh"):
+        return False
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "pr", "comment", str(pr_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Warning: Failed to post PR comment: {result.stderr}[/yellow]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post PR comment: {e}[/yellow]")
         return False
 
 

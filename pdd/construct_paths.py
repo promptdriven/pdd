@@ -695,8 +695,40 @@ def _strip_language_suffix(path_like: os.PathLike[str]) -> str:
         if candidate_lang == 'prompt' and p.suffix != '.prompt':
             return stem
         return "_".join(parts[:-1])
-    
+
     return stem
+
+
+def _strip_language_suffix_with_subdir(prompt_path: Path) -> str:
+    """Strip language suffix from a prompt path, preserving subdirectory components.
+
+    For nested prompts like ``prompts/commands/fix_python.prompt``, the
+    subdirectory relative to the ``prompts/`` root is part of the basename.
+    This function finds the ``prompts/`` ancestor directory and preserves
+    everything between it and the filename.
+
+    Falls back to :func:`_strip_language_suffix` (filename only) when the
+    path does not contain a ``prompts/`` component.
+    """
+    stripped_name = _strip_language_suffix(prompt_path)
+
+    # Find the "prompts" directory in the path parts
+    parts = prompt_path.parts
+    try:
+        prompts_idx = len(parts) - 1 - list(reversed(parts)).index("prompts")
+    except ValueError:
+        # No "prompts" directory in path — check for subdirectory parent
+        # that isn't a filesystem root (e.g. "commands/fix_python.prompt")
+        parent = prompt_path.parent
+        if parent != Path(".") and not parent.is_absolute():
+            return str(parent / stripped_name)
+        return stripped_name
+
+    # Everything between prompts/ and the filename is the subdir prefix
+    subdir_parts = parts[prompts_idx + 1 : -1]
+    if subdir_parts:
+        return str(Path(*subdir_parts) / stripped_name)
+    return stripped_name
 
 
 def _extract_basename(
@@ -711,7 +743,7 @@ def _extract_basename(
         prompt_path = _candidate_prompt_path(input_file_paths)
         if not prompt_path:
             raise ValueError("Could not determine prompt file for 'fix' command.")
-        
+
         prompt_basename = _strip_language_suffix(prompt_path)
         
         unit_test_path = input_file_paths.get("unit_test_file")
@@ -754,7 +786,7 @@ def _extract_basename(
     # General case: Use the primary prompt file
     prompt_path = _candidate_prompt_path(input_file_paths)
     if prompt_path:
-        return _strip_language_suffix(prompt_path)
+        return _strip_language_suffix_with_subdir(prompt_path)
 
     # Fallback: If no prompt found (e.g., command only takes code files?),
     # use the first input file's stem. This requires input_file_paths not to be empty.

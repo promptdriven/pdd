@@ -1,96 +1,112 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-# Add the project root to sys.path to allow importing the pdd package
-# This assumes the example script is located relative to the package root
-project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+from unittest.mock import patch
 
 from rich.console import Console
+
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
 
 from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
 console = Console()
 
 
+def mock_load_prompt_template(template_name: str) -> str:
+    """Return a minimal prompt template for the requested step."""
+    return (
+        f"Template: {template_name}\n"
+        "Issue #{issue_number}\n"
+        "Cycle {cycle_number}/{max_cycles}\n"
+        "Protect tests: {protect_tests_flag}"
+    )
+
+
+def mock_run_agentic_task(
+    instruction: str,
+    cwd: Path,
+    *,
+    label: str,
+    **_: object,
+) -> tuple[bool, str, float, str]:
+    """Simulate a successful single-cycle E2E fix workflow."""
+    if "step1" in label:
+        return True, "Unit tests reproduced the failure.", 0.04, "gpt-4.1"
+    if "step2" in label:
+        return True, "E2E tests failed in the login flow.", 0.04, "gpt-4.1"
+    if "step3" in label:
+        return True, "CODE_BUG: stale retry logic.", 0.05, "gpt-4.1"
+    if "step4" in label:
+        return True, "Applied targeted E2E fix.\nFILES_MODIFIED: src/login.py", 0.06, "gpt-4.1"
+    if "step5" in label:
+        return True, "DEV_UNITS_IDENTIFIED: src/login.py", 0.05, "gpt-4.1"
+    if "step6" in label:
+        return True, "FILES_CREATED: tests/test_login.py", 0.05, "gpt-4.1"
+    if "step7" in label:
+        return True, "The new unit test fails before the fix and passes after it.", 0.05, "gpt-4.1"
+    if "step8" in label:
+        return True, "src/login.py: FIXED\nFILES_MODIFIED: src/login.py, tests/test_login.py", 0.08, "gpt-4.1"
+    if "step9" in label:
+        return True, "Verification complete.\nALL_TESTS_PASS", 0.05, "gpt-4.1"
+    return False, f"Unexpected label: {label}", 0.0, "gpt-4.1"
+
+
 def main() -> None:
-    """
-    Demonstrates how to use the agentic_e2e_fix_orchestrator module to:
-    1. Set up a temporary working directory (simulating a repo).
-    2. Provide example GitHub issue details.
-    3. Run the E2E fix orchestrator with default parameters.
-    4. Print the results including success status, message, cost, model, and changed files.
-
-    Note: In a real scenario, use an actual repository path for cwd, and valid GitHub details.
-          This example uses dummies and a temp dir to avoid side effects.
-    """
-
-    # 1. Set up a temporary directory as cwd (agent's working directory)
+    """Run a local demonstration of the orchestrator with mocked dependencies."""
     with TemporaryDirectory() as temp_dir:
         cwd = Path(temp_dir)
-        console.print(f"[blue]Using temporary cwd: {cwd}[/blue]")
+        console.print(f"[blue]Running mocked E2E fix workflow in {cwd}[/blue]")
 
-        # 2. Example GitHub issue details (replace with real values)
-        issue_url = "https://github.com/example-owner/example-repo/issues/123"
-        issue_content = "Example issue content describing an E2E test failure."
-        repo_owner = "example-owner"
-        repo_name = "example-repo"
-        issue_number = 123
-        issue_author = "example-author"
-        issue_title = "Example Issue Title"
+        with patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", side_effect=mock_load_prompt_template), \
+            patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
+            patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state", return_value=(None, None)), \
+            patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state", return_value=None), \
+            patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state"), \
+            patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
+            patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_login.py"]), \
+            patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(True, "1 passed")), \
+            patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", return_value={}), \
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+                return_value=["src/login.py", "tests/test_login.py"],
+            ), \
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+                return_value=(True, "Committed and pushed 2 file(s)"),
+            ), \
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+                return_value=(True, "CI validation passed after push.", 0.02),
+            ):
+            success, final_message, total_cost, model_used, changed_files = run_agentic_e2e_fix_orchestrator(
+                issue_url="https://github.com/example-owner/example-repo/issues/123",
+                issue_content="Login E2E test fails after a retry timeout.",
+                repo_owner="example-owner",
+                repo_name="example-repo",
+                issue_number=123,
+                issue_author="example-author",
+                issue_title="Fix login E2E retry failure",
+                cwd=cwd,
+                timeout_adder=0.0,
+                max_cycles=1,
+                resume=False,
+                verbose=False,
+                quiet=False,
+                use_github_state=False,
+                protect_tests=True,
+                ci_retries=3,
+                skip_ci=False,
+            )
 
-        # 3. Run the orchestrator
-        # Parameters:
-        # - issue_url: Full URL of the GitHub issue.
-        # - issue_content: Body text of the issue.
-        # - repo_owner: GitHub username or organization.
-        # - repo_name: Repository name.
-        # - issue_number: Issue number.
-        # - issue_author: GitHub username of the issue author.
-        # - issue_title: Title of the issue.
-        # - cwd: Path to the working directory (repo root).
-        # - timeout_adder: Additional seconds to add to step timeouts (default 0.0).
-        # - max_cycles: Maximum fix cycles (default 5).
-        # - resume: Resume from saved state if available (default True).
-        # - verbose: Show detailed output (default False).
-        # - quiet: Suppress non-error output (default False).
-        # - use_github_state: Use GitHub for state persistence (default True).
-        # - protect_tests: Protect existing tests from changes (default False).
-        success, final_message, total_cost, model_used, changed_files = run_agentic_e2e_fix_orchestrator(
-            issue_url=issue_url,
-            issue_content=issue_content,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            issue_number=issue_number,
-            issue_author=issue_author,
-            issue_title=issue_title,
-            cwd=cwd,
-            timeout_adder=0.0,
-            max_cycles=1,  # Limit to 1 cycle for demo (real use: 5+)
-            resume=False,  # Start fresh for demo
-            verbose=True,
-            quiet=False,
-            use_github_state=False,  # Disable GitHub for demo (requires auth)
-            protect_tests=True,
-        )
-
-        # 4. Print results
-        # Returns:
-        # - success: bool - True if all tests passed after fixes.
-        # - final_message: str - Summary message (e.g., "All tests passed" or failure reason).
-        # - total_cost: float - Estimated total cost in USD.
-        # - model_used: str - LLM model used (e.g., "claude-3-sonnet").
-        # - changed_files: List[str] - Paths of files modified during the workflow.
-        console.print("\n[bold]Results:[/bold]")
+        console.print("\n[bold]Results[/bold]")
         console.print(f"Success: {success}")
-        console.print(f"Final Message: {final_message}")
-        console.print(f"Total Cost: ${total_cost:.4f}")
-        console.print(f"Model Used: {model_used}")
-        console.print(f"Changed Files: {changed_files}")
+        console.print(f"Final message: {final_message}")
+        console.print(f"Total cost: ${total_cost:.2f}")
+        console.print(f"Model used: {model_used}")
+        console.print(f"Changed files: {changed_files}")
 
 
 if __name__ == "__main__":
