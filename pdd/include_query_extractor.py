@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -182,9 +183,12 @@ class IncludeQueryExtractor:
         result = response["result"] if isinstance(response, dict) else response
 
         # ----- write cache -------------------------------------------------
+        # Write both files atomically: write to temp files first, then
+        # rename into place.  If the process crashes between renames,
+        # at worst we have a .md without a .meta.json — the next run
+        # will see the missing meta and re-extract.
         if _cache_enabled():
             token_count = len(result.split()) if result else 0
-            md_path.write_text(result, encoding="utf-8")
             meta = {
                 "source_path": rel_path,
                 "source_hash": source_hash,
@@ -192,6 +196,30 @@ class IncludeQueryExtractor:
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "token_count": token_count,
             }
-            meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            cache_dir_str = str(cache)
+            try:
+                # Write content to temp file, then rename
+                fd_md, tmp_md = tempfile.mkstemp(dir=cache_dir_str, suffix=".md.tmp")
+                os.close(fd_md)
+                Path(tmp_md).write_text(result, encoding="utf-8")
+
+                fd_meta, tmp_meta = tempfile.mkstemp(dir=cache_dir_str, suffix=".meta.json.tmp")
+                os.close(fd_meta)
+                Path(tmp_meta).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+                # Atomic renames (on POSIX, rename is atomic)
+                os.replace(tmp_md, str(md_path))
+                os.replace(tmp_meta, str(meta_path))
+            except Exception:
+                # Clean up temp files on failure
+                for tmp in (tmp_md, tmp_meta):
+                    try:
+                        os.unlink(tmp)
+                    except (OSError, UnboundLocalError):
+                        pass
+                # Also clean up any partially-renamed final files
+                md_path.unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                raise
 
         return result
