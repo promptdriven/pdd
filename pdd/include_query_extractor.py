@@ -19,23 +19,37 @@ except ImportError:
     def get_config():  # type: ignore[misc]
         return {"project_root": "."}
 
-try:
-    from pdd.llm_invoke import llm_invoke
-except ImportError:
-    def llm_invoke(*, prompt: str, input_json: dict, strength: str) -> dict:  # type: ignore[misc]
-        return {"result": "", "cost": 0.0, "model_name": ""}
+# ---------------------------------------------------------------------------
+# Lazy imports for llm_invoke, preprocess, load_prompt_template.
+#
+# These are imported on first use rather than at module load time to avoid
+# circular-import issues.  pdd.llm_invoke is large; when another module
+# triggers loading of include_query_extractor while llm_invoke is still
+# being initialised, `from pdd.llm_invoke import llm_invoke` silently
+# raises ImportError (the name isn't defined yet in the partially-loaded
+# module) and the try/except falls through to a no-op stub.  Deferring
+# the import to first call time guarantees the target module is fully
+# loaded.
+#
+# The names are kept as module-level attributes so that test code can
+# monkeypatch them (e.g. ``monkeypatch.setattr("pdd.include_query_extractor.llm_invoke", ...)``)
+# ---------------------------------------------------------------------------
+llm_invoke = None  # populated lazily
+load_prompt_template = None  # populated lazily
+preprocess = None  # populated lazily
 
-try:
-    from pdd.preprocess import preprocess
-except ImportError:
-    def preprocess(text: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: list[str] | None = None) -> str:  # type: ignore[misc]
-        return text
-
-try:
-    from pdd.load_prompt_template import load_prompt_template
-except ImportError:
-    def load_prompt_template(name: str) -> str:  # type: ignore[misc]
-        return ""
+def _ensure_imports() -> None:
+    """Import llm_invoke, preprocess, and load_prompt_template if not yet loaded."""
+    global llm_invoke, preprocess, load_prompt_template  # noqa: PLW0603
+    if llm_invoke is None:
+        from pdd.llm_invoke import llm_invoke as _llm_invoke
+        llm_invoke = _llm_invoke
+    if preprocess is None:
+        from pdd.preprocess import preprocess as _preprocess
+        preprocess = _preprocess
+    if load_prompt_template is None:
+        from pdd.load_prompt_template import load_prompt_template as _lpt
+        load_prompt_template = _lpt
 
 try:
     from rich.console import Console
@@ -128,6 +142,8 @@ class IncludeQueryExtractor:
         str
             The extracted content (Markdown).
         """
+        _ensure_imports()
+
         resolved = Path(file_path).resolve()
         source_content = resolved.read_text(encoding="utf-8")
         source_hash = _file_content_hash(source_content)
