@@ -102,9 +102,13 @@ def insert_includes(
             match = re.search(r'<include[^>]*>(.*?)</include>', update_block, re.DOTALL)
             if match:
                 file_path = match.group(1).strip()
+                # Extract only the <include>...</include> tag from the update block,
+                # ignoring any surrounding content (comments, whitespace, etc.)
+                include_tag_match = re.search(r'<include[^>]*>.*?</include>', update_block, re.DOTALL)
+                replacement = include_tag_match.group(0) if include_tag_match else update_block.strip()
                 escaped_path = re.escape(file_path)
                 pattern = r'<include[^>]*>\s*' + escaped_path + r'\s*</include>'
-                new_prompt = re.sub(pattern, update_block.strip(), output_prompt)
+                new_prompt = re.sub(pattern, replacement, output_prompt)
                 # If the full path didn't match, try matching by basename.
                 # This handles cases where the prompt has a bare filename
                 # (e.g. "file.py") but the update block has a qualified path

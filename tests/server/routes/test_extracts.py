@@ -195,6 +195,38 @@ class TestListExtracts:
         assert timestamps == sorted(timestamps, reverse=True)
         set_project_root(None)
 
+    def test_none_timestamp_sorts_last(self, client, tmp_path):
+        """Extracts with None timestamps should sort last (after all dated entries)."""
+        extracts_dir = tmp_path / ".pdd" / "extracts"
+        extracts_dir.mkdir(parents=True)
+
+        src = tmp_path / "a.py"
+        src.write_text("a")
+        h = hashlib.sha256(b"a").hexdigest()
+
+        _write_extract(extracts_dir, "a.py", "q1", "c1", h, "2024-01-01T00:00:00Z")
+        _write_extract(extracts_dir, "a.py", "q2", "c2", h, "2024-03-01T00:00:00Z")
+
+        # Write an extract with no timestamp
+        key_no_ts = _cache_key("a.py", "q_notime")
+        (extracts_dir / f"{key_no_ts}.md").write_text("no time content")
+        (extracts_dir / f"{key_no_ts}.meta.json").write_text(json.dumps({
+            "source_path": "a.py",
+            "query": "q_notime",
+            "source_hash": h,
+        }))
+
+        set_project_root(tmp_path)
+        resp = client.get("/api/v1/extracts")
+        data = resp.json()
+        timestamps = [e["timestamp"] for e in data["extracts"]]
+        # None timestamp should be at the end
+        assert timestamps[-1] is None
+        # The non-None timestamps should be in descending order
+        non_none = [t for t in timestamps if t is not None]
+        assert non_none == sorted(non_none, reverse=True)
+        set_project_root(None)
+
 
 # ===================================================================
 # Requirement 3: check_freshness query param
@@ -342,6 +374,24 @@ class TestExtractsForPrompt:
                           params={"prompt_path": "test.prompt"})
         assert len(resp.json()) == 1
 
+    def test_path_traversal_blocked(self, client, project):
+        """Path traversal in prompt_path should return 403."""
+        resp = client.get("/api/v1/extracts/for-prompt",
+                          params={"prompt_path": "../../etc/passwd"})
+        assert resp.status_code == 403
+
+    def test_path_traversal_with_dotdot_in_middle(self, client, project):
+        """Path traversal with ../ embedded should return 403."""
+        resp = client.get("/api/v1/extracts/for-prompt",
+                          params={"prompt_path": "subdir/../../etc/passwd"})
+        assert resp.status_code == 403
+
+    def test_absolute_path_blocked(self, client, project):
+        """Absolute paths should return 403."""
+        resp = client.get("/api/v1/extracts/for-prompt",
+                          params={"prompt_path": "/etc/passwd"})
+        assert resp.status_code == 403
+
 
 # ===================================================================
 # Requirement 7: compute_cache_key uses normpath + sha256
@@ -361,10 +411,55 @@ class TestComputeCacheKey:
     def test_different_queries_different_keys(self):
         assert compute_cache_key("f.py", "a") != compute_cache_key("f.py", "b")
 
+    def test_matches_canonical_implementation(self):
+        """Server compute_cache_key must match include_query_extractor's."""
+        from pdd.include_query_extractor import compute_cache_key as canonical
+        for path, query in [("src.py", "q"), ("./a/b.py", "find x"), ("a/../c.py", "q")]:
+            assert compute_cache_key(path, query) == canonical(path, query)
+
 
 # ===================================================================
 # Cache key consistency: CLI and API must produce same keys
 # ===================================================================
+
+# ===================================================================
+# Prune fallback: directory exclusions
+# ===================================================================
+
+class TestPruneFallbackExclusions:
+    def test_prompt_in_node_modules_ignored(self, client, tmp_path):
+        """Fallback prune should not scan .prompt files inside node_modules."""
+        project_root = tmp_path
+        extracts_dir = project_root / ".pdd" / "extracts"
+        extracts_dir.mkdir(parents=True)
+
+        # Create a source file and a cached extract
+        src = project_root / "src.py"
+        src.write_text("x = 1")
+        h = hashlib.sha256(b"x = 1").hexdigest()
+        key = _cache_key("src.py", "find x")
+        _write_extract(extracts_dir, "src.py", "find x", "extracted", h)
+
+        # Put a prompt in node_modules that references the same file
+        nm_dir = project_root / "node_modules" / "dep"
+        nm_dir.mkdir(parents=True)
+        nm_prompt = nm_dir / "test.prompt"
+        nm_prompt.write_text('<include query="find x">src.py</include>')
+
+        # Put NO prompt files in the actual project
+        # The extract should be considered orphaned since the only
+        # referencing prompt is in node_modules (which should be excluded)
+        set_project_root(project_root)
+        try:
+            resp = client.post("/api/v1/extracts/prune",
+                               params={"dry_run": "true"})
+            assert resp.status_code == 200
+            data = resp.json()
+            # The entry should be orphaned because node_modules was excluded
+            assert len(data["orphaned_keys"]) == 1
+        finally:
+            set_project_root(None)
+
 
 class TestCacheKeyConsistency:
     def test_api_finds_cli_created_cache(self, client, tmp_path):

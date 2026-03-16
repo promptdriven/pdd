@@ -408,6 +408,9 @@ def _resolve_section(content_lines: list[str], heading_text: str) -> list[_Span]
 # Regex pattern selector
 # ---------------------------------------------------------------------------
 
+_REGEX_TIMEOUT_SECONDS = 5
+
+
 def _resolve_pattern(content_lines: list[str], value: str) -> list[_Span]:
     """Select lines matching ``pattern:/regex/``."""
     # Strip surrounding slashes if present
@@ -421,10 +424,26 @@ def _resolve_pattern(content_lines: list[str], value: str) -> list[_Span]:
     except re.error as exc:
         raise SelectorError(f"Invalid regex pattern '{pattern}': {exc}") from exc
 
-    spans: list[_Span] = []
-    for i, line in enumerate(content_lines):
-        if compiled.search(line):
-            spans.append(_Span(i, i + 1))
+    import signal
+
+    def _timeout_handler(signum, frame):
+        raise SelectorError(
+            f"Regex pattern '{pattern}' timed out after {_REGEX_TIMEOUT_SECONDS}s "
+            "(possible catastrophic backtracking)"
+        )
+
+    # Set a timeout to guard against catastrophic backtracking (ReDoS)
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(_REGEX_TIMEOUT_SECONDS)
+    try:
+        spans: list[_Span] = []
+        for i, line in enumerate(content_lines):
+            if compiled.search(line):
+                spans.append(_Span(i, i + 1))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
     if not spans:
         raise SelectorError(f"No lines matched pattern '{pattern}'")
     return spans

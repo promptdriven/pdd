@@ -519,3 +519,39 @@ class TestEdgeCases:
         assert len(md_stem) == 64
         assert len(meta_stem) == 64
         assert md_stem == meta_stem
+
+
+# ---------------------------------------------------------------------------
+# Atomic cache writes
+# ---------------------------------------------------------------------------
+
+class TestAtomicCacheWrites:
+    """Cache writes should be atomic — no partial/zombie files on crash."""
+
+    def test_interrupted_write_leaves_no_partial_md(self, temp_project, mock_llm, monkeypatch):
+        """If meta write fails after md write, no orphan .md should remain."""
+        tmp_path, source_file = temp_project
+        cache_dir = tmp_path / ".pdd" / "extracts"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        original_write = Path.write_text
+        write_count = {"n": 0}
+
+        def crashing_write(self, content, *args, **kwargs):
+            write_count["n"] += 1
+            # Let the first write (temp file for md) succeed, crash on second (temp file for meta)
+            if write_count["n"] == 2:
+                raise OSError("Simulated crash during meta write")
+            return original_write(self, content, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "write_text", crashing_write)
+
+        extractor = IncludeQueryExtractor()
+        with pytest.raises(OSError, match="Simulated crash"):
+            extractor.extract(str(source_file), "query")
+
+        # No .md or .meta.json should exist in the cache (no partial state)
+        md_files = list(cache_dir.glob("*.md"))
+        meta_files = list(cache_dir.glob("*.meta.json"))
+        assert len(md_files) == 0, f"Orphan .md files found: {md_files}"
+        assert len(meta_files) == 0, f"Orphan .meta.json files found: {meta_files}"

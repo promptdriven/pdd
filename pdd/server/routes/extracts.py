@@ -28,24 +28,14 @@ except ImportError:
             builtins.print(*args)
     console = Console()
 
-# Try to import compute_cache_key from pdd.preprocess at runtime
+# Import compute_cache_key from the canonical location
 try:
-    from pdd.preprocess import compute_cache_key as _compute_cache_key
+    from pdd.include_query_extractor import compute_cache_key
 except ImportError:
-    _compute_cache_key = None
-
-
-def _fallback_compute_cache_key(source_path: str, query: str) -> str:
-    """Fallback cache key computation when pdd.preprocess is unavailable."""
-    normalized = os.path.normpath(source_path)
-    return hashlib.sha256((normalized + "\n" + query).encode("utf-8")).hexdigest()
-
-
-def compute_cache_key(source_path: str, query: str) -> str:
-    """Compute cache key for a source path and query pair."""
-    if _compute_cache_key is not None:
-        return _compute_cache_key(source_path, query)
-    return _fallback_compute_cache_key(source_path, query)
+    def compute_cache_key(source_path: str, query: str) -> str:  # type: ignore[misc]
+        """Fallback cache key computation when pdd.include_query_extractor is unavailable."""
+        normalized = os.path.normpath(source_path)
+        return hashlib.sha256((normalized + "\n" + query).encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +250,8 @@ async def list_extracts(
         if entry is not None:
             extracts.append(entry)
 
-    # Sort by timestamp descending (None timestamps sort last)
+    # Sort by timestamp descending; None timestamps sort last because
+    # "" < any ISO-8601 string, so reverse=True pushes them to the end.
     extracts.sort(
         key=lambda e: e.timestamp if e.timestamp is not None else "",
         reverse=True,
@@ -288,7 +279,9 @@ async def extracts_for_prompt(
     Reads the prompt file, parses <include path="..." query="..."> tags,
     computes the cache key for each, and checks whether a cached entry exists.
     """
-    abs_prompt = project_root / prompt_path
+    abs_prompt = (project_root / prompt_path).resolve()
+    if not abs_prompt.is_relative_to(project_root.resolve()):
+        raise HTTPException(status_code=403, detail="Path traversal is not allowed")
     if not abs_prompt.exists() or not abs_prompt.is_file():
         raise HTTPException(status_code=404, detail=f"Prompt file not found: {prompt_path}")
 
@@ -308,7 +301,8 @@ async def extracts_for_prompt(
         try:
             source_path = str(resolved.relative_to(project_root.resolve()))
         except ValueError:
-            source_path = str(resolved)
+            # Path is outside project root — skip to avoid leaking absolute paths
+            continue
 
         cache_key = compute_cache_key(source_path, query)
 
@@ -368,8 +362,20 @@ async def prune_extracts(
         referenced = _collect_referenced_keys(project_root)
     except ImportError:
         # Fallback: scan locally (same logic as extracts_prune.py)
+        _EXCLUDED_DIRS = frozenset({
+            "node_modules", ".git", ".hg", ".svn", "__pycache__",
+            ".venv", "venv", ".env", "env", ".tox", ".mypy_cache",
+            ".pytest_cache", "dist", "build",
+        })
+        prompt_files: list[Path] = []
+        for root, dirs, files in os.walk(project_root):
+            dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS]
+            for f in files:
+                if f.endswith(".prompt"):
+                    prompt_files.append(Path(root) / f)
+
         referenced: set[str] = set()
-        for prompt_file in sorted(project_root.rglob("*.prompt")):
+        for prompt_file in sorted(prompt_files):
             try:
                 text = prompt_file.read_text(encoding="utf-8")
             except OSError:

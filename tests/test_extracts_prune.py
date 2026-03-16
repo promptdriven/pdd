@@ -660,3 +660,38 @@ class TestCacheKeyComputation:
             _compute_cache_key("src/../src/main.py", "q")
             == _compute_cache_key("src/main.py", "q")
         )
+
+
+# ===========================================================================
+# Import source correctness
+# ===========================================================================
+
+class TestImportSources:
+    """Verify extracts_prune imports from the canonical module, not stubs."""
+
+    def test_compute_cache_key_matches_canonical(self):
+        """extracts_prune.compute_cache_key must produce the same result
+        as include_query_extractor.compute_cache_key for all inputs."""
+        from pdd.extracts_prune import compute_cache_key as prune_key
+        from pdd.include_query_extractor import compute_cache_key as canonical_key
+
+        for path, query in [
+            ("src.py", "q"),
+            ("./src.py", "q"),
+            ("a/b/../c.py", "find stuff"),
+        ]:
+            assert prune_key(path, query) == canonical_key(path, query), (
+                f"Key mismatch for ({path!r}, {query!r}): prune uses a different "
+                "implementation than include_query_extractor"
+            )
+
+    def test_compute_cache_key_imported_from_correct_module(self):
+        """compute_cache_key should be imported from pdd.include_query_extractor,
+        not from pdd.preprocess (where it doesn't exist)."""
+        import pdd.extracts_prune as ep
+        # The function should be the same object as the canonical one
+        from pdd.include_query_extractor import compute_cache_key as canonical
+        assert ep.compute_cache_key is canonical, (
+            "extracts_prune.compute_cache_key is not imported from "
+            "pdd.include_query_extractor — likely using a fallback stub"
+        )

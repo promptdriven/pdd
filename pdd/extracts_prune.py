@@ -22,46 +22,44 @@ except ImportError:
         return {"project_root": "."}
 
 try:
-    from pdd.preprocess import compute_cache_key
+    from pdd.include_query_extractor import compute_cache_key
 except ImportError:
     def compute_cache_key(source_file_path: str, query: str) -> str:  # type: ignore[misc]
         normalized = os.path.normpath(source_file_path)
         return hashlib.sha256((normalized + "\n" + query).encode()).hexdigest()
 
-try:
-    from pdd.preprocess import parse_include_tags
-except ImportError:
-    def parse_include_tags(text: str) -> list[tuple[str, str]]:  # type: ignore[misc]
-        """Parse <include query="...">file</include> tags.
 
-        Returns list of (file_path, query) tuples.
-        """
-        results: list[tuple[str, str]] = []
-        # <include query="...">file</include>
-        for m in re.finditer(
-            r'<include\s+[^>]*?query\s*=\s*["\']([^"\']*)["\'][^>]*?>\s*(.*?)\s*</include>',
-            text,
-        ):
-            item = (m.group(2), m.group(1))
-            if item not in results:
-                results.append(item)
-        # <include path="..." query="..." />
-        for m in re.finditer(
-            r'<include\s+[^>]*?path\s*=\s*["\']([^"\']*)["\'][^>]*?query\s*=\s*["\']([^"\']*)["\'][^>]*?/?>',
-            text,
-        ):
-            item = (m.group(1), m.group(2))
-            if item not in results:
-                results.append(item)
-        # <include query="..." path="..." />
-        for m in re.finditer(
-            r'<include\s+[^>]*?query\s*=\s*["\']([^"\']*)["\'][^>]*?path\s*=\s*["\']([^"\']*)["\'][^>]*?/?>',
-            text,
-        ):
-            item = (m.group(2), m.group(1))
-            if item not in results:
-                results.append(item)
-        return results
+def parse_include_tags(text: str) -> list[tuple[str, str]]:
+    """Parse <include query="...">file</include> tags.
+
+    Returns list of (file_path, query) tuples.
+    """
+    results: list[tuple[str, str]] = []
+    # <include query="...">file</include>
+    for m in re.finditer(
+        r'<include\s+[^>]*?query\s*=\s*["\']([^"\']*)["\'][^>]*?>\s*(.*?)\s*</include>',
+        text,
+    ):
+        item = (m.group(2), m.group(1))
+        if item not in results:
+            results.append(item)
+    # <include path="..." query="..." />
+    for m in re.finditer(
+        r'<include\s+[^>]*?path\s*=\s*["\']([^"\']*)["\'][^>]*?query\s*=\s*["\']([^"\']*)["\'][^>]*?/?>',
+        text,
+    ):
+        item = (m.group(1), m.group(2))
+        if item not in results:
+            results.append(item)
+    # <include query="..." path="..." />
+    for m in re.finditer(
+        r'<include\s+[^>]*?query\s*=\s*["\']([^"\']*)["\'][^>]*?path\s*=\s*["\']([^"\']*)["\'][^>]*?/?>',
+        text,
+    ):
+        item = (m.group(2), m.group(1))
+        if item not in results:
+            results.append(item)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -74,9 +72,23 @@ def extracts():
     pass
 
 
+_EXCLUDED_DIRS = frozenset({
+    "node_modules", ".git", ".hg", ".svn", "__pycache__",
+    ".venv", "venv", ".env", "env", ".tox", ".mypy_cache",
+    ".pytest_cache", "dist", "build",
+})
+
+
 def _find_prompt_files(project_root: Path) -> list[Path]:
-    """Return all .prompt files under *project_root*."""
-    return sorted(project_root.rglob("*.prompt"))
+    """Return all .prompt files under *project_root*, excluding common non-project dirs."""
+    results: list[Path] = []
+    for root, dirs, files in os.walk(project_root):
+        # Prune excluded directories in-place so os.walk doesn't descend into them
+        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS]
+        for f in files:
+            if f.endswith(".prompt"):
+                results.append(Path(root) / f)
+    return sorted(results)
 
 
 def _collect_referenced_keys(project_root: Path) -> set[str]:
