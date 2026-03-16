@@ -217,6 +217,14 @@ describe("ref management", () => {
     expect(sourceCode).toMatch(/batchEventSource\s*=\s*useRef\s*<\s*EventSource\s*\|\s*null\s*>/);
   });
 
+  it("stores rowJobIds in a ref so fetches can preserve rehydrated generating state", () => {
+    expect(sourceCode).toMatch(/rowJobIdsRef\s*=\s*useRef\s*<\s*Record\s*<\s*string\s*,\s*string\s*\|\s*null\s*>\s*>\s*\(\s*\{\s*\}\s*\)/);
+  });
+
+  it("defines attachBatchEventStream helper for batch job reconnects", () => {
+    expect(sourceCode).toMatch(/const\s+attachBatchEventStream\s*=\s*useCallback/);
+  });
+
   it("defines invalidateWaveform helper to destroy cached waveform instances", () => {
     expect(sourceCode).toMatch(/const\s+invalidateWaveform\s*=\s*useCallback/);
     expect(sourceCode).toMatch(/wavesurferMap\.current\.get\s*\(\s*segmentId\s*\)/);
@@ -259,6 +267,26 @@ describe("segment fetching on mount", () => {
 
   it("defines fetchSegments as useCallback", () => {
     expect(sourceCode).toMatch(/const\s+fetchSegments\s*=\s*useCallback/);
+  });
+
+  it("fetches /api/pipeline/status to rehydrate an active tts-render job", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/status['"]\s*,\s*\{\s*cache\s*:\s*['"]no-store['"]/);
+  });
+
+  it("fetches /api/jobs/${renderStage.lastJobId} to inspect the running render job", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*`\/api\/jobs\/\$\{renderStage\.lastJobId\}`\s*,\s*\{\s*cache\s*:\s*['"]no-store['"]/);
+  });
+
+  it("rehydrates batchJobId when the active render is a batch job", () => {
+    expect(sourceCode).toMatch(/setBatchJobId\s*\(\s*job\.id\s*\)/);
+  });
+
+  it("rehydrates rowJobIds when the active render targets a single segment", () => {
+    expect(sourceCode).toMatch(/setRowJobIds\s*\(\s*\(prev\)\s*=>\s*\(\s*\{\s*\.\.\.prev\s*,\s*\[segmentIds\[0\]\]\s*:\s*job\.id\s*\}\s*\)\s*\)/);
+  });
+
+  it("preserves rehydrated generating state when segments load after job lookup", () => {
+    expect(sourceCode).toMatch(/status:\s*rowJobIdsRef\.current\[String\(segment\.id\s*\?\?\s*''\)\]\s*\?\s*'generating'/);
   });
 
   it("calls fetchSegments on mount via useEffect", () => {
@@ -787,6 +815,10 @@ describe("row expansion", () => {
 // ---------------------------------------------------------------------------
 
 describe("inline SseLogPanel for per-row re-render", () => {
+  it("renders SseLogPanel for an active batch render job", () => {
+    expect(sourceCode).toMatch(/\{batchJobId\s*&&[\s\S]*?<SseLogPanel[\s\S]*?jobId=\{batchJobId\}/);
+  });
+
   it("renders SseLogPanel when rowJobIds has a job for the segment", () => {
     expect(sourceCode).toMatch(/rowJobIds\[seg\.id\]/);
     expect(sourceCode).toMatch(/<SseLogPanel/);

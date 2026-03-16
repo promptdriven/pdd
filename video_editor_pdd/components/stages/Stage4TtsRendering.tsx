@@ -5,6 +5,7 @@ import WaveSurfer from 'wavesurfer.js';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { SseLogPanel } from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
+import type { Job } from '@/lib/types';
 
 type SegmentStatus = 'done' | 'missing' | 'error' | 'generating';
 
@@ -52,6 +53,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
   const waveformRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const wavesurferMap = useRef<Map<string, WaveSurfer>>(new Map());
   const batchEventSource = useRef<EventSource | null>(null);
+  const rowJobIdsRef = useRef<Record<string, string | null>>({});
 
   const allDone = useMemo(() => segments.length > 0 && segments.every((s) => s.status === 'done'), [segments]);
 
@@ -70,6 +72,10 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
     setAudioReloadVersion((prev) => prev + 1);
   }, []);
 
+  useEffect(() => {
+    rowJobIdsRef.current = rowJobIds;
+  }, [rowJobIds]);
+
   const fetchSegments = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -80,7 +86,9 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
       const rawList = Array.isArray(data) ? data : (data.segments ?? []);
       const list: TtsSegment[] = rawList.map((segment: any) => ({
         id: String(segment.id ?? ''),
-        status: segment.status as SegmentStatus,
+        status: rowJobIdsRef.current[String(segment.id ?? '')]
+          ? 'generating'
+          : (segment.status as SegmentStatus),
         text: typeof segment.text === 'string' ? segment.text : '',
       }));
       setSegments(list);
@@ -136,6 +144,67 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
 
   const pendingPlayRef = useRef<string | null>(null);
 
+  const attachBatchEventStream = useCallback((jobId: string) => {
+    batchEventSource.current?.close();
+
+    const es = new EventSource(`/api/jobs/${jobId}/stream`);
+    batchEventSource.current = es;
+
+    es.addEventListener('message', (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.type === 'segment') {
+          setSegments((prev) =>
+            prev.map((s) =>
+              s.id === payload.segmentId
+                ? { ...s, status: payload.status as SegmentStatus }
+                : s
+            )
+          );
+
+          setBatchProgress((prev) => {
+            const completed = payload.completedCount ?? prev.completedCount;
+            const total = payload.total ?? prev.total;
+            const percent =
+              total && completed ? Math.round((completed / total) * 100) : prev.percent;
+
+            return {
+              currentSegment: payload.segmentId ?? prev.currentSegment,
+              completedCount: completed,
+              total,
+              percent,
+            };
+          });
+          return;
+        }
+
+        if (payload.type === 'progress') {
+          setBatchProgress((prev) => ({
+            ...prev,
+            percent:
+              typeof payload.percent === 'number' ? Math.round(payload.percent) : prev.percent,
+          }));
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    });
+
+    es.addEventListener('done', () => {
+      batchEventSource.current?.close();
+      batchEventSource.current = null;
+      setBatchJobId(null);
+      setBatchProgress(defaultProgress);
+      invalidateWaveform();
+      fetchSegments();
+    });
+
+    es.addEventListener('error', () => {
+      batchEventSource.current?.close();
+      batchEventSource.current = null;
+    });
+  }, [fetchSegments, invalidateWaveform]);
+
   const handlePlay = (id: string) => {
     const ws = wavesurferMap.current.get(id);
     if (ws) {
@@ -176,54 +245,7 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
       const jobId = await extractJobIdFromSse(res);
       if (!jobId) throw new Error('Failed to get job ID from TTS render.');
       setBatchJobId(jobId);
-
-      // Open SSE stream for batch progress
-      batchEventSource.current?.close();
-      const es = new EventSource(`/api/jobs/${jobId}/stream`);
-      batchEventSource.current = es;
-
-      es.addEventListener('message', (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          // Expected: { type: 'segment', segmentId, status, completedCount, total }
-          if (payload.type === 'segment') {
-            setSegments((prev) =>
-              prev.map((s) =>
-                s.id === payload.segmentId
-                  ? { ...s, status: payload.status as SegmentStatus }
-                  : s
-              )
-            );
-
-            setBatchProgress((prev) => {
-              const completed = payload.completedCount ?? prev.completedCount;
-              const total = payload.total ?? prev.total;
-              const percent =
-                total && completed ? Math.round((completed / total) * 100) : prev.percent;
-
-              return {
-                currentSegment: payload.segmentId ?? prev.currentSegment,
-                completedCount: completed,
-                total,
-                percent,
-              };
-            });
-          }
-        } catch (err) {
-          // Ignore parse errors
-        }
-      });
-
-      es.addEventListener('done', () => {
-        batchEventSource.current?.close();
-        setBatchJobId(null);
-        invalidateWaveform();
-        fetchSegments();
-      });
-
-      es.addEventListener('error', () => {
-        batchEventSource.current?.close();
-      });
+      attachBatchEventStream(jobId);
     } catch (err: any) {
       setError(err.message || 'Failed to start TTS render.');
     }
@@ -251,6 +273,61 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
       setError(err.message || 'Failed to start segment render.');
     }
   };
+
+  const rehydrateActiveRenderJob = useCallback(async () => {
+    try {
+      const statusRes = await fetch('/api/pipeline/status', { cache: 'no-store' });
+      if (!statusRes.ok) return;
+
+      const statusData = await statusRes.json();
+      const renderStage = statusData?.stages?.['tts-render'];
+      if (
+        !renderStage ||
+        renderStage.status !== 'running' ||
+        typeof renderStage.lastJobId !== 'string' ||
+        !renderStage.lastJobId
+      ) {
+        return;
+      }
+
+      const jobRes = await fetch(`/api/jobs/${renderStage.lastJobId}`, { cache: 'no-store' });
+      if (!jobRes.ok) return;
+
+      const job = (await jobRes.json()) as Job;
+      if (job.stage !== 'tts-render' || job.status !== 'running') {
+        return;
+      }
+
+      const segmentIds = Array.isArray(job.params?.segments)
+        ? job.params.segments.filter((segmentId): segmentId is string => typeof segmentId === 'string')
+        : [];
+
+      if (segmentIds.length === 1) {
+        setRowJobIds((prev) => ({ ...prev, [segmentIds[0]]: job.id }));
+        setSegments((prev) =>
+          prev.map((segment) =>
+            segment.id === segmentIds[0]
+              ? { ...segment, status: 'generating' }
+              : segment
+          )
+        );
+        return;
+      }
+
+      setBatchJobId(job.id);
+      setBatchProgress((prev) => ({
+        ...prev,
+        percent: typeof job.progress === 'number' ? Math.round(job.progress) : prev.percent,
+      }));
+      attachBatchEventStream(job.id);
+    } catch {
+      // Ignore rehydration failures and fall back to static segment state.
+    }
+  }, [attachBatchEventStream]);
+
+  useEffect(() => {
+    rehydrateActiveRenderJob();
+  }, [rehydrateActiveRenderJob]);
 
   const renderStatusBadge = (status: SegmentStatus) => {
     const base = 'px-2 py-1 text-xs rounded font-semibold';
@@ -302,6 +379,22 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
           </div>
           <div className="text-xs text-slate-400 mt-2">
             {batchProgress.completedCount}/{batchProgress.total} ({batchProgress.percent}%)
+          </div>
+          <div className="mt-3">
+            <SseLogPanel
+              jobId={batchJobId}
+              onDone={() => {
+                setBatchJobId(null);
+                setBatchProgress(defaultProgress);
+                invalidateWaveform();
+                fetchSegments();
+              }}
+              onError={() => {
+                setBatchJobId(null);
+                invalidateWaveform();
+                fetchSegments();
+              }}
+            />
           </div>
         </div>
       )}
