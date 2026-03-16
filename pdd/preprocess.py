@@ -406,7 +406,9 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 return match.group(0)
 
             # Optional project context includes: missing should behave as "no extra content".
-            normalized = file_path.lstrip("./")
+            # Strip only the literal "./" prefix so paths like "../context/example.prompt" are not
+            # incorrectly treated as optional; then normalize for consistent comparison.
+            normalized = Path(file_path.removeprefix("./")).as_posix()
             if normalized in ("context/example.prompt", "context/test.prompt"):
                 # Keep the console warning but do not leak a "[File not found: ...]" marker
                 # into the LLM-facing prompt.
