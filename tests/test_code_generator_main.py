@@ -2983,7 +2983,8 @@ class TestExampleOutputPathInjection:
 
     def test_resolved_config_paths_injected_for_cloud_execution(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
-        mock_requests_post_fixture, mock_pdd_preprocess_fixture, mock_env_vars
+        mock_requests_post_fixture, mock_pdd_preprocess_fixture, mock_env_vars,
+        mock_get_jwt_token_fixture, monkeypatch
     ):
         """Same injection must work for cloud execution path (local=False).
 
@@ -2992,32 +2993,32 @@ class TestExampleOutputPathInjection:
         cloud payload must contain the resolved value.
         """
         mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        # Ensure cloud detection doesn't force local execution in CI/cloud environments
+        monkeypatch.setattr(
+            "pdd.code_generator_main.CloudConfig.is_running_in_cloud",
+            staticmethod(lambda: False)
+        )
         prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt4.prompt"
         prompt_content = "Cloud examples at ${EXAMPLE_OUTPUT_PATH}"
         create_file(prompt_file_path, prompt_content)
-        output_file_path_str = str(temp_dir_setup["output_dir"] / "output4.prompt")
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output4.py")
 
         mock_construct_paths_fixture.return_value = (
             {"example_output_path": "context/examples"},
             {"prompt_file": prompt_content},
             {"output": output_file_path_str},
-            "prompt"
+            "python"
         )
 
-        # On buggy code, the unexpanded variable may cause an error or the cloud
-        # payload contains the raw ${EXAMPLE_OUTPUT_PATH}. Either outcome is a failure.
-        try:
-            code_generator_main(
-                mock_ctx, str(prompt_file_path), output_file_path_str, None, False
-            )
-        except (click.UsageError, Exception):
-            # If it errors out due to unexpanded variable, that's the bug
-            pytest.fail(
-                "Bug #687: Cloud path failed because ${EXAMPLE_OUTPUT_PATH} was not "
-                "expanded — resolved_config values are not injected into env_vars"
-            )
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
 
-        # If it didn't error, verify the cloud payload has the expanded value
+        # Verify the cloud payload has the expanded value
+        assert mock_requests_post_fixture.call_args is not None, (
+            "Bug #687: Cloud requests.post was never called — cloud path not reached"
+        )
         call_kwargs = mock_requests_post_fixture.call_args
         payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
         cloud_prompt = payload.get("promptContent", "")
