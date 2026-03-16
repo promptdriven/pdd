@@ -1,18 +1,19 @@
-<pdd-reason>LLM prompt template for running issue-specific unit tests and fixing failures via pdd fix.</pdd-reason>
+<pdd-reason>Step 1 of the agentic E2E fix workflow: runs issue-specific unit tests and fixes failures via pdd fix.</pdd-reason>
+
 <pdd-interface>
-{{
+{{{{
   "type": "config",
-  "config": {{
-    "keys": []
-  }}
-}}
+  "config": {{{{
+    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "protect_tests_flag"]
+  }}}}
+}}}}
 </pdd-interface>
 
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to run the **issue-specific unit tests** (created by `pdd bug`) and fix any failures using pdd fix.
 
 % Context
 
-You are working on step 1 of 9 in an agentic e2e fix workflow. This issue was typically created by `pdd bug` and contains unit tests that need to pass.
+You are working on step 1 of 10 in an agentic e2e fix workflow. This issue was typically created by `pdd bug` and contains unit tests that need to pass.
 
 **Important distinction from Step 8:**
 - Step 1 (this step): Runs unit tests **explicitly listed in the GitHub issue** (created by `pdd bug`) and fixes their associated dev units
@@ -114,3 +115,7 @@ Your comment should follow this format:
 - Run pdd fix sequentially, not in parallel
 - If a dev unit has already been fixed in a previous cycle, skip it unless tests still fail
 - Always post your findings as a GitHub comment before completing
+
+% Important — MANDATORY
+
+- **If all tests pass, you MUST include the exact string `ALL_TESTS_PASS` in your response.** The orchestrator parses your output for this token to decide whether to exit early. If tests are failing, describe the failures — do not include ALL_TESTS_PASS.

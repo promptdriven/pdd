@@ -34,6 +34,70 @@ def _is_github_issue_url(s: str) -> bool:
     return bool(re.search(r"github\.com/.+/issues/\d+", s))
 
 
+def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
+    """Detect modules to sync by diffing the current branch against main.
+
+    When on a feature branch created by ``pdd change``, the changed ``.prompt``
+    files are exactly the modules that need syncing.  This is deterministic,
+    free, and avoids the LLM identification step that can fail when
+    architecture.json lacks ``origin`` fields.
+
+    Returns:
+        List of basenames (e.g. ``["ci_validation", "commands/fix"]``), or an
+        empty list if we're on main/master or the diff cannot be determined.
+    """
+    try:
+        # 1. Get current branch name
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_root, capture_output=True, text=True, check=True,
+        )
+        branch = branch_result.stdout.strip()
+        if branch in ("main", "master", "HEAD"):
+            return []
+
+        # 2. Diff against main to find changed files
+        diff_result = subprocess.run(
+            ["git", "diff", "main...HEAD", "--name-only", "--diff-filter=ACMR"],
+            cwd=project_root, capture_output=True, text=True, check=True,
+        )
+        changed_files = [f.strip() for f in diff_result.stdout.strip().splitlines() if f.strip()]
+
+        # 3. Filter to .prompt files, excluding LLM templates
+        prompt_files = [
+            f for f in changed_files
+            if f.endswith(".prompt")
+            and ("/prompts/" in f or f.startswith("prompts/"))
+        ]
+        prompt_files = [f for f in prompt_files if not f.endswith("_LLM.prompt")]
+
+        # 4. Extract basenames
+        basenames: List[str] = []
+        for pf in prompt_files:
+            # Strip leading path up to and including "prompts/"
+            idx = pf.find("prompts/")
+            if idx == -1:
+                continue
+            relative = pf[idx + len("prompts/"):]
+            # Extract basename: strip language suffix from filename,
+            # preserving subdirectory prefix (e.g. "commands/fix_python.prompt" -> "commands/fix")
+            rel_path = Path(relative)
+            filename_basename = extract_module_from_include(rel_path.name)
+            if not filename_basename:
+                continue
+            # Re-attach subdirectory prefix if present
+            if rel_path.parent != Path("."):
+                basename = str(rel_path.parent / filename_basename)
+            else:
+                basename = filename_basename
+            if basename not in basenames:
+                basenames.append(basename)
+
+        return basenames
+    except (subprocess.CalledProcessError, OSError):
+        return []
+
+
 def _find_project_root(start: Path) -> Path:
     """Walk up from start to find project root (directory containing .pddrc or .git)."""
     current = start.resolve()
@@ -672,43 +736,55 @@ def run_agentic_sync(
         if not quiet:
             console.print("[yellow]No architecture.json found, falling back to include-based dependency graph[/yellow]")
 
-    # 7. Build LLM prompt for module identification
-    prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
-    if not prompt_template:
-        return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
+    # 7. Try git diff-based module detection first (deterministic, free)
+    branch_modules = _detect_modules_from_branch_diff(project_root)
+    llm_cost = 0.0
+    provider = ""
+    deps_valid = True
+    deps_corrections: List[Dict[str, Any]] = []
 
-    arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
-    # Escape braces in dynamic content to prevent .format() from interpreting
-    # code references like {uid} as template placeholders
-    safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
-    prompt = prompt_template.format(
-        issue_content=issue_content,
-        architecture_json=safe_arch_json,
-    )
+    if branch_modules:
+        if not quiet:
+            console.print(f"[green]Detected modules from branch diff: {branch_modules}[/green]")
+        modules_to_sync = branch_modules
+    else:
+        # 7b. Fall back to LLM-based module identification
+        prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
+        if not prompt_template:
+            return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
 
-    if not quiet:
-        console.print("[bold]Identifying modules to sync via LLM...[/bold]")
+        arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
+        # Escape braces in dynamic content to prevent .format() from interpreting
+        # code references like {uid} as template placeholders
+        safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
+        prompt = prompt_template.format(
+            issue_content=issue_content,
+            architecture_json=safe_arch_json,
+        )
 
-    # 8. Call LLM
-    llm_success, llm_output, llm_cost, provider = run_agentic_task(
-        instruction=prompt,
-        cwd=project_root,
-        verbose=verbose,
-        quiet=quiet,
-        label="agentic_sync_identify_modules",
-    )
+        if not quiet:
+            console.print("[bold]Identifying modules to sync via LLM...[/bold]")
 
-    if not llm_success:
-        msg = f"LLM failed to identify modules: {llm_output}"
-        if use_github_state:
-            _post_error_comment(owner, repo, issue_number, msg)
-        return False, msg, llm_cost, provider
+        # 8. Call LLM
+        llm_success, llm_output, llm_cost, provider = run_agentic_task(
+            instruction=prompt,
+            cwd=project_root,
+            verbose=verbose,
+            quiet=quiet,
+            label="agentic_sync_identify_modules",
+        )
 
-    # 9. Parse LLM response
-    modules_to_sync, deps_valid, deps_corrections = _parse_llm_response(llm_output)
+        if not llm_success:
+            msg = f"LLM failed to identify modules: {llm_output}"
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, llm_cost, provider
 
-    if not modules_to_sync:
-        return False, "LLM identified no modules to sync", llm_cost, provider
+        # 9. Parse LLM response
+        modules_to_sync, deps_valid, deps_corrections = _parse_llm_response(llm_output)
+
+        if not modules_to_sync:
+            return False, "LLM identified no modules to sync", llm_cost, provider
 
     # LLM returns basenames from architecture.json filenames (e.g., "crm_models_Python").
     # pdd sync expects basenames without the language suffix (e.g., "crm_models").
