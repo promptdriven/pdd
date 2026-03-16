@@ -117,6 +117,14 @@ describe("type definitions", () => {
     expect(sourceCode).toMatch(/interface\s+WordTimestamp/);
   });
 
+  it("defines SegmentValidation interface", () => {
+    expect(sourceCode).toMatch(/interface\s+SegmentValidation/);
+  });
+
+  it("defines SegmentValidationSummary interface", () => {
+    expect(sourceCode).toMatch(/interface\s+SegmentValidationSummary/);
+  });
+
   it("WordTimestamp has word: string property", () => {
     // Match inside the interface block
     expect(sourceCode).toMatch(/interface\s+WordTimestamp[\s\S]*?word\s*:\s*string/);
@@ -190,6 +198,19 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/useState\s*<\s*WordTimestamp\[\]\s*>/);
   });
 
+  it("tracks validationRows state as SegmentValidation[]", () => {
+    expect(sourceCode).toMatch(/\[\s*validationRows\s*,\s*setValidationRows\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*<\s*SegmentValidation\[\]\s*>/);
+  });
+
+  it("tracks validationSummary state", () => {
+    expect(sourceCode).toMatch(/\[\s*validationSummary\s*,\s*setValidationSummary\s*\]/);
+  });
+
+  it("tracks per-segment rerender job IDs", () => {
+    expect(sourceCode).toMatch(/\[\s*validationJobIds\s*,\s*setValidationJobIds\s*\]/);
+  });
+
   it("tracks loadingTimestamps state", () => {
     expect(sourceCode).toMatch(/\[\s*loadingTimestamps\s*,\s*setLoadingTimestamps\s*\]/);
   });
@@ -260,6 +281,14 @@ describe("timestamp loading", () => {
     expect(sourceCode).toMatch(/setTimestamps\s*\(\s*list\s*\)/);
   });
 
+  it("sets validationRows from response validation payload", () => {
+    expect(sourceCode).toMatch(/setValidationRows\s*\(\s*Array\.isArray\s*\(\s*data\?\.validation\?\.segments\s*\)/);
+  });
+
+  it("sets validationSummary from response validation payload", () => {
+    expect(sourceCode).toMatch(/setValidationSummary\s*\(\s*data\?\.validation\?\.summary/);
+  });
+
   it("tracks loading state for timestamps", () => {
     expect(sourceCode).toMatch(/setLoadingTimestamps\s*\(\s*true\s*\)/);
     expect(sourceCode).toMatch(/setLoadingTimestamps\s*\(\s*false\s*\)/);
@@ -270,7 +299,7 @@ describe("timestamp loading", () => {
   });
 
   it("depends on selectedSectionId", () => {
-    expect(sourceCode).toMatch(/\[\s*selectedSectionId\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*dataReloadVersion\s*,\s*selectedSectionId\s*\]/);
   });
 
   it("returns early if no selectedSectionId", () => {
@@ -279,7 +308,49 @@ describe("timestamp loading", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. Word filtering via search (Req 4 — search input)
+// 10. Transcript validation panel
+// ---------------------------------------------------------------------------
+
+describe("transcript validation panel", () => {
+  it("renders a flagged transcript mismatch section", () => {
+    expect(sourceCode).toMatch(/Flagged Transcript Mismatches/);
+  });
+
+  it("filters validation rows to warn/fail mismatches", () => {
+    expect(sourceCode).toMatch(/validationRows\.filter\s*\(\s*\(row\)\s*=>\s*row\.status\s*!==\s*['"]pass['"]/);
+  });
+
+  it("shows expected and actual transcript columns", () => {
+    expect(sourceCode).toMatch(/Expected Text/);
+    expect(sourceCode).toMatch(/Actual Transcript/);
+  });
+
+  it("renders a Re-render Segment action", () => {
+    expect(sourceCode).toMatch(/Re-render Segment/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. Transcript rerender action
+// ---------------------------------------------------------------------------
+
+describe("transcript rerender action", () => {
+  it("posts flagged segment IDs to /api/pipeline/tts-render/run", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/tts-render\/run['"]/);
+    expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{\s*segments\s*:\s*\[\s*segmentId\s*\]\s*\}\s*\)/);
+  });
+
+  it("extracts a rerender job ID from the SSE response", () => {
+    expect(sourceCode).toMatch(/extractJobIdFromSse/);
+  });
+
+  it("renders an SseLogPanel for per-segment rerender jobs", () => {
+    expect(sourceCode).toMatch(/<SseLogPanel[\s\S]*?jobId=\{validationJobIds\[row\.segmentId\] \?\? null\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Word filtering via search (Req 4 — search input)
 // ---------------------------------------------------------------------------
 
 describe("word filtering", () => {
@@ -403,8 +474,8 @@ describe("run audio sync handler", () => {
   });
 
   it("extracts jobId from response and sets state", () => {
-    expect(sourceCode).toMatch(/data\.jobId/);
-    expect(sourceCode).toMatch(/setJobId\s*\(\s*data\.jobId\s*\)/);
+    expect(sourceCode).toMatch(/extractJobIdFromSse/);
+    expect(sourceCode).toMatch(/setJobId\s*\(\s*nextJobId\s*\)/);
   });
 });
 

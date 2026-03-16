@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectConfig, Section } from '../../lib/types';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
+import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 interface Stage5AudioSyncProps {
   onAdvance: () => void;
@@ -15,6 +16,30 @@ interface WordTimestamp {
   end: number;
   segmentId?: string;
 }
+
+interface SegmentValidation {
+  segmentId: string;
+  expectedText: string;
+  actualText: string;
+  matchRatio: number | null;
+  status: 'pass' | 'warn' | 'fail' | 'skip';
+  expectedWordCount?: number;
+  actualWordCount?: number;
+}
+
+interface SegmentValidationSummary {
+  passCount: number;
+  warnCount: number;
+  failCount: number;
+  skipCount: number;
+}
+
+const EMPTY_VALIDATION_SUMMARY: SegmentValidationSummary = {
+  passCount: 0,
+  warnCount: 0,
+  failCount: 0,
+  skipCount: 0,
+};
 
 function expandRange(start: string, end: string): string[] {
   const sm = start.match(/^(.+)_(\d{3})$/);
@@ -47,8 +72,14 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
   const [selectedSectionId, setSelectedSectionId] = useState<string>('');
   const [timestamps, setTimestamps] = useState<WordTimestamp[]>([]);
+  const [validationRows, setValidationRows] = useState<SegmentValidation[]>([]);
+  const [validationSummary, setValidationSummary] = useState<SegmentValidationSummary>(
+    EMPTY_VALIDATION_SUMMARY
+  );
   const [loadingTimestamps, setLoadingTimestamps] = useState(false);
   const [search, setSearch] = useState('');
+  const [validationJobIds, setValidationJobIds] = useState<Record<string, string | null>>({});
+  const [dataReloadVersion, setDataReloadVersion] = useState(0);
 
   const [scrollTop, setScrollTop] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -127,9 +158,13 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         // API returns { words: [...] } or a raw array
         const list = Array.isArray(data) ? data : (Array.isArray(data?.words) ? data.words : []);
         setTimestamps(list);
+        setValidationRows(Array.isArray(data?.validation?.segments) ? data.validation.segments : []);
+        setValidationSummary(data?.validation?.summary ?? EMPTY_VALIDATION_SUMMARY);
       } catch (err) {
         if (!active) return;
         setTimestamps([]);
+        setValidationRows([]);
+        setValidationSummary(EMPTY_VALIDATION_SUMMARY);
       } finally {
         if (active) setLoadingTimestamps(false);
       }
@@ -137,7 +172,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     return () => {
       active = false;
     };
-  }, [selectedSectionId]);
+  }, [dataReloadVersion, selectedSectionId]);
 
   // ----------------------------------------
   // Derived values
@@ -146,6 +181,10 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     const term = search.toLowerCase();
     return timestamps.filter((w) => w.word.toLowerCase().includes(term));
   }, [timestamps, search]);
+  const flaggedValidationRows = useMemo(
+    () => validationRows.filter((row) => row.status !== 'pass' && row.status !== 'skip'),
+    [validationRows]
+  );
 
   const totalWords = timestamps.length;
   const visibleCount = Math.ceil(VIEWPORT_HEIGHT / ROW_HEIGHT) + 10;
@@ -259,17 +298,52 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   };
 
   const handleRunAudioSync = async () => {
-    const res = await fetch('/api/pipeline/audio-sync/run', {
-      method: 'POST',
-    });
-    const data = await res.json();
-    setJobId(data.jobId);
+    setDetectError(null);
+    try {
+      const res = await fetch('/api/pipeline/audio-sync/run', {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to start audio sync.');
+      }
+
+      const nextJobId = await extractJobIdFromSse(res);
+      if (!nextJobId) {
+        throw new Error('Failed to get audio sync job ID.');
+      }
+      setJobId(nextJobId);
+    } catch (err: any) {
+      setDetectError(err?.message ?? 'Failed to start audio sync');
+    }
   };
 
   const handleSseDone = () => {
     // Auto-load timestamps for first section after run completes
     if (project?.sections?.length && !selectedSectionId) {
       setSelectedSectionId(project.sections[0].id);
+    }
+    setDataReloadVersion((prev) => prev + 1);
+  };
+
+  const handleRerenderSegment = async (segmentId: string) => {
+    setDetectError(null);
+    try {
+      const res = await fetch('/api/pipeline/tts-render/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments: [segmentId] }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to start TTS rerender.');
+      }
+
+      const rowJobId = await extractJobIdFromSse(res);
+      if (!rowJobId) {
+        throw new Error('Failed to get TTS rerender job ID.');
+      }
+      setValidationJobIds((prev) => ({ ...prev, [segmentId]: rowJobId }));
+    } catch (err: any) {
+      setDetectError(err?.message ?? 'Failed to rerender segment');
     }
   };
 
@@ -426,6 +500,76 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
         <div className="text-xs text-slate-400 mb-2">
           {loadingTimestamps ? 'Loading timestamps…' : ''}
+        </div>
+
+        <div className="mb-4 rounded-lg border border-slate-700 bg-slate-950/60 p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-100">Flagged Transcript Mismatches</h3>
+              <div className="text-xs text-slate-400">
+                pass {validationSummary.passCount} · warn {validationSummary.warnCount} · fail {validationSummary.failCount}
+              </div>
+            </div>
+            <div className="text-xs text-slate-500">
+              Re-run audio sync after rerendering to refresh validation.
+            </div>
+          </div>
+
+          {flaggedValidationRows.length === 0 ? (
+            <div className="text-sm text-slate-400">No flagged transcript mismatches for this section.</div>
+          ) : (
+            <div className="space-y-3">
+              {flaggedValidationRows.map((row) => (
+                <div
+                  key={row.segmentId}
+                  className="rounded-md border border-slate-800 bg-slate-900/80 p-3"
+                >
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm font-medium text-slate-100">
+                      {row.segmentId}{' '}
+                      <span className="ml-2 text-xs uppercase tracking-wide text-amber-300">
+                        {row.status}
+                      </span>
+                      {typeof row.matchRatio === 'number' && (
+                        <span className="ml-2 text-xs text-slate-400">
+                          match {(row.matchRatio * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleRerenderSegment(row.segmentId)}
+                      className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
+                    >
+                      Re-render Segment
+                    </button>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Expected Text
+                      </div>
+                      <div className="rounded bg-slate-950 px-3 py-2 text-sm text-slate-200">
+                        {row.expectedText || 'No expected script found.'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Actual Transcript
+                      </div>
+                      <div className="rounded bg-slate-950 px-3 py-2 text-sm text-slate-200">
+                        {row.actualText || 'No speech detected.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <SseLogPanel jobId={validationJobIds[row.segmentId] ?? null} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Virtualized Table */}

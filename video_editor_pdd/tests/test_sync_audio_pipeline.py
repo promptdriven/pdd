@@ -44,6 +44,8 @@ SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 from sync_audio_pipeline import (
+    build_segment_validation_report,
+    normalize_transcript_text,
     load_project,
     get_segment_wav_path,
     get_wav_duration,
@@ -728,6 +730,125 @@ class TestProcessSection:
 
         assert result["status"] == "error"
         assert "Failed to generate word timestamps" in result["error"]
+
+    def test_writes_segment_validation_report(self, tmp_project):
+        """Writes segment_validation.json alongside word_timestamps.json."""
+        output_dir = str(tmp_project / "outputs" / "tts")
+        remotion_public = str(tmp_project / "remotion" / "public")
+
+        manifest = {
+            "segments": [
+                {"id": "seg_001", "cleanText": "Hello world."},
+            ]
+        }
+        with open(os.path.join(output_dir, "segments.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        mock_model = make_mock_whisper_model([
+            {"word": "Hello", "start": 0.1, "end": 0.4},
+            {"word": "world", "start": 0.5, "end": 0.8},
+        ])
+
+        def fake_concat(segment_paths, output_path):
+            _create_dummy_wav(str(output_path))
+
+        with mock.patch("sync_audio_pipeline.concatenate_wavs_ffmpeg", side_effect=fake_concat):
+            with mock.patch("faster_whisper.WhisperModel", return_value=mock_model):
+                with mock.patch("sync_audio_pipeline.get_wav_duration", return_value=1.0):
+                    process_section("intro", ["seg_001"], output_dir, remotion_public)
+
+        validation_path = os.path.join(output_dir, "intro", "segment_validation.json")
+        assert os.path.exists(validation_path)
+        with open(validation_path, "r", encoding="utf-8") as f:
+            validation = json.load(f)
+
+        assert validation["segments"][0]["segmentId"] == "seg_001"
+        assert validation["segments"][0]["status"] == "pass"
+        assert validation["summary"]["passCount"] == 1
+
+    def test_done_result_includes_validation_summary(self, tmp_project):
+        """Successful section processing includes transcript-validation counts."""
+        output_dir = str(tmp_project / "outputs" / "tts")
+        remotion_public = str(tmp_project / "remotion" / "public")
+
+        manifest = {
+            "segments": [
+                {"id": "seg_001", "cleanText": "Correct words."},
+            ]
+        }
+        with open(os.path.join(output_dir, "segments.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        mock_model = make_mock_whisper_model([
+            {"word": "Totally", "start": 0.1, "end": 0.3},
+            {"word": "different", "start": 0.4, "end": 0.7},
+        ])
+
+        def fake_concat(segment_paths, output_path):
+            _create_dummy_wav(str(output_path))
+
+        with mock.patch("sync_audio_pipeline.concatenate_wavs_ffmpeg", side_effect=fake_concat):
+            with mock.patch("faster_whisper.WhisperModel", return_value=mock_model):
+                with mock.patch("sync_audio_pipeline.get_wav_duration", return_value=1.0):
+                    result = process_section("intro", ["seg_001"], output_dir, remotion_public)
+
+        assert result["status"] == "done"
+        assert result["validationSummary"]["failCount"] == 1
+        assert result["validationSummary"]["passCount"] == 0
+
+
+class TestSegmentValidation:
+    """Verify transcript-vs-script validation helpers."""
+
+    def test_normalize_transcript_text_collapses_case_and_punctuation(self):
+        assert normalize_transcript_text("Hello,  WORLD!!") == "hello world"
+
+    def test_build_segment_validation_report_marks_random_speech_as_fail(self, tmp_path):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+
+        manifest = {
+            "segments": [
+                {"id": "intro_001", "cleanText": "The quick brown fox jumps over the lazy dog."},
+                {"id": "intro_002", "cleanText": "A second sentence for comparison."},
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["intro_001", "intro_002"],
+            str(output_dir),
+            [
+                {"word": "random", "start": 0.0, "end": 0.2, "segmentId": "intro_001"},
+                {"word": "words", "start": 0.2, "end": 0.4, "segmentId": "intro_001"},
+                {"word": "A", "start": 0.5, "end": 0.6, "segmentId": "intro_002"},
+                {"word": "second", "start": 0.6, "end": 0.7, "segmentId": "intro_002"},
+                {"word": "sentence", "start": 0.7, "end": 0.9, "segmentId": "intro_002"},
+                {"word": "for", "start": 0.9, "end": 1.0, "segmentId": "intro_002"},
+                {"word": "comparison", "start": 1.0, "end": 1.2, "segmentId": "intro_002"},
+            ],
+        )
+
+        first = report["segments"][0]
+        second = report["segments"][1]
+        assert first["status"] == "fail"
+        assert first["matchRatio"] < 0.8
+        assert second["status"] == "pass"
+        assert report["summary"]["failCount"] == 1
+
+    def test_build_segment_validation_report_skips_missing_manifest_text(self, tmp_path):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        (output_dir / "segments.json").write_text('{"segments":[]}', encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["intro_001"],
+            str(output_dir),
+            [{"word": "hello", "start": 0.0, "end": 0.2, "segmentId": "intro_001"}],
+        )
+
+        assert report["segments"][0]["status"] == "skip"
+        assert report["summary"]["skipCount"] == 1
 
 
 # ===========================================================================

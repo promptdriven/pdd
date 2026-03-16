@@ -10,6 +10,23 @@ interface WordTimestamp {
   segmentId: string;
 }
 
+interface SegmentValidationSummary {
+  passCount: number;
+  warnCount: number;
+  failCount: number;
+  skipCount: number;
+}
+
+const EMPTY_VALIDATION = {
+  segments: [],
+  summary: {
+    passCount: 0,
+    warnCount: 0,
+    failCount: 0,
+    skipCount: 0,
+  } satisfies SegmentValidationSummary,
+};
+
 /**
  * GET /api/pipeline/audio-sync/timestamps?section=X
  * Returns word timestamps JSON for a given section.
@@ -32,6 +49,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     sectionId,
     "word_timestamps.json"
   );
+  const validationPath = path.join(
+    getProjectDir(),
+    "outputs",
+    "tts",
+    sectionId,
+    "segment_validation.json"
+  );
 
   try {
     const raw = await fs.readFile(filePath, "utf-8");
@@ -44,7 +68,44 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       ? parsed.words
       : [];
 
-    return NextResponse.json({ words }, { status: 200 });
+    let validation = EMPTY_VALIDATION;
+    try {
+      const validationRaw = await fs.readFile(validationPath, "utf-8");
+      const parsedValidation = JSON.parse(validationRaw);
+      validation = {
+        segments: Array.isArray(parsedValidation?.segments)
+          ? parsedValidation.segments
+          : [],
+        summary:
+          parsedValidation?.summary &&
+          typeof parsedValidation.summary === "object"
+            ? {
+                passCount:
+                  typeof parsedValidation.summary.passCount === "number"
+                    ? parsedValidation.summary.passCount
+                    : 0,
+                warnCount:
+                  typeof parsedValidation.summary.warnCount === "number"
+                    ? parsedValidation.summary.warnCount
+                    : 0,
+                failCount:
+                  typeof parsedValidation.summary.failCount === "number"
+                    ? parsedValidation.summary.failCount
+                    : 0,
+                skipCount:
+                  typeof parsedValidation.summary.skipCount === "number"
+                    ? parsedValidation.summary.skipCount
+                    : 0,
+              }
+            : EMPTY_VALIDATION.summary,
+      };
+    } catch (validationErr) {
+      if ((validationErr as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error("Failed to read segment validation:", validationErr);
+      }
+    }
+
+    return NextResponse.json({ words, validation }, { status: 200 });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return NextResponse.json(

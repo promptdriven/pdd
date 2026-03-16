@@ -15,6 +15,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -305,6 +307,111 @@ def generate_word_timestamps(
     return word_timestamps
 
 
+def normalize_transcript_text(text: str) -> str:
+    """Normalize transcript/script text for mismatch comparison."""
+    collapsed = re.sub(r"[\u2018\u2019']", "", text.lower())
+    collapsed = re.sub(r"[^a-z0-9\s]", " ", collapsed)
+    return re.sub(r"\s+", " ", collapsed).strip()
+
+
+def load_segment_script_manifest(output_dir: str) -> Dict[str, str]:
+    """Load expected cleanText values from outputs/tts/segments.json."""
+    manifest_path = Path(output_dir) / "segments.json"
+    if not manifest_path.exists():
+        return {}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    segments = manifest.get("segments")
+    if not isinstance(segments, list):
+        return {}
+
+    expected_map: Dict[str, str] = {}
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        segment_id = segment.get("id")
+        clean_text = segment.get("cleanText") or segment.get("text") or ""
+        if isinstance(segment_id, str) and isinstance(clean_text, str) and clean_text.strip():
+            expected_map[segment_id] = clean_text.strip()
+    return expected_map
+
+
+def build_segment_validation_report(
+    segment_ids: List[str],
+    output_dir: str,
+    word_timestamps: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compare STT output against expected segment text from the TTS manifest."""
+    expected_map = load_segment_script_manifest(output_dir)
+
+    actual_by_segment: Dict[str, str] = {segment_id: "" for segment_id in segment_ids}
+    for word_info in word_timestamps:
+        segment_id = word_info.get("segmentId")
+        word = word_info.get("word")
+        if (
+            isinstance(segment_id, str)
+            and segment_id in actual_by_segment
+            and isinstance(word, str)
+            and word.strip()
+        ):
+            actual_by_segment[segment_id] = (
+                f"{actual_by_segment[segment_id]} {word.strip()}".strip()
+            )
+
+    rows: List[Dict[str, Any]] = []
+    summary = {
+        "passCount": 0,
+        "warnCount": 0,
+        "failCount": 0,
+        "skipCount": 0,
+    }
+
+    for segment_id in segment_ids:
+        expected_text = expected_map.get(segment_id, "")
+        actual_text = actual_by_segment.get(segment_id, "")
+        normalized_expected = normalize_transcript_text(expected_text)
+        normalized_actual = normalize_transcript_text(actual_text)
+        expected_word_count = len(normalized_expected.split()) if normalized_expected else 0
+        actual_word_count = len(normalized_actual.split()) if normalized_actual else 0
+
+        if not normalized_expected:
+            status = "skip"
+            match_ratio: Optional[float] = None
+        else:
+            match_ratio = round(
+                SequenceMatcher(None, normalized_expected, normalized_actual).ratio(),
+                3,
+            )
+            if match_ratio >= 0.94:
+                status = "pass"
+            elif match_ratio >= 0.8:
+                status = "warn"
+            else:
+                status = "fail"
+
+        summary[f"{status}Count"] += 1
+        rows.append(
+            {
+                "segmentId": segment_id,
+                "expectedText": expected_text,
+                "actualText": actual_text,
+                "normalizedExpectedText": normalized_expected,
+                "normalizedActualText": normalized_actual,
+                "matchRatio": match_ratio,
+                "status": status,
+                "expectedWordCount": expected_word_count,
+                "actualWordCount": actual_word_count,
+            }
+        )
+
+    return {"segments": rows, "summary": summary}
+
+
 def process_section(
     section_id: str,
     segment_ids: List[str],
@@ -411,10 +518,27 @@ def process_section(
             "error": f"Failed to write word_timestamps.json: {e}",
         }
 
+    validation_report = build_segment_validation_report(
+        actual_segment_ids,
+        output_dir,
+        word_timestamps,
+    )
+    validation_path = section_output_dir / "segment_validation.json"
+    try:
+        with open(validation_path, "w", encoding="utf-8") as f:
+            json.dump(validation_report, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return {
+            "sectionId": section_id,
+            "status": "error",
+            "error": f"Failed to write segment_validation.json: {e}",
+        }
+
     return {
         "sectionId": section_id,
         "status": "done",
         "wordCount": len(word_timestamps),
+        "validationSummary": validation_report["summary"],
     }
 
 

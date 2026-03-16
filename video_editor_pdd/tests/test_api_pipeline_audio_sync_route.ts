@@ -16,7 +16,7 @@
  *   7. Spawns python3 sync_audio_pipeline.py with cwd: process.cwd()
  *   8. Passes SECTION_GROUPS as env var to spawned process
  *   9. SSE headers: Content-Type text/event-stream, Cache-Control no-cache, Connection keep-alive
- *  10. Word timestamp format: { words: [{ word, start, end, segmentId }] }
+ *  10. Word timestamp format: { words: [{ word, start, end, segmentId }], validation?: { ... } }
  */
 
 import path from "path";
@@ -812,7 +812,16 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
         { word: "world", start: 0.6, end: 1.0, segmentId: "seg1" },
       ],
     };
-    mockReadFile.mockResolvedValue(JSON.stringify(timestamps));
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return JSON.stringify(timestamps);
+      }
+
+      return JSON.stringify({
+        segments: [],
+        summary: { passCount: 0, warnCount: 0, failCount: 0, skipCount: 0 },
+      });
+    });
 
     const response = await GET(makeGetRequest("intro") as any);
     expect(response.status).toBe(200);
@@ -826,6 +835,7 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
       end: 0.5,
       segmentId: "seg1",
     });
+    expect(body.validation.summary.failCount).toBe(0);
   });
 
   it("reads from correct path: outputs/tts/{sectionId}/word_timestamps.json", async () => {
@@ -884,7 +894,16 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
   });
 
   it("returns empty words array when file has no words", async () => {
-    mockReadFile.mockResolvedValue('{"words":[]}');
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[]}';
+      }
+
+      return JSON.stringify({
+        segments: [],
+        summary: { passCount: 0, warnCount: 0, failCount: 0, skipCount: 0 },
+      });
+    });
 
     const response = await GET(makeGetRequest("empty_section") as any);
     expect(response.status).toBe(200);
@@ -894,7 +913,16 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
   });
 
   it("no authentication required for GET", async () => {
-    mockReadFile.mockResolvedValue('{"words":[]}');
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[]}';
+      }
+
+      return JSON.stringify({
+        segments: [],
+        summary: { passCount: 0, warnCount: 0, failCount: 0, skipCount: 0 },
+      });
+    });
 
     const request = new Request(
       "http://localhost/api/pipeline/audio-sync/timestamps?section=intro",
@@ -906,6 +934,59 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
 
     const response = await GET(request as any);
     expect(response.status).toBe(200);
+  });
+
+  it("returns validation details when segment_validation.json exists", async () => {
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[{"word":"hello","start":0,"end":0.5,"segmentId":"seg1"}]}';
+      }
+
+      return JSON.stringify({
+        segments: [
+          {
+            segmentId: "seg1",
+            expectedText: "hello world",
+            actualText: "hello there",
+            status: "warn",
+            matchRatio: 0.82,
+          },
+        ],
+        summary: { passCount: 0, warnCount: 1, failCount: 0, skipCount: 0 },
+      });
+    });
+
+    const response = await GET(makeGetRequest("intro") as any);
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body.validation.segments[0]).toMatchObject({
+      segmentId: "seg1",
+      status: "warn",
+      matchRatio: 0.82,
+    });
+    expect(body.validation.summary.warnCount).toBe(1);
+  });
+
+  it("returns empty validation when segment_validation.json is missing", async () => {
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[]}';
+      }
+
+      const enoentError = new Error("ENOENT") as NodeJS.ErrnoException;
+      enoentError.code = "ENOENT";
+      throw enoentError;
+    });
+
+    const response = await GET(makeGetRequest("intro") as any);
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body.validation).toEqual({
+      segments: [],
+      summary: { passCount: 0, warnCount: 0, failCount: 0, skipCount: 0 },
+    });
   });
 });
 
