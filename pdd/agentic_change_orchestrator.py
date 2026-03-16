@@ -25,6 +25,8 @@ from pdd.agentic_common import (
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
     post_step_comment,
+    set_agentic_progress,
+    clear_agentic_progress,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -624,6 +626,9 @@ def run_agentic_change_orchestrator(
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
+
+    # Ensure any stale agentic progress from previous runs is cleared.
+    clear_agentic_progress()
     
     if not quiet:
         console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
@@ -758,6 +763,16 @@ def run_agentic_change_orchestrator(
     for step_num, name, description in steps_config:
         if step_num < start_step:
             continue
+
+        # Record progress so KeyboardInterrupt can report how far we got.
+        completed_list = list(range(1, step_num)) if step_num > 1 else []
+        set_agentic_progress(
+            workflow="change",
+            current_step=step_num,
+            total_steps=13,
+            step_name=description,
+            completed_steps=completed_list,
+        )
 
         previous_architecture = None
 
@@ -1098,6 +1113,8 @@ def run_agentic_change_orchestrator(
         )
         if not has_failed_steps:
             clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
+        # Clear progress on successful completion so future runs start clean.
+        clear_agentic_progress()
         return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
     return True, "Workflow already completed", total_cost, model_used, changed_files
 ""

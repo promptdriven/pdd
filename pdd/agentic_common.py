@@ -114,6 +114,43 @@ DEFAULT_RETRY_DELAY: float = 5.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
 
+# Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
+# can report how far the workflow progressed (console + core dumps).
+_agentic_interrupt_context: Optional[Dict[str, Any]] = None
+
+
+def set_agentic_progress(
+    workflow: str,
+    current_step: int,
+    total_steps: int,
+    step_name: str,
+    completed_steps: Optional[List[int]] = None,
+) -> None:
+    """Record current step progress for KeyboardInterrupt reporting and core dumps."""
+    global _agentic_interrupt_context
+    _agentic_interrupt_context = {
+        "workflow": workflow,
+        "current_step": current_step,
+        "total_steps": total_steps,
+        "step_name": step_name,
+        "completed_steps": completed_steps or [],
+    }
+
+
+def clear_agentic_progress() -> None:
+    """Clear progress context (call at start of workflow or on normal completion)."""
+    global _agentic_interrupt_context
+    _agentic_interrupt_context = None
+
+
+def get_and_clear_agentic_interrupt_context() -> Optional[Dict[str, Any]]:
+    """Return current progress and clear it (used by error handler on KeyboardInterrupt)."""
+    global _agentic_interrupt_context
+    ctx = _agentic_interrupt_context
+    _agentic_interrupt_context = None
+    return ctx
+
+
 # Job deadline constants — prevent agentic retry loops from consuming the full job timeout
 JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0   # Reserve for cleanup/reporting after last attempt
 MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0   # Don't start an attempt if less than this remains
