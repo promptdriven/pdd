@@ -2766,7 +2766,7 @@ class TestSecondaryPaginationCallSites:
 # Provider Error Details + post_step_comment Tests — Issue #289
 # ---------------------------------------------------------------------------
 
-from pdd.agentic_common import post_step_comment
+from pdd.agentic_common import post_pr_comment, post_step_comment
 
 
 def test_provider_error_details_preserved(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -2890,6 +2890,45 @@ def test_post_step_comment_no_gh_cli(tmp_path):
             total_steps=13,
             description="Research",
             output="Error",
+            cwd=tmp_path,
+        )
+
+        assert result is False
+
+
+def test_post_pr_comment_posts_to_github(tmp_path):
+    """Test that post_pr_comment calls gh pr comment with correct args."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="CI validation exhausted retries.",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "gh"
+        assert cmd[1] == "pr"
+        assert cmd[2] == "comment"
+        assert "42" in cmd
+        assert "--repo" in cmd
+        assert "owner/repo" in cmd
+
+
+def test_post_pr_comment_no_gh_cli(tmp_path):
+    """Test that post_pr_comment returns False without crashing when gh is not installed."""
+    with patch("shutil.which", return_value=None):
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="CI validation exhausted retries.",
             cwd=tmp_path,
         )
 

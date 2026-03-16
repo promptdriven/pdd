@@ -1,8 +1,19 @@
+<pdd-reason>Step 4 of the agentic E2E fix workflow: fixes E2E tests if they are the identified problem.</pdd-reason>
+
+<pdd-interface>
+{{{{
+  "type": "config",
+  "config": {{{{
+    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step3_output"]
+  }}}}
+}}}}
+</pdd-interface>
+
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to fix e2e tests if they are the problem.
 
 % Context
 
-You are working on step 4 of 9 in an agentic e2e fix workflow. Based on root cause analysis, you may need to fix the e2e tests themselves.
+You are working on step 4 of 10 in an agentic e2e fix workflow. Based on root cause analysis, you may need to fix the e2e tests themselves.
 
 % Inputs
 

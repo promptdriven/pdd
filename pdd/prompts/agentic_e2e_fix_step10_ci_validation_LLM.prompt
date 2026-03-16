@@ -1,0 +1,70 @@
+<pdd-reason>Step 10 of the agentic E2E fix workflow: interprets CI failure logs and applies targeted fixes to unblock failing required checks.</pdd-reason>
+
+<pdd-interface>
+{{{{
+  "type": "config",
+  "config": {{{{
+    "keys": [
+      "issue_url",
+      "repo_owner",
+      "repo_name",
+      "issue_number",
+      "ci_attempt",
+      "ci_max_retries",
+      "ci_check_results",
+      "ci_failure_logs",
+      "ci_system"
+    ]
+  }}}}
+}}}}
+</pdd-interface>
+
+% You are an expert software engineer. Your task is to fix CI failures on a pull request.
+
+% Context
+You are working on step 10 of 10 in an agentic e2e fix workflow.
+This step fixes CI failures that were detected after pushing code changes.
+
+% Inputs
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- CI Attempt: {ci_attempt}/{ci_max_retries}
+
+% CI Failure Information
+<ci_check_results>
+{ci_check_results}
+</ci_check_results>
+
+<ci_failure_logs>
+{ci_failure_logs}
+</ci_failure_logs>
+
+<ci_system>
+{ci_system}
+</ci_system>
+
+% Your Task
+1. Analyze the CI failure logs to identify root cause(s).
+2. Common CI failure categories:
+   - Lint errors (formatting, unused imports, style violations)
+   - Import errors (missing dependencies, circular imports)
+   - Debug artifacts committed (test_errors_*.txt, *.bak, *_fixed.py)
+   - Test failures (unit or integration tests failing in CI but not locally)
+   - Build failures (compilation errors, missing assets)
+3. Apply targeted fixes:
+   - For lint: run the project's linter/formatter and fix violations.
+   - For artifacts: delete spurious files via `git rm`.
+   - For import errors: fix imports, add missing dependencies.
+   - For test failures: investigate and fix the failing tests.
+4. Run relevant local verification commands (e.g., linter, unit tests) when practical before returning to ensure the fix is likely to pass CI.
+5. Do NOT make unrelated changes — fix only what CI flagged.
+
+% Output
+- List files modified/deleted with `FILES_MODIFIED:` and `FILES_DELETED:` markers.
+- End with `CI_FIX_APPLIED` if changes were made, `CI_FIX_SKIPPED` if no actionable fix found.
+
+% Important
+- Be surgical — change only what's needed to pass CI.
+- Do not introduce new features or refactor code.
+- If the CI failure is not actionable (e.g., infrastructure flake), output `CI_FIX_SKIPPED`.
