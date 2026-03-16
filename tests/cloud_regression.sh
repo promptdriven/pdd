@@ -799,7 +799,7 @@ PYEOF
                         "bug_py_program.py" \
                         "bug_py_current.txt" "bug_py_desired.txt"
     check_exists "$BUG_PY_TEST" "'bug' Python test output"
-    check_test_catches_bug "$BUG_PY_TEST" "Python" "."
+    check_test_catches_bug "$BUG_PY_TEST" "Python" "bug_py_code.py"
 fi
 
 # 10. Bug (Go) — Structural test regression guard
@@ -858,7 +858,7 @@ PYEOF
                         "bug_go_program.go" \
                         "bug_go_current.txt" "bug_go_desired.txt"
     check_exists "$BUG_GO_TEST" "'bug' Go test output"
-    check_test_catches_bug "$BUG_GO_TEST" "Go" "."
+    check_test_catches_bug "$BUG_GO_TEST" "Go" "bug_go_code.go"
 fi
 
 # 11. Bug (Java) — Structural test regression guard
@@ -927,7 +927,7 @@ PYEOF
                         "bug_java_program.java" \
                         "bug_java_current.txt" "bug_java_desired.txt"
     check_exists "$BUG_JAVA_TEST" "'bug' Java test output"
-    check_test_catches_bug "$BUG_JAVA_TEST" "Java" "."
+    check_test_catches_bug "$BUG_JAVA_TEST" "Java" "bug_java_code.java"
 fi
 
 # 12. Bug (JavaScript) — Structural test regression guard
@@ -993,7 +993,7 @@ PYEOF
                         "bug_js_program.js" \
                         "bug_js_current.txt" "bug_js_desired.txt"
     check_exists "$BUG_JS_TEST" "'bug' JavaScript test output"
-    check_test_catches_bug "$BUG_JS_TEST" "JavaScript" "."
+    check_test_catches_bug "$BUG_JS_TEST" "JavaScript" "bug_js_code.js"
 fi
 
 # --- Final Summary ---
