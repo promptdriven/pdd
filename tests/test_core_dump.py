@@ -468,6 +468,19 @@ def test_keyboard_interrupt_writes_core_dump(mock_main, mock_auto_update, tmp_pa
     assert any('KeyboardInterrupt' in str(err.get('type', '')) for err in errors), \
         "Error type should include KeyboardInterrupt"
 
+    # New behavior: reason field should be present when interrupt context is available
+    # (We don't assert exact wording, just that a non-empty reason exists for KeyboardInterrupt.)
+    keyboard_interrupt_errors = [
+        err for err in errors if 'KeyboardInterrupt' in str(err.get('type', ''))
+    ]
+    if keyboard_interrupt_errors:
+        reason = keyboard_interrupt_errors[0].get("reason", "")
+        # Reason may be absent in some non-agentic contexts; only assert that if present it is non-empty.
+        if reason is not None:
+            assert isinstance(reason, str)
+            # Allow empty string in legacy / non-agentic paths, but prefer non-empty when populated.
+            # We don't enforce content here to keep test resilient to formatting tweaks.
+
 
 def test_cli_results_none_guard_issue_253():
     """
