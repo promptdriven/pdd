@@ -619,40 +619,134 @@ PYEOF
 fi
 
 # --- Behavioral Test Validation Helper ---
-# Runs the generated test against the BUGGY code. A behavioral test should FAIL
-# against buggy code (it catches the bug). A structural test would PASS (it only
-# checks code shape, not behavior). This is the definitive check.
-# Only works for Python tests — other languages just get a file-exists check.
+# Two-layer validation:
+#   1. AST/content analysis (all languages): detects introspection imports,
+#      structural builtins in assertions, and verifies the test calls the
+#      function under test. Uses tests/validate_behavioral_test.py.
+#   2. Run-against-buggy-code (Python, Go, JS): the definitive check — a
+#      behavioral test MUST FAIL against buggy code.
+VALIDATOR_SCRIPT="$(cd "$(dirname "$0")" && pwd)/validate_behavioral_test.py"
+
 check_test_catches_bug() {
     local test_file="$1"
     local language="$2"
-    local buggy_code_dir="$3"  # directory containing the buggy source files
+    local buggy_source="$3"  # path to the buggy source file
+    local failed=0
 
-    if [ "$language" != "Python" ]; then
-        # For non-Python languages we can't easily run the test, so just verify
-        # the generated file is non-empty and contains an assertion keyword.
-        if [ ! -s "$test_file" ]; then
-            log_error "$language bug test file is empty: $test_file"
-            CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
-            return 1
-        fi
-        log "$language bug test file generated successfully (runtime validation skipped)"
-        return 0
+    if [ ! -s "$test_file" ]; then
+        log_error "$language bug test file is empty: $test_file"
+        CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
+        return 1
     fi
 
-    # For Python: run the generated test against the buggy (unfixed) code.
-    # A good behavioral test MUST FAIL here — it should detect the bug.
-    log "Running generated Python test against buggy code to verify it catches the bug..."
-    if python -m pytest "$test_file" --tb=short --no-header -q 2>&1; then
-        log_error "STRUCTURAL TEST DETECTED: generated test PASSED against buggy code"
-        log_error "A behavioral test must FAIL against the buggy code — this test only checks code shape"
+    # --- Layer 1: AST / content analysis (all languages) ---
+    log "Running AST validator on $language test..."
+    if ! python "$VALIDATOR_SCRIPT" "$test_file" "$language" "$buggy_source" 2>&1; then
+        log_error "AST validator flagged structural patterns in $language test"
+        failed=1
+    else
+        log "AST validator passed for $language test"
+    fi
+
+    # --- Layer 2: Run test against buggy code (language-specific) ---
+    case "$language" in
+        Python)
+            log "Running generated Python test against buggy code..."
+            if python -m pytest "$test_file" --tb=short --no-header -q 2>&1; then
+                log_error "STRUCTURAL TEST DETECTED: Python test PASSED against buggy code"
+                log_error "A behavioral test must FAIL against the buggy code"
+                failed=1
+            else
+                log "Python test correctly FAILS against buggy code — behavioral"
+            fi
+            ;;
+        Go)
+            # Go tests need a module. Read the package name from the generated
+            # test so the fixture source matches — we can't predict what the LLM
+            # will use.
+            if command -v go &>/dev/null; then
+                local go_tmp
+                go_tmp=$(mktemp -d)
+                log "Running generated Go test against buggy code in $go_tmp..."
+                (
+                    cd "$go_tmp"
+                    go mod init bugtest &>/dev/null
+                    cp "$OLDPWD/$buggy_source" source.go 2>/dev/null || true
+                    cp "$OLDPWD/$test_file" test_file_test.go 2>/dev/null || true
+                    # Match the buggy source's package to whatever the LLM used
+                    local test_pkg
+                    test_pkg=$(grep -m1 '^package ' test_file_test.go 2>/dev/null | awk '{print $2}')
+                    if [ -n "$test_pkg" ]; then
+                        sed -i.bak "s/^package .*/package ${test_pkg}/" source.go 2>/dev/null || true
+                    fi
+                    # Try to build and test — behavioral test should FAIL
+                    if go test ./... -count=1 -timeout 30s 2>&1; then
+                        echo "[ERROR] Go test PASSED against buggy code — structural test"
+                        exit 1
+                    else
+                        echo "[INFO] Go test correctly FAILS against buggy code"
+                        exit 0
+                    fi
+                )
+                local go_result=$?
+                rm -rf "$go_tmp"
+                if [ $go_result -ne 0 ]; then
+                    log_error "STRUCTURAL TEST DETECTED: Go test PASSED against buggy code"
+                    failed=1
+                else
+                    log "Go test correctly FAILS against buggy code — behavioral"
+                fi
+            else
+                log "go not found — skipping runtime validation for Go"
+            fi
+            ;;
+        JavaScript)
+            # JS tests: try running with node. If the test uses jest/mocha,
+            # try npx. A behavioral test should exit non-zero against buggy code.
+            if command -v node &>/dev/null; then
+                local js_tmp
+                js_tmp=$(mktemp -d)
+                log "Running generated JS test against buggy code in $js_tmp..."
+                cp "$buggy_source" "$js_tmp/" 2>/dev/null || true
+                cp "$test_file" "$js_tmp/" 2>/dev/null || true
+                (
+                    cd "$js_tmp"
+                    # Try node directly first, then npx jest
+                    if grep -q "require.*jest\|describe\|it(" "$test_file" 2>/dev/null && command -v npx &>/dev/null; then
+                        if npx --yes jest --no-cache "$(basename "$test_file")" 2>&1; then
+                            exit 1  # test passed = structural
+                        else
+                            exit 0  # test failed = behavioral
+                        fi
+                    elif node "$(basename "$test_file")" 2>&1; then
+                        exit 1  # test passed = structural
+                    else
+                        exit 0  # test failed = behavioral
+                    fi
+                )
+                local js_result=$?
+                rm -rf "$js_tmp"
+                if [ $js_result -ne 0 ]; then
+                    log_error "STRUCTURAL TEST DETECTED: JS test PASSED against buggy code"
+                    failed=1
+                else
+                    log "JS test correctly FAILS against buggy code — behavioral"
+                fi
+            else
+                log "node not found — skipping runtime validation for JavaScript"
+            fi
+            ;;
+        *)
+            log "$language runtime validation not supported — relying on AST validator only"
+            ;;
+    esac
+
+    if [ $failed -ne 0 ]; then
         log_error "File: $test_file"
         CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
         return 1
-    else
-        log "Generated Python test correctly FAILS against buggy code — behavioral test confirmed"
-        return 0
     fi
+    return 0
 }
 
 # 9. Bug (Python) — Structural test regression guard
@@ -724,6 +818,7 @@ PYEOF
 package config
 
 import (
+    "bytes"
     "encoding/json"
 )
 
