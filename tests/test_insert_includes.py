@@ -393,6 +393,30 @@ class TestReq4UpdateBlocks:
         # The extra comment line should NOT be injected into the prompt
         assert "<!-- selector added -->" not in output_prompt
 
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_basename_fallback_uses_only_include_tag(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """Basename fallback should inject only the <include> tag, not surrounding markup.
+
+        Regression test: the basename fallback path used update_block.strip()
+        instead of the extracted <include> tag, which could inject comments or
+        other content surrounding the tag inside the <update> block.
+        """
+        # Prompt has bare filename, update block has qualified path (triggers basename fallback)
+        input_prompt = "Before\n<include>utils.py</include>\nAfter"
+        update_directive = "<update><!-- added selector -->\n<include select='def:helper'>context/utils.py</include></update>"
+        mock_ai.return_value = (update_directive, "csv", 0.01, "model")
+        csv_path = tmp_path / "deps.csv"
+
+        output_prompt, _, _, _ = insert_includes(input_prompt, "dir", str(csv_path))
+
+        # The include tag should be updated via basename fallback
+        assert "<include select='def:helper'>context/utils.py</include>" in output_prompt
+        # The extra comment should NOT leak into the prompt
+        assert "<!-- added selector -->" not in output_prompt
+
 
 # ---------------------------------------------------------------------------
 # Req 5: If <new> blocks remain, invoke LLM
