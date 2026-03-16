@@ -2,9 +2,7 @@
 
 # Section 0.1: AI Tools Hook — Split Screen Intro
 
-**Tool:** Remotion
-**Duration:** ~5s (150 frames @ 30fps)
-**Timestamp:** 0:00 - 0:05
+**Tool:** Remotion **Duration:** ~5s (150 frames @ 30fps) **Timestamp:** 0:00 - 0:05
 
 ## Visual Description
 
@@ -15,6 +13,7 @@ Both sides animate simultaneously. The code edit lands cleanly on the left; the 
 ## Technical Specifications
 
 ### Canvas
+
 - Resolution: 1920x1080 (16:9)
 - Background: #0A0F1A (deep charcoal)
 - Vertical divider: 1px solid rgba(255,255,255,0.2) at x=960
@@ -22,12 +21,14 @@ Both sides animate simultaneously. The code edit lands cleanly on the left; the 
 ### Chart/Visual Elements
 
 **Left Panel (Developer Side) — x: 0-959**
+
 - IDE mockup: dark background #1E1E2E, sidebar #16161E
 - Code file: monospace text in muted syntax colors (strings: #A9DC76, keywords: #78DCE8, functions: #FFD866)
 - AI edit highlight: green glow #5AAA6E at 30% opacity, animating in from cursor position
 - Cursor blink: white #FFFFFF, 500ms interval
 
 **Right Panel (Grandmother Side) — x: 961-1920**
+
 - Warm background gradient: #2A1F14 → #1A1308 (top to bottom)
 - Lamplight glow: radial gradient from #D4A043 at 40% opacity, centered at (1600, 200)
 - Grandmother figure: stylized silhouette with warm fill #8B6914
@@ -35,20 +36,24 @@ Both sides animate simultaneously. The code edit lands cleanly on the left; the 
 - Thread line: animated bezier curve, #D4A043, 2px stroke
 
 **Vertical Divider**
+
 - Position: x=960, full height
 - Color: rgba(255,255,255,0.2)
 - Width: 1px
 
 ### Animation Sequence
+
 1. **Frame 0-15 (0-0.5s):** Both panels fade in from black. Opacity 0 → 1, `easeOut(cubic)`.
 2. **Frame 15-60 (0.5-2.0s):** LEFT: AI edit types out 3 lines of code, green highlight sweeps left-to-right behind the text. RIGHT: Grandmother's hand makes 4 stitching motions, thread curves animate along bezier path.
 3. **Frame 60-90 (2.0-3.0s):** LEFT: Edit completes, green highlight pulses once then settles to 15% opacity. RIGHT: Final stitch pulls tight, needle rests. Grandmother's hand settles.
 4. **Frame 90-150 (3.0-5.0s):** Both sides hold. Subtle ambient animations only — cursor blinking left, lamplight flickering right.
 
 ### Typography
+
 - No text elements in this scene (narration carries the content)
 
 ### Easing
+
 - Panel fade-in: `easeOut(cubic)`
 - Code typing: `linear` (character-by-character)
 - Green highlight sweep: `easeInOut(cubic)`
@@ -56,10 +61,12 @@ Both sides animate simultaneously. The code edit lands cleanly on the left; the 
 - Lamplight flicker: `easeInOut(sin)` with randomized amplitude
 
 ## Narration Sync
+
 > "If you use Cursor, or Claude Code, or Copilot..."
 > "...you're getting really good at this."
 
 ## Code Structure (Remotion)
+
 ```typescript
 <Sequence from={0} durationInFrames={150}>
   <SplitScreen dividerX={960} dividerColor="rgba(255,255,255,0.2)">
@@ -84,6 +91,7 @@ Both sides animate simultaneously. The code edit lands cleanly on the left; the 
 ```
 
 ## Data Points
+
 ```json
 {
   "layout": {

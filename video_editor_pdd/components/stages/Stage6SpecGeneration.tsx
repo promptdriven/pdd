@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
+import { EditorView } from '@codemirror/view';
 import {
   extractNarrationSyncQuotes,
   findMatchingScriptSection,
@@ -13,6 +14,8 @@ import {
   filterWordsForSpecTimingWindow,
   parseSpecTimingWindow,
 } from '@/lib/spec-timing-context';
+import { formatMarkdownDocument } from '@/lib/markdown-format';
+import { MarkdownPreview } from '@/lib/markdown-preview';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { readSseStartResult } from '../../lib/client/sse-utils';
 import { SseLogPanel } from '../SseLogPanel';
@@ -116,6 +119,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   const [selectedFile, setSelectedFile] = useState<SpecFile | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
   const [editorValue, setEditorValue] = useState('');
+  const [editorMode, setEditorMode] = useState<'edit' | 'preview'>('edit');
   const [editorLoading, setEditorLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -293,6 +297,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
   const loadSpecFile = useCallback(async (file: SpecFile, sectionId: string) => {
     setSelectedFile(file);
     setSelectedSectionId(sectionId);
+    setEditorMode('edit');
     setEditorLoading(true);
     setEditorValue('');
     try {
@@ -307,14 +312,17 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
     }
   }, []);
 
-  const saveSpecFile = useCallback(async () => {
+  const saveSpecFile = useCallback(async (contentOverride?: string) => {
     if (!selectedFile) return;
     setSaving(true);
     try {
       await fetch('/api/pipeline/specs/file', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: selectedFile.path, content: editorValue }),
+        body: JSON.stringify({
+          path: selectedFile.path,
+          content: contentOverride ?? editorValue,
+        }),
       });
     } finally {
       setSaving(false);
@@ -327,6 +335,17 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
       saveSpecFile();
     }, 1000);
   }, [saveSpecFile]);
+
+  const handleFormatMarkdown = useCallback(async () => {
+    const formatted = formatMarkdownDocument(editorValue);
+    if (formatted === editorValue) return;
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    setEditorValue(formatted);
+    await saveSpecFile(formatted);
+  }, [editorValue, saveSpecFile]);
 
   const editorTitle = useMemo(() => {
     return selectedFile ? `Editing: ${selectedFile.path}` : 'Select a spec file to edit';
@@ -527,7 +546,40 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                 >
                                   <div className="mb-3 flex items-center justify-between gap-3">
                                     <div className="text-sm font-medium">{editorTitle}</div>
-                                    {saving && <div className="text-xs text-slate-400">Saving…</div>}
+                                    <div className="flex items-center gap-3">
+                                      <div className="inline-flex overflow-hidden rounded border border-slate-600">
+                                        <button
+                                          className={`px-2 py-1 text-xs ${
+                                            editorMode === 'edit'
+                                              ? 'bg-slate-700 text-slate-100'
+                                              : 'text-slate-300 hover:bg-slate-700'
+                                          }`}
+                                          onClick={() => setEditorMode('edit')}
+                                          disabled={!selectedFile}
+                                        >
+                                          Edit Markdown
+                                        </button>
+                                        <button
+                                          className={`border-l border-slate-600 px-2 py-1 text-xs ${
+                                            editorMode === 'preview'
+                                              ? 'bg-slate-700 text-slate-100'
+                                              : 'text-slate-300 hover:bg-slate-700'
+                                          }`}
+                                          onClick={() => setEditorMode('preview')}
+                                          disabled={!selectedFile}
+                                        >
+                                          Preview Markdown
+                                        </button>
+                                      </div>
+                                      <button
+                                        className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={handleFormatMarkdown}
+                                        disabled={editorLoading || !selectedFile}
+                                      >
+                                        Format Markdown
+                                      </button>
+                                      {saving && <div className="text-xs text-slate-400">Saving…</div>}
+                                    </div>
                                   </div>
                                   <div className="grid gap-3 xl:grid-cols-3">
                                     <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60">
@@ -694,15 +746,21 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
 
                                     <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60 p-3">
                                       <div className="mb-2 text-sm font-medium text-slate-100">Visual Spec</div>
-                                      <CodeMirror
-                                        value={editorValue}
-                                        height="320px"
-                                        extensions={[markdown()]}
-                                        onChange={(value) => setEditorValue(value)}
-                                        onBlur={handleEditorBlur}
-                                        basicSetup={{ lineNumbers: true }}
-                                        theme="dark"
-                                      />
+                                      {editorMode === 'edit' ? (
+                                        <CodeMirror
+                                          value={editorValue}
+                                          height="320px"
+                                          extensions={[markdown(), EditorView.lineWrapping]}
+                                          onChange={(value) => setEditorValue(value)}
+                                          onBlur={handleEditorBlur}
+                                          basicSetup={{ lineNumbers: true }}
+                                          theme="dark"
+                                        />
+                                      ) : (
+                                        <div className="max-h-[320px] overflow-y-auto rounded border border-slate-700 bg-slate-950 p-4">
+                                          <MarkdownPreview content={editorValue} />
+                                        </div>
+                                      )}
                                       {editorLoading && <div className="mt-2 text-xs text-slate-400">Loading file…</div>}
                                     </div>
                                   </div>

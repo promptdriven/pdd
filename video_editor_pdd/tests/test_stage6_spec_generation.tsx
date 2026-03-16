@@ -117,6 +117,10 @@ describe("import structure", () => {
     expect(sourceCode).toMatch(/import\s+\{\s*markdown\s*\}\s+from\s+['"]@codemirror\/lang-markdown['"]/);
   });
 
+  it("imports EditorView from @codemirror/view for editor word wrap", () => {
+    expect(sourceCode).toMatch(/import\s+\{\s*EditorView\s*\}\s+from\s+['"]@codemirror\/view['"]/);
+  });
+
   it("imports SseLogPanel", () => {
     expect(sourceCode).toMatch(/import\s+\{?\s*SseLogPanel\s*\}?\s+from/);
   });
@@ -489,7 +493,7 @@ describe("save spec file", () => {
 
   it("sends path and content in body", () => {
     expect(sourceCode).toMatch(/path\s*:\s*selectedFile\.path/);
-    expect(sourceCode).toMatch(/content\s*:\s*editorValue/);
+    expect(sourceCode).toMatch(/content\s*:\s*contentOverride\s*\?\?\s*editorValue/);
   });
 
   it("tracks saving state", () => {
@@ -748,7 +752,7 @@ describe("inline CodeMirror editor", () => {
   });
 
   it("uses markdown extension", () => {
-    expect(sourceCode).toMatch(/extensions=\{\[markdown\(\)\]\}/);
+    expect(sourceCode).toMatch(/extensions=\{\[markdown\(\),\s*EditorView\.lineWrapping\]\}/);
   });
 
   it("has onChange handler that updates editorValue", () => {
@@ -757,6 +761,18 @@ describe("inline CodeMirror editor", () => {
 
   it("has onBlur handler for auto-save", () => {
     expect(sourceCode).toMatch(/onBlur=\{handleEditorBlur\}/);
+  });
+
+  it("renders a Format Markdown button tied to handleFormatMarkdown", () => {
+    expect(sourceCode).toMatch(/Format Markdown/);
+    expect(sourceCode).toMatch(/onClick=\{handleFormatMarkdown\}/);
+  });
+
+  it("supports a markdown preview mode", () => {
+    expect(sourceCode).toMatch(/MarkdownPreview/);
+    expect(sourceCode).toMatch(/Preview Markdown/);
+    expect(sourceCode).toMatch(/setEditorMode\s*\(\s*['"]preview['"]\s*\)/);
+    expect(sourceCode).toMatch(/setEditorMode\s*\(\s*['"]edit['"]\s*\)/);
   });
 
   it("editor is only shown when selectedFile matches current section", () => {

@@ -2,9 +2,7 @@
 
 # Section 0.2: Zoom Out — Accumulated Repair Work
 
-**Tool:** Remotion
-**Duration:** ~6s (180 frames @ 30fps)
-**Timestamp:** 0:05 - 0:11
+**Tool:** Remotion **Duration:** ~6s (180 frames @ 30fps) **Timestamp:** 0:05 - 0:11
 
 ## Visual Description
 
@@ -19,6 +17,7 @@ Both sides animate in sync. The zoom-out uses the same easing. The message is cl
 ## Technical Specifications
 
 ### Canvas
+
 - Resolution: 1920x1080 (16:9)
 - Background: #0A0F1A (deep charcoal)
 - Vertical divider: 1px solid rgba(255,255,255,0.2) at x=960
@@ -26,6 +25,7 @@ Both sides animate in sync. The zoom-out uses the same easing. The message is cl
 ### Chart/Visual Elements
 
 **Left Panel — Codebase Zoom-Out**
+
 - Starting view: single file (from 01), scale 1.0
 - Ending view: file tree with 200+ files, scale 0.15
 - Diff markers: small rectangles, red #EF4444 and green #5AAA6E, 4×2px each, scattered across files
@@ -34,6 +34,7 @@ Both sides animate in sync. The zoom-out uses the same easing. The message is cl
 - Original edit: pulses as a small green dot #5AAA6E, 6px diameter
 
 **Right Panel — Drawer Reveal**
+
 - Starting view: grandmother's hands close-up, scale 1.0
 - Ending view: open wooden drawer, scale 0.3
 - Mended items: 24 garments arranged in drawer, each with 1-3 visible stitch lines
@@ -42,31 +43,37 @@ Both sides animate in sync. The zoom-out uses the same easing. The message is cl
 - Warm light persists: radial gradient #D4A043 at 20% opacity
 
 **Counters (subtle, bottom of each panel)**
+
 - LEFT: "patches: 1,247" in monospace, #64748B, 11px, bottom-left at (40, 1040)
 - RIGHT: "mended: 47" in serif, #8B7355, 11px, bottom-right at (1840, 1040)
 
 ### Animation Sequence
+
 1. **Frame 0-15 (0-0.5s):** Hold from previous scene. Both panels static at full zoom.
 2. **Frame 15-90 (0.5-3.0s):** Synchronized zoom-out on both panels. Scale 1.0 → 0.15 (left) / 1.0 → 0.3 (right). New elements fade in as they enter frame — diff markers, TODO labels, garments in drawer.
 3. **Frame 90-120 (3.0-4.0s):** Counters fade in at bottom of each panel. Numbers count up rapidly: LEFT 0 → 1,247 / RIGHT 0 → 47.
 4. **Frame 120-180 (4.0-6.0s):** Hold. Both panels show the full accumulated weight. Original edit pulses faintly on the left. Subtle breathing animation on counters (opacity 0.7 → 0.9 → 0.7).
 
 ### Typography
+
 - Patch counter (left): `JetBrains Mono`, 11px, #64748B, opacity 0.8
 - Mended counter (right): `Georgia`, 11px, #8B7355, opacity 0.8
 - TODO labels: `JetBrains Mono`, 10px, #FBBF24, opacity 0.5
 - Code comments: `JetBrains Mono`, 9px, #64748B, opacity 0.6
 
 ### Easing
+
 - Zoom-out: `easeInOut(cubic)`
 - Element fade-in (during zoom): `easeOut(quad)`
 - Counter count-up: `easeOut(cubic)`
 - Pulse animation: `easeInOut(sin)`
 
 ## Narration Sync
+
 > "But here's what your great-grandmother figured out sixty years ago."
 
 ## Code Structure (Remotion)
+
 ```typescript
 <Sequence from={0} durationInFrames={180}>
   <SplitScreen dividerX={960}>
@@ -96,6 +103,7 @@ Both sides animate in sync. The zoom-out uses the same easing. The message is cl
 ```
 
 ## Data Points
+
 ```json
 {
   "layout": {
