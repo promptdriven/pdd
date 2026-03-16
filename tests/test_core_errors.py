@@ -117,3 +117,21 @@ def test_cli_handle_error_quiet(mock_main, mock_auto_update, mock_console, creat
     mock_main.assert_called_once()
     # Auto update still runs but prints nothing when quiet
     mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.core.errors.console', new_callable=MagicMock)
+def test_handle_error_keyboard_interrupt_messages(mock_console):
+    """KeyboardInterrupt should produce clear Ctrl+C messaging."""
+    # Import here to ensure patched console is used
+    from pdd.core.errors import handle_error
+
+    exc = KeyboardInterrupt()
+    # Simulate a bug command, not quiet
+    handle_error(exc, "bug", quiet=False)
+
+    output = _console_output(mock_console)
+    # Top-level line should clearly mention Ctrl+C and the command
+    assert "You pressed Ctrl+C in your terminal." in output
+    assert "Interrupted during 'bug' command" in output
+    # Hint about how to proceed
+    assert "Re-run the same command to start fresh." in output
