@@ -79,7 +79,7 @@ export async function GET(): Promise<NextResponse> {
       );
     });
 
-    const resolvedClips: ResolvedClipEntry[] = eligibleSections.flatMap((section) => {
+    const resolvedClips: ResolvedClipEntry[] = eligibleSections.flatMap((section): ResolvedClipEntry[] => {
       const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
       const specDir = path.join(getProjectDir(), "specs", normalizedSpecDir);
 
@@ -102,6 +102,9 @@ export async function GET(): Promise<NextResponse> {
           }
 
           const canonicalSpec = selectCanonicalVeoMarkdownSpec(markdownEntries);
+          if (!canonicalSpec) {
+            return [];
+          }
           return [
             {
               id: section.id,

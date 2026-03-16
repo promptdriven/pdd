@@ -212,6 +212,10 @@ function resolveSectionClipJobs(
     }));
   }
 
+  if (markdownEntries.length > 0) {
+    return [];
+  }
+
   return [
     {
       id: section.id,

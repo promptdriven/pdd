@@ -1410,6 +1410,79 @@ describe("GET_clips — script-derived Veo eligibility", () => {
     expect(data.clips[0].frameChainDeps).toEqual([]);
     expect(data.clips[1].frameChainDeps).toEqual(["veo_section"]);
   });
+
+  it("keeps sections eligible when script visuals imply cinematic footage even without explicit [veo:] markers", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "cinematic_section",
+        label: "Cinematic Section",
+        specDir: "cinematic_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p.includes("narrative/main_script.md");
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("narrative/main_script.md")) {
+        return `
+## Cinematic Section
+**[VISUAL: A developer at a keyboard in a dim office while rain streaks the window.]**
+**[VISUAL: Close-up on hands typing. Hard cut to a city street at night.]**
+        `.trim();
+      }
+      return "";
+    });
+    mockReaddirSync.mockReturnValue([]);
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips.map((clip: any) => clip.id)).toEqual(["cinematic_section"]);
+  });
+
+  it("does not invent a fallback clip when spec files exist but none are typed as veo", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "cinematic_section",
+        label: "Cinematic Section",
+        specDir: "cinematic_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("outputs/veo")) return false;
+      return p.includes("narrative/main_script.md") || p.includes("specs/cinematic_section");
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("narrative/main_script.md")) {
+        return `
+## Cinematic Section
+**[VISUAL: A developer at a keyboard in a dim office while rain streaks the window.]**
+**[VISUAL: Close-up on hands typing. Hard cut to a city street at night.]**
+        `.trim();
+      }
+      if (p.includes("01_title.md")) return "[title:]";
+      if (p.includes("02_chart.md")) return "[Remotion]\n# Chart";
+      return "";
+    });
+    mockReaddirSync.mockReturnValue(["01_title.md", "02_chart.md"]);
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1900,6 +1973,44 @@ describe("resolveVeoPrompt — prompt resolution", () => {
     const executor = registerCallArgs.factory({}, mockSend);
 
     await expect(executor(jest.fn())).rejects.toThrow("No Veo prompt found");
+  });
+
+  it("skips sections whose spec directory exists but contains no veo markdown specs", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "cinematic_section",
+        label: "Cinematic Section",
+        specDir: "cinematic_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p.includes("narrative/main_script.md") || p.includes("specs/cinematic_section");
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("narrative/main_script.md")) {
+        return `
+## Cinematic Section
+**[VISUAL: A developer at a keyboard in a dim office while rain streaks the window.]**
+**[VISUAL: Close-up on hands typing. Hard cut to a city street at night.]**
+        `.trim();
+      }
+      if (p.includes("01_title.md")) return "[title:]";
+      if (p.includes("02_chart.md")) return "[Remotion]\n# Chart";
+      return "";
+    });
+    mockReaddirSync.mockReturnValue(["01_title.md", "02_chart.md"]);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).not.toHaveBeenCalled();
   });
 });
 

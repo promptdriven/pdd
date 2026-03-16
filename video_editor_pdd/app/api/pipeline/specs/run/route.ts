@@ -10,7 +10,7 @@ import {
   isDeterministicPipelineMode,
   writeDeterministicSpecsForSection,
 } from "@/lib/deterministic-pipeline";
-import { resolveSectionHasVeoIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
+import { resolveSectionVisualIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
 import { getProjectDir } from "@/lib/projects";
 
 // ----------------------------------------------------------------------------
@@ -126,9 +126,9 @@ registerExecutor("specs", (params, _send) => {
       const dir = specDirMap.get(sid) ?? sid;
       const section = sectionMap.get(sid);
       const ctx = sectionContextMap.get(sid)!;
-      const hasVeoIntent =
+      const visualIntent =
         section && mainScriptContent
-          ? resolveSectionHasVeoIntent(mainScriptContent, {
+          ? resolveSectionVisualIntent(mainScriptContent, {
               id: section.id,
               label: section.label,
             })
@@ -143,18 +143,26 @@ ${ctx.hasWords ? `Word timestamps available at: data/${sid}_words.json (use for 
 `;
 
       const sectionVisualGuidance =
-        hasVeoIntent === false
+        visualIntent?.mode === "remotion_only"
           ? `
-This section does NOT use Veo footage in main_script.md.
-Do NOT create any [veo:] specs for this section.
+This section appears primarily abstract, diagrammatic, or UI-driven based on main_script.md.
+Avoid [veo:] unless a beat clearly requires cinematic footage.
 Use [Remotion], [title:], and [split:] only for this section.
 A typical section here should lean on 3-6 [Remotion] animations plus 1-2 [title:] or [split:] cards.
 `.trim()
-          : hasVeoIntent === true
+          : visualIntent?.explicitVeo
             ? `
 This section explicitly includes [veo:] footage in main_script.md.
 Include at least one [veo:] spec and align it to the quoted script beat that calls for footage.
 Mix [veo:] with [Remotion], [title:], and [split:] only where the script supports it.
+A typical section here should have a mix: 2-4 [Remotion] animations, 1-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
+`.trim()
+            : visualIntent?.mode === "hybrid" || visualIntent?.mode === "veo_favored"
+              ? `
+This section includes cinematic or live-action beats in main_script.md even without explicit [veo:] markers.
+Decide scene-by-scene whether each beat is better as [veo:], [Remotion], [title:], or [split:].
+Include at least one [veo:] spec for the cinematic beats.
+Use [Remotion] for charts, diagrams, code UI, data overlays, and abstract explanatory visuals.
 A typical section here should have a mix: 2-4 [Remotion] animations, 1-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
 `.trim()
             : `
