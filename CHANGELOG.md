@@ -1,3 +1,27 @@
+## v0.0.178 (2026-03-15)
+
+### Feat
+
+- Add and update narration audio files and configure their section groups in project.json.
+- add CI validation stage to pdd fix (#822)
+- use mlx whisper for stage5 on apple silicon
+- rerun audio sync after stage5 segment rerenders
+- add audio preview for stage5 transcript mismatches
+- validate synced transcript against tts script
+- Implement the PDD explainer video project with new specs and Remotion components across multiple parts.
+- add explicit qwen tts instructions
+- Introduce new Remotion animation components, enhance TTS script processing, and update integration test specifications.
+- add new project creation flow
+
+### Fix
+
+- reconnect stage4 to active render jobs
+- restore stage4 waveform on re-expand
+- reload rerendered tts audio and warm up qwen decode
+- prune stale tts audio artifacts
+- harden stage3 tts generation for large scripts
+- harden infographic audit geometry
+
 ## v0.0.177 (2026-03-14)
 
 ### Feat
