@@ -432,45 +432,46 @@ Use this pattern when:
 
 ### Selective Includes
 
-To further optimize token usage, PDD supports **Selective Includes**, allowing you to include only specific parts of a file (e.g., a single function, class, or section).
+Use `select=` to include only specific parts of a file instead of the whole thing:
 
-**Syntax:**
 ```xml
-<!-- Python: function/class extraction -->
 <include select="def:parse_user_id">src/utils.py</include>
 <include select="class:User">src/models.py</include>
-
-<!-- Markdown: section under heading -->
 <include select="section:Environment Variables">docs/config.md</include>
-
-<!-- Generic: line range or regex -->
 <include select="lines:10-50">src/config.py</include>
 <include select="pattern:/^API_.*=/">src/constants.py</include>
 ```
 
-**Interface Mode:**
-Use `mode="interface"` to extract only the public API (signatures, docstrings, type hints) of a module, skipping implementation details. This is ideal for large dependencies where you only need the contract.
+| Selector | File types | Example |
+|----------|-----------|---------|
+| `lines:N-M` | Any | `lines:10-20`, `lines:5-`, `lines:-3` |
+| `def:name` | Python | `def:process_request` |
+| `class:Name` | Python | `class:UserModel` |
+| `class:Name.method` | Python | `class:UserModel.validate` |
+| `section:Heading` | Markdown | `section:Installation` |
+| `pattern:/regex/` | Any | `pattern:/^import/` |
+| `path:key.nested` | JSON/YAML | `path:config.database.host` |
+
+Selectors are composable: `select="lines:1-5,def:main,def:helper"`. If a selector fails to match, PDD falls back to the full file with a warning.
+
+**Interface mode** (`mode="interface"`, Python only) extracts signatures, docstrings, and type hints with bodies replaced by `...`. Useful when you only need the contract, not the implementation:
 
 ```xml
 <include select="class:BillingService" mode="interface">src/billing/service.py</include>
+<include mode="interface">src/billing/service.py</include>
 ```
 
-### LLM-Powered Semantic Query (`<include ... query="...">`)
+**Attribute priority:** `select=` always wins over `query=` (deterministic, no LLM cost). `mode="interface"` is applied to the result of `select=`.
 
-For large, unstructured documents where structural selectors aren't enough (e.g., "find all retry policies in this 50-page PDF"), use the `query` attribute on `<include>`. This uses an LLM to semantically extract relevant information.
+### Semantic Query (`query=`)
 
-**Syntax:**
+For large documents where structural selectors aren't enough, use `query=` for LLM-powered extraction:
 
 ```xml
-<include query="Authentication flow, JWT token structure, and refresh token handling">docs/large_api_reference.md</include>
+<include query="Authentication flow and JWT handling">docs/large_api_reference.md</include>
 ```
 
-**Behavior:**
-
-- **First run:** PDD asks an LLM to perform the extraction, caches the result in `.pdd/extracts/`, and includes it.
-- **Subsequent runs:** PDD uses the cached file (deterministic and fast).
-- **Auto-refresh:** If the source file changes, PDD automatically re-extracts via LLM and updates the cache upon processing the `<include query=...>` tag the next time.
-- **Pruning:** Run `pdd extracts prune` to garbage-collect orphaned cache entries no longer referenced by any prompt.
+Results are cached in `.pdd/extracts/` and auto-refreshed when the source file changes. Run `pdd extracts prune` to garbage-collect orphaned cache entries.
 
 ### Positive over Negative Constraints
 

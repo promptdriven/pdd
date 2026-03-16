@@ -965,3 +965,86 @@ class TestQueryContentReductionRealLLM:
         assert "<include" not in result3
         print(f"  Step 4 - After invalidation ({len(result3)} chars)")
         print("  Cache invalidation lifecycle passed!")
+
+
+# ===========================================================================
+# 8. FULL PIPELINE WITH SELECT= — auto-deps emits selectors, preprocess resolves them
+# ===========================================================================
+
+class TestFullPipelineWithSelectRealLLM:
+    """Integration: verify that selectors emitted by auto-deps actually resolve to reduced content."""
+
+    def test_auto_deps_selectors_resolve_to_reduced_content(self, project_dir, monkeypatch):
+        """
+        Real LLM call: Full pipeline where:
+        1. auto-deps (insert_includes) emits <include select="..."> tags
+        2. preprocess resolves those tags via ContentSelector
+        3. The final prompt has real code content (not just tags)
+        4. If selectors were emitted for large files, content is reduced
+
+        This closes the gap: existing tests verify auto-deps emits selectors
+        and verify preprocess resolves selectors separately, but no test
+        verifies the two work together end-to-end.
+        """
+        _skip_unless_llm()
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.chdir(project_dir)
+
+        from pdd.insert_includes import insert_includes
+        from pdd.preprocess import preprocess
+
+        src_dir = project_dir / "src"
+        csv_path = project_dir / "deps.csv"
+        csv_path.write_text("full_path,file_summary,key_exports,dependencies,content_hash\n")
+
+        user_prompt = textwrap.dedent("""\
+            Generate a function that validates a user's email using UserModel.validate.
+        """)
+
+        # Step 1: auto-deps adds includes (possibly with selectors)
+        annotated_prompt, csv_output, cost, model = insert_includes(
+            input_prompt=user_prompt,
+            directory_path=str(src_dir),
+            csv_filename=str(csv_path),
+            prompt_filename="prompts/validate_email_python.prompt",
+            strength=0.5,
+            temperature=0.0,
+            verbose=True,
+        )
+
+        print(f"\n  Annotated prompt:\n{annotated_prompt[:600]}")
+
+        assert "<include" in annotated_prompt
+
+        # Step 2: preprocess resolves the includes
+        final_prompt = preprocess(
+            annotated_prompt,
+            recursive=False,
+            double_curly_brackets=False,
+        )
+
+        # All include tags should be resolved
+        assert "<include" not in final_prompt, \
+            f"All includes should be resolved, got:\n{final_prompt[:500]}"
+
+        # Should contain actual code from models.py
+        assert any(kw in final_prompt for kw in ["UserModel", "validate", "class"]), \
+            f"Expected code content in final prompt, got:\n{final_prompt[:500]}"
+
+        # If auto-deps emitted a selector for models.py (>100 lines),
+        # the resolved content should be smaller than the full file
+        full_models = (src_dir / "models.py").read_text()
+        has_selector = 'select=' in annotated_prompt and 'models.py' in annotated_prompt
+
+        if has_selector:
+            # The original prompt text + selected content should be less than
+            # the original prompt text + full models.py content
+            assert len(final_prompt) < len(user_prompt) + len(full_models), \
+                "When selectors are present, resolved content should be reduced"
+            print(f"  Selector-based reduction confirmed: "
+                  f"{len(final_prompt)} < {len(user_prompt) + len(full_models)}")
+        else:
+            print("  LLM did not emit selectors for models.py — full file included")
+
+        print(f"  Final prompt: {len(final_prompt)} chars")
+        print(f"  Cost: ${cost:.6f}")

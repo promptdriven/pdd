@@ -13,11 +13,13 @@ Tests the full pipeline of:
 - summarize_directory structured output (key_exports, dependencies)
 """
 
+import ast
 import hashlib
 import json
 import os
 import re
 import textwrap
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -2088,3 +2090,747 @@ class TestAutoDepsThenPreprocessPipeline:
         # Irrelevant content excluded
         assert "def lookup_username_in_db" not in result
         assert "Catering Menu" not in result
+
+
+# ===========================================================================
+# 13. SELECT= THROUGH PREPROCESS — structural extraction with rich fixtures
+# ===========================================================================
+
+@pytest.fixture
+def rich_project_dir(tmp_path):
+    """Create a realistic project with models, utils, config, and docs.
+
+    models.py has 160+ lines (exceeds small-file threshold), two classes
+    (UserModel, AdminModel), factory functions, and module-level constants.
+    """
+    models_code = textwrap.dedent('''\
+        """User and Admin models for the application."""
+
+        from __future__ import annotations
+
+        import re
+        from dataclasses import dataclass, field
+        from typing import Optional, List
+
+
+        @dataclass
+        class UserModel:
+            """Represents a user in the system."""
+
+            name: str
+            email: str
+            role: str = "user"
+            active: bool = True
+            tags: List[str] = field(default_factory=list)
+
+            def validate(self) -> bool:
+                """Validate user fields.
+
+                Returns True if name is non-empty and email contains @.
+                """
+                if not self.name or not self.name.strip():
+                    return False
+                if not self.email or "@" not in self.email:
+                    return False
+                if not re.match(r"^[^@]+@[^@]+\\\\.[^@]+$", self.email):
+                    return False
+                return True
+
+            def display_name(self) -> str:
+                """Return formatted display name."""
+                return f"{self.name} <{self.email}>"
+
+            def has_tag(self, tag: str) -> bool:
+                """Check if user has a specific tag."""
+                return tag in self.tags
+
+            def add_tag(self, tag: str) -> None:
+                """Add a tag to the user."""
+                if tag not in self.tags:
+                    self.tags.append(tag)
+
+            def remove_tag(self, tag: str) -> None:
+                """Remove a tag from the user."""
+                if tag in self.tags:
+                    self.tags.remove(tag)
+
+            def to_dict(self) -> dict:
+                """Serialize user to dictionary."""
+                return {
+                    "name": self.name,
+                    "email": self.email,
+                    "role": self.role,
+                    "active": self.active,
+                    "tags": self.tags,
+                }
+
+            @classmethod
+            def from_dict(cls, data: dict) -> "UserModel":
+                """Create user from dictionary."""
+                return cls(
+                    name=data["name"],
+                    email=data["email"],
+                    role=data.get("role", "user"),
+                    active=data.get("active", True),
+                    tags=data.get("tags", []),
+                )
+
+
+        @dataclass
+        class AdminModel(UserModel):
+            """Represents an admin user with additional permissions."""
+
+            permissions: List[str] = field(default_factory=list)
+
+            def has_permission(self, perm: str) -> bool:
+                """Check if admin has a specific permission."""
+                return perm in self.permissions or "admin:*" in self.permissions
+
+            def grant_permission(self, perm: str) -> None:
+                """Grant a permission to the admin."""
+                if perm not in self.permissions:
+                    self.permissions.append(perm)
+
+            def revoke_permission(self, perm: str) -> None:
+                """Revoke a permission from the admin."""
+                if perm in self.permissions:
+                    self.permissions.remove(perm)
+
+            def to_dict(self) -> dict:
+                """Serialize admin to dictionary."""
+                base = super().to_dict()
+                base["permissions"] = self.permissions
+                return base
+
+
+        def create_user(name: str, email: str, **kwargs) -> UserModel:
+            """Factory function to create a UserModel."""
+            return UserModel(name=name, email=email, **kwargs)
+
+
+        def create_admin(name: str, email: str, permissions: Optional[List[str]] = None) -> AdminModel:
+            """Factory function to create an AdminModel."""
+            return AdminModel(
+                name=name,
+                email=email,
+                role="admin",
+                permissions=permissions or [],
+            )
+
+
+        # Module-level constants
+        DEFAULT_ROLE = "user"
+        ADMIN_ROLE = "admin"
+        MAX_TAGS = 50
+    ''')
+
+    config_data = {
+        "database": {"host": "localhost", "port": 5432},
+        "auth": {"jwt_secret": "changeme", "token_ttl": 3600},
+        "features": ["users", "admin", "logging"],
+    }
+
+    docs_md = textwrap.dedent('''\
+        # MyApp Documentation
+
+        A sample application for testing PDD selective includes.
+
+        ## Installation
+
+        ```bash
+        pip install myapp
+        ```
+
+        ## Usage
+
+        ```python
+        from myapp.models import create_user
+        user = create_user("Alice", "alice@example.com")
+        ```
+
+        ## API Reference
+
+        See the models module for UserModel and AdminModel classes.
+
+        ## Configuration
+
+        Edit config.json to configure database and auth settings.
+    ''')
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "models.py").write_text(models_code)
+    (src / "config.json").write_text(json.dumps(config_data, indent=2))
+    (src / "docs.md").write_text(docs_md)
+
+    return tmp_path
+
+
+class TestPreprocessSelectRealFile:
+    """select= attributes resolved through preprocess() with real files.
+
+    These tests exercise the deterministic structural extraction path
+    (ContentSelector) through the full preprocess pipeline using a rich
+    multi-file fixture.
+    """
+
+    def test_select_def_extracts_single_function(self, rich_project_dir):
+        """
+        <include select="def:create_user">models.py</include> should resolve
+        to only the create_user function body, not the full 160-line file.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include select="def:create_user">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Should contain the function signature and its body
+        assert "def create_user" in result
+        assert "UserModel(name=name" in result  # actual implementation line
+
+        # Should NOT contain anything from the classes or other functions
+        assert "class UserModel" not in result
+        assert "class AdminModel" not in result
+        assert "def validate" not in result
+        assert "grant_permission" not in result
+        assert "DEFAULT_ROLE" not in result  # module-level constant
+
+        # Quantitative: a 3-line factory function should be <<10% of the 160-line file
+        result_lines = len(result.strip().splitlines())
+        full_lines = len(full_content.splitlines())
+        assert result_lines < full_lines * 0.1, (
+            f"Expected <10% of file lines for a single function. "
+            f"Got {result_lines}/{full_lines} lines."
+        )
+        print(f"  select=def:create_user: {result_lines} lines from {full_lines}-line file")
+
+    def test_select_class_extracts_whole_class(self, rich_project_dir):
+        """
+        <include select="class:UserModel">models.py</include> should resolve
+        to the UserModel class (including methods) but not AdminModel.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include select="class:UserModel">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # UserModel class and ALL its methods should be present
+        assert "class UserModel" in result
+        assert "def validate" in result
+        assert "def display_name" in result
+        assert "def has_tag" in result
+        assert "def to_dict" in result
+        assert "def from_dict" in result
+
+        # Actual implementation lines from UserModel should be present
+        assert "@" not in result or "re.match" in result  # validate() body uses re.match
+        assert "self.name" in result
+
+        # AdminModel (a subclass, separate entity) should NOT be present
+        assert "class AdminModel" not in result
+        assert "has_permission" not in result
+        assert "grant_permission" not in result
+
+        # Standalone functions should NOT be present
+        assert "def create_user" not in result
+        assert "def create_admin" not in result
+
+        # Module constants should NOT be present
+        assert "DEFAULT_ROLE" not in result
+        assert "MAX_TAGS" not in result
+
+        # UserModel is ~60 lines out of 160 — should be well under 60%
+        assert len(result) < len(full_content) * 0.6, (
+            f"select=class:UserModel should be <60% of file. "
+            f"Got {len(result)}/{len(full_content)} chars."
+        )
+        print(f"  class:UserModel: {len(result)} chars / {len(full_content)} full "
+              f"({100 - len(result)/len(full_content)*100:.0f}% reduction)")
+
+    def test_select_class_method_extracts_single_method(self, rich_project_dir):
+        """
+        <include select="class:UserModel.validate">models.py</include> should
+        extract only the validate method, not the whole class.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include select="class:UserModel.validate">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # The validate method signature and body
+        assert "def validate" in result
+        assert "re.match" in result or "@" in result  # implementation detail from validate()
+
+        # Should NOT include other UserModel methods
+        assert "def display_name" not in result
+        assert "def to_dict" not in result
+        assert "def has_tag" not in result
+        assert "def add_tag" not in result
+
+        # Should NOT include class-level stuff or other classes
+        assert "class AdminModel" not in result
+        assert "def create_user" not in result
+
+        # A single method is ~10 lines from a 160-line file
+        result_lines = len(result.strip().splitlines())
+        full_lines = len(full_content.splitlines())
+        assert result_lines < full_lines * 0.15, (
+            f"A single method should be <15% of the file. "
+            f"Got {result_lines}/{full_lines} lines."
+        )
+        print(f"  class:UserModel.validate: {result_lines} lines from {full_lines}-line file")
+
+    def test_select_multiple_selectors_combined(self, rich_project_dir):
+        """
+        Composing selectors: select="def:create_user,def:create_admin" should
+        extract both factory functions but nothing else.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include select="def:create_user,def:create_admin">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Both factory functions should be present with their bodies
+        assert "def create_user" in result
+        assert "def create_admin" in result
+        assert "UserModel(name=name" in result   # create_user body
+        assert "AdminModel(" in result            # create_admin body
+
+        # Nothing else from the file
+        assert "class UserModel" not in result
+        assert "class AdminModel" not in result
+        assert "def validate" not in result
+        assert "DEFAULT_ROLE" not in result
+
+        # Two 3-line functions from a 160-line file
+        result_lines = len(result.strip().splitlines())
+        full_lines = len(full_content.splitlines())
+        assert result_lines < full_lines * 0.15, (
+            f"Two small functions should be <15% of file. "
+            f"Got {result_lines}/{full_lines} lines."
+        )
+
+    def test_select_section_from_markdown(self, rich_project_dir):
+        """
+        <include select="section:Installation">docs.md</include> should extract
+        only the Installation section from the markdown file.
+        """
+        docs_file = rich_project_dir / "src" / "docs.md"
+        full_content = docs_file.read_text()
+        prompt = f'<include select="section:Installation">{docs_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Should contain the actual install command from the Installation section
+        assert "pip install myapp" in result
+
+        # Should NOT contain content from any other section
+        assert "API Reference" not in result
+        assert "Configuration" not in result
+        assert "config.json" not in result
+        assert "MyApp Documentation" not in result  # top-level heading
+
+        # The Installation section is ~5 lines out of ~20
+        result_lines = len(result.strip().splitlines())
+        full_lines = len(full_content.splitlines())
+        assert result_lines < full_lines * 0.5, (
+            f"One section should be <50% of the doc. "
+            f"Got {result_lines}/{full_lines} lines."
+        )
+        print(f"  section:Installation: {result_lines} lines from {full_lines}-line doc")
+
+    def test_select_json_path(self, rich_project_dir):
+        """
+        <include select="path:database">config.json</include> should extract
+        just the database config object, not the full config.
+        """
+        config_file = rich_project_dir / "src" / "config.json"
+        prompt = f'<include select="path:database">{config_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Should contain the database config values
+        assert "localhost" in result
+        assert "5432" in result
+
+        # Should NOT contain values from other top-level keys
+        assert "jwt_secret" not in result
+        assert "changeme" not in result
+        assert "token_ttl" not in result
+        assert "features" not in result or "logging" not in result
+
+        print(f"  path:database extracted: {result.strip()}")
+
+
+# ===========================================================================
+# 14. INTERFACE MODE — signature-only extraction with rich fixtures
+# ===========================================================================
+
+class TestInterfaceModeRichFixture:
+    """mode='interface' extracts only signatures through preprocess, using rich fixtures."""
+
+    def test_interface_mode_strips_method_bodies(self, rich_project_dir):
+        """
+        <include select="class:UserModel" mode="interface">models.py</include>
+        should produce signatures, docstrings, and field declarations but
+        replace all method implementations with `...`.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include select="class:UserModel" mode="interface">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Should preserve class declaration and ALL method signatures
+        assert "class UserModel" in result
+        assert "def validate(self) -> bool" in result
+        assert "def display_name(self) -> str" in result
+        assert "def has_tag(self, tag: str) -> bool" in result
+        assert "def add_tag(self, tag: str) -> None" in result
+        assert "def to_dict(self) -> dict" in result
+        assert "def from_dict(cls, data: dict)" in result
+
+        # Should preserve dataclass field declarations (the data contract)
+        assert "name: str" in result
+        assert "email: str" in result
+        assert 'role: str = "user"' in result
+        assert "tags: List[str]" in result
+
+        # Should preserve docstrings (the API contract)
+        assert "Validate user fields" in result
+        assert "Return formatted display name" in result
+        assert "Check if user has a specific tag" in result
+
+        # Bodies should be replaced with ... (the hallmark of interface mode)
+        assert "..." in result
+
+        # Should NOT have any implementation lines from method bodies
+        assert "self.tags.append" not in result   # add_tag body
+        assert "self.tags.remove" not in result   # remove_tag body
+        assert "re.match" not in result            # validate body
+        assert "return False" not in result        # validate body
+        assert 'f"{self.name}' not in result       # display_name body
+        assert "tag in self.tags" not in result    # has_tag body
+
+        # The output should be valid Python (interface is a real stub)
+        try:
+            ast.parse(result)
+        except SyntaxError as e:
+            raise AssertionError(f"Interface mode should produce valid Python, got: {e}")
+
+        # Quantitative: interface should be significantly smaller
+        assert len(result) < len(full_content) * 0.5, (
+            f"Interface mode should be <50% of full file. "
+            f"Got {len(result)}/{len(full_content)} chars."
+        )
+        print(f"  Interface mode: {len(result)} chars vs {len(full_content)} full "
+              f"({100 - len(result)/len(full_content)*100:.0f}% reduction)")
+
+    def test_interface_mode_whole_file(self, rich_project_dir):
+        """
+        <include mode="interface">models.py</include> (no select=) should
+        produce an interface view of the entire file — both classes, all
+        methods, standalone functions, and constants, but with all function/
+        method bodies replaced by `...`.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include mode="interface">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # --- Preserved: signatures from BOTH classes ---
+        assert "class UserModel" in result
+        assert "class AdminModel(UserModel)" in result
+        assert "def validate(self) -> bool" in result
+        assert "def has_permission(self, perm: str) -> bool" in result
+
+        # --- Preserved: standalone function signatures ---
+        assert "def create_user(name: str, email: str, **kwargs) -> UserModel" in result
+        assert "def create_admin(" in result
+
+        # --- Preserved: docstrings from both classes ---
+        assert "Represents a user in the system" in result
+        assert "Represents an admin user with additional permissions" in result
+        assert "Factory function to create a UserModel" in result
+
+        # --- Preserved: module-level constants (not function bodies) ---
+        assert "DEFAULT_ROLE" in result
+        assert "MAX_TAGS" in result
+
+        # --- Stripped: implementation bodies from ALL functions ---
+        # UserModel method bodies
+        assert "self.tags.append" not in result
+        assert "self.tags.remove" not in result
+        assert "return False" not in result         # validate body
+        assert "tag in self.tags" not in result     # has_tag body
+
+        # AdminModel method bodies
+        assert "self.permissions.append" not in result
+        assert "self.permissions.remove" not in result
+        assert 'base["permissions"]' not in result
+        assert 'super().to_dict()' not in result
+
+        # Standalone function bodies
+        assert "UserModel(name=name" not in result  # create_user body
+        assert 'role="admin"' not in result          # create_admin body
+
+        # --- Bodies replaced with ... ---
+        assert "..." in result
+
+        # --- Valid Python (the whole-file interface is a real stub) ---
+        try:
+            ast.parse(result)
+        except SyntaxError as e:
+            raise AssertionError(f"Whole-file interface should produce valid Python, got: {e}")
+
+        # --- Quantitative reduction ---
+        assert len(result) < len(full_content) * 0.75, (
+            f"Whole-file interface should be <75% of full file. "
+            f"Got {len(result)}/{len(full_content)} chars."
+        )
+        print(f"  Whole-file interface: {len(result)} chars vs {len(full_content)} full "
+              f"({100 - len(result)/len(full_content)*100:.0f}% reduction)")
+
+    def test_interface_mode_on_non_python_falls_back_gracefully(self, rich_project_dir):
+        """
+        <include mode="interface">docs.md</include> — interface mode on a
+        non-Python file. Preprocess should catch the failure and fall back
+        to including the full file content with a warning.
+        """
+        docs_file = rich_project_dir / "src" / "docs.md"
+        full_content = docs_file.read_text()
+        prompt = f'<include mode="interface">{docs_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Should not crash — tag must be resolved
+        assert "<include" not in result
+
+        # Should have fallen back to the full file
+        assert "# MyApp Documentation" in result
+        assert "Installation" in result
+        assert "API Reference" in result
+        assert "Configuration" in result
+
+        # Full file should be included (not empty, not truncated)
+        assert len(result.strip()) >= len(full_content.strip()) * 0.9, (
+            f"Should fall back to full file. Got {len(result)}/{len(full_content)} chars."
+        )
+
+        # Should have emitted a warning about the failure
+        assert len(w) >= 1, "Expected a warning about interface mode failing on non-Python file"
+        print(f"  Non-Python interface fallback: {len(result)} chars, {len(w)} warning(s)")
+
+    def test_interface_mode_on_non_python_with_selector_still_selects(self, rich_project_dir):
+        """
+        <include select="section:Installation" mode="interface">docs.md</include>
+        — interface mode is meaningless for markdown, but the section: selector
+        should still work. Interface is silently a no-op for non-Python
+        files when combined with selectors.
+        """
+        docs_file = rich_project_dir / "src" / "docs.md"
+        prompt = f'<include select="section:Installation" mode="interface">{docs_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # The section selector should have worked
+        assert "pip install myapp" in result
+        assert "<include" not in result
+
+        # Other sections should NOT be present (selector worked)
+        assert "API Reference" not in result
+        assert "Configuration" not in result
+
+        print(f"  Non-Python interface + selector: section extracted correctly")
+
+
+# ===========================================================================
+# 15. SELECT= FALLBACK — nonexistent selector falls back to full file
+# ===========================================================================
+
+class TestSelectFallbackRichFixture:
+    """When select= targets something that doesn't exist, behavior is graceful."""
+
+    def test_nonexistent_function_falls_back_to_full_file(self, rich_project_dir):
+        """
+        <include select="def:nonexistent_function">models.py</include> should
+        fall back to including the full file (with a warning), not crash.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        prompt = f'<include select="def:nonexistent_function">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # The include tag must be resolved — never left as raw XML
+        assert "<include" not in result
+
+        # Should have fallen back to the FULL file content
+        assert "class UserModel" in result
+        assert "class AdminModel" in result
+        assert "def create_user" in result
+        assert "DEFAULT_ROLE" in result
+
+        # The result should be approximately the full file size
+        assert len(result.strip()) >= len(full_content.strip()) * 0.9, (
+            f"Fallback should include the full file. "
+            f"Got {len(result)} chars vs {len(full_content)} full."
+        )
+
+        print(f"  Fallback: {len(result)} chars (full file: {len(full_content)}), "
+              f"warnings emitted: {len(w)}")
+
+
+# ===========================================================================
+# 16. COMBINED SELECT + QUERY PRIORITY — select= preferred over query=
+# ===========================================================================
+
+class TestSelectQueryPriorityRichFixture:
+    """When both select= and query= are present, select= wins."""
+
+    def test_select_preferred_over_query_when_both_present(self, rich_project_dir):
+        """
+        <include select="def:create_user" query="...">models.py</include>
+        should use select= (deterministic) and ignore query= (LLM-based).
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        prompt = (
+            f'<include select="def:create_user" '
+            f'query="How do you create users?">{src_file}</include>'
+        )
+
+        from pdd.preprocess import preprocess
+
+        # This should NOT trigger an LLM call — select= takes priority.
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # Should have the structurally-selected function
+        assert "def create_user" in result
+        assert "UserModel(name=name" in result
+        assert "<include" not in result
+
+        # Should NOT have the full file (proving select= did the filtering)
+        assert "class UserModel" not in result
+        assert "class AdminModel" not in result
+        assert "def validate" not in result
+
+    def test_select_query_and_interface_all_three(self, rich_project_dir):
+        """
+        All three attributes together: select= takes priority over query=,
+        and mode="interface" is applied to the structurally-selected content.
+        No LLM call should happen.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        prompt = (
+            f'<include select="class:UserModel" '
+            f'query="What does UserModel do?" '
+            f'mode="interface">{src_file}</include>'
+        )
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # select= picked UserModel, mode=interface transformed it
+        assert "class UserModel" in result
+        assert "def validate(self) -> bool" in result
+        assert "Validate user fields" in result  # docstring preserved
+
+        # Interface mode stripped bodies
+        assert "self.tags.append" not in result
+        assert "return False" not in result
+        assert "..." in result
+
+        # select= excluded everything else
+        assert "class AdminModel" not in result
+        assert "def create_user" not in result
+
+        # No LLM call happened (would fail without credentials)
+        assert "<include" not in result
+        print("  Triple combo (select + query + interface): all three composed correctly")
+
+
+# ===========================================================================
+# 17. SELECT= CONTENT REDUCTION — verify select actually reduces content
+# ===========================================================================
+
+class TestSelectContentReductionRichFixture:
+    """Verify that select= produces meaningfully less content than the full file."""
+
+    def test_selecting_one_method_is_much_smaller_than_full_file(self, rich_project_dir):
+        """
+        Selecting a single method from a 160-line file yields << 50% of content.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        full_len = len(full_content)
+
+        prompt = f'<include select="class:UserModel.validate">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        result_len = len(result.strip())
+        reduction_pct = (1 - result_len / full_len) * 100
+
+        assert result_len < full_len * 0.3, (
+            f"Selecting one method should yield <30% of file content. "
+            f"Got {result_len}/{full_len} chars ({100 - reduction_pct:.0f}%)"
+        )
+        print(f"  Single method: {result_len} chars / {full_len} full ({reduction_pct:.0f}% reduction)")
+
+    def test_selecting_two_functions_still_smaller_than_full(self, rich_project_dir):
+        """
+        Two small factory functions (~6 lines total) from a 160-line file
+        should yield significant reduction.
+        """
+        src_file = rich_project_dir / "src" / "models.py"
+        full_content = src_file.read_text()
+        full_len = len(full_content)
+
+        prompt = f'<include select="def:create_user,def:create_admin">{src_file}</include>'
+
+        from pdd.preprocess import preprocess
+
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        result_len = len(result.strip())
+        reduction_pct = (1 - result_len / full_len) * 100
+
+        assert result_len < full_len * 0.2, (
+            f"Two small functions should yield <20% of full file content. "
+            f"Got {result_len}/{full_len} chars ({100 - reduction_pct:.0f}%)"
+        )
+        print(f"  Two functions: {result_len} chars / {full_len} full ({reduction_pct:.0f}% reduction)")
