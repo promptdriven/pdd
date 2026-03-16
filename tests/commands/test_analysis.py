@@ -154,25 +154,24 @@ def test_bug_agentic_failure_exit_code_1(runner, mock_context_obj):
     """Test 'bug' agentic mode exits with code 1 when workflow fails (issue #593).
 
     pdd bug must not exit 0 on failure so CI and 'pdd bug && pdd fix' can detect failure.
-    We assert sys.exit(1) is called (patch builtin sys.exit where analysis uses it).
     """
-    import sys as sys_module
     with patch('pdd.commands.analysis.run_agentic_bug') as mock_agentic:
-        with patch.object(sys_module, 'exit') as mock_exit:
-            mock_agentic.return_value = (
-                False,
-                "Issue not found or API error: Failed to fetch issue: gh: Not Found (HTTP 404)",
-                0.0,
-                "",
-                [],
-            )
-            try:
-                runner.invoke(bug, ['https://github.com/promptdriven/pdd/issues/99999'], obj=mock_context_obj)
-            except SystemExit:
-                pass
-            mock_agentic.assert_called_once()
-            # Bug command calls sys.exit(1); Click may then call sys.exit(0) when mock prevents exit
-            mock_exit.assert_any_call(1)
+        mock_agentic.return_value = (
+            False,
+            "Issue not found or API error: Failed to fetch issue: gh: Not Found (HTTP 404)",
+            0.0,
+            "",
+            [],
+        )
+
+        result = runner.invoke(
+            bug,
+            ['https://github.com/promptdriven/pdd/issues/99999'],
+            obj=mock_context_obj,
+        )
+
+        mock_agentic.assert_called_once()
+        assert result.exit_code == 1
 
 
 def test_bug_agentic_wrong_args(runner, mock_context_obj):
@@ -708,7 +707,7 @@ def test_trace_success(runner):
             assert kwargs["prompt_file"] == "prompt.txt"
             assert kwargs["code_line"] == 42
 
-def test_bug_agentic_mode_failure(runner):
+def test_bug_agentic_mode_failure_exit_code(runner):
     """Test 'bug' agentic mode exit code on failure (issue #593).
     When the command raises Exit(1), CliRunner leaves result.output empty, so we only assert exit_code.
     """

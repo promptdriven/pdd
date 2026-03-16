@@ -15,7 +15,13 @@ def run_pdd_agentic_failure(command: str) -> subprocess.CompletedProcess:
     project_root = get_project_root()
     env = os.environ.copy()
     env["PYTHONPATH"] = str(project_root)
-    
+    # Make the test hermetic and avoid network/auto-update behavior.
+    env["PDD_AUTO_UPDATE"] = "false"
+    env["PDD_FORCE_LOCAL"] = "1"
+    # Use a minimal, deterministic PATH that does not include external tools like `gh`,
+    # but still allows Python to be found.
+    env["PATH"] = os.path.dirname(sys.executable)
+
     # We use a completely invalid GitHub URL so the issue fetch fails immediately,
     # avoiding real LLM API calls, but still triggering the "failure -> non-zero exit code" path.
     invalid_url = "https://github.com/promptdriven/pdd/issues/99999999"
@@ -26,6 +32,7 @@ def run_pdd_agentic_failure(command: str) -> subprocess.CompletedProcess:
         text=True,
         cwd=str(project_root),
         env=env,
+        timeout=60,
     )
 
 def test_pdd_bug_exit_code_on_failure():
