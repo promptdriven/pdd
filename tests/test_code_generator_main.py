@@ -2873,3 +2873,183 @@ class TestVerifyArchitectureConformance:
             language="python",
             verbose=False,
         )
+
+
+# === Issue #687 Tests: example_output_path not injected into env_vars ===
+# Root cause: construct_paths() returns resolved_config with example_output_path,
+# but code_generator_main never injects it into env_vars for template variable
+# substitution via _expand_vars(). Templates using ${EXAMPLE_OUTPUT_PATH} are
+# left unexpanded, causing the LLM to emit raw source code paths instead of
+# example file paths.
+
+
+class TestExampleOutputPathInjection:
+    """Tests for issue #687: resolved_config path values must be injected into env_vars."""
+
+    def test_resolved_config_example_output_path_injected_into_env_vars(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_pdd_preprocess_fixture, mock_env_vars
+    ):
+        """Primary bug reproduction: EXAMPLE_OUTPUT_PATH from resolved_config
+        must appear in the expanded prompt passed to the local generator.
+
+        On buggy code, ${EXAMPLE_OUTPUT_PATH} remains as a literal string because
+        resolved_config['example_output_path'] is never injected into env_vars.
+        """
+        mock_ctx.obj['local'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt.prompt"
+        prompt_content = "Use example files from ${EXAMPLE_OUTPUT_PATH} directory"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output.prompt")
+
+        # construct_paths returns resolved_config with example_output_path set
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "context/examples"},  # resolved_config
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "prompt"
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # The prompt passed to the local generator should have ${EXAMPLE_OUTPUT_PATH}
+        # expanded to "context/examples" — not left as the raw variable reference.
+        called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+        assert "${EXAMPLE_OUTPUT_PATH}" not in called_prompt, (
+            "Bug #687: ${EXAMPLE_OUTPUT_PATH} was not expanded — resolved_config "
+            "values are not being injected into env_vars"
+        )
+        assert "context/examples" in called_prompt
+
+    def test_resolved_config_example_output_path_with_custom_pddrc(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_pdd_preprocess_fixture, mock_env_vars
+    ):
+        """Non-default example_output_path from .pddrc must propagate into env_vars."""
+        mock_ctx.obj['local'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt2.prompt"
+        prompt_content = "Examples at ${EXAMPLE_OUTPUT_PATH}/module_example.py"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output2.prompt")
+
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "examples/shared"},  # custom path from .pddrc
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "prompt"
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+        assert "${EXAMPLE_OUTPUT_PATH}" not in called_prompt, (
+            "Bug #687: custom example_output_path from .pddrc not injected into env_vars"
+        )
+        assert "examples/shared" in called_prompt
+
+    def test_explicit_env_var_overrides_resolved_config_example_output_path(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_pdd_preprocess_fixture, mock_env_vars
+    ):
+        """Explicit -e EXAMPLE_OUTPUT_PATH=custom/path must take precedence
+        over the value from resolved_config."""
+        mock_ctx.obj['local'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt3.prompt"
+        prompt_content = "Examples at ${EXAMPLE_OUTPUT_PATH}"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output3.prompt")
+
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "context/examples"},  # from resolved_config
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "prompt"
+        )
+
+        # User explicitly passes -e EXAMPLE_OUTPUT_PATH=custom/override
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False,
+            env_vars={"EXAMPLE_OUTPUT_PATH": "custom/override"}
+        )
+
+        called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+        # The explicit -e value must win over resolved_config
+        assert "custom/override" in called_prompt
+        assert "context/examples" not in called_prompt
+
+    def test_resolved_config_paths_injected_for_cloud_execution(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_requests_post_fixture, mock_pdd_preprocess_fixture, mock_env_vars
+    ):
+        """Same injection must work for cloud execution path (local=False).
+
+        On buggy code, the unexpanded ${EXAMPLE_OUTPUT_PATH} causes a formatting
+        error downstream (or gets sent unexpanded to the cloud). Either way, the
+        cloud payload must contain the resolved value.
+        """
+        mock_ctx.obj['local'] = False
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt4.prompt"
+        prompt_content = "Cloud examples at ${EXAMPLE_OUTPUT_PATH}"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output4.prompt")
+
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "context/examples"},
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "prompt"
+        )
+
+        # On buggy code, the unexpanded variable may cause an error or the cloud
+        # payload contains the raw ${EXAMPLE_OUTPUT_PATH}. Either outcome is a failure.
+        try:
+            code_generator_main(
+                mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+            )
+        except (click.UsageError, Exception):
+            # If it errors out due to unexpanded variable, that's the bug
+            pytest.fail(
+                "Bug #687: Cloud path failed because ${EXAMPLE_OUTPUT_PATH} was not "
+                "expanded — resolved_config values are not injected into env_vars"
+            )
+
+        # If it didn't error, verify the cloud payload has the expanded value
+        call_kwargs = mock_requests_post_fixture.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        assert "${EXAMPLE_OUTPUT_PATH}" not in cloud_prompt, (
+            "Bug #687: ${EXAMPLE_OUTPUT_PATH} not expanded in cloud prompt"
+        )
+        assert "context/examples" in cloud_prompt
+
+    def test_resolved_config_fallback_when_example_output_path_missing(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_pdd_preprocess_fixture, mock_env_vars
+    ):
+        """When resolved_config has no example_output_path, the template variable
+        should still be left as-is (no crash) or use a sensible default."""
+        mock_ctx.obj['local'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt5.prompt"
+        prompt_content = "Examples at ${EXAMPLE_OUTPUT_PATH}"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output5.prompt")
+
+        # resolved_config has no example_output_path key
+        mock_construct_paths_fixture.return_value = (
+            {},  # empty resolved_config
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "prompt"
+        )
+
+        # Should not raise — graceful handling
+        code, incremental, cost, model = code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # The function should complete without error
+        assert code is not None
