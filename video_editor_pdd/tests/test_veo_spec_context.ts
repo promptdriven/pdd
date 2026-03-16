@@ -75,6 +75,39 @@ describe("veo spec context helpers", () => {
     });
   });
 
+  it("extracts prompts from a blank [veo:] marker when the markdown has a Veo Prompt section", () => {
+    const clips = listResolvedVeoClipSpecs([
+      {
+        path: "specs/veo_section/03_sock_toss_economics.md",
+        content: [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "A hand tosses a worn sock into a trash bin, then grabs a fresh pack of socks.",
+          "```",
+          "",
+          "## Data Points",
+          "```json",
+          "{",
+          '  "clipId": "sock_toss_economics"',
+          "}",
+          "```",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(clips).toEqual([
+      {
+        id: "sock_toss_economics",
+        path: "specs/veo_section/03_sock_toss_economics.md",
+        prompt:
+          "A hand tosses a worn sock into a trash bin, then grabs a fresh pack of socks.",
+        filename: "sock_toss_economics.mp4",
+      },
+    ]);
+  });
+
   it("resolves one generated clip per Veo markdown spec when prompts and clip sources are declared in the spec JSON", () => {
     const clips = listResolvedVeoClipSpecs([
       {

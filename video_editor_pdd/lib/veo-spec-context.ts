@@ -36,6 +36,40 @@ export function extractVeoMarker(content: string): string | null {
   return prompt ? prompt : null;
 }
 
+function stripOptionalCodeFence(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("```")) {
+    return trimmed;
+  }
+
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.length === 0) {
+    return trimmed;
+  }
+
+  const withoutOpenFence = lines.slice(1);
+  const closingFenceIndex = withoutOpenFence.findIndex((line) => line.trim() === "```");
+  const bodyLines =
+    closingFenceIndex >= 0
+      ? withoutOpenFence.slice(0, closingFenceIndex)
+      : withoutOpenFence;
+
+  return bodyLines.join("\n").trim();
+}
+
+function extractVeoPromptSection(content: string): string | null {
+  const match = content.match(
+    /(?:^|\n)#{2,6}\s+Veo Prompt\s*\n([\s\S]*?)(?=\n#{1,6}\s|\n---\s*$|$)/i
+  );
+  const rawSectionBody = match?.[1]?.trim();
+  if (!rawSectionBody) {
+    return null;
+  }
+
+  const prompt = stripOptionalCodeFence(rawSectionBody);
+  return prompt || null;
+}
+
 function extractJsonStringField(
   content: string,
   fieldNames: string[]
@@ -56,6 +90,7 @@ function extractJsonStringField(
 export function extractVeoPrompt(content: string): string | null {
   return (
     extractVeoMarker(content) ??
+    extractVeoPromptSection(content) ??
     extractJsonStringField(content, ["veoPrompt", "prompt", "videoPrompt"])
   );
 }

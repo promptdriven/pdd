@@ -706,6 +706,54 @@ describe("veo executor factory — clip generation", () => {
     expect(mockGenerateVeoClip.mock.calls[1][3]).toContain("aerial_forest.mp4");
   });
 
+  it("generates clips from markdown specs whose Veo prompt lives in a dedicated Veo Prompt section", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      return p.includes("specs/veo_section");
+    });
+    mockReaddirSync.mockReturnValue(["03_sock_toss_economics.md"]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("03_sock_toss_economics.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "A hand tosses a worn sock into a trash bin, then grabs a fresh pack of socks.",
+          "```",
+          "",
+          "## Data Points",
+          "```json",
+          "{",
+          '  "clipId": "sock_toss_economics"',
+          "}",
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(1);
+    expect(mockGenerateVeoClip.mock.calls[0][0]).toBe(
+      "A hand tosses a worn sock into a trash bin, then grabs a fresh pack of socks."
+    );
+    expect(mockGenerateVeoClip.mock.calls[0][3]).toContain("sock_toss_economics.mp4");
+  });
+
   it("passes aspectRatio from project config to generateVeoClip", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]];
@@ -1314,6 +1362,55 @@ describe("GET_clips — response shape", () => {
     expect(data.clips.map((clip: any) => clip.specPath)).toEqual([
       "specs/veo_section/02_ocean_sunset_footage.md",
       "specs/veo_section/04_aerial_forest_footage.md",
+    ]);
+  });
+
+  it("returns Veo clips when the prompt comes from a dedicated Veo Prompt section", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "veo_section",
+        label: "Veo Section",
+        specDir: "veo_section",
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("outputs/veo")) return false;
+      return p.includes("specs/veo_section");
+    });
+    mockReaddirSync.mockReturnValue(["03_sock_toss_economics.md"]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("03_sock_toss_economics.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "A hand tosses a worn sock into a trash bin, then grabs a fresh pack of socks.",
+          "```",
+          "",
+          "## Data Points",
+          "```json",
+          "{",
+          '  "clipId": "sock_toss_economics"',
+          "}",
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips.map((clip: any) => clip.id)).toEqual(["sock_toss_economics"]);
+    expect(data.clips.map((clip: any) => clip.sectionId)).toEqual(["veo_section"]);
+    expect(data.clips.map((clip: any) => clip.specPath)).toEqual([
+      "specs/veo_section/03_sock_toss_economics.md",
     ]);
   });
 
