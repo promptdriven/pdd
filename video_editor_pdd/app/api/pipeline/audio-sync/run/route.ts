@@ -41,10 +41,21 @@ function createSseStream() {
  * Register executor for the audio-sync pipeline stage.
  * This spawns sync_audio_pipeline.py and emits SSE section events.
  */
-registerExecutor("audio-sync", (_params, send: SseSend) => {
+registerExecutor("audio-sync", (params, send: SseSend) => {
   return async (onLog) => {
     const project = loadProject();
-    const sectionGroups = project.audioSync?.sectionGroups ?? {};
+    const allSectionGroups = project.audioSync?.sectionGroups ?? {};
+    const requestedSections = Array.isArray(params.sections)
+      ? params.sections.filter((sectionId): sectionId is string => typeof sectionId === "string")
+      : [];
+    const sectionGroups =
+      requestedSections.length > 0
+        ? Object.fromEntries(
+            Object.entries(allSectionGroups).filter(([sectionId]) =>
+              requestedSections.includes(sectionId)
+            )
+          )
+        : allSectionGroups;
 
     onLog(`[audio-sync] Loaded sectionGroups: ${JSON.stringify(sectionGroups)}`);
 
@@ -125,10 +136,18 @@ registerExecutor("audio-sync", (_params, send: SseSend) => {
  */
 export async function POST(_request: NextRequest): Promise<Response> {
   const { stream, send, done, error } = createSseStream();
+  const body = await _request.json().catch(() => ({}));
+  const sections = Array.isArray(body?.sections)
+    ? body.sections.filter((sectionId: unknown): sectionId is string => typeof sectionId === "string")
+    : undefined;
 
   (async () => {
     try {
-      const jobId = await runPipelineStage("audio-sync", {}, send);
+      const jobId = await runPipelineStage(
+        "audio-sync",
+        sections && sections.length > 0 ? { sections } : {},
+        send
+      );
       send({ type: "job", jobId });
       send({ type: "complete", jobId });
       done();

@@ -88,9 +88,11 @@ const registerCallArgs = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makePostRequest(): Request {
+function makePostRequest(body?: Record<string, unknown>): Request {
   return new Request("http://localhost/api/pipeline/audio-sync/run", {
     method: "POST",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
 }
 
@@ -261,6 +263,17 @@ describe("POST — SSE events", () => {
       expect.any(Function)
     );
   });
+
+  it("passes requested sections into runPipelineStage params", async () => {
+    await POST(makePostRequest({ sections: ["intro"] }) as any);
+    await flushPromises();
+
+    expect(mockRunPipelineStage).toHaveBeenCalledWith(
+      "audio-sync",
+      { sections: ["intro"] },
+      expect.any(Function)
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -409,6 +422,23 @@ describe("audio-sync executor factory", () => {
     const [, , options] = mockSpawn.mock.calls[0];
     expect(options.env.SECTION_GROUPS).toBe(
       JSON.stringify({ narration: ["intro", "main"] })
+    );
+  });
+
+  it("filters SECTION_GROUPS when params.sections is provided", async () => {
+    mockLoadProject.mockReturnValue({
+      audioSync: {
+        sectionGroups: { intro: ["intro_001"], outro: ["outro_001"] },
+      },
+    });
+
+    const executor = registerCallArgs.factory({ sections: ["outro"] }, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    const [, , options] = mockSpawn.mock.calls[0];
+    expect(options.env.SECTION_GROUPS).toBe(
+      JSON.stringify({ outro: ["outro_001"] })
     );
   });
 

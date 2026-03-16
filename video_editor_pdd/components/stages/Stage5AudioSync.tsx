@@ -79,6 +79,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [loadingTimestamps, setLoadingTimestamps] = useState(false);
   const [search, setSearch] = useState('');
   const [validationJobIds, setValidationJobIds] = useState<Record<string, string | null>>({});
+  const [validationSyncJobIds, setValidationSyncJobIds] = useState<Record<string, string | null>>({});
   const [dataReloadVersion, setDataReloadVersion] = useState(0);
   const [playingSegmentId, setPlayingSegmentId] = useState<string | null>(null);
 
@@ -358,6 +359,37 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     }
   };
 
+  const handleValidationRerenderDone = async (segmentId: string) => {
+    if (!selectedSectionId) {
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/pipeline/audio-sync/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sections: [selectedSectionId] }),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to rerun audio sync.');
+      }
+
+      const syncJobId = await extractJobIdFromSse(res);
+      if (!syncJobId) {
+        throw new Error('Failed to get audio sync job ID.');
+      }
+      setValidationSyncJobIds((prev) => ({ ...prev, [segmentId]: syncJobId }));
+    } catch (err: any) {
+      setDetectError(err?.message ?? 'Failed to rerun audio sync');
+    }
+  };
+
+  const handleValidationSyncDone = (segmentId: string) => {
+    setValidationJobIds((prev) => ({ ...prev, [segmentId]: null }));
+    setValidationSyncJobIds((prev) => ({ ...prev, [segmentId]: null }));
+    setDataReloadVersion((prev) => prev + 1);
+  };
+
   const handlePreviewSegmentAudio = async (segmentId: string) => {
     try {
       if (playingSegmentId === segmentId) {
@@ -613,7 +645,14 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                   </div>
 
                   <div className="mt-3">
-                    <SseLogPanel jobId={validationJobIds[row.segmentId] ?? null} />
+                    <SseLogPanel
+                      jobId={validationJobIds[row.segmentId] ?? null}
+                      onDone={() => handleValidationRerenderDone(row.segmentId)}
+                    />
+                    <SseLogPanel
+                      jobId={validationSyncJobIds[row.segmentId] ?? null}
+                      onDone={() => handleValidationSyncDone(row.segmentId)}
+                    />
                   </div>
                 </div>
               ))}

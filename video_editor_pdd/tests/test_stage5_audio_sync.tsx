@@ -211,6 +211,10 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/\[\s*validationJobIds\s*,\s*setValidationJobIds\s*\]/);
   });
 
+  it("tracks per-segment audio-sync job IDs", () => {
+    expect(sourceCode).toMatch(/\[\s*validationSyncJobIds\s*,\s*setValidationSyncJobIds\s*\]/);
+  });
+
   it("tracks playingSegmentId state for validation audio preview", () => {
     expect(sourceCode).toMatch(/\[\s*playingSegmentId\s*,\s*setPlayingSegmentId\s*\]/);
   });
@@ -354,6 +358,15 @@ describe("transcript rerender action", () => {
 
   it("renders an SseLogPanel for per-segment rerender jobs", () => {
     expect(sourceCode).toMatch(/<SseLogPanel[\s\S]*?jobId=\{validationJobIds\[row\.segmentId\] \?\? null\}/);
+  });
+
+  it("runs audio sync again for the selected section after rerender completes", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/audio-sync\/run['"]/);
+    expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{\s*sections\s*:\s*\[\s*selectedSectionId\s*\]\s*\}\s*\)/);
+  });
+
+  it("renders an SseLogPanel for follow-up audio sync jobs", () => {
+    expect(sourceCode).toMatch(/<SseLogPanel[\s\S]*?jobId=\{validationSyncJobIds\[row\.segmentId\] \?\? null\}/);
   });
 });
 
