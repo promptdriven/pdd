@@ -80,9 +80,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [search, setSearch] = useState('');
   const [validationJobIds, setValidationJobIds] = useState<Record<string, string | null>>({});
   const [dataReloadVersion, setDataReloadVersion] = useState(0);
+  const [playingSegmentId, setPlayingSegmentId] = useState<string | null>(null);
 
   const [scrollTop, setScrollTop] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
@@ -173,6 +175,15 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       active = false;
     };
   }, [dataReloadVersion, selectedSectionId]);
+
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+    };
+  }, []);
 
   // ----------------------------------------
   // Derived values
@@ -344,6 +355,36 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       setValidationJobIds((prev) => ({ ...prev, [segmentId]: rowJobId }));
     } catch (err: any) {
       setDetectError(err?.message ?? 'Failed to rerender segment');
+    }
+  };
+
+  const handlePreviewSegmentAudio = async (segmentId: string) => {
+    try {
+      if (playingSegmentId === segmentId) {
+        previewAudioRef.current?.pause();
+        previewAudioRef.current = null;
+        setPlayingSegmentId(null);
+        return;
+      }
+
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current = null;
+      }
+
+      const audio = new Audio(`/api/audio/tts/${segmentId}.wav?v=${Date.now()}`);
+      audio.addEventListener('ended', () => {
+        if (previewAudioRef.current === audio) {
+          previewAudioRef.current = null;
+          setPlayingSegmentId(null);
+        }
+      });
+      previewAudioRef.current = audio;
+      await audio.play();
+      setPlayingSegmentId(segmentId);
+    } catch (err: any) {
+      setDetectError(err?.message ?? 'Failed to play segment audio');
+      setPlayingSegmentId(null);
     }
   };
 
@@ -524,9 +565,9 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                   key={row.segmentId}
                   className="rounded-md border border-slate-800 bg-slate-900/80 p-3"
                 >
-                  <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-100">
-                      {row.segmentId}{' '}
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-slate-100">
+                          {row.segmentId}{' '}
                       <span className="ml-2 text-xs uppercase tracking-wide text-amber-300">
                         {row.status}
                       </span>
@@ -535,14 +576,22 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                           match {(row.matchRatio * 100).toFixed(0)}%
                         </span>
                       )}
-                    </div>
-                    <button
-                      onClick={() => handleRerenderSegment(row.segmentId)}
-                      className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
-                    >
-                      Re-render Segment
-                    </button>
-                  </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handlePreviewSegmentAudio(row.segmentId)}
+                            className="rounded-md bg-slate-700 px-3 py-1.5 text-xs font-medium text-white"
+                          >
+                            {playingSegmentId === row.segmentId ? 'Stop Audio' : 'Play Audio'}
+                          </button>
+                          <button
+                            onClick={() => handleRerenderSegment(row.segmentId)}
+                            className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
+                          >
+                            Re-render Segment
+                          </button>
+                        </div>
+                      </div>
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <div>

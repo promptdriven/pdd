@@ -211,6 +211,10 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/\[\s*validationJobIds\s*,\s*setValidationJobIds\s*\]/);
   });
 
+  it("tracks playingSegmentId state for validation audio preview", () => {
+    expect(sourceCode).toMatch(/\[\s*playingSegmentId\s*,\s*setPlayingSegmentId\s*\]/);
+  });
+
   it("tracks loadingTimestamps state", () => {
     expect(sourceCode).toMatch(/\[\s*loadingTimestamps\s*,\s*setLoadingTimestamps\s*\]/);
   });
@@ -328,6 +332,10 @@ describe("transcript validation panel", () => {
   it("renders a Re-render Segment action", () => {
     expect(sourceCode).toMatch(/Re-render Segment/);
   });
+
+  it("renders a Play Audio action", () => {
+    expect(sourceCode).toMatch(/Play Audio/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -350,7 +358,26 @@ describe("transcript rerender action", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 12. Word filtering via search (Req 4 — search input)
+// 12. Transcript audio preview action
+// ---------------------------------------------------------------------------
+
+describe("transcript audio preview action", () => {
+  it("defines handlePreviewSegmentAudio", () => {
+    expect(sourceCode).toMatch(/const\s+handlePreviewSegmentAudio\s*=\s*async/);
+  });
+
+  it("creates browser Audio for the segment wav route", () => {
+    expect(sourceCode).toMatch(/new\s+Audio\s*\(\s*`\/api\/audio\/tts\/\$\{segmentId\}\.wav/);
+  });
+
+  it("toggles stop/play based on the active segment", () => {
+    expect(sourceCode).toMatch(/playingSegmentId\s*===\s*segmentId/);
+    expect(sourceCode).toMatch(/playingSegmentId\s*===\s*row\.segmentId\s*\?\s*'Stop Audio'\s*:\s*'Play Audio'/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. Word filtering via search (Req 4 — search input)
 // ---------------------------------------------------------------------------
 
 describe("word filtering", () => {
