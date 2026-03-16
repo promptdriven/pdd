@@ -69,10 +69,14 @@ This tutorial walks through implementing a GitHub issue using PDD.
    ```bash
    pdd fix https://github.com/myorg/myrepo/issues/456
    ```
-   This iteratively fixes the code until tests pass.
+   This orchestrates a 10-step iterative workflow that fixes the code until all tests pass locally, followed by post-push CI validation.
 
-3. **Review and Merge**
-   - The PR is updated with the fix
+3. **Configure CI Validation (Optional)**
+   - Use `--ci-retries INT` to set maximum post-push fix attempts (default: 3)
+   - Use `--skip-ci` to skip the CI validation stage entirely
+
+4. **Review and Merge**
+   - The PR is updated with the fix and verified against external CI
    - Review and merge when ready
 
 ### Method 4: Generating Tests (UI, CLI, or API)

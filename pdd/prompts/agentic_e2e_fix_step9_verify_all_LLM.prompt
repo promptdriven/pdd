@@ -1,8 +1,19 @@
+<pdd-reason>Step 9 of the agentic E2E fix workflow: performs final verification and controls the outer loop.</pdd-reason>
+
+<pdd-interface>
+{{{{
+  "type": "config",
+  "config": {{{{
+    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step1_output", "step2_output", "step8_output"]
+  }}}}
+}}}}
+</pdd-interface>
+
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to perform final verification and control the outer loop.
 
 % Context
 
-You are working on step 9 of 9 in an agentic e2e fix workflow. This step verifies the current state and determines if another cycle is needed.
+You are working on step 9 of 10 in an agentic e2e fix workflow. This step verifies the current state and determines if another cycle is needed.
 
 % Inputs
 
@@ -85,13 +96,13 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - E2E tests: {{N}}/{{M}} pass
 
 ### Summary
-All bugs fixed successfully in {cycle_number} cycle(s).
+All bugs fixed successfully in {cycle_number} cycle(s). Handing off to CI validation.
 
 ### Files Changed (Total)
 {{list_of_all_files_modified}}
 
 ---
-*Workflow complete - all tests passing*
+*Proceeding to Step 10: CI Validation*
 ```
 
 **If more cycles needed:**
