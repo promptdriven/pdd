@@ -10,8 +10,58 @@ import {
   isDeterministicPipelineMode,
   writeDeterministicSpecsForSection,
 } from "@/lib/deterministic-pipeline";
-import { resolveSectionVisualIntent } from "@/app/api/pipeline/_lib/script-visual-intent";
+import {
+  findMatchingScriptSectionVisualIntent,
+  parseScriptSectionVisualIntent,
+  resolveSectionVisualIntent,
+} from "@/app/api/pipeline/_lib/script-visual-intent";
 import { getProjectDir } from "@/lib/projects";
+
+const BASE_SPECS_TIMEOUT_MS = 600_000;
+const MAX_SPECS_TIMEOUT_MS = 1_500_000;
+
+function estimateSpecsTimeoutMs(params: {
+  specMd: string;
+  scriptBody: string;
+  visualIntentMode: "remotion_only" | "hybrid" | "veo_favored" | "unknown";
+  hasWords: boolean;
+}): number {
+  const combinedLength = params.specMd.length + params.scriptBody.length;
+  const extraChars = Math.max(0, combinedLength - 20_000);
+  const extraCharBuckets = Math.floor(extraChars / 10_000);
+  const visualComplexityBonusMs =
+    params.visualIntentMode === "veo_favored"
+      ? 120_000
+      : params.visualIntentMode === "hybrid"
+        ? 60_000
+        : 0;
+  const timestampBonusMs = params.hasWords ? 30_000 : 0;
+  const scaledTimeoutMs =
+    BASE_SPECS_TIMEOUT_MS +
+    extraCharBuckets * 120_000 +
+    visualComplexityBonusMs +
+    timestampBonusMs;
+
+  return Math.min(MAX_SPECS_TIMEOUT_MS, scaledTimeoutMs);
+}
+
+function resetSectionSpecDir(sectionSpecDir: string): void {
+  const veoJsonPath = path.join(sectionSpecDir, "veo.json");
+  let veoJsonBackup: string | null = null;
+
+  if (fs.existsSync(veoJsonPath)) {
+    veoJsonBackup = fs.readFileSync(veoJsonPath, "utf-8");
+  }
+
+  if (fs.existsSync(sectionSpecDir)) {
+    fs.rmSync(sectionSpecDir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(sectionSpecDir, { recursive: true });
+
+  if (veoJsonBackup !== null) {
+    fs.writeFileSync(veoJsonPath, veoJsonBackup);
+  }
+}
 
 // ----------------------------------------------------------------------------
 // Register specs executor (runs Claude scoped to /specs)
@@ -51,6 +101,10 @@ registerExecutor("specs", (params, _send) => {
       }
     }
 
+    const scriptVisualIntentSections = mainScriptContent
+      ? parseScriptSectionVisualIntent(mainScriptContent)
+      : [];
+
     // Read spec.md and word timestamps BEFORE cleaning, so the narrative
     // context survives the stale-file purge.
     const sectionContextMap = new Map<string, { specMd: string; hasWords: boolean }>();
@@ -66,28 +120,6 @@ registerExecutor("specs", (params, _send) => {
         specMd: specMdContent,
         hasWords: fs.existsSync(wordsPath),
       });
-    }
-
-    // Clean stale spec files for sections being regenerated so Claude CLI
-    // doesn't waste time reading/deconflicting with old content.
-    // Preserve veo.json (Veo prompt overrides placed by users or tests).
-    for (const sid of sectionIds) {
-      const dir = specDirMap.get(sid) ?? sid;
-      const sectionSpecDir = path.join(specsBase, dir);
-      if (fs.existsSync(sectionSpecDir)) {
-        const veoJsonPath = path.join(sectionSpecDir, "veo.json");
-        let veoJsonBackup: string | null = null;
-        if (fs.existsSync(veoJsonPath)) {
-          veoJsonBackup = fs.readFileSync(veoJsonPath, "utf-8");
-        }
-        fs.rmSync(sectionSpecDir, { recursive: true, force: true });
-        fs.mkdirSync(sectionSpecDir, { recursive: true });
-        if (veoJsonBackup !== null) {
-          fs.writeFileSync(veoJsonPath, veoJsonBackup);
-        }
-      } else {
-        fs.mkdirSync(sectionSpecDir, { recursive: true });
-      }
     }
 
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
@@ -114,69 +146,88 @@ registerExecutor("specs", (params, _send) => {
 
     let completedSections = 0;
     let nextIndex = 0;
+    const failures: Array<{ sid: string; message: string }> = [];
     const workerCount = Math.min(2, sectionIds.length || 1);
 
     const runSection = async (): Promise<void> => {
-      const currentIndex = nextIndex++;
-      if (currentIndex >= sectionIds.length) {
-        return;
-      }
+      while (true) {
+        const currentIndex = nextIndex++;
+        if (currentIndex >= sectionIds.length) {
+          return;
+        }
 
-      const sid = sectionIds[currentIndex];
-      const dir = specDirMap.get(sid) ?? sid;
-      const section = sectionMap.get(sid);
-      const ctx = sectionContextMap.get(sid)!;
-      const visualIntent =
-        section && mainScriptContent
-          ? resolveSectionVisualIntent(mainScriptContent, {
-              id: section.id,
-              label: section.label,
-            })
-          : null;
+        const sid = sectionIds[currentIndex];
+        const dir = specDirMap.get(sid) ?? sid;
+        const section = sectionMap.get(sid);
+        const ctx = sectionContextMap.get(sid)!;
+        const matchingScriptSection =
+          section && scriptVisualIntentSections.length > 0
+            ? findMatchingScriptSectionVisualIntent(scriptVisualIntentSections, {
+                id: section.id,
+                label: section.label,
+              })
+            : null;
+        const visualIntent =
+          section && mainScriptContent
+            ? resolveSectionVisualIntent(mainScriptContent, {
+                id: section.id,
+                label: section.label,
+              })
+            : null;
+        const timeoutMs = estimateSpecsTimeoutMs({
+          specMd: ctx.specMd,
+          scriptBody: matchingScriptSection?.bodyLines.join("\n") ?? "",
+          visualIntentMode: visualIntent?.mode ?? "unknown",
+          hasWords: ctx.hasWords,
+        });
+        const sectionSpecDir = path.join(specsBase, dir);
 
-      onLog(`[specs] Generating specs for section: ${sid} (${currentIndex + 1}/${sectionIds.length})`);
+        onLog(
+          `[specs] Generating specs for section: ${sid} (${currentIndex + 1}/${sectionIds.length})`
+        );
+        resetSectionSpecDir(sectionSpecDir);
 
-      const sectionContext = `
+        const sectionContext = `
 ### Section: ${sid} → specs/${dir}/
 ${ctx.specMd ? `\nNarrative arc (spec.md):\n${ctx.specMd}\n` : "(No spec.md found — infer visual needs from section name.)"}
 ${ctx.hasWords ? `Word timestamps available at: data/${sid}_words.json (use for frame-accurate timing)` : "(No word timestamps available yet.)"}
 `;
 
-      const sectionVisualGuidance =
-        visualIntent?.mode === "remotion_only"
-          ? `
+        const sectionVisualGuidance =
+          visualIntent?.mode === "remotion_only"
+            ? `
 This section appears primarily abstract, diagrammatic, or UI-driven based on main_script.md.
 Avoid [veo:] unless a beat clearly requires cinematic footage.
 Use [Remotion], [title:], and [split:] only for this section.
 A typical section here should lean on 3-6 [Remotion] animations plus 1-2 [title:] or [split:] cards.
 `.trim()
-          : visualIntent?.explicitVeo
-            ? `
+            : visualIntent?.explicitVeo
+              ? `
 This section explicitly includes [veo:] footage in main_script.md.
 Include at least one [veo:] spec and align it to the quoted script beat that calls for footage.
 Mix [veo:] with [Remotion], [title:], and [split:] only where the script supports it.
 A typical section here should have a mix: 2-4 [Remotion] animations, 1-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
 `.trim()
-            : visualIntent?.mode === "hybrid" || visualIntent?.mode === "veo_favored"
-              ? `
+              : visualIntent?.mode === "hybrid" || visualIntent?.mode === "veo_favored"
+                ? `
 This section includes cinematic or live-action beats in main_script.md even without explicit [veo:] markers.
 Decide scene-by-scene whether each beat is better as [veo:], [Remotion], [title:], or [split:].
 Include at least one [veo:] spec for the cinematic beats.
 Use [Remotion] for charts, diagrams, code UI, data overlays, and abstract explanatory visuals.
 A typical section here should have a mix: 2-4 [Remotion] animations, 1-3 [veo:] clips, and 1-2 [title:] or [split:] cards.
 `.trim()
-            : `
+                : `
 Script intent could not be resolved for this section, so infer the right mix from the section narrative.
 A typical section should have a mix: 2-4 [Remotion] animations, 2-3 [veo:] clips, and 1-2 [title:] or [split:] cards when the script suggests cinematic footage.
 `.trim();
 
-      const sectionVisualGuidanceList = sectionVisualGuidance
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => `- ${line}`)
-        .join("\n");
+        const sectionVisualGuidanceList = sectionVisualGuidance
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => `- ${line}`)
+          .join("\n");
 
-      const prompt = `
+        const prompt = `
 You are generating rich visual spec markdown files for a video pipeline.
 Each spec file describes ONE animated Remotion component with enough detail for a developer to implement it.
 
@@ -253,18 +304,35 @@ REQUIRED SPEC FORMAT — each spec file MUST include ALL of these sections:
 ${sectionContext}
 `.trim();
 
-      await runClaudeFix(prompt, specsBase, onLog);
-
-      completedSections += 1;
-      const pct = Math.round((completedSections / totalSections) * 100);
-      progressFn?.(pct);
-      onLog(`[specs] Section ${sid} complete (${pct}%)`);
-      await runSection();
+        try {
+          await runClaudeFix(prompt, specsBase, onLog, { timeoutMs });
+          completedSections += 1;
+          const pct = Math.round((completedSections / totalSections) * 100);
+          progressFn?.(pct);
+          onLog(`[specs] Section ${sid} complete (${pct}%)`);
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : "Unknown spec generation error";
+          failures.push({ sid, message });
+          completedSections += 1;
+          const pct = Math.round((completedSections / totalSections) * 100);
+          progressFn?.(pct);
+          onLog(`[specs] Section ${sid} failed (${pct}%): ${message}`);
+        }
+      }
     };
 
     await Promise.all(
       Array.from({ length: workerCount }, () => runSection())
     );
+
+    if (failures.length > 0) {
+      const message = `Spec generation failed for ${failures.length} section(s): ${failures
+        .map((failure) => `${failure.sid} (${failure.message})`)
+        .join(", ")}`;
+      onLog(`[specs] ${message}`);
+      throw new Error(message);
+    }
   };
 });
 

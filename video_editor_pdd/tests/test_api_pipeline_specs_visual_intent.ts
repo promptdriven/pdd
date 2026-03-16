@@ -150,4 +150,71 @@ describe("specs route visual-intent prompting", () => {
     );
     expect(cinematicPrompt).toContain("Include at least one [veo:] spec for the cinematic beats.");
   });
+
+  it("scales the Claude timeout for larger section contexts", async () => {
+    mockExistsSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") return false;
+      return (
+        filePath.includes("narrative/main_script.md") ||
+        filePath.includes("specs/animation_section/spec.md")
+      );
+    });
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") {
+        return "";
+      }
+      if (filePath.includes("narrative/main_script.md")) {
+        return `
+## Animation Section
+**[VISUAL: Animated chart with axes and labels.]**
+**NARRATOR:**
+${"A".repeat(24_000)}
+        `.trim();
+      }
+      if (filePath.includes("specs/animation_section/spec.md")) {
+        return `Narrative arc\n\n${"B".repeat(18_000)}`;
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const animationCall = mockRunClaudeFix.mock.calls.find((call) =>
+      String(call[0]).includes("specs/animation_section/")
+    );
+    expect(animationCall).toBeDefined();
+    expect(animationCall?.[3]?.timeoutMs).toBeGreaterThan(600_000);
+    expect(animationCall?.[3]?.timeoutMs).toBeLessThanOrEqual(1_500_000);
+  });
+
+  it("continues later sections after a section times out and reports an aggregated error", async () => {
+    mockRunClaudeFix.mockImplementation(async (prompt: string) => {
+      if (prompt.includes("specs/veo_section/")) {
+        throw new Error("Claude CLI timeout after 600s");
+      }
+    });
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+
+    await expect(executor(onLog)).rejects.toThrow(
+      "Spec generation failed for 1 section(s): veo_section (Claude CLI timeout after 600s)"
+    );
+
+    const generatedSections = mockRunClaudeFix.mock.calls.map((call) => {
+      const prompt = String(call[0]);
+      const match = prompt.match(/specs\/([^/]+)\//);
+      return match?.[1] ?? "unknown";
+    });
+    expect(generatedSections).toEqual(
+      expect.arrayContaining(["animation_section", "veo_section", "cinematic_section"])
+    );
+    expect(onLog).toHaveBeenCalledWith(
+      "[specs] Section veo_section failed (67%): Claude CLI timeout after 600s"
+    );
+    expect(onLog).toHaveBeenCalledWith(
+      "[specs] Spec generation failed for 1 section(s): veo_section (Claude CLI timeout after 600s)"
+    );
+  });
 });
