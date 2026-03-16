@@ -10,8 +10,10 @@ Standalone Python script invoked by the Next.js audio sync API route to:
 """
 
 import argparse
+import importlib
 import json
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -19,6 +21,12 @@ import re
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+DEFAULT_FASTER_WHISPER_MODEL = "base"
+DEFAULT_FASTER_WHISPER_DEVICE = "cpu"
+DEFAULT_FASTER_WHISPER_COMPUTE_TYPE = "int8"
+DEFAULT_MLX_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 
 
 def _expand_segment_range(
@@ -245,12 +253,124 @@ def copy_to_remotion(source_path: Path, remotion_public: str, section_id: str) -
     return dest_path
 
 
+def is_apple_silicon_mac() -> bool:
+    """Return True when running on Apple Silicon macOS."""
+    return sys.platform == "darwin" and platform.machine().lower() in {"arm64", "aarch64"}
+
+
+def resolve_stt_backend() -> Dict[str, str]:
+    """Choose the speech-to-text backend for Stage 5.
+
+    Defaults:
+    - Apple Silicon macOS with mlx-whisper installed -> mlx-whisper large-v3-turbo
+    - otherwise -> faster-whisper base on CPU
+    """
+    requested_backend = os.environ.get("SYNC_AUDIO_STT_BACKEND", "auto").strip().lower()
+    if requested_backend not in {"auto", "faster-whisper", "mlx-whisper"}:
+        requested_backend = "auto"
+
+    if requested_backend == "mlx-whisper" and not is_apple_silicon_mac():
+        raise RuntimeError("mlx-whisper requires Apple Silicon macOS")
+
+    if requested_backend in {"auto", "mlx-whisper"} and is_apple_silicon_mac():
+        try:
+            importlib.import_module("mlx_whisper")
+        except ImportError as exc:
+            if requested_backend == "mlx-whisper":
+                raise RuntimeError("mlx-whisper requested but unavailable") from exc
+        else:
+            return {
+                "backend": "mlx-whisper",
+                "model_id": os.environ.get("SYNC_AUDIO_MLX_MODEL", DEFAULT_MLX_WHISPER_MODEL),
+                "device": "apple-gpu",
+            }
+
+    return {
+        "backend": "faster-whisper",
+        "model_id": os.environ.get("SYNC_AUDIO_FASTER_WHISPER_MODEL", DEFAULT_FASTER_WHISPER_MODEL),
+        "device": os.environ.get("SYNC_AUDIO_FASTER_WHISPER_DEVICE", DEFAULT_FASTER_WHISPER_DEVICE),
+        "compute_type": os.environ.get(
+            "SYNC_AUDIO_FASTER_WHISPER_COMPUTE_TYPE",
+            DEFAULT_FASTER_WHISPER_COMPUTE_TYPE,
+        ),
+    }
+
+
+def _transcribe_words_faster_whisper(
+    wav_path: Path, backend_config: Dict[str, str]
+) -> List[Dict[str, float | str]]:
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(
+        backend_config["model_id"],
+        device=backend_config["device"],
+        compute_type=backend_config["compute_type"],
+    )
+
+    segments_iter, _info = model.transcribe(
+        str(wav_path),
+        word_timestamps=True,
+        language="en",
+    )
+
+    words: List[Dict[str, float | str]] = []
+    for segment in segments_iter:
+        if segment.words is None:
+            continue
+        for word_info in segment.words:
+            word = word_info.word.strip()
+            if not word:
+                continue
+            words.append(
+                {
+                    "word": word,
+                    "start": float(word_info.start),
+                    "end": float(word_info.end),
+                }
+            )
+    return words
+
+
+def _transcribe_words_mlx_whisper(
+    wav_path: Path, backend_config: Dict[str, str]
+) -> List[Dict[str, float | str]]:
+    mlx_whisper = importlib.import_module("mlx_whisper")
+
+    result = mlx_whisper.transcribe(
+        str(wav_path),
+        path_or_hf_repo=backend_config["model_id"],
+        language="en",
+        task="transcribe",
+        word_timestamps=True,
+        verbose=False,
+    )
+
+    words: List[Dict[str, float | str]] = []
+    for segment in result.get("segments", []):
+        if not isinstance(segment, dict):
+            continue
+        for word_info in segment.get("words") or []:
+            if not isinstance(word_info, dict):
+                continue
+            word = str(word_info.get("word", "")).strip()
+            if not word:
+                continue
+            words.append(
+                {
+                    "word": word,
+                    "start": float(word_info.get("start", 0.0)),
+                    "end": float(word_info.get("end", 0.0)),
+                }
+            )
+    return words
+
+
 def generate_word_timestamps(
     wav_path: Path,
     segment_ids: List[str],
     segment_durations: List[float],
 ) -> List[Dict[str, Any]]:
-    """Generate word-level timestamps using Faster-Whisper.
+    """Generate word-level timestamps using the selected STT backend.
 
     Each word is mapped back to its originating segment by tracking
     cumulative audio duration boundaries.
@@ -264,15 +384,11 @@ def generate_word_timestamps(
         List of word timestamp dictionaries with keys:
         word, start, end, segmentId.
     """
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel("base", device="cpu", compute_type="int8")
-
-    segments_iter, _info = model.transcribe(
-        str(wav_path),
-        word_timestamps=True,
-        language="en",
-    )
+    backend_config = resolve_stt_backend()
+    if backend_config["backend"] == "mlx-whisper":
+        transcribed_words = _transcribe_words_mlx_whisper(wav_path, backend_config)
+    else:
+        transcribed_words = _transcribe_words_faster_whisper(wav_path, backend_config)
 
     # Build cumulative duration boundaries for segment mapping
     cumulative_boundaries: List[Tuple[float, float, str]] = []
@@ -283,26 +399,23 @@ def generate_word_timestamps(
 
     word_timestamps: List[Dict[str, Any]] = []
 
-    for segment in segments_iter:
-        if segment.words is None:
-            continue
-        for word_info in segment.words:
-            # Determine which segment this word belongs to based on its start time
-            word_start = word_info.start
-            word_end = word_info.end
-            matched_segment_id = segment_ids[-1] if segment_ids else "unknown"
+    for word_info in transcribed_words:
+        # Determine which segment this word belongs to based on its start time
+        word_start = float(word_info["start"])
+        word_end = float(word_info["end"])
+        matched_segment_id = segment_ids[-1] if segment_ids else "unknown"
 
-            for boundary_start, boundary_end, seg_id in cumulative_boundaries:
-                if boundary_start <= word_start < boundary_end:
-                    matched_segment_id = seg_id
-                    break
+        for boundary_start, boundary_end, seg_id in cumulative_boundaries:
+            if boundary_start <= word_start < boundary_end:
+                matched_segment_id = seg_id
+                break
 
-            word_timestamps.append({
-                "word": word_info.word.strip(),
-                "start": round(word_start, 3),
-                "end": round(word_end, 3),
-                "segmentId": matched_segment_id,
-            })
+        word_timestamps.append({
+            "word": str(word_info["word"]).strip(),
+            "start": round(word_start, 3),
+            "end": round(word_end, 3),
+            "segmentId": matched_segment_id,
+        })
 
     return word_timestamps
 

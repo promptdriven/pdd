@@ -53,6 +53,8 @@ from sync_audio_pipeline import (
     _concatenate_wavs_pydub,
     copy_to_remotion,
     generate_word_timestamps,
+    is_apple_silicon_mac,
+    resolve_stt_backend,
     process_section,
     main,
 )
@@ -123,6 +125,12 @@ def output_dir(tmp_path):
     out = tmp_path / "outputs" / "tts"
     out.mkdir(parents=True)
     return out
+
+
+@pytest.fixture(autouse=True)
+def force_test_stt_backend(monkeypatch):
+    """Keep the existing suite deterministic regardless of local MLX availability."""
+    monkeypatch.setenv("SYNC_AUDIO_STT_BACKEND", "faster-whisper")
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +557,99 @@ class TestGenerateWordTimestamps:
 
         for word in result:
             assert word["segmentId"] == "seg_001"
+
+    def test_can_use_mlx_whisper_with_word_timestamps(self, tmp_path, monkeypatch):
+        """Apple Silicon path uses mlx-whisper when explicitly requested."""
+        wav_path = tmp_path / "test.wav"
+        _create_dummy_wav(str(wav_path))
+
+        monkeypatch.setenv("SYNC_AUDIO_STT_BACKEND", "mlx-whisper")
+        mock_mlx = mock.MagicMock()
+        mock_mlx.transcribe.return_value = {
+            "segments": [
+                {
+                    "words": [
+                        {"word": " Hello", "start": 0.1, "end": 0.4},
+                        {"word": " world", "start": 0.5, "end": 0.8},
+                    ]
+                }
+            ]
+        }
+
+        with mock.patch("sync_audio_pipeline.is_apple_silicon_mac", return_value=True):
+            with mock.patch("sync_audio_pipeline.importlib.import_module", return_value=mock_mlx):
+                result = generate_word_timestamps(wav_path, ["seg_001"], [1.0])
+
+        assert result == [
+            {"word": "Hello", "start": 0.1, "end": 0.4, "segmentId": "seg_001"},
+            {"word": "world", "start": 0.5, "end": 0.8, "segmentId": "seg_001"},
+        ]
+        mock_mlx.transcribe.assert_called_once()
+        call_kwargs = mock_mlx.transcribe.call_args.kwargs
+        assert call_kwargs["word_timestamps"] is True
+        assert call_kwargs["task"] == "transcribe"
+        assert call_kwargs["language"] == "en"
+
+
+class TestSttBackendSelection:
+    """Verify Stage 5 STT backend selection logic."""
+
+    def test_detects_apple_silicon_mac(self):
+        with mock.patch("sync_audio_pipeline.sys.platform", "darwin"):
+            with mock.patch("sync_audio_pipeline.platform.machine", return_value="arm64"):
+                assert is_apple_silicon_mac() is True
+
+    def test_resolve_stt_backend_prefers_mlx_on_apple_silicon(self, monkeypatch):
+        monkeypatch.delenv("SYNC_AUDIO_STT_BACKEND", raising=False)
+        mock_mlx = mock.MagicMock()
+
+        with mock.patch("sync_audio_pipeline.is_apple_silicon_mac", return_value=True):
+            with mock.patch("sync_audio_pipeline.importlib.import_module", return_value=mock_mlx):
+                backend = resolve_stt_backend()
+
+        assert backend["backend"] == "mlx-whisper"
+        assert backend["model_id"] == "mlx-community/whisper-large-v3-turbo"
+
+    def test_resolve_stt_backend_falls_back_to_faster_whisper(self, monkeypatch):
+        monkeypatch.delenv("SYNC_AUDIO_STT_BACKEND", raising=False)
+
+        with mock.patch("sync_audio_pipeline.is_apple_silicon_mac", return_value=True):
+            with mock.patch(
+                "sync_audio_pipeline.importlib.import_module",
+                side_effect=ImportError("no mlx"),
+            ):
+                backend = resolve_stt_backend()
+
+        assert backend["backend"] == "faster-whisper"
+        assert backend["model_id"] == "base"
+        assert backend["device"] == "cpu"
+        assert backend["compute_type"] == "int8"
+
+    def test_resolve_stt_backend_honors_explicit_faster_whisper_override(self, monkeypatch):
+        monkeypatch.setenv("SYNC_AUDIO_STT_BACKEND", "faster-whisper")
+
+        with mock.patch("sync_audio_pipeline.is_apple_silicon_mac", return_value=True):
+            backend = resolve_stt_backend()
+
+        assert backend["backend"] == "faster-whisper"
+
+    def test_resolve_stt_backend_raises_if_forced_mlx_is_unavailable(self, monkeypatch):
+        monkeypatch.setenv("SYNC_AUDIO_STT_BACKEND", "mlx-whisper")
+
+        with mock.patch("sync_audio_pipeline.is_apple_silicon_mac", return_value=True):
+            with mock.patch(
+                "sync_audio_pipeline.importlib.import_module",
+                side_effect=ImportError("no mlx"),
+            ):
+                with pytest.raises(RuntimeError, match="mlx-whisper requested but unavailable"):
+                    resolve_stt_backend()
+
+    def test_resolve_stt_backend_raises_if_forced_mlx_on_non_apple_silicon(self, monkeypatch):
+        monkeypatch.setenv("SYNC_AUDIO_STT_BACKEND", "mlx-whisper")
+
+        with mock.patch("sync_audio_pipeline.is_apple_silicon_mac", return_value=False):
+            with pytest.raises(RuntimeError, match="mlx-whisper requires Apple Silicon macOS"):
+                resolve_stt_backend()
 
 
 # ===========================================================================
