@@ -380,7 +380,15 @@ describe("row toggle handler", () => {
   });
 
   it("toggles expandedId between the clicked id and null", () => {
-    expect(sourceCode).toMatch(/setExpandedId\s*\(\s*\(prev\)\s*=>\s*\(\s*prev\s*===\s*id\s*\?\s*null\s*:\s*id\s*\)\s*\)/);
+    expect(sourceCode).toMatch(/setExpandedId\s*\(\s*\(prev\)\s*=>\s*\{/);
+    expect(sourceCode).toMatch(/prev\s*===\s*id/);
+    expect(sourceCode).toMatch(/return\s+null/);
+    expect(sourceCode).toMatch(/return\s+id/);
+  });
+
+  it("invalidates the previously expanded waveform when collapsing or switching rows", () => {
+    expect(sourceCode).toMatch(/handleRowToggle[\s\S]*?if\s*\(\s*prev\s*\)/);
+    expect(sourceCode).toMatch(/handleRowToggle[\s\S]*?invalidateWaveform\s*\(\s*prev\s*\)/);
   });
 });
 

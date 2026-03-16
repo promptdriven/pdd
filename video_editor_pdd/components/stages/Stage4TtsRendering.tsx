@@ -148,7 +148,17 @@ export default function Stage4TtsRendering({ onAdvance }: Stage4TtsRenderingProp
   };
 
   const handleRowToggle = (id: string) => {
-    setExpandedId((prev) => (prev === id ? null : id));
+    setExpandedId((prev) => {
+      if (prev) {
+        invalidateWaveform(prev);
+      }
+
+      if (prev === id) {
+        return null;
+      }
+
+      return id;
+    });
   };
 
   const startBatchRender = async (segmentsFilter?: string[]) => {
