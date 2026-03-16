@@ -1750,41 +1750,19 @@ Options:
 
 PDD supports the following XML-like tags in prompt files. Note: XML-like tags (`<include>`, `<include-many>`, `<shell>`, `<web>`) are left untouched inside fenced code blocks (``` or ~~~) or inline single backticks so documentation examples remain literal.
 
-1. **`include`**: Includes file content into the prompt. The file path is always the tag body. Optional attributes control what is extracted:
+1. **`include`**: Includes file content into the prompt. The file path is always the tag body. Optional attributes extract specific parts instead of the full file:
    ```xml
-   <!-- Full file -->
    <include>./path/to/file.txt</include>
-
-   <!-- Structural selectors (deterministic) -->
    <include select="def:foo,class:Bar">src/utils.py</include>
-   <include select="lines:10-50">src/config.py</include>
-   <include select="section:Installation">docs/setup.md</include>
-   <include select="pattern:/^API_.*=/">src/constants.py</include>
-   <include select="path:config.database.host">settings.yaml</include>
-
-   <!-- Interface mode (signatures + docstrings only) -->
    <include select="class:Handler" mode="interface">src/api.py</include>
-
-   <!-- Semantic query (LLM-powered, cached in .pdd/extracts/) -->
-   <include query="authentication flow and JWT handling">docs/api_reference.md</include>
+   <include query="authentication flow">docs/api_reference.md</include>
    ```
-   **Selector reference:**
+   - `select=` — deterministic structural extraction (functions, classes, line ranges, headings, regex, JSON/YAML paths). Composable via comma-separation.
+   - `mode="interface"` — Python-only. Extracts signatures and docstrings with bodies replaced by `...`.
+   - `query=` — LLM-powered semantic extraction, cached in `.pdd/extracts/`.
+   - When both `select=` and `query=` are present, `select=` wins (no LLM cost).
 
-   | Selector | File types | Description |
-   |----------|-----------|-------------|
-   | `lines:N-M` | Any | Line range (e.g., `lines:10-20`, `lines:5-`, `lines:-3`) |
-   | `def:name` | Python (`.py`) | Function or async function by name |
-   | `class:Name` | Python (`.py`) | Entire class |
-   | `class:Name.method` | Python (`.py`) | Specific method within a class |
-   | `section:Heading` | Markdown (`.md`) | Section under a heading (up to next same-level heading) |
-   | `pattern:/regex/` | Any | All lines matching a regex |
-   | `path:key.nested` | JSON / YAML (`.json`, `.yaml`, `.yml`) | Value by dot-notation path |
-
-   `mode="interface"` is Python-only and extracts signatures, docstrings, and type hints with bodies replaced by `...`.
-
-   Selectors are composable (comma-separated). If a selector fails to match, PDD falls back to including the full file with a warning.
-
-   This mechanism is also used internally by some commands (like `test` and `example`) to automatically incorporate project-specific context files if they exist in conventional locations (e.g., `context/test.prompt`). See 'Providing Command-Specific Context' for details. For a full guide on selective includes, see the [Prompting Guide](docs/prompting_guide.md#selective-includes).
+   This mechanism is also used internally by some commands (like `test` and `example`) to automatically incorporate project-specific context files if they exist in conventional locations (e.g., `context/test.prompt`). See 'Providing Command-Specific Context' for details. For the full selector reference, see the [Prompting Guide](docs/prompting_guide.md#selective-includes).
 
 2. **`pdd`**: Indicates a comment that will be removed from the preprocessed prompt, including the tags themselves.
    ```xml
@@ -2364,7 +2342,7 @@ See the [fix command](#6-fix) documentation for details on the agentic E2E fix w
 
 ### 15. auto-deps
 
-Analyze a prompt file and search a directory or glob pattern for potential dependencies/examples to determine and insert into the prompt. Auto-deps also automatically determines *what parts* of each dependency are needed and emits `select=` or `query=` attributes on `<include>` tags.
+Analyze a prompt file and search a directory or glob pattern for potential dependencies/examples to determine and insert into the prompt. Auto-deps automatically determines what parts of each dependency are needed and emits appropriate selectors on new and existing `<include>` tags.
 
 ```
 pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
