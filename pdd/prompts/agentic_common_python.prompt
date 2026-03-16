@@ -9,6 +9,7 @@
       {"name": "get_available_agents", "signature": "() -> List[str]", "returns": "List[str]"},
       {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose, quiet, label, timeout, max_retries, retry_delay, deadline, use_playwright)", "returns": "Tuple[bool, str, float, str]"},
       {"name": "post_step_comment", "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)", "returns": "bool"},
+      {"name": "post_pr_comment", "signature": "(repo_owner, repo_name, pr_number, body, cwd)", "returns": "bool"},
       {"name": "github_save_state", "signature": "(...)", "returns": "Optional[int]"},
       {"name": "github_load_state", "signature": "(...)", "returns": "Tuple[Optional[Dict], Optional[int]]"},
       {"name": "validate_cached_state", "signature": "(last_completed_step, step_outputs, step_order, quiet)", "returns": "Union[int, float]"}
@@ -54,6 +55,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining < 60s (after 120s reserve).
 9. **GitHub State**: Persistence in issue comments via hidden markers (`<!-- PDD_WORKFLOW_STATE:... -->`). `gh api --paginate`.
 10. **State Validation**: `validate_cached_state` scans `step_outputs` for "FAILED:" to correct `last_completed_step`.
+11. **PR Comments**: Provide `post_pr_comment(repo_owner, repo_name, pr_number, body, cwd) -> bool` that posts a comment to a PR via `gh pr comment {{pr_number}} --repo {repo_owner}/{repo_name} --body ...`. Handle missing `gh` CLI gracefully (return False). This is used by CI validation to report unresolved failures.
 
 % Function Signatures
 `get_agent_provider_preference() -> List[str]`
@@ -62,6 +64,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 - Tries providers in preference order. Returns (success, output, cost, provider).
 - `use_playwright` enables constrained tools (see section).
 `post_step_comment(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool`
+`post_pr_comment(repo_owner, repo_name, pr_number, body, cwd) -> bool`
 `validate_cached_state(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]`
 `load_workflow_state(...) -> Tuple[Optional[Dict], Optional[int]]`
 `save_workflow_state(...) -> Optional[int]` - Must return `None` on GitHub failure (Issue #830).

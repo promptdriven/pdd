@@ -8,6 +8,8 @@ Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
 import re
+import subprocess
+import sys
 from typing import Dict, Optional
 
 import pytest
@@ -188,6 +190,24 @@ def test_run_agentic_e2e_fix_orchestrator_has_protect_tests_parameter():
 
     assert 'protect_tests' in params, \
         "run_agentic_e2e_fix_orchestrator must accept protect_tests parameter"
+
+
+def test_agentic_e2e_fix_orchestrator_example_runs_successfully():
+    """The example should run against the current worktree without external setup."""
+    repo_root = Path(__file__).resolve().parents[1]
+    example_path = repo_root / "context" / "agentic_e2e_fix_orchestrator_example.py"
+
+    result = subprocess.run(
+        [sys.executable, str(example_path)],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    combined_output = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode == 0, combined_output
+    assert "Success: True" in combined_output, combined_output
 
 
 class TestLoopModeNoLogFile:
@@ -3069,3 +3089,82 @@ class TestStep9PromptRequiresControlToken:
             "Add explicit mandatory instruction like 'You MUST include exactly one of "
             "ALL_TESTS_PASS, CONTINUE_CYCLE, or MAX_CYCLES_REACHED in your response.'"
         )
+
+
+# ---------------------------------------------------------------------------
+# _classify_step_output — semantic fallback for control tokens (Issue #865)
+# ---------------------------------------------------------------------------
+
+class TestClassifyStepOutput:
+    """Test semantic fallback when LLMs don't emit exact control tokens."""
+
+    def test_exact_token_local_tests_pass(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("**Status:** LOCAL_TESTS_PASS", step_num=9) == "LOCAL_TESTS_PASS"
+
+    def test_exact_token_all_tests_pass(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("**Status:** ALL_TESTS_PASS", step_num=9) == "ALL_TESTS_PASS"
+
+    def test_exact_token_continue_cycle(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("CONTINUE_CYCLE", step_num=9) == "CONTINUE_CYCLE"
+
+    def test_exact_token_max_cycles_reached(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("MAX_CYCLES_REACHED", step_num=9) == "MAX_CYCLES_REACHED"
+
+    def test_exact_token_not_a_bug(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("NOT_A_BUG", step_num=3) == "NOT_A_BUG"
+
+    def test_semantic_all_tests_passed_step9(self):
+        """Real Step 9 output from pdd_cloud#673 — says tests pass but no token."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = (
+            "The fix appears complete for issue #673. "
+            "full extensions/github_pdd_app/tests: 788 passed, 25 skipped. "
+            "no additional cycle is indicated from test results."
+        )
+        assert _classify_step_output(output, step_num=9) == "LOCAL_TESTS_PASS"
+
+    def test_semantic_all_n_tests_pass(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "All 18 tests pass. The fix is complete."
+        assert _classify_step_output(output, step_num=9) == "LOCAL_TESTS_PASS"
+
+    def test_semantic_tests_still_failing(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "3 tests still failing. Need another cycle to fix the remaining issues."
+        assert _classify_step_output(output, step_num=9) == "CONTINUE_CYCLE"
+
+    def test_semantic_not_a_bug_paraphrase(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "This is not a bug. The behavior is working as intended."
+        assert _classify_step_output(output, step_num=3) == "NOT_A_BUG"
+
+    def test_semantic_already_fixed(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "The issue is already fixed on this branch. Both tests passed."
+        assert _classify_step_output(output, step_num=3) == "NOT_A_BUG"
+
+    def test_ambiguous_returns_none(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "I analyzed the code and found several potential issues."
+        assert _classify_step_output(output, step_num=9) is None
+
+    def test_verification_failed_not_classified_as_pass(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "VERIFICATION_FAILED: LLM claimed LOCAL_TESTS_PASS but pytest failed.\n5 tests failed."
+        assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
+
+    def test_step1_all_tests_pass(self):
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "Verified with npx jest... both passed. All tests are passing."
+        assert _classify_step_output(output, step_num=1) == "ALL_TESTS_PASS"
+
+    def test_mixed_pass_fail_not_classified_as_pass(self):
+        """If some tests fail, don't classify as pass even if 'passed' appears."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "18 passed, 3 failed. The fix needs more work."
+        assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"

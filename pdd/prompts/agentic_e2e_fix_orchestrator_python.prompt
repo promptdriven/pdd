@@ -1,13 +1,13 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Orchestrates the 9-step agentic E2E fix workflow for resolving end-to-end test failures.</pdd-reason>
+<pdd-reason>Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.</pdd-reason>
 
 <pdd-interface>
 {{
   "type": "module",
   "module": {{
     "functions": [
-      {{"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
+      {{"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False)", "returns": "Tuple[bool, str, float, str, List[str]]"}}
     ]
   }}
 }}
@@ -15,15 +15,23 @@
 
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>ci_validation_python.prompt</pdd-dependency>
+
+<pdd.agentic_e2e_fix_orchestrator>
+<include>context/agentic_e2e_fix_orchestrator_example.py</include>
+</pdd.agentic_e2e_fix_orchestrator>
+<pdd.ci_validation>
+<include>context/ci_validation_example.py</include>
+</pdd.ci_validation>
 
 % Goal
 Write the `pdd/agentic_e2e_fix_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence (GitHub + local) for resumption. This workflow fixes bugs by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units.
+Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence (GitHub + local) for resumption. This workflow fixes bugs by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units, followed by a post-push CI validation stage.
 
 % Requirements
-1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False, ci_retries: int = 3, skip_ci: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run an outer loop (max `max_cycles` iterations) that executes steps 1-9 until all tests pass.
 4. Accumulate step outputs to pass as context to subsequent steps. Track total cost.
@@ -36,6 +44,8 @@ Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separa
    - Commit and push changed files (excluding intermediate artifacts like `_fixed.py`, `.bak`, `.pdd/` except state).
    - Handle push auth failures by retrying with `PDD_GH_TOKEN_FILE` if available.
 8. On failure/incomplete: Post final status comment to GitHub via `post_final_comment`.
+9. Include `<include>context/agentic_e2e_fix_orchestrator_example.py</include>` for orchestration patterns and `<include>context/ci_validation_example.py</include>` for CI loop integration.
+10. After successful commit/push (step 9 exit), run CI validation (step 10): poll external CI via `run_ci_validation_loop()`, iterate on failures up to `ci_retries` attempts, post PR comment on max retries exhausted.
 
 % Helper Functions
 - `_check_e2e_environment(cwd: Path) -> Tuple[bool, str]`: Check for `npx` and `playwright.config.*`.
@@ -46,8 +56,8 @@ Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separa
 - `_commit_and_push(...) -> Tuple[bool, str]`: Stage hash-detected changes, commit (`fix: {title}\n\nFixes #{number}`), and push with retry.
 
 % Step Execution & Logic
-- **Step Mapping**: 1:unit_tests, 2:e2e_tests, 3:root_cause, 4:fix_e2e_tests, 5:identify_devunits, 6:create_unit_tests, 7:verify_tests, 8:run_pdd_fix, 9:verify_all.
-- **Timeouts**: Define `E2E_FIX_STEP_TIMEOUTS` (Step 8 is 1000s, others 240-600s). Step 1 retries once with 1.5x timeout if it times out.
+- **Step Mapping**: 1:unit_tests, 2:e2e_tests, 3:root_cause, 4:fix_e2e_tests, 5:identify_devunits, 6:create_unit_tests, 7:verify_tests, 8:run_pdd_fix, 9:verify_all, 10:ci_validation.
+- **Timeouts**: Define `E2E_FIX_STEP_TIMEOUTS` (Step 8 is 1000s, Step 10 is 600s, others 240-600s). Step 1 retries once with 1.5x timeout if it times out.
 - **Pre-flight (Step 2)**: Skip if `_check_e2e_environment` returns False. Store as `E2E_SKIP` in `skipped_steps` and `step_outputs`.
 - **Bug Analysis Reuse**: Check `_bug_state_candidates` (e.g., `.pdd/bug-state/bug_state_{issue_number}.json`) for successful Step 2/3 outputs to skip redundant diagnosis in Cycle 1.
 - **Resumption**: Load state via `load_workflow_state`. Use `validate_cached_state` to find the last *successful* step. Check staleness via `_check_staleness`.
@@ -58,11 +68,37 @@ Orchestrator for the 9-step agentic e2e fix workflow. Runs each step as a separa
   - `MAX_CYCLES_REACHED`: Informational, loop exits naturally (Step 9).
   - **Missing Token**: Treat as terminal error — log warning and `break` (Step 9).
 
+% Step Sequence
+| Step | Name | Description |
+|---|---|---|
+| 1 | agentic_e2e_fix_step1_unit_tests_LLM | Run existing unit tests |
+| 2 | agentic_e2e_fix_step2_e2e_tests_LLM | Run existing e2e tests |
+| 3 | agentic_e2e_fix_step3_root_cause_LLM | Analyze logs and identify root cause |
+| 4 | agentic_e2e_fix_step4_fix_e2e_tests_LLM | Apply targeted fix to make e2e tests pass |
+| 5 | agentic_e2e_fix_step5_identify_devunits_LLM | Identify dev units needing pdd fix |
+| 6 | agentic_e2e_fix_step6_create_unit_tests_LLM | Create new unit tests for dev units |
+| 7 | agentic_e2e_fix_step7_verify_tests_LLM | Verify new unit tests pass/fail as expected |
+| 8 | agentic_e2e_fix_step8_run_pdd_fix_LLM | Run `pdd fix` on failing dev units |
+| 9 | agentic_e2e_fix_step9_verify_all_LLM | Run all tests and decide next cycle |
+| 10 | agentic_e2e_fix_step10_ci_validation_LLM | Interpret CI failures, apply fixes |
+
+% CI Validation Stage (Step 10)
+After `_commit_and_push()` succeeds and `skip_ci` is False:
+1. Call `run_ci_validation_loop(cwd, repo_owner, repo_name, issue_number, ci_retries, step10_template, run_agentic_task, timeout, quiet)`
+2. The loop: poll CI → on failure read logs → run step 10 LLM to fix → commit/push → repeat.
+3. On success: return normally.
+4. On max retries: post PR comment via `post_ci_failure_comment()` describing remaining failures.
+If `skip_ci` is True: skip step 10 entirely, log "[yellow]Skipping CI validation (--skip-ci)[/yellow]".
+
 % Context Variables
-- Common: `issue_url`, `repo_owner`, `repo_name`, `issue_number`, `cycle_number`, `max_cycles`, `issue_content`, `protect_tests`, `protect_tests_flag`.
+- Common: `issue_url`, `repo_owner`, `repo_name`, `issue_number`, `cycle_number`, `max_cycles`, `issue_content`, `protect_tests`, `protect_tests_flag`, `ci_retries`, `skip_ci`.
 - Step-specific: Previous `stepN_output`.
 - Parsed: `dev_units_identified` (Step 5 -> 6, 8), `failing_dev_units` (Step 8), `next_cycle` (Step 9).
 - Append `E2E_SKIP` notes to context if any previous steps were skipped.
+
+% Console Output
+- Add step 10 progress output using `Rich` console.
+- Include CI validation result in the final summary message.
 
 % Deliverables
 - Code: `pdd/agentic_e2e_fix_orchestrator.py`

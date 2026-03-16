@@ -1,11 +1,16 @@
 {
   "pdd_version": "0.0.176",
-  "timestamp": "2026-03-15T01:16:32.610412+00:00",
-  "command": "example",
-  "prompt_hash": null,
-  "code_hash": null,
-  "example_hash": null,
-  "test_hash": null,
-  "test_files": null,
-  "include_deps": null
+  "timestamp": "2026-03-15T06:13:08.948818+00:00",
+  "command": "fix",
+  "prompt_hash": "9017be16eec2691ccfbf42f4ec2c2b4972efb4f8f244e7e0b0eab04307288d79",
+  "code_hash": "1dc2e8c6843eaa3ce0533459ecaafd70b60becb5e71eb5aaa59a6b6522e0cf26",
+  "example_hash": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+  "test_hash": "57d5da1306d0b856a721231f11da75ab7b041e69642285e829130c67f52637af",
+  "test_files": {
+    "test_agentic_common.py": "57d5da1306d0b856a721231f11da75ab7b041e69642285e829130c67f52637af"
+  },
+  "include_deps": {
+    "context/llm_invoke_example.py": "88e1071cf088837c1adb6738f0a1f8e5134efd4a44370758dd19d0719475ac48",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+  }
 }

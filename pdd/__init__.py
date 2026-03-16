@@ -49,6 +49,9 @@ def _setup_cloud_defaults() -> None:
 
 # Initialize cloud defaults on package import
 _setup_cloud_defaults()
-from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, github_save_state, github_load_state, github_clear_state, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment
+from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, github_save_state, github_load_state, github_clear_state, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment
 from .agentic_test_orchestrator import run_agentic_test_orchestrator
 from .architecture_sync_helper import filepath_to_prompt_filename
+from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+from .ci_validation import detect_ci_system, post_ci_failure_comment, run_ci_validation_loop
+from .agentic_e2e_fix import run_agentic_e2e_fix

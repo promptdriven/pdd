@@ -1947,7 +1947,7 @@ You can configure these keys using `pdd setup` or by setting them in your shell'
 
 #### Agentic E2E Fix Mode
 
-For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates a 9-step iterative workflow to fix both unit tests and e2e tests across your codebase.
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates a 10-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation.
 
 **How it Works:**
 
@@ -1961,7 +1961,8 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 6. **Create Unit Tests**: For code bugs, create or append unit tests for the affected dev units
 7. **Verify Tests**: Run new unit tests to confirm they detect the bugs and will pass once fixed
 8. **Run PDD Fix**: Execute `pdd fix` sequentially on failing unit tests for each dev unit
-9. **Verify All**: Return to step 1 and repeat until all tests pass
+9. **Verify All**: Final verification that all tests pass locally
+10. **CI Validation**: Poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate CI-specific issues (lint, artifacts, build)
 
 **Resumable Operations:**
 
@@ -1977,6 +1978,12 @@ pdd fix https://github.com/myorg/myrepo/issues/42
 # With custom timeout and max cycles
 pdd fix --timeout-adder 30 --max-cycles 10 https://github.com/myorg/myrepo/issues/42
 
+# Configure CI retries and validation
+pdd fix --ci-retries 5 https://github.com/myorg/myrepo/issues/42
+
+# Skip post-push CI validation entirely
+pdd fix --skip-ci https://github.com/myorg/myrepo/issues/42
+
 # Start fresh (ignore saved state)
 pdd fix --no-resume https://github.com/myorg/myrepo/issues/42
 
@@ -1990,6 +1997,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
 - At least one supported agent CLI (Claude, Gemini, or Codex) with API key configured
+- For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
 

@@ -12,6 +12,7 @@ import pytest
 
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
+    _detect_modules_from_branch_diff,
     _filter_already_synced,
     _find_project_root,
     _is_catchall_match,
@@ -286,6 +287,7 @@ class TestRunAgenticSync:
         assert "Invalid" in msg
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
@@ -302,6 +304,7 @@ class TestRunAgenticSync:
         mock_load_prompt,
         mock_build_graph,
         mock_dry_run,
+        mock_branch_diff,
         mock_runner_cls,
     ):
         # Setup mocks
@@ -333,6 +336,7 @@ class TestRunAgenticSync:
         mock_runner.run.assert_called_once()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync.build_dep_graph_from_architecture")
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
@@ -349,6 +353,7 @@ class TestRunAgenticSync:
         mock_load_prompt,
         mock_build_graph,
         mock_dry_run,
+        mock_branch_diff,
         mock_runner_cls,
     ):
         """LLM returns basenames with language suffix; they should be stripped."""
@@ -871,3 +876,184 @@ class TestPostStrippingDedup:
         result = list(dict.fromkeys(stripped))
 
         assert result == ["recruiting_chat", "recruiting_config"]
+
+
+# ---------------------------------------------------------------------------
+# _detect_modules_from_branch_diff
+# ---------------------------------------------------------------------------
+
+class TestDetectModulesFromBranchDiff:
+    """Test git diff-based module detection for pdd sync with issue URLs."""
+
+    def test_returns_basenames_from_changed_prompts(self):
+        """When branch has changed prompt files, return their basenames."""
+        diff_output = (
+            "prompts/agentic_e2e_fix_orchestrator_python.prompt\n"
+            "prompts/ci_validation_python.prompt\n"
+            "prompts/commands/fix_python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == [
+            "agentic_e2e_fix_orchestrator",
+            "ci_validation",
+            "commands/fix",
+        ]
+
+    def test_returns_empty_list_on_main_branch(self):
+        """When on main/master, no diff is possible — return empty list."""
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="main\n", stderr=""
+            )
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == []
+
+    def test_returns_empty_list_when_no_prompts_changed(self):
+        """When branch has changes but no prompt files, return empty list."""
+        diff_output = "pdd/agentic_common.py\ntests/test_agentic_common.py\n"
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == []
+
+    def test_filters_non_prompt_files_from_diff(self):
+        """Only .prompt files are considered, not other changed files."""
+        diff_output = (
+            "prompts/ci_validation_python.prompt\n"
+            "pdd/ci_validation.py\n"
+            "tests/test_ci_validation.py\n"
+            "architecture.json\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == ["ci_validation"]
+
+    def test_excludes_llm_prompt_templates(self):
+        """LLM prompt templates (ending in _LLM.prompt) are not syncable modules."""
+        diff_output = (
+            "prompts/ci_validation_python.prompt\n"
+            "prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == ["ci_validation"]
+
+    def test_returns_empty_list_when_git_fails(self):
+        """When git command fails (not a git repo, etc.), return empty list."""
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("git not found")
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == []
+
+    def test_deduplicates_basenames(self):
+        """If same basename appears multiple times, deduplicate."""
+        diff_output = (
+            "prompts/ci_validation_python.prompt\n"
+            "prompts/ci_validation_javascript.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == ["ci_validation"]
+
+    def test_handles_nested_prompt_paths(self):
+        """Prompts in subdirectories like commands/ get correct basenames."""
+        diff_output = (
+            "prompts/commands/fix_python.prompt\n"
+            "prompts/commands/sync_python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == ["commands/fix", "commands/sync"]
+
+
+class TestBranchDiffSkipsLlm:
+    """Verify run_agentic_sync uses branch diff and skips LLM when modules found."""
+
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_skips_llm_when_branch_diff_finds_modules(
+        self, mock_cli, mock_gh, mock_llm, mock_diff, mock_dry_run
+    ):
+        """When branch diff returns modules, LLM should not be called."""
+        mock_diff.return_value = ["ci_validation", "agentic_common"]
+        mock_gh.return_value = (True, json.dumps({
+            "title": "test", "body": "test body", "comments_url": ""
+        }))
+        mock_dry_run.return_value = (True, {}, [], 0.0)
+
+        with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
+             patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
+            mock_runner_inst = MagicMock()
+            mock_runner_inst.run.return_value = (True, "ok", 0.5)
+            mock_runner.return_value = mock_runner_inst
+
+            run_agentic_sync(
+                "https://github.com/owner/repo/issues/822",
+                quiet=True,
+            )
+
+        mock_llm.assert_not_called()
+
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_falls_back_to_llm_when_branch_diff_empty(
+        self, mock_cli, mock_gh, mock_llm, mock_diff, mock_dry_run
+    ):
+        """When branch diff returns empty, LLM identification should be used."""
+        mock_diff.return_value = []
+        mock_gh.return_value = (True, json.dumps({
+            "title": "test", "body": "test body", "comments_url": ""
+        }))
+        mock_llm.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["ci_validation"]\nDEPS_VALID: true',
+            0.50,
+            "gpt-4",
+        )
+        mock_dry_run.return_value = (True, {}, [], 0.0)
+
+        with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
+             patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}"), \
+             patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
+            mock_runner_inst = MagicMock()
+            mock_runner_inst.run.return_value = (True, "ok", 0.5)
+            mock_runner.return_value = mock_runner_inst
+
+            run_agentic_sync(
+                "https://github.com/owner/repo/issues/822",
+                quiet=True,
+            )
+
+        mock_llm.assert_called_once()

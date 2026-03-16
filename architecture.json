@@ -369,6 +369,11 @@
             "returns": "bool"
           },
           {
+            "name": "post_pr_comment",
+            "signature": "(repo_owner, repo_name, pr_number, body, cwd)",
+            "returns": "bool"
+          },
+          {
             "name": "github_save_state",
             "signature": "(...)",
             "returns": "Optional[int]"
@@ -656,7 +661,7 @@
         "functions": [
           {
             "name": "__init__",
-            "signature": "(self, client_id: str)",
+            "signature": "(self, firebase_api_key: str, app_name: str, client_id: str)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -4049,7 +4054,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, basename: str, language: str)",
+            "signature": "(self, rc, out, err, basename: str, language: str)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5718,7 +5723,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, message: str, title: str = 'Confirmation Required')",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, message: str, title: str = 'Confirmation Required')",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5758,7 +5763,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, message: str, title: str = 'Input Required', default: str = '', password: bool = False)",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, message: str, title: str = 'Input Required', default: str = '', password: bool = False)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5806,7 +5811,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, app_ref: List[Optional['SyncApp']])",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, app_ref: List[Optional['SyncApp']])",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5854,7 +5859,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, real_redirector: 'ThreadSafeRedirector', stdin_redirector: 'TUIStdinRedirector')",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, real_redirector: 'ThreadSafeRedirector', stdin_redirector: 'TUIStdinRedirector')",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5886,7 +5891,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, app: App, log: RichLog)",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, app: App, log: RichLog)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -7184,11 +7189,12 @@
     }
   },
   {
-    "reason": "Orchestrates the 9-step agentic E2E fix workflow for resolving end-to-end test failures.",
+    "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
     "dependencies": [
       "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
+      "load_prompt_template_python.prompt",
+      "ci_validation_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -7204,11 +7210,8 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
       }
@@ -7219,11 +7222,10 @@
     }
   },
   {
-    "reason": "Autonomously fixes end-to-end test failures from GitHub issues.",
+    "reason": "CLI entry point for the 10-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
     "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
     "dependencies": [
-      "agentic_e2e_fix_orchestrator_python.prompt",
-      "agentic_common_python.prompt"
+      "agentic_e2e_fix_orchestrator_python.prompt"
     ],
     "priority": 184,
     "filename": "agentic_e2e_fix_python.prompt",
@@ -7239,19 +7241,8 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix",
-            "signature": "(issue_url: str) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "_find_worktree_for_issue",
-            "signature": "(issue_url: str) -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(issue_url, *, timeout_adder=0.0, max_cycles=5, resume=True, force=False, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
       }
@@ -7262,7 +7253,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for running issue-specific unit tests in E2E fix workflow.",
+    "reason": "Step 1 of the agentic E2E fix workflow: runs issue-specific unit tests and fixes failures via pdd fix.",
     "description": "Step 1 of the agentic E2E fix workflow. Runs issue-specific unit tests (created by pdd bug) and fixes failures using pdd fix.",
     "dependencies": [],
     "priority": 185,
@@ -7288,7 +7279,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for running E2E tests as exit condition.",
+    "reason": "Step 2 of the agentic E2E fix workflow: runs existing E2E tests to check if they all pass.",
     "description": "Step 2 of the agentic E2E fix workflow. Runs E2E tests and checks if they all pass, serving as the exit condition for the outer fix loop.",
     "dependencies": [],
     "priority": 186,
@@ -7313,7 +7304,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for root cause analysis of E2E test failures.",
+    "reason": "Step 3 of the agentic E2E fix workflow: root causes the E2E test failures.",
     "description": "Step 3 of the agentic E2E fix workflow. Performs root cause analysis on E2E test failures to determine whether the problem is in code, tests, or both.",
     "dependencies": [],
     "priority": 187,
@@ -7338,7 +7329,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for fixing E2E tests when they are the problem.",
+    "reason": "Step 4 of the agentic E2E fix workflow: fixes E2E tests if they are the identified problem.",
     "description": "Step 4 of the agentic E2E fix workflow. Fixes E2E tests themselves if root cause analysis indicates the tests are the problem.",
     "dependencies": [],
     "priority": 188,
@@ -7363,7 +7354,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for identifying dev units causing E2E failures.",
+    "reason": "Step 5 of the agentic E2E fix workflow: identifies which dev units are involved in test failures.",
     "description": "Step 5 of the agentic E2E fix workflow. Identifies which dev units (modules) are responsible for remaining test failures.",
     "dependencies": [],
     "priority": 189,
@@ -7388,7 +7379,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for creating unit tests from E2E failure analysis.",
+    "reason": "Step 6 of the agentic E2E fix workflow: creates or appends unit tests for the involved dev units.",
     "description": "Step 6 of the agentic E2E fix workflow. Creates or appends unit tests for the dev units identified as causing E2E failures.",
     "dependencies": [],
     "priority": 190,
@@ -7413,7 +7404,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for verifying unit tests detect the bug.",
+    "reason": "Step 7 of the agentic E2E fix workflow: verifies that the newly created unit tests detect the bugs.",
     "description": "Step 7 of the agentic E2E fix workflow. Verifies that the created unit tests actually fail on the current buggy code, confirming they detect the bug.",
     "dependencies": [],
     "priority": 191,
@@ -7438,7 +7429,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for running pdd fix on identified dev units.",
+    "reason": "Step 8 of the agentic E2E fix workflow: runs pdd fix sequentially on dev units identified during E2E failure analysis.",
     "description": "Step 8 of the agentic E2E fix workflow. Runs pdd fix sequentially on dev units identified during E2E failure analysis to fix the underlying bugs.",
     "dependencies": [],
     "priority": 192,
@@ -7463,7 +7454,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for final verification and loop control.",
+    "reason": "Step 9 of the agentic E2E fix workflow: performs final verification and controls the outer loop.",
     "description": "Step 9 of the agentic E2E fix workflow. Performs final verification and determines if another fix cycle is needed; controls the outer loop.",
     "dependencies": [],
     "priority": 193,
@@ -8488,6 +8479,100 @@
       "inputs": {
         "project_root": "Absolute path to the project root directory",
         "architecture_path": "Absolute path to the architecture JSON file to update"
+      }
+    }
+  },
+  {
+    "reason": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
+    "description": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
+    "dependencies": [
+      "agentic_e2e_fix_python.prompt",
+      "fix_main_python.prompt",
+      "track_cost_python.prompt"
+    ],
+    "priority": 220,
+    "filename": "commands/fix_python.prompt",
+    "filepath": "pdd/commands/fix.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "fix",
+            "description": "Iteratively fix code and tests or orchestrate an agentic GitHub issue fix"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
+    "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
+    "priority": 221,
+    "filename": "ci_validation_python.prompt",
+    "filepath": "pdd/ci_validation.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_ci_validation_loop",
+            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet)",
+            "returns": "Tuple[bool, str, float]"
+          },
+          {
+            "name": "post_ci_failure_comment",
+            "signature": "(repo_owner, repo_name, pr_number, failures, attempts, cwd)",
+            "returns": "bool"
+          },
+          {
+            "name": "detect_ci_system",
+            "signature": "(cwd)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Step 10 of the agentic E2E fix workflow: interprets CI failure logs and applies targeted fixes to unblock failing required checks.",
+    "description": "Step 10 of the agentic E2E fix workflow: interprets CI failure logs and applies targeted fixes to unblock failing required checks.",
+    "dependencies": [],
+    "priority": 222,
+    "filename": "agentic_e2e_fix_step10_ci_validation_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          "issue_url",
+          "repo_owner",
+          "repo_name",
+          "issue_number",
+          "ci_attempt",
+          "ci_max_retries",
+          "ci_check_results",
+          "ci_failure_logs",
+          "ci_system"
+        ]
       }
     }
   }
