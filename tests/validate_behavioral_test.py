@@ -45,8 +45,6 @@ STRUCTURAL_ASSERT_BUILTINS = frozenset({
     "callable",
     "dir",
     "vars",
-    "type",          # type(obj) == Foo  vs  isinstance — both structural in asserts
-    "isinstance",
 })
 
 

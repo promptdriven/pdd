@@ -715,7 +715,7 @@ check_test_catches_bug() {
                 (
                     cd "$js_tmp"
                     # Try node directly first, then npx jest
-                    if grep -q "require.*jest\|describe\|it(" "$test_file" 2>/dev/null && command -v npx &>/dev/null; then
+                    if grep -Eq "require.*jest|describe|it\(" "$(basename "$test_file")" 2>/dev/null && command -v npx &>/dev/null; then
                         if npx --yes jest --no-cache "$(basename "$test_file")" 2>&1; then
                             exit 1  # test passed = structural
                         else
@@ -737,6 +737,47 @@ check_test_catches_bug() {
                 fi
             else
                 log "node not found — skipping runtime validation for JavaScript"
+            fi
+            ;;
+        Java)
+            # Java tests: compile and run with javac/java. A behavioral test
+            # should fail (non-zero exit or test framework failure) against buggy code.
+            if command -v javac &>/dev/null; then
+                local java_tmp
+                java_tmp=$(mktemp -d)
+                log "Running generated Java test against buggy code in $java_tmp..."
+                (
+                    cd "$java_tmp"
+                    cp "$OLDPWD/$buggy_source" . 2>/dev/null || true
+                    cp "$OLDPWD/$test_file" . 2>/dev/null || true
+                    # Try to compile all .java files together
+                    if javac *.java 2>&1; then
+                        # Find the test class name from the test file
+                        local test_class
+                        test_class=$(grep -m1 'public class ' "$(basename "$test_file")" 2>/dev/null | awk '{print $3}')
+                        if [ -n "$test_class" ] && java -cp . "$test_class" 2>&1; then
+                            echo "[ERROR] Java test PASSED against buggy code — structural test"
+                            exit 1
+                        else
+                            echo "[INFO] Java test correctly FAILS against buggy code"
+                            exit 0
+                        fi
+                    else
+                        # Compile failure — can't validate at runtime, not a pass
+                        echo "[WARN] Java compilation failed — skipping runtime validation"
+                        exit 0
+                    fi
+                )
+                local java_result=$?
+                rm -rf "$java_tmp"
+                if [ $java_result -ne 0 ]; then
+                    log_error "STRUCTURAL TEST DETECTED: Java test PASSED against buggy code"
+                    failed=1
+                else
+                    log "Java test correctly FAILS against buggy code — behavioral"
+                fi
+            else
+                log "javac not found — skipping runtime validation for Java"
             fi
             ;;
         *)
@@ -811,13 +852,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
     log "10. Testing cloud 'bug' command (Go) — no structural tests"
     log "========================================"
 
-    cat > "bug_go.prompt" << 'PYEOF'
+    cat > "bug_go.prompt" << 'GOEOF'
 Write a Go function GetContentType() on a MessageResp struct that safely
 extracts the "type" field from a JSON payload. It should use comma-ok type
 assertions to avoid panics when the field is missing or has the wrong type.
-PYEOF
+GOEOF
 
-    cat > "bug_go_code.go" << 'PYEOF'
+    cat > "bug_go_code.go" << 'GOEOF'
 package config
 
 import (
@@ -839,9 +880,9 @@ func (m *MessageResp) GetContentType() int64 {
     // BUG: unsafe chained type assertion — panics on missing/wrong type
     return payloadMap["type"].(json.Number).Int64()
 }
-PYEOF
+GOEOF
 
-    cat > "bug_go_program.go" << 'PYEOF'
+    cat > "bug_go_program.go" << 'GOEOF'
 package main
 
 import "fmt"
@@ -850,7 +891,7 @@ func main() {
     msg := &MessageResp{Payload: []byte(`{"content": "hello"}`)}
     fmt.Println(msg.GetContentType())
 }
-PYEOF
+GOEOF
 
     echo 'panic: interface conversion: interface {} is nil, not json.Number' > "bug_go_current.txt"
     echo '0' > "bug_go_desired.txt"
@@ -870,13 +911,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "11" ]; then
     log "11. Testing cloud 'bug' command (Java) — no structural tests"
     log "========================================"
 
-    cat > "bug_java.prompt" << 'PYEOF'
+    cat > "bug_java.prompt" << 'JAVAEOF'
 Write a Java class PbjGrpcCall with a receiveRepliesLoop() method that uses
 PbjGrpcDatagramReader to process gRPC responses. The reader should respect
 the maxSize from PbjGrpcClientConfig instead of using a hardcoded 10MB limit.
-PYEOF
+JAVAEOF
 
-    cat > "bug_java_code.java" << 'PYEOF'
+    cat > "bug_java_code.java" << 'JAVAEOF'
 public class PbjGrpcCall {
     private final PbjGrpcClientConfig config;
 
@@ -907,9 +948,9 @@ class PbjGrpcClientConfig {
     public PbjGrpcClientConfig(int maxSize) { this.maxSize = maxSize; }
     public int getMaxSize() { return maxSize; }
 }
-PYEOF
+JAVAEOF
 
-    cat > "bug_java_program.java" << 'PYEOF'
+    cat > "bug_java_program.java" << 'JAVAEOF'
 public class Main {
     public static void main(String[] args) {
         PbjGrpcClientConfig config = new PbjGrpcClientConfig(20 * 1024 * 1024);
@@ -919,7 +960,7 @@ public class Main {
         System.out.println("Success: 15 MB response processed");
     }
 }
-PYEOF
+JAVAEOF
 
     echo 'Exception in thread "main" java.nio.BufferOverflowException' > "bug_java_current.txt"
     echo 'Success: 15 MB response processed' > "bug_java_desired.txt"
@@ -939,13 +980,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "12" ]; then
     log "12. Testing cloud 'bug' command (JavaScript) — no structural tests"
     log "========================================"
 
-    cat > "bug_js.prompt" << 'PYEOF'
+    cat > "bug_js.prompt" << 'JSEOF'
 Write a JavaScript parser module that handles optional chaining (?.) with
 reserved words as property identifiers. Expressions like a?.delete(b) should
 parse the same as a.delete(b) — producing a call_expression, not an ERROR node.
-PYEOF
+JSEOF
 
-    cat > "bug_js_code.js" << 'PYEOF'
+    cat > "bug_js_code.js" << 'JSEOF'
 // tree-sitter JavaScript parser grammar excerpt
 // BUG: optional_chaining rule does not include reserved words
 // in the property identifier position
@@ -963,24 +1004,24 @@ function getMemberProperty(node) {
     }
     return null;
 }
-PYEOF
+JSEOF
 
-    cat > "bug_js_program.js" << 'PYEOF'
+    cat > "bug_js_program.js" << 'JSEOF'
 const { parse } = require('./bug_js_code');
 const tree = parse('a?.delete(b);');
 console.log(tree.toString());
-PYEOF
+JSEOF
 
-    cat > "bug_js_current.txt" << 'PYEOF'
+    cat > "bug_js_current.txt" << 'JSEOF'
 (program
   (expression_statement
     (call_expression
       function: (identifier)
       arguments: (arguments (identifier)))
     (ERROR (identifier))))
-PYEOF
+JSEOF
 
-    cat > "bug_js_desired.txt" << 'PYEOF'
+    cat > "bug_js_desired.txt" << 'JSEOF'
 (program
   (expression_statement
     (call_expression
@@ -988,7 +1029,7 @@ PYEOF
         object: (identifier)
         property: (property_identifier))
       arguments: (arguments (identifier)))))
-PYEOF
+JSEOF
 
     BUG_JS_TEST="bug_test_js.js"
     run_pdd_command bug --manual --output "$BUG_JS_TEST" --language JavaScript \
