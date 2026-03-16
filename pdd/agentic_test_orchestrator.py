@@ -22,6 +22,8 @@ from .agentic_common import (
     clear_workflow_state,
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
+    set_agentic_progress,
+    clear_agentic_progress,
 )
 from .load_prompt_template import load_prompt_template
 
@@ -297,11 +299,14 @@ def run_agentic_test_orchestrator(
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 18-step agentic test generation workflow.
-
+    
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
     console = _get_console()
+
+    # Ensure any stale agentic progress from previous runs is cleared.
+    clear_agentic_progress()
 
     if not quiet:
         console.print(f"Generating tests for issue #{issue_number}: \"{issue_title}\"")
@@ -407,6 +412,22 @@ def run_agentic_test_orchestrator(
         use_playwright: bool = False,
         step_cwd: Optional[Path] = None,
     ) -> Tuple[bool, str, float, str]:
+        # Record progress so KeyboardInterrupt can report how far we got.
+        # For fractional steps (e.g. 5.5), treat completed steps as all strictly
+        # less than the current step number.
+        if isinstance(step_num, (int, float)):
+            completed_steps: List[int] = []
+            for n in range(1, 19):
+                if float(n) < float(step_num):
+                    completed_steps.append(n)
+            set_agentic_progress(
+                workflow="test",
+                current_step=int(step_num) if isinstance(step_num, int) else step_num,
+                total_steps=18,
+                step_name=description,
+                completed_steps=completed_steps,
+            )
+
         if not quiet:
             console.print(f"[bold][Step {step_num}/18][/bold] {description}...")
 
@@ -766,4 +787,6 @@ def run_agentic_test_orchestrator(
     clear_workflow_state(cwd, issue_number, "test", state_dir, repo_owner, repo_name, use_github_state)
 
     final_msg = f"PR Created: {pr_url}" if pr_url != "Unknown" else "Workflow completed"
+    # Clear progress on successful completion so future runs start clean.
+    clear_agentic_progress()
     return True, final_msg, total_cost, model_used, changed_files
