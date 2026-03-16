@@ -1,194 +1,149 @@
 [Remotion]
 
-# Section 7.4: Dissolve-Regenerate Loop — Disposable Code
+# Section 7.4: Dissolve-Regenerate Loop — Disposable Code in Motion
 
 **Tool:** Remotion
-**Duration:** ~12s (360 frames @ 30fps)
-**Timestamp:** 24:43 - 24:55
+**Duration:** ~8s (240 frames @ 30fps)
+**Timestamp:** 24:43 - 24:51
 
 ## Visual Description
-The PDD triangle from the previous scene remains visible but recedes to the edges of frame (vertices move outward, edges become faint guide lines). The center code block from the triangle scene becomes the focus — it expands to fill the center of the screen. The code then enters a hypnotic dissolve-regenerate loop: it dissolves upward (the familiar smoke effect), pauses briefly, then regenerates from the top with fresh code. This cycle repeats 3 times. Each iteration produces slightly different code (different variable names, different structure) but a terminal snippet in the corner shows `✓` every time — all tests pass, all prompts satisfied.
-
-The visual rhythm hammers the thesis: code is generated, verified, and disposable. The triangle persists at the edges — the specification endures while the code is ephemeral.
+The triangle from the previous shot holds its position, but the focus shifts to the generated code at its center. The code dissolves — particles scatter outward — then regenerates. Dissolves again, regenerates again. Each cycle produces subtly different code (different bar widths, slightly different arrangement) but the triangle "mold" remains perfectly stable. A small test-pass indicator flashes green after each regeneration. The visual makes the thesis visceral: the code is ephemeral, but the structure that generates it is permanent. A subtle terminal sequence runs in the corner: `pdd generate → ✓ → pdd generate → ✓` — a heartbeat of continuous regeneration.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Deep dark `#0A0F1A` (continuous from previous scene)
+- Background: `#0F172A` with radial gradient center `#111D2E` (carried from previous shot)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Receded Triangle:** Same vertices as previous scene but moved to outer frame:
-  - PROMPT glow: top-center, (960, 60), opacity reduced to 20%
-  - TESTS glow: bottom-left corner, (100, 980), opacity 20%
-  - GROUNDING glow: bottom-right corner, (1820, 980), opacity 20%
-  - Edges: 1px, 8% opacity, barely visible — just enough to maintain the triangle frame
-
-- **Center Code Block (expanded):**
-  - 14 lines of monospace code, syntax-highlighted
-  - Contained in ~600x400px region centered at (960, 500)
-  - Faint editor chrome: subtle line numbers `#4A5568` at 30% opacity
-
-- **Code Variants (3 iterations):**
-  - Variant A: `def process_order(order, config):` — functional style
-  - Variant B: `def process_order(order, settings):` — renamed params, reordered blocks
-  - Variant C: `def process_order(order, opts):` — further variation, list comprehension instead of loop
-  - All functionally equivalent. All pass tests.
-
-- **Terminal Snippet (bottom-right):**
-  - Persistent `#0D1117` rounded rectangle, ~320x36px at (1580, 1010)
-  - Shows `pdd generate → ✓` cycling in sync with regeneration
-  - Checkmark `#50C878`
-
-- **Cycle Indicator (bottom-center):**
-  - Three small dots (8px) at Y=1020, centered. Dot fills to white `#FFFFFF` as each cycle completes. Visual progress: ○○○ → ●○○ → ●●○ → ●●●
+- **Triangle (persistent):** Same vertices as Section 7.3 — (960, 240), (520, 720), (1400, 720). Edges at `rgba(255,255,255,0.12)`, stroke 1.5px. Nodes dimmed to 0.3 opacity (no longer the focus). Labels remain visible at 0.3 opacity
+- **Code Block (Center):**
+  - Generation 1: 8 horizontal bars, varying widths (80-200px), `rgba(255,255,255,0.15)`, height 6px, spaced 16px, centered at (960, 560)
+  - Generation 2: 8 bars with different widths (60-220px), same styling — subtly different code
+  - Generation 3: 8 bars, yet another variation (70-190px)
+- **Dissolve Particles:** When code dissolves, each bar breaks into 6-8 tiny squares (4x4px) that scatter outward with random velocity vectors, fading from `rgba(255,255,255,0.15)` to `rgba(255,255,255,0)` over 20 frames. Particles drift toward the nearest triangle edge (attracted to the mold)
+- **Regeneration Glow:** When new code appears, a brief radial pulse emanates from centroid — `rgba(74,144,217,0.06)` expanding outward 100px then fading
+- **Test-Pass Indicator:** Small `✓` in `#5AAA6E`, 24px, appears at (960, 640) after each regeneration. Scales 0→1.2→1.0 then fades after 15 frames
+- **Terminal Heartbeat (Bottom-right corner, X: 1480, Y: 960):**
+  - Rounded rect container, `#0D1117` fill, 360x60px, border `rgba(255,255,255,0.04)`
+  - Text cycles: `pdd generate` in `#C9D1D9` → `✓` in `#5AAA6E` → `pdd generate` → `✓` — JetBrains Mono 12px, synchronized with dissolve/regenerate beats
+- **Cycle Counter:** Small "×1", "×2", "×3" in `#94A3B8`, 14px, positioned at (960, 470), incrementing with each cycle
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1.0s):** Triangle recedes — vertices translate to corners, edges fade to 8% opacity. Center code expands (scale 0.6→1.0). Establishes the loop arena.
-
-2. **Cycle 1 (Frame 30-130):**
-   - **Frame 30-60 (1.0-2.0s):** Code Variant A visible, held for a beat.
-   - **Frame 60-85 (2.0-2.83s):** Dissolve upward — lines fade out bottom-to-top, stagger 2 frames, translateY -15px each.
-   - **Frame 85-95 (2.83-3.17s):** Empty pause. Just line numbers and faint triangle edges.
-   - **Frame 95-125 (3.17-4.17s):** Variant B regenerates top-to-bottom, stagger 2 frames, blue flash per line.
-   - **Frame 125-130 (4.17-4.33s):** Terminal: `✓`. First cycle dot fills.
-
-3. **Cycle 2 (Frame 130-230):**
-   - **Frame 130-155 (4.33-5.17s):** Variant B held.
-   - **Frame 155-180 (5.17-6.0s):** Dissolve.
-   - **Frame 180-190 (6.0-6.33s):** Empty pause.
-   - **Frame 190-220 (6.33-7.33s):** Variant C regenerates.
-   - **Frame 220-230 (7.33-7.67s):** Terminal: `✓`. Second dot fills.
-
-4. **Cycle 3 (Frame 230-320):**
-   - **Frame 230-255 (7.67-8.5s):** Variant C held.
-   - **Frame 255-280 (8.5-9.33s):** Dissolve.
-   - **Frame 280-290 (9.33-9.67s):** Empty pause.
-   - **Frame 290-315 (9.67-10.5s):** Variant A regenerates (full circle — same code returns, proving interchangeability).
-   - **Frame 315-320 (10.5-10.67s):** Terminal: `✓`. Third dot fills.
-
-5. **Frame 320-360 (10.67-12.0s):** Hold on final regenerated code. All three cycle dots filled. The message is clear.
+1. **Frame 0-20 (0-0.67s):** Triangle persists from previous shot (already on screen). Code bars are visible at center. Cycle counter shows "×1"
+2. **Frame 20-50 (0.67-1.67s):** First dissolve — code bars break into particles that scatter outward. Particles drift toward triangle edges. Terminal shows `pdd generate`
+3. **Frame 50-80 (1.67-2.67s):** First regeneration — new code bars (Generation 2) materialize from center outward (staggered, 2 frames/bar). Radial glow pulse. `✓` appears and fades. Counter updates to "×2"
+4. **Frame 80-110 (2.67-3.67s):** Second dissolve — same particle effect, slightly different scatter pattern
+5. **Frame 110-140 (3.67-4.67s):** Second regeneration — Generation 3 bars appear. Glow pulse. `✓`. Counter "×3". Terminal shows another `pdd generate → ✓` cycle
+6. **Frame 140-170 (4.67-5.67s):** Third dissolve — particles scatter more gently this time (reduced velocity). The triangle edges pulse brighter briefly, emphasizing the mold's stability
+7. **Frame 170-200 (5.67-6.67s):** Final regeneration — code bars settle into place. This time the `✓` lingers instead of fading. The triangle nodes pulse once in their respective colors
+8. **Frame 200-240 (6.67-8.0s):** Hold. Code breathes at center. Triangle is stable. Terminal shows a slow blinking cursor. The contrast between stable mold and ephemeral code is the final impression
 
 ### Typography
-- Code: JetBrains Mono, 15px, syntax-highlighted (muted — keywords `#81A1C1` at 70%, strings `#A3BE8C` at 70%)
-- Line numbers: JetBrains Mono, 13px, `#4A5568` at 30% opacity
-- Terminal: JetBrains Mono, 13px, `#94A3B8`
-- Cycle dots: no text — purely visual indicators
+- Test checkmark: Inter, 24px, bold (700), `#5AAA6E`
+- Cycle counter: Inter, 14px, medium (500), `#94A3B8`
+- Terminal text: JetBrains Mono, 12px, regular (400), `#C9D1D9` / `#5AAA6E`
 
 ### Easing
-- Triangle recession: `easeInOut(cubic)`
-- Code expand: `easeOut(quad)`
-- Line dissolve: `easeIn(quad)`
-- Line regenerate: `easeOut(cubic)`
-- Blue flash: `easeOut(expo)`
-- Cycle dot fill: `easeOut(quad)`
-- Terminal checkmark: `easeOut(elastic)` with 0.4 damping
+- Particle scatter: `easeOut(quad)` with random velocity multipliers (0.5-1.5x)
+- Code bar materialize: `easeOut(cubic)`
+- Radial glow pulse: `easeOut(sine)`
+- Checkmark scale: `easeOut(quad)`
+- Triangle edge pulse: `easeInOut(sine)`
+- Terminal typing: linear (typewriter feel)
 
 ## Narration Sync
 > "Code is generated, verified, and disposable."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={360}>
-  <Background color="#0A0F1A" />
+<Sequence from={0} durationInFrames={240}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    <RadialGradient center={[960, 560]} color="#111D2E" />
 
-  {/* Receded Triangle — ambient frame */}
-  <RecededTriangle
-    vertices={[
-      { position: [960, 60], color: "#4A90D9", opacity: 0.2 },
-      { position: [100, 980], color: "#D9944A", opacity: 0.2 },
-      { position: [1820, 980], color: "#5AAA6E", opacity: 0.2 }
-    ]}
-    edgeOpacity={0.08}
-    animateIn={{ durationInFrames: 30 }}
-  />
+    {/* Persistent Triangle (dimmed) */}
+    <TriangleMold
+      vertices={[[960, 240], [520, 720], [1400, 720]]}
+      nodeOpacity={0.3}
+      edgeOpacity={0.12}
+    />
 
-  {/* Code Dissolve-Regenerate Loop */}
-  <Sequence from={30}>
+    {/* Dissolve-Regenerate Cycle */}
     <DissolveRegenerateLoop
-      center={[960, 500]}
-      variants={[variantA, variantB, variantC]}
-      cycleConfig={{
-        holdFrames: 25,
-        dissolveFrames: 25,
-        pauseFrames: 10,
-        regenerateFrames: 30,
-      }}
-      dissolveDirection="bottom-to-top"
-      staggerFrames={2}
-      flashColor="#4A90D9"
+      center={[960, 560]}
+      cycles={[
+        { dissolveStart: 20, regenStart: 50, barWidths: [80, 180, 120, 200, 90, 160, 140, 100] },
+        { dissolveStart: 80, regenStart: 110, barWidths: [60, 220, 100, 170, 130, 190, 80, 150] },
+        { dissolveStart: 140, regenStart: 170, barWidths: [70, 190, 110, 180, 95, 150, 130, 120] },
+      ]}
+      particleCount={7}
+      particleSize={4}
     />
-  </Sequence>
 
-  {/* Terminal Snippet */}
-  <TerminalSnippet
-    position={[1580, 1010]}
-    background="#0D1117"
-    persistent={true}
-  >
-    <CyclingCheckmark
-      text="pdd generate"
-      checkColor="#50C878"
-      cycleFrames={[130, 230, 320]}
-    />
-  </TerminalSnippet>
+    {/* Test-Pass Indicators */}
+    {[50, 110, 170].map((frame, i) => (
+      <Sequence key={i} from={frame + 20} durationInFrames={20}>
+        <TestPassCheck x={960} y={640} />
+      </Sequence>
+    ))}
 
-  {/* Cycle Progress Dots */}
-  <CycleDots
-    position={[960, 1020]}
-    count={3}
-    fillFrames={[130, 230, 320]}
-    emptyColor="#4A5568"
-    filledColor="#FFFFFF"
-    dotSize={8}
-    gap={20}
-  />
+    {/* Cycle Counter */}
+    <CycleCounter x={960} y={470} keyframes={[0, 50, 110]} />
+
+    {/* Terminal Heartbeat */}
+    <Sequence from={0} durationInFrames={240}>
+      <TerminalHeartbeat
+        x={1480}
+        y={960}
+        command="pdd generate"
+        cycleFrames={[20, 80, 140]}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
+  "backgroundColor": "#0F172A",
   "triangle": {
-    "recessedVertices": [
-      { "position": [960, 60], "color": "#4A90D9", "opacity": 0.2 },
-      { "position": [100, 980], "color": "#D9944A", "opacity": 0.2 },
-      { "position": [1820, 980], "color": "#5AAA6E", "opacity": 0.2 }
-    ],
-    "edgeOpacity": 0.08
+    "vertices": [[960, 240], [520, 720], [1400, 720]],
+    "nodeOpacity": 0.3,
+    "edgeOpacity": 0.12
   },
-  "codeBlock": {
-    "center": [960, 500],
-    "lineCount": 14,
-    "variants": 3
-  },
-  "cycleConfig": {
-    "holdFrames": 25,
-    "dissolveFrames": 25,
-    "pauseFrames": 10,
-    "regenerateFrames": 30,
-    "staggerFrames": 2
-  },
-  "dissolve": {
-    "direction": "bottom-to-top",
-    "translateY": -15,
-    "flashColor": "#4A90D9"
-  },
-  "cycleDots": {
-    "position": [960, 1020],
-    "count": 3,
-    "fillFrames": [130, 230, 320],
-    "emptyColor": "#4A5568",
-    "filledColor": "#FFFFFF",
-    "dotSize": 8
+  "cycles": [
+    {
+      "generation": 1,
+      "barWidths": [80, 180, 120, 200, 90, 160, 140, 100],
+      "dissolveFrame": 20,
+      "regenFrame": 50
+    },
+    {
+      "generation": 2,
+      "barWidths": [60, 220, 100, 170, 130, 190, 80, 150],
+      "dissolveFrame": 80,
+      "regenFrame": 110
+    },
+    {
+      "generation": 3,
+      "barWidths": [70, 190, 110, 180, 95, 150, 130, 120],
+      "dissolveFrame": 140,
+      "regenFrame": 170
+    }
+  ],
+  "particles": {
+    "countPerBar": 7,
+    "size": 4,
+    "fadeDuration": 20,
+    "attractToEdges": true
   },
   "terminal": {
-    "position": [1580, 1010],
     "command": "pdd generate",
-    "checkColor": "#50C878"
-  },
-  "backgroundColor": "#0A0F1A"
+    "successSymbol": "✓",
+    "position": [1480, 960]
+  }
 }
 ```
 

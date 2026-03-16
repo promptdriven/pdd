@@ -1,52 +1,58 @@
-[Remotion]
+[split:]
 
-# Section 7.1: The Sock Callback — Metaphor Returns
+# Section 7.1: Sock Callback — The Final Discard
 
 **Tool:** Remotion
 **Duration:** ~8s (240 frames @ 30fps)
 **Timestamp:** 24:15 - 24:23
 
 ## Visual Description
-The sock metaphor from the cold open returns one final time, completing the narrative circle. A single holey sock sits center-frame on a clean, modern surface — the same geometric style as Section 0.4. A simplified geometric person notices the hole, pauses for a beat of consideration, then casually discards it to the left (same toss arc) and grabs a fresh sock from the right. The motion is unhurried and decisive — no hesitation, no sentimentality. The economics made the decision obvious.
-
-The color palette mirrors the cold open's modern tones (cool neutrals) but is slightly darker and more cinematic, signaling we've arrived at the conclusion.
+The sock metaphor returns one final time — stripped to its essence. A split-screen shows a holey sock on the left and a buggy code file on the right, both rendered as minimal silhouettes against the dark background. A figure on each side considers the object briefly, then discards it and reaches for a replacement. The grandmother grabs a fresh sock from a pack; the developer hits "regenerate" in their terminal. The parallel motion is synchronized — both acts of rational disposal happen in lockstep. This is the emotional callback that ties the entire video's thesis together: economics changed, so behavior changed.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Muted neutral `#E8E4DF` — slightly darker than cold open's `#F0EDE8` to mark the closing mood
+- Background: Dark navy `#0F172A` (solid fill)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Person:** Simplified geometric figure — circle head `#64748B`, rectangle torso `#475569`, rectangle legs `#334155`. Centered at (960, 580). ~200px tall. Same design vocabulary as cold open
-- **Holey Sock:** Rounded rectangle `#8B7355`, 80x40px, with a 14px circular cutout (hole) revealing background `#E8E4DF`. Initial position at hand level (960, 630)
-- **Hole Highlight:** Red circle outline `#EF4444` at 40% opacity, 14px diameter, single pulse around the cutout
-- **Trash Area (left):** No visible bin — sock simply arcs off-screen left past X=200, emphasizing effortlessness
-- **Fresh Sock (right):** Clean rounded rectangle `#FFFFFF` with subtle `#E2E8F0` border, appears from right shelf area at (1300, 700)
-- **Shelf:** Thin horizontal line `#94A3B8` at Y=740, spanning X=1150-1450
+- **Vertical Divider:** 2px line at X=960, full height, `rgba(255,255,255,0.10)`
+- **Left Panel — Sock (X: 0-958)**
+  - Label: "SOCKS" — `#94A3B8`, 14px, top-left at (80, 60), letter-spacing 3px
+  - Holey sock silhouette: Simplified outline, `#D9944A` at 0.5 opacity, stroke 2px, centered at (480, 420). Three small holes rendered as gaps in the outline
+  - Hand silhouette: Minimal geometric shape reaching from left edge toward sock, `rgba(255,255,255,0.15)`, stroke 1.5px
+  - Discard motion: Sock fades and drifts downward (Y+40, opacity→0)
+  - Fresh sock: Slides in from right side of panel, `#4A90D9` at 0.5 opacity, clean unbroken outline, centered at (480, 420)
+  - Cost label: "$2" — `#5AAA6E`, 18px, appears below fresh sock at (480, 560)
+- **Right Panel — Code (X: 962-1920)**
+  - Label: "CODE" — `#94A3B8`, 14px, top-left at (1040, 60), letter-spacing 3px
+  - Buggy code block: Simplified rectangle with wavy red underlines (3 squiggles), `rgba(255,255,255,0.12)` fill, `#EF4444` squiggles at 0.4 opacity, centered at (1440, 420)
+  - Hand/cursor silhouette: Minimal geometric cursor approaching from left, `rgba(255,255,255,0.15)`
+  - Discard motion: Code block fades and drifts downward (Y+40, opacity→0) — synchronized with sock
+  - Terminal block: Slides in from right, dark rounded rect `#1E293B` with border `rgba(255,255,255,0.08)`, containing `pdd fix` in `#5AAA6E` JetBrains Mono, centered at (1440, 420)
+  - Cost label: "~30s" — `#5AAA6E`, 18px, appears below terminal at (1440, 560)
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Fade in from previous section. Person stands center, holding holey sock at waist level. Scene establishes.
-2. **Frame 20-40 (0.67-1.33s):** Head tilts down 5deg toward sock. Hole highlight pulses once (`#EF4444` opacity 0→0.4→0 over 20 frames).
-3. **Frame 40-60 (1.33-2.0s):** Brief pause — the "consideration" beat. Person is still. This mirrors the narration rhythm.
-4. **Frame 60-100 (2.0-3.33s):** Sock toss. Sock follows a parabolic arc from (960, 630) toward off-screen left (100, 400). Sock rotates 270deg during flight, fading to opacity 0 as it exits. No landing — it simply leaves frame.
-5. **Frame 100-130 (3.33-4.33s):** Person walks right (translateX +340px). Reaches toward shelf area.
-6. **Frame 130-160 (4.33-5.33s):** Hand pulls fresh white sock from shelf. Fresh sock has a subtle clean glow — white `#FFFFFF` with a 4px `#4A90D9` shadow at 15% opacity.
-7. **Frame 160-240 (5.33-8.0s):** Hold. Person stands with fresh sock. Confident stillness. Gentle breathing idle (torso scaleY 1.0→1.01→1.0, 50-frame cycle).
+1. **Frame 0-20 (0-0.67s):** Divider draws top-to-bottom. "SOCKS" and "CODE" labels fade in
+2. **Frame 20-60 (0.67-2.0s):** Left: Holey sock fades in with hand approaching. Right: Buggy code block fades in with cursor approaching. Both scale 0.95→1.0
+3. **Frame 60-90 (2.0-3.0s):** Pause — both figures "consider" the object. Subtle ambient pulse on the sock holes and code squiggles (opacity oscillates 0.3→0.5)
+4. **Frame 90-140 (3.0-4.67s):** Synchronized discard — both objects drift down (Y+40) and fade out. Hand/cursor follow briefly then retract
+5. **Frame 140-190 (4.67-6.33s):** Left: Fresh sock slides in from right (easeOut). Right: Terminal block slides in from right (easeOut). Cost labels fade in beneath each
+6. **Frame 190-240 (6.33-8.0s):** Hold at final state. Fresh sock and terminal breathe with gentle 0.02 opacity oscillation. Cost labels hold steady
 
 ### Typography
-- None in scene — purely visual storytelling
+- Panel Labels: Inter, 14px, medium (500), `#94A3B8`, letter-spacing 3px
+- Cost Labels: Inter, 18px, semi-bold (600), `#5AAA6E`
+- Terminal Text: JetBrains Mono, 14px, regular (400), `#5AAA6E`
 
 ### Easing
-- Fade in: `easeOut(quad)`
-- Head tilt: `easeInOut(quad)`
-- Hole highlight pulse: `easeInOut(sin)`
-- Sock toss arc: `easeIn(quad)` rise, `easeIn(cubic)` descent
-- Sock rotation: `linear`
-- Sock fade-out: `easeIn(quad)`
-- Walk: `linear` translate, `easeInOut(sin)` leg alternation
-- Fresh sock pull: `easeOut(quad)`
+- Divider draw: `easeOut(cubic)`
+- Object fade-in/scale: `easeOut(quad)`
+- Discard drift: `easeIn(quad)` (gravity feel)
+- Replacement slide-in: `easeOut(cubic)`
+- Cost label fade: `easeOut(quad)`
+- Ambient pulse: `easeInOut(sine)`
 
 ## Narration Sync
 > "You don't patch socks because socks got cheap. The economics made patching irrational."
@@ -54,88 +60,81 @@ The color palette mirrors the cold open's modern tones (cool neutrals) but is sl
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={240}>
-  <Background color="#E8E4DF" />
-
-  {/* Person figure */}
-  <GeometricPerson position={[960, 580]}>
-    <Sequence from={20}>
-      <HeadTilt degrees={5} durationInFrames={20} />
-    </Sequence>
-    <Sequence from={100}>
-      <WalkRight distance={340} durationInFrames={30} />
-    </Sequence>
-    <Sequence from={160}>
-      <IdleBreathe cycleFrames={50} scaleRange={[1.0, 1.01]} />
-    </Sequence>
-  </GeometricPerson>
-
-  {/* Holey Sock with highlight */}
-  <Sequence from={0} durationInFrames={100}>
-    <HoleySock position={[960, 630]} sockColor="#8B7355" holeColor="#E8E4DF">
-      <Sequence from={20}>
-        <HoleHighlightPulse color="#EF4444" maxOpacity={0.4} durationInFrames={20} />
-      </Sequence>
-    </HoleySock>
+  {/* Divider */}
+  <Sequence from={0} durationInFrames={20}>
+    <VerticalDivider x={960} color="rgba(255,255,255,0.10)" />
+    <PanelLabel text="SOCKS" x={80} y={60} />
+    <PanelLabel text="CODE" x={1040} y={60} />
   </Sequence>
 
-  {/* Sock Toss — arc off-screen left */}
-  <Sequence from={60}>
-    <ParabolicToss
-      startPos={[960, 630]}
-      endPos={[100, 400]}
-      rotation={270}
-      fadeOut={true}
-      durationInFrames={40}
-    />
-  </Sequence>
+  {/* Left Panel — Sock */}
+  <AbsoluteFill style={{ clipPath: "inset(0 50% 0 0)" }}>
+    <Sequence from={20} durationInFrames={40}>
+      <HoleySockSilhouette x={480} y={420} color="#D9944A" />
+    </Sequence>
+    <Sequence from={90} durationInFrames={50}>
+      <DiscardMotion targetY={460} />
+    </Sequence>
+    <Sequence from={140} durationInFrames={50}>
+      <FreshSockSlideIn x={480} y={420} color="#4A90D9" />
+      <CostLabel text="$2" x={480} y={560} color="#5AAA6E" />
+    </Sequence>
+  </AbsoluteFill>
 
-  {/* Shelf and Fresh Sock */}
-  <ShelfLine y={740} xRange={[1150, 1450]} color="#94A3B8" />
-  <Sequence from={130}>
-    <FreshSockPull
-      position={[1300, 700]}
-      sockColor="#FFFFFF"
-      glowColor="#4A90D9"
-      glowOpacity={0.15}
-      durationInFrames={30}
-    />
-  </Sequence>
+  {/* Right Panel — Code */}
+  <AbsoluteFill style={{ clipPath: "inset(0 0 0 50%)" }}>
+    <Sequence from={20} durationInFrames={40}>
+      <BuggyCodeBlock x={1440} y={420} squiggles={3} />
+    </Sequence>
+    <Sequence from={90} durationInFrames={50}>
+      <DiscardMotion targetY={460} />
+    </Sequence>
+    <Sequence from={140} durationInFrames={50}>
+      <TerminalBlock x={1440} y={420} command="pdd fix" color="#5AAA6E" />
+      <CostLabel text="~30s" x={1440} y={560} color="#5AAA6E" />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "person": {
-    "headColor": "#64748B",
-    "torsoColor": "#475569",
-    "legsColor": "#334155",
-    "position": [960, 580]
+  "backgroundColor": "#0F172A",
+  "divider": {
+    "x": 960,
+    "color": "rgba(255,255,255,0.10)",
+    "width": 2
   },
-  "holeySock": {
-    "color": "#8B7355",
-    "holeHighlight": "#EF4444",
-    "position": [960, 630]
+  "leftPanel": {
+    "label": "SOCKS",
+    "oldItem": {
+      "type": "holey_sock",
+      "color": "#D9944A",
+      "opacity": 0.5,
+      "holes": 3
+    },
+    "newItem": {
+      "type": "fresh_sock",
+      "color": "#4A90D9",
+      "opacity": 0.5
+    },
+    "cost": "$2"
   },
-  "toss": {
-    "startPos": [960, 630],
-    "endPos": [100, 400],
-    "rotation": 270,
-    "fadeOut": true
-  },
-  "freshSock": {
-    "color": "#FFFFFF",
-    "borderColor": "#E2E8F0",
-    "glowColor": "#4A90D9",
-    "glowOpacity": 0.15,
-    "shelfPosition": [1300, 700]
-  },
-  "shelf": {
-    "y": 740,
-    "xRange": [1150, 1450],
-    "color": "#94A3B8"
-  },
-  "backgroundColor": "#E8E4DF"
+  "rightPanel": {
+    "label": "CODE",
+    "oldItem": {
+      "type": "buggy_code",
+      "squiggles": 3,
+      "errorColor": "#EF4444"
+    },
+    "newItem": {
+      "type": "terminal",
+      "command": "pdd fix",
+      "color": "#5AAA6E"
+    },
+    "cost": "~30s"
+  }
 }
 ```
 

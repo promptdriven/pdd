@@ -1,119 +1,128 @@
 [split:]
 
-# Section 3.5: Split — Traditional Bug Fix vs. PDD Bug Fix
+# Section 3.4: Ratchet Split — Code Bug vs. Prompt Defect
 
 **Tool:** Remotion
 **Duration:** ~14s (420 frames @ 30fps)
-**Timestamp:** 13:57 - 14:11
+**Timestamp:** 14:02 – 14:16
 
 ## Visual Description
-A split-screen comparison showing two approaches to the same bug. LEFT side: "Traditional" — a sequential chain where a bug is found, code is patched, a similar bug appears elsewhere, code is patched again, a different bug appears, patched again. The chain grows downward, accumulating. RIGHT side: "PDD" — a bug is found, a test is added (`pdd bug`), code is regenerated (`pdd fix`), and the bug is permanently impossible. The right side is clean and final. Below, a fork-in-the-road diagram distinguishes between code bugs (add a wall) and prompt defects (change the mold itself).
+A split-screen comparison distinguishing two types of defects in PDD: a code bug (left) and a prompt defect (right). Left panel shows a bug in the generated code — the fix is to add a new test wall, then regenerate. Right panel shows code that correctly implements a wrong specification — the fix is to edit the prompt (the mold itself), then regenerate. Both sides show the same regeneration step at the end, but the intervention point is different. This subtle but critical distinction is central to PDD's mental model.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
-- Vertical divider: 2px line at X=960, `rgba(255,255,255,0.15)`, full height
+- Background: #0F172A (dark navy)
+- Vertical divider: 2px, `rgba(255,255,255,0.12)`, centered at x=960
 
 ### Chart/Visual Elements
-- **LEFT Header:** "Traditional" — `#FFFFFF`, 28px bold, centered at X=480, Y=60
-- **RIGHT Header:** "PDD" — `#FFFFFF`, 28px bold, centered at X=1440, Y=60
-- **LEFT Chain (sequential patches):**
-  - Step 1: "Bug found" — red circle icon `#EF4444`, label 16px white, Y=140
-  - Step 2: "Patch code" → green-ish box `rgba(34,197,94,0.3)`, Y=220
-  - Arrow down (dashed, `rgba(255,255,255,0.3)`)
-  - Step 3: "Similar bug elsewhere" — red circle, Y=310
-  - Step 4: "Patch again" → yellow-ish box `rgba(245,158,11,0.3)`, Y=390
-  - Arrow down
-  - Step 5: "Different bug" — red circle, Y=480
-  - Step 6: "Patch again..." → orange box `rgba(239,68,68,0.2)`, Y=560
-  - Trailing ellipsis dots, suggesting infinite continuation
-  - Overall: chain tints progressively warmer/redder, implying accumulating fragility
-- **RIGHT Chain (PDD approach):**
-  - Step 1: "Bug found" — red circle icon `#EF4444`, Y=140
-  - Step 2: "Add test" → amber wall icon `#D9944A`, label: `pdd bug`, Y=260
-  - Step 3: "Regenerate" → blue pulse icon `#4A90D9`, label: `pdd fix`, Y=380
-  - Step 4: "Bug impossible forever" — green checkmark `#22C55E`, with permanent glow, Y=500
-  - Clean, final. No continuation. The chain ends.
-- **Fork Diagram (bottom third, centered):**
-  - Starting node: "Bug found" — white circle, centered at X=960, Y=750
-  - LEFT branch: "Code bug → add a wall" — arrow to amber wall icon, X=660, Y=850
-  - RIGHT branch: "Prompt defect → change the mold" — arrow to blue document icon, X=1260, Y=850
+- **Left Panel — Code Bug (x: 0–958)**
+  - Header: "Code Bug" — `#EF4444`, 22px, top-center at (480, 80)
+  - Subheader: "Generated code violates intent" — `#94A3B8`, 14px
+  - Step 1 visual: Mold with walls + code. Red spark (bug) in code area
+  - Step 2 visual: New amber wall brick slides in → labeled "Add a wall"
+  - Step 3 visual: Code regenerates (particles refill, clean)
+  - Arrow flow: Step 1 → Step 2 → Step 3, vertical, connected by thin arrows
+  - Intervention label: "Fix: Add a test" — `#D9944A`, 16px, bold
+
+- **Right Panel — Prompt Defect (x: 962–1920)**
+  - Header: "Prompt Defect" — `#4A90D9`, 22px, top-center at (1440, 80)
+  - Subheader: "Code correctly implements wrong spec" — `#94A3B8`, 14px
+  - Step 1 visual: Mold with walls + code. Code is green (passes tests!) but the cavity shape is wrong
+  - Step 2 visual: The mold cavity shape morphs — labeled "Change the mold"
+  - Step 3 visual: Code regenerates with new shape
+  - Arrow flow: Step 1 → Step 2 → Step 3, vertical, connected by thin arrows
+  - Intervention label: "Fix: Edit the prompt" — `#4A90D9`, 16px, bold
+
+- **Bottom banner:** "PDD distinguishes between these. A code bug? Add a wall. A prompt defect? Change the mold itself."
+  - Centered at y=920, `#FFFFFF` at 0.6 opacity, 16px
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Divider line draws top-to-bottom. Headers fade in
-2. **Frame 20-80 (0.67-2.67s):** LEFT: Steps 1-2 animate in sequence (bug circle pulses, patch box slides in). RIGHT: Step 1 animates in simultaneously
-3. **Frame 80-140 (2.67-4.67s):** LEFT: Steps 3-4 animate (arrow draws, second bug, second patch). RIGHT: Step 2 — amber wall materializes with "pdd bug" label
-4. **Frame 140-200 (4.67-6.67s):** LEFT: Steps 5-6 animate (third bug, third patch, ellipsis). Chain visibly accumulating weight. RIGHT: Step 3 — blue regeneration pulse
-5. **Frame 200-260 (6.67-8.67s):** RIGHT: Step 4 — green checkmark scales in with glow. "Bug impossible forever" text. The RIGHT side is done. The LEFT side's ellipsis continues to pulse, suggesting it never ends
-6. **Frame 260-340 (8.67-11.33s):** Fork diagram fades in at bottom. Starting node appears, then branches animate left and right simultaneously. Amber wall icon and blue document icon pulse at their endpoints
-7. **Frame 340-420 (11.33-14.0s):** Hold. LEFT chain pulses faintly with accumulated red tint. RIGHT side glows clean green. Fork diagram steady
+1. **Frame 0–20 (0–0.67s):** Vertical divider draws top-to-bottom. Headers "Code Bug" and "Prompt Defect" fade in simultaneously.
+2. **Frame 20–60 (0.67–2.0s):** Subheaders fade in. Both Step 1 visuals appear — left shows bug spark in code, right shows green-passing code but with a misshapen cavity outline (dashed `#4A90D9` showing "wrong shape").
+3. **Frame 60–150 (2.0–5.0s):** Left: Step 2 — new wall brick slides into the mold stack with amber flash. Arrow draws from Step 1 to Step 2. "Add a wall" label fades in. Right: Step 2 — the mold cavity outline morphs smoothly from wrong shape to correct shape. Arrow draws. "Change the mold" label fades in.
+4. **Frame 150–240 (5.0–8.0s):** Both sides simultaneously: Step 3 — code particles dissolve and regenerate. Left: clean particles, no bug. Right: particles now conform to the corrected cavity shape. Arrows draw to Step 3.
+5. **Frame 240–300 (8.0–10.0s):** Intervention labels fade in on each side — "Fix: Add a test" (amber) on left, "Fix: Edit the prompt" (blue) on right. Each gets a subtle left-border accent bar (4px).
+6. **Frame 300–360 (10.0–12.0s):** Bottom banner types on character by character.
+7. **Frame 360–420 (12.0–14.0s):** Hold. Both panels breathe with subtle ambient pulse. Divider pulses faintly.
 
 ### Typography
-- Headers: Inter, 28px, bold (700), `#FFFFFF`
-- Step Labels: Inter, 16px, regular (400), `#FFFFFF` at 0.9 opacity
-- Command Labels: JetBrains Mono, 14px, regular (400), `#94A3B8`
-- Fork Labels: Inter, 16px, semi-bold (600), respective colors
-- "Bug impossible forever": Inter, 18px, bold (700), `#22C55E`
+- Panel headers: Inter Bold, 22px, respective colors
+- Subheaders: Inter Regular, 14px, `#94A3B8`
+- Step labels: Inter Medium, 14px, `#FFFFFF` at 0.7 opacity
+- Intervention labels: Inter SemiBold, 16px, respective colors, with 4px left accent bar
+- Bottom banner: Inter Regular, 16px, `#FFFFFF` at 0.6 opacity
 
 ### Easing
-- Divider draw: `easeOut(cubic)`
-- Bug circles: `easeOut(back(1.3))`
-- Patch boxes: `easeOut(quad)`
-- Arrows: `linear` draw
-- Green checkmark: `easeOut(back(1.5))`
-- Fork branches: `easeOut(cubic)`
+- Divider draw: `easeOutCubic`
+- Header fade: `easeOutQuad`
+- Wall brick slide: `spring({ damping: 12, stiffness: 110 })`
+- Cavity morph: `easeInOutCubic` (1s duration)
+- Particle regeneration: `easeInOutCubic`
+- Arrow draw: `easeOutQuad`
+- Banner type-on: linear
 
 ## Narration Sync
-> "In traditional development, a bug fix helps one place. In PDD, a test prevents that bug everywhere, forever."
 > "And sometimes the bug isn't in the code — it's in the prompt. The code correctly implements a wrong specification. PDD distinguishes between these. A code bug? Add a wall. A prompt defect? Change the mold itself."
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={420}>
-  {/* Divider and Headers */}
-  <Sequence from={0} durationInFrames={20}>
-    <VerticalDivider x={960} />
-    <SplitHeaders left="Traditional" right="PDD" />
-  </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Divider */}
+    <Sequence from={0} durationInFrames={20}>
+      <VerticalDivider x={960} color="rgba(255,255,255,0.12)" />
+    </Sequence>
 
-  {/* LEFT: Traditional chain */}
-  <Sequence from={20} durationInFrames={180}>
-    <TraditionalChain
-      steps={[
-        { type: "bug", label: "Bug found" },
-        { type: "patch", label: "Patch code" },
-        { type: "bug", label: "Similar bug elsewhere" },
-        { type: "patch", label: "Patch again" },
-        { type: "bug", label: "Different bug" },
-        { type: "patch", label: "Patch again..." }
-      ]}
-      stagger={30}
-    />
-  </Sequence>
+    {/* Left Panel — Code Bug */}
+    <AbsoluteFill style={{ clipPath: "inset(0 50% 0 0)" }}>
+      <Sequence from={0} durationInFrames={20}>
+        <PanelHeader text="Code Bug" color="#EF4444" x={480} />
+        <Subheader text="Generated code violates intent" x={480} />
+      </Sequence>
+      <Sequence from={20} durationInFrames={40}>
+        <BugInCode x={480} y={320} />
+      </Sequence>
+      <Sequence from={60} durationInFrames={90}>
+        <AddWallStep x={480} y={480} />
+      </Sequence>
+      <Sequence from={150} durationInFrames={90}>
+        <RegenerateStep x={480} y={640} clean={true} />
+      </Sequence>
+      <Sequence from={240} durationInFrames={60}>
+        <InterventionLabel text="Fix: Add a test" color="#D9944A" />
+      </Sequence>
+    </AbsoluteFill>
 
-  {/* RIGHT: PDD chain */}
-  <Sequence from={20} durationInFrames={240}>
-    <PDDChain
-      steps={[
-        { type: "bug", label: "Bug found", frame: 0 },
-        { type: "wall", label: "Add test", cmd: "pdd bug", frame: 60 },
-        { type: "regen", label: "Regenerate", cmd: "pdd fix", frame: 120 },
-        { type: "done", label: "Bug impossible forever", frame: 180 }
-      ]}
-    />
-  </Sequence>
+    {/* Right Panel — Prompt Defect */}
+    <AbsoluteFill style={{ clipPath: "inset(0 0 0 50%)" }}>
+      <Sequence from={0} durationInFrames={20}>
+        <PanelHeader text="Prompt Defect" color="#4A90D9" x={1440} />
+        <Subheader text="Code correctly implements wrong spec" x={1440} />
+      </Sequence>
+      <Sequence from={20} durationInFrames={40}>
+        <WrongShapeCode x={1440} y={320} />
+      </Sequence>
+      <Sequence from={60} durationInFrames={90}>
+        <MoldMorphStep x={1440} y={480} />
+      </Sequence>
+      <Sequence from={150} durationInFrames={90}>
+        <RegenerateStep x={1440} y={640} newShape={true} />
+      </Sequence>
+      <Sequence from={240} durationInFrames={60}>
+        <InterventionLabel text="Fix: Edit the prompt" color="#4A90D9" />
+      </Sequence>
+    </AbsoluteFill>
 
-  {/* Fork Diagram */}
-  <Sequence from={260} durationInFrames={80}>
-    <ForkDiagram
-      startLabel="Bug found"
-      leftBranch={{ label: "Code bug → add a wall", icon: "wall", color: "#D9944A" }}
-      rightBranch={{ label: "Prompt defect → change the mold", icon: "document", color: "#4A90D9" }}
-    />
-  </Sequence>
+    {/* Bottom banner */}
+    <Sequence from={300} durationInFrames={60}>
+      <TypeOnText
+        text="A code bug? Add a wall. A prompt defect? Change the mold itself."
+        y={920}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -121,30 +130,21 @@ A split-screen comparison showing two approaches to the same bug. LEFT side: "Tr
 ```json
 {
   "backgroundColor": "#0F172A",
-  "dividerColor": "rgba(255,255,255,0.15)",
-  "traditional": {
-    "header": "Traditional",
-    "steps": [
-      { "type": "bug", "label": "Bug found" },
-      { "type": "patch", "label": "Patch code" },
-      { "type": "bug", "label": "Similar bug elsewhere" },
-      { "type": "patch", "label": "Patch again" },
-      { "type": "bug", "label": "Different bug" },
-      { "type": "patch", "label": "Patch again..." }
-    ]
+  "leftPanel": {
+    "title": "Code Bug",
+    "subtitle": "Generated code violates intent",
+    "color": "#EF4444",
+    "intervention": "Add a test",
+    "interventionColor": "#D9944A",
+    "steps": ["Bug in code", "Add wall", "Regenerate (clean)"]
   },
-  "pdd": {
-    "header": "PDD",
-    "steps": [
-      { "type": "bug", "label": "Bug found" },
-      { "type": "wall", "label": "Add test", "command": "pdd bug" },
-      { "type": "regen", "label": "Regenerate", "command": "pdd fix" },
-      { "type": "done", "label": "Bug impossible forever" }
-    ]
-  },
-  "fork": {
-    "codeBug": { "label": "Code bug → add a wall", "color": "#D9944A" },
-    "promptDefect": { "label": "Prompt defect → change the mold", "color": "#4A90D9" }
+  "rightPanel": {
+    "title": "Prompt Defect",
+    "subtitle": "Code correctly implements wrong spec",
+    "color": "#4A90D9",
+    "intervention": "Edit the prompt",
+    "interventionColor": "#4A90D9",
+    "steps": ["Wrong spec", "Morph mold", "Regenerate (new shape)"]
   }
 }
 ```

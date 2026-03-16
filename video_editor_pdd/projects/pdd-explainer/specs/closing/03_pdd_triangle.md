@@ -1,179 +1,193 @@
 [Remotion]
 
-# Section 7.3: The PDD Triangle — Three Components
+# Section 7.3: PDD Triangle — Prompt, Tests, Grounding
 
 **Tool:** Remotion
 **Duration:** ~10s (300 frames @ 30fps)
 **Timestamp:** 24:33 - 24:43
 
 ## Visual Description
-The screen transitions to a dark cinematic background. Three glowing nodes appear at the vertices of an equilateral triangle, each representing a core PDD component: PROMPT (top, blue), TESTS (bottom-left, amber), GROUNDING (bottom-right, green). The triangle assembles vertex by vertex, timed precisely to the narration's three declarative sentences. As each vertex appears, a label and a thin connecting edge draw in. Once all three vertices are connected, code materializes in the center of the triangle — generated from the three. The code text is neutral gray with a faint blue tint, visually subordinate to the glowing triangle vertices.
-
-This is the thesis distilled to its simplest geometric form — the specification triangle, where value lives.
+The three core components of PDD materialize as a triangle diagram — the video's definitive visual thesis. PROMPT sits at the apex in cool blue, TESTS at bottom-left in warm amber, GROUNDING at bottom-right in soft green. Each vertex is a rounded node connected by subtle glowing edges. As the narrator names each component, that vertex illuminates and its label appears. Once all three are lit, the center of the triangle fills with generated code — simplified horizontal bars rendered in neutral gray. The triangle represents the "mold" that shapes the disposable code. The animation is deliberate and rhythmic, matching the narrator's measured cadence: one component per beat.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Deep dark `#0A0F1A` (solid)
+- Background: `#0F172A` (dark navy), with a very subtle radial gradient center — `#111D2E` at the triangle's centroid fading to `#0F172A` at edges
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Triangle Vertices (equilateral, centered at 960, 520):**
-  - **PROMPT (top):** Circle node, 24px radius, `#4A90D9` fill, `#4A90D9` glow (16px blur, 40% opacity). Position: (960, 300)
-  - **TESTS (bottom-left):** Circle node, 24px radius, `#D9944A` fill, `#D9944A` glow (16px blur, 40% opacity). Position: (660, 720)
-  - **GROUNDING (bottom-right):** Circle node, 24px radius, `#5AAA6E` fill, `#5AAA6E` glow (16px blur, 40% opacity). Position: (1260, 720)
-
-- **Triangle Edges:**
-  - PROMPT→TESTS: 2px line, gradient from `#4A90D9` to `#D9944A`
-  - TESTS→GROUNDING: 2px line, gradient from `#D9944A` to `#5AAA6E`
-  - GROUNDING→PROMPT: 2px line, gradient from `#5AAA6E` to `#4A90D9`
-
-- **Vertex Labels:**
-  - "PROMPT" — centered above top vertex, `#4A90D9`
-  - "TESTS" — centered below bottom-left vertex, `#D9944A`
-  - "GROUNDING" — centered below bottom-right vertex, `#5AAA6E`
-
-- **Center Code Block:**
-  - 6 lines of faint monospace code text, `#94A3B8` at 50% opacity
-  - Contained within an implicit rectangle ~280x140px centered at (960, 520)
-  - Subtle blue tint overlay `#4A90D9` at 5% opacity
-  - Lines represent generic function code (syntax-highlighted but muted)
+- **Triangle Edges:** Three lines connecting vertices, `rgba(255,255,255,0.08)` initially, brightening to `rgba(255,255,255,0.15)` once all vertices are lit. Stroke 1.5px. Vertices at:
+  - Top: (960, 240)
+  - Bottom-left: (520, 720)
+  - Bottom-right: (1400, 720)
+- **PROMPT Node (Top):**
+  - Circle: 60px diameter, `#4A90D9` at 0.15 opacity fill, `#4A90D9` at 0.6 opacity stroke (2px), centered at (960, 240)
+  - Icon: Simplified document/pencil icon inside, `#4A90D9` at 0.5 opacity, 24px
+  - Label: "PROMPT" — `#4A90D9`, 18px Inter semi-bold, positioned at (960, 180), centered
+  - Subtitle: "Encodes intent" — `#4A90D9` at 0.4 opacity, 14px Inter regular, positioned at (960, 310)
+- **TESTS Node (Bottom-left):**
+  - Circle: 60px diameter, `#D9944A` at 0.15 opacity fill, `#D9944A` at 0.6 opacity stroke (2px), centered at (520, 720)
+  - Icon: Simplified checkmark/shield icon, `#D9944A` at 0.5 opacity, 24px
+  - Label: "TESTS" — `#D9944A`, 18px Inter semi-bold, positioned at (520, 790), centered
+  - Subtitle: "Preserve behavior" — `#D9944A` at 0.4 opacity, 14px Inter regular, positioned at (520, 660)
+- **GROUNDING Node (Bottom-right):**
+  - Circle: 60px diameter, `#5AAA6E` at 0.15 opacity fill, `#5AAA6E` at 0.6 opacity stroke (2px), centered at (1400, 720)
+  - Icon: Simplified anchor/pin icon, `#5AAA6E` at 0.5 opacity, 24px
+  - Label: "GROUNDING" — `#5AAA6E`, 18px Inter semi-bold, positioned at (1400, 790), centered
+  - Subtitle: "Maintains style" — `#5AAA6E` at 0.4 opacity, 14px Inter regular, positioned at (1400, 660)
+- **Generated Code (Center):**
+  - Cluster of 8 horizontal bars (simulated code lines), varying widths (60-200px), `rgba(255,255,255,0.12)`, height 6px, spaced 16px apart, centered at triangle centroid (960, 560)
+  - Very subtle multi-color tint: top bars lean slightly blue, left bars slightly amber, right bars slightly green — representing influence from each vertex
+- **Directional Arrows:** Three small chevrons (›) along each edge, pointing inward toward center, `rgba(255,255,255,0.06)`, appearing after code materializes — showing that the mold shapes the code
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Fade in from black. Empty dark canvas.
-2. **Frame 15-60 (0.5-2.0s):** Narration: "Prompts encode intent." — PROMPT vertex fades in (opacity 0→1, scale 0.5→1.0) with blue glow bloom. Label "PROMPT" fades in 10 frames after node.
-3. **Frame 60-105 (2.0-3.5s):** Narration: "Tests preserve behavior." — TESTS vertex fades in with amber glow. Edge draws from PROMPT→TESTS (line grows from PROMPT position toward TESTS). Label "TESTS" fades in.
-4. **Frame 105-150 (3.5-5.0s):** Narration: "Grounding maintains style." — GROUNDING vertex fades in with green glow. Edges draw: TESTS→GROUNDING and GROUNDING→PROMPT simultaneously. Label "GROUNDING" fades in. Triangle complete.
-5. **Frame 150-180 (5.0-6.0s):** Triangle pulses once (all edges brighten to full opacity then settle to 70%). The interior of the triangle fills with a very subtle gradient (center lighter `#0A0F1A` at 95% → transparent).
-6. **Frame 180-240 (6.0-8.0s):** Code materializes in center. Lines type in sequentially (3 frames apart), each with a brief flash matching the nearest vertex color. The code is clearly generated from the triangle — visual causality.
-7. **Frame 240-300 (8.0-10.0s):** Hold. All elements visible. Gentle ambient pulse on vertex glows (opacity 0.3→0.5→0.3, 60-frame cycle). Code sits subordinate in center.
+1. **Frame 0-30 (0-1.0s):** Triangle edges draw on simultaneously — three lines grow from vertices toward each other, meeting at midpoints. Edges start at `rgba(255,255,255,0.04)` and reach `rgba(255,255,255,0.08)`
+2. **Frame 30-80 (1.0-2.67s):** PROMPT node illuminates — circle scales 0.8→1.0 with fill opacity 0→0.15, stroke brightens. Label "PROMPT" fades in above. Subtitle "Encodes intent" fades in below. Synced with narrator saying "Prompts encode intent."
+3. **Frame 80-130 (2.67-4.33s):** TESTS node illuminates — same animation pattern. Label "TESTS" and subtitle "Preserve behavior" fade in. Synced with "Tests preserve behavior." Edge from PROMPT to TESTS brightens
+4. **Frame 130-180 (4.33-6.0s):** GROUNDING node illuminates. Label "GROUNDING" and subtitle "Maintains style" fade in. Synced with "Grounding maintains style." All edges now at full brightness `rgba(255,255,255,0.15)`
+5. **Frame 180-210 (6.0-7.0s):** Radial gradient background intensifies slightly at center. Generated code bars appear one by one from center outward (3-frame stagger per bar)
+6. **Frame 210-240 (7.0-8.0s):** Directional arrows fade in along edges, pointing inward. Code bars pulse once with a subtle multi-color tint
+7. **Frame 240-300 (8.0-10.0s):** Hold at final state. All three nodes breathe gently (0.02 opacity oscillation on fills, staggered phase). Code bars have very slow ambient shimmer
 
 ### Typography
-- Vertex labels: Inter, 20px, semi-bold (600), matching vertex color, letter-spacing: 3px
-- Center code: JetBrains Mono, 13px, `#94A3B8` at 50% opacity
+- Node Labels: Inter, 18px, semi-bold (600), color matches respective node
+- Node Subtitles: Inter, 14px, regular (400), color matches node at 0.4 opacity
+- Letter-spacing on labels: 2px
 
 ### Easing
-- Vertex appear (scale + opacity): `easeOut(back)` with overshoot 1.2
-- Glow bloom: `easeOut(quad)`
-- Edge draw: `easeInOut(cubic)`
-- Label fade: `easeOut(quad)`
-- Triangle pulse: `easeInOut(sin)`
-- Code line type-in: `easeOut(quad)`
-- Ambient glow pulse: `easeInOut(sin)`
+- Edge draw: `easeOut(cubic)`
+- Node illuminate/scale: `easeOut(quad)`
+- Label fade-in: `easeOut(quad)`
+- Code bar stagger: `easeOut(cubic)`
+- Arrow fade: `easeOut(quad)`
+- Ambient breathing: `easeInOut(sine)`
 
 ## Narration Sync
-> "Prompts encode intent."
-> "Tests preserve behavior."
-> "Grounding maintains style."
+> "Prompts encode intent. Tests preserve behavior. Grounding maintains style."
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={300}>
-  <Background color="#0A0F1A" />
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Radial gradient background */}
+    <RadialGradient center={[960, 560]} color="#111D2E" />
 
-  {/* PROMPT vertex — top */}
-  <Sequence from={15}>
-    <GlowNode
-      position={[960, 300]}
-      color="#4A90D9"
-      radius={24}
-      glowBlur={16}
-      durationInFrames={30}
-    />
-    <Sequence from={10}>
-      <FadeInLabel text="PROMPT" position={[960, 260]} color="#4A90D9" />
+    {/* Triangle Edges */}
+    <Sequence from={0} durationInFrames={30}>
+      <TriangleEdges
+        vertices={[[960, 240], [520, 720], [1400, 720]]}
+        strokeWidth={1.5}
+        initialOpacity={0.04}
+        finalOpacity={0.08}
+      />
     </Sequence>
-  </Sequence>
 
-  {/* TESTS vertex — bottom-left */}
-  <Sequence from={60}>
-    <GlowNode position={[660, 720]} color="#D9944A" radius={24} glowBlur={16} durationInFrames={30} />
-    <Sequence from={10}>
-      <FadeInLabel text="TESTS" position={[660, 760]} color="#D9944A" />
+    {/* PROMPT Node */}
+    <Sequence from={30} durationInFrames={50}>
+      <TriangleNode
+        x={960} y={240}
+        label="PROMPT"
+        subtitle="Encodes intent"
+        color="#4A90D9"
+        icon="document"
+      />
     </Sequence>
-  </Sequence>
 
-  {/* GROUNDING vertex — bottom-right */}
-  <Sequence from={105}>
-    <GlowNode position={[1260, 720]} color="#5AAA6E" radius={24} glowBlur={16} durationInFrames={30} />
-    <Sequence from={10}>
-      <FadeInLabel text="GROUNDING" position={[1260, 760]} color="#5AAA6E" />
+    {/* TESTS Node */}
+    <Sequence from={80} durationInFrames={50}>
+      <TriangleNode
+        x={520} y={720}
+        label="TESTS"
+        subtitle="Preserve behavior"
+        color="#D9944A"
+        icon="checkmark"
+      />
     </Sequence>
-  </Sequence>
 
-  {/* Triangle Edges */}
-  <Sequence from={60}>
-    <DrawEdge from={[960, 300]} to={[660, 720]} gradient={["#4A90D9", "#D9944A"]} durationInFrames={30} />
-  </Sequence>
-  <Sequence from={105}>
-    <DrawEdge from={[660, 720]} to={[1260, 720]} gradient={["#D9944A", "#5AAA6E"]} durationInFrames={30} />
-    <DrawEdge from={[1260, 720]} to={[960, 300]} gradient={["#5AAA6E", "#4A90D9"]} durationInFrames={30} />
-  </Sequence>
+    {/* GROUNDING Node */}
+    <Sequence from={130} durationInFrames={50}>
+      <TriangleNode
+        x={1400} y={720}
+        label="GROUNDING"
+        subtitle="Maintains style"
+        color="#5AAA6E"
+        icon="anchor"
+      />
+    </Sequence>
 
-  {/* Triangle pulse */}
-  <Sequence from={150}>
-    <TrianglePulse vertices={[[960,300],[660,720],[1260,720]]} durationInFrames={30} />
-  </Sequence>
+    {/* Edge brightness boost after all nodes lit */}
+    <Sequence from={170} durationInFrames={10}>
+      <TriangleEdgeBrighten finalOpacity={0.15} />
+    </Sequence>
 
-  {/* Center Code Materialization */}
-  <Sequence from={180}>
-    <CenterCodeBlock
-      position={[960, 520]}
-      lines={generatedCodeLines}
-      staggerFrames={3}
-      textColor="#94A3B8"
-      textOpacity={0.5}
-      tintColor="#4A90D9"
-      tintOpacity={0.05}
-    />
-  </Sequence>
+    {/* Generated Code Center */}
+    <Sequence from={180} durationInFrames={30}>
+      <GeneratedCodeBars
+        count={8}
+        center={[960, 560]}
+        stagger={3}
+        barHeight={6}
+      />
+    </Sequence>
 
-  {/* Ambient glow cycle */}
-  <Sequence from={240}>
-    <AmbientGlowPulse
-      nodes={[
-        { position: [960, 300], color: "#4A90D9" },
-        { position: [660, 720], color: "#D9944A" },
-        { position: [1260, 720], color: "#5AAA6E" }
-      ]}
-      cycleFrames={60}
-      opacityRange={[0.3, 0.5]}
-    />
-  </Sequence>
+    {/* Directional Arrows */}
+    <Sequence from={210} durationInFrames={30}>
+      <DirectionalArrows
+        vertices={[[960, 240], [520, 720], [1400, 720]]}
+        target={[960, 560]}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
+  "backgroundColor": "#0F172A",
+  "gradientCenter": "#111D2E",
   "triangle": {
-    "center": [960, 520],
     "vertices": {
-      "prompt": { "position": [960, 300], "color": "#4A90D9", "label": "PROMPT" },
-      "tests": { "position": [660, 720], "color": "#D9944A", "label": "TESTS" },
-      "grounding": { "position": [1260, 720], "color": "#5AAA6E", "label": "GROUNDING" }
+      "top": [960, 240],
+      "bottomLeft": [520, 720],
+      "bottomRight": [1400, 720]
     },
-    "edges": [
-      { "from": "prompt", "to": "tests", "gradient": ["#4A90D9", "#D9944A"] },
-      { "from": "tests", "to": "grounding", "gradient": ["#D9944A", "#5AAA6E"] },
-      { "from": "grounding", "to": "prompt", "gradient": ["#5AAA6E", "#4A90D9"] }
-    ],
-    "edgeWidth": 2
+    "centroid": [960, 560],
+    "edgeStroke": 1.5
   },
-  "nodeStyle": {
-    "radius": 24,
-    "glowBlur": 16,
-    "glowOpacity": 0.4
-  },
-  "centerCode": {
-    "lineCount": 6,
-    "textColor": "#94A3B8",
-    "textOpacity": 0.5,
-    "tintColor": "#4A90D9",
-    "tintOpacity": 0.05
-  },
-  "backgroundColor": "#0A0F1A"
+  "nodes": [
+    {
+      "label": "PROMPT",
+      "subtitle": "Encodes intent",
+      "position": [960, 240],
+      "color": "#4A90D9",
+      "icon": "document",
+      "radius": 30
+    },
+    {
+      "label": "TESTS",
+      "subtitle": "Preserve behavior",
+      "position": [520, 720],
+      "color": "#D9944A",
+      "icon": "checkmark",
+      "radius": 30
+    },
+    {
+      "label": "GROUNDING",
+      "subtitle": "Maintains style",
+      "position": [1400, 720],
+      "color": "#5AAA6E",
+      "icon": "anchor",
+      "radius": 30
+    }
+  ],
+  "generatedCode": {
+    "bars": 8,
+    "barHeight": 6,
+    "spacing": 16,
+    "color": "rgba(255,255,255,0.12)"
+  }
 }
 ```
 

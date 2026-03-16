@@ -1,126 +1,152 @@
-[split:]
+[Remotion]
 
-# Section 0.2: Split Screen — Craft Parallel
+# Section 0.2: Zoom Out — Accumulated Repair Work
 
 **Tool:** Remotion
-**Duration:** ~12s (360 frames @ 30fps)
-**Timestamp:** 0:03 - 0:15
+**Duration:** ~6s (180 frames @ 30fps)
+**Timestamp:** 0:05 - 0:11
 
 ## Visual Description
-A vertical split screen divides the frame precisely in half. **Left side:** A stylized developer workspace — a code editor (dark theme) with a Cursor-like interface. Animated lines of code appear and a highlighted diff-style patch lands cleanly on a function. The edit is slick, satisfying. **Right side:** A stylized illustration of a 1950s grandmother darning a wool sock by warm lamplight. Her needle pulls thread through fabric in a rhythmic, careful motion. Both sides complete their repair task simultaneously, emphasizing the parallel: modern AI-assisted coding is just a faster version of the same careful mending.
 
-The visual style is geometric and clean — not photorealistic. The developer side uses flat UI shapes with code-editor colors. The grandmother side uses warm, muted tones with simple geometric shapes (circles for yarn, rectangles for fabric).
+The split screen from 01 is still held. Now both sides pull back in a smooth zoom-out, revealing the accumulated weight of careful repair work.
+
+LEFT side zooms out from the single code edit to reveal a massive codebase. The clean file expands to show hundreds of files in a file tree — diff markers (red/green lines) scattered everywhere, `TODO` comments floating as subtle labels, `// temporary fix (2019)` annotations visible. The single AI-assisted edit is now a tiny green dot among thousands of patches, each marked with its own faint glow.
+
+RIGHT side zooms out from the grandmother's hands to reveal her open drawer — dozens of carefully mended socks, shirts, and trousers, each with visible stitch lines. The mending work is beautiful but the volume is overwhelming. Stitch marks accumulate as small amber indicators.
+
+Both sides animate in sync. The zoom-out uses the same easing. The message is clear: both the developer and the grandmother are excellent at repair — but the accumulation is the problem.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Left `#1A1B26` (editor dark), Right `#2D1F14` (warm sepia dark)
-- Grid lines: None
-- Vertical divider: 2px, `#FFFFFF` at 30% opacity, X=960
+- Background: #0A0F1A (deep charcoal)
+- Vertical divider: 1px solid rgba(255,255,255,0.2) at x=960
 
 ### Chart/Visual Elements
-- **Left Panel (Code Editor):**
-  - Editor chrome: tab bar at top, line numbers column `#4A5568`, gutter
-  - Code lines: 15-20 lines of monospace text, syntax-colored (strings `#A3BE8C`, keywords `#81A1C1`, functions `#88C0D0`)
-  - Diff highlight: green `+` lines `rgba(80, 200, 120, 0.15)` background glow on lines 8-12
-  - Cursor: blinking bar at line 10
-  - Subtle Cursor-like AI suggestion ghost text in `#4A5568` opacity 0.4
 
-- **Right Panel (Grandmother):**
-  - Lamplight: warm radial gradient from `#D4A574` center to `#2D1F14` edges, centered at top-right
-  - Sock shape: rounded rectangle, `#8B7355` with `#5C4A32` darning grid visible
-  - Needle: thin white line `#E8D5C0`, 40px long, animated along a stitching path
-  - Thread trail: `#C49A6C` line following needle path, accumulating
+**Left Panel — Codebase Zoom-Out**
+- Starting view: single file (from 01), scale 1.0
+- Ending view: file tree with 200+ files, scale 0.15
+- Diff markers: small rectangles, red #EF4444 and green #5AAA6E, 4×2px each, scattered across files
+- TODO labels: monospace "TODO" in #FBBF24 at 50% opacity, 10px font, ~15 visible
+- Comment annotations: "// temporary fix (2019)", "// don't touch", "// legacy" in #64748B, 9px font
+- Original edit: pulses as a small green dot #5AAA6E, 6px diameter
+
+**Right Panel — Drawer Reveal**
+- Starting view: grandmother's hands close-up, scale 1.0
+- Ending view: open wooden drawer, scale 0.3
+- Mended items: 24 garments arranged in drawer, each with 1-3 visible stitch lines
+- Stitch marks: short lines in #D4A043, 2px wide
+- Drawer wood: #6B4226 with grain texture lines in #503018
+- Warm light persists: radial gradient #D4A043 at 20% opacity
+
+**Counters (subtle, bottom of each panel)**
+- LEFT: "patches: 1,247" in monospace, #64748B, 11px, bottom-left at (40, 1040)
+- RIGHT: "mended: 47" in serif, #8B7355, 11px, bottom-right at (1840, 1040)
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Split screen slides in — left panel from left, right panel from right, meeting at center divider
-2. **Frame 15-30 (0.5-1.0s):** Left: code editor content fades in. Right: lamplight glow intensifies from dim to warm
-3. **Frame 30-120 (1.0-4.0s):** Both sides animate simultaneously:
-   - Left: AI ghost text appears on lines 8-12, then "accepts" — code solidifies with green diff highlight
-   - Right: Needle makes 4 stitching passes across the sock hole (arc paths), thread trail follows
-4. **Frame 120-150 (4.0-5.0s):** Narration: "...you're getting really good at this."
-   - Left: green checkmark fades in next to the diff
-   - Right: needle rests, last stitch completes, thread snips (small white flash)
-5. **Frame 150-360 (5.0-12.0s):** Hold on completed state. Both sides show their finished, satisfying repair work. Subtle idle animations (cursor blink left, gentle lamplight flicker right)
+1. **Frame 0-15 (0-0.5s):** Hold from previous scene. Both panels static at full zoom.
+2. **Frame 15-90 (0.5-3.0s):** Synchronized zoom-out on both panels. Scale 1.0 → 0.15 (left) / 1.0 → 0.3 (right). New elements fade in as they enter frame — diff markers, TODO labels, garments in drawer.
+3. **Frame 90-120 (3.0-4.0s):** Counters fade in at bottom of each panel. Numbers count up rapidly: LEFT 0 → 1,247 / RIGHT 0 → 47.
+4. **Frame 120-180 (4.0-6.0s):** Hold. Both panels show the full accumulated weight. Original edit pulses faintly on the left. Subtle breathing animation on counters (opacity 0.7 → 0.9 → 0.7).
 
 ### Typography
-- Left panel line numbers: JetBrains Mono, 14px, `#4A5568`
-- Left panel code: JetBrains Mono, 16px, various syntax colors
-- No visible text labels on right panel
+- Patch counter (left): `JetBrains Mono`, 11px, #64748B, opacity 0.8
+- Mended counter (right): `Georgia`, 11px, #8B7355, opacity 0.8
+- TODO labels: `JetBrains Mono`, 10px, #FBBF24, opacity 0.5
+- Code comments: `JetBrains Mono`, 9px, #64748B, opacity 0.6
 
 ### Easing
-- Panel slide-in: `easeOut(cubic)`
-- Code fade-in: `easeOut(quad)`
-- Needle arc path: `easeInOut(sin)` per stitch pass
-- Lamplight glow: `easeOut(quad)`
-- Checkmark fade: `easeOut(quad)`
+- Zoom-out: `easeInOut(cubic)`
+- Element fade-in (during zoom): `easeOut(quad)`
+- Counter count-up: `easeOut(cubic)`
+- Pulse animation: `easeInOut(sin)`
 
 ## Narration Sync
-> "If you use Cursor, or Claude Code, or Copilot... you're getting really good at this."
+> "But here's what your great-grandmother figured out sixty years ago."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={360}>
-  {/* Left Panel — Code Editor */}
-  <Sequence from={0}>
-    <SlideIn direction="left" durationInFrames={15}>
-      <CodeEditorPanel background="#1A1B26">
-        <CodeLines lines={codeContent} syntaxTheme="nord" />
-        <Sequence from={30}>
-          <AIDiffAccept lines={[8, 9, 10, 11, 12]} highlightColor="rgba(80, 200, 120, 0.15)" />
-        </Sequence>
-        <Sequence from={120}>
-          <FadeIn><Checkmark color="#50C878" /></FadeIn>
-        </Sequence>
-      </CodeEditorPanel>
-    </SlideIn>
-  </Sequence>
-
-  {/* Vertical Divider */}
-  <VerticalDivider x={960} color="#FFFFFF" opacity={0.3} />
-
-  {/* Right Panel — Grandmother Darning */}
-  <Sequence from={0}>
-    <SlideIn direction="right" durationInFrames={15}>
-      <DarningPanel background="#2D1F14">
-        <LampGlow center={[1680, 120]} color="#D4A574" />
-        <SockShape position={[1440, 540]} />
-        <Sequence from={30}>
-          <StitchingNeedle
-            passes={4}
-            framesPerPass={22}
-            threadColor="#C49A6C"
-          />
-        </Sequence>
-      </DarningPanel>
-    </SlideIn>
-  </Sequence>
+<Sequence from={0} durationInFrames={180}>
+  <SplitScreen dividerX={960}>
+    <Sequence from={0} durationInFrames={180}>
+      <ZoomOut startScale={1.0} endScale={0.15} startFrame={15} endFrame={90}>
+        <CodebaseReveal
+          fileCount={200}
+          diffMarkers={{ red: "#EF4444", green: "#5AAA6E" }}
+          todoLabels={15}
+          commentAnnotations={["// temporary fix (2019)", "// don't touch", "// legacy"]}
+        />
+      </ZoomOut>
+      <Sequence from={90} durationInFrames={30}>
+        <AnimatedCounter label="patches" endValue={1247} color="#64748B" />
+      </Sequence>
+    </Sequence>
+    <Sequence from={0} durationInFrames={180}>
+      <ZoomOut startScale={1.0} endScale={0.3} startFrame={15} endFrame={90}>
+        <DrawerReveal garmentCount={24} stitchColor="#D4A043" />
+      </ZoomOut>
+      <Sequence from={90} durationInFrames={30}>
+        <AnimatedCounter label="mended" endValue={47} color="#8B7355" />
+      </Sequence>
+    </Sequence>
+  </SplitScreen>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
+  "layout": {
+    "splitX": 960,
+    "divider": { "width": 1, "color": "rgba(255,255,255,0.2)" }
+  },
   "leftPanel": {
-    "background": "#1A1B26",
-    "editorTheme": "nord",
-    "diffLines": [8, 9, 10, 11, 12],
-    "diffHighlight": "rgba(80, 200, 120, 0.15)"
+    "zoom": { "start": 1.0, "end": 0.15, "startFrame": 15, "endFrame": 90 },
+    "fileCount": 200,
+    "diffMarkers": {
+      "colors": { "red": "#EF4444", "green": "#5AAA6E" },
+      "size": [4, 2]
+    },
+    "todoLabels": {
+      "count": 15,
+      "color": "#FBBF24",
+      "opacity": 0.5,
+      "fontSize": 10
+    },
+    "comments": [
+      "// temporary fix (2019)",
+      "// don't touch",
+      "// legacy"
+    ],
+    "counter": {
+      "label": "patches",
+      "endValue": 1247,
+      "position": [40, 1040],
+      "color": "#64748B"
+    }
   },
   "rightPanel": {
-    "background": "#2D1F14",
-    "lampColor": "#D4A574",
-    "sockColor": "#8B7355",
-    "threadColor": "#C49A6C",
-    "stitchPasses": 4
+    "zoom": { "start": 1.0, "end": 0.3, "startFrame": 15, "endFrame": 90 },
+    "garments": {
+      "count": 24,
+      "stitchesPerGarment": [1, 3],
+      "stitchColor": "#D4A043"
+    },
+    "drawer": {
+      "woodColor": "#6B4226",
+      "grainColor": "#503018"
+    },
+    "counter": {
+      "label": "mended",
+      "endValue": 47,
+      "position": [1840, 1040],
+      "color": "#8B7355"
+    }
   },
-  "divider": {
-    "x": 960,
-    "color": "#FFFFFF",
-    "opacity": 0.3,
-    "width": 2
-  }
+  "narrationSegments": ["cold_open_003"],
+  "narrationTimingSeconds": { "start": 5.82, "end": 11.28 }
 }
 ```
 

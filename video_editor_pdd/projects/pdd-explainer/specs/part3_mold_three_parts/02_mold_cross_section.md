@@ -1,104 +1,126 @@
 [Remotion]
 
-# Section 3.2: Mold Cross-Section — Three Components Reveal
+# Section 3.1: Mold Cross-Section — Three Components
 
 **Tool:** Remotion
-**Duration:** ~15s (450 frames @ 30fps)
-**Timestamp:** 13:04 - 13:19
+**Duration:** ~14s (420 frames @ 30fps)
+**Timestamp:** 13:04 – 13:18
 
 ## Visual Description
-A technical cross-section of an injection mold fills the screen. The mold is drawn as a clean, geometric cutaway — a rectangular cavity with defined walls, a nozzle at the top, and a material flow channel. Three regions highlight sequentially: the **walls** (tests, amber), the **nozzle/inlet** (prompt, blue), and the **material flowing through** (grounding, green). Each region illuminates with its label as the narrator introduces the concept. Liquid (representing code) then injects through the nozzle, fills the cavity, and is constrained by the walls — a visual preview of how the three components work together.
+A technical cross-section of an injection mold is rendered schematically. The mold has three distinct regions that illuminate one by one: outer walls (tests, amber), inner cavity specification (prompt, blue), and material filling properties (grounding, green). The visualization starts as a single outlined shape, then each region lights up with its label as the narrator introduces the three components. Liquid code (visualized as flowing particles) fills the mold interior, constrained by the walls, shaped by the specification, and colored by the grounding material. The three-part framework is established visually before diving into each one.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: Faint blueprint grid `rgba(255,255,255,0.03)`, 40px spacing
+- Background: #0F172A (dark navy)
+- Grid lines: None
 
 ### Chart/Visual Elements
-- **Mold Body:** Centered, 800px wide x 500px tall, outer shell in `#334155` with 2px stroke `#475569`, rounded corners 4px
-- **Cavity:** Inner negative space, 600px wide x 300px tall, centered within mold body, dark background showing through
-- **Wall Segments (Tests):** Left wall, right wall, and bottom wall of the cavity — each 20px thick, initially `#475569`, highlight color `#D9944A` at 0.6 opacity
-  - Wall labels (appearing on highlight): "null → None", "empty string → ''", "handles unicode", "latency < 100ms" — each 12px, `#D9944A`, positioned along respective walls
-- **Nozzle (Prompt):** Funnel shape at top-center of cavity, 80px wide at top tapering to 30px, fill `#4A90D9` at 0.4 opacity
-  - Label: "intent", "requirements", "constraints" stacked vertically inside nozzle, 12px, `#4A90D9`
-- **Material Channel (Grounding):** Subtle texture fill behind the liquid flow, `#5AAA6E` at 0.15 opacity, visible as a tint on the flowing liquid
-- **Liquid Flow:** Animated particles/fluid flowing from nozzle downward, filling cavity. Blue-tinted `rgba(74,144,217,0.5)` with slight green tint from grounding `rgba(90,170,110,0.2)`
-- **Section Label (top-left):** "Three types of capital" — `#FFFFFF` at 0.6 opacity, 20px
+- **Mold outline:** Centered at (960, 480), ~800×400px, rounded rectangle shape with thick walls
+  - Outer stroke: 3px, `rgba(255,255,255,0.15)` initial, transitions to colored
+  - Wall thickness: ~40px visual representation
+- **Region 1 — Walls (Tests):**
+  - The 40px-thick outer walls of the mold
+  - Color: `#D9944A` (warm amber) at 0.7 opacity
+  - Label: "Tests: The Walls" — positioned to the left of the mold at x=280
+  - Connector line: 1px dashed, `#D9944A` at 0.4, pointing to wall region
+- **Region 2 — Cavity (Prompt):**
+  - The hollow interior shape of the mold — the specification of what gets created
+  - Color: `#4A90D9` (cool blue) at 0.15 opacity fill, 2px border
+  - Label: "Prompt: The Specification" — positioned to the right at x=1400
+  - Connector line: 1px dashed, `#4A90D9` at 0.4, pointing to cavity
+- **Region 3 — Material (Grounding):**
+  - Particle texture filling the cavity — small dots representing the material properties
+  - Color: `#5AAA6E` (soft green) particles, 3px radius, ~60 particles scattered
+  - Label: "Grounding: The Material" — positioned below at y=760
+  - Connector line: 1px dashed, `#5AAA6E` at 0.4, pointing upward to interior
+- **Center equation (appears last):** "Intent + Constraints + Style = Complete Specification"
+  - Positioned at y=900, centered, `#FFFFFF` at 0.6 opacity
 
 ### Animation Sequence
-1. **Frame 0-40 (0-1.33s):** Mold body draws in — outer shell, then cavity negative space, blueprint grid visible
-2. **Frame 40-100 (1.33-3.33s):** Wall segments highlight amber one by one (left, bottom, right). Each wall glows `#D9944A` at 0.6 opacity. Individual constraint labels fade in along each wall with 10-frame stagger
-3. **Frame 100-160 (3.33-5.33s):** Nozzle region highlights blue. "intent", "requirements", "constraints" labels fade in inside the nozzle funnel
-4. **Frame 160-220 (5.33-7.33s):** Material channel tints green. Subtle texture/pattern appears behind the cavity space
-5. **Frame 220-350 (7.33-11.67s):** Liquid injection animation — fluid particles stream from nozzle, flow downward, spread laterally, fill cavity progressively. Liquid respects wall boundaries (stops at edges). Fill level rises from 0% to 100%
-6. **Frame 350-400 (11.67-13.33s):** Liquid settles. Surface smooths. A clean "code block" shape emerges from the filled mold — the output
-7. **Frame 400-450 (13.33-15.0s):** Hold. All three regions glow at their respective colors. The output glows faintly then dims — the mold stays bright
+1. **Frame 0–45 (0–1.5s):** Mold outline draws on — outer rectangle traces clockwise from top-left. Interior cavity shape traces simultaneously. Both start as neutral white at low opacity.
+2. **Frame 45–120 (1.5–4.0s):** Walls illuminate amber. The 40px wall region fills with `#D9944A` at 0.7, radiating outward from center like a glow. "Tests: The Walls" label fades in with connector line drawing outward. Synced with "In PDD, the mold has three components."
+3. **Frame 120–195 (4.0–6.5s):** Cavity interior illuminates blue. The hollow space fills with `#4A90D9` at 0.15 opacity, a soft glow defining the shape. "Prompt: The Specification" label fades in with connector. Synced with "Three types of capital you're accumulating."
+4. **Frame 195–270 (6.5–9.0s):** Grounding particles materialize. ~60 small green dots fade in scattered across the interior with slight random drift. "Grounding: The Material" label fades in from below. Particles have subtle Brownian motion (±2px random walk per second).
+5. **Frame 270–360 (9.0–12.0s):** All three regions pulse gently in sequence (amber → blue → green, 0.5s each). Liquid code animation: streams of tiny code-like characters (`{`, `}`, `=`, `;`) flow downward into the mold cavity from above, constrained by walls, taking the shape of the cavity.
+6. **Frame 360–420 (12.0–14.0s):** Center equation types on: "Intent + Constraints + Style = Complete Specification." Hold with all elements visible. Subtle ambient breathing on all three regions.
 
 ### Typography
-- Section Label: Inter, 20px, regular (400), `#FFFFFF`, opacity 0.6
-- Wall Labels: JetBrains Mono, 12px, regular (400), `#D9944A`
-- Nozzle Labels: Inter, 12px, semi-bold (600), `#4A90D9`
-- Component Names (appearing next to regions): Inter, 24px, bold (700), respective color at 0.8 opacity
+- Region labels: Inter SemiBold, 22px, matching region color
+- Connector labels: Inter Regular, 14px, matching region color at 0.6 opacity
+- Center equation: Inter Medium, 20px, `#FFFFFF` at 0.6 opacity
+- "+" and "=" in equation: Inter Regular, 20px, `#8B9DC3`
 
 ### Easing
-- Mold body draw: `easeOut(cubic)`
-- Wall highlights: `easeInOut(sine)`
-- Label fades: `easeOut(quad)`
-- Liquid flow: `easeIn(quad)` for initial stream, `easeOut(cubic)` for fill spread
-- Output emerge: `easeOut(quad)`
+- Mold outline draw: `easeInOutCubic`
+- Region illumination: `easeOutCubic` (800ms each)
+- Label fade-in: `easeOutQuad`
+- Particle materialization: `easeOutExpo` (staggered, 20ms per particle)
+- Equation type-on: linear
+- Ambient pulse: `easeInOutSine` (looping, 3s period)
 
 ## Narration Sync
 > "In PDD, the mold has three components. Three types of capital you're accumulating."
-> "First: tests. Tests are the walls of your mold."
-> "Each test is a constraint. A boundary the generated code cannot cross."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={450}>
-  {/* Mold Body */}
-  <Sequence from={0} durationInFrames={40}>
-    <MoldBody width={800} height={500} cavityWidth={600} cavityHeight={300} />
-  </Sequence>
+<Sequence from={0} durationInFrames={420}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Mold outline */}
+    <Sequence from={0} durationInFrames={45}>
+      <MoldOutline cx={960} cy={480} width={800} height={400} wallThickness={40} />
+    </Sequence>
 
-  {/* Wall Highlights (Tests) */}
-  <Sequence from={40} durationInFrames={60}>
-    <WallHighlight
-      walls={["left", "bottom", "right"]}
-      color="#D9944A"
-      labels={["null → None", "empty string → ''", "handles unicode", "latency < 100ms"]}
-      stagger={10}
-    />
-  </Sequence>
+    {/* Walls (Tests) illuminate */}
+    <Sequence from={45} durationInFrames={75}>
+      <WallRegion color="#D9944A" opacity={0.7} />
+      <RegionLabel
+        text="Tests: The Walls"
+        color="#D9944A"
+        x={280}
+        y={480}
+        connectorTarget={{ x: 560, y: 480 }}
+      />
+    </Sequence>
 
-  {/* Nozzle Highlight (Prompt) */}
-  <Sequence from={100} durationInFrames={60}>
-    <NozzleHighlight
-      color="#4A90D9"
-      labels={["intent", "requirements", "constraints"]}
-    />
-  </Sequence>
+    {/* Cavity (Prompt) illuminate */}
+    <Sequence from={120} durationInFrames={75}>
+      <CavityRegion color="#4A90D9" fillOpacity={0.15} />
+      <RegionLabel
+        text="Prompt: The Specification"
+        color="#4A90D9"
+        x={1400}
+        y={480}
+        connectorTarget={{ x: 1360, y: 480 }}
+      />
+    </Sequence>
 
-  {/* Material Channel (Grounding) */}
-  <Sequence from={160} durationInFrames={60}>
-    <MaterialChannel color="#5AAA6E" />
-  </Sequence>
+    {/* Material (Grounding) particles */}
+    <Sequence from={195} durationInFrames={75}>
+      <GroundingParticles count={60} color="#5AAA6E" radius={3} />
+      <RegionLabel
+        text="Grounding: The Material"
+        color="#5AAA6E"
+        x={960}
+        y={760}
+        connectorTarget={{ x: 960, y: 680 }}
+      />
+    </Sequence>
 
-  {/* Liquid Injection */}
-  <Sequence from={220} durationInFrames={130}>
-    <LiquidFill
-      fromNozzle={true}
-      fillColor="rgba(74,144,217,0.5)"
-      groundingTint="rgba(90,170,110,0.2)"
-      respectWalls={true}
-    />
-  </Sequence>
+    {/* Code flow animation */}
+    <Sequence from={270} durationInFrames={90}>
+      <CodeFlowParticles direction="down" constrainTo="cavity" />
+    </Sequence>
 
-  {/* Output Emerge */}
-  <Sequence from={350} durationInFrames={50}>
-    <CodeOutput glow={true} fadeGlow={true} />
-  </Sequence>
+    {/* Equation */}
+    <Sequence from={360} durationInFrames={60}>
+      <TypeOnText
+        text="Intent + Constraints + Style = Complete Specification"
+        y={900}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -107,34 +129,35 @@ A technical cross-section of an injection mold fills the screen. The mold is dra
 {
   "backgroundColor": "#0F172A",
   "mold": {
-    "outerWidth": 800,
-    "outerHeight": 500,
-    "cavityWidth": 600,
-    "cavityHeight": 300,
-    "shellColor": "#334155",
-    "strokeColor": "#475569"
+    "center": { "x": 960, "y": 480 },
+    "width": 800,
+    "height": 400,
+    "wallThickness": 40
   },
-  "walls": {
-    "thickness": 20,
-    "highlightColor": "#D9944A",
-    "highlightOpacity": 0.6,
-    "labels": ["null → None", "empty string → ''", "handles unicode", "latency < 100ms"]
-  },
-  "nozzle": {
-    "topWidth": 80,
-    "bottomWidth": 30,
-    "color": "#4A90D9",
-    "opacity": 0.4,
-    "labels": ["intent", "requirements", "constraints"]
-  },
-  "grounding": {
-    "color": "#5AAA6E",
-    "opacity": 0.15
-  },
-  "liquid": {
-    "primaryColor": "rgba(74,144,217,0.5)",
-    "groundingTint": "rgba(90,170,110,0.2)"
-  }
+  "regions": [
+    {
+      "name": "Tests",
+      "subtitle": "The Walls",
+      "color": "#D9944A",
+      "role": "constraints",
+      "labelPosition": { "x": 280, "y": 480 }
+    },
+    {
+      "name": "Prompt",
+      "subtitle": "The Specification",
+      "color": "#4A90D9",
+      "role": "intent",
+      "labelPosition": { "x": 1400, "y": 480 }
+    },
+    {
+      "name": "Grounding",
+      "subtitle": "The Material",
+      "color": "#5AAA6E",
+      "role": "style",
+      "labelPosition": { "x": 960, "y": 760 }
+    }
+  ],
+  "equation": "Intent + Constraints + Style = Complete Specification"
 }
 ```
 

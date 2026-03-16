@@ -7,7 +7,7 @@
 **Timestamp:** 21:14 - 21:26
 
 ## Visual Description
-The pie chart morphs into an animated chart showing the mathematical nature of compounding technical debt. An exponential curve labeled "Debt × (1 + Rate)^Time" grows dramatically upward, visualizing how patching accrues compound costs. A second flat line appears below it — "Regeneration cost (debt resets each cycle)" — showing PDD's fundamentally different trajectory. A large annotation calls out the CISQ statistic: $1.52 trillion annually in US technical debt costs. The formula itself is visible on screen, connecting the abstract curve to concrete mathematics.
+An animated chart showing the mathematical nature of compounding technical debt. An exponential curve labeled "Debt × (1 + Rate)^Time" grows dramatically upward, visualizing how patching accrues compound costs. A second flat line appears below it — "Regeneration cost (debt resets each cycle)" — showing PDD's fundamentally different trajectory with a subtle sawtooth pattern (small rises then sharp drops as regeneration resets accumulated cruft). A large annotation calls out the CISQ statistic: $1.52 trillion annually in US technical debt costs. The formula is visible on screen, connecting the abstract curve to concrete mathematics.
 
 ## Technical Specifications
 
@@ -34,12 +34,12 @@ The pie chart morphs into an animated chart showing the mathematical nature of c
 
 ### Animation Sequence
 1. **Frame 0-30 (0-1.0s):** Axes draw in — X-axis sweeps left-to-right, Y-axis sweeps bottom-to-top. Axis labels fade in
-2. **Frame 30-150 (1.0-5.0s):** Debt curve draws from left to right. Starts gentle, then accelerates dramatically upward. Fill beneath the curve fades in progressively as the curve extends. The exponential acceleration is the key visual beat — the curve should visibly "take off" around x=6
+2. **Frame 30-150 (1.0-5.0s):** Debt curve draws from left to right. Starts gentle, then accelerates dramatically upward. Fill beneath the curve fades in progressively as the curve extends. The exponential acceleration is the key visual beat — the curve visibly "takes off" around x=6
 3. **Frame 120-160 (4.0-5.33s):** Formula label "Debt × (1 + Rate)^Time" fades in near the curve's steep section, with a thin connector line to the curve
 4. **Frame 160-240 (5.33-8.0s):** Regeneration line draws from left to right. The sawtooth pattern is visible — small rises then sharp drops. The contrast with the exponential curve above is stark
 5. **Frame 220-260 (7.33-8.67s):** "Regeneration cost" label fades in near the flat line
 6. **Frame 260-310 (8.67-10.33s):** CISQ callout slides up from bottom with 15px drift, opacity 0→1
-7. **Frame 310-360 (10.33-12.0s):** Hold. The gap between the two curves continues to be visible — the exponential curve dominates the upper portion while the flat line hugs the bottom
+7. **Frame 310-360 (10.33-12.0s):** Hold. The gap between the two curves is visible — the exponential curve dominates the upper portion while the flat line hugs the bottom
 
 ### Typography
 - Chart Title: Inter, 28px, semi-bold (600), `#FFFFFF`, opacity 0.9

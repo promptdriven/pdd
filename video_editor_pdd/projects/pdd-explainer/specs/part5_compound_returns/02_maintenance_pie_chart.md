@@ -7,7 +7,7 @@
 **Timestamp:** 21:04 - 21:14
 
 ## Visual Description
-A clean animated pie chart materializes to illustrate the staggering proportion of software cost consumed by maintenance. The chart starts as a single thin ring, then separates into two segments: a small slice labeled "Initial Development: 10-20%" and a dominant slice labeled "Maintenance: 80-90%." The maintenance slice pulses with emphasis. Two research callouts animate in below: McKinsey's 40% maintenance overhead finding and Stripe's developer time waste statistic. The visualization grounds the section's argument in concrete economics before transitioning to the compound math.
+A clean animated donut chart materializes to illustrate the staggering proportion of software cost consumed by maintenance. The chart starts as a single thin ring, then separates into two segments: a small slice labeled "Initial Development: 10-20%" and a dominant slice labeled "Maintenance: 80-90%." The maintenance slice pushes outward with emphasis. Two research callouts animate in below: McKinsey's 40% maintenance overhead finding and Stripe's developer time waste statistic. The visualization grounds the section's argument in concrete economics before transitioning to the compound math.
 
 ## Technical Specifications
 

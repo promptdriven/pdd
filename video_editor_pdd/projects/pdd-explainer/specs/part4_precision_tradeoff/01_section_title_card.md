@@ -1,47 +1,46 @@
 [title:]
 
-# Section 4.1: The Precision Tradeoff — Title Card
+# Section 4.0: Part 4 Title Card
 
 **Tool:** Remotion
 **Duration:** ~4s (120 frames @ 30fps)
-**Timestamp:** 18:30 - 18:34
+**Timestamp:** 0:00 – 0:04
 
 ## Visual Description
-A section title card introducing Part 4. The heading "The Precision Tradeoff" fades in at center. Below the title, a stylized icon animates: a horizontal line with a precise, angular mold shape on the left and a loose, freeform squiggle on the right — representing the tension between specification precision and constraint-driven shaping. The subtitle "Part 4" drifts upward below an accent line. Dark navy background consistent with the series.
+A bold title card introduces Part 4. The text "Part 4" fades in small above the main title "The Precision Tradeoff", which types on letter-by-letter. A thin horizontal rule expands outward from center beneath the title. Two small icons fade in below the rule: a crosshair (representing precision) and a wall brick (representing constraints). Background is deep navy with a subtle radial gradient.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
+- Background: Deep navy (#0A1628) with radial gradient to (#122240) at center
+- No grid lines
 
 ### Chart/Visual Elements
-- **Title Text:** "The Precision Tradeoff" — white `#FFFFFF`, centered at Y=370px
-- **Precision Icon:** Centered at Y=460px, 260px wide x 60px tall
-  - Left side: Angular geometric shape (precise grid points connected by straight lines), stroke `#4A90D9` at 0.5 opacity, 2px
-  - Right side: Smooth organic curve (flowing liquid constrained by two wall lines), stroke `#D9944A` at 0.5 opacity, 2px
-  - Divider: Thin vertical mark at center, `rgba(255,255,255,0.3)`, 1px
-- **Accent Line:** Thin horizontal rule — `rgba(255,255,255,0.7)`, centered at Y=520px, 400px wide x 2px tall
-- **Subtitle Text:** "Part 4" — muted slate `#94A3B8`, centered at Y=560px
+- Part label: "Part 4" — small caps, centered, positioned at y=360
+- Main title: "The Precision Tradeoff" — large, centered, positioned at y=440
+- Horizontal rule: 2px line, white at 40% opacity, centered at y=520, expands from 0px to 400px width
+- Two preview icons at y=580, spaced 160px apart (centered at x=880, 1040):
+  - Crosshair icon: Simplified crosshair/target outline, `#4A90D9` at 0.5 opacity, 28px
+  - Wall icon: Simplified brick wall outline, `#D9944A` at 0.5 opacity, 28px
 
 ### Animation Sequence
-1. **Frame 0-25 (0-0.83s):** Title text fades in (opacity 0→1) and scales up (0.85→1.0) from center
-2. **Frame 20-50 (0.67-1.67s):** Precision icon draws in — left angular grid strokes first, then right flowing curve, meeting at the center divider
-3. **Frame 40-65 (1.33-2.17s):** Accent line expands from 0px to 400px width
-4. **Frame 55-80 (1.83-2.67s):** Subtitle "Part 4" fades in with 12px upward drift
-5. **Frame 80-120 (2.67-4.0s):** Hold at final state
+1. **Frame 0–15 (0–0.5s):** Background fades in from black. "Part 4" fades in with slight upward drift (10px).
+2. **Frame 15–60 (0.5–2.0s):** Main title types on character-by-character with a blinking cursor. Monospaced typing cadence (~30ms per character).
+3. **Frame 60–75 (2.0–2.5s):** Cursor blinks twice, then disappears. Horizontal rule expands outward from center.
+4. **Frame 75–105 (2.5–3.5s):** Two icons fade in left-to-right with 10-frame stagger. Each icon scales up from 0.8→1.0 with slight bounce.
+5. **Frame 105–120 (3.5–4.0s):** Hold. All elements at full opacity. Gentle pulse on the rule (opacity 40%→60%→40%).
 
 ### Typography
-- Title: Inter, 64px, bold (700), `#FFFFFF`
-- Subtitle: Inter, 28px, regular (400), `#94A3B8`
+- Part label: Inter Medium, 20px, #8B9DC3 (muted blue-gray), letter-spacing 4px, uppercase
+- Main title: Inter Bold, 52px, #FFFFFF, letter-spacing -0.5px
+- Typing cursor: 3px wide, #4A90D9, blinking 500ms interval
 
 ### Easing
-- Title fade/scale: `easeOut(quad)`
-- Icon draw (left angular): `easeOut(cubic)`
-- Icon draw (right curve): `easeInOut(cubic)`
-- Accent line expand: `easeOut(cubic)`
-- Subtitle fade/drift: `easeOut(quad)`
+- Fade in: `easeOutCubic`
+- Title type-on: linear (constant typing speed)
+- Rule expansion: `easeInOutCubic`
+- Icon fade/scale: `spring({ damping: 14, stiffness: 120 })`
 
 ## Narration Sync
 > "Let's talk about precision. Because there's a subtle tradeoff that changes how you think about prompts."
@@ -49,38 +48,40 @@ A section title card introducing Part 4. The heading "The Precision Tradeoff" fa
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
-  <TitleText text="The Precision Tradeoff" fontSize={64} />
-  <Sequence from={20}>
-    <PrecisionIcon width={260} height={60} y={460}>
-      <AngularGrid color="#4A90D9" side="left" />
-      <FlowingCurve color="#D9944A" side="right" />
-    </PrecisionIcon>
-  </Sequence>
-  <Sequence from={40}>
-    <AccentLine targetWidth={400} color="rgba(255,255,255,0.7)" />
-  </Sequence>
-  <Sequence from={55}>
-    <SubtitleText text="Part 4" />
-  </Sequence>
+  <AbsoluteFill style={{ background: 'radial-gradient(circle, #122240, #0A1628)' }}>
+    <Sequence from={0} durationInFrames={15}>
+      <FadeIn>
+        <PartLabel text="Part 4" />
+      </FadeIn>
+    </Sequence>
+    <Sequence from={15} durationInFrames={45}>
+      <TypeOnText text="The Precision Tradeoff" />
+    </Sequence>
+    <Sequence from={60} durationInFrames={15}>
+      <ExpandingRule width={400} />
+    </Sequence>
+    <Sequence from={75} durationInFrames={30}>
+      <StaggeredIcons
+        icons={[
+          { type: "crosshair", color: "#4A90D9" },
+          { type: "wall", color: "#D9944A" },
+        ]}
+        stagger={10}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
+  "partNumber": 4,
   "title": "The Precision Tradeoff",
-  "subtitle": "Part 4",
-  "accentLineWidth": 400,
-  "backgroundColor": "#0F172A",
-  "titleColor": "#FFFFFF",
-  "subtitleColor": "#94A3B8",
-  "icon": {
-    "width": 260,
-    "height": 60,
-    "leftColor": "#4A90D9",
-    "rightColor": "#D9944A",
-    "dividerColor": "rgba(255,255,255,0.3)"
-  }
+  "icons": [
+    { "type": "crosshair", "label": "Precision", "color": "#4A90D9" },
+    { "type": "wall", "label": "Constraints", "color": "#D9944A" }
+  ]
 }
 ```
 

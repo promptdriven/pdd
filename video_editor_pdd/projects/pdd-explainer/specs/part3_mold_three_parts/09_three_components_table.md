@@ -1,120 +1,183 @@
 [Remotion]
 
-# Section 3.9: Three Components — Summary Table and Hierarchy
+# Section 3.8: Three Components — Hierarchy Table
 
 **Tool:** Remotion
-**Duration:** ~18s (540 frames @ 30fps)
-**Timestamp:** 15:03 - 15:21
+**Duration:** ~20s (600 frames @ 30fps)
+**Timestamp:** 15:16 – 15:36
 
 ## Visual Description
-The three components come together in a unified visualization. First, an animated pipeline shows the flow: prompt flows in → passes through grounding → fills the mold → constrained by test walls → code emerges. Then a clean data table materializes showing the role of each component: Prompt encodes WHAT (intent), Grounding encodes HOW (style), Tests encode CORRECTNESS. Below the table, a pulsing priority rule appears: "When these conflict, tests win. Always." The final beat shows generated code glowing briefly — then the glow transfers to the mold, driving home the message: "The code is output. The mold is what matters."
+A structured table/diagram showing the three PDD components side by side with their hierarchy. Three columns — Prompt (blue), Tests (amber), Grounding (green) — each with a role label, description, and priority rank. Animated arrows show the override hierarchy: Tests > Prompt > Grounding. When conflicts arise, an animated scenario shows tests overriding a prompt directive and the prompt overriding a grounding style preference. The final frame reduces to a powerful closing statement: "The code is output. The mold is what matters." with the code representation fading to near-invisible while the three-part mold glows.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
+- Background: #0F172A (dark navy)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Unified Pipeline (top half, Y=80 to Y=450):**
-  - Stage 1: Prompt document icon at X=200, `#4A90D9`, label "Prompt" below
-  - Arrow → Stage 2: Grounding database icon at X=500, `#5AAA6E`, label "Grounding" below
-  - Arrow → Stage 3: Mold cavity with walls at X=800, `#D9944A` walls, label "Tests" below
-  - Arrow → Stage 4: Code output block at X=1150, `rgba(255,255,255,0.3)`, label "Code" below
-  - Animated flow: Blue particles travel along the arrow path, picking up green tint at grounding stage, being shaped at mold stage, emerging as code
-- **Component Table (center, Y=480 to Y=700):**
-  - 3 rows × 3 columns, clean design, 900px wide centered
-  - Header row: "Component" | "Encodes" | "Owner" — `#FFFFFF` at 0.6 opacity, 16px bold, underline `rgba(255,255,255,0.1)`
-  - Row 1: "Prompt" (blue `#4A90D9`) | "WHAT (intent)" | "Developer"
-  - Row 2: "Grounding" (green `#5AAA6E`) | "HOW (style)" | "Automatic"
-  - Row 3: "Tests" (amber `#D9944A`) | "CORRECTNESS" | "Accumulated"
-  - Cell text: 18px, regular (400)
-  - Subtle row dividers: `rgba(255,255,255,0.05)`
-- **Priority Rule (below table, Y=740):**
-  - Text: "When these conflict, tests win. Always." — `#D9944A`, 22px bold
-  - Subtle underline pulse in amber
-- **Final Beat (bottom, Y=850):**
-  - Small code block (150px wide) glowing `rgba(255,255,255,0.3)` → glow transfers leftward to mold icon (150px wide) which glows `#D9944A`
-  - Text: "The code is output. The mold is what matters." — `#FFFFFF`, 20px semi-bold
+- **Three component columns:** Centered horizontally, y: 160–600
+  - Column 1 — Prompt: x=280, 340px wide
+    - Header bar: `#4A90D9`, 6px top border
+    - Icon: Document/page, `#4A90D9`
+    - Title: "Prompt" — `#4A90D9`, 24px, bold
+    - Role: "Intent" — `#FFFFFF` at 0.8, 16px
+    - Description: "What you want and why" — `#94A3B8`, 14px
+    - Priority: "2" in circle, `#4A90D9` border
+  - Column 2 — Tests: x=680, 340px wide
+    - Header bar: `#D9944A`, 6px top border
+    - Icon: Shield/wall, `#D9944A`
+    - Title: "Tests" — `#D9944A`, 24px, bold
+    - Role: "Constraints" — `#FFFFFF` at 0.8, 16px
+    - Description: "Boundaries code cannot cross" — `#94A3B8`, 14px
+    - Priority: "1" in circle with crown/star accent, `#D9944A` border
+  - Column 3 — Grounding: x=1080, 340px wide
+    - Header bar: `#5AAA6E`, 6px top border
+    - Icon: Gear/brush, `#5AAA6E`
+    - Title: "Grounding" — `#5AAA6E`, 24px, bold
+    - Role: "Style" — `#FFFFFF` at 0.8, 16px
+    - Description: "How it looks and feels" — `#94A3B8`, 14px
+    - Priority: "3" in circle, `#5AAA6E` border
+
+- **Hierarchy arrows (y: 620–680):**
+  - Arrow from Tests → Prompt: labeled "overrides", `#D9944A` at 0.5, 2px
+  - Arrow from Prompt → Grounding: labeled "overrides", `#4A90D9` at 0.5, 2px
+  - Summary: "Tests > Prompt > Grounding" — centered, `#FFFFFF` at 0.7, 18px
+
+- **Conflict scenario (appears mid-sequence):**
+  - Small animated vignette at y: 720–800
+  - Scenario: Grounding says "use camelCase" (green tag), Prompt says "use descriptive names" (blue tag), Test says "function must return int" (amber tag)
+  - Resolution: amber tag expands to full width, blue tag stays, green tag dims
+  - Label: "When these conflict, tests win. Always." — `#FFFFFF` at 0.7, 16px
+
+- **Closing statement (final phase):**
+  - Three-part mold icon (from spec 02) glows at center
+  - Code representation (gray text block) at right fades to 10% opacity
+  - Text: "The code is output. The mold is what matters." — `#FFFFFF`, 28px, bold, centered at y=900
+  - Subtle radial glow behind the mold icon, `rgba(255,255,255,0.05)`
 
 ### Animation Sequence
-1. **Frame 0-60 (0-2.0s):** Pipeline stages appear left-to-right (15-frame stagger). Each icon fades in with slight upward drift (10px). Labels appear below each
-2. **Frame 60-150 (2.0-5.0s):** Animated particle flow through the pipeline — blue particles emerge from prompt, pick up green tint at grounding, enter mold cavity, emerge as code output. Flow is continuous, looping
-3. **Frame 150-190 (5.0-6.33s):** Pipeline dims to 0.3 opacity. Table begins to materialize — header row draws in (left-to-right underline)
-4. **Frame 190-300 (6.33-10.0s):** Table rows appear with 25-frame stagger:
-   - Row 1 (Prompt): Blue text slides in, "WHAT (intent)" fades in, "Developer" fades in
-   - Row 2 (Grounding): Green text slides in, "HOW (style)" fades in, "Automatic" fades in
-   - Row 3 (Tests): Amber text slides in, "CORRECTNESS" fades in, "Accumulated" fades in
-5. **Frame 300-370 (10.0-12.33s):** Priority rule fades in below table. "tests win" portion is emphasized (slightly larger, amber color). Underline pulse animation
-6. **Frame 370-450 (12.33-15.0s):** Final beat — code block glows briefly, then glow transfers (animated light sweep moving leftward) to the mold icon. Code block dims to near-invisible. Mold icon glows prominently
-7. **Frame 450-500 (15.0-16.67s):** "The code is output. The mold is what matters." text fades in centered below
-8. **Frame 500-540 (16.67-18.0s):** Hold at final state. Mold continues ambient glow
+1. **Frame 0–60 (0–2.0s):** Three columns animate in left-to-right with 15-frame stagger. Each column: header bar draws left→right, icon scales up (0→1), title fades in, then role and description. Synced with "Prompt plus tests plus grounding. Intent plus constraints plus style."
+2. **Frame 60–120 (2.0–4.0s):** Priority numbers appear in circles — "1" for Tests appears with a brief amber flash and crown accent. "2" for Prompt and "3" for Grounding follow. Tests column gets a subtle elevated shadow to emphasize primacy.
+3. **Frame 120–210 (4.0–7.0s):** Hierarchy arrows draw between columns at the bottom. "overrides" labels type on. Summary text "Tests > Prompt > Grounding" fades in below. Synced with "Together, they form a complete specification."
+4. **Frame 210–330 (7.0–11.0s):** Conflict scenario animates. Three colored tags appear in a row. Then resolution: amber (test) tag pulses and expands, blue (prompt) tag stays steady, green (grounding) tag dims to 30% opacity. "When these conflict, tests win. Always." types on below. Synced with "When these conflict, tests win. Always. The walls override the specification. The specification overrides the style."
+5. **Frame 330–420 (11.0–14.0s):** Table columns compress/slide up to top 40% of screen. Below, a side-by-side appears: left is the three-part mold icon (from cross-section spec) glowing with all three colors. Right is a code block that starts at full opacity.
+6. **Frame 420–510 (14.0–17.0s):** The code block fades from 100% → 10% opacity. Simultaneously, the mold icon glows brighter — amber walls pulse, blue cavity glows, green particles shimmer. The mold is what endures; the code is ephemeral.
+7. **Frame 510–570 (17.0–19.0s):** Closing statement types on: "The code is output. The mold is what matters." Large, centered, definitive. Synced with "The code is output. The mold is what matters."
+8. **Frame 570–600 (19.0–20.0s):** Hold. Mold icon maintains gentle tri-color glow. Statement at full opacity. Code block nearly invisible.
 
 ### Typography
-- Pipeline Labels: Inter, 16px, semi-bold (600), respective component colors
-- Table Header: Inter, 16px, bold (700), `#FFFFFF` at 0.6 opacity
-- Table Cells: Inter, 18px, regular (400), `#FFFFFF` or respective component color
-- Priority Rule: Inter, 22px, bold (700), `#D9944A`
-- Final Text: Inter, 20px, semi-bold (600), `#FFFFFF`
+- Column titles: Inter Bold, 24px, respective colors
+- Role labels: Inter SemiBold, 16px, `#FFFFFF` at 0.8 opacity
+- Descriptions: Inter Regular, 14px, `#94A3B8`
+- Priority numbers: Inter Bold, 20px, respective colors, inside 36px circle
+- Hierarchy summary: Inter SemiBold, 18px, `#FFFFFF` at 0.7 opacity
+- "overrides" labels: Inter Regular, 13px, respective arrow colors at 0.5
+- Conflict label: Inter Medium, 16px, `#FFFFFF` at 0.7 opacity
+- Closing statement: Inter Bold, 28px, `#FFFFFF`
 
 ### Easing
-- Pipeline stage appear: `easeOut(quad)`
-- Particle flow: `linear` (constant)
-- Table row slide: `easeOut(cubic)`
-- Priority rule fade: `easeOut(quad)`
-- Glow transfer: `easeInOut(cubic)`
-- Final text fade: `easeOut(quad)`
+- Column animation: `spring({ damping: 15, stiffness: 110 })` (staggered)
+- Priority number pop: `spring({ damping: 10, stiffness: 150 })`
+- Arrow draw: `easeOutQuad`
+- Tag resolution: `easeInOutCubic`
+- Code fade-out: `easeInOutCubic` (2s)
+- Mold glow intensify: `easeInOutSine`
+- Closing type-on: linear
 
 ## Narration Sync
 > "Prompt plus tests plus grounding. Intent plus constraints plus style. Together, they form a complete specification."
+
 > "When these conflict, tests win. Always. The walls override the specification. The specification overrides the style."
+
 > "The code is output. The mold is what matters."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={540}>
-  {/* Pipeline */}
-  <Sequence from={0} durationInFrames={150}>
-    <Pipeline
-      stages={[
-        { icon: "document", label: "Prompt", color: "#4A90D9", x: 200 },
-        { icon: "database", label: "Grounding", color: "#5AAA6E", x: 500 },
-        { icon: "mold", label: "Tests", color: "#D9944A", x: 800 },
-        { icon: "code", label: "Code", color: "rgba(255,255,255,0.3)", x: 1150 }
-      ]}
-      stagger={15}
-    />
-    <ParticleFlow path="pipeline" loop={true} />
-  </Sequence>
+<Sequence from={0} durationInFrames={600}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Three component columns */}
+    <Sequence from={0} durationInFrames={60}>
+      <ComponentColumn
+        x={280}
+        icon="document"
+        title="Prompt"
+        role="Intent"
+        description="What you want and why"
+        priority={2}
+        color="#4A90D9"
+        delay={0}
+      />
+      <ComponentColumn
+        x={680}
+        icon="shield"
+        title="Tests"
+        role="Constraints"
+        description="Boundaries code cannot cross"
+        priority={1}
+        color="#D9944A"
+        delay={15}
+        crown={true}
+      />
+      <ComponentColumn
+        x={1080}
+        icon="gear"
+        title="Grounding"
+        role="Style"
+        description="How it looks and feels"
+        priority={3}
+        color="#5AAA6E"
+        delay={30}
+      />
+    </Sequence>
 
-  {/* Table */}
-  <Sequence from={150} durationInFrames={150}>
-    <ComponentTable
-      headers={["Component", "Encodes", "Owner"]}
-      rows={[
-        { component: "Prompt", componentColor: "#4A90D9", encodes: "WHAT (intent)", owner: "Developer" },
-        { component: "Grounding", componentColor: "#5AAA6E", encodes: "HOW (style)", owner: "Automatic" },
-        { component: "Tests", componentColor: "#D9944A", encodes: "CORRECTNESS", owner: "Accumulated" }
-      ]}
-      rowStagger={25}
-    />
-  </Sequence>
+    {/* Priority numbers */}
+    <Sequence from={60} durationInFrames={60}>
+      <PriorityBadges priorities={[2, 1, 3]} colors={["#4A90D9", "#D9944A", "#5AAA6E"]} />
+    </Sequence>
 
-  {/* Priority Rule */}
-  <Sequence from={300} durationInFrames={70}>
-    <PriorityRule text="When these conflict, tests win. Always." emphasisColor="#D9944A" />
-  </Sequence>
+    {/* Hierarchy arrows */}
+    <Sequence from={120} durationInFrames={90}>
+      <HierarchyArrows
+        links={[
+          { from: "Tests", to: "Prompt", color: "#D9944A" },
+          { from: "Prompt", to: "Grounding", color: "#4A90D9" },
+        ]}
+        summary="Tests > Prompt > Grounding"
+      />
+    </Sequence>
 
-  {/* Glow Transfer */}
-  <Sequence from={370} durationInFrames={80}>
-    <GlowTransfer from="code" to="mold" />
-  </Sequence>
+    {/* Conflict scenario */}
+    <Sequence from={210} durationInFrames={120}>
+      <ConflictResolution
+        tags={[
+          { text: "use camelCase", color: "#5AAA6E", outcome: "dim" },
+          { text: "use descriptive names", color: "#4A90D9", outcome: "stay" },
+          { text: "function must return int", color: "#D9944A", outcome: "expand" },
+        ]}
+        label="When these conflict, tests win. Always."
+      />
+    </Sequence>
 
-  {/* Final Text */}
-  <Sequence from={450} durationInFrames={50}>
-    <EmphasisText text="The code is output. The mold is what matters." y={850} />
-  </Sequence>
+    {/* Mold vs. Code comparison */}
+    <Sequence from={330} durationInFrames={180}>
+      <MoldVsCode
+        moldGlowColors={["#D9944A", "#4A90D9", "#5AAA6E"]}
+        codeFadeTarget={0.1}
+      />
+    </Sequence>
+
+    {/* Closing statement */}
+    <Sequence from={510} durationInFrames={60}>
+      <TypeOnText
+        text="The code is output. The mold is what matters."
+        fontSize={28}
+        fontWeight="bold"
+        y={900}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -122,26 +185,32 @@ The three components come together in a unified visualization. First, an animate
 ```json
 {
   "backgroundColor": "#0F172A",
-  "pipeline": {
-    "stages": [
-      { "id": "prompt", "label": "Prompt", "color": "#4A90D9", "icon": "document" },
-      { "id": "grounding", "label": "Grounding", "color": "#5AAA6E", "icon": "database" },
-      { "id": "tests", "label": "Tests", "color": "#D9944A", "icon": "mold" },
-      { "id": "code", "label": "Code", "color": "rgba(255,255,255,0.3)", "icon": "code" }
-    ]
-  },
-  "table": {
-    "headers": ["Component", "Encodes", "Owner"],
-    "rows": [
-      { "component": "Prompt", "color": "#4A90D9", "encodes": "WHAT (intent)", "owner": "Developer" },
-      { "component": "Grounding", "color": "#5AAA6E", "encodes": "HOW (style)", "owner": "Automatic" },
-      { "component": "Tests", "color": "#D9944A", "encodes": "CORRECTNESS", "owner": "Accumulated" }
-    ]
-  },
-  "priorityRule": {
-    "text": "When these conflict, tests win. Always.",
-    "color": "#D9944A"
-  }
+  "components": [
+    {
+      "name": "Prompt",
+      "role": "Intent",
+      "description": "What you want and why",
+      "priority": 2,
+      "color": "#4A90D9"
+    },
+    {
+      "name": "Tests",
+      "role": "Constraints",
+      "description": "Boundaries code cannot cross",
+      "priority": 1,
+      "color": "#D9944A"
+    },
+    {
+      "name": "Grounding",
+      "role": "Style",
+      "description": "How it looks and feels",
+      "priority": 3,
+      "color": "#5AAA6E"
+    }
+  ],
+  "hierarchy": "Tests > Prompt > Grounding",
+  "conflictRule": "When conflicts arise, tests win. Always.",
+  "closingStatement": "The code is output. The mold is what matters."
 }
 ```
 

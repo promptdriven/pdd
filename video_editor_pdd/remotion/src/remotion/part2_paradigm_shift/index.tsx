@@ -18,13 +18,12 @@ const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
 };
 
 const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "07_netlist_zoom_unreviewable": {"specBaseName": "07_netlist_zoom_unreviewable", "dataPoints": {"chipLayout": {"gateColor": "#2AA198", "wireColor": "rgba(42, 161, 152, 0.1)", "zoomLevels": [1, 10, 100, 1000]}, "codeDiff": {"totalLines": 10247, "addBackground": "rgba(34, 197, 94, 0.12)", "deleteBackground": "rgba(239, 68, 68, 0.12)", "addTextColor": "#A3BE8C", "deleteTextColor": "#EF4444", "scrollLinesPerSecond": 100}, "resolution": {"prompt": {"filename": "email_validator.prompt", "lineCount": 8, "background": "rgba(74, 144, 217, 0.1)", "borderColor": "#4A90D9"}, "tests": {"testCount": 7, "allPassing": true, "background": "rgba(34, 197, 94, 0.08)", "borderColor": "#22C55E"}, "label": "Review the spec. Verify the output."}, "backgroundColor": "#0A0A0F"}, "overlayConfig": null},
   "part2_paradigm_shift_main": {"specBaseName": "main", "dataPoints": null, "overlayConfig": null},
 };
 
 export const Part2ParadigmShiftSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 0;
+  const durationSeconds = 228.053292;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

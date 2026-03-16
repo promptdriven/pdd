@@ -1,119 +1,141 @@
 [Remotion]
 
-# Section 3.3: Test Capital — Walls That Constrain
+# Section 3.2: Test Capital — Walls of the Mold
 
 **Tool:** Remotion
-**Duration:** ~18s (540 frames @ 30fps)
-**Timestamp:** 13:19 - 13:37
+**Duration:** ~24s (720 frames @ 30fps)
+**Timestamp:** 13:18 – 13:42
 
 ## Visual Description
-A focused animation on the "test walls" concept. The mold cavity from the previous component is shown centered, with its amber walls clearly visible. Liquid (code generation) is injected and flows freely until it hits a wall — then stops. One specific wall labeled "null → None" is spotlighted: the liquid approaches, contacts the wall, and is firmly constrained. Then research annotations materialize: CodeRabbit's "1.7× more issues" stat and DORA's finding that AI + strong tests amplifies delivery. The walls glow brighter as the evidence stacks, reinforcing that tests aren't optional — they're what make regeneration safe.
+An animated visualization showing tests as physical walls that constrain code generation. The screen begins with a simplified mold cavity (from the previous component), zoomed into the wall region. Individual test cases materialize as labeled bricks in the wall — each one a constraint the generated code cannot violate. Code (visualized as flowing liquid) attempts to fill the cavity and is visibly blocked/shaped by the walls. Two research callout cards animate in below: CodeRabbit's finding on AI code quality (1.7× more issues) and the 2025 DORA report (AI + tests = amplified delivery). The visual drives home that tests are structural, not decorative.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
+- Background: #0F172A (dark navy)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Mold Cavity:** Centered, 700px wide x 350px tall, walls visible as amber `#D9944A` at 0.5 opacity, 20px thick
-- **Focused Wall:** Right wall segment, labeled "null → None" in JetBrains Mono 14px, `#D9944A`
-- **Liquid Stream:** Animated blue particles/fluid `rgba(74,144,217,0.6)` flowing left-to-right toward the focused wall
-- **Impact Effect:** When liquid hits wall — subtle ripple emanation (3 concentric rings, `#D9944A` at 0.3→0 opacity, expanding outward 20px)
-- **Annotation 1 — CodeRabbit:**
-  - Position: Upper-right, outside the mold
-  - Stat Badge: "1.7×" in `#EF4444`, 42px bold
-  - Label: "more issues in AI code" — white, 16px
-  - Sub-stats: "+75% logic errors" and "8× performance issues" stacked, `#EF4444`, 14px
-  - Citation: "CodeRabbit, 2025" — `#94A3B8`, 12px
-- **Annotation 2 — DORA:**
-  - Position: Lower-right, outside the mold
-  - Stat Badge: Checkmark icon in `#22C55E`
-  - Label: "AI + strong tests = amplified delivery" — `#22C55E`, 18px
-  - Citation: "DORA, 2025" — `#94A3B8`, 12px
-- **Wall Glow Effect:** After annotations, all walls pulse to 0.8 opacity with 6px glow blur in `rgba(217,148,74,0.4)`
+- **Mold wall section:** Left-center of screen (x: 200–900), height 500px (y: 240–740)
+  - Wall composed of individual "bricks" — rounded rectangles, 180×40px each
+  - Each brick labeled with a test constraint in monospace text
+  - Brick fill: `#D9944A` at 0.25 opacity, border `#D9944A` at 0.6 opacity, 1.5px
+  - Six test bricks (stacked vertically with 8px gap):
+    - `assert output != None`
+    - `assert len(result) > 0`
+    - `assert response.status == 200`
+    - `assert total == sum(items)`
+    - `assert elapsed_ms < 100`
+    - `assert no_sql_injection(input)`
+- **Code flow (right side):** Liquid animation flowing rightward from x=900
+  - Small code-character particles (`{`, `}`, `fn`, `if`, `=`), `#6B7C93` at 0.5 opacity
+  - Particles that hit walls bounce off or redirect (constrained behavior)
+  - Particles that pass through the cavity exit shaped/conforming
+- **Wall header:** "TEST CAPITAL: THE WALLS" — top-left at (200, 160)
+- **Research Callout 1 (bottom-left, y=800):**
+  - Metric: "1.7× more issues" — `#EF4444`, 28px, bold
+  - Detail: "AI-generated code produces 75% more logic errors, 8× more performance problems"
+  - Source: "CodeRabbit, 2025" — `#94A3B8`, 13px
+- **Research Callout 2 (bottom-right, y=800):**
+  - Metric: "AI + Tests = Amplified Delivery" — `#22C55E`, 22px, bold
+  - Detail: "AI without strong tests increases instability"
+  - Source: "DORA Report, 2025" — `#94A3B8`, 13px
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1.0s):** Mold cavity fades in with walls visible. "null → None" label appears on right wall
-2. **Frame 30-120 (1.0-4.0s):** Liquid stream enters from nozzle area (top-center), flows downward and spreads left-to-right. Particles move freely in the open cavity
-3. **Frame 120-160 (4.0-5.33s):** Liquid front reaches the right wall ("null → None"). Impact — liquid stops, ripple effect emanates from contact point. Wall brightens momentarily to 0.8 opacity
-4. **Frame 160-200 (5.33-6.67s):** Liquid redirects, fills remaining cavity space. All walls demonstrate containment. The shape is constrained
-5. **Frame 200-320 (6.67-10.67s):** CodeRabbit annotation materializes — stat badge scales in, labels fade in, leader line connects to the wall region. Walls dim slightly to draw attention to the stat
-6. **Frame 320-420 (10.67-14.0s):** DORA annotation materializes below. Green checkmark pulses in. The contrast: without tests = instability, with tests = amplified delivery
-7. **Frame 420-490 (14.0-16.33s):** All walls pulse and glow brighter. Glow effect `rgba(217,148,74,0.4)` with 6px blur. Text appears centered below mold: "The walls aren't optional." — white, 24px, bold
-8. **Frame 490-540 (16.33-18.0s):** Hold at final state. Walls continue subtle ambient glow pulse
+1. **Frame 0–30 (0–1.0s):** Wall header "TEST CAPITAL: THE WALLS" fades in with amber underline drawing left→right. Mold cavity outline fades in as a dim wireframe.
+2. **Frame 30–180 (1.0–6.0s):** Test bricks materialize one by one from top to bottom, each with a slide-in from left (20px drift) and fade. 25-frame stagger between bricks. Each brick's label types on as it arrives. Synced with "First: tests. Tests are the walls of your mold. Each test is a constraint."
+3. **Frame 180–300 (6.0–10.0s):** Code flow begins. Particles stream from left. They hit the wall bricks and redirect — some bounce upward, some channel through gaps. Particles that pass the wall exit in a clean, ordered stream on the right side. Visual metaphor: unstructured input → structured output.
+4. **Frame 300–390 (10.0–13.0s):** Wall bricks pulse once in sequence (top→bottom, 5-frame stagger). Each pulse: scale 1.0→1.03→1.0 with amber glow `rgba(217,148,74,0.3)`. Emphasizes "these walls matter more than you'd think."
+5. **Frame 390–510 (13.0–17.0s):** Research Callout 1 slides in from bottom-left with 30px upward drift. "1.7×" counter animates from 0→1.7 with `easeOutExpo`. Detail text fades in 15 frames after metric.
+6. **Frame 510–600 (17.0–20.0s):** Research Callout 2 slides in from bottom-right. "Amplified Delivery" text appears with green glow. The word "instability" in the detail briefly flashes `#EF4444` before settling to white.
+7. **Frame 600–720 (20.0–24.0s):** Both callouts hold. Wall bricks maintain subtle ambient glow. Code flow continues at reduced rate. A concluding text fades in at center-bottom: "The walls aren't optional. They're what make regeneration safe." — `#FFFFFF` at 0.7 opacity, 18px.
 
 ### Typography
-- Wall Labels: JetBrains Mono, 14px, regular (400), `#D9944A`
-- Stat Badges: Inter, 42px, bold (800)
-- Annotation Labels: Inter, 16-18px, semi-bold (600)
-- Citations: Inter, 12px, regular (400), `#94A3B8`
-- Emphasis Text: Inter, 24px, bold (700), `#FFFFFF`
+- Wall header: Inter Bold, 20px, `#D9944A`, letter-spacing 3px, uppercase
+- Brick labels: JetBrains Mono, 13px, `#D9944A` at 0.8 opacity
+- Callout metric: Inter Bold, 28px (CodeRabbit) / 22px (DORA), respective colors
+- Callout detail: Inter Regular, 15px, `#FFFFFF` at 0.5 opacity
+- Callout source: Inter Regular, 13px, `#94A3B8`
+- Concluding text: Inter Medium, 18px, `#FFFFFF` at 0.7 opacity
 
 ### Easing
-- Liquid flow: `linear` (constant stream)
-- Wall impact ripple: `easeOut(cubic)` with opacity decay
-- Stat badge scale: `easeOut(back(1.3))`
-- Label fades: `easeOut(quad)`
-- Wall glow pulse: `easeInOut(sine)` (looping)
+- Header fade: `easeOutCubic`
+- Brick materialization: `spring({ damping: 15, stiffness: 100 })`
+- Code particle flow: linear with random velocity variation (±20%)
+- Wall pulse: `easeInOutSine`
+- Metric counter: `easeOutExpo` (800ms)
+- Callout slide: `easeOutCubic`
+- Concluding text fade: `easeOutQuad`
 
 ## Narration Sync
+> "First: tests. Tests are the walls of your mold."
+
+> "Each test is a constraint. A boundary the generated code cannot cross."
+
 > "And these walls matter more than you'd think. CodeRabbit analyzed hundreds of pull requests and found AI-generated code produces one-point-seven times more issues than human code — seventy-five percent more logic errors, eight times more performance problems. The 2025 DORA report confirmed it: AI without strong tests increases instability. AI with strong tests amplifies delivery."
+
 > "The walls aren't optional. They're what make regeneration safe."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={540}>
-  {/* Mold Cavity */}
-  <Sequence from={0} durationInFrames={30}>
-    <MoldCavity width={700} height={350} wallColor="#D9944A" wallOpacity={0.5} />
-    <WallLabel text="null → None" position="right" />
-  </Sequence>
+<Sequence from={0} durationInFrames={720}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Header */}
+    <Sequence from={0} durationInFrames={30}>
+      <SectionHeader text="TEST CAPITAL: THE WALLS" color="#D9944A" />
+    </Sequence>
 
-  {/* Liquid Flow */}
-  <Sequence from={30} durationInFrames={90}>
-    <LiquidStream color="rgba(74,144,217,0.6)" direction="spread" />
-  </Sequence>
+    {/* Test bricks */}
+    <Sequence from={30} durationInFrames={150}>
+      <TestWallBricks
+        bricks={testConstraints}
+        stagger={25}
+        brickColor="#D9944A"
+      />
+    </Sequence>
 
-  {/* Wall Impact */}
-  <Sequence from={120} durationInFrames={40}>
-    <WallImpact wall="right" rippleColor="#D9944A" />
-  </Sequence>
+    {/* Code flow particles */}
+    <Sequence from={180} durationInFrames={420}>
+      <CodeFlowParticles
+        source={{ x: 100, y: 490 }}
+        wallBounds={{ x: 200, width: 700 }}
+        particleColor="#6B7C93"
+      />
+    </Sequence>
 
-  {/* Fill Remaining */}
-  <Sequence from={160} durationInFrames={40}>
-    <LiquidFillComplete />
-  </Sequence>
+    {/* Wall pulse */}
+    <Sequence from={300} durationInFrames={90}>
+      <SequentialPulse targets="bricks" scale={1.03} stagger={5} />
+    </Sequence>
 
-  {/* CodeRabbit Annotation */}
-  <Sequence from={200} durationInFrames={120}>
-    <StudyAnnotation
-      stat="1.7×"
-      statColor="#EF4444"
-      label="more issues in AI code"
-      subStats={["+75% logic errors", "8× performance issues"]}
-      citation="CodeRabbit, 2025"
-      position="upper-right"
-    />
-  </Sequence>
+    {/* Research Callouts */}
+    <Sequence from={390} durationInFrames={120}>
+      <ResearchCallout
+        metric="1.7×"
+        metricColor="#EF4444"
+        text="AI-generated code produces 75% more logic errors, 8× more performance problems"
+        source="CodeRabbit, 2025"
+        position="bottom-left"
+      />
+    </Sequence>
+    <Sequence from={510} durationInFrames={90}>
+      <ResearchCallout
+        metric="AI + Tests = Amplified Delivery"
+        metricColor="#22C55E"
+        text="AI without strong tests increases instability"
+        source="DORA Report, 2025"
+        position="bottom-right"
+      />
+    </Sequence>
 
-  {/* DORA Annotation */}
-  <Sequence from={320} durationInFrames={100}>
-    <StudyAnnotation
-      icon="checkmark"
-      iconColor="#22C55E"
-      label="AI + strong tests = amplified delivery"
-      citation="DORA, 2025"
-      position="lower-right"
-    />
-  </Sequence>
-
-  {/* Wall Glow + Emphasis */}
-  <Sequence from={420} durationInFrames={70}>
-    <WallGlow color="rgba(217,148,74,0.4)" blur={6} />
-    <EmphasisText text="The walls aren't optional." y={780} />
-  </Sequence>
+    {/* Concluding text */}
+    <Sequence from={600} durationInFrames={120}>
+      <FadeIn>
+        <CenterCaption text="The walls aren't optional. They're what make regeneration safe." />
+      </FadeIn>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -121,31 +143,26 @@ A focused animation on the "test walls" concept. The mold cavity from the previo
 ```json
 {
   "backgroundColor": "#0F172A",
-  "cavity": {
-    "width": 700,
-    "height": 350,
-    "wallThickness": 20,
-    "wallColor": "#D9944A"
-  },
-  "focusedWall": {
-    "position": "right",
-    "label": "null → None"
-  },
-  "studies": [
+  "testConstraints": [
+    "assert output != None",
+    "assert len(result) > 0",
+    "assert response.status == 200",
+    "assert total == sum(items)",
+    "assert elapsed_ms < 100",
+    "assert no_sql_injection(input)"
+  ],
+  "research": [
     {
-      "id": "coderabbit",
-      "stat": "1.7×",
-      "statColor": "#EF4444",
-      "label": "more issues in AI code",
-      "subStats": ["+75% logic errors", "8× performance issues"],
-      "citation": "CodeRabbit, 2025"
+      "source": "CodeRabbit, 2025",
+      "metric": "1.7×",
+      "details": {
+        "logicErrors": "75% more",
+        "performanceProblems": "8× more"
+      }
     },
     {
-      "id": "dora",
-      "icon": "checkmark",
-      "iconColor": "#22C55E",
-      "label": "AI + strong tests = amplified delivery",
-      "citation": "DORA, 2025"
+      "source": "DORA Report, 2025",
+      "finding": "AI without strong tests increases instability; AI with strong tests amplifies delivery"
     }
   ]
 }

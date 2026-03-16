@@ -1,105 +1,111 @@
 [split:]
 
-# Section 4.2: 3D Printer vs Injection Mold — Split Comparison
+# Section 4.1: 3D Printer vs Injection Mold Split
 
 **Tool:** Remotion
-**Duration:** ~8s (240 frames @ 30fps)
-**Timestamp:** 18:34 - 18:42
+**Duration:** ~10s (300 frames @ 30fps)
+**Timestamp:** 0:04 – 0:14
 
 ## Visual Description
-A split-screen comparison occupies the full canvas. The LEFT half shows a stylized 3D printer: a nozzle head moves along a precise coordinate grid, depositing material dot-by-dot along an exact path — every point explicitly specified. The RIGHT half shows an injection mold: liquid pours in from the top and flows freely, chaotically spreading until it contacts the walls, which constrain it into a clean shape. A vertical divider separates the halves. Labels identify each manufacturing approach. The contrast is immediate: explicit point-by-point specification vs. constraint-driven shaping.
+A split-screen comparison contrasting two manufacturing approaches. The left panel shows a 3D printer nozzle depositing material point-by-point on a coordinate grid — each point explicitly specified, slow, tedious. The right panel shows an injection mold cavity where liquid pours in and flows chaotically until it contacts walls, which shape the output. The visual metaphor is immediate: explicit specification (3D printing) vs. constraint-driven shaping (injection molding). The divider pulses softly. Each side has a footer label summarizing the approach.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None (each half has its own internal grid/visual treatment)
+- Background: #0F172A (dark navy)
+- Vertical divider: 2px, `rgba(255,255,255,0.12)`, centered at x=960
 
 ### Chart/Visual Elements
-- **Vertical Divider:** 2px line at X=960, full height, `rgba(255,255,255,0.15)`
-- **Left Panel — 3D Printer (X: 0-958)**
-  - Label: "3D Printing" — `#94A3B8`, 22px, positioned at (240, 60)
-  - Coordinate Grid: 20x12 dot grid, dots `rgba(255,255,255,0.08)`, 36px spacing, centered in panel
-  - Nozzle Head: Small inverted triangle, 16px wide, `#4A90D9` at 0.8 opacity, positioned above the current deposit point
-  - Deposited Material: Trail of filled dots, `#4A90D9` at 0.6 opacity, 6px diameter, tracing out a shape point-by-point
-  - Path Guide: Faint dashed line connecting upcoming deposit points, `rgba(74,144,217,0.2)`, 1px
-- **Right Panel — Injection Mold (X: 962-1920)**
-  - Label: "Injection Molding" — `#94A3B8`, 22px, positioned at (1180, 60)
-  - Mold Walls: Rectangular cavity outline, 340px wide x 240px tall, centered in panel, wall thickness 16px, `#D9944A` at 0.5 opacity
-  - Nozzle Inlet: Small funnel at top-center of cavity, 40px wide, `#475569`
-  - Liquid: Amorphous blob particles, blue-tinted `rgba(74,144,217,0.4)`, flowing from inlet and spreading chaotically until hitting walls
-  - Wall Contact Glow: When liquid touches a wall, that wall segment briefly pulses to `#D9944A` at 0.8 opacity
+- **Left Panel — 3D Printer (x: 0–958)**
+  - Header: "3D Printing" — `#94A3B8`, 20px, centered at (480, 60)
+  - Coordinate grid: 400×400px centered at (480, 400), faint white grid lines at 0.06 opacity, 50px spacing
+  - Nozzle: Simplified printer head icon, 30×20px, `#6B7C93`, positioned above current deposit point
+  - Deposit trail: Small circles (6px radius), `#EF4444` at 0.7 opacity, appearing sequentially at grid intersections
+  - Coordinate labels: As each point deposits, a tiny label "(x, y)" appears briefly — `#EF4444` at 0.4 opacity, JetBrains Mono 10px
+  - Footer label: "Every point specified" — `#EF4444`, 16px, bold, centered at (480, 720)
+
+- **Right Panel — Injection Mold (x: 962–1920)**
+  - Header: "Injection Molding" — `#94A3B8`, 20px, centered at (1440, 60)
+  - Mold cavity: Curly-brace / wrench-shaped outline, thick walls (6px), `#D9944A` at 0.6 opacity, centered at (1440, 400), ~400×400px bounding box
+  - Liquid flow: Particles (small circles 4px, `#4A90D9` at 0.5 opacity) pour from top-center nozzle, spread chaotically, then contact walls and settle
+  - Wall glow: As liquid contacts each wall segment, the segment briefly pulses `#D9944A` at full opacity
+  - Footer label: "Walls do the work" — `#D9944A`, 16px, bold, centered at (1440, 720)
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Divider line draws from top to bottom. Both labels fade in simultaneously
-2. **Frame 20-40 (0.67-1.33s):** Left: coordinate grid dots fade in with subtle wave pattern. Right: mold walls draw in (stroke-dashoffset)
-3. **Frame 40-150 (1.33-5.0s):** Left: nozzle head begins moving along grid, depositing dots one-by-one (12 frames per dot, ~9 dots total), dashed path guide visible ahead of nozzle. Right: liquid begins pouring from inlet, spreading organically downward and laterally
-4. **Frame 100-180 (3.33-6.0s):** Right: liquid contacts left wall (wall pulses), then bottom (pulse), then right (pulse). Shape progressively defined by constraints
-5. **Frame 150-200 (5.0-6.67s):** Left: nozzle continues depositing, shape ~60% complete. Right: liquid has filled cavity completely, surface settling
-6. **Frame 200-240 (6.67-8.0s):** Both sides hold. Left panel gets a subtle label overlay: "Every point specified". Right panel: "Walls do the work". Labels fade in at 0.7 opacity, `#FFFFFF`, 18px, centered in each panel at Y=860
+1. **Frame 0–20 (0–0.67s):** Vertical divider draws top-to-bottom. Both headers fade in. Grid and mold cavity wireframe appear simultaneously.
+2. **Frame 20–90 (0.67–3.0s):** Left: Nozzle begins depositing points one-by-one. Each deposit: nozzle moves → pauses → dot appears → coordinate label blinks in/out. 10-frame cadence per point. Right: Liquid begins pouring — blue particles stream from top.
+3. **Frame 90–180 (3.0–6.0s):** Left: 7 more points deposit along the shape outline. Progress is visible but slow — only ~40% of the target shape complete. Right: Liquid flow spreads, hitting first wall segments. Each wall glows on contact. Particles redirect and fill the cavity bottom.
+4. **Frame 180–240 (6.0–8.0s):** Left: Nozzle continues, reaching 12 points total. Tedium is palpable. Right: Cavity filling rapidly. Walls constrain the flow — the shape emerges organically. Most of the cavity is filled.
+5. **Frame 240–270 (8.0–9.0s):** Footer labels fade in simultaneously: "Every point specified" (left, red) and "Walls do the work" (right, amber).
+6. **Frame 270–300 (9.0–10.0s):** Hold. Left panel shows incomplete shape (12 of ~30 points). Right panel shows the finished, wall-constrained shape fully filled.
 
 ### Typography
-- Panel Labels: Inter, 22px, semi-bold (600), `#94A3B8`
-- Bottom Overlay Labels: Inter, 18px, medium (500), `#FFFFFF` at 0.7 opacity
+- Panel headers: Inter Medium, 20px, `#94A3B8`
+- Coordinate labels: JetBrains Mono, 10px, `#EF4444` at 0.4 opacity
+- Footer labels: Inter Bold, 16px, respective colors
+- Nozzle indicator: No text, purely visual
 
 ### Easing
-- Divider draw: `easeOut(cubic)`
-- Grid fade-in: `easeOut(quad)`
-- Nozzle movement (per step): `linear` (mechanical feel)
-- Liquid spread: `easeOut(quad)` per expansion step
-- Wall contact pulse: `easeInOut(sine)`
-- Bottom labels fade: `easeOut(quad)`
+- Divider draw: `easeOutCubic`
+- Point deposit: `spring({ damping: 20, stiffness: 200 })` (snappy pop-in)
+- Nozzle movement: `easeInOutQuad`
+- Liquid particle flow: linear with Perlin noise offset (organic spread)
+- Wall glow pulse: `easeOutSine` (200ms on, 400ms fade)
+- Footer fade: `easeOutQuad`
 
 ## Narration Sync
-> "Let's talk about precision. Because there's a subtle tradeoff that changes how you think about prompts."
-> "In 3D printing, there's no mold. The machine must know exactly where to place every single point of material. The specification must be extremely precise."
-> "In injection molding, precision comes from the walls. The material just flows until it's constrained."
+> "In 3D printing, there is no mold. The machine must know exactly where to place every single point of material. The specification must be extremely precise."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={240}>
-  {/* Divider */}
-  <Sequence from={0} durationInFrames={20}>
-    <VerticalDivider x={960} color="rgba(255,255,255,0.15)" />
-  </Sequence>
+<Sequence from={0} durationInFrames={300}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Divider */}
+    <Sequence from={0} durationInFrames={20}>
+      <VerticalDivider x={960} color="rgba(255,255,255,0.12)" />
+    </Sequence>
 
-  {/* Left Panel — 3D Printer */}
-  <AbsoluteFill style={{ clipPath: "inset(0 50% 0 0)" }}>
-    <PanelLabel text="3D Printing" x={240} y={60} />
-    <Sequence from={20} durationInFrames={20}>
-      <CoordinateGrid cols={20} rows={12} spacing={36} dotColor="rgba(255,255,255,0.08)" />
-    </Sequence>
-    <Sequence from={40} durationInFrames={160}>
-      <NozzleDepositor
-        points={printerPath}
-        dotColor="#4A90D9"
-        nozzleColor="#4A90D9"
-        framesPerDot={12}
-      />
-    </Sequence>
-    <Sequence from={200}>
-      <OverlayLabel text="Every point specified" y={860} />
-    </Sequence>
-  </AbsoluteFill>
+    {/* Left Panel — 3D Printer */}
+    <AbsoluteFill style={{ clipPath: "inset(0 50% 0 0)" }}>
+      <Sequence from={0} durationInFrames={20}>
+        <PanelHeader text="3D Printing" color="#94A3B8" x={480} />
+      </Sequence>
+      <Sequence from={20} durationInFrames={220}>
+        <CoordinateGrid x={480} y={400} size={400} />
+        <PrinterNozzle
+          points={printerPoints}
+          cadence={10}
+          dotColor="#EF4444"
+          labelColor="#EF4444"
+        />
+      </Sequence>
+      <Sequence from={240} durationInFrames={30}>
+        <FadeIn>
+          <FooterLabel text="Every point specified" color="#EF4444" x={480} />
+        </FadeIn>
+      </Sequence>
+    </AbsoluteFill>
 
-  {/* Right Panel — Injection Mold */}
-  <AbsoluteFill style={{ clipPath: "inset(0 0 0 50%)" }}>
-    <PanelLabel text="Injection Molding" x={1180} y={60} />
-    <Sequence from={20} durationInFrames={20}>
-      <MoldWalls width={340} height={240} wallThickness={16} color="#D9944A" />
-    </Sequence>
-    <Sequence from={40} durationInFrames={160}>
-      <LiquidPour
-        inletWidth={40}
-        fillColor="rgba(74,144,217,0.4)"
-        wallPulseColor="#D9944A"
-        wallPulseOpacity={0.8}
-      />
-    </Sequence>
-    <Sequence from={200}>
-      <OverlayLabel text="Walls do the work" y={860} />
-    </Sequence>
+    {/* Right Panel — Injection Mold */}
+    <AbsoluteFill style={{ clipPath: "inset(0 0 0 50%)" }}>
+      <Sequence from={0} durationInFrames={20}>
+        <PanelHeader text="Injection Molding" color="#94A3B8" x={1440} />
+      </Sequence>
+      <Sequence from={20} durationInFrames={220}>
+        <MoldCavity x={1440} y={400} wallColor="#D9944A" />
+        <LiquidFlow
+          source={{ x: 1440, y: 180 }}
+          particleColor="#4A90D9"
+          wallGlowColor="#D9944A"
+        />
+      </Sequence>
+      <Sequence from={240} durationInFrames={30}>
+        <FadeIn>
+          <FooterLabel text="Walls do the work" color="#D9944A" x={1440} />
+        </FadeIn>
+      </Sequence>
+    </AbsoluteFill>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -108,26 +114,25 @@ A split-screen comparison occupies the full canvas. The LEFT half shows a styliz
 ```json
 {
   "backgroundColor": "#0F172A",
-  "divider": {
-    "x": 960,
-    "color": "rgba(255,255,255,0.15)",
-    "width": 2
-  },
   "leftPanel": {
-    "label": "3D Printing",
-    "grid": { "cols": 20, "rows": 12, "spacing": 36, "dotColor": "rgba(255,255,255,0.08)" },
-    "nozzle": { "width": 16, "color": "#4A90D9", "opacity": 0.8 },
-    "depositDot": { "diameter": 6, "color": "#4A90D9", "opacity": 0.6 },
-    "pathGuide": { "color": "rgba(74,144,217,0.2)", "dashPattern": "4 4" },
-    "overlayLabel": "Every point specified"
+    "title": "3D Printing",
+    "footerLabel": "Every point specified",
+    "color": "#EF4444",
+    "printerPoints": [
+      { "x": 2, "y": 8 }, { "x": 3, "y": 7 }, { "x": 4, "y": 7 },
+      { "x": 5, "y": 6 }, { "x": 5, "y": 5 }, { "x": 5, "y": 4 },
+      { "x": 4, "y": 4 }, { "x": 3, "y": 4 }, { "x": 3, "y": 3 },
+      { "x": 3, "y": 2 }, { "x": 4, "y": 1 }, { "x": 5, "y": 1 }
+    ],
+    "gridSize": 400,
+    "gridSpacing": 50
   },
   "rightPanel": {
-    "label": "Injection Molding",
-    "mold": { "cavityWidth": 340, "cavityHeight": 240, "wallThickness": 16, "wallColor": "#D9944A", "wallOpacity": 0.5 },
-    "inlet": { "width": 40, "color": "#475569" },
-    "liquid": { "fillColor": "rgba(74,144,217,0.4)" },
-    "wallPulse": { "color": "#D9944A", "peakOpacity": 0.8 },
-    "overlayLabel": "Walls do the work"
+    "title": "Injection Molding",
+    "footerLabel": "Walls do the work",
+    "color": "#D9944A",
+    "cavityShape": "curly-brace",
+    "wallThickness": 6
   }
 }
 ```

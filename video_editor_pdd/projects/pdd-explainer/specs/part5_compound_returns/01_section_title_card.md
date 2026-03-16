@@ -7,7 +7,7 @@
 **Timestamp:** 21:00 - 21:04
 
 ## Visual Description
-A section title card introducing Part 5. The heading "Compound Returns" fades in at center. Below the title, a stylized icon animates: two curves diverge from a shared origin — one curving exponentially upward (amber, representing compounding debt/cost) and one staying flat then gently rising (blue, representing PDD's compounding value). The visual immediately foreshadows the section's core argument. The subtitle "Part 5" drifts upward below an accent line. Dark navy background consistent with the series.
+A section title card introducing Part 5. The heading "Compound Returns" fades in at center. Below the title, a stylized icon animates: two curves diverge from a shared origin — one curving exponentially upward (amber, representing compounding debt/cost) and one staying flat then gently declining (blue, representing PDD's compounding value). A small dollar sign marks the end of the upper curve; a small checkmark marks the end of the lower curve. The subtitle "Part 5" drifts upward below an accent line. Dark navy background consistent with the series.
 
 ## Technical Specifications
 
@@ -29,7 +29,7 @@ A section title card introducing Part 5. The heading "Compound Returns" fades in
 
 ### Animation Sequence
 1. **Frame 0-25 (0-0.83s):** Title text fades in (opacity 0→1) and scales up (0.85→1.0) from center
-2. **Frame 20-55 (0.67-1.83s):** Divergence icon draws in — origin dot appears, then both curves draw outward simultaneously from the shared origin, diverging
+2. **Frame 20-55 (0.67-1.83s):** Divergence icon draws in — origin dot appears, then both curves draw outward simultaneously from the shared origin, diverging. Dollar sign and checkmark fade in at endpoints
 3. **Frame 45-70 (1.50-2.33s):** Accent line expands from 0px to 400px width
 4. **Frame 60-85 (2.0-2.83s):** Subtitle "Part 5" fades in with 12px upward drift
 5. **Frame 85-120 (2.83-4.0s):** Hold at final state

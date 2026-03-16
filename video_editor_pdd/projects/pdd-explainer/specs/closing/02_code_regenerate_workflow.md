@@ -1,68 +1,67 @@
 [Remotion]
 
-# Section 7.2: Code Regenerate Workflow — "Code Just Got That Cheap"
+# Section 7.2: Code Regenerate Workflow — Bug → Fix → Check
 
 **Tool:** Remotion
 **Duration:** ~10s (300 frames @ 30fps)
 **Timestamp:** 24:23 - 24:33
 
 ## Visual Description
-Hard cut to a code editor view. A function with a visible bug sits on screen — a red squiggly underline marks the problematic line. Instead of the developer opening the file and manually patching, the workflow is different: a test file appears in a split pane on the right, a new assertion is typed that captures the expected behavior, and then the terminal at the bottom runs `pdd bug → pdd fix → ✓`. The buggy code dissolves and clean code regenerates — the same visual vocabulary from Section 0.5 but faster and more practiced. This makes the closing argument concrete: this is what "cheap code" looks like in practice.
+A terminal-style animation shows the PDD workflow in action. A buggy code file appears on the left half of the screen — a simplified code block with a visible red squiggle on one line. Instead of opening the file and patching, a developer adds a test (a green line appears in a test file on the right), then executes a three-step terminal sequence: `pdd bug` → `pdd fix` → `✓ check`. Each command types out in the terminal with a brief processing animation, and a green checkmark confirms success. The code block on the left dissolves and is replaced by a fresh version — clean, no squiggles. The key insight: the developer never touched the code directly.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Editor dark `#1A1B26`
+- Background: `#0A1628` (deep navy)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Code Editor (left pane, 60% width):**
-  - Line numbers: `#4A5568`, left gutter
-  - Tab bar: single tab "calculate_total.py" with red modified indicator `#EF4444`
-  - Code: 18 lines of Python-like code. Line 11 has the bug — a red squiggly underline `#EF4444` beneath `total += item.price * item.qty`
-  - Bug comment visible: `# BUG: doesn't apply discount` in `#EF4444` at line 12
-
-- **Test Pane (right pane, 40% width):**
-  - Tab: "test_calculate.py" with green indicator `#50C878`
-  - Initially shows 3 existing test functions (collapsed, just signatures visible)
-  - New test assertion types in at line 15: `assert calculate_total(cart, discount=0.1) == 90.0`
-
-- **Terminal Strip (bottom, 80px tall):**
-  - Dark background `#0D1117`
-  - Commands appear sequentially:
-    - `$ pdd bug calculate_total` → amber text `#D9944A`
-    - `$ pdd fix` → white text `#E2E8F0`
-    - Green checkmark `✓ All 4 tests passing` in `#50C878`
-
-- **Vertical Divider:** 1px `#FFFFFF` at 15% opacity between code and test panes
+- **Code Block (Left, X: 80-880):**
+  - Container: Rounded rectangle, `#1E293B` fill, border `rgba(255,255,255,0.06)`, border-radius 8px
+  - Title bar: "module.py" in `#94A3B8`, 13px JetBrains Mono, with red dot `#EF4444` at 8px diameter (unsaved indicator)
+  - Code lines: 12 rows of simulated code — horizontal bars at varying widths (60-320px), `rgba(255,255,255,0.08)` fill, height 8px, spaced 24px apart, starting at Y=160
+  - Bug indicator: Line 7 has a wavy red underline (`#EF4444` at 0.5 opacity), 3px stroke
+  - Post-regenerate: All lines are fresh bars (slightly different widths), bug line replaced with clean bar, green tint `rgba(90,170,110,0.1)` background flash on entire block
+- **Test Block (Right, X: 960-1840):**
+  - Container: Same style as code block, `#1E293B` fill
+  - Title bar: "test_module.py" in `#94A3B8`, 13px JetBrains Mono, with green dot `#5AAA6E` at 8px
+  - Existing test lines: 6 rows of simulated code bars, `rgba(255,255,255,0.08)`
+  - New test line: Appears at row 7, bar colored `#5AAA6E` at 0.3 opacity with a typing/extend animation (width grows 0→240px)
+- **Terminal Strip (Bottom, Y: 740-980):**
+  - Container: Full-width rounded rectangle, `#0D1117` fill, border `rgba(255,255,255,0.04)`, height 240px
+  - Prompt prefix: `$` in `#6E7681`, 14px JetBrains Mono
+  - Command 1: `pdd bug` — types out in `#C9D1D9`, 14px JetBrains Mono, followed by spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ cycle), then `→ found: line 7` in `#D9944A`
+  - Command 2: `pdd fix` — types out, spinner, then `→ regenerated module.py` in `#5AAA6E`
+  - Command 3: `pdd test` — types out, spinner, then `✓ all tests pass` in `#5AAA6E`
+- **"Never opened the file" annotation:** Appears at bottom-center, `#FFFFFF` at 0.4 opacity, 16px Inter italic
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Code editor fades in. Buggy code visible. Red squiggly underline pulses once.
-2. **Frame 20-50 (0.67-1.67s):** Test pane slides in from right (width 0→40%). Existing tests visible. Cursor blinks at end of test file.
-3. **Frame 50-100 (1.67-3.33s):** New test assertion types in character-by-character (monospace typewriter effect, ~2 chars/frame). Green highlight flash on the new line when complete.
-4. **Frame 100-130 (3.33-4.33s):** Terminal strip slides up from bottom. `$ pdd bug calculate_total` appears (typewriter, fast).
-5. **Frame 130-160 (4.33-5.33s):** Brief spinner (3 dots cycling), then `$ pdd fix` appears below.
-6. **Frame 160-210 (5.33-7.0s):** Left pane: buggy code dissolves (same smoke-upward effect from Section 0.5 but faster — stagger 1 frame). Clean code regenerates top-to-bottom (stagger 2 frames). Blue flash `#4A90D9` per line.
-7. **Frame 210-240 (7.0-8.0s):** Terminal shows `✓ All 4 tests passing` in green. Scale bounce on checkmark (0.5→1.2→1.0).
-8. **Frame 240-300 (8.0-10.0s):** Hold. Clean code visible. All tests passing. The new test assertion is highlighted with a subtle amber glow `#D9944A` at 10% — this test caught the bug.
+1. **Frame 0-30 (0-1.0s):** Code block fades in on left. Bug squiggle pulses once (attention). Test block fades in on right
+2. **Frame 30-60 (1.0-2.0s):** New test line types/extends into the test block at row 7. Green dot on test file pulses
+3. **Frame 60-90 (2.0-3.0s):** Terminal strip slides up from bottom. `$ pdd bug` types out character by character (2 frames/char)
+4. **Frame 90-120 (3.0-4.0s):** Spinner cycles 6 times. Output: `→ found: line 7` appears. Bug squiggle in code block brightens momentarily
+5. **Frame 120-150 (4.0-5.0s):** `$ pdd fix` types out. Spinner cycles 6 times. Output: `→ regenerated module.py`
+6. **Frame 150-180 (5.0-6.0s):** Code block dissolves — all lines simultaneously fade out (opacity 1→0 over 15 frames), then new lines fade in (0→1, slightly different widths). Green tint flash on the entire block (0→0.1→0 opacity, 20 frames)
+7. **Frame 180-210 (6.0-7.0s):** `$ pdd test` types out. Spinner cycles 4 times. Output: `✓ all tests pass` in green
+8. **Frame 210-240 (7.0-8.0s):** Green checkmark scales up briefly (1.0→1.2→1.0) in the terminal. Red dot on code file transitions to green dot
+9. **Frame 240-270 (8.0-9.0s):** Annotation fades in: "Never opened the file"
+10. **Frame 270-300 (9.0-10.0s):** Hold at final state. Subtle ambient glow on the green elements
 
 ### Typography
-- Code: JetBrains Mono, 15px, syntax-highlighted (keywords `#81A1C1`, strings `#A3BE8C`, functions `#88C0D0`)
-- Bug comment: JetBrains Mono, 15px, `#EF4444`
-- Test code: JetBrains Mono, 14px, same syntax theme
-- Line numbers: JetBrains Mono, 13px, `#4A5568`
-- Terminal: JetBrains Mono, 14px, `#94A3B8` (commands), `#50C878` (success)
-- Tab filenames: Inter, 12px, `#94A3B8`
+- File titles: JetBrains Mono, 13px, regular (400), `#94A3B8`
+- Terminal commands: JetBrains Mono, 14px, regular (400), `#C9D1D9`
+- Terminal output: JetBrains Mono, 14px, regular (400), varies by context
+- Annotation: Inter, 16px, italic, `#FFFFFF` at 0.4 opacity
 
 ### Easing
-- Pane slide-in: `easeOut(cubic)`
-- Typewriter effect: `linear` (fixed chars/frame)
-- Code dissolve: `easeIn(quad)`
-- Code regeneration: `easeOut(cubic)`
-- Blue flash per line: `easeOut(expo)`
-- Terminal slide-up: `easeOut(quad)`
-- Checkmark bounce: `easeOut(elastic)` with 0.3 damping
+- Block fade-in: `easeOut(quad)`
+- Test line extend: `easeOut(cubic)`
+- Terminal slide-up: `easeOut(cubic)`
+- Code dissolve/regenerate: `easeInOut(sine)`
+- Green flash: `easeInOut(sine)`
+- Checkmark scale pulse: `easeOut(quad)`
+- Annotation fade: `easeOut(quad)`
 
 ## Narration Sync
 > "Code just got that cheap."
@@ -70,105 +69,94 @@ Hard cut to a code editor view. A function with a visible bug sits on screen —
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={300}>
-  <EditorChrome tab="calculate_total.py" tabIndicator="#EF4444">
-    {/* Left Pane — Buggy Code */}
-    <Sequence from={0} durationInFrames={160}>
-      <CodeBlock lines={buggyCodeLines} syntaxTheme="nord" width="60%">
-        <BugSquiggly line={11} color="#EF4444" />
-        <BugComment line={12} text="# BUG: doesn't apply discount" />
-      </CodeBlock>
-    </Sequence>
-
-    {/* Code Dissolve & Regenerate */}
-    <Sequence from={160}>
-      <DissolveCascade staggerFrames={1} direction="bottom-to-top" />
-    </Sequence>
-    <Sequence from={180}>
-      <RegenerateCascade
-        lines={cleanCodeLines}
-        staggerFrames={2}
-        flashColor="#4A90D9"
-        width="60%"
+  <AbsoluteFill style={{ backgroundColor: '#0A1628' }}>
+    {/* Code Block */}
+    <Sequence from={0} durationInFrames={300}>
+      <CodeBlock
+        title="module.py"
+        x={80}
+        width={800}
+        lines={12}
+        bugLine={7}
+        regenerateAtFrame={150}
       />
     </Sequence>
 
-    {/* Vertical Divider */}
-    <VerticalDivider x="60%" color="#FFFFFF" opacity={0.15} />
-
-    {/* Right Pane — Test File */}
-    <Sequence from={20}>
-      <SlideIn direction="right" durationInFrames={30}>
-        <TestPane tab="test_calculate.py" tabIndicator="#50C878" width="40%">
-          <ExistingTests count={3} collapsed={true} />
-          <Sequence from={30}>
-            <TypewriterLine
-              text='assert calculate_total(cart, discount=0.1) == 90.0'
-              line={15}
-              charsPerFrame={2}
-              highlightOnComplete="#50C878"
-            />
-          </Sequence>
-        </TestPane>
-      </SlideIn>
+    {/* Test Block */}
+    <Sequence from={0} durationInFrames={300}>
+      <TestBlock
+        title="test_module.py"
+        x={960}
+        width={880}
+        existingLines={6}
+        newTestAtFrame={30}
+      />
     </Sequence>
-  </EditorChrome>
 
-  {/* Terminal Strip */}
-  <Sequence from={100}>
-    <TerminalStrip height={80} background="#0D1117">
-      <TypewriterCommand text="pdd bug calculate_total" color="#D9944A" startFrame={0} />
-      <Sequence from={30}>
-        <LoadingDots durationInFrames={15} />
-      </Sequence>
-      <Sequence from={30}>
-        <TypewriterCommand text="pdd fix" color="#E2E8F0" startFrame={15} />
-      </Sequence>
-      <Sequence from={110}>
-        <SuccessMessage text="✓ All 4 tests passing" color="#50C878" bounce={true} />
-      </Sequence>
-    </TerminalStrip>
-  </Sequence>
+    {/* Terminal Strip */}
+    <Sequence from={60} durationInFrames={240}>
+      <TerminalStrip y={740} height={240}>
+        <TerminalCommand
+          from={0}
+          command="pdd bug"
+          output="→ found: line 7"
+          outputColor="#D9944A"
+        />
+        <TerminalCommand
+          from={60}
+          command="pdd fix"
+          output="→ regenerated module.py"
+          outputColor="#5AAA6E"
+        />
+        <TerminalCommand
+          from={120}
+          command="pdd test"
+          output="✓ all tests pass"
+          outputColor="#5AAA6E"
+        />
+      </TerminalStrip>
+    </Sequence>
+
+    {/* Annotation */}
+    <Sequence from={240} durationInFrames={60}>
+      <FadeText
+        text="Never opened the file"
+        fontSize={16}
+        fontStyle="italic"
+        opacity={0.4}
+        y={1020}
+        align="center"
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "editor": {
-    "background": "#1A1B26",
-    "leftTab": "calculate_total.py",
-    "rightTab": "test_calculate.py",
-    "leftWidth": "60%",
-    "rightWidth": "40%"
+  "backgroundColor": "#0A1628",
+  "codeBlock": {
+    "title": "module.py",
+    "lines": 12,
+    "bugLine": 7,
+    "bugColor": "#EF4444",
+    "blockFill": "#1E293B"
   },
-  "buggyCode": {
-    "lineCount": 18,
-    "bugLine": 11,
-    "bugComment": "# BUG: doesn't apply discount",
-    "squigglyColor": "#EF4444"
-  },
-  "testPane": {
-    "existingTests": 3,
-    "newAssertion": "assert calculate_total(cart, discount=0.1) == 90.0",
-    "newAssertionLine": 15
-  },
-  "dissolve": {
-    "staggerFrames": 1,
-    "direction": "bottom-to-top"
-  },
-  "regeneration": {
-    "staggerFrames": 2,
-    "flashColor": "#4A90D9"
+  "testBlock": {
+    "title": "test_module.py",
+    "existingLines": 6,
+    "newTestColor": "#5AAA6E"
   },
   "terminal": {
     "background": "#0D1117",
-    "height": 80,
     "commands": [
-      { "text": "pdd bug calculate_total", "color": "#D9944A" },
-      { "text": "pdd fix", "color": "#E2E8F0" }
-    ],
-    "success": { "text": "✓ All 4 tests passing", "color": "#50C878" }
-  }
+      { "cmd": "pdd bug", "output": "→ found: line 7", "outputColor": "#D9944A" },
+      { "cmd": "pdd fix", "output": "→ regenerated module.py", "outputColor": "#5AAA6E" },
+      { "cmd": "pdd test", "output": "✓ all tests pass", "outputColor": "#5AAA6E" }
+    ]
+  },
+  "annotation": "Never opened the file"
 }
 ```
 

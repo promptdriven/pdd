@@ -20,7 +20,7 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 0.085333,
+      "durationSeconds": 0.149333,
       "offsetSeconds": 0
     },
     {
@@ -30,8 +30,8 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 0.085333,
-      "offsetSeconds": 0.085333
+      "durationSeconds": 0.149333,
+      "offsetSeconds": 0.149333
     },
     {
       "id": "part2_paradigm_shift",
@@ -40,8 +40,8 @@
       "specDir": "part2_paradigm_shift",
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0.170666,
+      "durationSeconds": 228.053292,
+      "offsetSeconds": 0.298666,
       "compositions": [
         "part2_paradigm_shift_main"
       ],
@@ -54,8 +54,8 @@
       "specDir": "part3_mold_three_parts",
       "remotionDir": "S03-Part3MoldThreeParts",
       "compositionId": "Part3MoldThreePartsSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0.170666
+      "durationSeconds": 344.396583,
+      "offsetSeconds": 228.351958
     },
     {
       "id": "part4_precision_tradeoff",
@@ -64,8 +64,8 @@
       "specDir": "part4_precision_tradeoff",
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0.170666
+      "durationSeconds": 112.000667,
+      "offsetSeconds": 572.748541
     },
     {
       "id": "part5_compound_returns",
@@ -74,8 +74,8 @@
       "specDir": "part5_compound_returns",
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0.170666
+      "durationSeconds": 115.321625,
+      "offsetSeconds": 684.7492080000001
     },
     {
       "id": "where_to_start",
@@ -84,8 +84,8 @@
       "specDir": "where_to_start",
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0.170666
+      "durationSeconds": 32.569083,
+      "offsetSeconds": 800.0708330000001
     },
     {
       "id": "closing",
@@ -94,8 +94,8 @@
       "specDir": "closing",
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0.170666
+      "durationSeconds": 20.903208,
+      "offsetSeconds": 832.6399160000001
     }
   ],
   "audioSync": {

@@ -1,66 +1,60 @@
 [Remotion]
 
-# Section 7.5: Mold Glow Finale — "The Code Is Just Plastic"
+# Section 7.5: Mold Glow Finale — The Code Is Just Plastic
 
 **Tool:** Remotion
 **Duration:** ~8s (240 frames @ 30fps)
-**Timestamp:** 24:55 - 25:03
+**Timestamp:** 24:51 - 24:59
 
 ## Visual Description
-The dissolve-regenerate loop fades, and the scene transitions to the injection mold metaphor from Part 2 returning for the final time. A cross-section of an injection mold fills the center of frame — the same clean, technical illustration style established earlier. The mold walls glow with warm, living light (amber for tests, blue for prompt outline, green accents for grounding). Inside the mold cavity, a plastic part sits — it's present but unremarkable, rendered in flat neutral gray with no glow, no highlight, no special treatment.
-
-The visual hierarchy is absolute: the mold glows, the plastic doesn't. This is the final visual thesis — the specification is what matters, the code is just output.
+The visual metaphor reaches its climax. The triangle "mold" from the previous shots remains on screen, but now it begins to glow — edges brightening, nodes pulsing with their signature colors, a warm inner luminance radiating from the structure. Meanwhile, the generated code at the center dims significantly, becoming visually unremarkable — just gray bars, barely visible. The contrast is the entire point: the mold is radiant, the plastic is forgettable. A single line of text fades in below: "The code is just plastic." The frame holds with quiet confidence. This is the emotional peak of the closing.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Deep dark `#0A0F1A` fading to `#050810` at edges (vignette)
+- Background: `#0A1225` (slightly darker than previous shots — creates gravitas)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Mold Cross-Section (centered at 960, 500):**
-  - Outer shell: Rounded rectangle, 500x320px, 3px stroke
-  - Left wall: `#D9944A` (tests/amber), 3px, with inner glow (12px blur, 50% opacity)
-  - Right wall: `#D9944A` (tests/amber), matching left
-  - Top outline: `#4A90D9` (prompt/blue), 3px, with inner glow (12px blur, 40% opacity)
-  - Bottom detail: `#5AAA6E` (grounding/green), 2px accent lines inside the mold base
-  - Corner radii: 8px outer, 4px inner cavity
-
-- **Mold Glow Effect:**
-  - Pulsing ambient glow radiating outward from mold walls
-  - Amber glow on sides: `#D9944A` radial gradient, 40px reach, opacity pulsing 0.2→0.5→0.2
-  - Blue glow on top: `#4A90D9` radial gradient, 30px reach, same pulse
-  - Green accent glow on base: `#5AAA6E`, subtle, 20px reach
-
-- **Plastic Part (inside mold cavity):**
-  - Filled shape conforming to cavity interior, `#64748B` (neutral gray)
-  - No glow, no shadow, no highlight — deliberately flat and unremarkable
-  - 1px `#4A5568` border, no effects
-  - Positioned inside the cavity, 4px inset from walls
-
-- **Label Text (appearing after mold establishes):**
-  - "The code is just plastic." — positioned below mold at (960, 780)
+- **Triangle Mold (Glowing):**
+  - Vertices: (960, 280), (520, 720), (1400, 720) — slightly adjusted upward to make room for text below
+  - Edges: Triple-layered glow effect:
+    - Inner line: `rgba(255,255,255,0.25)`, 2px
+    - Mid glow: `rgba(255,255,255,0.08)`, 8px blur
+    - Outer glow: `rgba(255,255,255,0.03)`, 20px blur
+  - Edge color shifts: top-left edge leans blue `#4A90D9`, bottom edge leans amber `#D9944A`, top-right edge leans green `#5AAA6E` — all at 0.06 opacity mixed into the glow
+- **PROMPT Node (Top):** Circle brightens — fill `#4A90D9` at 0.25 opacity, stroke `#4A90D9` at 0.8 opacity, 3px. Outer glow `#4A90D9` at 0.12 opacity, 12px blur. Label "PROMPT" at 0.7 opacity
+- **TESTS Node (Bottom-left):** Same glow treatment — `#D9944A` fills/strokes, label at 0.7 opacity
+- **GROUNDING Node (Bottom-right):** Same glow treatment — `#5AAA6E` fills/strokes, label at 0.7 opacity
+- **Generated Code (Center, dimmed):**
+  - 8 horizontal bars from previous shot, but faded to `rgba(255,255,255,0.05)` — barely visible, unremarkable
+  - No animation, no shimmer — intentionally lifeless compared to the glowing mold
+- **"The code is just plastic." text:**
+  - `#FFFFFF` at 0.7 opacity, 28px Inter regular (400), centered at (960, 860)
+  - Appears with slow fade and slight upward drift (10px)
+- **Subtle particle field:** 20-30 tiny dots (2px) slowly drifting upward around the triangle, `rgba(255,255,255,0.04)`, speed ~0.5px/frame — suggests warmth/energy emanating from the mold
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1.0s):** Scene transition. Previous elements fade out. Mold cross-section fades in from center (opacity 0→1, scale 0.9→1.0). Mold arrives as a technical diagram — neutral, no glow yet.
-2. **Frame 30-60 (1.0-2.0s):** Mold walls begin to glow. Amber glow ignites on left wall, sweeps to right wall (staggered 8 frames). Blue glow ignites on top. Green accents on base. The mold comes alive.
-3. **Frame 60-90 (2.0-3.0s):** Plastic part fades in inside cavity (opacity 0→0.6). Deliberately understated — it just appears, while the mold continues to glow intensely around it. The contrast is the point.
-4. **Frame 90-120 (3.0-4.0s):** Narration: "The code is just plastic." — Text fades in below the mold. Quiet, definitive.
-5. **Frame 120-180 (4.0-6.0s):** Mold glow intensifies (pulse peak — all walls reach maximum brightness). Plastic part remains exactly the same. Unaffected, unremarkable, replaceable.
-6. **Frame 180-240 (6.0-8.0s):** Hold. Mold continues gentle ambient pulse. The visual hierarchy speaks for itself.
+1. **Frame 0-40 (0-1.33s):** Triangle edges begin glowing — inner lines brighten from 0.08→0.25 opacity. Mid and outer glow layers fade in from 0→target. Transition from previous shot's dim triangle to luminous mold
+2. **Frame 20-60 (0.67-2.0s):** Node circles brighten — fills 0.15→0.25, strokes 0.6→0.8. Outer glow halos expand (0→12px blur). Labels brighten to 0.7 opacity. Each node brightens with a 10-frame stagger (PROMPT first, TESTS second, GROUNDING third)
+3. **Frame 40-80 (1.33-2.67s):** Code bars at center dim from 0.12→0.05 opacity. Slow, deliberate fade — the code becoming forgettable
+4. **Frame 60-100 (2.0-3.33s):** Particle field begins — tiny dots appear from behind the triangle edges and drift upward. New particles spawn every 6 frames
+5. **Frame 80-120 (2.67-4.0s):** Edge color tints emerge — subtle blue on left edge, amber on bottom, green on right. Very faint, just enough to tie edges to their respective nodes
+6. **Frame 120-170 (4.0-5.67s):** "The code is just plastic." fades in with 10px upward drift, opacity 0→0.7. Synced with narrator
+7. **Frame 170-240 (5.67-8.0s):** Hold. The mold glows. The code is dim. Particles drift. Nodes breathe (0.02 opacity oscillation, staggered). The frame is still and confident
 
 ### Typography
-- Quote text: Inter, 32px, regular (400), `#94A3B8`, centered at (960, 780)
-- No other text in scene
+- Statement text: Inter, 28px, regular (400), `#FFFFFF` at 0.7 opacity
+- Node labels: Inter, 18px, semi-bold (600), respective node colors at 0.7 opacity
 
 ### Easing
-- Mold fade-in: `easeOut(quad)`
-- Mold scale: `easeOut(cubic)`
-- Wall glow ignition: `easeOut(expo)` — sharp onset
-- Glow pulse: `easeInOut(sin)` — smooth breathing
-- Plastic part fade: `easeOut(quad)` — deliberate, slow
-- Text fade: `easeOut(quad)`
+- Edge glow brighten: `easeInOut(cubic)` (slow, dignified)
+- Node brighten: `easeOut(quad)`
+- Code dim: `easeInOut(sine)` (gentle fade)
+- Text fade/drift: `easeOut(quad)`
+- Particle drift: linear (constant upward motion)
+- Node breathing: `easeInOut(sine)`
 
 ## Narration Sync
 > "The code is just plastic."
@@ -68,97 +62,105 @@ The visual hierarchy is absolute: the mold glows, the plastic doesn't. This is t
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={240}>
-  <VignetteBackground center="#0A0F1A" edge="#050810" />
-
-  {/* Mold Cross-Section */}
-  <Sequence from={0}>
-    <FadeInScale scale={[0.9, 1.0]} durationInFrames={30}>
-      <MoldCrossSection position={[960, 500]} width={500} height={320}>
-        {/* Mold Walls with Glow */}
-        <Sequence from={30}>
-          <WallGlow side="left" color="#D9944A" glowBlur={12} glowOpacity={0.5} />
-          <Sequence from={8}>
-            <WallGlow side="right" color="#D9944A" glowBlur={12} glowOpacity={0.5} />
-          </Sequence>
-          <Sequence from={12}>
-            <WallGlow side="top" color="#4A90D9" glowBlur={12} glowOpacity={0.4} />
-          </Sequence>
-          <Sequence from={16}>
-            <WallGlow side="bottom" color="#5AAA6E" glowBlur={8} glowOpacity={0.3} />
-          </Sequence>
-        </Sequence>
-
-        {/* Plastic Part — deliberately flat */}
-        <Sequence from={60}>
-          <PlasticPart
-            color="#64748B"
-            borderColor="#4A5568"
-            maxOpacity={0.6}
-            durationInFrames={30}
-          />
-        </Sequence>
-      </MoldCrossSection>
-    </FadeInScale>
-  </Sequence>
-
-  {/* Glow Pulse Cycle */}
-  <Sequence from={120}>
-    <GlowPulse
-      colors={["#D9944A", "#4A90D9", "#5AAA6E"]}
-      cycleFrames={60}
-      opacityRange={[0.2, 0.5]}
-    />
-  </Sequence>
-
-  {/* Quote Text */}
-  <Sequence from={90}>
-    <FadeIn durationInFrames={20}>
-      <CenteredText
-        text="The code is just plastic."
-        position={[960, 780]}
-        font="Inter"
-        size={32}
-        color="#94A3B8"
+  <AbsoluteFill style={{ backgroundColor: '#0A1225' }}>
+    {/* Particle Field */}
+    <Sequence from={60} durationInFrames={180}>
+      <ParticleField
+        count={25}
+        spawnRate={6}
+        size={2}
+        color="rgba(255,255,255,0.04)"
+        drift={[0, -0.5]}
+        bounds={{ x: [400, 1520], y: [200, 800] }}
       />
-    </FadeIn>
-  </Sequence>
+    </Sequence>
+
+    {/* Glowing Triangle */}
+    <GlowingTriangleMold
+      vertices={[[960, 280], [520, 720], [1400, 720]]}
+      glowStart={0}
+      glowEnd={40}
+      innerOpacity={0.25}
+      midBlur={8}
+      outerBlur={20}
+      edgeTints={[
+        { edge: "top-left", color: "#4A90D9", opacity: 0.06 },
+        { edge: "bottom", color: "#D9944A", opacity: 0.06 },
+        { edge: "top-right", color: "#5AAA6E", opacity: 0.06 }
+      ]}
+    />
+
+    {/* Brightening Nodes */}
+    <Sequence from={20} durationInFrames={40}>
+      <GlowingNode x={960} y={280} color="#4A90D9" label="PROMPT" delay={0} />
+    </Sequence>
+    <Sequence from={30} durationInFrames={40}>
+      <GlowingNode x={520} y={720} color="#D9944A" label="TESTS" delay={10} />
+    </Sequence>
+    <Sequence from={40} durationInFrames={40}>
+      <GlowingNode x={1400} y={720} color="#5AAA6E" label="GROUNDING" delay={20} />
+    </Sequence>
+
+    {/* Dimming Code */}
+    <DimmingCodeBars
+      center={[960, 500]}
+      startOpacity={0.12}
+      endOpacity={0.05}
+      dimStart={40}
+      dimEnd={80}
+    />
+
+    {/* Statement */}
+    <Sequence from={120} durationInFrames={50}>
+      <FadeText
+        text="The code is just plastic."
+        fontSize={28}
+        color="#FFFFFF"
+        opacity={0.7}
+        y={860}
+        driftY={-10}
+        align="center"
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "mold": {
-    "position": [960, 500],
-    "width": 500,
-    "height": 320,
-    "cornerRadius": { "outer": 8, "inner": 4 },
-    "walls": {
-      "left": { "color": "#D9944A", "width": 3, "glowBlur": 12 },
-      "right": { "color": "#D9944A", "width": 3, "glowBlur": 12 },
-      "top": { "color": "#4A90D9", "width": 3, "glowBlur": 12 },
-      "bottom": { "color": "#5AAA6E", "width": 2, "glowBlur": 8 }
+  "backgroundColor": "#0A1225",
+  "triangle": {
+    "vertices": [[960, 280], [520, 720], [1400, 720]],
+    "glow": {
+      "innerOpacity": 0.25,
+      "innerStroke": 2,
+      "midGlowBlur": 8,
+      "midGlowOpacity": 0.08,
+      "outerGlowBlur": 20,
+      "outerGlowOpacity": 0.03
     }
   },
-  "plasticPart": {
-    "color": "#64748B",
-    "borderColor": "#4A5568",
-    "opacity": 0.6,
-    "glow": "none"
+  "nodes": [
+    { "label": "PROMPT", "position": [960, 280], "color": "#4A90D9", "fillOpacity": 0.25, "strokeOpacity": 0.8 },
+    { "label": "TESTS", "position": [520, 720], "color": "#D9944A", "fillOpacity": 0.25, "strokeOpacity": 0.8 },
+    { "label": "GROUNDING", "position": [1400, 720], "color": "#5AAA6E", "fillOpacity": 0.25, "strokeOpacity": 0.8 }
+  ],
+  "code": {
+    "opacity": 0.05,
+    "color": "rgba(255,255,255,0.05)"
   },
-  "glowPulse": {
-    "cycleFrames": 60,
-    "opacityRange": [0.2, 0.5]
-  },
-  "quoteText": {
+  "statement": {
     "text": "The code is just plastic.",
-    "position": [960, 780],
-    "color": "#94A3B8",
-    "fontSize": 32
+    "fontSize": 28,
+    "opacity": 0.7,
+    "y": 860
   },
-  "background": {
-    "center": "#0A0F1A",
-    "edge": "#050810"
+  "particles": {
+    "count": 25,
+    "size": 2,
+    "color": "rgba(255,255,255,0.04)",
+    "driftSpeed": 0.5
   }
 }
 ```

@@ -1,129 +1,164 @@
 [Remotion]
 
-# Section 3.7: Prompt Capital — The Specification
+# Section 3.6: Prompt Capital — The Specification
 
 **Tool:** Remotion
-**Duration:** ~20s (600 frames @ 30fps)
-**Timestamp:** 14:27 - 14:47
+**Duration:** ~22s (660 frames @ 30fps)
+**Timestamp:** 14:38 – 15:00
 
 ## Visual Description
-The injection nozzle of the mold highlights as the narrator introduces prompt capital. Text representing the prompt specification flows into the mold like injection material: "Parse user IDs from untrusted input. Return None on failure, never throw. Handle unicode." A file label `user_parser.prompt` is briefly visible. Then the same prompt generates code twice — two different implementations appear side by side, with different variable names and slightly different structure, but both pass all tests. The ratio "1:5 to 1:10" appears, showing the compression advantage. Finally, two context windows are compared: LEFT filled with 15,000 tokens of dense code, RIGHT filled with clean prompts for ten modules — same window size, ten times more system knowledge.
+A visualization of the prompt as the specification layer of PDD. On the left, a compact prompt document (blue-bordered card, ~15 lines of natural language) is shown. On the right, the generated code it produces (~100 lines, gray code blocks). An animated ratio indicator shows "1:5 to 1:10" compression. The prompt card and code are connected by a transformation arrow. Two variations of generated code materialize from the same prompt — different implementations, same behavior — establishing that the contract is fixed but the code is flexible. Below, a context window comparison shows how natural-language prompts fit 5-10× more system context than raw code, with the MIT "89% improvement" stat called out.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
+- Background: #0F172A (dark navy)
 - Grid lines: None
 
 ### Chart/Visual Elements
-- **Nozzle Region:** Top-center, funnel shape 100px wide at top → 40px at bottom, `#4A90D9` at 0.5 opacity with 4px glow blur
-- **Prompt Text Flow:** Text strings flow downward from nozzle into the mold cavity, styled as glowing blue text particles:
-  - "Parse user IDs from untrusted input" — `#4A90D9`, 16px
-  - "Return None on failure, never throw" — `#4A90D9`, 16px
-  - "Handle unicode" — `#4A90D9`, 16px
-- **File Label:** `user_parser.prompt` — JetBrains Mono, 14px, `#94A3B8`, positioned above nozzle with a document icon
-- **Dual Generation Panel:** Two code blocks side by side, each 500px wide x 280px tall, 60px gap
-  - Left block: Code-line texture pattern A (class-based style), border `rgba(74,144,217,0.3)`, green checkmark below
-  - Right block: Code-line texture pattern B (function-based style), border `rgba(74,144,217,0.3)`, green checkmark below
-  - Connecting line from same prompt document to both blocks
-  - Label between checkmarks: "Different code. Same behavior." — `#FFFFFF`, 18px
-- **Compression Ratio:** Large text "1:5 to 1:10" — `#4A90D9`, 48px bold, with explanatory label: "Prompt-to-code compression" — `#94A3B8`, 16px
-  - Visual: Small glowing prompt document (left, ~50px tall) connected by expanding arrow to larger code block (right, ~300px tall)
-- **Context Window Comparison (final beat):**
-  - Two side-by-side rectangles, each 600px wide x 350px tall, labeled "Context Window"
-  - LEFT: Packed with dense horizontal lines (code), `rgba(239,68,68,0.15)` red tint on ~30% of lines (irrelevant code), tiny green highlights on ~5% (relevant). Label: "15,000 tokens of code" — `#94A3B8`, 14px. Overall: cluttered, noisy
-  - RIGHT: Clean horizontal lines (prompts), all `rgba(74,144,217,0.2)` blue tint, well-spaced. Label: "Prompts for 10 modules" — `#94A3B8`, 14px. Sub-label: "10× more system knowledge" — `#4A90D9`, 16px. Overall: spacious, focused
+- **Prompt card (left):** Positioned at (280, 340), 360×320px
+  - Background: `#1E293B`, border `#4A90D9` 2px, border-radius 8px
+  - Header: "prompt.md" — `#4A90D9`, 14px, monospace, top-left with file icon
+  - Content: 12 lines of stylized natural language text (horizontal bars of varying length)
+  - Text bars: `#FFFFFF` at 0.3 opacity, 2px height, spaced 18px apart
+  - Blue accent bar: 4px left border, `#4A90D9`
+  - Size label below: "~300 tokens" — `#4A90D9`, 14px
+
+- **Generated code (right):** Positioned at (1100, 250), 520×480px
+  - Background: `#1E293B`, border `rgba(255,255,255,0.1)` 1px, border-radius 8px
+  - Header: "module.py" — `#6B7C93`, 14px, monospace
+  - Content: ~25 lines of stylized code (horizontal bars with indentation)
+  - Code bars: `#6B7C93` at 0.3 opacity, 2px height, varied indentation
+  - Size label below: "~2,500 tokens" — `#6B7C93`, 14px
+
+- **Transformation arrow:** From prompt card right-edge → code left-edge
+  - Curved arrow, `rgba(255,255,255,0.2)`, 2px, with `pdd generate` label at midpoint
+  - Midpoint: animated spinning gear icon, `#4A90D9` at 0.3, 20px
+
+- **Compression ratio indicator:** Centered at (690, 700)
+  - Large text: "1 : 5–10" — `#FFFFFF`, 36px, bold
+  - Subtitle: "Prompt is a fifth to a tenth the size of generated code" — `#94A3B8`, 14px
+  - Visual: Small blue bar (50px) and large gray bar (350px) stacked, showing ratio
+
+- **Dual code variants (appears mid-sequence):**
+  - Two overlapping code cards at right side, offset 20px diagonally
+  - Different internal line patterns but same overall shape
+  - Label: "Different code. Same behavior." — `#FFFFFF` at 0.6, 16px
+  - Green checkmark on each variant
+
+- **Context advantage callout (bottom):** y=880
+  - "Natural language is their deepest fluency" — `#4A90D9`, 16px
+  - "MIT: +89% coding performance with natural language context" — `#FFFFFF` at 0.5, 15px
+  - Source: "MIT, 2024" — `#94A3B8`, 13px
 
 ### Animation Sequence
-1. **Frame 0-40 (0-1.33s):** Nozzle region highlights with blue glow. `user_parser.prompt` file label fades in above
-2. **Frame 40-120 (1.33-4.0s):** Prompt text strings flow downward through nozzle one by one (20-frame stagger), each drifting down with particle trail effect. They enter the mold cavity
-3. **Frame 120-220 (4.0-7.33s):** Dual generation — prompt document at top-center, two connecting lines draw to left and right code blocks. Both blocks fill with code-line textures simultaneously but visibly different patterns. Green checkmarks appear below both
-4. **Frame 220-270 (7.33-9.0s):** "Different code. Same behavior." text fades in centered between the two blocks
-5. **Frame 270-360 (9.0-12.0s):** Scene transitions (cross-fade). Compression ratio visualization: small prompt document on left, expanding arrow, large code block on right. "1:5 to 1:10" scales in with emphasis
-6. **Frame 360-520 (12.0-17.33s):** Scene transitions to context window comparison. Both windows draw in simultaneously. LEFT fills with dense noisy code lines (red highlights scattered). RIGHT fills with clean spaced prompt lines (blue tint). Labels appear. The contrast is stark
-7. **Frame 520-600 (17.33-20.0s):** Hold. "10× more system knowledge" pulses once on right window. Text appears below: "Every token is author-curated." — `#FFFFFF`, 18px
+1. **Frame 0–45 (0–1.5s):** Prompt card draws in — border traces clockwise, then interior text bars fade in top-to-bottom. "prompt.md" header appears. Synced with "Second: the prompt. Your specification of what you want."
+2. **Frame 45–105 (1.5–3.5s):** Transformation arrow draws from prompt card to right. Spinning gear icon appears at midpoint. "pdd generate" label fades in below arrow.
+3. **Frame 105–180 (3.5–6.0s):** Generated code card materializes on right — border draws, code lines fill in rapidly (2-frame stagger per line). "module.py" header appears. Size labels ("~300 tokens" and "~2,500 tokens") fade in below their respective cards.
+4. **Frame 180–240 (6.0–8.0s):** Compression ratio indicator fades in center-bottom. "1 : 5–10" counter animates — the "1" appears first, then the ratio expands outward. Blue/gray comparison bars fill in. Synced with "A good prompt is a fifth to a tenth the size of the code it generates."
+5. **Frame 240–330 (8.0–11.0s):** Code card duplicates — a second variant slides out from behind (offset 20px right, 20px down). Both have slightly different line patterns but identical overall dimensions. "Different code. Same behavior." label fades in with green checkmarks on each. Synced with "Notice something subtle: the exact implementation can vary. What's locked is the behavior."
+6. **Frame 330–450 (11.0–15.0s):** Prompt card pulses blue. Label appears: "What and why, not how." — `#4A90D9`, 16px. The interior text bars of the prompt subtly recolor to blue at 0.15 opacity to emphasize it's natural language. Synced with "Think of the prompt as your header file. The generated code is the OBJ file."
+7. **Frame 450–570 (15.0–19.0s):** Context advantage callout slides in from bottom. MIT stat counter animates 0→89%. "Natural language is their deepest fluency" appears first, then the MIT citation.
+8. **Frame 570–660 (19.0–22.0s):** Hold. Prompt card has gentle blue glow pulse. All elements at final state.
 
 ### Typography
-- File Label: JetBrains Mono, 14px, regular (400), `#94A3B8`
-- Prompt Text: Inter, 16px, regular (400), `#4A90D9`
-- "Different code. Same behavior.": Inter, 18px, semi-bold (600), `#FFFFFF`
-- Compression Ratio: Inter, 48px, bold (800), `#4A90D9`
-- Compression Label: Inter, 16px, regular (400), `#94A3B8`
-- Context Window Labels: Inter, 14px, regular (400), `#94A3B8`
-- "10× more system knowledge": Inter, 16px, bold (700), `#4A90D9`
-- Emphasis Text: Inter, 18px, semi-bold (600), `#FFFFFF`
+- File headers: JetBrains Mono, 14px, respective colors
+- Size labels: Inter Regular, 14px, respective colors
+- Compression ratio: Inter Bold, 36px, `#FFFFFF`
+- Ratio subtitle: Inter Regular, 14px, `#94A3B8`
+- "Different code" label: Inter Medium, 16px, `#FFFFFF` at 0.6 opacity
+- "What and why" label: Inter Medium, 16px, `#4A90D9`
+- Context callout: Inter Medium, 16px, `#4A90D9`
+- MIT stat: Inter Regular, 15px, `#FFFFFF` at 0.5 opacity
+- Source: Inter Regular, 13px, `#94A3B8`
 
 ### Easing
-- Nozzle highlight: `easeInOut(sine)`
-- Prompt text flow: `easeIn(quad)` for downward drift
-- Code block fill: `easeOut(cubic)`
-- Checkmark pop: `easeOut(back(1.3))`
-- Compression ratio scale: `easeOut(back(1.5))`
-- Context window draw: `easeOut(cubic)`
-- Code line fill (LEFT): `linear` (constant stream, overwhelming)
-- Prompt line fill (RIGHT): `easeOut(quad)` (clean, deliberate)
+- Card border draw: `easeInOutCubic`
+- Text bar fade-in: `easeOutQuad` (staggered, 2 frames per line)
+- Arrow draw: `easeInOutCubic`
+- Compression counter: `easeOutExpo` (800ms)
+- Bar fill: `easeInOutCubic`
+- Variant slide-out: `spring({ damping: 14, stiffness: 100 })`
+- MIT counter: `easeOutExpo` (1s)
+- Callout slide: `easeOutCubic`
 
 ## Narration Sync
 > "Second: the prompt. Your specification of what you want."
+
 > "The prompt doesn't define the walls — tests do that. The prompt defines what you're asking for and why."
+
 > "Notice something subtle: the exact implementation can vary. What's locked is the behavior. The code is flexible; the contract is fixed."
-> "A good prompt is a fifth to a tenth the size of the code it generates."
-> "This is why the context window advantage we talked about is so powerful. You're not stuffing code into a window and hoping the model figures it out. You're giving it natural language — its strongest modality — in a window that's five to ten times more spacious."
+
+> "A good prompt is a fifth to a tenth the size of the code it generates. Think of the prompt as your header file. The generated code is the OBJ file. You're specifying what and why, not how."
+
+> "This is why the context window advantage we talked about is so powerful. You're not stuffing code into a window and hoping the model figures it out. You're giving it natural language — its strongest modality."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={600}>
-  {/* Nozzle Highlight */}
-  <Sequence from={0} durationInFrames={40}>
-    <NozzleHighlight color="#4A90D9" />
-    <FileLabel text="user_parser.prompt" />
-  </Sequence>
+<Sequence from={0} durationInFrames={660}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Prompt card */}
+    <Sequence from={0} durationInFrames={45}>
+      <DrawOnCard
+        x={280} y={340} width={360} height={320}
+        borderColor="#4A90D9"
+        header="prompt.md"
+        lineCount={12}
+      />
+    </Sequence>
 
-  {/* Prompt Text Flow */}
-  <Sequence from={40} durationInFrames={80}>
-    <PromptTextFlow
-      lines={[
-        "Parse user IDs from untrusted input",
-        "Return None on failure, never throw",
-        "Handle unicode"
-      ]}
-      stagger={20}
-    />
-  </Sequence>
+    {/* Transformation arrow */}
+    <Sequence from={45} durationInFrames={60}>
+      <TransformArrow
+        from={{ x: 460, y: 500 }}
+        to={{ x: 840, y: 490 }}
+        label="pdd generate"
+      />
+    </Sequence>
 
-  {/* Dual Generation */}
-  <Sequence from={120} durationInFrames={100}>
-    <DualGeneration
-      promptSource="user_parser.prompt"
-      leftStyle="class-based"
-      rightStyle="functional"
-    />
-  </Sequence>
+    {/* Generated code card */}
+    <Sequence from={105} durationInFrames={75}>
+      <DrawOnCard
+        x={1100} y={250} width={520} height={480}
+        borderColor="rgba(255,255,255,0.1)"
+        header="module.py"
+        lineCount={25}
+        lineColor="#6B7C93"
+      />
+    </Sequence>
 
-  {/* Same Behavior Label */}
-  <Sequence from={220} durationInFrames={50}>
-    <CenterLabel text="Different code. Same behavior." />
-  </Sequence>
+    {/* Size labels */}
+    <Sequence from={150} durationInFrames={30}>
+      <FadeIn><SizeLabel text="~300 tokens" color="#4A90D9" x={280} y={680} /></FadeIn>
+      <FadeIn><SizeLabel text="~2,500 tokens" color="#6B7C93" x={1100} y={750} /></FadeIn>
+    </Sequence>
 
-  {/* Compression Ratio */}
-  <Sequence from={270} durationInFrames={90}>
-    <CompressionRatio ratio="1:5 to 1:10" />
-  </Sequence>
+    {/* Compression ratio */}
+    <Sequence from={180} durationInFrames={60}>
+      <CompressionRatio ratio="1 : 5–10" x={690} y={700} />
+    </Sequence>
 
-  {/* Context Window Comparison */}
-  <Sequence from={360} durationInFrames={160}>
-    <ContextWindowComparison
-      leftLabel="15,000 tokens of code"
-      rightLabel="Prompts for 10 modules"
-      rightSubLabel="10× more system knowledge"
-    />
-  </Sequence>
+    {/* Dual code variants */}
+    <Sequence from={240} durationInFrames={90}>
+      <DualVariants x={1100} y={250} offset={20} />
+      <FadeIn>
+        <Label text="Different code. Same behavior." y={760} />
+      </FadeIn>
+    </Sequence>
 
-  {/* Final Emphasis */}
-  <Sequence from={520} durationInFrames={80}>
-    <EmphasisText text="Every token is author-curated." y={800} />
-  </Sequence>
+    {/* Context advantage callout */}
+    <Sequence from={450} durationInFrames={120}>
+      <SlideUp>
+        <ContextCallout
+          headline="Natural language is their deepest fluency"
+          stat="+89% coding performance with NL context"
+          source="MIT, 2024"
+          y={880}
+        />
+      </SlideUp>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -131,32 +166,27 @@ The injection nozzle of the mold highlights as the narrator introduces prompt ca
 ```json
 {
   "backgroundColor": "#0F172A",
-  "promptFile": "user_parser.prompt",
-  "promptLines": [
-    "Parse user IDs from untrusted input",
-    "Return None on failure, never throw",
-    "Handle unicode"
-  ],
-  "compressionRatio": {
-    "min": "1:5",
-    "max": "1:10",
-    "displayText": "1:5 to 1:10",
+  "prompt": {
+    "filename": "prompt.md",
+    "tokenCount": 300,
+    "lineCount": 12,
     "color": "#4A90D9"
   },
-  "contextComparison": {
-    "left": {
-      "label": "15,000 tokens of code",
-      "tokenCount": 15000,
-      "irrelevantPct": 0.30,
-      "relevantPct": 0.05,
-      "tint": "rgba(239,68,68,0.15)"
-    },
-    "right": {
-      "label": "Prompts for 10 modules",
-      "moduleCount": 10,
-      "multiplier": "10×",
-      "tint": "rgba(74,144,217,0.2)"
-    }
+  "generatedCode": {
+    "filename": "module.py",
+    "tokenCount": 2500,
+    "lineCount": 100,
+    "color": "#6B7C93"
+  },
+  "compressionRatio": {
+    "min": 5,
+    "max": 10,
+    "display": "1 : 5–10"
+  },
+  "research": {
+    "source": "MIT, 2024",
+    "finding": "+89% coding performance with natural language context",
+    "trainingRatio": "30× more natural language than code in training data"
   }
 }
 ```

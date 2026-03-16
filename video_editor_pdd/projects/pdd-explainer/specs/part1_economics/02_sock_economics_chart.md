@@ -1,139 +1,112 @@
 [Remotion]
 
-# Section 1.2: Sock Economics — Labor vs. Garment Cost
+# Section 1.1: Sock Economics — Labor vs. Garment Cost
 
 **Tool:** Remotion
-**Duration:** ~12s (360 frames @ 30fps)
-**Timestamp:** 2:33 - 2:45
+**Duration:** ~24s
+**Timestamp:** 0:20 – 0:44
 
 ## Visual Description
-An animated line chart showing the economics of sock darning from 1950 to 2020. Two lines — "Labor Cost (per hour)" and "Garment Cost (pair of socks)" — start with garment cost high relative to labor, then cross around 1960-65 at "The Threshold." After crossing, the lines diverge dramatically: labor rises while garment cost plummets. The crossing point is highlighted with a glowing circle and label. The chart uses warm, vintage-inspired colors on the project's dark background to evoke the 1950s-60s era.
+An animated line chart showing the economic crossover that made sock darning irrational. Two lines — "Labor Cost" (rising) and "Sock Cost" (falling) — are plotted from 1950 to 1975. They cross around 1962–1965, with the crossing point highlighted and labeled "The Threshold". Before the cross, the area between is shaded green (darning makes sense). After, it's shaded red (darning is irrational). The chart builds progressively as the narrator tells the story.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: Horizontal, `rgba(255, 255, 255, 0.06)`, 5 evenly spaced
+- Background: #0F1923 (dark blue-black)
+- Grid lines: Horizontal at 25%, 50%, 75% of Y-axis — #FFFFFF at 5% opacity
 
 ### Chart/Visual Elements
-- **Chart Area:** 1400px wide x 600px tall, centered (left margin 260px, top margin 200px)
-- **X-Axis:** Years 1950–2020, labeled every decade, white `#FFFFFF` at 0.5 opacity
-- **Y-Axis:** "Relative Cost" (unitless index 0–100), labeled at 0, 25, 50, 75, 100, white `#FFFFFF` at 0.5 opacity
-- **Labor Cost Line:** `#D9944A` (warm amber), 3px stroke, starts at 30 (1950), rises steadily to 85 (2020)
-- **Garment Cost Line:** `#4A90D9` (cool blue), 3px stroke, starts at 70 (1950), drops to 5 (2020)
-- **Crossing Point:** Glowing circle at ~1962, value ~45, radius 8px, fill `#FFFFFF` at 0.8 opacity, glow `rgba(255,255,255,0.3)` blur 12px
-- **Crossing Label:** "The Threshold" — white, positioned above crossing point at Y offset -40px
-- **Legend:** Top-right corner — two color swatches with labels
+- **Chart area:** 1400×600px, centered, with 260px left margin for Y-axis labels
+- **X-axis:** Years 1950–1975, ticks every 5 years, labels in #8B9DC3
+- **Y-axis:** "Relative Cost (% of hourly wage)" — 0% to 100%, ticks at 25% intervals
+- **Labor cost line:** Warm amber (#D9944A), 3px solid, rises from ~30% to ~80%
+- **Sock cost line:** Cool blue (#4A90D9), 3px solid, falls from ~70% to ~15%
+- **Crossing point:** White circle (8px radius) with pulsing glow at the intersection (~1962, ~50%)
+- **"The Threshold" label:** White text with connecting line to intersection point
+- **Green shaded area (pre-cross):** Between lines, 1950–1962, #22C55E at 12% opacity
+- **Red shaded area (post-cross):** Between lines, 1962–1975, #EF4444 at 12% opacity
+- **Chart title:** "When Darning Became Irrational" — top-left of chart area
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1.0s):** Axes draw in — X-axis sweeps left-to-right, Y-axis sweeps bottom-to-top. Axis labels fade in (opacity 0→0.5)
-2. **Frame 30-120 (1.0-4.0s):** Both lines draw simultaneously from 1950 rightward. Labor line rises; garment line falls. They approach each other
-3. **Frame 120-150 (4.0-5.0s):** Lines cross at ~1962. Crossing point circle pulses in (scale 0→1.2→1.0). "The Threshold" label fades in above
-4. **Frame 150-270 (5.0-9.0s):** Lines continue diverging dramatically post-crossing. Garment cost plummets; labor cost climbs. The gap widens
-5. **Frame 270-310 (9.0-10.33s):** Shaded area between the two lines fills in with a semi-transparent gradient (`rgba(217,148,74,0.1)` to `rgba(74,144,217,0.1)`) to emphasize the divergence
-6. **Frame 310-360 (10.33-12.0s):** Hold at final state. Legend fades in at top-right
+1. **Frame 0–30 (0–1s):** Chart axes draw on (X-axis left→right, Y-axis bottom→up). Grid lines fade in.
+2. **Frame 30–90 (1–3s):** Both lines draw simultaneously from 1950 toward 1960. Green shaded area fills behind as lines progress. Synced with "In 1950, a wool sock cost real money..."
+3. **Frame 90–150 (3–5s):** Lines continue drawing through the crossing point. White circle pulses at intersection. "The Threshold" label fades in with a subtle bounce.
+4. **Frame 150–240 (5–8s):** Lines continue to 1975. Red shaded area fills in post-crossing zone. The divergence becomes dramatic. Synced with "By the mid-1960s, the math flipped..."
+5. **Frame 240–360 (8–12s):** Small annotation fades in near the green zone: "30 min of labor > new sock cost". Post-1965 region dims slightly to emphasize the irrationality.
+6. **Frame 360–480 (12–16s):** Hold with gentle ambient animation (subtle line glow pulse). The word "irrational" appears in the red zone with a typewriter effect.
+7. **Frame 480–720 (16–24s):** Chart holds for remaining narration. At frame 600, elements begin a slow fade-out to prepare for transition to code chart.
 
 ### Typography
-- Chart Title: Inter, 32px, semi-bold (600), `#FFFFFF`, opacity 0.9, top-center of chart
-- Axis Labels: Inter, 16px, regular (400), `#FFFFFF`, opacity 0.5
-- "The Threshold" Label: Inter, 22px, semi-bold (600), `#FFFFFF`, opacity 0.9
-- Legend Labels: Inter, 16px, regular (400), `#FFFFFF`, opacity 0.7
+- Chart title: Inter SemiBold, 28px, #FFFFFF, opacity 0.9
+- Axis labels: Inter Regular, 14px, #8B9DC3
+- "The Threshold" label: Inter SemiBold, 18px, #FFFFFF
+- Annotation text: Inter Regular, 14px, #8B9DC3, italic
+- "irrational" keyword: Inter Bold, 22px, #EF4444
 
 ### Easing
-- Axis draw: `easeOut(cubic)`
-- Line draw: `linear` (constant speed along X-axis for time-accurate feel)
-- Crossing pulse: `easeOut(back(1.5))`
-- Label fades: `easeOut(quad)`
-- Area fill: `easeIn(quad)`
+- Line draw-on: `easeInOutCubic`
+- Crossing point pulse: `easeInOutSine` (looping, 2s period)
+- Label fade-in: `easeOutQuad`
+- Shaded area fill: `easeOutCubic`
 
 ## Narration Sync
+> "This isn't nostalgia. It's economics."
+
 > "In 1950, a wool sock cost real money relative to an hour of labor. Darning made sense. You'd spend thirty minutes to save a dollar."
+
 > "By the mid-1960s, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational."
+
+Segments: `part1_economics_005` (19.48s – 23.02s), `part1_economics_006` (23.94s – 34.50s), `part1_economics_007` (34.62s – 43.30s)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={360}>
-  {/* Axes */}
-  <Sequence from={0} durationInFrames={30}>
-    <AnimatedAxis
-      xRange={[1950, 2020]}
-      yRange={[0, 100]}
-      xLabel="Year"
-      yLabel="Relative Cost"
-    />
-  </Sequence>
-
-  {/* Lines */}
-  <Sequence from={30} durationInFrames={240}>
-    <AnimatedLine
-      data={laborCostData}
-      color="#D9944A"
-      strokeWidth={3}
-    />
-    <AnimatedLine
-      data={garmentCostData}
-      color="#4A90D9"
-      strokeWidth={3}
-    />
-  </Sequence>
-
-  {/* Crossing Point */}
-  <Sequence from={120} durationInFrames={30}>
-    <CrossingHighlight
-      x={1962}
-      y={45}
-      label="The Threshold"
-    />
-  </Sequence>
-
-  {/* Divergence Area */}
-  <Sequence from={270} durationInFrames={40}>
-    <AreaFill upperLine={laborCostData} lowerLine={garmentCostData} />
-  </Sequence>
-
-  {/* Legend */}
-  <Sequence from={310}>
-    <ChartLegend items={[
-      { label: "Labor Cost (per hour)", color: "#D9944A" },
-      { label: "Garment Cost (pair of socks)", color: "#4A90D9" }
-    ]} />
-  </Sequence>
+<Sequence from={0} durationInFrames={720}>
+  <AbsoluteFill style={{ backgroundColor: '#0F1923' }}>
+    <Sequence from={0} durationInFrames={30}>
+      <AnimatedAxes xRange={[1950, 1975]} yRange={[0, 100]} />
+    </Sequence>
+    <Sequence from={30} durationInFrames={450}>
+      <AnimatedLine
+        data={laborCostData}
+        color="#D9944A"
+        drawDuration={210}
+      />
+      <AnimatedLine
+        data={sockCostData}
+        color="#4A90D9"
+        drawDuration={210}
+      />
+      <ShadedArea data={preCrossArea} color="#22C55E" opacity={0.12} />
+      <ShadedArea data={postCrossArea} color="#EF4444" opacity={0.12} />
+    </Sequence>
+    <Sequence from={90} durationInFrames={60}>
+      <PulsingDot cx={crossX} cy={crossY} color="#FFFFFF" />
+      <FadeInLabel text="The Threshold" />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
-  "xAxis": { "label": "Year", "range": [1950, 2020], "tickInterval": 10 },
-  "yAxis": { "label": "Relative Cost", "range": [0, 100] },
   "laborCost": [
     { "year": 1950, "value": 30 },
-    { "year": 1955, "value": 35 },
-    { "year": 1960, "value": 42 },
-    { "year": 1965, "value": 50 },
-    { "year": 1970, "value": 55 },
-    { "year": 1980, "value": 65 },
-    { "year": 1990, "value": 72 },
-    { "year": 2000, "value": 78 },
-    { "year": 2010, "value": 82 },
-    { "year": 2020, "value": 85 }
+    { "year": 1955, "value": 38 },
+    { "year": 1960, "value": 47 },
+    { "year": 1965, "value": 58 },
+    { "year": 1970, "value": 68 },
+    { "year": 1975, "value": 80 }
   ],
-  "garmentCost": [
+  "sockCost": [
     { "year": 1950, "value": 70 },
-    { "year": 1955, "value": 60 },
+    { "year": 1955, "value": 58 },
     { "year": 1960, "value": 48 },
-    { "year": 1965, "value": 38 },
-    { "year": 1970, "value": 28 },
-    { "year": 1980, "value": 18 },
-    { "year": 1990, "value": 12 },
-    { "year": 2000, "value": 8 },
-    { "year": 2010, "value": 6 },
-    { "year": 2020, "value": 5 }
+    { "year": 1965, "value": 32 },
+    { "year": 1970, "value": 22 },
+    { "year": 1975, "value": 15 }
   ],
-  "crossingPoint": { "year": 1962, "value": 45 },
-  "backgroundColor": "#0F172A"
+  "crossingPoint": { "year": 1962, "value": 50 }
 }
 ```
-
----

@@ -1,13 +1,14 @@
 import React from "react";
-import { Sequence } from "remotion";
+import { Sequence, Audio, staticFile } from "remotion";
 
 export const WhereToStartSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 0;
-  const durationSeconds = 0;
+  const offsetSeconds = 799.9428330000001;
+  const durationSeconds = 32.569083;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
+      <Audio src={staticFile("where_to_start/narration.wav")} />
       {/* Sub-compositions will be added here */}
     </Sequence>
   );

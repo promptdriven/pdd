@@ -1,142 +1,144 @@
 [Remotion]
 
-# Section 1.4: Research Study Annotations Overlay
+# Section 1.3: Research Annotations — The Evidence Stack
 
 **Tool:** Remotion
-**Duration:** ~18s (540 frames @ 30fps)
-**Timestamp:** 3:10 - 3:28
+**Duration:** ~40s
+**Timestamp:** 1:30 – 2:10
 
 ## Visual Description
-An annotation overlay that layers research study citations onto a simplified version of the cost chart from the previous component. Four study callouts materialize in sequence, each with a stat badge, citation, and fine print. The annotations create a building narrative: individual task speedup is real, but systemic throughput is flat, and code quality is degrading. Each annotation appears with a connecting leader line to the relevant part of the chart. The tone is "evidence stacking" — each study adds weight to the argument.
+Research citations appear as animated annotation cards that stack on screen, each delivering a data point that reinforces the argument. This is NOT a traditional chart — it's a dynamic evidence-stacking layout where each study appears as a floating card with key metrics highlighted. The cards build vertically, creating a visual "weight of evidence." Each card has a colored accent bar (green for positive-seeming results, red for concerning findings). By the end, the red cards dramatically outnumber the green, visually showing the balance of evidence.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: Inherited from previous chart (faint horizontal, `rgba(255,255,255,0.05)`)
+- Background: #0F1923 (dark blue-black)
+- No grid lines
 
 ### Chart/Visual Elements
-- **Simplified Chart:** The triple-line chart from 03 is shown in a dimmed state (lines at 0.3 opacity) as background context, with the immediate patch line and debt area visible
-- **Annotation 1 — GitHub Study:**
-  - Position: Lower-left of chart, pointing to the dropping solid amber line
-  - Stat Badge: "-55%" in `#22C55E` (green), 48px bold
-  - Label: "Individual task speedup" — white, 18px
-  - Citation: "GitHub, 2022" — muted `#94A3B8`, 14px
-  - Fine Print: "95 developers, one greenfield task" — `#64748B`, 12px italic
-  - Leader Line: 1px dashed `rgba(34,197,94,0.4)` connecting badge to the solid amber line
-- **Annotation 2 — Uplevel Study:**
-  - Position: Upper-right of chart, pointing to the flat dashed amber line
-  - Stat Badge: "~0%" in `#EF4444` (red), 48px bold
-  - Label: "Overall throughput" — white, 18px
-  - Sub-stat: "+41% bugs" in `#EF4444`, 28px
-  - Citation: "Uplevel, 2024" — muted `#94A3B8`, 14px
-  - Fine Print: "785 developers, one year" — `#64748B`, 12px italic
-  - Leader Line: 1px dashed `rgba(239,68,68,0.4)` connecting badge to dashed line
-- **Annotation 3 — GitClear Study:**
-  - Position: Center-right, pointing to the debt shaded area
-  - Stat Badge: "+44%" in `#F59E0B` (amber-yellow), 48px bold
-  - Label: "Code churn increase" — white, 18px
-  - Sub-stat: "-60% refactoring" in `#EF4444`, 28px
-  - Citation: "GitClear, 2025 — 211M lines analyzed" — muted `#94A3B8`, 14px
-  - Leader Line: 1px dashed `rgba(245,158,11,0.4)` to the debt area
-- **Annotation 4 — METR Study:**
-  - Position: Lower-right, subtle — arrives last
-  - Stat Badge: "-19%" in `#EF4444`, 36px bold
-  - Label: "Experienced devs slower on mature repos" — white, 16px
-  - Sub-stat: "Believed: +20% faster" — `#F59E0B`, 16px italic
-  - Citation: "METR, 2025" — muted `#94A3B8`, 14px
-  - Fine Print: "39-point perception gap" — `#64748B`, 12px
+- **Card layout:** Cards appear in a staggered vertical stack, centered on screen. Each card is 700×90px with rounded corners (8px radius), semi-transparent background (#1A2A3E at 90% opacity), and a 4px left accent bar.
+- **Card 1 (Green accent #22C55E):**
+  - Source: "GitHub, 2022"
+  - Metric: "+55% speedup"
+  - Detail: "95 developers · 1 greenfield HTTP server"
+- **Card 2 (Red accent #EF4444):**
+  - Source: "Uplevel, 2024"
+  - Metric: "0% throughput · +41% bugs"
+  - Detail: "785 developers · 1 year · real enterprise work"
+- **Card 3 (Red accent #EF4444):**
+  - Source: "GitClear, 2025"
+  - Metric: "+44% churn · -60% refactoring"
+  - Detail: "211M lines analyzed"
+- **Card 4 (Red accent #EF4444):**
+  - Source: "METR, 2025"
+  - Metric: "-19% slower (experienced devs)"
+  - Detail: "Brownfield repos · out-of-distribution tasks"
+- **Card 5 (Orange accent #F59E0B):**
+  - Source: "METR, 2025 (perception)"
+  - Metric: "39-point perception gap"
+  - Detail: "Believed +20% faster · Actually -19% slower"
+- **Connecting theme text:** After all cards appear, centered below the stack: "Every study is correct. They measured different things."
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1.0s):** Simplified chart fades in at 0.3 opacity as context layer
-2. **Frame 30-120 (1.0-4.0s):** Annotation 1 (GitHub -55%) materializes — leader line draws, stat badge scales in (0→1.1→1.0), label and citation fade in. Solid amber line brightens momentarily to 0.8 opacity where leader connects
-3. **Frame 120-240 (4.0-8.0s):** Annotation 2 (Uplevel ~0%, +41% bugs) materializes — same pattern. Dashed amber line brightens where leader connects. The contrast between -55% and ~0% is visually stark
-4. **Frame 240-370 (8.0-12.33s):** Annotation 3 (GitClear +44%, -60%) materializes. Debt area brightens/pulses subtly. The picture worsens
-5. **Frame 370-470 (12.33-15.67s):** Annotation 4 (METR -19%) materializes — smaller, more understated. The perception gap sub-stat fades in with a beat delay
-6. **Frame 470-540 (15.67-18.0s):** Hold. All four annotations visible simultaneously. A subtle connecting theme line traces between all four badges, forming a visual chain of evidence
+1. **Frame 0–30 (0–1s):** Background settles. A subtle header "The Research" fades in at top.
+2. **Frame 30–120 (1–4s):** Card 1 slides in from right with spring physics. Green accent bar glows briefly. Synced with "GitHub measured a fifty-five percent speedup..."
+3. **Frame 120–300 (4–10s):** Card 2 slides in below Card 1 from left. Red accent. Card 1 shifts up slightly to make room. Pause on the metrics — "+41% bugs" gets a brief text scale pulse. Synced with "When Uplevel tracked almost eight hundred developers..."
+4. **Frame 300–480 (10–16s):** Card 3 appears below Card 2 from right. The "+44% churn" and "-60% refactoring" numbers animate (count up/down from 0). Synced with "And GitClear confirmed it..."
+5. **Frame 480–660 (16–22s):** Card 4 slides in from left. The red tint on the stack is now dominant. Brief hold.
+6. **Frame 660–840 (22–28s):** Card 5 appears with special treatment — the perception gap is shown as a split bar: green portion labeled "+20% (belief)" and red portion labeled "-19% (reality)" with a gap indicator showing "39 pts". Synced with "those same developers believed AI was making them twenty percent faster..."
+7. **Frame 840–1020 (28–34s):** All cards are visible. They settle into final positions. The green Card 1 is visually outweighed by the four red/orange cards.
+8. **Frame 1020–1200 (34–40s):** Theme text fades in below. Slow dissolve begins.
 
 ### Typography
-- Stat Badges: Inter, 48px (36px for METR), bold (800)
-- Stat Labels: Inter, 18px (16px for METR), semi-bold (600), `#FFFFFF`
-- Sub-stats: Inter, 28px (16px for METR), bold (700)
-- Citations: Inter, 14px, regular (400), `#94A3B8`
-- Fine Print: Inter, 12px, italic (400), `#64748B`
+- Header: Inter SemiBold, 24px, #8B9DC3
+- Card source: Inter Medium, 14px, #8B9DC3
+- Card metric: Inter Bold, 28px, #FFFFFF
+- Card detail: Inter Regular, 12px, #6B7C93, italic
+- Theme text: Inter SemiBold, 22px, #FFFFFF, opacity 0.9
 
 ### Easing
-- Leader line draw: `easeOut(cubic)`
-- Stat badge scale: `easeOut(back(1.3))`
-- Label/citation fade: `easeOut(quad)`
-- Chart line brighten: `easeInOut(quad)`
-- Debt area pulse: `easeInOut(sine)`
+- Card slide-in: `spring({ damping: 15, stiffness: 120 })`
+- Number count-up: `easeOutCubic`
+- Metric pulse: `easeInOutSine` (scale 1.0 → 1.08 → 1.0, 400ms)
+- Theme text fade: `easeOutQuad`
 
 ## Narration Sync
 > "GitHub measured a fifty-five percent speedup on individual coding tasks. But that was ninety-five developers writing one HTTP server from scratch. A greenfield task — exactly where AI shines."
+
 > "When Uplevel tracked almost eight hundred developers across real enterprise work for a full year? No change in throughput. Forty-one percent more bugs."
-> "And GitClear confirmed it across two hundred eleven million lines of code. Since AI coding assistants arrived, code churn is up forty-four percent. Meanwhile, refactoring collapsed by sixty percent."
+
+> "And GitClear confirmed it across two hundred eleven million lines of code. Since AI coding assistants arrived, code churn is up forty-four percent... refactoring collapsed by sixty percent. Developers aren't cleaning up. They're piling on."
+
+Segments: `part1_economics_014` (89.28s – 103.20s), `part1_economics_015` (103.20s – 127.22s), `part1_economics_016` (128.04s – 149.92s)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={540}>
-  {/* Background chart context */}
-  <Sequence from={0} durationInFrames={30}>
-    <DimmedChart opacity={0.3} chartData={tripleLineData} />
-  </Sequence>
+<Sequence from={0} durationInFrames={1200}>
+  <AbsoluteFill style={{ backgroundColor: '#0F1923' }}>
+    <Sequence from={0} durationInFrames={30}>
+      <FadeIn><Header text="The Research" /></FadeIn>
+    </Sequence>
 
-  {/* GitHub Study */}
-  <Sequence from={30} durationInFrames={90}>
-    <StudyAnnotation
-      stat="-55%"
-      statColor="#22C55E"
-      label="Individual task speedup"
-      citation="GitHub, 2022"
-      finePrint="95 developers, one greenfield task"
-      position="bottom-left"
-      leaderTarget="immediatePatchLine"
-    />
-  </Sequence>
+    <Sequence from={30} durationInFrames={90}>
+      <SlideInCard
+        direction="right"
+        accent="#22C55E"
+        source="GitHub, 2022"
+        metric="+55% speedup"
+        detail="95 developers · 1 greenfield HTTP server"
+        yOffset={0}
+      />
+    </Sequence>
 
-  {/* Uplevel Study */}
-  <Sequence from={120} durationInFrames={120}>
-    <StudyAnnotation
-      stat="~0%"
-      statColor="#EF4444"
-      subStat="+41% bugs"
-      label="Overall throughput"
-      citation="Uplevel, 2024"
-      finePrint="785 developers, one year"
-      position="top-right"
-      leaderTarget="totalCostLine"
-    />
-  </Sequence>
+    <Sequence from={120} durationInFrames={180}>
+      <SlideInCard
+        direction="left"
+        accent="#EF4444"
+        source="Uplevel, 2024"
+        metric="0% throughput · +41% bugs"
+        detail="785 developers · 1 year · real enterprise work"
+        yOffset={1}
+      />
+    </Sequence>
 
-  {/* GitClear Study */}
-  <Sequence from={240} durationInFrames={130}>
-    <StudyAnnotation
-      stat="+44%"
-      statColor="#F59E0B"
-      subStat="-60% refactoring"
-      label="Code churn increase"
-      citation="GitClear, 2025 — 211M lines analyzed"
-      position="center-right"
-      leaderTarget="debtArea"
-    />
-  </Sequence>
+    <Sequence from={300} durationInFrames={180}>
+      <SlideInCard
+        direction="right"
+        accent="#EF4444"
+        source="GitClear, 2025"
+        metric="+44% churn · -60% refactoring"
+        detail="211M lines analyzed"
+        yOffset={2}
+      />
+    </Sequence>
 
-  {/* METR Study */}
-  <Sequence from={370} durationInFrames={100}>
-    <StudyAnnotation
-      stat="-19%"
-      statColor="#EF4444"
-      subStat="Believed: +20% faster"
-      subStatColor="#F59E0B"
-      label="Experienced devs slower on mature repos"
-      citation="METR, 2025"
-      finePrint="39-point perception gap"
-      position="bottom-right"
-      size="small"
-    />
-  </Sequence>
+    <Sequence from={480} durationInFrames={180}>
+      <SlideInCard
+        direction="left"
+        accent="#EF4444"
+        source="METR, 2025"
+        metric="-19% slower (experienced devs)"
+        detail="Brownfield repos · out-of-distribution tasks"
+        yOffset={3}
+      />
+    </Sequence>
+
+    <Sequence from={660} durationInFrames={180}>
+      <PerceptionGapCard
+        belief="+20%"
+        reality="-19%"
+        gap="39 pts"
+        yOffset={4}
+      />
+    </Sequence>
+
+    <Sequence from={1020} durationInFrames={180}>
+      <FadeIn>
+        <ThemeText text="Every study is correct. They measured different things." />
+      </FadeIn>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -145,48 +147,37 @@ An annotation overlay that layers research study citations onto a simplified ver
 {
   "studies": [
     {
-      "id": "github",
-      "stat": "-55%",
-      "statColor": "#22C55E",
-      "label": "Individual task speedup",
-      "citation": "GitHub, 2022",
-      "finePrint": "95 developers, one greenfield task",
-      "position": "bottom-left"
+      "source": "GitHub, 2022",
+      "metric": "+55%",
+      "type": "speedup",
+      "sample": "95 developers",
+      "context": "greenfield HTTP server",
+      "sentiment": "positive"
     },
     {
-      "id": "uplevel",
-      "stat": "~0%",
-      "statColor": "#EF4444",
-      "subStat": "+41% bugs",
-      "label": "Overall throughput",
-      "citation": "Uplevel, 2024",
-      "finePrint": "785 developers, one year",
-      "position": "top-right"
+      "source": "Uplevel, 2024",
+      "throughputChange": "0%",
+      "bugIncrease": "+41%",
+      "sample": "785 developers",
+      "duration": "1 year",
+      "context": "real enterprise work",
+      "sentiment": "negative"
     },
     {
-      "id": "gitclear",
-      "stat": "+44%",
-      "statColor": "#F59E0B",
-      "subStat": "-60% refactoring",
-      "label": "Code churn increase",
-      "citation": "GitClear, 2025",
-      "finePrint": "211M lines analyzed",
-      "position": "center-right"
+      "source": "GitClear, 2025",
+      "churnIncrease": "+44%",
+      "refactoringDecline": "-60%",
+      "linesAnalyzed": "211M",
+      "sentiment": "negative"
     },
     {
-      "id": "metr",
-      "stat": "-19%",
-      "statColor": "#EF4444",
-      "subStat": "Believed: +20% faster",
-      "subStatColor": "#F59E0B",
-      "label": "Experienced devs slower on mature repos",
-      "citation": "METR, 2025",
-      "finePrint": "39-point perception gap",
-      "position": "bottom-right"
+      "source": "METR, 2025",
+      "speedChange": "-19%",
+      "context": "experienced devs, brownfield",
+      "perceivedChange": "+20%",
+      "perceptionGap": "39 points",
+      "sentiment": "negative"
     }
-  ],
-  "backgroundColor": "#0F172A"
+  ]
 }
 ```
-
----

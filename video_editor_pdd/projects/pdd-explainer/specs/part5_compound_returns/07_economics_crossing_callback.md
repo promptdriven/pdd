@@ -7,7 +7,7 @@
 **Timestamp:** 22:02 - 22:12
 
 ## Visual Description
-The economics chart from Part 1 returns — but now the viewer sees it with new eyes. The original crossing-point chart (labor cost vs. garment cost) re-enters, and the crossing point pulses with emphasis. Then the chart morphs: the "sock economics" labels transform into "code economics" labels, and the crossing point shifts to "now." The narration delivers the thesis: "When economics change, behavior that was rational becomes... darning socks." The word "darning socks" lingers on screen with a wry visual treatment. This callback creates the full-circle narrative closure that connects the opening metaphor to the technical argument.
+The economics chart from Part 1 returns — but now the viewer sees it with new eyes. The original crossing-point chart (labor cost vs. garment cost) re-enters, and the crossing point pulses with emphasis. Then the chart morphs: the "sock economics" labels transform into "code economics" labels, and the crossing point shifts to "now." The narration delivers the thesis: "When economics change, behavior that was rational becomes... darning socks." The word "darning socks" lingers on screen with a wry visual treatment — amber italic text with a darning needle icon drawn through it. This callback creates full-circle narrative closure connecting the opening metaphor to the technical argument.
 
 ## Technical Specifications
 

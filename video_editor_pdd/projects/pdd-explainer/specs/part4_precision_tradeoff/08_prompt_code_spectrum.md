@@ -1,169 +1,178 @@
 [Remotion]
 
-# Section 4.8: Prompt-Code Spectrum — Language to Code Slider
+# Section 4.7: Prompt–Code Spectrum — Stay in Prompt Space
 
 **Tool:** Remotion
-**Duration:** ~20s (600 frames @ 30fps)
-**Timestamp:** 19:40 - 20:00
+**Duration:** ~16s (480 frames @ 30fps)
+**Timestamp:** 1:22 – 1:38
 
 ## Visual Description
-A horizontal spectrum bar fills the lower-center of the screen. The LEFT end is labeled "Pure natural language" in blue, the RIGHT end "Pure code" in a neutral gray. A slider/marker sits on the spectrum, initially at the far left, then shifts to show where PDD operates — mostly to the left (natural language side), with a few notch marks further right for code-critical sections. Above the spectrum, a prompt document illustration shows natural-language text with an embedded code block — the code block has sharp monospace edges while the surrounding prose flows more organically. Labels explain: "Stay in prompt space as long as possible. Dip into code when you must." The visual makes clear that the boundary between prompt and code is fluid, not binary.
+A horizontal spectrum bar stretches across the screen with "Pure natural language" on the left (blue) and "Pure code" on the right (gray). A slider dot sits at approximately 25% from the left — PDD's sweet spot. A bracket labeled "PDD Zone" marks the 10–35% range where most specification happens. The slider briefly hops to notch marks at 60%, 75%, and 90% (representing rare code-level precision needs) before returning to the PDD zone. Below the spectrum, a concluding text reframes the question: "The question isn't prompts OR code. It's how far into prompt space can you stay?" The animation makes the fluid boundary tangible.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
+- Background: #0F172A (dark navy)
+- No grid lines
 
 ### Chart/Visual Elements
-- **Spectrum Bar:** Centered horizontally, Y=700, 1400px wide x 16px tall, rounded corners 8px
-  - Gradient fill: `#4A90D9` (left, pure NL) → `#64748B` (center, mixed) → `#94A3B8` (right, pure code)
-  - Border: `rgba(255,255,255,0.1)`, 1px
-- **Left Label:** "Pure natural language" — Inter 15px semi-bold, `#4A90D9`, positioned at left end of bar (260, 740)
-- **Right Label:** "Pure code" — Inter 15px semi-bold, `#94A3B8`, positioned at right end of bar (1540, 740), right-aligned
-- **Slider Marker:** Rounded rectangle 8px wide x 28px tall, `#FFFFFF`, positioned at ~25% from left (initial), with a soft glow `rgba(255,255,255,0.3)` 12px blur
-- **PDD Zone Indicator:** Bracket/brace spanning from ~10% to ~35% of the bar, `#4A90D9` at 0.3 opacity, 2px stroke, with label "PDD operates here" below in `#4A90D9` at 0.5 opacity, 12px
-- **Code Notch Marks:** 3 small ticks at ~60%, ~75%, ~90% of the bar, `#94A3B8` at 0.4 opacity, 2px wide x 10px tall, each with tiny labels: "algorithm", "inner loop", "bit ops" — JetBrains Mono 9px, `#94A3B8` at 0.3 opacity
-- **Prompt Document (above spectrum):** Centered at (960, 360), 700px wide x 260px tall
-  - Document background: `#1E293B`, border `rgba(255,255,255,0.06)` 1px, rounded corners 6px
-  - Natural language lines: 14 horizontal "text lines", varying width (60-90% of document width), `#4A90D9` at 0.25 opacity, 3px tall, 8px spacing — organic, slightly irregular lengths
-  - Embedded code block: A distinct 200px wide x 60px tall region at lines 8-11, background `#0F172A`, border `rgba(148,163,184,0.2)` 1px, containing 4 shorter "code lines" in `#94A3B8` at 0.35 opacity, uniform width, monospace feel (evenly spaced "characters" as tiny dots)
-  - Label above document: "A prompt with embedded code" — Inter 14px, `#94A3B8` at 0.5 opacity
-  - Arrow from code block pointing right toward the "code" end of spectrum, dashed, `rgba(148,163,184,0.2)`, 1px
-  - Arrow from NL text pointing left toward "NL" end of spectrum, dashed, `rgba(74,144,217,0.2)`, 1px
-- **Summary Label:** "The boundary between prompt and code is fluid." — Inter 20px medium, `#FFFFFF` at 0.6 opacity, centered at Y=820
+- **Spectrum bar:** 1200px wide × 40px tall, centered at (960, 440)
+  - Left gradient: `#4A90D9` (blue, natural language)
+  - Right gradient: `#6B7C93` (gray, code)
+  - Gradient transition: smooth linear blend across full width
+  - Rounded ends: 20px radius
+  - Border: 1px, `rgba(255,255,255,0.1)`
+- **Left label:** "Pure natural language" — `#4A90D9`, 16px, positioned at left end (360, 400)
+- **Right label:** "Pure code" — `#6B7C93`, 16px, positioned at right end (1560, 400)
+- **Slider dot:** 16px circle, `#FFFFFF` with 3px glow halo, positioned at 25% from left (x≈660)
+- **PDD Zone bracket:** Spans 10%–35% of bar (x: 480–780)
+  - Top bracket line: 2px, `#FFFFFF` at 0.3 opacity, with downward ticks at ends
+  - Label: "PDD Zone" — `#FFFFFF` at 0.6 opacity, 14px, centered above bracket at y=390
+  - Subtle fill highlight: `rgba(74,144,217,0.06)` behind PDD zone section of spectrum
+- **Code notch marks:** Small ticks on the spectrum bar at 60%, 75%, 90%
+  - 60%: Label "Algorithm choice" — `#94A3B8`, 11px, below bar
+  - 75%: Label "Inner loops" — `#94A3B8`, 11px
+  - 90%: Label "Bit ops" — `#94A3B8`, 11px
+  - Each notch: 2px wide × 12px tall tick, `#D9944A` at 0.4 opacity
+- **Concluding text:** Two lines, centered at (960, 640):
+  - Line 1: "The question isn't "prompts OR code."" — `#FFFFFF` at 0.6 opacity, 22px
+  - Line 2: "It's "how far into prompt space can you stay?"" — `#FFFFFF` at 0.8 opacity, 22px, bold
+- **Answer text:** "For most of the specification — further than you'd think." — centered at (960, 720), `#4A90D9` at 0.7 opacity, 18px
 
 ### Animation Sequence
-1. **Frame 0-40 (0-1.33s):** Spectrum bar draws in from center outward (expanding from 0 to full 1400px width). Left and right labels fade in
-2. **Frame 40-80 (1.33-2.67s):** Prompt document fades in above spectrum. Natural language lines appear with left-to-right wipe, staggered. Label "A prompt with embedded code" fades in
-3. **Frame 80-120 (2.67-4.0s):** Embedded code block within document highlights — border brightens from 0.2→0.5 opacity, background darkens slightly. Code lines appear. The visual distinction between NL and code regions is clear
-4. **Frame 120-160 (4.0-5.33s):** Connecting arrows draw from document to spectrum — NL arrow to left, code arrow to right. Establishes the mapping between document regions and spectrum positions
-5. **Frame 160-220 (5.33-7.33s):** Slider appears at far-left position (0%) and begins sliding right. It pauses at ~25% — the "sweet spot" for PDD. PDD zone bracket draws in around the slider position
-6. **Frame 220-300 (7.33-10.0s):** Code notch marks fade in at 60%, 75%, 90% positions with tiny labels. These are the exceptions — the rare moments you need pure code
-7. **Frame 300-360 (10.0-12.0s):** Slider makes brief, quick hops to the notch positions (60%, 75%) and back to 25%, showing that PDD "dips into code" occasionally but returns to prompt space. Each hop takes ~15 frames
-8. **Frame 360-480 (12.0-16.0s):** "The boundary between prompt and code is fluid." label fades in at bottom. Summary label for the section
-9. **Frame 480-540 (16.0-18.0s):** Subtitle appears: "Stay in prompt space as long as possible. Dip into code when you must." — Inter 16px, `#94A3B8` at 0.5 opacity, at Y=860
-10. **Frame 540-600 (18.0-20.0s):** Hold at final state. Slider rests at ~25%. Subtle breathing pulse on the PDD zone bracket
+1. **Frame 0–40 (0–1.33s):** Spectrum bar draws in from center outward — left half extends left (turning blue), right half extends right (turning gray). End labels fade in.
+2. **Frame 40–80 (1.33–2.67s):** PDD Zone bracket draws in — top line extends, ticks drop down, "PDD Zone" label fades in. Slider dot appears at 25% position with a pop-in spring animation and glow pulse.
+3. **Frame 80–140 (2.67–4.67s):** Code notch marks appear at 60%, 75%, 90% with 10-frame stagger. Each tick drops down with their labels fading in below. These represent the exceptions — rare code needs.
+4. **Frame 140–200 (4.67–6.67s):** Slider dot hops to 60% notch (algorithm choice) — pauses 15 frames — hops to 75% (inner loops) — pauses 10 frames — hops to 90% (bit ops) — pauses 10 frames. Each hop is a quick `easeInOutBack` with subtle trail.
+5. **Frame 200–250 (6.67–8.33s):** Slider dot returns to PDD Zone (25%) with a satisfying snap. A brief pulse on the PDD Zone fill emphasizes "this is home." The notch labels dim to 0.2 opacity — they're exceptions, not the norm.
+6. **Frame 250–340 (8.33–11.33s):** Concluding text appears — Line 1 fades in, then 500ms later Line 2 fades in with slight upward drift and bold emphasis on "how far into prompt space can you stay?"
+7. **Frame 340–420 (11.33–14.0s):** Answer text fades in: "For most of the specification — further than you'd think." in blue.
+8. **Frame 420–480 (14.0–16.0s):** Hold. Slider breathes with gentle glow. PDD Zone has ambient pulse.
 
 ### Typography
-- Spectrum Left Label: Inter, 15px, semi-bold (600), `#4A90D9`
-- Spectrum Right Label: Inter, 15px, semi-bold (600), `#94A3B8`
-- PDD Zone Label: Inter, 12px, regular (400), `#4A90D9` at 0.5 opacity
-- Notch Labels: JetBrains Mono, 9px, regular (400), `#94A3B8` at 0.3 opacity
-- Document Label: Inter, 14px, regular (400), `#94A3B8` at 0.5 opacity
-- Summary Label: Inter, 20px, medium (500), `#FFFFFF` at 0.6 opacity
-- Subtitle: Inter, 16px, regular (400), `#94A3B8` at 0.5 opacity
+- End labels: Inter Medium, 16px, respective colors
+- PDD Zone label: Inter SemiBold, 14px, `#FFFFFF` at 0.6 opacity
+- Notch labels: Inter Regular, 11px, `#94A3B8`
+- Concluding Line 1: Inter Regular, 22px, `#FFFFFF` at 0.6 opacity
+- Concluding Line 2: Inter Bold, 22px, `#FFFFFF` at 0.8 opacity
+- Answer text: Inter Medium, 18px, `#4A90D9` at 0.7 opacity
 
 ### Easing
-- Spectrum bar expand: `easeOut(cubic)`
-- Document fade/wipe: `easeOut(quad)`
-- Code block highlight: `easeInOut(sine)`
-- Arrow draw: `easeOut(quad)`
-- Slider initial slide: `easeInOut(cubic)`
-- Slider hops: `easeInOut(back)` (slight overshoot on arrival)
-- PDD zone bracket draw: `easeOut(quad)`
-- Notch marks fade: `easeOut(quad)`
-- Summary label fade: `easeOut(quad)`
-- Breathing pulse: `easeInOut(sine)`
+- Spectrum draw: `easeOutCubic`
+- Slider pop-in: `spring({ damping: 10, stiffness: 140 })`
+- Notch appear: `easeOutQuad`
+- Slider hop: `easeInOutBack` (overshoot gives playful energy)
+- Slider return: `spring({ damping: 14, stiffness: 120 })`
+- Concluding text fade: `easeOutCubic`
+- Answer text fade: `easeOutQuad`
+- Breathing glow: `easeInOutSine` (2s cycle)
 
 ## Narration Sync
-> "But some things genuinely need code-level precision. Algorithm choice. Performance-critical inner loops. Bit-level operations."
-> "PDD handles this. A prompt can embed code snippets for exactly those critical sections. It's not all-or-nothing. You stay in prompt space for as long as possible — architecture, intent, constraints, edge cases — then dip into code when the precision demands it."
-> "Think of it as a spectrum. Natural language on one end, code on the other. The question isn't 'prompts OR code.' It's 'how far into prompt space can you stay?' For most of the specification — further than you'd think."
+> "Think of it as a spectrum. Natural language on one end, code on the other."
+
+> "The question isn't prompts or code. It's how far into prompt space can you stay? For most of the specification, further than you'd think."
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={600}>
-  {/* Spectrum Bar */}
-  <Sequence from={0} durationInFrames={40}>
-    <SpectrumBar
-      y={700}
-      width={1400}
-      height={16}
-      gradient={["#4A90D9", "#64748B", "#94A3B8"]}
-    />
-    <SpectrumLabels
-      left={{ text: "Pure natural language", color: "#4A90D9" }}
-      right={{ text: "Pure code", color: "#94A3B8" }}
-    />
-  </Sequence>
-
-  {/* Prompt Document */}
-  <Sequence from={40} durationInFrames={80}>
-    <PromptDocumentWithCode
-      x={610} y={230} width={700} height={260}
-      nlLineCount={14}
-      codeBlock={{ x: 250, y: 96, width: 200, height: 60, lines: 4 }}
-    />
-    <Label text="A prompt with embedded code" x={960} y={210} centered />
-  </Sequence>
-
-  {/* Code Block Highlight */}
-  <Sequence from={80} durationInFrames={40}>
-    <CodeBlockHighlight targetOpacity={0.5} />
-  </Sequence>
-
-  {/* Connecting Arrows */}
-  <Sequence from={120} durationInFrames={40}>
-    <ConnectingArrow from="nlRegion" to="spectrumLeft" color="rgba(74,144,217,0.2)" />
-    <ConnectingArrow from="codeRegion" to="spectrumRight" color="rgba(148,163,184,0.2)" />
-  </Sequence>
-
-  {/* Slider + PDD Zone */}
-  <Sequence from={160} durationInFrames={60}>
-    <SpectrumSlider
-      initialPosition={0}
-      targetPosition={0.25}
-      markerWidth={8}
-      markerHeight={28}
-      color="#FFFFFF"
-    />
-    <PDDZoneBracket from={0.10} to={0.35} color="#4A90D9" label="PDD operates here" />
-  </Sequence>
-
-  {/* Code Notch Marks */}
-  <Sequence from={220} durationInFrames={80}>
-    <NotchMarks
-      positions={[0.60, 0.75, 0.90]}
-      labels={["algorithm", "inner loop", "bit ops"]}
-      color="#94A3B8"
-    />
-  </Sequence>
-
-  {/* Slider Hops */}
-  <Sequence from={300} durationInFrames={60}>
-    <SliderHops
-      homePosition={0.25}
-      hopTargets={[0.60, 0.75]}
-      framesPerHop={15}
-    />
-  </Sequence>
-
-  {/* Summary Labels */}
-  <Sequence from={360} durationInFrames={120}>
-    <FadeIn>
-      <SummaryLabel
-        text="The boundary between prompt and code is fluid."
-        y={820}
-        fontSize={20}
-        color="#FFFFFF"
-        opacity={0.6}
+<Sequence from={0} durationInFrames={480}>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Spectrum bar */}
+    <Sequence from={0} durationInFrames={40}>
+      <SpectrumBar
+        width={1200}
+        height={40}
+        leftColor="#4A90D9"
+        rightColor="#6B7C93"
+        leftLabel="Pure natural language"
+        rightLabel="Pure code"
+        y={440}
       />
-    </FadeIn>
-  </Sequence>
+    </Sequence>
 
-  <Sequence from={480} durationInFrames={60}>
-    <FadeIn>
-      <SubtitleLabel
-        text="Stay in prompt space as long as possible. Dip into code when you must."
-        y={860}
-        fontSize={16}
-        color="#94A3B8"
-        opacity={0.5}
+    {/* PDD Zone bracket + slider */}
+    <Sequence from={40} durationInFrames={40}>
+      <ZoneBracket
+        range={[0.10, 0.35]}
+        label="PDD Zone"
+        fillColor="rgba(74,144,217,0.06)"
+        y={440}
       />
-    </FadeIn>
-  </Sequence>
+      <SliderDot position={0.25} y={440} />
+    </Sequence>
+
+    {/* Code notch marks */}
+    <Sequence from={80} durationInFrames={60}>
+      <NotchMarks
+        positions={[
+          { at: 0.60, label: "Algorithm choice" },
+          { at: 0.75, label: "Inner loops" },
+          { at: 0.90, label: "Bit ops" },
+        ]}
+        stagger={10}
+        color="#D9944A"
+        y={440}
+      />
+    </Sequence>
+
+    {/* Slider hops to notches */}
+    <Sequence from={140} durationInFrames={60}>
+      <AnimatedSlider
+        keyframes={[
+          { position: 0.25, hold: 0 },
+          { position: 0.60, hold: 15 },
+          { position: 0.75, hold: 10 },
+          { position: 0.90, hold: 10 },
+        ]}
+        y={440}
+      />
+    </Sequence>
+
+    {/* Slider returns to PDD zone */}
+    <Sequence from={200} durationInFrames={50}>
+      <AnimatedSlider
+        keyframes={[{ position: 0.90, hold: 0 }, { position: 0.25, hold: 30 }]}
+        y={440}
+      />
+      <ZonePulse range={[0.10, 0.35]} />
+    </Sequence>
+
+    {/* Concluding text */}
+    <Sequence from={250} durationInFrames={90}>
+      <FadeIn>
+        <CenterText
+          text='The question isn't "prompts OR code."'
+          y={620}
+          size={22}
+          opacity={0.6}
+        />
+      </FadeIn>
+      <Sequence from={15}>
+        <FadeIn yDrift={6}>
+          <CenterText
+            text='"How far into prompt space can you stay?"'
+            y={660}
+            size={22}
+            bold={true}
+            opacity={0.8}
+          />
+        </FadeIn>
+      </Sequence>
+    </Sequence>
+
+    {/* Answer text */}
+    <Sequence from={340} durationInFrames={80}>
+      <FadeIn>
+        <CenterText
+          text="For most of the specification — further than you'd think."
+          y={720}
+          size={18}
+          color="#4A90D9"
+          opacity={0.7}
+        />
+      </FadeIn>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -172,45 +181,30 @@ A horizontal spectrum bar fills the lower-center of the screen. The LEFT end is 
 {
   "backgroundColor": "#0F172A",
   "spectrum": {
-    "y": 700,
-    "width": 1400,
-    "height": 16,
-    "gradient": ["#4A90D9", "#64748B", "#94A3B8"],
+    "width": 1200,
+    "height": 40,
+    "leftColor": "#4A90D9",
     "leftLabel": "Pure natural language",
-    "rightLabel": "Pure code"
-  },
-  "slider": {
-    "width": 8,
-    "height": 28,
-    "color": "#FFFFFF",
-    "homePosition": 0.25,
-    "glowColor": "rgba(255,255,255,0.3)",
-    "glowBlur": 12
+    "rightColor": "#6B7C93",
+    "rightLabel": "Pure code",
+    "y": 440
   },
   "pddZone": {
-    "start": 0.10,
-    "end": 0.35,
-    "color": "#4A90D9",
-    "opacity": 0.3,
-    "label": "PDD operates here"
+    "range": [0.10, 0.35],
+    "label": "PDD Zone",
+    "sliderPosition": 0.25,
+    "fillColor": "rgba(74,144,217,0.06)"
   },
   "codeNotches": [
-    { "position": 0.60, "label": "algorithm" },
-    { "position": 0.75, "label": "inner loop" },
-    { "position": 0.90, "label": "bit ops" }
+    { "position": 0.60, "label": "Algorithm choice" },
+    { "position": 0.75, "label": "Inner loops" },
+    { "position": 0.90, "label": "Bit ops" }
   ],
-  "promptDocument": {
-    "width": 700,
-    "height": 260,
-    "nlLines": 14,
-    "codeBlock": {
-      "width": 200,
-      "height": 60,
-      "lines": 4
-    }
-  },
-  "summaryText": "The boundary between prompt and code is fluid.",
-  "subtitleText": "Stay in prompt space as long as possible. Dip into code when you must."
+  "concludingText": {
+    "line1": "The question isn't \"prompts OR code.\"",
+    "line2": "\"How far into prompt space can you stay?\"",
+    "answer": "For most of the specification — further than you'd think."
+  }
 }
 ```
 

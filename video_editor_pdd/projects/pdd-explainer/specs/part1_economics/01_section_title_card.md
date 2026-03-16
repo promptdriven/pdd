@@ -1,87 +1,72 @@
 [title:]
 
-# Section 1.1: The Economics of Darning — Title Card
+# Section 1.0: Part 1 Title Card
 
 **Tool:** Remotion
-**Duration:** ~3s (90 frames @ 30fps)
-**Timestamp:** 2:30 - 2:33
+**Duration:** ~4s
+**Timestamp:** 0:16 – 0:20
 
 ## Visual Description
-A section title card introducing Part 1. The heading "The Economics of Darning" fades in and scales up from center, followed by a thin horizontal accent line expanding outward beneath it, then the subtitle "Part 1" drifts upward into view. A subtle darning-needle icon (thin line with a trailing thread curve) traces across the bottom third and fades out. All elements are centered on a deep navy background consistent with the project palette.
+A bold title card introduces the section. The text "Part 1" fades in small above the main title "The Economics of Darning", which types on letter-by-letter. A thin horizontal rule expands outward from center beneath the title. Background is deep navy with a subtle radial gradient toward the center.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark slate `#0F172A` (solid fill)
-- Grid lines: None
+- Background: Deep navy (#0A1628) with radial gradient to (#122240) at center
+- No grid lines
 
 ### Chart/Visual Elements
-- **Title Text:** "The Economics of Darning" — white `#FFFFFF`, centered at Y=420px
-- **Accent Line:** Thin horizontal rule — `rgba(255, 255, 255, 0.7)`, centered at Y=490px, 400px wide x 2px tall
-- **Subtitle Text:** "Part 1" — muted slate `#94A3B8`, centered at Y=540px
-- **Needle Trace:** Thin curved path (2px stroke, `rgba(255,255,255,0.15)`) sweeping from X=300 to X=1620 at Y=750, with a slight sine-wave wobble (amplitude 8px, 2 periods)
+- Part label: "Part 1" — small caps, centered, positioned at y=380
+- Main title: "The Economics of Darning" — large, centered, positioned at y=460
+- Horizontal rule: 2px line, white at 40% opacity, centered at y=540, expands from 0px to 400px width
+- Subtle background texture: fine diagonal hatching at 3% opacity (#FFFFFF)
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Title text fades in (opacity 0→1) and scales up (0.85→1.0) from center
-2. **Frame 15-35 (0.5-1.17s):** Accent line expands from 0px to 400px width, centered horizontally
-3. **Frame 25-45 (0.83-1.5s):** Subtitle "Part 1" fades in (opacity 0→1) with a 12px upward drift
-4. **Frame 30-70 (1.0-2.33s):** Needle trace draws left-to-right along its curved path (stroke-dashoffset reveal)
-5. **Frame 70-90 (2.33-3.0s):** Hold all elements at final state, needle trace fades to 0.05 opacity
+1. **Frame 0–15 (0–0.5s):** Background fades in from black. "Part 1" fades in with slight upward drift (10px).
+2. **Frame 15–60 (0.5–2s):** Main title types on character-by-character with a blinking cursor. Monospaced typing cadence (~30ms per character).
+3. **Frame 60–75 (2–2.5s):** Cursor blinks twice, then disappears. Horizontal rule expands outward from center.
+4. **Frame 75–120 (2.5–4s):** Hold. All elements at full opacity. Gentle pulse on the rule (opacity 40% → 60% → 40%).
 
 ### Typography
-- Title: Inter, 64px, bold (700), `#FFFFFF`
-- Subtitle: Inter, 28px, regular (400), `#94A3B8`
+- Part label: Inter Medium, 20px, #8B9DC3 (muted blue-gray), letter-spacing 4px, uppercase
+- Main title: Inter Bold, 56px, #FFFFFF, letter-spacing -0.5px
+- Typing cursor: 3px wide, #4A90D9 (cool blue), blinking 500ms interval
 
 ### Easing
-- Title fade/scale: `easeOut(quad)`
-- Accent line expand: `easeOut(cubic)`
-- Subtitle fade/drift: `easeOut(quad)`
-- Needle trace draw: `easeInOut(cubic)`
+- Fade in: `easeOutCubic`
+- Title type-on: linear (constant typing speed)
+- Rule expansion: `easeInOutCubic`
 
 ## Narration Sync
-> "This isn't nostalgia. It's economics."
+> "Now, let me show you why this matters."
+
+Segment: `part1_economics_004` (16.16s – 19.22s)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={90}>
-  <TitleText text="The Economics of Darning" fontSize={64} />
-  <Sequence from={15}>
-    <AccentLine targetWidth={400} color="rgba(255,255,255,0.7)" />
-  </Sequence>
-  <Sequence from={25}>
-    <SubtitleText text="Part 1" />
-  </Sequence>
-  <Sequence from={30}>
-    <NeedleTrace
-      startX={300}
-      endX={1620}
-      y={750}
-      amplitude={8}
-      periods={2}
-    />
-  </Sequence>
+<Sequence from={0} durationInFrames={120}>
+  <AbsoluteFill style={{ background: 'radial-gradient(circle, #122240, #0A1628)' }}>
+    <Sequence from={0} durationInFrames={15}>
+      <FadeIn>
+        <PartLabel text="Part 1" />
+      </FadeIn>
+    </Sequence>
+    <Sequence from={15} durationInFrames={45}>
+      <TypeOnText text="The Economics of Darning" />
+    </Sequence>
+    <Sequence from={60} durationInFrames={15}>
+      <ExpandingRule />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points
 ```json
 {
+  "partNumber": 1,
   "title": "The Economics of Darning",
-  "subtitle": "Part 1",
-  "accentLineWidth": 400,
-  "backgroundColor": "#0F172A",
-  "titleColor": "#FFFFFF",
-  "subtitleColor": "#94A3B8",
-  "accentLineColor": "rgba(255, 255, 255, 0.7)",
-  "needleTrace": {
-    "strokeColor": "rgba(255, 255, 255, 0.15)",
-    "strokeWidth": 2,
-    "y": 750,
-    "amplitude": 8,
-    "periods": 2
-  }
+  "segmentId": "part1_economics_004"
 }
 ```
-
----

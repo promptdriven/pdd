@@ -7,13 +7,13 @@
 **Timestamp:** 22:12 - 22:20
 
 ## Visual Description
-A clean, deliberate quote card — the kind of frame that earns a pause. The quote from a Microsoft research engineer appears in elegant typography against the dark background: "This is either the way of the future or it's going to crash and burn spectacularly." The attribution fades in below. This is the video's penultimate beat before the practical "Where to Start" section — it acknowledges the contrarian nature of the PDD thesis while the narration reframes it as a calculated bet with economics on its side. Minimal animation; the words do the work.
+A clean, deliberate quote card — the kind of frame that earns a pause. The quote from a Microsoft research engineer appears in elegant typography against the dark background: "This is either the way of the future or it's going to crash and burn spectacularly." The key phrases are color-coded — "the way of the future" in blue, "crash and burn spectacularly" in amber. The attribution fades in below. This is the video's penultimate beat before the practical "Where to Start" section — it acknowledges the contrarian nature of the PDD thesis while the narration reframes it as a calculated bet with economics on its side. Minimal animation; the words do the work.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
+- Background: Dark navy `#0F172A` (solid fill), brightening subtly to `#111D2E` for spotlight effect
 - Grid lines: None
 
 ### Chart/Visual Elements
