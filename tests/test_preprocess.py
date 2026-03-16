@@ -315,6 +315,17 @@ def test_file_not_found() -> None:
     with patch('builtins.open', side_effect=FileNotFoundError):
         assert preprocess(prompt, recursive=False, double_curly_brackets=False) == expected_output
 
+
+def test_optional_context_example_missing_is_silent() -> None:
+    """Optional context/example.prompt should not leak a [File not found: ...] marker into prompts."""
+    prompt = "<include>./context/example.prompt</include>"
+
+    # Simulate missing file; include should resolve to empty string (but still warn on console).
+    with patch('builtins.open', side_effect=FileNotFoundError):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    assert result == ""
+
 # Test for handling shell command error
 def test_shell_command_error() -> None:
     """Test handling of shell command error."""
