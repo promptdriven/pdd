@@ -440,7 +440,7 @@ def test_test_missing_args(runner):
     assert result.exit_code != 0
     assert "Missing arguments" in result.output
 
-def test_test_agentic_mode_failure(runner, mock_agentic_test):
+def test_test_agentic_mode_agentic_failure(runner, mock_agentic_test):
     """Test 'test' command Agentic mode failure exit code (issue #593).
     When the command raises Exit(1), CliRunner leaves result.output empty, so we only assert exit_code.
     """
