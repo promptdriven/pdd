@@ -123,7 +123,7 @@ def insert_includes(
                     pattern = r'<include[^>]*>\s*(?:[^\s<]*/)*' + escaped_basename + r'\s*</include>'
                     matches = re.findall(pattern, output_prompt)
                     if len(matches) == 1:
-                        new_prompt = re.sub(pattern, update_block.strip(), output_prompt)
+                        new_prompt = re.sub(pattern, replacement, output_prompt)
                     elif len(matches) > 1 and verbose:
                         print(f"[yellow]Warning: basename '{basename}' matches {len(matches)} includes; skipping ambiguous update[/yellow]")
                 output_prompt = new_prompt
