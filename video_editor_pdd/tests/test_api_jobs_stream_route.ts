@@ -28,6 +28,20 @@ const mockGetJob = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   getJob: (...args: unknown[]) => mockGetJob(...args),
+  parseStoredJobLogLine: (line: string) => {
+    if (!line.startsWith("__ts__:")) {
+      return { message: line };
+    }
+    const payload = line.slice("__ts__:".length);
+    const tabIndex = payload.indexOf("\t");
+    if (tabIndex === -1) {
+      return { message: line };
+    }
+    return {
+      message: payload.slice(tabIndex + 1),
+      timestamp: payload.slice(0, tabIndex),
+    };
+  },
 }));
 
 let mockSend: jest.Mock;
@@ -258,6 +272,37 @@ describe("log streaming", () => {
     expect(logCalls).toHaveLength(2);
     expect(logCalls[0][0].message).toBe("line1");
     expect(logCalls[1][0].message).toBe("line2");
+  });
+
+  it("parses timestamped log lines and includes the timestamp in SSE payloads", async () => {
+    mockGetJob.mockReturnValue({
+      id: "job-1",
+      stage: "setup",
+      status: "done",
+      progress: 100,
+      error: null,
+      params: {},
+      logs: "__ts__:2026-03-16T22:21:32.380Z\tline 1\n__ts__:2026-03-16T22:31:33.275Z\tline 2\n",
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:00:00Z",
+    });
+
+    await GET(mockRequest(), makeParams("job-1"));
+
+    const logCalls = mockSend.mock.calls.filter(
+      (call: any[]) => call[0]?.type === "log"
+    );
+    expect(logCalls).toHaveLength(2);
+    expect(logCalls[0][0]).toEqual({
+      type: "log",
+      message: "line 1",
+      timestamp: "2026-03-16T22:21:32.380Z",
+    });
+    expect(logCalls[1][0]).toEqual({
+      type: "log",
+      message: "line 2",
+      timestamp: "2026-03-16T22:31:33.275Z",
+    });
   });
 });
 

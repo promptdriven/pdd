@@ -933,6 +933,24 @@ describe("SSE integration with runJob", () => {
       expect((event as any).jobId).toBe(jobId);
     }
   });
+
+  it("log events include an ISO timestamp for live SSE consumers", async () => {
+    const { send, calls } = createMockSend();
+
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        onLog("timestamped message");
+      };
+    });
+
+    await runPipelineStage("setup", {}, send);
+
+    const logEvents = calls.filter((c: any) => c.type === "log");
+    expect(logEvents.length).toBeGreaterThanOrEqual(1);
+    expect((logEvents[0] as any).timestamp).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

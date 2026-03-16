@@ -188,6 +188,44 @@ ${"A".repeat(24_000)}
     expect(animationCall?.[3]?.timeoutMs).toBeLessThanOrEqual(1_500_000);
   });
 
+  it("adds extra timeout budget for hybrid sections with many visual beats", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [
+        {
+          id: "dense_hybrid_section",
+          label: "Dense Hybrid Section",
+          specDir: "dense_hybrid_section",
+        },
+      ],
+      veo: { defaultAspectRatio: "16:9" },
+    });
+    mockExistsSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") return false;
+      return filePath.includes("narrative/main_script.md");
+    });
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") {
+        return "";
+      }
+      if (filePath.includes("narrative/main_script.md")) {
+        return `
+## Dense Hybrid Section
+${Array.from({ length: 20 }, (_, index) => `**[VISUAL: Developer in a rainy office close-up beat ${index + 1}.]**`).join("\n")}
+**[VISUAL: A chart overlay appears with annotations and graph axes.]**
+**NARRATOR:**
+${"A".repeat(8000)}
+        `.trim();
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
+    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(660_000);
+  });
+
   it("continues later sections after a section times out and reports an aggregated error", async () => {
     mockRunClaudeFix.mockImplementation(async (prompt: string) => {
       if (prompt.includes("specs/veo_section/")) {

@@ -25,6 +25,7 @@ function estimateSpecsTimeoutMs(params: {
   scriptBody: string;
   visualIntentMode: "remotion_only" | "hybrid" | "veo_favored" | "unknown";
   hasWords: boolean;
+  visualBeatCount: number;
 }): number {
   const combinedLength = params.specMd.length + params.scriptBody.length;
   const extraChars = Math.max(0, combinedLength - 20_000);
@@ -35,11 +36,17 @@ function estimateSpecsTimeoutMs(params: {
       : params.visualIntentMode === "hybrid"
         ? 60_000
         : 0;
+  const extraVisualBeats = Math.max(0, params.visualBeatCount - 8);
+  const visualBeatBonusMs =
+    params.visualIntentMode === "hybrid" || params.visualIntentMode === "veo_favored"
+      ? Math.min(360_000, Math.ceil(extraVisualBeats / 4) * 60_000)
+      : 0;
   const timestampBonusMs = params.hasWords ? 30_000 : 0;
   const scaledTimeoutMs =
     BASE_SPECS_TIMEOUT_MS +
     extraCharBuckets * 120_000 +
     visualComplexityBonusMs +
+    visualBeatBonusMs +
     timestampBonusMs;
 
   return Math.min(MAX_SPECS_TIMEOUT_MS, scaledTimeoutMs);
@@ -179,6 +186,7 @@ registerExecutor("specs", (params, _send) => {
           scriptBody: matchingScriptSection?.bodyLines.join("\n") ?? "",
           visualIntentMode: visualIntent?.mode ?? "unknown",
           hasWords: ctx.hasWords,
+          visualBeatCount: matchingScriptSection?.visualLines.length ?? 0,
         });
         const sectionSpecDir = path.join(specsBase, dir);
 

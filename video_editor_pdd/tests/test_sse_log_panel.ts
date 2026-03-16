@@ -105,6 +105,11 @@ describe("log formatting", () => {
     );
   });
 
+  it("accepts an optional timestamp when formatting log lines", () => {
+    expect(sourceCode).toMatch(/formatTimestamp\s*=\s*\(\s*timestamp\?\s*:\s*string\s*\|\s*null\s*\)/);
+    expect(sourceCode).toMatch(/appendLog\s*=\s*\(\s*message\s*:\s*string\s*,\s*timestamp\?\s*:\s*string\s*\|\s*null\s*\)/);
+  });
+
   it("formats logs as [timestamp] message", () => {
     expect(sourceCode).toMatch(/`\[\$\{ts\}\]\s+\$\{message\}`/);
   });
@@ -293,6 +298,10 @@ describe("event data parsing", () => {
 
   it("extracts message field from parsed data", () => {
     expect(sourceCode).toMatch(/data\?\.message/);
+  });
+
+  it("uses backend-provided timestamps when available", () => {
+    expect(sourceCode).toMatch(/appendLog\s*\(\s*data\.message\s*,\s*data\?\.timestamp\s*\)/);
   });
 
   it("handles JSON parse failure gracefully", () => {

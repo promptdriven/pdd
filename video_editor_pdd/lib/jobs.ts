@@ -95,6 +95,33 @@ function nowIso(): string {
   return new Date(Date.now()).toISOString();
 }
 
+const JOB_LOG_PREFIX = "__ts__:";
+
+function serializeJobLogLine(message: string, timestamp: string): string {
+  const normalizedMessage = message.endsWith("\n")
+    ? message.slice(0, -1)
+    : message;
+  return `${JOB_LOG_PREFIX}${timestamp}\t${normalizedMessage}\n`;
+}
+
+export function parseStoredJobLogLine(
+  line: string
+): { message: string; timestamp?: string } {
+  if (!line.startsWith(JOB_LOG_PREFIX)) {
+    return { message: line };
+  }
+
+  const payload = line.slice(JOB_LOG_PREFIX.length);
+  const separatorIndex = payload.indexOf("\t");
+  if (separatorIndex === -1) {
+    return { message: line };
+  }
+
+  const timestamp = payload.slice(0, separatorIndex).trim();
+  const message = payload.slice(separatorIndex + 1);
+  return timestamp ? { message, timestamp } : { message };
+}
+
 function getStageStatus(stage: PipelineStage): {
   status: string;
   lastJobId: string | null;
@@ -128,10 +155,10 @@ function upsertPipelineStatus(
   ).run(stage, status, lastJobId, error, updatedAt);
 }
 
-function safeAppendLog(jobId: string, msg: string): void {
+function safeAppendLog(jobId: string, msg: string): string {
   const db = getDb();
   const updatedAt = nowIso();
-  const line = msg.endsWith('\n') ? msg : `${msg}\n`;
+  const line = serializeJobLogLine(msg, updatedAt);
 
   try {
     db.prepare(
@@ -142,6 +169,8 @@ function safeAppendLog(jobId: string, msg: string): void {
   } catch {
     // logs column might not exist in older schema; ignore gracefully
   }
+
+  return updatedAt;
 }
 
 function updateProgress(jobId: string, percent: number): void {
@@ -271,8 +300,8 @@ export async function runJob(
 
   const onLog: OnLog = Object.assign(
     (msg: string): void => {
-      safeAppendLog(jobId, msg);
-      send({ type: 'log', message: msg, jobId });
+      const timestamp = safeAppendLog(jobId, msg);
+      send({ type: 'log', message: msg, timestamp, jobId });
     },
     {
       progress: (percent: number): void => {

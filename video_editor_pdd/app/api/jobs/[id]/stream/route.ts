@@ -1,4 +1,4 @@
-import { getJob } from "@/lib/jobs";
+import { getJob, parseStoredJobLogLine } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 
 export const dynamic = "force-dynamic";
@@ -49,7 +49,12 @@ export async function GET(
           : lines.length;
       if (lineCount > lastLineIndex) {
         for (let i = lastLineIndex; i < lineCount; i++) {
-          send({ type: "log", message: lines[i] });
+          const parsed = parseStoredJobLogLine(lines[i]);
+          send(
+            parsed.timestamp
+              ? { type: "log", message: parsed.message, timestamp: parsed.timestamp }
+              : { type: "log", message: parsed.message }
+          );
         }
         lastLineIndex = lineCount;
       }

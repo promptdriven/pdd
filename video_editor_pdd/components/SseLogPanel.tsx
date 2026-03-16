@@ -11,8 +11,11 @@ interface SseLogPanelProps {
   logClassName?: string;
 }
 
-const formatTimestamp = () =>
-  new Date().toLocaleTimeString('en-US', { hour12: false });
+const formatTimestamp = (timestamp?: string | null) => {
+  const parsedDate = timestamp ? new Date(timestamp) : new Date();
+  const date = Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+  return date.toLocaleTimeString('en-US', { hour12: false });
+};
 
 export const SseLogPanel: React.FC<SseLogPanelProps> = ({
   jobId,
@@ -31,8 +34,8 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
   const doneCalledRef = useRef(false);
   const errorCalledRef = useRef(false);
 
-  const appendLog = (message: string) => {
-    const ts = formatTimestamp();
+  const appendLog = (message: string, timestamp?: string | null) => {
+    const ts = formatTimestamp(timestamp);
     setLogs((prev) => [...prev, `[${ts}] ${message}`]);
   };
 
@@ -122,7 +125,7 @@ export const SseLogPanel: React.FC<SseLogPanelProps> = ({
       es.onmessage = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
-          if (data?.message) appendLog(data.message);
+          if (data?.message) appendLog(data.message, data?.timestamp);
         } catch {
           appendLog(event.data);
         }
