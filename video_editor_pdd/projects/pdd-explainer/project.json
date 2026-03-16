@@ -99,7 +99,40 @@
     }
   ],
   "audioSync": {
-    "sectionGroups": {},
+    "sectionGroups": {
+      "cold_open": {
+        "startSegment": "cold_open_001",
+        "endSegment": "cold_open_006"
+      },
+      "part1_economics": {
+        "startSegment": "part1_economics_001",
+        "endSegment": "part1_economics_033"
+      },
+      "part2_paradigm_shift": {
+        "startSegment": "part2_paradigm_shift_001",
+        "endSegment": "part2_paradigm_shift_019"
+      },
+      "part3_mold_three_parts": {
+        "startSegment": "part3_mold_three_parts_001",
+        "endSegment": "part3_mold_three_parts_030"
+      },
+      "part4_precision_tradeoff": {
+        "startSegment": "part4_precision_tradeoff_001",
+        "endSegment": "part4_precision_tradeoff_010"
+      },
+      "part5_compound_returns": {
+        "startSegment": "part5_compound_returns_001",
+        "endSegment": "part5_compound_returns_011"
+      },
+      "where_to_start": {
+        "startSegment": "where_to_start_001",
+        "endSegment": "where_to_start_003"
+      },
+      "closing": {
+        "startSegment": "closing_001",
+        "endSegment": "closing_005"
+      }
+    },
     "silenceGapDefault": 0.3
   },
   "veo": {
