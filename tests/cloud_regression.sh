@@ -9,6 +9,9 @@ set -e
 # Treat unset variables as an error when substituting.
 set -u
 
+# Resolve paths relative to this script before any cd
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
 STRENGTH=${STRENGTH:-0.5} # Default strength (slightly higher for cloud stability)
@@ -625,7 +628,7 @@ fi
 #      function under test. Uses tests/validate_behavioral_test.py.
 #   2. Run-against-buggy-code (Python, Go, JS): the definitive check — a
 #      behavioral test MUST FAIL against buggy code.
-VALIDATOR_SCRIPT="$(cd "$(dirname "$0")" && pwd)/validate_behavioral_test.py"
+VALIDATOR_SCRIPT="$SCRIPT_DIR/validate_behavioral_test.py"
 
 check_test_catches_bug() {
     local test_file="$1"
