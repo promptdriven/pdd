@@ -443,6 +443,20 @@ class TestPatternSelectors:
         assert "line1" in result
         assert "line5" in result
 
+    def test_redos_pattern_times_out(self):
+        """Catastrophically backtracking patterns should raise SelectorError, not hang."""
+        import time
+        # This pattern causes catastrophic backtracking on long inputs
+        evil_pattern = "pattern:/(a+)+$/"
+        content = "a" * 30 + "!"
+
+        start = time.time()
+        with pytest.raises(SelectorError, match="timed out"):
+            ContentSelector.select(content, [evil_pattern])
+        elapsed = time.time() - start
+        # Should be killed by the timeout guard, not run for minutes
+        assert elapsed < 10, f"ReDoS guard didn't trigger in time ({elapsed:.1f}s)"
+
 
 # ==============================================================================
 # Tests: JSON Path Selector

@@ -374,6 +374,25 @@ class TestReq4UpdateBlocks:
         assert "select='x'" in output_prompt
         assert "select='y'" in output_prompt
 
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_multiline_update_block_uses_only_include_tag(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """Multi-line update blocks should only inject the <include> tag, not extra content."""
+        input_prompt = "Before\n<include>utils.py</include>\nAfter"
+        # A multi-line update block with a comment before the include
+        update_directive = "<update><!-- selector added -->\n<include select='def:helper'>utils.py</include></update>"
+        mock_ai.return_value = (update_directive, "csv", 0.01, "model")
+        csv_path = tmp_path / "deps.csv"
+
+        output_prompt, _, _, _ = insert_includes(input_prompt, "dir", str(csv_path))
+
+        # The include tag should be updated
+        assert "<include select='def:helper'>utils.py</include>" in output_prompt
+        # The extra comment line should NOT be injected into the prompt
+        assert "<!-- selector added -->" not in output_prompt
+
 
 # ---------------------------------------------------------------------------
 # Req 5: If <new> blocks remain, invoke LLM
