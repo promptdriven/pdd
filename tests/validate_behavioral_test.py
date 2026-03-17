@@ -192,7 +192,7 @@ REFLECTION_IMPORT_PATTERNS: dict[str, list[tuple[str, str]]] = {
 
 # Assertion patterns — POSITIVE check that the file contains real assertions.
 ASSERTION_PATTERNS: dict[str, list[str]] = {
-    "Python": [r"\bassert\s", r"assertEqual", r"assertTrue", r"assertRaises", r"pytest\.raises"],
+    "Python": [r"\bassert\s", r"assertEqual", r"assertTrue", r"assertRaises", r"pytest\.raises", r"\.assert_called", r"\.assert_not_called", r"\.assert_has_calls"],
     "Go": [r"\bt\.(Error|Fatal|Run|Helper)\b", r"\bassert\.", r"\brequire\."],
     "Java": [r"\bassert(Equals|True|False|Throws|NotNull|That)\b", r"@Test"],
     "JavaScript": [r"\bexpect\s*\(", r"\bassert\s*[\.(]", r"\bit\s*\(", r"\btest\s*\("],
