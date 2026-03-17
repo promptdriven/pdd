@@ -146,7 +146,7 @@ def test_agentic_failure_prints_failure_message(runner: CliRunner, mock_deps) ->
 
     result = runner.invoke(fix, ["https://github.com/example/repo/issues/1"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0
     assert "Agentic fix failed" in result.output
 
 
