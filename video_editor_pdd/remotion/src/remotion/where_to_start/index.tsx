@@ -3,7 +3,7 @@ import { Sequence, Audio, staticFile } from "remotion";
 
 export const WhereToStartSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 799.9428330000001;
+  const offsetSeconds = 800.0708330000001;
   const durationSeconds = 32.569083;
 
   return (

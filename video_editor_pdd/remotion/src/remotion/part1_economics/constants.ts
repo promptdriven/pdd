@@ -1,105 +1,53 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 382.176;
-export const SECTION_DURATION_FRAMES = Math.round(
-  SECTION_FPS * SECTION_DURATION_SECONDS,
-);
+export const SECTION_DURATION_SECONDS = 0.149;
+export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
-  VISUAL_00_START: s2f(0.0),
-  VISUAL_00_END: s2f(5.0),
-  VISUAL_01_START: s2f(5.0),
-  VISUAL_01_END: s2f(95.0),
-  VISUAL_02_START: s2f(95.0),
-  VISUAL_02_END: s2f(103.0),
-  VISUAL_03_START: s2f(103.0),
-  VISUAL_03_END: s2f(113.0),
-  VISUAL_04_START: s2f(113.0),
-  VISUAL_04_END: s2f(143.0),
-  VISUAL_05_START: s2f(143.0),
-  VISUAL_05_END: s2f(155.0),
-  VISUAL_06_START: s2f(155.0),
-  VISUAL_06_END: s2f(180.0),
-  VISUAL_07_START: s2f(180.0),
-  VISUAL_07_END: s2f(187.0),
-  VISUAL_08_START: s2f(187.0),
-  VISUAL_08_END: s2f(195.0),
-  VISUAL_09_START: s2f(0.0),
-  VISUAL_09_END: s2f(382.176),
+  VISUAL_00_START: s2f(0.000),
+  VISUAL_00_END: s2f(0.033),
+  VISUAL_01_START: s2f(0.000),
+  VISUAL_01_END: s2f(0.033),
+  VISUAL_02_START: s2f(0.000),
+  VISUAL_02_END: s2f(0.033),
+  VISUAL_03_START: s2f(0.000),
+  VISUAL_03_END: s2f(0.033),
+  VISUAL_04_START: s2f(0.000),
+  VISUAL_04_END: s2f(0.033),
+  VISUAL_05_START: s2f(0.000),
+  VISUAL_05_END: s2f(0.033),
+  VISUAL_06_START: s2f(0.016),
+  VISUAL_06_END: s2f(0.049),
+  VISUAL_07_START: s2f(0.049),
+  VISUAL_07_END: s2f(0.083),
+  VISUAL_08_START: s2f(0.083),
+  VISUAL_08_END: s2f(0.116),
+  VISUAL_09_START: s2f(0.116),
+  VISUAL_09_END: s2f(0.149),
 };
 
 export const VISUAL_SEQUENCE = [
-  {
-    start: BEATS.VISUAL_00_START,
-    end: BEATS.VISUAL_00_END,
-    id: "01_title_card",
-    desc: "Part 1 Economics title card with eyebrow label and horizontal rule",
-  },
-  {
-    start: BEATS.VISUAL_01_START,
-    end: BEATS.VISUAL_01_END,
-    id: "03_cost_crossover_chart",
-    desc: "Animated cost crossover chart showing patching vs generation economics",
-  },
-  {
-    start: BEATS.VISUAL_02_START,
-    end: BEATS.VISUAL_02_END,
-    id: "04_stat_callout_github",
-    desc: "GitHub Copilot study stat callout — 55% faster task completion",
-  },
-  {
-    start: BEATS.VISUAL_03_START,
-    end: BEATS.VISUAL_03_END,
-    id: "06_stat_callout_uplevel",
-    desc: "Uplevel study stat callout — AI-assisted developer productivity gains",
-  },
-  {
-    start: BEATS.VISUAL_04_START,
-    end: BEATS.VISUAL_04_END,
-    id: "07_stat_callout_gitclear",
-    desc: "GitClear analysis of 150M lines shows code churn has doubled",
-  },
-  {
-    start: BEATS.VISUAL_05_START,
-    end: BEATS.VISUAL_05_END,
-    id: "09_context_degradation_chart",
-    desc: "Context window fill vs capability degradation bar chart",
-  },
-  {
-    start: BEATS.VISUAL_06_START,
-    end: BEATS.VISUAL_06_END,
-    id: "10_split_perception_reality",
-    desc: "Split view contrasting developer perception vs measured reality",
-  },
-  {
-    start: BEATS.VISUAL_07_START,
-    end: BEATS.VISUAL_07_END,
-    id: "12_regeneration_infographic",
-    desc: "Compression ratio and U-curve showing regeneration economics",
-  },
-  {
-    start: BEATS.VISUAL_08_START,
-    end: BEATS.VISUAL_08_END,
-    id: "13_crossover_zoom",
-    desc: "Zoom into cost crossover point where generation beats patching",
-  },
-  {
-    start: BEATS.VISUAL_09_START,
-    end: BEATS.VISUAL_09_END,
-    id: "14_subtitle_track",
-    desc: "Word-by-word subtitle track spanning full Part 1 narration",
-  },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "Section 1.0: Part 1 Section Title — The Economics of Darning" },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_sock_economics_chart", desc: "Section 1.1: Sock Economics Chart — Labor Cost vs Garment Cost" },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_code_cost_triple_line", desc: "Section 1.2: Code Cost Triple-Line Chart — Generate vs Patch vs Total" },
+  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_research_annotations", desc: "Section 1.3: Research Annotations — Stacking the Evidence" },
+  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_context_window_shrink", desc: "Section 1.4: Context Window Shrink — The AI Blindspot" },
+  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_two_by_two_grid", desc: "Section 1.5: Two-by-Two Grid — Why Studies Contradict" },
+  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_split_context_comparison", desc: "Section 1.6: Split Context Comparison — Agentic Patching vs PDD Regeneration" },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_developer_patching_montage", desc: "Section 1.7: Developer Patching Montage — Still Darning" },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_crossing_lines_moment", desc: "Section 1.8: Crossing Lines Moment — Generation Beats Total Cost" },
+  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "10_double_meter_insight", desc: "Section 1.9: Double Meter Insight — The Key Insight Beat" },
 ];
 
-export const Part1EconomicsProps = z.object({
+export const Part1EconomicsSectionProps = z.object({
   showTitle: z.boolean().default(true),
 });
 
-export const defaultPart1EconomicsProps: z.infer<typeof Part1EconomicsProps> = {
+export const defaultPart1EconomicsSectionProps: z.infer<typeof Part1EconomicsSectionProps> = {
   showTitle: true,
 };
 
-export type Part1EconomicsPropsType = z.infer<typeof Part1EconomicsProps>;
+export type Part1EconomicsSectionPropsType = z.infer<typeof Part1EconomicsSectionProps>;

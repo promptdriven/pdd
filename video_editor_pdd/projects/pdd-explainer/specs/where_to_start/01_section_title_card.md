@@ -8,99 +8,118 @@
 
 ## Visual Description
 
-A clean section title card introduces the final practical section. "Where to Start" appears in large white text, centered, with a subtle underline accent in blue (#4A90D9). The subtitle "Part 6" sits above in small muted type. A simple icon — a single module block with a forward-pointing play triangle — materializes to the left of the title, pulsing once with a golden glow to suggest "begin here." The icon reinforces the actionable, practical tone of this section: you're not theorizing anymore — you're starting.
+A clean section title card for the final instructional section. "WHERE TO" appears first in large bold weight, then "START" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
+
+Behind the text, a faint ghost silhouette of a large codebase topology — interconnected nodes representing modules, files, and dependencies — sits at low opacity. The topology is dense and intimidating, hinting at the brownfield reality the section addresses. A single node near the edge pulses with a faint blue glow, suggesting the starting point. Background is deep navy-black.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0F172A` (dark navy)
-- Grid lines: none
+- Background: `#0A0F1A` (deep navy-black)
+- Blueprint grid: 60px spacing, `#1E293B` at 0.05
 
 ### Chart/Visual Elements
 
-#### Part Label
-- "PART 6" — Inter, 12px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
-- Position: centered at (960, 400)
-
 #### Title Text
-- "Where to Start" — Inter, 64px, bold (700), `#FFFFFF`
-- Position: centered at (960, 480)
+- "WHERE TO" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
+- "START" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 200px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
-#### Accent Underline
-- Horizontal line beneath title, 180px wide, 3px tall
-- Color: `#4A90D9` at 0.7
-- Centered at (960, 520)
+#### Section Number
+- "WHERE TO START" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
-#### Module Icon
-- Position: (760, 478), 48x48px
-- Module block: rounded rectangle 40x40, `#1E293B` stroke 2px `#334155`
-- Play triangle: 14px equilateral, `#FBBF24`, centered within module block
-- Glow pulse: 16px Gaussian blur, `#FBBF24` at 0.2, pulses once
+#### Background Ghost (codebase topology)
+- Network graph: 30-40 small circles (6px) connected by thin lines (1px)
+- Spread across 800×500px area, centered
+- Node color: `#94A3B8` at 0.03
+- Edge color: `#94A3B8` at 0.015
+- One node at edge position (1200, 600): `#4A90D9` at 0.06, with 12px Gaussian glow at `#4A90D9` at 0.03
+- Pulsing: the glowing node breathes between 0.04 and 0.08 opacity
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Background fades in from black. "PART 6" label fades in.
-2. **Frame 20-50 (0.67-1.67s):** "Where to Start" title scales from 0.9→1.0 and fades in. Accent underline draws left-to-right.
-3. **Frame 50-75 (1.67-2.5s):** Module icon materializes with soft pop. Play triangle fills in. Golden glow pulse fires once (expand → contract).
-4. **Frame 75-120 (2.5-4s):** Hold on complete card. Subtle ambient glow on icon.
+1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
+2. **Frame 15-40 (0.5-1.33s):** Section label fades in. Ghost codebase topology draws — nodes appear one by one (staggered), edges draw between them.
+3. **Frame 40-60 (1.33-2s):** "WHERE TO" types on character-by-character (3 frames per character).
+4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
+5. **Frame 70-90 (2.33-3s):** "START" fades in with 10px upward slide.
+6. **Frame 90-120 (3-4s):** Hold. The single glowing node pulses. Ghost topology fully drawn.
 
 ### Typography
-- Part label: Inter, 12px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
-- Title: Inter, 64px, bold (700), `#FFFFFF`
+- Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
+- Title words: Inter, 72px, bold (700), `#E2E8F0`
+- Rule: `#334155` at 0.5
 
 ### Easing
-- Label fade: `easeOut(quad)` over 20 frames
-- Title scale+fade: `easeOut(cubic)` over 25 frames
-- Underline draw: `easeInOut(cubic)` over 20 frames
-- Icon pop: `easeOut(back(1.4))` over 18 frames
-- Glow pulse: `easeInOut(sine)` scale 1.0→1.3→1.0, 20 frames
+- Text fade-in: `easeOut(quad)` over 20 frames
+- "START" slide-up: `easeOut(cubic)` over 20 frames
+- Rule draw: `easeInOut(quad)` over 10 frames
+- Node stagger: `easeOut(quad)`, 1 frame per node
+- Edge draw: `easeOut(cubic)` over 30 frames
+- Node pulse: `easeInOut(sine)` on 40-frame cycle
 
 ## Narration Sync
-> "PDD can create prompts from existing code."
+> "Now — you don't work on a greenfield project. Nobody does."
 
 Segment: `where_to_start_001`
 
-- **23:15** ("PDD can create prompts"): Title card visible — sets context before the workflow begins
+- **0.0s** ("Now — you don't"): Title card begins fade-in
+- **1.5s** ("work on a greenfield project"): "WHERE TO" typing on screen
+- **3.0s** ("Nobody does."): "START" revealed, hold
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
-  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
-    {/* Part label */}
-    <Sequence from={0}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
+
+    {/* Ghost codebase topology */}
+    <Sequence from={15}>
+      <NetworkGraph
+        nodes={codebaseNodes} edges={codebaseEdges}
+        nodeSize={6} nodeColor="#94A3B8" nodeOpacity={0.03}
+        edgeColor="#94A3B8" edgeOpacity={0.015}
+        staggerFrames={1} edgeDrawDuration={30}
+        highlightNode={{
+          index: 28, color: '#4A90D9', opacity: 0.06,
+          glow: { blur: 12, opacity: 0.03 },
+          pulse: { min: 0.04, max: 0.08, period: 40 }
+        }}
+      />
+    </Sequence>
+
+    {/* Section label */}
+    <Sequence from={15}>
       <FadeIn duration={20}>
-        <Text text="PART 6" font="Inter" size={12}
+        <Text text="WHERE TO START" font="Inter" size={14}
           weight={600} color="#64748B" opacity={0.5}
           letterSpacing={4} x={960} y={400} align="center" />
       </FadeIn>
     </Sequence>
 
-    {/* Title */}
-    <Sequence from={20}>
-      <ScaleFadeIn from={0.9} to={1.0} duration={25}>
-        <Text text="Where to Start" font="Inter" size={64}
-          weight={700} color="#FFFFFF"
-          x={960} y={480} align="center" />
-      </ScaleFadeIn>
+    {/* Title: WHERE TO */}
+    <Sequence from={40}>
+      <TypeWriter text="WHERE TO" font="Inter" size={72}
+        weight={700} color="#E2E8F0"
+        charDelay={3} x={960} y={460} align="center" />
     </Sequence>
 
-    {/* Accent underline */}
-    <Sequence from={25}>
-      <LineDraw from={[870, 520]} to={[1050, 520]}
-        color="#4A90D9" opacity={0.7} width={3} duration={20} />
+    {/* Horizontal rule */}
+    <Sequence from={60}>
+      <DrawLine from={[860, 505]} to={[1060, 505]}
+        color="#334155" opacity={0.5} width={2}
+        drawDuration={10} fromCenter />
     </Sequence>
 
-    {/* Module icon with play triangle */}
-    <Sequence from={50}>
-      <ScaleIn easing="easeOut(back(1.4))" duration={18}>
-        <ModuleIcon x={760} y={478} size={48}
-          bgColor="#1E293B" borderColor="#334155"
-          triangleColor="#FBBF24" />
-      </ScaleIn>
-      <Sequence from={18}>
-        <GlowPulse color="#FBBF24" blur={16} opacity={0.2}
-          scale={[1.0, 1.3, 1.0]} duration={20} />
-      </Sequence>
+    {/* Title: START */}
+    <Sequence from={70}>
+      <SlideUp distance={10} duration={20}>
+        <FadeIn duration={20}>
+          <Text text="START" font="Inter" size={72}
+            weight={700} color="#E2E8F0"
+            x={975} y={545} align="center" />
+        </FadeIn>
+      </SlideUp>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -110,14 +129,15 @@ Segment: `where_to_start_001`
 ```json
 {
   "type": "title_card",
-  "cardId": "where_to_start_title",
   "sectionNumber": 6,
-  "title": "Where to Start",
-  "subtitle": "PART 6",
-  "icon": "module_play",
-  "accentColor": "#4A90D9",
-  "glowColor": "#FBBF24",
-  "backgroundColor": "#0F172A",
+  "sectionLabel": "WHERE TO START",
+  "titleLine1": "WHERE TO",
+  "titleLine2": "START",
+  "backgroundColor": "#0A0F1A",
+  "ghostElements": [
+    { "shape": "network_graph", "color": "#94A3B8", "component": "codebase_topology" },
+    { "shape": "highlighted_node", "color": "#4A90D9", "component": "starting_point" }
+  ],
   "narrationSegments": ["where_to_start_001"]
 }
 ```

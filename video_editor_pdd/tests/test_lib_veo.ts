@@ -122,10 +122,12 @@ function makeVeoOperation({
   done = false,
   hasVideo = true,
   error,
+  filteredReasons,
 }: {
   done?: boolean;
   hasVideo?: boolean;
   error?: object;
+  filteredReasons?: string[];
 } = {}) {
   return {
     done,
@@ -135,6 +137,12 @@ function makeVeoOperation({
           generatedVideos: [
             { video: hasVideo ? { uri: "gs://bucket/video.mp4" } : undefined },
           ],
+          ...(filteredReasons
+            ? {
+                raiMediaFilteredCount: filteredReasons.length,
+                raiMediaFilteredReasons: filteredReasons,
+              }
+            : {}),
         }
       : undefined,
   };
@@ -802,6 +810,26 @@ describe("generateVeoClip -- error handling", () => {
     await expect(
       generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
     ).rejects.toThrow("no video");
+  });
+
+  it("surfaces provider RAI filter reasons when Veo completes without a video", async () => {
+    mockGenerateVideos.mockResolvedValue(makeVeoOperation({ done: false }));
+    mockGetVideosOperation.mockResolvedValue(
+      makeVeoOperation({
+        done: true,
+        hasVideo: false,
+        filteredReasons: [
+          "Veo could not generate 1 videos based on the prompt provided. You will not be charged for this request. Try rephrasing the prompt. Support codes: 42237218",
+        ],
+      })
+    );
+
+    await expect(
+      generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
+    ).rejects.toThrow("Veo output filtered by provider RAI");
+    await expect(
+      generateVeoClip("test", null, "16:9", "/tmp/out.mp4")
+    ).rejects.toThrow("42237218");
   });
 
   it("throws when files.download fails", async () => {

@@ -92,6 +92,38 @@ const writeInlineVideoBytes = (outputPath: string, videoBytes: string): void => 
   fs.writeFileSync(outputPath, Buffer.from(videoBytes, "base64"));
 };
 
+const getFilteredVeoReason = (response: unknown): string | null => {
+  const candidate = response as {
+    raiMediaFilteredCount?: unknown;
+    raiMediaFilteredReasons?: unknown;
+  } | null;
+
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+
+  const reasons = Array.isArray(candidate.raiMediaFilteredReasons)
+    ? candidate.raiMediaFilteredReasons.filter(
+        (reason): reason is string => typeof reason === "string" && reason.trim().length > 0
+      )
+    : [];
+
+  const filteredCount =
+    typeof candidate.raiMediaFilteredCount === "number"
+      ? candidate.raiMediaFilteredCount
+      : reasons.length;
+
+  if (filteredCount <= 0 && reasons.length === 0) {
+    return null;
+  }
+
+  if (reasons.length > 0) {
+    return reasons.join(" ");
+  }
+
+  return `Veo provider filtered ${filteredCount} generated video${filteredCount === 1 ? "" : "s"}.`;
+};
+
 export async function generateReferenceImage(prompt: string, outputPath: string): Promise<void> {
   try {
     ensureOutputDir(outputPath);
@@ -174,9 +206,14 @@ export async function generateVeoClip(
       throw new Error(`Veo operation failed: ${JSON.stringify(currentOperation.error)}`);
     }
 
-    const generatedVideo = currentOperation.response?.generatedVideos?.[0];
+    const response = currentOperation.response;
+    const generatedVideo = response?.generatedVideos?.[0];
     const video = generatedVideo?.video;
     if (!video) {
+      const filteredReason = getFilteredVeoReason(response);
+      if (filteredReason) {
+        throw new Error(`Veo output filtered by provider RAI: ${filteredReason}`);
+      }
       throw new Error("Veo operation completed with no video");
     }
 

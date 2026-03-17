@@ -5,7 +5,7 @@ import { ClosingSection as ClosingSectionBase } from "./ClosingSection";
 
 export const ClosingSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 832.511916;
+  const offsetSeconds = 832.6399160000001;
   const durationSeconds = 20.903208;
 
   return (

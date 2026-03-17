@@ -205,6 +205,11 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/useState\s*<\s*ReferencePortrait\[\]\s*>/);
   });
 
+  it("tracks referenceReloadVersion state for refreshed portrait thumbnails", () => {
+    expect(sourceCode).toMatch(/\[\s*referenceReloadVersion\s*,\s*setReferenceReloadVersion\s*\]/);
+    expect(sourceCode).toMatch(/useState\s*\(\s*0\s*\)/);
+  });
+
   it("tracks loading state", () => {
     expect(sourceCode).toMatch(/\[\s*loading\s*,\s*setLoading\s*\]/);
   });
@@ -344,7 +349,7 @@ describe("Character References panel", () => {
   });
 
   it("renders reference portrait thumbnail with correct src pattern", () => {
-    expect(sourceCode).toMatch(/src=\{`\/api\/video\/outputs\/veo\/references\/\$\{ref\.id\}\.png`\}/);
+    expect(sourceCode).toMatch(/src=\{`\/api\/video\/outputs\/veo\/references\/\$\{ref\.id\}\.png\?v=\$\{referenceReloadVersion\}`\}/);
   });
 
   it("thumbnail has w-16 h-16 object-cover rounded classes", () => {
@@ -362,6 +367,19 @@ describe("Character References panel", () => {
 
   it("sends referenceId in regenerate request body", () => {
     expect(sourceCode).toMatch(/referenceId\s*:\s*refId/);
+  });
+
+  it("clears the broken reference fallback after a successful regenerate", () => {
+    expect(sourceCode).toMatch(/setBrokenRefs\s*\(\s*\(prev\)\s*=>\s*\{/);
+    expect(sourceCode).toMatch(/next\.delete\s*\(\s*refId\s*\)/);
+  });
+
+  it("bumps the portrait reload version after a successful regenerate", () => {
+    expect(sourceCode).toMatch(/setReferenceReloadVersion\s*\(\s*\(prev\)\s*=>\s*prev\s*\+\s*1\s*\)/);
+  });
+
+  it("refreshes the clip and reference list after a successful regenerate", () => {
+    expect(sourceCode).toMatch(/await\s+fetchClips\s*\(\s*\)/);
   });
 
   it("shows empty state when no references found", () => {

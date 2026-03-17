@@ -50,6 +50,7 @@ const statusBadge = (status: VeoClipStatus) => {
 export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationProps) {
   const [clips, setClips] = useState<VeoClip[]>([]);
   const [references, setReferences] = useState<ReferencePortrait[]>([]);
+  const [referenceReloadVersion, setReferenceReloadVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -240,7 +241,16 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
       });
       if (!res.ok) return;
       const extractedJobId = await extractJobIdFromSse(res);
-      if (extractedJobId) setJobId(extractedJobId);
+      if (extractedJobId) {
+        setJobId(extractedJobId);
+        setBrokenRefs((prev) => {
+          const next = new Set(prev);
+          next.delete(refId);
+          return next;
+        });
+        setReferenceReloadVersion((prev) => prev + 1);
+        await fetchClips();
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -291,7 +301,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
                       </div>
                     ) : (
                       <img
-                        src={`/api/video/outputs/veo/references/${ref.id}.png`}
+                        src={`/api/video/outputs/veo/references/${ref.id}.png?v=${referenceReloadVersion}`}
                         className="w-16 h-16 object-cover rounded"
                         alt={ref.label ?? ref.id}
                         onError={() =>

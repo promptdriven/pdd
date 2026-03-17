@@ -1210,6 +1210,32 @@ describe("veo executor factory — clip validation", () => {
     });
   });
 
+  it("does not retry when Veo output is filtered by provider RAI", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockGenerateVeoClip.mockRejectedValue(
+      new Error(
+        "Failed to generate Veo clip: Veo output filtered by provider RAI: Veo could not generate 1 videos based on the prompt provided. Support codes: 42237218"
+      )
+    );
+
+    const onLog = jest.fn();
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+
+    await expect(executor(onLog)).rejects.toThrow(/filtered by provider RAI/);
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(1);
+    expect(onLog).not.toHaveBeenCalledWith(
+      expect.stringContaining('Transient Veo generation error for "intro" on attempt 1; retrying once.')
+    );
+    expect(mockSend).toHaveBeenCalledWith({
+      type: "clip",
+      clipId: "intro",
+      status: "error",
+    });
+  });
+
   it("fails the clip after the final validation attempt still mismatches the prompt", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]];

@@ -21,7 +21,15 @@
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
       "durationSeconds": 0.149333,
-      "offsetSeconds": 0
+      "offsetSeconds": 0,
+      "compositions": [
+        "01_split_screen_hook",
+        "02_zoom_out_accumulated",
+        "05_code_blink",
+        "06_still_patching_beat",
+        "07_pdd_title_card"
+      ],
+      "timelineSource": "authored"
     },
     {
       "id": "part1_economics",
@@ -31,7 +39,19 @@
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
       "durationSeconds": 0.149333,
-      "offsetSeconds": 0.149333
+      "offsetSeconds": 0.149333,
+      "compositions": [
+        "01_section_title_card",
+        "02_sock_economics_chart",
+        "03_code_cost_triple_line",
+        "04_research_annotations",
+        "05_context_window_shrink",
+        "06_two_by_two_grid",
+        "07_split_context_comparison",
+        "09_crossing_lines_moment",
+        "10_double_meter_insight"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "part2_paradigm_shift",
@@ -156,6 +176,7 @@
         "label": "Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
+          "part1_economics",
           "part3_mold_three_parts",
           "part5_compound_returns"
         ],

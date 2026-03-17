@@ -3,7 +3,7 @@ import { Sequence, Audio, staticFile } from "remotion";
 
 export const Part3MoldThreePartsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 228.223958;
+  const offsetSeconds = 228.351958;
   const durationSeconds = 344.396583;
 
   return (

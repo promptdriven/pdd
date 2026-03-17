@@ -3,7 +3,7 @@ import { Sequence, Audio, staticFile } from "remotion";
 
 export const Part4PrecisionTradeoffSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 572.620541;
+  const offsetSeconds = 572.748541;
   const durationSeconds = 112.000667;
 
   return (
