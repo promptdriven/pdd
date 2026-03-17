@@ -2873,3 +2873,127 @@ class TestVerifyArchitectureConformance:
             language="python",
             verbose=False,
         )
+
+
+# === Issue #687 Tests: example_output_path must be injected and consumed ===
+# Root cause: generate_prompt.prompt tells the LLM to parse .pddrc YAML for
+# example_output_path, but when .pddrc is missing the LLM has no fallback.
+# Fix: (1) inject EXAMPLE_OUTPUT_PATH from resolved_config into env_vars,
+# (2) update the template to use ${EXAMPLE_OUTPUT_PATH} directly.
+
+
+class TestIssue687ExampleOutputPath:
+    """Tests for issue #687: example_output_path must flow from resolved_config
+    through env_vars into the prompt the LLM receives."""
+
+    def test_example_output_path_injected_into_env_vars(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_env_vars
+    ):
+        """When resolved_config has example_output_path, it must be injected into
+        env_vars as EXAMPLE_OUTPUT_PATH so _expand_vars can substitute it.
+
+        Verifies via the cloud prompt payload since the cloud mock is autouse."""
+        mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "test_prompt_python.prompt"
+        prompt_content = "Dependencies at ${EXAMPLE_OUTPUT_PATH}/dep_example.py"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "local_output.py")
+
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "examples/shared"},  # resolved_config
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "python"
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        # Check the prompt sent to cloud — it goes through the same _expand_vars path
+        from pdd.code_generator_main import requests
+        call_kwargs = requests.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
+            "Bug #687: ${EXAMPLE_OUTPUT_PATH} was not expanded — resolved_config "
+            "values are not being injected into env_vars"
+        )
+        assert "examples/shared" in cloud_prompt
+
+    def test_explicit_env_var_overrides_resolved_config(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_env_vars
+    ):
+        """Explicit -e EXAMPLE_OUTPUT_PATH=value must take precedence over
+        the value from resolved_config."""
+        mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt2.prompt"
+        prompt_content = "Examples at ${EXAMPLE_OUTPUT_PATH}"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output2.py")
+
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "context/examples"},
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "python"
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False,
+            env_vars={"EXAMPLE_OUTPUT_PATH": "custom/override"}
+        )
+
+        from pdd.code_generator_main import requests
+        call_kwargs = requests.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        assert "custom/override" in cloud_prompt
+        assert "context/examples" not in cloud_prompt
+
+    def test_no_crash_when_resolved_config_lacks_example_output_path(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_env_vars
+    ):
+        """When resolved_config has no example_output_path, must not crash."""
+        mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt3.prompt"
+        prompt_content = "Examples at ${EXAMPLE_OUTPUT_PATH}"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "output3.py")
+
+        mock_construct_paths_fixture.return_value = (
+            {},  # empty resolved_config
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "python"
+        )
+
+        # Should not raise
+        result = code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+        assert result is not None
+
+    def test_real_template_references_example_output_path_variable(self):
+        """The actual generate_prompt.prompt template must reference
+        ${EXAMPLE_OUTPUT_PATH} so the injected variable is consumed.
+
+        This is the critical test — without this, injecting the variable
+        into env_vars does nothing because the template never uses it."""
+        template_path = (
+            pathlib.Path(__file__).parent.parent
+            / "pdd" / "templates" / "generic" / "generate_prompt.prompt"
+        )
+        template_content = template_path.read_text(encoding="utf-8")
+        assert "${EXAMPLE_OUTPUT_PATH}" in template_content, (
+            "Bug #687: generate_prompt.prompt does not reference "
+            "${EXAMPLE_OUTPUT_PATH}. The template tells the LLM to parse "
+            ".pddrc YAML for example_output_path, which fails when .pddrc "
+            "is missing. The template must use ${EXAMPLE_OUTPUT_PATH} directly."
+        )
