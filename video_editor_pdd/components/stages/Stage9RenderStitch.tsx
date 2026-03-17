@@ -31,7 +31,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
   const [sections, setSections] = useState<SectionRenderStatus[]>([]);
   const [fullVideo, setFullVideo] = useState<FullVideoInfo>({ exists: false });
   const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const [renderMode, setRenderMode] = useState<RenderMode>('all');
+  const [renderMenuOpen, setRenderMenuOpen] = useState(false);
   const [renderJobId, setRenderJobId] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +40,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
   const [previewSectionId, setPreviewSectionId] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const renderMenuRef = useRef<HTMLDivElement | null>(null);
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -109,6 +110,24 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
     };
   }, [renderJobId, loadStatus]);
 
+  useEffect(() => {
+    if (!renderMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        renderMenuRef.current &&
+        target instanceof Node &&
+        !renderMenuRef.current.contains(target)
+      ) {
+        setRenderMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [renderMenuOpen]);
+
   const activeRenders = useMemo(
     () => sections.filter((s) => s.progress > 0 && s.progress < 100).slice(0, 3),
     [sections]
@@ -151,6 +170,11 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
     } catch (err: any) {
       setError(err?.message || 'Failed to start render job.');
     }
+  };
+
+  const handleRenderSelection = async (mode: RenderMode) => {
+    setRenderMenuOpen(false);
+    await handleRender(mode);
   };
 
   const handleRerenderSection = async (sectionId: string) => {
@@ -230,23 +254,49 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
         </div>
 
         <div className="flex items-center gap-2">
-          <select
-            data-testid="render-mode-select"
-            className="border rounded-md px-3 py-2 text-sm text-slate-200 bg-slate-800 border-slate-600"
-            value={renderMode}
-            onChange={(e) => setRenderMode(e.target.value as RenderMode)}
-          >
-            <option value="all">All</option>
-            <option value="missing">Missing</option>
-            <option value="selected">Selected</option>
-          </select>
-          <button
-            data-testid="render-sections-button"
-            onClick={() => handleRender(renderMode)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
-          >
-            Render ▾
-          </button>
+          <div className="relative" ref={renderMenuRef}>
+            <button
+              data-testid="render-sections-button"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={renderMenuOpen}
+              onClick={() => setRenderMenuOpen((prev) => !prev)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+            >
+              Render ▾
+            </button>
+            {renderMenuOpen && (
+              <div
+                className="absolute right-0 z-10 mt-2 min-w-[12rem] overflow-hidden rounded-md border border-slate-600 bg-slate-800 shadow-lg"
+                role="menu"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full px-4 py-2 text-left text-sm text-slate-200 hover:bg-slate-700"
+                  onClick={() => void handleRenderSelection('all')}
+                >
+                  Render All
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full px-4 py-2 text-left text-sm text-slate-200 hover:bg-slate-700"
+                  onClick={() => void handleRenderSelection('missing')}
+                >
+                  Render Missing
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full px-4 py-2 text-left text-sm text-slate-200 hover:bg-slate-700"
+                  onClick={() => void handleRenderSelection('selected')}
+                >
+                  Render Selected
+                </button>
+              </div>
+            )}
+          </div>
           <button
             data-testid="stitch-full-video-button"
             onClick={handleStitch}

@@ -10,7 +10,7 @@
  *   2. Section render table: columns section ID, duration (seconds), status badge,
  *      progress bar (0–100%), [▶] modal preview, [↺] re-render.
  *   3. Active renders panel: shows up to 3 simultaneous progress bars (each labeled with section ID).
- *   4. [Render ▾] dropdown: options All / Missing / Selected.
+ *   4. [Render ▾] dropdown menu: options Render All / Render Missing / Render Selected.
  *      Triggers POST /api/pipeline/render/run with appropriate { sections }.
  *   5. [Stitch Full Video] button: triggers POST /api/pipeline/stitch/run.
  *      Disabled while renders are in progress.
@@ -214,24 +214,38 @@ describe("Active renders panel", () => {
 // ---------------------------------------------------------------------------
 
 describe("Render dropdown", () => {
-  it("renders a select element with render mode options", () => {
-    expect(sourceCode).toMatch(/<select/);
-  });
-
-  it("has All option", () => {
-    expect(sourceCode).toMatch(/<option\s+value="all">All<\/option>/);
-  });
-
-  it("has Missing option", () => {
-    expect(sourceCode).toMatch(/<option\s+value="missing">Missing<\/option>/);
-  });
-
-  it("has Selected option", () => {
-    expect(sourceCode).toMatch(/<option\s+value="selected">Selected<\/option>/);
+  it("tracks whether the render menu is open", () => {
+    expect(sourceCode).toMatch(/useState\(false\)/);
+    expect(sourceCode).toMatch(/renderMenuOpen/);
   });
 
   it("renders Render ▾ button", () => {
     expect(sourceCode).toContain("Render ▾");
+  });
+
+  it("marks the Render button as a menu trigger", () => {
+    expect(sourceCode).toMatch(/aria-haspopup="menu"/);
+    expect(sourceCode).toMatch(/aria-expanded=\{renderMenuOpen\}/);
+  });
+
+  it("renders Render All menu option", () => {
+    expect(sourceCode).toContain("Render All");
+  });
+
+  it("renders Render Missing menu option", () => {
+    expect(sourceCode).toContain("Render Missing");
+  });
+
+  it("renders Render Selected menu option", () => {
+    expect(sourceCode).toContain("Render Selected");
+  });
+
+  it("toggles the render menu from the button", () => {
+    expect(sourceCode).toMatch(/setRenderMenuOpen\(\(prev\)\s*=>\s*!prev\)/);
+  });
+
+  it("closes the menu after selecting an option", () => {
+    expect(sourceCode).toMatch(/setRenderMenuOpen\(false\)/);
   });
 
   it("handleRender sends POST /api/pipeline/render/run with sections payload", () => {
@@ -248,6 +262,10 @@ describe("Render dropdown", () => {
 
   it("'selected' mode uses selected state", () => {
     expect(sourceCode).toMatch(/Object\.keys\(selected\)\.filter/);
+  });
+
+  it("removes the old standalone render mode select", () => {
+    expect(sourceCode).not.toMatch(/data-testid="render-mode-select"/);
   });
 });
 
@@ -555,7 +573,7 @@ describe("Dark theme compliance", () => {
     expect(sourceCode).not.toMatch(/className="[^"]*bg-white[^"]*"/);
   });
 
-  it("select dropdown uses dark theme", () => {
+  it("render dropdown menu uses dark theme", () => {
     expect(sourceCode).toMatch(/bg-slate-800/);
   });
 
