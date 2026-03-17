@@ -2573,7 +2573,65 @@ describe("compositions executor — generated preview validation", () => {
     await expect(executor(jest.fn())).rejects.toThrow(
       "Expected generated component output not found for veo_section_05_split_nature_comparison"
     );
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
     expect(mockRenderStill).not.toHaveBeenCalled();
+  });
+
+  it("retries once when Claude returns without creating the expected artifact", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "veo_section";
+    config.sections[0].specDir = "veo_section";
+    config.sections[0].compositionId = "VeoSection";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "veo_section");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+    const generatedIndex = pathMod.join(
+      remotionDir,
+      "VeoSection05SplitNatureComparison",
+      "index.ts"
+    );
+
+    let artifactExists = false;
+    let attemptCount = 0;
+    mockRunClaudeFix.mockImplementation(async () => {
+      attemptCount += 1;
+      artifactExists = attemptCount >= 2;
+    });
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      if (p === generatedIndex) return artifactExists;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs") && p.includes("veo_section")) {
+        return [{ name: "05_split_nature_comparison.md", isFile: () => true }];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("[split:]\n# Spec content");
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "veo_section", components: ["05_split_nature_comparison"] },
+        ],
+        wrappers: [],
+      },
+      jest.fn()
+    );
+
+    await expect(executor(onLog)).resolves.toBeUndefined();
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
+    expect(onLog).toHaveBeenCalledWith(
+      "[compositions] No generated artifact found for veo_section_05_split_nature_comparison after Claude run; retrying once."
+    );
   });
 
   it("only preview-validates compositions that were actually discovered into the section render graph", async () => {

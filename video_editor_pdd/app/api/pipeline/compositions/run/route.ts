@@ -638,16 +638,28 @@ registerExecutor("compositions", (params, send: SseSend) => {
         onLog(`[compositions] Generating component: ${item.outputName}`);
 
         try {
+          const spec = findSpecForComponent(item.name, item.specDir);
+
           if (isDeterministicPipelineMode()) {
-            const spec = findSpecForComponent(item.name, item.specDir);
             writeDeterministicComponent(getRemotionScopeDir(), item.outputName, spec, onLog);
           } else if (item.name.endsWith("_main")) {
-            const spec = findSpecForComponent(item.name, item.specDir);
             generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
           } else {
-            const spec = findSpecForComponent(item.name, item.specDir);
             const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
-            await runClaudeFix(prompt, getRemotionScopeDir(), (line) => onLog(line));
+
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              await runClaudeFix(prompt, getRemotionScopeDir(), (line) => onLog(line));
+
+              if (generatedArtifactExists(item.name, item.outputName, item.sectionId)) {
+                break;
+              }
+
+              if (attempt === 1) {
+                onLog(
+                  `[compositions] No generated artifact found for ${item.outputName} after Claude run; retrying once.`
+                );
+              }
+            }
           }
 
           if (!generatedArtifactExists(item.name, item.outputName, item.sectionId)) {
