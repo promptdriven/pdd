@@ -46,7 +46,7 @@
                     {
                         "action": "RETRY_TASK",
                         "actionCondition": {
-                            "exitCodes": [50001]
+                            "exitCodes": [50001, 50002, 50003, 50006]
                         }
                     }
                 ]
