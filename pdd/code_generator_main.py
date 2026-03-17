@@ -595,6 +595,7 @@ def code_generator_main(
     # Merge -e vars with front-matter defaults; validate required
     if env_vars is None:
         env_vars = {}
+    explicit_env_keys = set(env_vars.keys())  # Track which vars came from explicit -e
     if fm_meta and isinstance(fm_meta.get("variables"), dict):
         for k, spec in (fm_meta["variables"].items()):
             if isinstance(spec, dict):
@@ -677,18 +678,20 @@ def code_generator_main(
             if k not in env_vars:
                 env_vars[k] = v
 
-    # Inject resolved_config path values into env_vars (without overriding explicit -e values)
+    # Inject resolved_config path values into env_vars.
     # Fix for #687: example_output_path must be available as a template variable so the LLM
     # can construct correct _example.py include paths instead of raw source code paths.
+    # Priority: explicit -e > resolved_config (.pddrc) > front-matter default > hardcoded default
     _config_to_env_defaults = {
         "example_output_path": ("EXAMPLE_OUTPUT_PATH", "context"),
     }
     for config_key, (env_key, default_val) in _config_to_env_defaults.items():
-        if env_key not in env_vars:
-            if resolved_config and config_key in resolved_config:
-                env_vars[env_key] = str(resolved_config[config_key])
-            else:
-                env_vars[env_key] = default_val
+        if env_key in explicit_env_keys:
+            continue  # explicit -e takes highest priority
+        if resolved_config and config_key in resolved_config:
+            env_vars[env_key] = str(resolved_config[config_key])
+        elif env_key not in env_vars:
+            env_vars[env_key] = default_val
 
     # Expand variables in output path if provided
     if output_path:
