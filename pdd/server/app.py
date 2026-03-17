@@ -22,7 +22,7 @@ from .security import (
 )
 from .jobs import JobManager
 from .routes.websocket import ConnectionManager, create_websocket_routes
-from .routes import architecture, auth, files, commands, prompts
+from .routes import architecture, auth, extracts, files, commands, prompts
 from .routes import websocket as ws_routes
 from .routes.config import router as config_router
 
@@ -247,10 +247,12 @@ def create_app(
     app.dependency_overrides[ws_routes.get_job_manager] = get_job_manager
     app.dependency_overrides[ws_routes.get_project_root] = lambda: get_app_state().project_root
     app.dependency_overrides[prompts.get_path_validator] = get_path_validator
+    app.dependency_overrides[extracts.get_project_root] = lambda: get_app_state().project_root
 
     app.include_router(architecture.router)
     app.include_router(auth.router)
     app.include_router(config_router)
+    app.include_router(extracts.router)
     app.include_router(files.router)
     app.include_router(commands.router)
     app.include_router(prompts.router)

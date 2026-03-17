@@ -169,12 +169,12 @@ def mock_shutil_which():
 
 @pytest.fixture
 def mock_subprocess():
-    with patch('subprocess.run') as mock:
+    with patch('pdd.agentic_common._subprocess_run') as mock:
         yield mock
 
 @pytest.fixture
 def mock_subprocess_run():
-    with patch("subprocess.run") as mock:
+    with patch("pdd.agentic_common._subprocess_run") as mock:
         yield mock
 
 @pytest.fixture
@@ -2766,7 +2766,7 @@ class TestSecondaryPaginationCallSites:
 # Provider Error Details + post_step_comment Tests — Issue #289
 # ---------------------------------------------------------------------------
 
-from pdd.agentic_common import post_step_comment
+from pdd.agentic_common import post_pr_comment, post_step_comment
 
 
 def test_provider_error_details_preserved(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -2896,6 +2896,45 @@ def test_post_step_comment_no_gh_cli(tmp_path):
         assert result is False
 
 
+def test_post_pr_comment_posts_to_github(tmp_path):
+    """Test that post_pr_comment calls gh pr comment with correct args."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="CI validation exhausted retries.",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "gh"
+        assert cmd[1] == "pr"
+        assert cmd[2] == "comment"
+        assert "42" in cmd
+        assert "--repo" in cmd
+        assert "owner/repo" in cmd
+
+
+def test_post_pr_comment_no_gh_cli(tmp_path):
+    """Test that post_pr_comment returns False without crashing when gh is not installed."""
+    with patch("shutil.which", return_value=None):
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="CI validation exhausted retries.",
+            cwd=tmp_path,
+        )
+
+        assert result is False
+
+
 # ---------------------------------------------------------------------------
 # get_agent_provider_preference() tests
 # ---------------------------------------------------------------------------
@@ -2971,7 +3010,7 @@ def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
     deadline = time.time() + 30  # Only 30s left — less than margin(120) + min(60)
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
-         patch("subprocess.run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("time.sleep"):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="fail"
@@ -2992,7 +3031,7 @@ def test_deadline_caps_per_attempt_timeout(tmp_path):
     deadline = time.time() + 300  # 300s left; after 120s margin → 180s available
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
-         patch("subprocess.run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("time.sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -3017,7 +3056,7 @@ def test_no_deadline_preserves_default_timeout(tmp_path):
     """Without deadline, default timeout is used."""
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
-         patch("subprocess.run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("time.sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -3043,7 +3082,7 @@ def test_deadline_from_env_used_when_param_not_passed(tmp_path):
         "PDD_JOB_DEADLINE": env_deadline,
     }, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \
-         patch("subprocess.run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("time.sleep"):
         mock_run.return_value = MagicMock(
             returncode=1, stdout="", stderr="fail"
@@ -3112,7 +3151,7 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("subprocess.run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -3149,7 +3188,7 @@ def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("subprocess.run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -3186,7 +3225,7 @@ def test_issue557_session_end_usage_for_cost(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("subprocess.run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -3228,7 +3267,7 @@ def test_issue557_single_line_json_no_ndjson(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("subprocess.run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=single_json,
@@ -3336,7 +3375,7 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("subprocess.run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("time.sleep"):  # Skip retry delays
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -3387,7 +3426,7 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
-         patch("subprocess.run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
          patch("time.sleep"):
         mock_run.return_value = MagicMock(
             returncode=0,
@@ -3829,3 +3868,265 @@ class TestExtractJsonFromOutput:
         """Empty string raises JSONDecodeError."""
         with pytest.raises(json.JSONDecodeError):
             _extract_json_from_output("")
+
+
+# ============================================================================
+# Issue #830: Subprocess Process Group & State Divergence
+#
+# Bug 2: subprocess.run() in _run_with_provider does not use
+# start_new_session=True, so timeout only kills the direct child process.
+# Child processes spawned by CLI tools (e.g., claude) become orphans.
+#
+# Bug 3: save_workflow_state() returns the stale github_comment_id when
+# GitHub save fails, masking the failure from the caller.
+# ============================================================================
+
+
+class TestIssue830SubprocessProcessGroup:
+    """Tests for issue #830 Bug 2: subprocess.run missing start_new_session.
+
+    The _run_with_provider function calls subprocess.run() without
+    start_new_session=True. When a timeout occurs, only the direct child
+    process is killed — grandchild processes (spawned by CLI tools) become
+    orphans and can hang indefinitely.
+
+    Other subprocess callers in the codebase (sync_orchestration.py,
+    fix_code_loop.py, agentic_sync_runner.py) all use start_new_session=True.
+    """
+
+    def test_subprocess_run_uses_start_new_session(
+        self, mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+    ):
+        """subprocess.run() in _run_with_provider should use start_new_session=True.
+
+        Bug: subprocess.run() is called without start_new_session=True,
+        so timeout only kills the direct child, not the process group.
+        Fix: add start_new_session=True to match sync_orchestration.py:1102.
+        """
+        from pdd.agentic_common import _run_with_provider
+
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout='{"result": "test", "cost_usd": 0.1}',
+            stderr=""
+        )
+
+        prompt_path = mock_cwd / "prompt.txt"
+        prompt_path.write_text("test prompt")
+
+        _run_with_provider(
+            provider="anthropic",
+            prompt_path=prompt_path,
+            cwd=mock_cwd,
+            timeout=240,
+        )
+
+        # Verify subprocess.run was called with start_new_session=True
+        assert mock_subprocess.called, "subprocess.run should have been called"
+        call_kwargs = mock_subprocess.call_args.kwargs if mock_subprocess.call_args.kwargs else {}
+        # Also check positional-style keyword args
+        if not call_kwargs:
+            # Some mocks capture kwargs differently
+            call_kwargs = dict(zip(
+                ['cwd', 'env', 'input', 'capture_output', 'text', 'timeout'],
+                mock_subprocess.call_args[1:] if len(mock_subprocess.call_args) > 1 else []
+            ))
+            call_kwargs = mock_subprocess.call_args.kwargs
+
+        assert call_kwargs.get('start_new_session') is True, (
+            f"subprocess.run() must use start_new_session=True for process group cleanup on timeout. "
+            f"Got kwargs: {call_kwargs}. "
+            f"Without this, CLI tool child processes become orphans when timeout kills only the parent."
+        )
+
+    def test_subprocess_run_uses_start_new_session_google(
+        self, mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+    ):
+        """Google provider subprocess.run() should also use start_new_session=True."""
+        from pdd.agentic_common import _run_with_provider
+
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout='{"result": "test", "totalTokens": 1000}',
+            stderr=""
+        )
+
+        prompt_path = mock_cwd / "prompt.txt"
+        prompt_path.write_text("test prompt")
+
+        _run_with_provider(
+            provider="google",
+            prompt_path=prompt_path,
+            cwd=mock_cwd,
+            timeout=240,
+        )
+
+        assert mock_subprocess.called
+        call_kwargs = mock_subprocess.call_args.kwargs
+        assert call_kwargs.get('start_new_session') is True, (
+            f"subprocess.run() for Google provider must also use start_new_session=True. "
+            f"Got kwargs: {call_kwargs}"
+        )
+
+    def test_subprocess_run_uses_start_new_session_codex(
+        self, mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+    ):
+        """Codex provider subprocess.run() should also use start_new_session=True."""
+        from pdd.agentic_common import _run_with_provider
+
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout='{"output_text": "test result"}',
+            stderr=""
+        )
+
+        prompt_path = mock_cwd / "prompt.txt"
+        prompt_path.write_text("test prompt")
+
+        _run_with_provider(
+            provider="openai",
+            prompt_path=prompt_path,
+            cwd=mock_cwd,
+            timeout=240,
+        )
+
+        assert mock_subprocess.called
+        call_kwargs = mock_subprocess.call_args.kwargs
+        assert call_kwargs.get('start_new_session') is True, (
+            f"subprocess.run() for Codex provider must also use start_new_session=True. "
+            f"Got kwargs: {call_kwargs}"
+        )
+
+
+class TestIssue830SaveWorkflowStateDivergence:
+    """Tests for issue #830 Bug 3: save_workflow_state returns stale ID.
+
+    When github_save_state() returns None (GitHub save failed),
+    save_workflow_state() should propagate the failure by returning None,
+    not returning the old github_comment_id.
+    """
+
+    def test_returns_none_when_github_save_fails(self, tmp_path):
+        """save_workflow_state should return None when GitHub save fails.
+
+        Bug: returns the old github_comment_id (12345) instead of None,
+        making the caller think the save succeeded.
+        """
+        state_dir = tmp_path / "state"
+        state = {"last_completed_step": 5, "step_outputs": {"1": "ok"}}
+        stale_id = 12345
+
+        with patch("pdd.agentic_common._should_use_github_state") as mock_should, \
+             patch("pdd.agentic_common.github_save_state") as mock_gh_save:
+            mock_should.return_value = True
+            mock_gh_save.return_value = None  # GitHub save failed
+
+            result = save_workflow_state(
+                cwd=tmp_path,
+                issue_number=42,
+                workflow_type="e2e_fix",
+                state=state,
+                state_dir=state_dir,
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+                github_comment_id=stale_id,
+            )
+
+        assert result is None or result != stale_id, (
+            f"save_workflow_state returned {result} (stale comment_id) when GitHub save failed. "
+            f"Should return None to signal failure so caller detects state divergence."
+        )
+
+    def test_returns_new_id_when_github_save_succeeds(self, tmp_path):
+        """save_workflow_state should return new ID when GitHub save succeeds."""
+        state_dir = tmp_path / "state"
+        state = {"last_completed_step": 5}
+        old_id = 12345
+        new_id = 67890
+
+        with patch("pdd.agentic_common._should_use_github_state") as mock_should, \
+             patch("pdd.agentic_common.github_save_state") as mock_gh_save:
+            mock_should.return_value = True
+            mock_gh_save.return_value = new_id  # GitHub save succeeded
+
+            result = save_workflow_state(
+                cwd=tmp_path,
+                issue_number=42,
+                workflow_type="e2e_fix",
+                state=state,
+                state_dir=state_dir,
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+                github_comment_id=old_id,
+            )
+
+        assert result == new_id, (
+            f"save_workflow_state should return new comment_id {new_id}, got {result}"
+        )
+
+    def test_local_state_persists_even_when_github_fails(self, tmp_path):
+        """Local state file should be written even when GitHub save fails.
+
+        Bug 3 showed that GitHub state diverged from execution. At minimum,
+        the local state should always be saved correctly.
+        """
+        state_dir = tmp_path / "state"
+        state = {"last_completed_step": 9, "step_outputs": {"9": "verification done"}}
+
+        with patch("pdd.agentic_common._should_use_github_state") as mock_should, \
+             patch("pdd.agentic_common.github_save_state") as mock_gh_save:
+            mock_should.return_value = True
+            mock_gh_save.return_value = None  # GitHub save failed
+
+            save_workflow_state(
+                cwd=tmp_path,
+                issue_number=42,
+                workflow_type="e2e_fix",
+                state=state,
+                state_dir=state_dir,
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+                github_comment_id=12345,
+            )
+
+        local_file = state_dir / "e2e_fix_state_42.json"
+        assert local_file.exists(), "Local state file should exist even when GitHub save fails"
+        saved = json.loads(local_file.read_text())
+        assert saved["last_completed_step"] == 9, (
+            f"Local state should show step 9, got {saved['last_completed_step']}"
+        )
+
+    def test_github_save_failure_logs_warning(self, tmp_path):
+        """A warning should be logged when GitHub state save fails."""
+        state_dir = tmp_path / "state"
+        state = {"last_completed_step": 5}
+
+        with patch("pdd.agentic_common._should_use_github_state") as mock_should, \
+             patch("pdd.agentic_common.github_save_state") as mock_gh_save, \
+             patch("pdd.agentic_common.console") as mock_console:
+            mock_should.return_value = True
+            mock_gh_save.return_value = None  # GitHub save failed
+
+            save_workflow_state(
+                cwd=tmp_path,
+                issue_number=42,
+                workflow_type="e2e_fix",
+                state=state,
+                state_dir=state_dir,
+                repo_owner="owner",
+                repo_name="repo",
+                use_github_state=True,
+                github_comment_id=12345,
+            )
+
+        warning_logged = any(
+            "GitHub" in str(call) or "github" in str(call).lower()
+            for call in mock_console.print.call_args_list
+        )
+        assert warning_logged, (
+            f"Expected a warning about GitHub state save failure. "
+            f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
+        )

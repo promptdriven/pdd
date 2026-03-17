@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import sys
 import json
 import shutil
@@ -29,7 +30,7 @@ _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
-    *,
+    *, 
     strict_unresolved: bool = False,
 ) -> str:
     """Safely substitute known {placeholders} without raising on unknown keys.
@@ -44,7 +45,7 @@ def substitute_template_variables(
         return str(template.format(**context))
 
     if strict_unresolved:
-        for match in re.finditer(r"(?<!\{)\{([A-Za-z_][A-Za-z0-9_]*)\}(?!\})", template):
+        for match in re.finditer(r"(?<![{])[{]([A-Za-z_][A-Za-z0-9_]*)[}](?![}])", template):
             key = match.group(1)
             if key not in context:
                 raise KeyError(key)
@@ -112,6 +113,43 @@ DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
+
+# Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
+# can report how far the workflow progressed (console + core dumps).
+_agentic_interrupt_context: Optional[Dict[str, Any]] = None
+
+
+def set_agentic_progress(
+    workflow: str,
+    current_step: int,
+    total_steps: int,
+    step_name: str,
+    completed_steps: Optional[List[int]] = None,
+) -> None:
+    """Record current step progress for KeyboardInterrupt reporting and core dumps."""
+    global _agentic_interrupt_context
+    _agentic_interrupt_context = {
+        "workflow": workflow,
+        "current_step": current_step,
+        "total_steps": total_steps,
+        "step_name": step_name,
+        "completed_steps": completed_steps or [],
+    }
+
+
+def clear_agentic_progress() -> None:
+    """Clear progress context (call at start of workflow or on normal completion)."""
+    global _agentic_interrupt_context
+    _agentic_interrupt_context = None
+
+
+def get_and_clear_agentic_interrupt_context() -> Optional[Dict[str, Any]]:
+    """Return current progress and clear it (used by error handler on KeyboardInterrupt)."""
+    global _agentic_interrupt_context
+    ctx = _agentic_interrupt_context
+    _agentic_interrupt_context = None
+    return ctx
+
 
 # Job deadline constants — prevent agentic retry loops from consuming the full job timeout
 JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0   # Reserve for cleanup/reporting after last attempt
@@ -685,6 +723,39 @@ def run_agentic_task(
             except OSError:
                 pass
 
+def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
+                    text=False, timeout=None, start_new_session=False, **kwargs):
+    """Wrapper around subprocess that uses Popen for proper process group cleanup.
+
+    Provides a subprocess.run-compatible interface but uses Popen internally
+    so we can reliably kill the process group on timeout (Issue #830).
+    """
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if input is not None or capture_output else None,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=text,
+        start_new_session=start_new_session,
+    )
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if start_new_session:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+        proc.kill()
+        proc.wait(timeout=5)
+        raise
+
+    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    return result
+
+
 def _run_with_provider(
     provider: str,
     prompt_path: Path,
@@ -799,14 +870,15 @@ def _run_with_provider(
     stdin_content = prompt_content if provider == "anthropic" else None
 
     try:
-        result = subprocess.run(
+        result = _subprocess_run(
             cmd,
             cwd=cwd,
             env=env,
             input=stdin_content,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            start_new_session=True,
         )
     except subprocess.TimeoutExpired:
         return False, "Timeout expired", 0.0
@@ -1282,7 +1354,8 @@ def save_workflow_state(
             return new_id
         else:
             console.print("[dim]Warning: Failed to sync state to GitHub[/dim]")
-            
+            return None
+
     return github_comment_id
 
 def clear_workflow_state(
@@ -1373,4 +1446,109 @@ def post_step_comment(
         return True
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
+        return False
+
+
+def post_pr_comment(
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    body: str,
+    cwd: Path,
+) -> bool:
+    """
+    Post a comment on a pull request.
+
+    Args:
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
+        pr_number: Pull request number to comment on
+        body: Comment body
+        cwd: Working directory for subprocess
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    if not shutil.which("gh"):
+        return False
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "pr", "comment", str(pr_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Warning: Failed to post PR comment: {result.stderr}[/yellow]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post PR comment: {e}[/yellow]")
+        return False
+
+
+def post_final_comment(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    reason: str,
+    total_cost: float,
+    steps_completed: int,
+    total_steps: int,
+    cwd: Path,
+) -> bool:
+    """
+    Post a final status comment when the workflow stops early.
+
+    Unlike post_step_comment (which is for step-level failures where the agent
+    didn't execute), this is for workflow-level outcomes: NOT_A_BUG, max cycles
+    exhausted, missing loop control token, etc.
+
+    Args:
+        repo_owner: GitHub repository owner
+        repo_name: GitHub repository name
+        issue_number: Issue number to comment on
+        reason: Human-readable reason the workflow stopped
+        total_cost: Total LLM cost incurred
+        steps_completed: Last completed step number
+        total_steps: Total number of steps in the workflow
+        cwd: Working directory for subprocess
+
+    Returns:
+        True if comment was posted successfully, False otherwise
+    """
+    if not shutil.which("gh"):
+        return False
+
+    body = (
+        f"## Workflow Stopped\n\n"
+        f"**Reason:** {reason}\n\n"
+        f"**Progress:** Completed through step {steps_completed}/{total_steps}\n"
+        f"**Total cost:** ${total_cost:.4f}\n\n"
+        f"---\n"
+        f"*Automated status comment — pdd-fix workflow exited early.*"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Warning: Failed to post final comment: {result.stderr}[/yellow]")
+            return False
+        return True
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post final comment: {e}[/yellow]")
         return False

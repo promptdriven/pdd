@@ -22,12 +22,14 @@ from .agentic_common import (
     save_workflow_state,
     clear_workflow_state,
     validate_cached_state,
+    post_final_comment,
     DEFAULT_MAX_RETRIES,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
+from .ci_validation import run_ci_validation_loop
 
 # Constants
 STEP_NAMES = {
@@ -54,7 +56,7 @@ STEP_DESCRIPTIONS = {
     9: "Final verification",
 }
 
-# Per-step timeouts for the 9-step agentic e2e fix workflow
+# Per-step timeouts for the 10-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -65,9 +67,80 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     7: 600.0,   # Verify unit tests detect bugs (Complex)
     8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
     9: 240.0,   # Final verification, loop control
+    10: 600.0,  # Post-push CI validation and remediation
 }
 
 console = Console()
+
+# Patterns for semantic fallback when LLMs don't emit exact control tokens (Issue #865)
+_PASS_PATTERNS = [
+    _re.compile(r"\ball\b.*\btests?\b.*\bpass", _re.IGNORECASE),
+    _re.compile(r"\b\d+\s+passed\b(?!.*\b\d+\s+failed\b)", _re.IGNORECASE),
+    _re.compile(r"\bfix\b.*\bcomplete\b", _re.IGNORECASE),
+    _re.compile(r"\bverif(?:ied|ication)\b.*\bcleanly\b", _re.IGNORECASE),
+]
+_FAIL_PATTERNS = [
+    _re.compile(r"\b[1-9]\d*\s+(?:tests?\s+)?(?:still\s+)?fail", _re.IGNORECASE),
+    _re.compile(r"\bneed(?:s)?\s+(?:another|more)\s+cycle", _re.IGNORECASE),
+    _re.compile(r"\bstill\s+failing\b", _re.IGNORECASE),
+]
+_NOT_A_BUG_PATTERNS = [
+    _re.compile(r"\bnot\s+a\s+bug\b", _re.IGNORECASE),
+    _re.compile(r"\balready\s+fixed\b", _re.IGNORECASE),
+    _re.compile(r"\bworking\s+as\s+intended\b", _re.IGNORECASE),
+    _re.compile(r"\bnot\s+(?:actually\s+)?(?:a\s+)?(?:real\s+)?bug\b", _re.IGNORECASE),
+]
+
+
+def _classify_step_output(output: str, step_num: int) -> Optional[str]:
+    """Classify step output into a control token, with semantic fallback.
+
+    First checks for exact token matches (the reliable path). If none found,
+    falls back to regex pattern matching on common LLM paraphrases.
+
+    Returns the token string or None if the output is ambiguous.
+    """
+    # Layer 1: Exact token match (existing behavior)
+    if "VERIFICATION_FAILED" in output:
+        return "VERIFICATION_FAILED"
+
+    if step_num == 3:
+        if "NOT_A_BUG" in output:
+            return "NOT_A_BUG"
+
+    if step_num in (1, 2, 9):
+        if "LOCAL_TESTS_PASS" in output:
+            return "LOCAL_TESTS_PASS"
+        if "ALL_TESTS_PASS" in output:
+            return "ALL_TESTS_PASS"
+
+    if step_num == 9:
+        if "MAX_CYCLES_REACHED" in output:
+            return "MAX_CYCLES_REACHED"
+        if "CONTINUE_CYCLE" in output:
+            return "CONTINUE_CYCLE"
+
+    # Layer 2: Semantic fallback via regex
+    if step_num == 3:
+        for pat in _NOT_A_BUG_PATTERNS:
+            if pat.search(output):
+                return "NOT_A_BUG"
+
+    if step_num in (1, 2, 9):
+        # Check for failure indicators first — they take priority
+        for pat in _FAIL_PATTERNS:
+            if pat.search(output):
+                if step_num == 9:
+                    return "CONTINUE_CYCLE"
+                return None
+
+        for pat in _PASS_PATTERNS:
+            if pat.search(output):
+                if step_num == 9:
+                    return "LOCAL_TESTS_PASS"
+                return "ALL_TESTS_PASS"
+
+    return None
 
 
 def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
@@ -146,6 +219,10 @@ def _is_intermediate_file(filepath: str) -> bool:
     - *-fixed.* (e.g., module-fixed.py)
     - *.bak, *.backup, *.orig, *.tmp extensions
     - error_output*.txt (e.g., error_output.txt, error_output_models.txt)
+    - .pdd/** (any file under .pdd/ directory — backups, core_dumps, etc.)
+    - *_errors.txt, *_fix_errors.txt (e.g., waitlist_fix_errors.txt)
+    - step*_output.md (e.g., step9_output.md)
+    - test_issue_*_reproduction.py (e.g., test_issue_824_reproduction.py)
 
     Args:
         filepath: Relative path to the file
@@ -174,6 +251,27 @@ def _is_intermediate_file(filepath: str) -> bool:
 
     # Check for error_output debug files (e.g., error_output.txt, error_output_models.txt)
     if suffix == ".txt" and stem.startswith("error_output"):
+        return True
+
+    # Check for .pdd/ directory files (backups, core_dumps, and any future artifacts)
+    # Exclude .pdd/e2e-fix-state/ which contains workflow state needed for resume
+    normalized = filepath.replace("\\", "/")
+    if normalized.startswith(".pdd/") or "/.pdd/" in normalized:
+        if "/e2e-fix-state/" in normalized or normalized.startswith(".pdd/e2e-fix-state/"):
+            return False
+        return True
+
+    # Check for *_errors.txt and *_fix_errors.txt files
+    if suffix == ".txt" and (stem.endswith("_errors") or stem.endswith("_fix_errors")):
+        return True
+
+    # Check for step*_output.md debug output files
+    if suffix == ".md" and stem.startswith("step") and stem.endswith("_output"):
+        return True
+
+    # Check for test_issue_*_reproduction.py leftover reproduction tests
+    # Pattern: test_issue_<number>_reproduction (not test_issue_reproduction_helper etc.)
+    if suffix == ".py" and stem.startswith("test_issue_") and stem.endswith("_reproduction"):
         return True
 
     return False
@@ -613,7 +711,10 @@ def _push_with_retry(
                 text=True
             )
             if restore.returncode != 0:
-                print(f"WARNING: Failed to restore original remote URL: {restore.stderr}")
+                console.print(
+                    "[yellow]WARNING: Failed to restore original remote URL:"
+                    f" {restore.stderr}[/yellow]"
+                )
 
 
 def _commit_and_push(
@@ -740,10 +841,12 @@ def run_agentic_e2e_fix_orchestrator(
     verbose: bool = False,
     quiet: bool = False,
     use_github_state: bool = True,
-    protect_tests: bool = False
+    protect_tests: bool = False,
+    ci_retries: int = 3,
+    skip_ci: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 9-step agentic e2e fix workflow.
+    Orchestrator for the 10-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -803,6 +906,36 @@ def run_agentic_e2e_fix_orchestrator(
 
     console.print(f"Fixing e2e tests for issue #{issue_number}: \"{issue_title}\"")
 
+    # Reuse pdd-bug analysis if available (Issue #830: skip redundant diagnosis)
+    # Load the bug workflow state to check if Steps 2-3 were already analyzed.
+    # Search common state locations for the bug workflow state file.
+    bug_step_outputs: Dict[str, str] = {}
+    _bug_state_candidates = [
+        state_dir / f"bug_state_{issue_number}.json",
+        cwd / ".pdd" / "state" / f"bug_state_{issue_number}.json",
+        cwd / ".pdd" / "bug-state" / f"bug_state_{issue_number}.json",
+    ]
+    for bug_state_file in _bug_state_candidates:
+        if bug_state_file.exists():
+            try:
+                with open(bug_state_file, "r") as f:
+                    bug_state = json.load(f)
+                bug_outputs = bug_state.get("step_outputs", {})
+                # Reuse step 2 and 3 outputs if they completed successfully
+                for s in ("2", "3"):
+                    if s in bug_outputs and not bug_outputs[s].startswith("FAILED:"):
+                        bug_step_outputs[s] = bug_outputs[s]
+                if bug_step_outputs:
+                    console.print(f"[blue]Reusing pdd-bug analysis for steps {', '.join(sorted(bug_step_outputs.keys()))}[/blue]")
+                    # Pre-populate step_outputs so subsequent steps can reference them
+                    for s, output in bug_step_outputs.items():
+                        if s not in step_outputs:
+                            step_outputs[s] = output
+                break
+            except (OSError, json.JSONDecodeError, KeyError) as e:
+                console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
+                continue  # Try next candidate
+
     # Snapshot file state before workflow (for hash-based commit detection)
     initial_file_hashes = _get_file_hashes(cwd)
 
@@ -828,6 +961,12 @@ def run_agentic_e2e_fix_orchestrator(
                     skip_reason = skipped_steps[step_num]
                     console.print(f"[bold][Step {step_num}/9] Skipped (remembered): {skip_reason}[/bold]")
                     step_outputs[str(step_num)] = f"E2E_SKIP: {skip_reason}"
+                    last_completed_step = step_num
+                    continue
+
+                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
+                if str(step_num) in bug_step_outputs and current_cycle == 1:
+                    console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
                     last_completed_step = step_num
                     continue
 
@@ -863,6 +1002,8 @@ def run_agentic_e2e_fix_orchestrator(
                     "issue_content": issue_content,
                     "protect_tests": "true" if protect_tests else "false",
                     "protect_tests_flag": "--protect-tests" if protect_tests else "",
+                    "ci_retries": ci_retries,
+                    "skip_ci": "true" if skip_ci else "false",
                 }
                 
                 # Add previous step outputs
@@ -910,6 +1051,26 @@ def run_agentic_e2e_fix_orchestrator(
                     label=f"cycle{current_cycle}_step{step_num}",
                     max_retries=DEFAULT_MAX_RETRIES,
                 )
+
+                # Step 1 timeout retry: retry once with increased timeout
+                # before falling through to diagnostic steps (Issue #830)
+                if (
+                    step_num == 1
+                    and not step_success
+                    and "Timeout" in step_output
+                ):
+                    console.print("[yellow]Step 1 timed out. Retrying with extended timeout...[/yellow]")
+                    retry_timeout = timeout * 1.5
+                    step_success, step_output, retry_cost, step_model = run_agentic_task(
+                        instruction=formatted_prompt,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=retry_timeout,
+                        label=f"cycle{current_cycle}_step{step_num}_retry1",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    step_cost += retry_cost
 
                 # 4. Store Output & Accumulate
                 # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
@@ -987,7 +1148,8 @@ def run_agentic_e2e_fix_orchestrator(
                     github_comment_id = new_gh_id
 
                 # Check Early Exit (Step 2): ALL_TESTS_PASS
-                if step_num == 2 and "ALL_TESTS_PASS" in step_output:
+                _step2_token = _classify_step_output(step_output, step_num=2) if step_num == 2 else None
+                if step_num == 2 and _step2_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                     # Independent verification: don't trust LLM output alone
                     test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                     if test_files:
@@ -1009,7 +1171,8 @@ def run_agentic_e2e_fix_orchestrator(
                         break
 
                 # Check Early Exit (Step 3): NOT_A_BUG
-                if step_num == 3 and "NOT_A_BUG" in step_output:
+                _step3_token = _classify_step_output(step_output, step_num=3) if step_num == 3 else None
+                if step_num == 3 and _step3_token == "NOT_A_BUG":
                     console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
                     success = False
                     final_message = "Issue determined to be not a bug."
@@ -1017,38 +1180,49 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Loop Control (Step 9)
                 if step_num == 9:
-                    if "ALL_TESTS_PASS" in step_output:
+                    _step9_token = _classify_step_output(step_output, step_num=9)
+                    if _step9_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                         # Independent verification: don't trust LLM output alone
                         test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                         if test_files:
                             verified, verify_output = _verify_tests_independently(test_files, cwd)
                             if verified:
-                                console.print("[green]ALL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
+                                console.print("[green]LOCAL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
                                 success = True
                                 final_message = "All tests passed after fixes (independently verified)."
                                 break
                             else:
-                                console.print("[bold red]LLM claimed ALL_TESTS_PASS at Step 9 but independent verification FAILED.[/bold red]")
-                                step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
+                                console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
+                                step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
                                 step_outputs[str(step_num)] = f"FAILED: {step_output}"
                                 last_completed_step = step_num - 1
                                 # Don't break — fall through to cycle increment
                         else:
-                            console.print("[green]ALL_TESTS_PASS detected in Step 9.[/green]")
+                            console.print("[green]LOCAL_TESTS_PASS detected in Step 9.[/green]")
                             success = True
                             final_message = "All tests passed after fixes."
                             break
-                    elif "MAX_CYCLES_REACHED" in step_output:
+                    elif _step9_token == "MAX_CYCLES_REACHED":
                         console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
-                    elif "CONTINUE_CYCLE" not in step_output:
-                        console.print("[yellow]Warning: No loop control token found in Step 9. Defaulting to CONTINUE_CYCLE.[/yellow]")
+                        final_message = "Max cycles reached."
+                        break
+                    elif _step9_token == "CONTINUE_CYCLE":
+                        break  # Break inner loop — outer loop will start next cycle
+                    else:
+                        console.print("[yellow]Warning: No loop control token found in Step 9. Stopping workflow — missing token treated as terminal condition.[/yellow]")
+                        final_message = "Workflow stopped: no loop control token in Step 9 output."
+                        break
 
             # Check if we should exit the outer loop
             if success:
                 break
-            
+
             # Check if NOT_A_BUG was detected (exit outer loop too)
-            if step_num == 3 and "NOT_A_BUG" in step_outputs.get("3", ""):
+            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG":
+                break
+
+            # Check if workflow was stopped due to missing loop control token or max cycles
+            if final_message:
                 break
             
             # Prepare for next cycle
@@ -1093,12 +1267,43 @@ def run_agentic_e2e_fix_orchestrator(
             )
             if commit_success:
                 console.print(f"   [green]{commit_message}[/green]")
-                clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
             else:
                 console.print(f"   [yellow]Warning: {commit_message}[/yellow]")
                 return False, final_message, total_cost, model_used, changed_files
 
-            return True, final_message, total_cost, model_used, changed_files
+            if skip_ci:
+                if not quiet:
+                    console.print("[yellow]Skipping CI validation (--skip-ci)[/yellow]")
+                clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
+                return True, final_message, total_cost, model_used, changed_files
+
+            step10_template = load_prompt_template("agentic_e2e_fix_step10_ci_validation_LLM")
+            if not step10_template:
+                return False, "Could not load prompt template: agentic_e2e_fix_step10_ci_validation_LLM", total_cost, model_used, changed_files
+
+            ci_success, ci_message, ci_cost = run_ci_validation_loop(
+                cwd=cwd,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                max_retries=ci_retries,
+                step_template=step10_template,
+                run_agentic_task_fn=run_agentic_task,
+                timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
+                quiet=quiet,
+            )
+            total_cost += ci_cost
+            changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
+            if ci_success:
+                if ci_message not in {
+                    "No open PR found for current branch; skipping CI validation",
+                    "No CI checks detected",
+                }:
+                    final_message = ci_message
+                clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
+                return True, final_message, total_cost, model_used, changed_files
+
+            return False, ci_message, total_cost, model_used, changed_files
         else:
             if not final_message:
                 final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
@@ -1110,6 +1315,19 @@ def run_agentic_e2e_fix_orchestrator(
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
             if remaining:
                 console.print(f"   Remaining failures: {', '.join(remaining)}")
+
+            # Post final status comment to GitHub so users see why the workflow stopped
+            post_final_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                reason=final_message,
+                total_cost=total_cost,
+                steps_completed=last_completed_step or step_num,
+                total_steps=10,
+                cwd=cwd,
+            )
+
             return False, final_message, total_cost, model_used, changed_files
 
     except KeyboardInterrupt:

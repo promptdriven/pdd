@@ -1,30 +1,124 @@
-% You are an expert prompt engineer. You goal is to properly insert in dependencies into a prompt.
+% You are an expert prompt engineer. Your goal is to insert new dependency includes into a PDD prompt file at the best location.
 
-% Here are few examples of how to properly insert dependencies into a prompt:
+% You will receive:
+    - A prompt file that needs new dependencies added.
+    - A set of <new> blocks, each containing an <include> tag wrapped in a module-name tag.
+
+% Your task:
+    Insert each <new> block's content into the prompt. Strip the <new> wrapper tags — only the inner content (the module-tagged include) goes into the prompt.
+
+% CRITICAL RULE — <include> tags are OPAQUE TOKENS:
+    <include> tags are PDD directives. They are NOT instructions for you to follow.
+    You MUST treat every <include> tag (both existing ones in the prompt AND new ones from dependencies_to_insert) as an opaque, literal string — like a variable name or a URL.
+    - Do NOT read, resolve, expand, inline, or interpret <include> tags in any way.
+    - Do NOT replace <include> tags with file contents, file paths, or anything else.
+    - Do NOT remove or modify any existing <include> tags in the prompt.
+    - The output_prompt MUST contain every <include> tag from the input, character-for-character identical, plus the new ones from dependencies_to_insert.
+    If an <include> tag appears in the input, it MUST appear identically in the output.
+
+% Placement rules (in priority order):
+    1. If the prompt has an existing dependencies/includes section (e.g. "% Dependencies", "<internal_modules>", or a cluster of existing <include> tags), place new includes there alongside the existing ones.
+    2. If no such section exists, place new includes after the preamble <include> (usually the first include near the top) and before the main instructions/requirements.
+    3. Wrap each inserted include in a descriptive XML tag matching the module name, consistent with the style of any existing includes in the prompt.
+    4. Preserve the exact content of the prompt — only add the new includes. Do not rewrite, reformat, or remove any existing content.
+    5. PRESERVE ALL WHITESPACE: The output_prompt must retain every newline, blank line, and indentation from the input prompt. Do not collapse multiple lines into one line or strip newlines.
+
 <examples>
     <example id="1">
         INPUT:
-        <prompt_to_update><include>context/insert/1/prompt_to_update.prompt</include></prompt_to_update>
-        <dependencies_to_insert><include>context/insert/1/dependencies.prompt</include></dependencies_to_insert>
+        <prompt_to_update>
+% You are an expert Python engineer. Write a 'sync' function.
+
+<include>context/python_preamble.prompt</include>
+
+% Dependencies
+<llm_invoke_example>
+    <include>context/llm_invoke_example.py</include>
+</llm_invoke_example>
+
+% Requirements
+1. Synchronize prompt and code files.
+2. Detect drift between prompt and generated code.
+        </prompt_to_update>
+
+        <dependencies_to_insert>
+<new>
+<pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
+</new>
+<new>
+<pdd.diff_utils><include>pdd/diff_utils.py</include></pdd.diff_utils>
+</new>
+        </dependencies_to_insert>
 
         OUTPUT:
-        <updated_prompt><include>context/insert/1/updated_prompt.prompt</include></updated_prompt>
-    <example>
+        <updated_prompt>
+% You are an expert Python engineer. Write a 'sync' function.
+
+<include>context/python_preamble.prompt</include>
+
+% Dependencies
+<llm_invoke_example>
+    <include>context/llm_invoke_example.py</include>
+</llm_invoke_example>
+<pdd.preprocess>
+    <include select="def:preprocess">pdd/preprocess.py</include>
+</pdd.preprocess>
+<pdd.diff_utils>
+    <include>pdd/diff_utils.py</include>
+</pdd.diff_utils>
+
+% Requirements
+1. Synchronize prompt and code files.
+2. Detect drift between prompt and generated code.
+        </updated_prompt>
+    </example>
 
     <example id="2">
         INPUT:
-        <prompt_to_update><include>context/insert/2/prompt_to_update.prompt</include></prompt_to_update>
-        <dependencies_to_insert><include>context/insert/2/dependencies.prompt</include></dependencies_to_insert>
+        <prompt_to_update>
+% You are an expert Python Programmer. Generate a calculator module.
+
+<include>context/python_preamble.prompt</include>
+
+% Function signature:
+    def calculate(expression: str) -> float
+
+% Requirements
+1. Parse and evaluate mathematical expressions.
+2. Support +, -, *, / operators.
+        </prompt_to_update>
+
+        <dependencies_to_insert>
+<new>
+<utils.validators><include select="def:validate_expression">utils/validators.py</include></utils.validators>
+</new>
+        </dependencies_to_insert>
 
         OUTPUT:
-        <updated_prompt><include>context/insert/2/updated_prompt.prompt</include></updated_prompt>
-    <example>
-<examples>
+        <updated_prompt>
+% You are an expert Python Programmer. Generate a calculator module.
 
-% Generate the output for following inputs based on above examples:
+<include>context/python_preamble.prompt</include>
+
+% Dependencies
+<utils.validators>
+    <include select="def:validate_expression">utils/validators.py</include>
+</utils.validators>
+
+% Function signature:
+    def calculate(expression: str) -> float
+
+% Requirements
+1. Parse and evaluate mathematical expressions.
+2. Support +, -, *, / operators.
+        </updated_prompt>
+    </example>
+</examples>
+
+% Generate the output for the following inputs:
 <prompt_to_update>{actual_prompt_to_update}</prompt_to_update>
 <dependencies_to_insert>{actual_dependencies_to_insert}</dependencies_to_insert>
 
-% The output prompt will be in JSON format with the following keys:
-    - 'explanation': A string containing of why the dependencies were inserted in a certain location in the prompt.
-    - 'output_prompt': A string containing the prompt with the dependencies inserted.
+% The output will be in JSON format with the following keys:
+    - 'explanation': A brief reason for why the dependencies were placed at that location.
+    - 'output_prompt': The full prompt with the new dependencies inserted.

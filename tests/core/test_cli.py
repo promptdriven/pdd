@@ -554,13 +554,15 @@ def test_pddcli_invoke_handles_exception(mock_write_dump, mock_handle_error):
 
 @patch('pdd.core.cli.handle_error')
 def test_pddcli_invoke_handles_system_exit_error(mock_handle_error):
+    """Intentional SystemExit(1) from a command is not reported as an error (issue #593)."""
     def exit_cmd(): sys.exit(1)
     cmd = click.Command("exit", callback=exit_cmd)
     group = PDDCLI(commands={"exit": cmd})
     runner = CliRunner()
     result = runner.invoke(group, ["exit"])
     assert result.exit_code == 1
-    mock_handle_error.assert_called_once()
+    # PDDCLI catches SystemExit and calls ctx.exit(1) without calling handle_error
+    mock_handle_error.assert_not_called()
 
 @patch('pdd.core.cli._write_core_dump')
 def test_pddcli_invoke_captures_output_for_dump(mock_write_dump):

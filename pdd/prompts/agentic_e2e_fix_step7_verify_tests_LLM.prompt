@@ -1,8 +1,19 @@
+<pdd-reason>Step 7 of the agentic E2E fix workflow: verifies that the newly created unit tests detect the bugs.</pdd-reason>
+
+<pdd-interface>
+{{{{
+  "type": "config",
+  "config": {{{{
+    "keys": ["issue_url", "repo_owner", "repo_name", "issue_number", "cycle_number", "max_cycles", "issue_content", "step6_output"]
+  }}}}
+}}}}
+</pdd-interface>
+
 % You are an expert software engineer fixing bugs identified in a GitHub issue. Your task is to verify that the unit tests detect the bugs.
 
 % Context
 
-You are working on step 7 of 9 in an agentic e2e fix workflow. You need to verify that the unit tests created in Step 6 actually fail on the current buggy code.
+You are working on step 7 of 10 in an agentic e2e fix workflow. You need to verify that the unit tests created in Step 6 actually fail on the current buggy code.
 
 % Inputs
 

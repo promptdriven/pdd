@@ -1,36 +1,91 @@
+## v0.0.178 (2026-03-15)
+
+### Feat
+
+- Add and update narration audio files and configure their section groups in project.json.
+- add CI validation stage to pdd fix (#822)
+- use mlx whisper for stage5 on apple silicon
+- rerun audio sync after stage5 segment rerenders
+- add audio preview for stage5 transcript mismatches
+- validate synced transcript against tts script
+- Implement the PDD explainer video project with new specs and Remotion components across multiple parts.
+- add explicit qwen tts instructions
+- Introduce new Remotion animation components, enhance TTS script processing, and update integration test specifications.
+- add new project creation flow
+
+### Fix
+
+- reconnect stage4 to active render jobs
+- restore stage4 waveform on re-expand
+- reload rerendered tts audio and warm up qwen decode
+- prune stale tts audio artifacts
+- harden stage3 tts generation for large scripts
+- harden infographic audit geometry
+
+## v0.0.177 (2026-03-14)
+
+### Feat
+
+- **`pdd sync` skips LLM-only basenames**: basenames with only `*_LLM.prompt` files (agentic step templates, not syncable) now return success gracefully instead of raising `UsageError`, enabling multi-prompt repos that mix syncable and non-syncable templates
+- **`--protect-tests` threaded through agentic E2E fix**: the `protect_tests` flag is now forwarded from the `fix` CLI through `run_agentic_e2e_fix` into the orchestrator, which passes it as context to all fix steps — prevents the LLM from modifying test files when tests are known-correct
+
+### Fix
+
+- **Step 9 loop control token recognition and Step 10 fallthrough**: orchestrator now correctly detects `ALL_TESTS_PASS`/`CONTINUE_CYCLE` tokens in Step 9 output and prevents Step 10 from executing when it shouldn't
+- **`save_workflow_state` returns `None` on GitHub failure**: enables callers to detect state divergence between local and remote persistence (issue #830)
+- **`_subprocess_run` uses `start_new_session=True`**: process group isolation via `Popen` prevents orphaned child processes on timeout (issue #830)
+- **Catch `OSError` in `_get_current_branch` and `_get_pr_number`**: prevents crashes in environments without git (e.g., bare containers)
+- **Case-insensitive LLM match, no recursive glob**: `sync_main` uses case-insensitive glob pattern `[Ll][Ll][Mm]` for LLM template detection and avoids recursive globbing that could match unrelated subdirectories
+- **Mark private prompt tests with `private_prompt` marker**: tests that check private `_python.prompt` content are skipped in public CI
+- **Add git identity config for CI test environments**: tests that run `git commit` in temp directories now configure `user.email` and `user.name` to prevent failures in containers without global git config
+
+### Refactor
+
+- **Condense four major prompt files**: `agentic_common_python`, `agentic_e2e_fix_orchestrator_python`, `agentic_e2e_fix_python`, and `fix_python` prompts reduced from verbose step-by-step prose to concise requirements-based format — removing redundant detail while preserving all behavioral requirements and function signatures
+- **Trim context examples to match condensed prompts**: `agentic_common_example.py`, `agentic_e2e_fix_example.py`, `agentic_e2e_fix_orchestrator_example.py`, and `fix_example.py` updated to align with the leaner prompt specifications
+- **Remove Gemini sandbox/pricing external doc links**: dropped `gemini_cli_sandbox` and `gemini_cli_pricing` web references from `agentic_common_python.prompt` (no longer needed by the prompt)
+
+### Build
+
+- New `private_prompt` pytest marker in `pytest.ini` for tests that check private prompt content
+- Removed stale `.pdd/meta/agentic_common_python_run.json` tracking file
+
+
+## v0.0.176 (2026-03-13)
+
+### Fix
+
+- **Orchestrator stall, killpg, retry, and final comment (issue #830)**: new `_subprocess_run` wrapper kills entire process groups on timeout via `os.killpg`; Step 1 gets an automatic 1.5× timeout retry; missing loop control token in Step 9 now stops the workflow instead of silently continuing; new `post_final_comment` reports workflow stop reason to GitHub; reuses prior pdd-bug analysis to skip redundant diagnosis steps
+- **Architecture interface parameter preservation (issue #825)**: new `_merge_interface_signatures` and `_merge_function_signature` use Python AST parsing to ensure updated signatures are supersets of existing ones — dropped parameters are restored with warnings instead of silently lost
+- **Preserve architecture params after change step10**: new `_sanitize_architecture_interfaces` snapshots architecture.json before Step 10 and merges interface signatures afterward, preventing LLM edits from dropping function parameters
+- **Artifact file filtering (issue #824)**: intermediate file filter expanded to catch `.pdd/` directories (except `e2e-fix-state/`), `*_errors.txt`, `step*_output.md`, and `test_issue_*_reproduction.py` — prevents workflow artifacts from being committed
+
 ## v0.0.175 (2026-03-12)
 
 ### Feat
 
-- Enhance user story generation with auto-detection of prompt links and fallback mechanism
-- Add support for multistory prompt metadata and caching in user story tests
-- refresh integration fixture remotion outputs
+- **Prompt filenames mirror output filepath structure (issue #617)**: `architecture.json` `filename` fields now preserve the directory path from `filepath` (e.g. `app/api/route_TypeScript.prompt` instead of `api_route_TypeScript.prompt`). New `normalize_architecture_filenames()` in `architecture_sync.py` rewrites filenames and dependency references automatically. Applied in architecture orchestrator, code generator, and fix prompts. Thanks Vishal Ramvelu!
+- **User story prompt metadata and auto-detection**: stories can declare linked prompts via `<!-- pdd-story-prompts: ... -->` HTML comment metadata. `detect_change` auto-caches story-prompt links. New `pdd test story__*.md` command links metadata, and `pdd test *.prompt ...` generates user stories from prompt files. Thanks Benjamin Knobloch!
+- **`substitute_template_variables` helper**: new centralized template substitution in `agentic_common.py` that uses iterative `str.replace` instead of `str.format`, preserving JSON braces in context values and supporting `strict_unresolved` mode for key validation
+- **Quiet mode improvements**: `PDD_QUIET=1` now consistently suppresses preprocessing banners, `double_curly` messages, and LLM model CSV info-level log lines (downgraded to debug). `set_quiet_logging` checks for attribute existence on litellm before setting
 
 ### Fix
 
-- address Copilot review comments on PR #835
-- address review findings in multiprompt user stories PR
-- restore substitute_template_variables after rebase
-- revert rebase merge mistakes
-- Add architecture dependency sanitization and prompt auto-registration functionality
-- validate veo clips across frames
-- tighten stage10 audit sampling
-- stop fake stage8 asset staging jobs
-- prompt filenames mirror output filepath structure (#617) (#834)
-- keep spec timing parsing client-safe
-- generalize stage10 audit source selection
-- align remotion validation and visual media aliases
-- annotation fc600068-1f94-4620-b262-1348c9f30615 Change the main background color of this section t
-- annotation test-batch-ann-1773344206392 Change the primary background accent in Animation
-- refresh remotion bundle for audit renders
-- generalize audit runtime and responsive veo layouts
-- repair audit frame previews and fixture rendering
-- make veo overlays resolution-aware
-- fail stage 8 when generated components are missing
+- **Prompt filename normalization in `architecture_sync`**: `register_untracked_prompts` uses `rglob` and relative paths; `_find_renamed_prompt_file` searches subdirectories; `get_architecture_entry_for_prompt` tries exact path match first with basename fallback
+- **Architecture dependency sanitization**: `_sanitize_architecture_dependencies` strips corrupted dependency values (full prompt contents mistaken for dependency names) from architecture.json after step 10
+- **Namespace package bootstrap**: `cli.py` seeds missing package-level defaults (`DEFAULT_STRENGTH`, `DEFAULT_TIME`, `__version__`) when `pdd` loads as a namespace package; `core/cli.py` and `core/dump.py` add `ImportError` fallbacks
 
 ### Refactor
 
-- update Claude audit process with fresh still rendering and refined prompt, simplify Python fixing prompt, and update related tests and integration specs.
+- **Simplify fix_main_python.prompt**: rewrite from verbose step-by-step specification (~163 lines) to concise requirements-based format (~87 lines) while preserving all behavioral requirements
+- **Centralize template substitution**: replace inline `str.replace` loops in `agentic_change_orchestrator`, `agentic_checkup_orchestrator`, and `agentic_bug_orchestrator` with `substitute_template_variables`
+- **Update agentic_arch_step13_fix prompt for issue #617**: reverse the "no slashes in filename" rule — filenames must now mirror filepath directory structure; update all examples, cleanup scripts, and .pddrc patterns
+- **Preprocess handles non-string templates**: `preprocess()` accepts non-string template objects (from test mocks) and returns `str(prompt)` instead of crashing
+
+### Build
+
+- New `architecture_sync_helper.py` module with `filepath_to_prompt_filename` utility
+- Story template updated with `pdd-story-prompts` metadata comment example
 
 ## v0.0.174 (2026-03-11)
 
