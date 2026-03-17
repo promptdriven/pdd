@@ -21,6 +21,7 @@ If the environment is unsafe, the orchestrator stops early with an informative m
 % Skipped Steps & Memory: skipped_steps_memory
 The orchestrator tracks last_completed_step and, when resuming, may skip earlier steps.
 However, it must still preserve and reload previous step outputs so that later steps receive a coherent context.
+skipped_steps persists across cycles and is NOT cleared when step_outputs is cleared.
 This behavior is called `skipped_steps_memory`: even skipped steps contribute their prior stepN_output values into downstream prompts.
 The skipped_steps (or equivalent) state Persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
 
