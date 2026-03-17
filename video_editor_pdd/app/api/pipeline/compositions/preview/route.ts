@@ -144,15 +144,32 @@ function resolvePreviewTarget(
       return { compositionId: section.compositionId, section };
     }
 
-    const artifactMatch = componentArtifactExists(section.id, componentName);
-    if (artifactMatch) {
-      return {
-        compositionId: artifactMatch.compositionId,
-        section,
-      };
+    // Only trust orphan on-disk artifacts when the section has no registered
+    // composition graph yet. Once a graph exists, Root.tsx is the source of truth.
+    if (comps.length === 0) {
+      const artifactMatch = componentArtifactExists(section.id, componentName);
+      if (artifactMatch) {
+        return {
+          compositionId: artifactMatch.compositionId,
+          section,
+        };
+      }
     }
   }
   return null;
+}
+
+function findPreviewSection(sectionId?: string): PreviewSection | null {
+  if (!sectionId) {
+    return null;
+  }
+
+  const config = loadProject();
+  return (
+    (config.sections as PreviewSection[]).find(
+      (section) => section.id === sectionId
+    ) ?? null
+  );
 }
 
 function resolvePreviewSpec(
@@ -260,24 +277,36 @@ export async function GET(request: NextRequest): Promise<Response> {
   // Render a new still
   const previewTarget = resolvePreviewTarget(componentName, sectionId);
   if (!previewTarget) {
+    const fallbackSection = findPreviewSection(sectionId);
+    const { specPath, specContent } = fallbackSection
+      ? resolvePreviewSpec(componentName, fallbackSection)
+      : { specPath: null, specContent: null };
     return NextResponse.json(
-      { error: `Cannot resolve compositionId for "${componentName}"` },
+      {
+        error: `Cannot resolve compositionId for "${componentName}"`,
+        specPath,
+        specContent,
+      },
       { status: 404 }
     );
   }
+
+  const { specPath, specContent } = resolvePreviewSpec(
+    componentName,
+    previewTarget.section
+  );
 
   try {
     await renderStill(previewTarget.compositionId, FPS, pngPath);
     const qs = new URLSearchParams({ component: componentName, raw: "1" });
     if (sectionId) qs.set("section", sectionId);
     const url = `/api/pipeline/compositions/preview?${qs}`;
-    const { specPath, specContent } = resolvePreviewSpec(
-      componentName,
-      previewTarget.section
-    );
     return NextResponse.json({ url, specPath, specContent });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Render failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: message, specPath, specContent },
+      { status: 500 }
+    );
   }
 }

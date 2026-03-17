@@ -504,8 +504,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                             </div>
                             <div className="flex items-center gap-2">
                               <button
-                                className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                                className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                                 onClick={(e) => { e.stopPropagation(); openPreview(component.name, section.id); }}
+                                disabled={component.status !== 'done'}
                               >
                                 Preview
                               </button>
@@ -562,8 +563,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                   <div className="flex items-center gap-2">
                     <StatusBadge status={wrapper.status} error={wrapper.error} />
                     <button
-                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
+                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                       onClick={() => openPreview(wrapper.name, sectionId)}
+                      disabled={wrapper.status !== 'done'}
                     >
                       Preview
                     </button>

@@ -1886,6 +1886,42 @@ describe("GET_CompositionList — section-scoped components", () => {
     expect(comp).toBeDefined();
     expect(comp.status).toBe("done");
   });
+
+  it("returns 'missing' when an artifact exists on disk but the section render graph does not register it", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].compositions = ["intro_other_component"];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("specs")) return true;
+      if (typeof p === "string" && p.endsWith("intro_title_card.tsx")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          {
+            name: "title_card.md",
+            isDirectory: () => false,
+            isFile: () => true,
+          },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Title Card Spec\nSome content");
+
+    const response = await GET_CompositionList();
+    const data = await response.json();
+
+    const introSection = data.sections.find((s: any) => s.id === "intro");
+    const comp = introSection.components.find(
+      (c: any) => c.name === "title_card"
+    );
+    expect(comp).toBeDefined();
+    expect(comp.status).toBe("missing");
+    expect(comp.error).toMatch(/not registered/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

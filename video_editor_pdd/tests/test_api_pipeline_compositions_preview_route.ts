@@ -366,14 +366,51 @@ describe("GET — error cases", () => {
     expect(body.error).toMatch(/cannot resolve/i);
   });
 
+  it("returns 404 when only an unregistered on-disk artifact exists for the section", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [{
+        id: "part3_mold_three_parts",
+        label: "Part 3",
+        compositionId: "Part3MoldThreePartsSection",
+        compositions: ["part3_mold_three_parts_01_section_title_card"],
+        specDir: "part3_mold_three_parts",
+      }],
+    });
+    mockResolveSectionCompositionIds.mockReturnValue([
+      "part3_mold_three_parts_01_section_title_card",
+    ]);
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate.endsWith("part3_mold_three_parts_02_mold_cross_section.tsx") ||
+      candidate.endsWith(path.join("specs", "part3_mold_three_parts", "02_mold_cross_section.md"))
+    );
+
+    const res = await GET(
+      makeRequest("http://localhost/api/pipeline/compositions/preview?component=02_mold_cross_section&section=part3_mold_three_parts")
+    );
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toMatch(/cannot resolve/i);
+    expect(body.specPath).toContain(
+      path.join("specs", "part3_mold_three_parts", "02_mold_cross_section.md")
+    );
+    expect(body.specContent).toContain("02_mold_cross_section.md");
+    expect(mockRenderStill).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when renderStill throws", async () => {
     mockRenderStill.mockRejectedValue(new Error("Bundle not found"));
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate.endsWith(path.join("specs", "cold_open", "title_card.md"))
+    );
     const res = await GET(
       makeRequest("http://localhost/api/pipeline/compositions/preview?component=title_card")
     );
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toBe("Bundle not found");
+    expect(body.specPath).toContain(path.join("specs", "cold_open", "title_card.md"));
+    expect(body.specContent).toContain("title_card.md");
   });
 
   it("returns null spec metadata when no matching spec file exists", async () => {

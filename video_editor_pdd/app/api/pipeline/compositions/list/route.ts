@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-import { getCompositionArtifactState } from "@/app/api/pipeline/_lib/composition-manifest";
+import {
+  getCompositionArtifactState,
+  resolveSectionCompositionIds,
+} from "@/app/api/pipeline/_lib/composition-manifest";
 import { loadProject } from "@/lib/project";
 import { getAppRemotionSrcDir, getProjectDir } from "@/lib/projects";
+import type { Section } from "@/lib/types";
 
 /**
  * GET /api/pipeline/compositions/list
@@ -107,7 +111,7 @@ function toPascalCase(s: string): string {
   return s.replace(/(^|_)(\w)/g, (_, __, c) => c.toUpperCase());
 }
 
-function buildComponent(name: string, sectionId?: string): CompositionComponent {
+function componentArtifactExists(name: string, sectionId?: string): boolean {
   // Check component directory ({NN}-{PascalName}/index.ts) first
   const nnMatch = name.match(/^(\d{2})_/);
   const strippedPascal = nnMatch ? toPascalCase(name.slice(nnMatch[0].length)) : toPascalCase(name);
@@ -124,9 +128,36 @@ function buildComponent(name: string, sectionId?: string): CompositionComponent 
   // Then check section-scoped file ({sectionId}_{name}.tsx), fall back to flat ({name}.tsx)
   const scopedExists = sectionId && fs.existsSync(path.join(remotionDir, `${sectionId}_${name}.tsx`));
   const flatExists = fs.existsSync(path.join(remotionDir, `${name}.tsx`));
+  return dirExists || pascalDirExists || scopedExists || flatExists;
+}
+
+function isComponentRegistered(name: string, section: Pick<Section, "id" | "compositions">): boolean {
+  const registeredIds = resolveSectionCompositionIds(section);
+  if (registeredIds.length === 0) {
+    return true;
+  }
+
+  return (
+    registeredIds.includes(name) ||
+    registeredIds.includes(`${section.id}_${name}`)
+  );
+}
+
+function buildComponent(name: string, section: Pick<Section, "id" | "compositions">): CompositionComponent {
+  const artifactExists = componentArtifactExists(name, section.id);
+  const registered = isComponentRegistered(name, section);
+
+  if (artifactExists && !registered) {
+    return {
+      name,
+      status: "missing",
+      error: "Generated artifact exists on disk but is not registered in the current section composition graph. Regenerate this component in Stage 8.",
+    };
+  }
+
   return {
     name,
-    status: dirExists || pascalDirExists || scopedExists || flatExists ? "done" : "missing",
+    status: artifactExists ? "done" : "missing",
     error: null,
   };
 }
@@ -164,7 +195,7 @@ export async function GET(): Promise<NextResponse> {
       return {
         id: section.id,
         label: section.label,
-        components: componentNames.map((n) => buildComponent(n, section.id)),
+        components: componentNames.map((n) => buildComponent(n, section)),
         wrappers: wrapperNames.map((n) => buildWrapper(n, section)),
       };
     });

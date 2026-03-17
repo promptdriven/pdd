@@ -133,6 +133,10 @@ describe("Left Panel: Component List", () => {
     expect(sourceCode).toContain("Preview");
   });
 
+  it("disables component preview when the row is not in done state", () => {
+    expect(sourceCode).toMatch(/disabled=\{component\.status !== ['"]done['"]\}/);
+  });
+
   it("opens modal for preview", () => {
     expect(sourceCode).toMatch(/<dialog/);
     expect(sourceCode).toMatch(/showModal/);
