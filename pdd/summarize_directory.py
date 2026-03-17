@@ -6,6 +6,7 @@ import io
 import csv
 import os
 import subprocess
+import json
 from typing import Optional, List, Dict, Tuple, Callable
 from pydantic import BaseModel, Field
 from rich.console import Console
@@ -82,6 +83,19 @@ def _get_files_from_glob(directory_path: str) -> List[str]:
 class FileSummary(BaseModel):
     """Pydantic model for structured LLM output."""
     file_summary: str = Field(..., description="A concise summary of the file contents.")
+    key_exports: List[str] = Field(..., description="List of the file's key public exports.")
+    dependencies: List[str] = Field(..., description="List of the file's direct import dependencies.")
+
+def _flush_csv_to_disk(results_data: List[Dict[str, str]], csv_path: str) -> None:
+    """Write current results_data to disk as a complete CSV, preserving partial progress."""
+    output_io = io.StringIO()
+    fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
+    writer = csv.DictWriter(output_io, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(results_data)
+    with open(csv_path, 'w', encoding='utf-8') as f:
+        f.write(output_io.getvalue())
+
 
 def summarize_directory(
     directory_path: str,
@@ -90,7 +104,8 @@ def summarize_directory(
     time: float = DEFAULT_TIME,
     verbose: bool = False,
     csv_file: Optional[str] = None,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    csv_path: Optional[str] = None,
 ) -> Tuple[str, float, str]:
     """
     Summarizes files in a directory using an LLM, with caching based on content hashes.
@@ -103,6 +118,8 @@ def summarize_directory(
         verbose: Whether to print detailed logs.
         csv_file: Existing CSV content string to check for cache hits.
         progress_callback: Optional callback for progress updates (current, total).
+        csv_path: Optional file path to flush CSV results to disk after each file,
+            so partial progress survives if the user interrupts mid-run.
 
     Returns:
         Tuple containing:
@@ -131,6 +148,12 @@ def summarize_directory(
                  raise ValueError("Missing required columns.")
             for row in reader:
                 if 'full_path' in row and 'content_hash' in row:
+                    # Default missing columns (old-format entries)
+                    # Mark as backfilled so cache logic can force re-summarization
+                    if 'key_exports' not in row or 'dependencies' not in row:
+                        row.setdefault('key_exports', '[]')
+                        row.setdefault('dependencies', '[]')
+                        row['_backfilled'] = True
                     # Use normalized path for cache key consistency
                     existing_data[os.path.normpath(row['full_path'])] = row
         except Exception:
@@ -148,13 +171,17 @@ def summarize_directory(
     if files is None:
         files = _get_files_from_glob(directory_path)
 
-    # Filter out binary files that can't be summarized
+    # Filter out binary files and prompt files that can't be summarized
     filtered_files = []
     for f in files:
         if not os.path.isfile(f):
             continue
         _, ext = os.path.splitext(f)
         if ext.lower() in BINARY_EXTENSIONS:
+            continue
+        # Skip .prompt files — they are the consumers of dependencies, not
+        # dependencies themselves.  Including them adds noise to auto-deps.
+        if ext.lower() == '.prompt':
             continue
         filtered_files.append(f)
 
@@ -164,9 +191,19 @@ def summarize_directory(
     if not files:
         # Return empty CSV header
         output_io = io.StringIO()
-        writer = csv.DictWriter(output_io, fieldnames=['full_path', 'file_summary', 'content_hash'])
+        writer = csv.DictWriter(output_io, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
         writer.writeheader()
         return output_io.getvalue(), 0.0, "None"
+
+    # Determine base directory for relative paths
+    if os.path.isdir(directory_path):
+        base_dir = os.path.abspath(directory_path)
+    else:
+        prefix = directory_path.split('*')[0]
+        if os.path.isdir(prefix):
+            base_dir = os.path.abspath(prefix)
+        else:
+            base_dir = os.path.abspath(os.path.dirname(prefix))
 
     results_data: List[Dict[str, str]] = []
     total_cost = 0.0
@@ -178,20 +215,24 @@ def summarize_directory(
     if progress_callback:
         for i, file_path in enumerate(files):
             progress_callback(i + 1, total_files)
+            rel_path = os.path.relpath(file_path, base_dir)
             cost, model = _process_single_file_logic(
-                file_path, 
-                existing_data, 
-                prompt_template, 
-                strength, 
-                temperature, 
-                time, 
-                verbose, 
+                file_path,
+                rel_path,
+                existing_data,
+                prompt_template,
+                strength,
+                temperature,
+                time,
+                verbose,
                 results_data
             )
             total_cost += cost
             if model != "cached":
                 last_model_name = model
-    else:
+            if csv_path:
+                _flush_csv_to_disk(results_data, csv_path)
+    elif verbose:
         console.print(f"[bold blue]Summarizing {len(files)} files in '{directory_path}'...[/bold blue]")
         with Progress(
             SpinnerColumn(),
@@ -202,24 +243,47 @@ def summarize_directory(
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
             for file_path in files:
+                rel_path = os.path.relpath(file_path, base_dir)
                 cost, model = _process_single_file_logic(
-                    file_path, 
-                    existing_data, 
-                    prompt_template, 
-                    strength, 
-                    temperature, 
-                    time, 
-                    verbose, 
+                    file_path,
+                    rel_path,
+                    existing_data,
+                    prompt_template,
+                    strength,
+                    temperature,
+                    time,
+                    verbose,
                     results_data
                 )
                 total_cost += cost
                 if model != "cached":
                     last_model_name = model
+                if csv_path:
+                    _flush_csv_to_disk(results_data, csv_path)
                 progress.advance(task)
+    else:
+        for file_path in files:
+            rel_path = os.path.relpath(file_path, base_dir)
+            cost, model = _process_single_file_logic(
+                file_path,
+                rel_path,
+                existing_data,
+                prompt_template,
+                strength,
+                temperature,
+                time,
+                verbose,
+                results_data
+            )
+            total_cost += cost
+            if model != "cached":
+                last_model_name = model
+            if csv_path:
+                _flush_csv_to_disk(results_data, csv_path)
 
     # Step 7: Generate CSV output
     output_io = io.StringIO()
-    fieldnames = ['full_path', 'file_summary', 'content_hash']
+    fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
     writer = csv.DictWriter(output_io, fieldnames=fieldnames)
     
     writer.writeheader()
@@ -231,6 +295,7 @@ def summarize_directory(
 
 def _process_single_file_logic(
     file_path: str,
+    rel_path: str,
     existing_data: Dict[str, Dict[str, str]],
     prompt_template: str,
     strength: float,
@@ -255,25 +320,39 @@ def _process_single_file_logic(
         current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
         
         summary = ""
+        key_exports = "[]"
+        dependencies = "[]"
         
-        # Step 6c: Check cache (using normalized path)
-        normalized_path = os.path.normpath(file_path)
+        # Step 6c: Check cache (using normalized relative path)
+        normalized_path = os.path.normpath(rel_path)
         cache_hit = False
         
-        if normalized_path in existing_data:
-            cached_entry = existing_data[normalized_path]
-            # Step 6d: Check hash match
-            if cached_entry.get('content_hash') == current_hash:
+        # Also check absolute path for backward compatibility with older caches
+        abs_normalized_path = os.path.normpath(file_path)
+        
+        cached_entry = existing_data.get(normalized_path) or existing_data.get(abs_normalized_path)
+        
+        if cached_entry:
+            # Step 6d: Check hash match and that entry was produced by the new format
+            # (old-format entries lack key_exports/dependencies columns entirely;
+            #  the CSV parser defaults those to '[]' AND sets a marker flag).
+            # A new-format entry may legitimately have '[]' for either field.
+            if (
+                cached_entry.get('content_hash') == current_hash and
+                not cached_entry.get('_backfilled')
+            ):
                 # Step 6e: Reuse summary
                 summary = cached_entry.get('file_summary', "")
+                key_exports = cached_entry.get('key_exports', "[]")
+                dependencies = cached_entry.get('dependencies', "[]")
                 cache_hit = True
                 if verbose:
-                    console.print(f"[dim]Cache hit for {file_path}[/dim]")
+                    console.print(f"[dim]Cache hit for {rel_path}[/dim]")
 
         # Step 6f: Summarize if needed
         if not cache_hit:
             if verbose:
-                console.print(f"[dim]Summarizing {file_path}...[/dim]")
+                console.print(f"[dim]Summarizing {rel_path}...[/dim]")
             
             llm_result = llm_invoke(
                 prompt=prompt_template,
@@ -287,35 +366,35 @@ def _process_single_file_logic(
             
             file_summary_obj: FileSummary = llm_result['result']
             summary = file_summary_obj.file_summary
+            key_exports = json.dumps(file_summary_obj.key_exports)
+            dependencies = json.dumps(file_summary_obj.dependencies)
             
             cost = llm_result.get('cost', 0.0)
             model_name = llm_result.get('model_name', "unknown")
 
+        # Print verbose per-file summary (only for freshly summarized files)
+        if verbose and not cache_hit:
+            console.print(f"  [bold]{rel_path}[/bold]")
+            console.print(f"    Summary:      {summary}")
+            console.print(f"    Dependencies: {dependencies}")
+            console.print(f"    Key Exports:  {key_exports}")
+
         # Step 6g: Store data
-        # Note: Requirement says "Store the relative path (not the full path)" in Step 6g description,
-        # but Output definition says "full_path". The existing code stored file_path (from glob).
-        # The new prompt Step 6g says "Store the relative path".
-        # However, the Output schema explicitly demands 'full_path'.
-        # To satisfy the Output schema which is usually the contract, we keep using file_path as 'full_path'.
-        # But we will calculate relative path if needed. 
-        # Given the conflict, usually the Output definition takes precedence for the CSV column name,
-        # but the value might need to be relative. 
-        # Let's stick to the existing behavior (glob path) which satisfied 'full_path' previously,
-        # unless 'relative path' implies os.path.relpath(file_path, start=directory_path_root).
-        # The prompt is slightly ambiguous: "Store the relative path... in the current data dictionary" vs Output "full_path".
-        # We will store the path as found by glob to ensure it matches the 'full_path' column expectation.
-        
         results_data.append({
-            'full_path': file_path,
+            'full_path': rel_path,
             'file_summary': summary,
+            'key_exports': key_exports,
+            'dependencies': dependencies,
             'content_hash': current_hash
         })
 
     except Exception as e:
         console.print(f"[bold red]Error processing file {file_path}:[/bold red] {e}")
         results_data.append({
-            'full_path': file_path,
+            'full_path': rel_path,
             'file_summary': f"Error processing file: {str(e)}",
+            'key_exports': "[]",
+            'dependencies': "[]",
             'content_hash': "error"
         })
         
