@@ -29,7 +29,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
 - `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
-- `pdd test <issue-url>` - Generate UI tests from issue descriptions (9-step workflow)
+- `pdd test <issue-url>` - Generate UI tests from issue descriptions (18-step workflow with exploratory testing, contract validation, accessibility audits)
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
@@ -585,7 +585,7 @@ graph TB
 - **[`checkup`](#17-checkup)**: Run automated project health check from a GitHub issue (8-step workflow)
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
 - **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename)
-- **[`test`](#4-test)**: Generate UI tests from GitHub issues (9-step workflow in agentic mode)
+- **[`test`](#4-test)**: Generate UI tests from GitHub issues (18-step workflow in agentic mode)
 
 ### Core Commands (Prompt-Based)
 - **[`sync`](#1-sync)**: **[PRIMARY FOR PROMPT WORKFLOWS]** Automated prompt-to-code cycle
@@ -879,7 +879,7 @@ The sync command automatically detects what files exist and executes the appropr
 3. **example**: Generate usage example if it doesn't exist or is outdated
 4. **crash**: Fix any runtime errors to make code executable
 5. **verify**: Run functional verification against prompt intent (unless --skip-verify)
-6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests)
+6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests). Auth modules get auth-specific test patterns (mock OAuth servers, JWT fixtures, token lifecycle testing)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
 
@@ -1085,7 +1085,7 @@ The 11-step workflow:
 1. **Analyze PRD**: Extract features, tech stack, and requirements from the issue content
 2. **Deep Analysis**: Feature decomposition, module boundaries, shared concerns
 3. **Research**: Web search for tech stack documentation and best practices
-4. **Design**: Module breakdown with dependency graph and priority ordering
+4. **Design**: Module breakdown with dependency graph and priority ordering (auth modules are separated into dedicated concerns with low priority numbers)
 5. **Research Dependencies**: Find relevant API docs and code examples per module
 6. **Generate**: Produce complete `architecture.json` and scaffolding files
 7. **Generate .pddrc**: Create project configuration with context-specific paths
@@ -1580,32 +1580,65 @@ Generate UI tests from a GitHub issue. The issue describes what needs to be test
 pdd [GLOBAL OPTIONS] test <github-issue-url>
 ```
 
-**How it works (9-step workflow with GitHub comments):**
+**How it works (18-step workflow with GitHub comments):**
 
-1. **Duplicate check** - Search for existing issues describing the same test requirements. If found, merge content and close the duplicate. Posts comment with findings.
+1. **Duplicate check** - Search for existing issues describing the same test requirements. If found, merge content and close the duplicate.
 
-2. **Documentation check** - Review repo documentation and codebase to understand what needs to be tested. Posts comment with findings.
+2. **Documentation check** - Review repo documentation and codebase to understand what needs to be tested. Identifies OpenAPI/Swagger specs if present.
 
 3. **Analyze & clarify** - Determine if enough information exists in the issue to create tests. Posts comment requesting clarification if needed.
 
-4. **Detect frontend** - Identify the frontend type: web UI (Next.js, React, etc.), CLI, or desktop app. Determines the appropriate testing framework (e.g., Playwright for web). Posts comment with frontend analysis.
+4. **Detect frontend** - Identify the test type: web UI, CLI, desktop app, or API. Determines the appropriate testing framework.
 
-5. **Create test plan** - Design a comprehensive test plan and verify it's achievable. Posts comment requesting information (e.g., credential access) if plan is blocked.
+5. **Create test plan** - Design a comprehensive test plan and verify it's achievable.
 
-6. **Generate tests** - Create UI tests in a new worktree following the test plan. Posts comment with generated test code.
+5b. **Enhance test plan** - Add contract validation test cases (from OpenAPI/Swagger specs) and accessibility test cases (for web apps using `@axe-core/playwright` at WCAG 2.1 AA level).
 
-7. **Run tests** - Execute the generated tests against the target. Posts comment with test results.
+6. **Assess coverage** *(web only, requires `playwright-cli`)* - Compare requirements against the enhanced test plan to identify gaps needing manual testing.
 
-8. **Fix & iterate** - Fix any failing tests and re-run until they pass. Posts comment with fix attempts and final status.
+7. **Create manual testing checklist** *(web only)* - Generate a checklist using three strategies: page-by-page exhaustive testing, user-story walkthroughs, and accessibility spot-checks.
 
-9. **Submit PR** - Create a draft pull request with the UI tests linked to the issue. Posts comment with PR link.
+8. **Manual testing execution** *(web only)* - Execute checklist items via `playwright-cli` commands. Runs serially in CLI mode or in parallel via Cloud Batch when `PDD_CLOUD_RUN=true`.
+
+9. **Create regression tests** *(web only)* - Generate automated tests that reproduce bugs found in Step 8.
+
+10. **Validate regression tests** *(web only)* - Confirm regression tests fail against current code (proving bugs exist).
+
+11. **Loop check** *(web only)* - Check checklist completion. Loops back to Step 8 if items remain (max 3 iterations).
+
+12. **Generate tests** - Create tests in a worktree from the enhanced plan, including behavioral, contract, and accessibility tests.
+
+13. **Run tests** - Execute all generated tests against the target.
+
+14. **Fix & iterate** - Fix any failing tests and re-run until they pass.
+
+15. **Validate tests against plan** - Cross-reference the enhanced plan against generated tests. Generate missing tests for any unimplemented cases.
+
+16. **Run newly generated tests** - Run and fix tests created in Step 15 (if any).
+
+17. **Submit PR** - Create a draft PR with enhanced description including test plan coverage ratio, contract test summary, accessibility audit summary, and manual testing summary.
+
+**Execution Modes:**
+
+| Mode | Steps 6-11 behavior |
+|------|---------------------|
+| **CLI** (`pdd test <url>`) | Serial: Runs each checklist chunk one at a time |
+| **GitHub App** (`PDD_CLOUD_RUN=true`) | Parallel: Fans out to Cloud Batch spot VMs |
+
+**Prerequisites:**
+- Steps 6-11 (manual/exploratory testing) require `playwright-cli` in PATH. If not found, these steps are skipped with a warning.
+- Steps 6-11 only run for web test types (`TEST_TYPE: web`).
 
 **Agentic Options:**
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub issue comment-based state persistence, use local-only
 - `--manual`: Use legacy prompt-based mode instead of agentic mode
 
-**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
+**Environment Variables:**
+- `PDD_CLOUD_RUN=true`: Enable parallel execution mode for manual testing (Steps 6-11)
+- `PDD_NO_GITHUB_STATE=1`: Disable GitHub state persistence
+
+**Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature.
 
 **Example (Agentic Mode):**
 ```bash

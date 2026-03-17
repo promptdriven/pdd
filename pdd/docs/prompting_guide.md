@@ -705,6 +705,49 @@ Ask yourself:
 
 ---
 
+## Auth-Heavy Module Requirements
+
+Auth modules (OAuth, JWT, session auth, API key management) are one of the most common sources of test failures in generated code. This is because auth inherently depends on external identity providers that can't be called during testing, and because token lifecycle management spans multiple concerns.
+
+### Why Auth Modules Fail
+
+1. **External provider dependency**: OAuth flows require real network calls to providers (Google, GitHub, Auth0). Generated tests that attempt these calls fail without credentials.
+2. **Complex lifecycle**: Token issuance, validation, refresh, and revocation are separate operations that must all work correctly. Missing any stage causes subtle production failures.
+3. **Tight coupling**: Auth logic embedded in business modules makes both untestable. The auth logic can't be mocked because it's not a separate dependency.
+
+### Writing Prompts for Auth Modules
+
+When writing prompts for auth-related modules, include these requirements:
+
+1. **Testability**: "Use dependency injection for the OAuth client and token verifier. Accept these as constructor/function parameters so tests can substitute mock implementations without calling real identity providers."
+2. **Token lifecycle**: "Handle the full token lifecycle: issuance (or exchange), validation, refresh, revocation, and expiry detection."
+3. **Error handling**: "Handle auth-specific errors: expired tokens (return 401 with refresh hint), invalid tokens (return 401), missing scopes (return 403), CSRF state mismatch (return 400), and network failures during token exchange (retry with backoff)."
+4. **Security**: "Never log tokens or secrets at INFO level or above. Use CSRF state parameters for all OAuth redirect flows. Validate redirect URIs against an allowlist."
+5. **Test fixtures**: "Tests should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14 for concrete examples)."
+
+### Example Requirements Section for an OAuth Module
+
+```text
+Requirements
+1. Function: exchange_code_for_token(code, redirect_uri, oauth_client) -> TokenResponse
+2. Function: refresh_access_token(refresh_token, oauth_client) -> TokenResponse
+3. Function: revoke_token(token, oauth_client) -> bool
+4. Accept oauth_client as a parameter (dependency injection for testability)
+5. Handle errors: invalid_grant, expired refresh token, network timeout (retry 3x)
+6. Never log token values; log only token metadata (expiry, scopes)
+7. Validate redirect_uri against configured allowlist before exchange
+```
+
+### Architecture Guidance
+
+When using `pdd generate <issue>` with a PRD that mentions auth:
+- PDD automatically detects auth technologies and creates separate auth modules
+- Auth modules are tagged with "auth" and given low priority numbers
+- Business modules depend on auth modules, not the reverse
+- The completeness validation checks for full token lifecycle coverage
+
+---
+
 ## Dependencies
 
 ### When to Use `<include>`
