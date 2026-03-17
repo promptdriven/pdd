@@ -135,3 +135,26 @@ def test_handle_error_keyboard_interrupt_messages(mock_console):
     assert "Interrupted during 'bug' command" in output
     # Hint about how to proceed
     assert "Re-run the same command to start fresh." in output
+
+
+@patch('pdd.core.errors.console', new_callable=MagicMock)
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_keyboard_interrupt_reports_correct_command_name(
+    mock_main, mock_auto_update, mock_console, create_dummy_files
+):
+    """KeyboardInterrupt during a subcommand should report the subcommand name, not 'unknown'."""
+    files = create_dummy_files("test.prompt")
+
+    mock_main.side_effect = KeyboardInterrupt()
+
+    result = CliRunner().invoke(cli.cli, ["generate", str(files["test.prompt"])])
+
+    output = _console_output(mock_console)
+    # Must say "generate", NOT "unknown"
+    assert "Interrupted during 'generate' command" in output, (
+        f"Expected 'generate' in interrupt message but got: {output}"
+    )
+    assert "'unknown'" not in output, (
+        f"Command name should not be 'unknown': {output}"
+    )

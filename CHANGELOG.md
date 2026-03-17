@@ -1,26 +1,58 @@
+## v0.0.179 (2026-03-16)
+
+### Feat
+
+- infer spec visual types from script intent
+- Implement markdown formatting, preview, and editor word wrapping in the spec generation stage.
+
+### Fix
+
+- restore README and prompting guide content overwritten by PR #552 cherry-pick
+- update test to expect exit code 1 on agentic fix failure
+- limit spec file reruns to owning section
+- harden stage6 veo reference sync and timeouts
+- agentic bug/test/fix exit with code 1 on failure (#593)
+- add mock assertion patterns to behavioral test validator
+- review fixes for PR #839 — grep compat, false positives, Java runtime validation
+- resolve VALIDATOR_SCRIPT path before cd changes working directory
+- update pytest assertions to match language-agnostic prompt wording
+- address PR review feedback on test assertions
+- pdd bug generates structural tests (param existence checks) instead of behavioral tests
+- E2E skip cascade — subdirectory config, early exit, NOT_A_BUG guard (#673)
+- improve stage6 timeout scaling and log timestamps
+- resolve command name in KeyboardInterrupt from 'unknown' to actual subcommand
+- resolve veo prompts from markdown sections
+- harden stage6 spec generation retries
+
+### Refactor
+
+- Reorganize and update video explainer project specifications, adjusting pipeline route and tests.
+- remove duplicated test files per PR review
+- make structural test blocking prompts language-agnostic
+- replace copy-paste E2E tests with shared _render_prompt helper
+
 ## v0.0.178 (2026-03-15)
 
 ### Feat
 
-- Add and update narration audio files and configure their section groups in project.json.
-- add CI validation stage to pdd fix (#822)
-- use mlx whisper for stage5 on apple silicon
-- rerun audio sync after stage5 segment rerenders
-- add audio preview for stage5 transcript mismatches
-- validate synced transcript against tts script
-- Implement the PDD explainer video project with new specs and Remotion components across multiple parts.
-- add explicit qwen tts instructions
-- Introduce new Remotion animation components, enhance TTS script processing, and update integration test specifications.
-- add new project creation flow
+- **CI validation stage (Step 10) in `pdd fix`**: new `ci_validation.py` module adds post-push CI monitoring to the agentic E2E fix workflow. After local tests pass and code is pushed, Step 10 auto-detects the CI system (GitHub Actions, Cloud Build, CircleCI, GitLab CI, Jenkins), polls check status, retrieves failure logs via tiered fallback (`gh run view --log-failed` → zip download → check URL), and invokes the LLM to apply targeted fixes — up to `--ci-retries` (default 3) iterations. New `--skip-ci` flag bypasses this stage. Workflow expanded from 9 steps to 10 across all prompts and orchestration code.
+- **Semantic fallback for LLM control tokens**: new `_classify_step_output()` in the orchestrator adds regex-based pattern matching as a second layer when LLMs paraphrase instead of emitting exact control tokens (e.g., "all tests pass" → `ALL_TESTS_PASS`, "not a bug" → `NOT_A_BUG`, "still failing" → `CONTINUE_CYCLE`). Prevents workflow stalls from token format drift.
+- **Deterministic module detection in `pdd sync`**: new `_detect_modules_from_branch_diff()` diffs the current branch against main to identify changed `.prompt` files, bypassing the LLM module-identification step entirely when on a feature branch. Zero API cost, deterministic, and correctly handles nested prompt paths (e.g., `commands/fix`).
+- **`post_pr_comment` helper**: new function in `agentic_common.py` posts structured comments to pull requests via `gh pr comment`, used by CI validation to report unresolved failures after max retries.
+- **Subdirectory-aware basename extraction**: new `_strip_language_suffix_with_subdir()` in `construct_paths.py` preserves directory components for nested prompts (e.g., `commands/fix` instead of just `fix`), fixing basename resolution for subcommand prompts.
 
-### Fix
+### Refactor
 
-- reconnect stage4 to active render jobs
-- restore stage4 waveform on re-expand
-- reload rerendered tts audio and warm up qwen decode
-- prune stale tts audio artifacts
-- harden stage3 tts generation for large scripts
-- harden infographic audit geometry
+- **`pdd/commands/fix.py` cleaned up**: URL and user-story detection use compiled regexes (`_GITHUB_OR_HTTP_RE`, `_USER_STORY_RE`), deferred imports for mode-specific modules, options reformatted to multi-line for readability.
+- **`pdd/agentic_e2e_fix.py` refactored**: compiled regex patterns for URL parsing and branch detection, consolidated `_run_command` helper, `_flatten_comment_pages` handles paginated `gh api --slurp` output.
+- **All LLM step prompts updated**: steps 1-9 prompts now declare explicit `pdd-interface` config keys and reference 10-step workflow; mandatory control token instructions added to step 1.
+
+### Build
+
+- New `ci_validation_python.prompt` and `agentic_e2e_fix_step10_ci_validation_LLM.prompt` prompt templates.
+- New `context/ci_validation_example.py` context example for CI validation patterns.
+- Exported `run_agentic_e2e_fix_orchestrator`, `detect_ci_system`, `post_ci_failure_comment`, `run_ci_validation_loop`, `run_agentic_e2e_fix`, `substitute_template_variables`, `post_pr_comment`, `post_final_comment` from `pdd/__init__.py`.
+- Test coverage for new modules: `test_ci_validation.py` (282 lines), `test_agentic_e2e_fix.py` (+238 lines), `test_agentic_e2e_fix_orchestrator.py` (+99 lines), `test_agentic_e2e_fix_step10_prompt.py` (338 lines), `test_agentic_sync.py` (+186 lines).
 
 ## v0.0.177 (2026-03-14)
 
