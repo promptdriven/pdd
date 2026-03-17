@@ -2955,44 +2955,6 @@ class TestIssue687ExampleOutputPath:
         assert "custom/override" in cloud_prompt
         assert "context/examples" not in cloud_prompt
 
-    def test_default_fallback_when_resolved_config_empty(
-        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
-        mock_env_vars
-    ):
-        """When resolved_config has no example_output_path (no .pddrc),
-        the template front-matter default 'context' must be used.
-        This simulates the reporter's scenario: no .pddrc → LLM must still
-        get a valid example path, not fall back to raw source code paths."""
-        mock_ctx.obj['local'] = False
-        mock_ctx.obj['force'] = True
-        prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt3.prompt"
-        prompt_content = "Dependencies at ${EXAMPLE_OUTPUT_PATH}/storage_layer_example.py"
-        create_file(prompt_file_path, prompt_content)
-        output_file_path_str = str(temp_dir_setup["output_dir"] / "output3.py")
-
-        mock_construct_paths_fixture.return_value = (
-            {},  # empty resolved_config — simulates missing .pddrc
-            {"prompt_file": prompt_content},
-            {"output": output_file_path_str},
-            "python"
-        )
-
-        code_generator_main(
-            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
-        )
-
-        from pdd.code_generator_main import requests
-        call_kwargs = requests.post.call_args
-        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
-        cloud_prompt = payload.get("promptContent", "")
-        # Must use "context" default, not leave variable unexpanded
-        assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
-            "Bug #687: ${EXAMPLE_OUTPUT_PATH} not expanded when resolved_config is empty"
-        )
-        assert "context/storage_layer_example.py" in cloud_prompt, (
-            "Expected default 'context' path when no .pddrc and no resolved_config"
-        )
-
     def test_real_template_references_example_output_path_variable(self):
         """The actual generate_prompt.prompt template must reference
         ${EXAMPLE_OUTPUT_PATH} so the injected variable is consumed.
@@ -3014,14 +2976,120 @@ class TestIssue687ExampleOutputPath:
     def test_real_template_has_example_output_path_default(self):
         """The template front-matter must define EXAMPLE_OUTPUT_PATH with
         default 'context' so missing .pddrc doesn't leave the variable empty."""
+        import yaml
+
         template_path = (
             pathlib.Path(__file__).parent.parent
             / "pdd" / "templates" / "generic" / "generate_prompt.prompt"
         )
         template_content = template_path.read_text(encoding="utf-8")
-        assert "EXAMPLE_OUTPUT_PATH:" in template_content, (
+        # Parse YAML front-matter between --- delimiters
+        parts = template_content.split("---", 2)
+        assert len(parts) >= 3, "Template must have YAML front-matter delimited by ---"
+        fm = yaml.safe_load(parts[1])
+        variables = fm.get("variables", {})
+        assert "EXAMPLE_OUTPUT_PATH" in variables, (
             "Template must define EXAMPLE_OUTPUT_PATH variable in front-matter"
         )
-        assert "default: context" in template_content, (
+        eop_spec = variables["EXAMPLE_OUTPUT_PATH"]
+        assert isinstance(eop_spec, dict), "EXAMPLE_OUTPUT_PATH must be a dict spec"
+        assert eop_spec.get("default") == "context", (
             "EXAMPLE_OUTPUT_PATH must default to 'context' for projects without .pddrc"
+        )
+
+    def test_resolved_config_overwrites_front_matter_default(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_env_vars
+    ):
+        """resolved_config.example_output_path must overwrite the front-matter
+        default 'context'. This test uses a template WITH front-matter to verify
+        the full code path: front-matter sets default → injection overwrites it."""
+        mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "fm_prompt_python.prompt"
+        # Template with front-matter declaring EXAMPLE_OUTPUT_PATH default "context"
+        prompt_content = (
+            "---\n"
+            "name: test/fm_prompt\n"
+            "variables:\n"
+            "  EXAMPLE_OUTPUT_PATH:\n"
+            "    required: false\n"
+            "    type: string\n"
+            "    default: context\n"
+            "---\n"
+            "Deps at ${EXAMPLE_OUTPUT_PATH}/service_example.py\n"
+        )
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "fm_output.py")
+
+        mock_construct_paths_fixture.return_value = (
+            {"example_output_path": "examples/shared"},  # resolved_config from .pddrc
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "python"
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        from pdd.code_generator_main import requests
+        call_kwargs = requests.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        # resolved_config must overwrite front-matter default "context"
+        assert "examples/shared/service_example.py" in cloud_prompt, (
+            "resolved_config.example_output_path must overwrite the front-matter "
+            "default 'context' — got: " + cloud_prompt[:200]
+        )
+        assert "context/service_example.py" not in cloud_prompt, (
+            "Front-matter default 'context' should have been overwritten by "
+            "resolved_config value 'examples/shared'"
+        )
+
+    def test_front_matter_default_used_when_no_resolved_config(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_local_generator_fixture, mock_env_vars
+    ):
+        """When resolved_config has no example_output_path, the front-matter
+        default 'context' must be used. This is James's exact scenario:
+        .pddrc exists but has no example_output_path configured."""
+        mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "fm_prompt2_python.prompt"
+        prompt_content = (
+            "---\n"
+            "name: test/fm_prompt2\n"
+            "variables:\n"
+            "  EXAMPLE_OUTPUT_PATH:\n"
+            "    required: false\n"
+            "    type: string\n"
+            "    default: context\n"
+            "---\n"
+            "Deps at ${EXAMPLE_OUTPUT_PATH}/storage_layer_example.py\n"
+        )
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "fm_output2.py")
+
+        mock_construct_paths_fixture.return_value = (
+            {},  # empty resolved_config — no example_output_path
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "python"
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False
+        )
+
+        from pdd.code_generator_main import requests
+        call_kwargs = requests.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        assert "context/storage_layer_example.py" in cloud_prompt, (
+            "Front-matter default 'context' must be used when resolved_config "
+            "has no example_output_path — got: " + cloud_prompt[:200]
+        )
+        assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
+            "${EXAMPLE_OUTPUT_PATH} was not expanded — front-matter default not applied"
         )

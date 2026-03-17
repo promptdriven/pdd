@@ -679,19 +679,16 @@ def code_generator_main(
                 env_vars[k] = v
 
     # Inject resolved_config path values into env_vars.
-    # Fix for #687: example_output_path must be available as a template variable so the LLM
-    # can construct correct _example.py include paths instead of raw source code paths.
-    # Priority: explicit -e > resolved_config (.pddrc) > front-matter default > hardcoded default
-    _config_to_env_defaults = {
-        "example_output_path": ("EXAMPLE_OUTPUT_PATH", "context"),
-    }
-    for config_key, (env_key, default_val) in _config_to_env_defaults.items():
-        if env_key in explicit_env_keys:
-            continue  # explicit -e takes highest priority
-        if resolved_config and config_key in resolved_config:
-            env_vars[env_key] = str(resolved_config[config_key])
-        elif env_key not in env_vars:
-            env_vars[env_key] = default_val
+    # Fix for promptdriven/pdd#687: example_output_path must be available as a template
+    # variable so the LLM can construct correct _example.py include paths instead of raw
+    # source code paths.
+    # Priority: explicit -e > resolved_config (.pddrc) > front-matter default (from template)
+    if (
+        "EXAMPLE_OUTPUT_PATH" not in explicit_env_keys
+        and resolved_config
+        and "example_output_path" in resolved_config
+    ):
+        env_vars["EXAMPLE_OUTPUT_PATH"] = str(resolved_config["example_output_path"])
 
     # Expand variables in output path if provided
     if output_path:
