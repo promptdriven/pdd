@@ -40,7 +40,13 @@ export async function POST(request: Request): Promise<Response> {
       const ref = references.find((r: { id: string }) => r.id === referenceId);
 
       const label = ref?.label ?? referenceId;
-      const prompt = `Professional portrait photograph of ${label}, detailed face, neutral background`;
+      const prompt =
+        (typeof ref?.referencePrompt === "string" && ref.referencePrompt.trim().length > 0
+          ? ref.referencePrompt.trim()
+          : typeof ref?.prompt === "string" && ref.prompt.trim().length > 0
+            ? ref.prompt.trim()
+            : null) ??
+        `Professional portrait photograph of ${label}, detailed face, neutral background`;
 
       const outputPath = path.join(
         getProjectDir(),

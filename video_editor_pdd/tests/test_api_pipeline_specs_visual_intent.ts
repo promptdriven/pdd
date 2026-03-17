@@ -1,12 +1,14 @@
 const mockRegisterExecutor = jest.fn();
 const mockRunClaudeFix = jest.fn();
 const mockLoadProject = jest.fn();
+const mockSaveProject = jest.fn();
 
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
 const mockRmSync = jest.fn();
 const mockMkdirSync = jest.fn();
 const mockWriteFileSync = jest.fn();
+const mockReaddirSync = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   registerExecutor: (...args: unknown[]) => mockRegisterExecutor(...args),
@@ -19,6 +21,7 @@ jest.mock("@/lib/claude", () => ({
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
+  saveProject: (...args: unknown[]) => mockSaveProject(...args),
 }));
 
 jest.mock("@/lib/deterministic-pipeline", () => ({
@@ -34,12 +37,14 @@ jest.mock("fs", () => ({
     rmSync: (...args: unknown[]) => mockRmSync(...args),
     mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
     writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+    readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
   },
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
   readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
   rmSync: (...args: unknown[]) => mockRmSync(...args),
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
 }));
 
 import "../app/api/pipeline/specs/run/route";
@@ -79,14 +84,18 @@ describe("specs route visual-intent prompting", () => {
   beforeEach(() => {
     mockRunClaudeFix.mockReset();
     mockLoadProject.mockReset();
+    mockSaveProject.mockReset();
     mockExistsSync.mockReset();
     mockReadFileSync.mockReset();
     mockRmSync.mockReset();
     mockMkdirSync.mockReset();
     mockWriteFileSync.mockReset();
+    mockReaddirSync.mockReset();
 
     mockLoadProject.mockReturnValue(mockProjectConfig());
     mockRunClaudeFix.mockResolvedValue(undefined);
+    mockSaveProject.mockReturnValue(undefined);
+    mockReaddirSync.mockReturnValue([]);
 
     mockExistsSync.mockImplementation((filePath: string) => {
       return typeof filePath === "string" && filePath.includes("narrative/main_script.md");
@@ -226,6 +235,47 @@ ${"A".repeat(8000)}
     expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(660_000);
   });
 
+  it("adds extra timeout budget for remotion-only sections with many visual beats", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [
+        {
+          id: "dense_remotion_section",
+          label: "Dense Remotion Section",
+          specDir: "dense_remotion_section",
+        },
+      ],
+      veo: { defaultAspectRatio: "16:9" },
+    });
+    mockExistsSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") return false;
+      return filePath.includes("narrative/main_script.md");
+    });
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") {
+        return "";
+      }
+      if (filePath.includes("narrative/main_script.md")) {
+        return `
+## Dense Remotion Section
+${Array.from(
+  { length: 14 },
+  (_, index) =>
+    `**[VISUAL: Graph beat ${index + 1} with axis labels, curve overlays, and terminal annotations.]**`
+).join("\n")}
+**NARRATOR:**
+${"A".repeat(6000)}
+        `.trim();
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
+    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(600_000);
+  });
+
   it("continues later sections after a section times out and reports an aggregated error", async () => {
     mockRunClaudeFix.mockImplementation(async (prompt: string) => {
       if (prompt.includes("specs/veo_section/")) {
@@ -254,5 +304,111 @@ ${"A".repeat(8000)}
     expect(onLog).toHaveBeenCalledWith(
       "[specs] Spec generation failed for 1 section(s): veo_section (Claude CLI timeout after 600s)"
     );
+  });
+
+  it("syncs inferred recurring Veo references into project.json after a successful run", async () => {
+    mockExistsSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") return false;
+      return (
+        filePath.includes("narrative/main_script.md") ||
+        filePath.includes("specs/veo_section") ||
+        filePath.includes("specs/cinematic_section")
+      );
+    });
+    mockReaddirSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") return [];
+      if (filePath.includes("specs/veo_section")) {
+        return ["01_grandmother_intro.md"];
+      }
+      if (filePath.includes("specs/cinematic_section")) {
+        return ["02_grandmother_callback.md"];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") {
+        return "";
+      }
+      if (filePath.includes("narrative/main_script.md")) {
+        return `
+## Animation Section
+**[VISUAL: Animated chart with axes and labels.]**
+
+## Veo Section
+**[VISUAL: A grandmother under a lamp, threading a needle.]**
+
+## Cinematic Section
+**[VISUAL: The same grandmother sets down the sock and smiles faintly.]**
+        `.trim();
+      }
+      if (filePath.includes("01_grandmother_intro.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "Warm portrait of a 1950s grandmother under a tungsten lamp.",
+          "```",
+          "",
+          "## Data Points",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "grandmother_intro",',
+          '  "characters": [',
+          '    {',
+          '      "id": "grandmother",',
+          '      "label": "Grandmother",',
+          '      "referencePrompt": "Portrait photo of the same 1950s grandmother, warm lamp light, lace curtains behind her."',
+          '    }',
+          "  ]",
+          "}",
+          "```",
+        ].join("\n");
+      }
+      if (filePath.includes("02_grandmother_callback.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "The same grandmother pauses and sets down a sock.",
+          "```",
+          "",
+          "## Data Points",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "grandmother_callback",',
+          '  "characters": [',
+          '    {',
+          '      "id": "grandmother",',
+          '      "label": "Grandmother",',
+          '      "referencePrompt": "Portrait photo of the same 1950s grandmother, warm lamp light, lace curtains behind her."',
+          '    }',
+          "  ]",
+          "}",
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockSaveProject).toHaveBeenCalledTimes(1);
+    const savedConfig = mockSaveProject.mock.calls[0][0];
+    expect(savedConfig.veo.references).toEqual([
+      expect.objectContaining({
+        id: "grandmother",
+        label: "Grandmother",
+        imagePath: "outputs/veo/references/grandmother.png",
+        sections: ["cinematic_section", "veo_section"],
+        referencePrompt:
+          "Portrait photo of the same 1950s grandmother, warm lamp light, lace curtains behind her.",
+        source: "stage6-inferred",
+      }),
+    ]);
   });
 });

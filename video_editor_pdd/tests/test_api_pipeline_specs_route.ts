@@ -39,9 +39,11 @@ jest.mock("@/lib/claude", () => ({
 }));
 
 const mockLoadProject = jest.fn();
+const mockSaveProject = jest.fn();
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
+  saveProject: (...args: unknown[]) => mockSaveProject(...args),
 }));
 
 jest.mock("@/lib/projects", () => ({
@@ -171,10 +173,12 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockRunClaudeFix.mockReset();
   mockLoadProject.mockReset();
+  mockSaveProject.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-specs-001");
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockLoadProject.mockReturnValue(mockProjectConfig());
+  mockSaveProject.mockReturnValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -521,6 +525,38 @@ describe("specs executor factory", () => {
     expect(prompt).toContain("[veo:]");
     expect(prompt).toContain("[title:]");
     expect(prompt).toContain("[split:]");
+  });
+
+  it("prompt defines a canonical markdown contract for Veo specs", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain("For EVERY [veo:] spec, use this exact canonical structure:");
+    expect(prompt).toContain('first line must be exactly: [veo:]');
+    expect(prompt).toContain("### Veo Prompt");
+    expect(prompt).toContain("## Data Points JSON");
+    expect(prompt).toContain('"clipId": "{snake_case_clip_id}"');
+    expect(prompt).toContain('"characters": [{ "id": "{snake_case_character_id}"');
+    expect(prompt).toContain("Do NOT put the natural-language Veo prompt inline inside the [veo:] marker.");
+  });
+
+  it("uses a single canonical Data Points heading in the required Veo template", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain("## Data Points JSON");
+    expect(prompt).not.toContain("## Data Points\n```json");
+  });
+
+  it("prompt distinguishes Veo and Remotion tool labels", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain('For [Remotion] specs, use **Tool:** Remotion.');
+    expect(prompt).toContain('For [veo:] specs, use **Tool:** Veo');
   });
 
   it("prompt instructs to generate specs under specs/ directory", async () => {

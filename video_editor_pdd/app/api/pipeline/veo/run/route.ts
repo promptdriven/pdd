@@ -33,6 +33,20 @@ export const runtime = 'nodejs';
 const CLIP_VALIDATION_SAMPLE_RATIOS = [0.2, 0.5, 0.8];
 const MAX_CLIP_GENERATION_ATTEMPTS = 2;
 
+function isRetryableVeoGenerationError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("deadline exceeded") ||
+    message.includes("please try again later") ||
+    message.includes("temporarily unavailable") ||
+    message.includes("resource exhausted") ||
+    message.includes("too many requests") ||
+    message.includes("internal error") ||
+    message.includes("backend error") ||
+    message.includes('"code":1')
+  );
+}
+
 /** Resolve a Veo prompt from specs on disk */
 function resolveVeoPrompt(
   section: { id: string; label: string; specDir?: string | null },
@@ -317,13 +331,25 @@ registerExecutor('veo', (params, send: SseSend) => {
             break;
           }
 
-          await generateVeoClip(
-            prompt,
-            referenceImagePath,
-            aspectRatio,
-            outputPath,
-            model
-          );
+          try {
+            await generateVeoClip(
+              prompt,
+              referenceImagePath,
+              aspectRatio,
+              outputPath,
+              model
+            );
+          } catch (err) {
+            if (attempt >= MAX_CLIP_GENERATION_ATTEMPTS || !isRetryableVeoGenerationError(err)) {
+              throw err;
+            }
+
+            const msg = err instanceof Error ? err.message : String(err);
+            onLog(
+              `Transient Veo generation error for "${clipId}" on attempt ${attempt}; retrying once. ${msg}`
+            );
+            continue;
+          }
 
           try {
             await validateGeneratedClip(clipId, prompt, outputPath, onLog);

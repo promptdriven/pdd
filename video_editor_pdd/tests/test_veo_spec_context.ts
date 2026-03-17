@@ -1,4 +1,5 @@
 import {
+  extractMarkdownJsonBlock,
   extractVeoMarker,
   listResolvedVeoClipSpecs,
   isVeoMarkdownSpec,
@@ -106,6 +107,28 @@ describe("veo spec context helpers", () => {
         filename: "sock_toss_economics.mp4",
       },
     ]);
+  });
+
+  it("extracts JSON blocks from a 'Data Points JSON' heading for backward compatibility", () => {
+    const dataPoints = extractMarkdownJsonBlock(
+      [
+        "[veo:]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        "{",
+        '  "type": "veo_clip",',
+        '  "clipId": "chip_design_history"',
+        "}",
+        "```",
+      ].join("\n"),
+      "Data Points"
+    );
+
+    expect(dataPoints).toEqual({
+      type: "veo_clip",
+      clipId: "chip_design_history",
+    });
   });
 
   it("resolves one generated clip per Veo markdown spec when prompts and clip sources are declared in the spec JSON", () => {

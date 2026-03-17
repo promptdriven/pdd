@@ -5,7 +5,7 @@ import path from "path";
 import { runPipelineStage, registerExecutor } from "@/lib/jobs";
 import { createSseStream } from "@/lib/sse";
 import { runClaudeFix } from "@/lib/claude";
-import { loadProject } from "@/lib/project";
+import { loadProject, saveProject } from "@/lib/project";
 import {
   isDeterministicPipelineMode,
   writeDeterministicSpecsForSection,
@@ -16,6 +16,7 @@ import {
   resolveSectionVisualIntent,
 } from "@/app/api/pipeline/_lib/script-visual-intent";
 import { getProjectDir } from "@/lib/projects";
+import { syncInferredVeoReferencesFromProjectSpecs } from "@/lib/veo-references";
 
 const BASE_SPECS_TIMEOUT_MS = 600_000;
 const MAX_SPECS_TIMEOUT_MS = 1_500_000;
@@ -38,9 +39,13 @@ function estimateSpecsTimeoutMs(params: {
         : 0;
   const extraVisualBeats = Math.max(0, params.visualBeatCount - 8);
   const visualBeatBonusMs =
-    params.visualIntentMode === "hybrid" || params.visualIntentMode === "veo_favored"
+    params.visualIntentMode === "veo_favored"
       ? Math.min(360_000, Math.ceil(extraVisualBeats / 4) * 60_000)
-      : 0;
+      : params.visualIntentMode === "hybrid"
+        ? Math.min(300_000, Math.ceil(extraVisualBeats / 4) * 60_000)
+        : params.visualIntentMode === "remotion_only"
+          ? Math.min(180_000, Math.ceil(extraVisualBeats / 4) * 30_000)
+          : 0;
   const timestampBonusMs = params.hasWords ? 30_000 : 0;
   const scaledTimeoutMs =
     BASE_SPECS_TIMEOUT_MS +
@@ -237,7 +242,7 @@ A typical section should have a mix: 2-4 [Remotion] animations, 2-3 [veo:] clips
 
         const prompt = `
 You are generating rich visual spec markdown files for a video pipeline.
-Each spec file describes ONE animated Remotion component with enough detail for a developer to implement it.
+Each spec file describes ONE visual component with enough detail for a developer to implement or generate it.
 
 CRITICAL: You MUST create MULTIPLE separate files — one per visual component.
 DO NOT create a single spec.md or any single monolithic file.
@@ -252,6 +257,19 @@ Instructions:
   [veo:] — for cinematic video footage or B-roll (live-action style, no data overlay)
   [title:] — for title cards, section headers, or text-only screens
   [split:] — for split-screen comparison layouts
+- For [Remotion] specs, use **Tool:** Remotion.
+- For [veo:] specs, use **Tool:** Veo (cinematic B-roll) or **Tool:** Veo.
+- For [title:] specs, use **Tool:** Title.
+- For [split:] specs, use **Tool:** Split.
+- For EVERY [veo:] spec, use this exact canonical structure:
+  - first line must be exactly: [veo:]
+  - include a dedicated heading: ### Veo Prompt
+  - place the full natural-language Veo generation prompt inside a fenced code block under ### Veo Prompt
+  - include ## Data Points JSON with at least: { "type": "veo_clip", "clipId": "{snake_case_clip_id}" }
+  - when the same human character/person recurs across multiple [veo:] specs or must stay visually consistent, include:
+    "characters": [{ "id": "{snake_case_character_id}", "label": "{Display Name}", "referencePrompt": "{portrait/reference description}" }]
+  - include characters ONLY for recurring or consistency-critical people, not one-off background extras
+  - Do NOT put the natural-language Veo prompt inline inside the [veo:] marker.
 ${sectionVisualGuidanceList}
 - You should generate at least 4-8 spec files per section.
 ${files.length > 0 ? `- Only generate these specific files: ${files.join(", ")}` : "- Generate ALL spec files needed for the section."}
@@ -260,7 +278,7 @@ REQUIRED SPEC FORMAT — each spec file MUST include ALL of these sections:
 
 # Section N.N: {Component Name}
 
-**Tool:** Remotion
+**Tool:** {Remotion | Veo | Title | Split}
 **Duration:** ~Xs
 **Timestamp:** M:SS - M:SS
 
@@ -302,7 +320,7 @@ REQUIRED SPEC FORMAT — each spec file MUST include ALL of these sections:
 </Sequence>
 \`\`\`
 
-## Data Points
+## Data Points JSON
 \`\`\`json
 { "series": [...] }
 \`\`\`
@@ -340,6 +358,16 @@ ${sectionContext}
         .join(", ")}`;
       onLog(`[specs] ${message}`);
       throw new Error(message);
+    }
+
+    const syncedConfig = syncInferredVeoReferencesFromProjectSpecs(getProjectDir(), cfg);
+    const previousReferences = JSON.stringify(cfg.veo.references ?? []);
+    const nextReferences = JSON.stringify(syncedConfig.veo.references ?? []);
+    if (previousReferences !== nextReferences) {
+      saveProject(syncedConfig, getProjectDir());
+      onLog(
+        `[specs] Synced ${(syncedConfig.veo.references ?? []).length} Veo reference entr${(syncedConfig.veo.references ?? []).length === 1 ? "y" : "ies"} to project.json`
+      );
     }
   };
 });

@@ -1152,6 +1152,64 @@ describe("veo executor factory — clip validation", () => {
     });
   });
 
+  it("retries a clip once when Veo returns a transient deadline-exceeded error", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockGenerateVeoClip
+      .mockRejectedValueOnce(
+        new Error(
+          'Failed to generate Veo clip: Veo operation failed: {"code":1,"message":"Deadline exceeded. Please try again later. Operation ID: abc123."}'
+        )
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const onLog = jest.fn();
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(onLog);
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(onLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Transient Veo generation error for "intro" on attempt 1; retrying once.'
+      )
+    );
+    expect(mockSend).toHaveBeenCalledWith({
+      type: "clip",
+      clipId: "intro",
+      status: "done",
+    });
+  });
+
+  it("fails the clip after the final retry when Veo keeps timing out", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockGenerateVeoClip.mockRejectedValue(
+      new Error(
+        'Failed to generate Veo clip: Veo operation failed: {"code":1,"message":"Deadline exceeded. Please try again later. Operation ID: abc123."}'
+      )
+    );
+
+    const onLog = jest.fn();
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+
+    await expect(executor(onLog)).rejects.toThrow(/Deadline exceeded/);
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(onLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Transient Veo generation error for "intro" on attempt 1; retrying once.'
+      )
+    );
+    expect(mockSend).toHaveBeenCalledWith({
+      type: "clip",
+      clipId: "intro",
+      status: "error",
+    });
+  });
+
   it("fails the clip after the final validation attempt still mismatches the prompt", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]];
@@ -1815,6 +1873,40 @@ describe("POST_references — validation and response", () => {
 
     const response = await POST_references(request as any);
     expect(response.status).toBe(200);
+  });
+
+  it("prefers a structured reference prompt from project config when regenerating a reference", async () => {
+    const mockSend = jest.fn();
+    mockCreateSseStream.mockReturnValue({
+      stream: new ReadableStream(),
+      send: mockSend,
+      done: jest.fn(),
+      error: jest.fn(),
+    });
+    mockLoadProject.mockReturnValue({
+      veo: {
+        references: [
+          {
+            id: "grandmother",
+            label: "Grandmother",
+            referencePrompt: "Portrait photo of the same 1950s grandmother, warm lamp light, lace curtains behind her.",
+          },
+        ],
+      },
+    });
+
+    const request = makeRequest(
+      "http://localhost/api/pipeline/veo/references/run",
+      { referenceId: "grandmother" }
+    );
+
+    await POST_references(request as any);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockGenerateReferenceImage).toHaveBeenCalledWith(
+      "Portrait photo of the same 1950s grandmother, warm lamp light, lace curtains behind her.",
+      expect.stringContaining("grandmother.png")
+    );
   });
 });
 

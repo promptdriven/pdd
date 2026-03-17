@@ -57,6 +57,36 @@ function stripOptionalCodeFence(content: string): string {
   return bodyLines.join("\n").trim();
 }
 
+export function extractMarkdownJsonBlock(
+  content: string,
+  heading: string
+): Record<string, unknown> | null {
+  const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const headingPattern =
+    heading.trim().toLowerCase() === "data points"
+      ? `${escapedHeading}(?:\\s+JSON)?`
+      : escapedHeading;
+  const match = content.match(
+    new RegExp(
+      `(?:^|\\n)#{2,6}\\s+${headingPattern}\\s*\\n\\\`\\\`\\\`json\\s*([\\s\\S]*?)\\\`\\\`\\\``,
+      "i"
+    )
+  );
+  const rawJson = match?.[1]?.trim();
+  if (!rawJson) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawJson);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function extractVeoPromptSection(content: string): string | null {
   const match = content.match(
     /(?:^|\n)#{2,6}\s+Veo Prompt\s*\n([\s\S]*?)(?=\n#{1,6}\s|\n---\s*$|$)/i
