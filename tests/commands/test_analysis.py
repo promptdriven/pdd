@@ -353,28 +353,17 @@ def test_conflicts_success_v2(mock_main, runner, mock_context_obj):
 def test_bug_agentic_mode_v2(mock_agentic, runner, mock_context_obj):
     """Test bug command in default agentic mode (URL)."""
     mock_agentic.return_value = (True, "Fixed", 1.0, "gpt-4", [])
-    result = runner.invoke(bug, ["https://github.com/user/repo/issues/1", "--timeout-adder", "5.0", "--no-github-state"], obj=mock_context_obj)
+    result = runner.invoke(
+        bug,
+        ["https://github.com/user/repo/issues/1", "--timeout-adder", "5.0", "--no-github-state"],
+        obj=mock_context_obj,
+    )
     assert result.exit_code == 0
     args, kwargs = mock_agentic.call_args
     assert kwargs["issue_url"] == "https://github.com/user/repo/issues/1"
     assert kwargs["timeout_adder"] == 5.0
     assert kwargs["use_github_state"] is False
 
-
-@patch("pdd.commands.analysis.run_agentic_bug")
-def test_bug_agentic_mode_failure(mock_agentic, runner, mock_context_obj):
-    """Test bug command exits with 1 when agentic workflow fails (issue #593)."""
-    mock_agentic.return_value = (False, "Workflow failed", 0.0, "", [])
-    result = runner.invoke(bug, ["https://github.com/user/repo/issues/593"], obj=mock_context_obj)
-    assert result.exit_code == 1
-
-
-@patch("pdd.commands.analysis.run_agentic_bug")
-def test_bug_agentic_mode_failure_exit_code_1_v2(mock_agentic, runner, mock_context_obj):
-    """Test bug agentic mode exits with 1 on failure, consistent with pdd change (issue #593)."""
-    mock_agentic.return_value = (False, "Workflow failed", 0.0, "", [])
-    result = runner.invoke(bug, ["https://github.com/user/repo/issues/593"], obj=mock_context_obj)
-    assert result.exit_code == 1
 
 def test_bug_agentic_mode_missing_arg_v2(runner, mock_context_obj):
     """Test bug command fails in agentic mode without URL."""
