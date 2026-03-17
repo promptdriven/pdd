@@ -21,6 +21,39 @@ import { syncInferredVeoReferencesFromProjectSpecs } from "@/lib/veo-references"
 const BASE_SPECS_TIMEOUT_MS = 600_000;
 const MAX_SPECS_TIMEOUT_MS = 1_500_000;
 
+function normalizeSectionSpecDir(specDir: string): string {
+  return specDir.replace(/^specs[\\/]/, "").replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function normalizeRequestedSpecPath(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\.?\//, "");
+  return normalized.startsWith("specs/") ? normalized : `specs/${normalized}`;
+}
+
+function buildRequestedFilesBySection(
+  sectionSpecDirs: Map<string, string>,
+  requestedFiles: string[]
+): Map<string, string[]> {
+  const bySection = new Map<string, string[]>();
+
+  for (const requestedFile of requestedFiles.map(normalizeRequestedSpecPath)) {
+    for (const [sectionId, specDir] of sectionSpecDirs.entries()) {
+      const normalizedSpecDir = normalizeSectionSpecDir(specDir);
+      const expectedPrefix = `specs/${normalizedSpecDir}/`;
+      if (!requestedFile.startsWith(expectedPrefix)) {
+        continue;
+      }
+
+      const existing = bySection.get(sectionId) ?? [];
+      existing.push(requestedFile);
+      bySection.set(sectionId, existing);
+      break;
+    }
+  }
+
+  return bySection;
+}
+
 function estimateSpecsTimeoutMs(params: {
   specMd: string;
   scriptBody: string;
@@ -75,6 +108,31 @@ function resetSectionSpecDir(sectionSpecDir: string): void {
   }
 }
 
+function resetRequestedSpecFiles(
+  specsBase: string,
+  sectionSpecDir: string,
+  requestedFiles: string[]
+): void {
+  fs.mkdirSync(sectionSpecDir, { recursive: true });
+  const normalizedSectionDir = path.resolve(sectionSpecDir);
+
+  for (const requestedFile of requestedFiles) {
+    const requestedAbsPath = path.resolve(
+      specsBase,
+      normalizeRequestedSpecPath(requestedFile).replace(/^specs\//, "")
+    );
+
+    if (
+      requestedAbsPath !== normalizedSectionDir &&
+      !requestedAbsPath.startsWith(`${normalizedSectionDir}${path.sep}`)
+    ) {
+      continue;
+    }
+
+    fs.rmSync(requestedAbsPath, { force: true });
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Register specs executor (runs Claude scoped to /specs)
 // ----------------------------------------------------------------------------
@@ -90,15 +148,21 @@ registerExecutor("specs", (params, _send) => {
       specDirMap.set(s.id, s.specDir);
     }
 
-    const sectionIds =
-      Array.isArray(params.sections) && params.sections.length > 0
-        ? (params.sections as string[])
-        : allSectionIds;
-
     const files =
       Array.isArray(params.files) && params.files.length > 0
         ? (params.files as string[])
         : [];
+    const requestedFilesBySection = buildRequestedFilesBySection(specDirMap, files);
+    const sectionIds =
+      Array.isArray(params.sections) && params.sections.length > 0
+        ? (params.sections as string[])
+        : requestedFilesBySection.size > 0
+          ? allSectionIds.filter((sid) => requestedFilesBySection.has(sid))
+          : allSectionIds;
+
+    if (files.length > 0 && sectionIds.length === 0) {
+      throw new Error(`No sections matched requested spec files: ${files.join(", ")}`);
+    }
 
     const specsBase = path.join(getProjectDir(), "specs");
     const dataDir = path.join(getProjectDir(), "data");
@@ -170,6 +234,7 @@ registerExecutor("specs", (params, _send) => {
 
         const sid = sectionIds[currentIndex];
         const dir = specDirMap.get(sid) ?? sid;
+        const sectionFiles = requestedFilesBySection.get(sid) ?? [];
         const section = sectionMap.get(sid);
         const ctx = sectionContextMap.get(sid)!;
         const matchingScriptSection =
@@ -198,7 +263,11 @@ registerExecutor("specs", (params, _send) => {
         onLog(
           `[specs] Generating specs for section: ${sid} (${currentIndex + 1}/${sectionIds.length})`
         );
-        resetSectionSpecDir(sectionSpecDir);
+        if (sectionFiles.length > 0) {
+          resetRequestedSpecFiles(specsBase, sectionSpecDir, sectionFiles);
+        } else {
+          resetSectionSpecDir(sectionSpecDir);
+        }
 
         const sectionContext = `
 ### Section: ${sid} → specs/${dir}/
@@ -272,7 +341,7 @@ Instructions:
   - Do NOT put the natural-language Veo prompt inline inside the [veo:] marker.
 ${sectionVisualGuidanceList}
 - You should generate at least 4-8 spec files per section.
-${files.length > 0 ? `- Only generate these specific files: ${files.join(", ")}` : "- Generate ALL spec files needed for the section."}
+${sectionFiles.length > 0 ? `- Only generate these specific files: ${sectionFiles.join(", ")}` : "- Generate ALL spec files needed for the section."}
 
 REQUIRED SPEC FORMAT — each spec file MUST include ALL of these sections:
 

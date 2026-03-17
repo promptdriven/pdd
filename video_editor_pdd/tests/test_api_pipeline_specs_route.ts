@@ -20,6 +20,10 @@
  *  12. Executor reports progress via onLog.progress callback
  */
 
+import fs from "fs";
+import os from "os";
+import path from "path";
+
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
 // ---------------------------------------------------------------------------
@@ -83,6 +87,8 @@ function makeRequest(body?: object): Request {
 function flushPromises(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 50));
 }
+
+const originalCwd = process.cwd();
 
 /** Parse SSE events from a ReadableStream. */
 async function readSseEvents(
@@ -179,6 +185,10 @@ beforeEach(() => {
   mockRunClaudeFix.mockResolvedValue(undefined);
   mockLoadProject.mockReturnValue(mockProjectConfig());
   mockSaveProject.mockReturnValue(undefined);
+});
+
+afterEach(() => {
+  process.chdir(originalCwd);
 });
 
 // ---------------------------------------------------------------------------
@@ -494,6 +504,54 @@ describe("specs executor factory", () => {
     const allPrompts = mockRunClaudeFix.mock.calls.map((c: any[]) => c[0]).join("\n");
     expect(allPrompts).toContain("specs/intro/visual.md");
     expect(allPrompts).toContain("specs/main/overlay.md");
+  });
+
+  it("limits file-only reruns to the section owning the requested file", async () => {
+    const executor = registerCallArgs.factory(
+      { files: ["specs/intro/visual.md"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
+    const prompt = mockRunClaudeFix.mock.calls[0][0];
+    expect(prompt).toContain("### Section: intro");
+    expect(prompt).toContain("specs/intro/visual.md");
+    expect(prompt).not.toContain("### Section: main");
+    expect(prompt).not.toContain("### Section: outro");
+  });
+
+  it("only deletes the targeted spec file during a file-only rerun", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "specs-file-rerun-"));
+    process.chdir(tmpDir);
+
+    mockLoadProject.mockReturnValue({
+      ...mockProjectConfig(),
+      sections: [
+        { id: "intro", label: "Introduction", specDir: "intro" },
+        { id: "main", label: "Main Content", specDir: "main" },
+        { id: "outro", label: "Outro", specDir: "outro" },
+      ],
+    });
+
+    fs.mkdirSync(path.join(tmpDir, "specs", "intro"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "specs", "main"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, "specs", "outro"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "specs", "intro", "visual.md"), "old-intro", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, "specs", "intro", "keep.md"), "keep-intro", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, "specs", "main", "overlay.md"), "keep-main", "utf-8");
+    fs.writeFileSync(path.join(tmpDir, "specs", "outro", "end.md"), "keep-outro", "utf-8");
+
+    const executor = registerCallArgs.factory(
+      { files: ["specs/intro/visual.md"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(fs.existsSync(path.join(tmpDir, "specs", "intro", "visual.md"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, "specs", "intro", "keep.md"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, "specs", "main", "overlay.md"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, "specs", "outro", "end.md"))).toBe(true);
   });
 
   it("calls runClaudeFix with prompt scoped to specs/ directory", async () => {
