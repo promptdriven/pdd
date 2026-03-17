@@ -680,13 +680,15 @@ def code_generator_main(
     # Inject resolved_config path values into env_vars (without overriding explicit -e values)
     # Fix for #687: example_output_path must be available as a template variable so the LLM
     # can construct correct _example.py include paths instead of raw source code paths.
-    if resolved_config:
-        _config_to_env_mapping = {
-            "example_output_path": "EXAMPLE_OUTPUT_PATH",
-        }
-        for config_key, env_key in _config_to_env_mapping.items():
-            if env_key not in env_vars and config_key in resolved_config:
+    _config_to_env_defaults = {
+        "example_output_path": ("EXAMPLE_OUTPUT_PATH", "context"),
+    }
+    for config_key, (env_key, default_val) in _config_to_env_defaults.items():
+        if env_key not in env_vars:
+            if resolved_config and config_key in resolved_config:
                 env_vars[env_key] = str(resolved_config[config_key])
+            else:
+                env_vars[env_key] = default_val
 
     # Expand variables in output path if provided
     if output_path:

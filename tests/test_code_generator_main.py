@@ -2955,30 +2955,43 @@ class TestIssue687ExampleOutputPath:
         assert "custom/override" in cloud_prompt
         assert "context/examples" not in cloud_prompt
 
-    def test_no_crash_when_resolved_config_lacks_example_output_path(
+    def test_default_fallback_when_resolved_config_empty(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
         mock_env_vars
     ):
-        """When resolved_config has no example_output_path, must not crash."""
+        """When resolved_config has no example_output_path (no .pddrc),
+        the template front-matter default 'context' must be used.
+        This simulates the reporter's scenario: no .pddrc → LLM must still
+        get a valid example path, not fall back to raw source code paths."""
         mock_ctx.obj['local'] = False
         mock_ctx.obj['force'] = True
         prompt_file_path = temp_dir_setup["prompts_dir"] / "gen_prompt3.prompt"
-        prompt_content = "Examples at ${EXAMPLE_OUTPUT_PATH}"
+        prompt_content = "Dependencies at ${EXAMPLE_OUTPUT_PATH}/storage_layer_example.py"
         create_file(prompt_file_path, prompt_content)
         output_file_path_str = str(temp_dir_setup["output_dir"] / "output3.py")
 
         mock_construct_paths_fixture.return_value = (
-            {},  # empty resolved_config
+            {},  # empty resolved_config — simulates missing .pddrc
             {"prompt_file": prompt_content},
             {"output": output_file_path_str},
             "python"
         )
 
-        # Should not raise
-        result = code_generator_main(
+        code_generator_main(
             mock_ctx, str(prompt_file_path), output_file_path_str, None, False
         )
-        assert result is not None
+
+        from pdd.code_generator_main import requests
+        call_kwargs = requests.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        # Must use "context" default, not leave variable unexpanded
+        assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
+            "Bug #687: ${EXAMPLE_OUTPUT_PATH} not expanded when resolved_config is empty"
+        )
+        assert "context/storage_layer_example.py" in cloud_prompt, (
+            "Expected default 'context' path when no .pddrc and no resolved_config"
+        )
 
     def test_real_template_references_example_output_path_variable(self):
         """The actual generate_prompt.prompt template must reference
@@ -2996,4 +3009,19 @@ class TestIssue687ExampleOutputPath:
             "${EXAMPLE_OUTPUT_PATH}. The template tells the LLM to parse "
             ".pddrc YAML for example_output_path, which fails when .pddrc "
             "is missing. The template must use ${EXAMPLE_OUTPUT_PATH} directly."
+        )
+
+    def test_real_template_has_example_output_path_default(self):
+        """The template front-matter must define EXAMPLE_OUTPUT_PATH with
+        default 'context' so missing .pddrc doesn't leave the variable empty."""
+        template_path = (
+            pathlib.Path(__file__).parent.parent
+            / "pdd" / "templates" / "generic" / "generate_prompt.prompt"
+        )
+        template_content = template_path.read_text(encoding="utf-8")
+        assert "EXAMPLE_OUTPUT_PATH:" in template_content, (
+            "Template must define EXAMPLE_OUTPUT_PATH variable in front-matter"
+        )
+        assert "default: context" in template_content, (
+            "EXAMPLE_OUTPUT_PATH must default to 'context' for projects without .pddrc"
         )
