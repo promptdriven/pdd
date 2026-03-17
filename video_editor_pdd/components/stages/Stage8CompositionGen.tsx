@@ -3,7 +3,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import { SseLogPanel } from '../SseLogPanel';
-import { extractJobIdFromSse } from '@/lib/client/sse-utils';
 
 type ComponentStatus = 'done' | 'missing' | 'error' | 'running' | 'pending';
 
@@ -85,6 +84,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
   const [sections, setSections] = useState<CompositionSection[]>([]);
   const [stagingManifest, setStagingManifest] = useState<StagingManifestEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [manifestError, setManifestError] = useState<string | null>(null);
   const [artifactState, setArtifactState] = useState<{
@@ -177,8 +177,12 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
     }
   };
 
-  const refreshData = useCallback(async () => {
-    setLoading(true);
+  const refreshData = useCallback(async ({ background = false }: { background?: boolean } = {}) => {
+    if (background) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setListError(null);
     setManifestError(null);
 
@@ -205,7 +209,11 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
       setManifestError(err instanceof Error ? err.message : 'Failed to load manifest');
     }
 
-    setLoading(false);
+    if (background) {
+      setRefreshing(false);
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -217,7 +225,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
   useEffect(() => {
     if (!activeJobId) return;
     const interval = setInterval(() => {
-      refreshData();
+      refreshData({ background: true });
     }, 5000);
     return () => clearInterval(interval);
   }, [activeJobId, refreshData]);
@@ -245,11 +253,64 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
         body: payload ? JSON.stringify(payload) : undefined,
       });
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      const extractedJobId = await extractJobIdFromSse(res);
-      if (extractedJobId) {
-        setActiveJobId(extractedJobId);
-        setLogOpen(true);
+      const reader = res.body?.getReader();
+      if (!reader) {
+        throw new Error('Missing SSE response body');
       }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let foundJobId = false;
+      let isErrorEvent = false;
+
+      while (!foundJobId) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+
+        for (const line of lines) {
+          if (line === 'event: error') {
+            isErrorEvent = true;
+            continue;
+          }
+
+          if (!line.startsWith('data: ')) continue;
+
+          try {
+            const data = JSON.parse(line.slice(6)) as {
+              jobId?: string | null;
+              message?: string;
+            };
+
+            if (isErrorEvent) {
+              throw new Error(data?.message ?? 'Job failed to start');
+            }
+
+            if (data?.jobId) {
+              setActiveJobId(data.jobId);
+              setLogOpen(true);
+              foundJobId = true;
+              break;
+            }
+          } catch (err) {
+            if (err instanceof Error && isErrorEvent) {
+              throw err;
+            }
+          }
+
+          isErrorEvent = false;
+        }
+
+        if (!buffer.endsWith('\n')) {
+          buffer = lines[lines.length - 1] ?? '';
+        } else {
+          buffer = '';
+        }
+      }
+
+      reader.cancel().catch(() => {});
     } catch (err) {
       console.error(err);
     } finally {
@@ -283,7 +344,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
         throw new Error(payload?.error ?? `Request failed (${res.status})`);
       }
 
-      await refreshData();
+      await refreshData({ background: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to stage assets';
       setManifestError(message);
@@ -369,6 +430,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
               Components ({totalComponents})
             </h3>
             <div className="flex items-center gap-2">
+              {refreshing && (
+                <span className="text-xs text-slate-400">Refreshing…</span>
+              )}
               {missingComponentCount > 0 && (
                 <button
                   className="rounded bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-600"
@@ -397,7 +461,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             </div>
           </div>
 
-          {loading && <p className="text-sm text-slate-500">Loading components…</p>}
+          {loading && sections.length === 0 && (
+            <p className="text-sm text-slate-500">Loading components…</p>
+          )}
           {listError && (
             <p className="rounded bg-red-900/50 px-3 py-2 text-sm text-red-300">{listError}</p>
           )}
@@ -408,8 +474,7 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
             </p>
           )}
 
-          {!loading &&
-            sections.map((section) => {
+          {sections.map((section) => {
               const isCollapsed = collapsed[section.id];
               return (
                 <div key={section.id} className="mb-3 rounded border border-slate-700">
@@ -618,11 +683,9 @@ export default function Stage8CompositionGen({ onAdvance }: Stage8CompositionGen
                 <SseLogPanel
                   jobId={activeJobId}
                   onDone={() => {
-                    setActiveJobId(null);
                     refreshData();
                   }}
                   onError={() => {
-                    setActiveJobId(null);
                     refreshData();
                   }}
                 />

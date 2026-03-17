@@ -100,6 +100,21 @@ describe("API endpoints", () => {
     expect(sourceCode).toMatch(/method\s*:\s*['"]POST['"]/);
   });
 
+  it("reads the jobId from the streaming SSE response instead of waiting for the full body", () => {
+    expect(sourceCode).toMatch(/res\.body\?\.getReader\(\)/);
+    expect(sourceCode).toMatch(/const\s+decoder\s*=\s*new\s+TextDecoder/);
+    expect(sourceCode).toMatch(/reader\.read\(\)/);
+    expect(sourceCode).toMatch(/if\s*\(\s*data\?\.jobId\s*\)/);
+    expect(sourceCode).toMatch(/reader\.cancel\(\)\.catch\(\(\)\s*=>\s*\{\}\)/);
+  });
+
+  it("uses background refresh while a job is active instead of resetting the whole list to loading", () => {
+    expect(sourceCode).toMatch(/const\s+\[refreshing,\s*setRefreshing\]/);
+    expect(sourceCode).toMatch(/refreshData\(\{\s*background:\s*true\s*\}\)/);
+    expect(sourceCode).toMatch(/loading\s*&&\s*sections\.length\s*===\s*0/);
+    expect(sourceCode).toContain("Refreshing…");
+  });
+
   it("uses POST /api/pipeline/asset-staging/run", () => {
     expect(sourceCode).toMatch(/['"]\/api\/pipeline\/asset-staging\/run['"]/);
   });
@@ -247,12 +262,14 @@ describe("Log Drawer", () => {
     expect(sourceCode).toMatch(/jobId=\{activeJobId\}/);
   });
 
-  it("clears the active job id when SseLogPanel completes", () => {
-    expect(sourceCode).toMatch(/onDone=\{\(\)\s*=>\s*\{[\s\S]*setActiveJobId\(null\);[\s\S]*refreshData\(\);[\s\S]*\}\}/);
+  it("keeps the active job id when SseLogPanel completes so finished logs remain visible", () => {
+    expect(sourceCode).toMatch(/onDone=\{\(\)\s*=>\s*\{[\s\S]*refreshData\(\);[\s\S]*\}\}/);
+    expect(sourceCode).not.toMatch(/onDone=\{\(\)\s*=>\s*\{[\s\S]*setActiveJobId\(null\);[\s\S]*\}\}/);
   });
 
-  it("clears the active job id when SseLogPanel errors", () => {
-    expect(sourceCode).toMatch(/onError=\{\(\)\s*=>\s*\{[\s\S]*setActiveJobId\(null\);[\s\S]*refreshData\(\);[\s\S]*\}\}/);
+  it("keeps the active job id when SseLogPanel errors so failure logs remain visible", () => {
+    expect(sourceCode).toMatch(/onError=\{\(\)\s*=>\s*\{[\s\S]*refreshData\(\);[\s\S]*\}\}/);
+    expect(sourceCode).not.toMatch(/onError=\{\(\)\s*=>\s*\{[\s\S]*setActiveJobId\(null\);[\s\S]*\}\}/);
   });
 });
 
