@@ -9,6 +9,9 @@ set -e
 # Treat unset variables as an error when substituting.
 set -u
 
+# Resolve paths relative to this script before any cd
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Global settings
 VERBOSE=${VERBOSE:-1} # Default to 1 if not set
 STRENGTH=${STRENGTH:-0.5} # Default strength (slightly higher for cloud stability)
@@ -616,6 +619,425 @@ PYEOF
                               "$FIXTURES_PATH/$MATH_PROMPT" "autodeps_context/*.py"
     check_exists "$AUTO_DEPS_PROMPT" "'auto-deps' modified prompt"
     check_exists "$AUTO_DEPS_CSV" "'auto-deps' dependency CSV"
+fi
+
+# --- Behavioral Test Validation Helper ---
+# Two-layer validation:
+#   1. AST/content analysis (all languages): detects introspection imports,
+#      structural builtins in assertions, and verifies the test calls the
+#      function under test. Uses tests/validate_behavioral_test.py.
+#   2. Run-against-buggy-code (Python, Go, JS): the definitive check — a
+#      behavioral test MUST FAIL against buggy code.
+VALIDATOR_SCRIPT="$SCRIPT_DIR/validate_behavioral_test.py"
+
+check_test_catches_bug() {
+    local test_file="$1"
+    local language="$2"
+    local buggy_source="$3"  # path to the buggy source file
+    local failed=0
+
+    if [ ! -s "$test_file" ]; then
+        log_error "$language bug test file is empty: $test_file"
+        CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
+        return 1
+    fi
+
+    # --- Layer 1: AST / content analysis (all languages) ---
+    log "Running AST validator on $language test..."
+    if ! python "$VALIDATOR_SCRIPT" "$test_file" "$language" "$buggy_source" 2>&1; then
+        log_error "AST validator flagged structural patterns in $language test"
+        failed=1
+    else
+        log "AST validator passed for $language test"
+    fi
+
+    # --- Layer 2: Run test against buggy code (language-specific) ---
+    case "$language" in
+        Python)
+            log "Running generated Python test against buggy code..."
+            if python -m pytest "$test_file" --tb=short --no-header -q 2>&1; then
+                log_error "STRUCTURAL TEST DETECTED: Python test PASSED against buggy code"
+                log_error "A behavioral test must FAIL against the buggy code"
+                failed=1
+            else
+                log "Python test correctly FAILS against buggy code — behavioral"
+            fi
+            ;;
+        Go)
+            # Go tests need a module. Read the package name from the generated
+            # test so the fixture source matches — we can't predict what the LLM
+            # will use.
+            if command -v go &>/dev/null; then
+                local go_tmp
+                go_tmp=$(mktemp -d)
+                log "Running generated Go test against buggy code in $go_tmp..."
+                (
+                    cd "$go_tmp"
+                    go mod init bugtest &>/dev/null
+                    cp "$OLDPWD/$buggy_source" source.go 2>/dev/null || true
+                    cp "$OLDPWD/$test_file" test_file_test.go 2>/dev/null || true
+                    # Match the buggy source's package to whatever the LLM used
+                    local test_pkg
+                    test_pkg=$(grep -m1 '^package ' test_file_test.go 2>/dev/null | awk '{print $2}')
+                    if [ -n "$test_pkg" ]; then
+                        sed -i.bak "s/^package .*/package ${test_pkg}/" source.go 2>/dev/null || true
+                    fi
+                    # Try to build and test — behavioral test should FAIL
+                    if go test ./... -count=1 -timeout 30s 2>&1; then
+                        echo "[ERROR] Go test PASSED against buggy code — structural test"
+                        exit 1
+                    else
+                        echo "[INFO] Go test correctly FAILS against buggy code"
+                        exit 0
+                    fi
+                )
+                local go_result=$?
+                rm -rf "$go_tmp"
+                if [ $go_result -ne 0 ]; then
+                    log_error "STRUCTURAL TEST DETECTED: Go test PASSED against buggy code"
+                    failed=1
+                else
+                    log "Go test correctly FAILS against buggy code — behavioral"
+                fi
+            else
+                log "go not found — skipping runtime validation for Go"
+            fi
+            ;;
+        JavaScript)
+            # JS tests: try running with node. If the test uses jest/mocha,
+            # try npx. A behavioral test should exit non-zero against buggy code.
+            if command -v node &>/dev/null; then
+                local js_tmp
+                js_tmp=$(mktemp -d)
+                log "Running generated JS test against buggy code in $js_tmp..."
+                cp "$buggy_source" "$js_tmp/" 2>/dev/null || true
+                cp "$test_file" "$js_tmp/" 2>/dev/null || true
+                (
+                    cd "$js_tmp"
+                    # Try node directly first, then npx jest
+                    if grep -Eq "require.*jest|describe|it\(" "$(basename "$test_file")" 2>/dev/null && command -v npx &>/dev/null; then
+                        if npx --yes jest --no-cache "$(basename "$test_file")" 2>&1; then
+                            exit 1  # test passed = structural
+                        else
+                            exit 0  # test failed = behavioral
+                        fi
+                    elif node "$(basename "$test_file")" 2>&1; then
+                        exit 1  # test passed = structural
+                    else
+                        exit 0  # test failed = behavioral
+                    fi
+                )
+                local js_result=$?
+                rm -rf "$js_tmp"
+                if [ $js_result -ne 0 ]; then
+                    log_error "STRUCTURAL TEST DETECTED: JS test PASSED against buggy code"
+                    failed=1
+                else
+                    log "JS test correctly FAILS against buggy code — behavioral"
+                fi
+            else
+                log "node not found — skipping runtime validation for JavaScript"
+            fi
+            ;;
+        Java)
+            # Java tests: compile and run with javac/java. A behavioral test
+            # should fail (non-zero exit or test framework failure) against buggy code.
+            if command -v javac &>/dev/null; then
+                local java_tmp
+                java_tmp=$(mktemp -d)
+                log "Running generated Java test against buggy code in $java_tmp..."
+                (
+                    cd "$java_tmp"
+                    cp "$OLDPWD/$buggy_source" . 2>/dev/null || true
+                    cp "$OLDPWD/$test_file" . 2>/dev/null || true
+                    # Try to compile all .java files together
+                    if javac *.java 2>&1; then
+                        # Find the test class name from the test file
+                        local test_class
+                        test_class=$(grep -m1 'public class ' "$(basename "$test_file")" 2>/dev/null | awk '{print $3}')
+                        if [ -n "$test_class" ] && java -cp . "$test_class" 2>&1; then
+                            echo "[ERROR] Java test PASSED against buggy code — structural test"
+                            exit 1
+                        else
+                            echo "[INFO] Java test correctly FAILS against buggy code"
+                            exit 0
+                        fi
+                    else
+                        # Compile failure — can't validate at runtime, not a pass
+                        echo "[WARN] Java compilation failed — skipping runtime validation"
+                        exit 0
+                    fi
+                )
+                local java_result=$?
+                rm -rf "$java_tmp"
+                if [ $java_result -ne 0 ]; then
+                    log_error "STRUCTURAL TEST DETECTED: Java test PASSED against buggy code"
+                    failed=1
+                else
+                    log "Java test correctly FAILS against buggy code — behavioral"
+                fi
+            else
+                log "javac not found — skipping runtime validation for Java"
+            fi
+            ;;
+        *)
+            log "$language runtime validation not supported — relying on AST validator only"
+            ;;
+    esac
+
+    if [ $failed -ne 0 ]; then
+        log_error "File: $test_file"
+        CLOUD_FAILURES=$((CLOUD_FAILURES + 1))
+        return 1
+    fi
+    return 0
+}
+
+# 9. Bug (Python) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "9" ]; then
+    log "========================================"
+    log "9. Testing cloud 'bug' command (Python) — no structural tests"
+    log "========================================"
+
+    # Create Python fixture: quiet flag not suppressing output
+    cat > "bug_py_python.prompt" << 'PYEOF'
+Write a Python module with a preprocess() function that accepts a quiet parameter.
+When quiet=True, the function should suppress all Rich console panel output.
+When quiet=False (default), panels should print normally.
+PYEOF
+
+    cat > "bug_py_code.py" << 'PYEOF'
+from rich.console import Console
+console = Console()
+from rich.panel import Panel
+
+def preprocess(text, quiet=False):
+    """Preprocess text. Bug: quiet parameter is accepted but ignored."""
+    console.print(Panel("Starting preprocessing"))
+    result = text.strip()
+    console.print(Panel("Preprocessing complete"))
+    return result
+PYEOF
+
+    cat > "bug_py_program.py" << 'PYEOF'
+from bug_py_code import preprocess
+result = preprocess("hello world", quiet=True)
+print(result)
+PYEOF
+
+    cat > "bug_py_current.txt" << 'PYEOF'
+╭─────────────────────────╮
+│ Starting preprocessing  │
+╰─────────────────────────╯
+╭─────────────────────────╮
+│ Preprocessing complete  │
+╰─────────────────────────╯
+hello world
+PYEOF
+
+    echo "hello world" > "bug_py_desired.txt"
+
+    BUG_PY_TEST="bug_test_python.py"
+    run_pdd_command bug --manual --output "$BUG_PY_TEST" --language Python \
+                        "bug_py_python.prompt" "bug_py_code.py" \
+                        "bug_py_program.py" \
+                        "bug_py_current.txt" "bug_py_desired.txt"
+    check_exists "$BUG_PY_TEST" "'bug' Python test output"
+    check_test_catches_bug "$BUG_PY_TEST" "Python" "bug_py_code.py"
+fi
+
+# 10. Bug (Go) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
+    log "========================================"
+    log "10. Testing cloud 'bug' command (Go) — no structural tests"
+    log "========================================"
+
+    cat > "bug_go.prompt" << 'GOEOF'
+Write a Go function GetContentType() on a MessageResp struct that safely
+extracts the "type" field from a JSON payload. It should use comma-ok type
+assertions to avoid panics when the field is missing or has the wrong type.
+GOEOF
+
+    cat > "bug_go_code.go" << 'GOEOF'
+package config
+
+import (
+    "bytes"
+    "encoding/json"
+)
+
+type MessageResp struct {
+    Payload []byte
+}
+
+func (m *MessageResp) GetContentType() int64 {
+    var payloadMap map[string]interface{}
+    decoder := json.NewDecoder(bytes.NewReader(m.Payload))
+    decoder.UseNumber()
+    if err := decoder.Decode(&payloadMap); err != nil {
+        return 0
+    }
+    // BUG: unsafe chained type assertion — panics on missing/wrong type
+    return payloadMap["type"].(json.Number).Int64()
+}
+GOEOF
+
+    cat > "bug_go_program.go" << 'GOEOF'
+package main
+
+import "fmt"
+
+func main() {
+    msg := &MessageResp{Payload: []byte(`{"content": "hello"}`)}
+    fmt.Println(msg.GetContentType())
+}
+GOEOF
+
+    echo 'panic: interface conversion: interface {} is nil, not json.Number' > "bug_go_current.txt"
+    echo '0' > "bug_go_desired.txt"
+
+    BUG_GO_TEST="bug_test_go.go"
+    run_pdd_command bug --manual --output "$BUG_GO_TEST" --language Go \
+                        "bug_go.prompt" "bug_go_code.go" \
+                        "bug_go_program.go" \
+                        "bug_go_current.txt" "bug_go_desired.txt"
+    check_exists "$BUG_GO_TEST" "'bug' Go test output"
+    check_test_catches_bug "$BUG_GO_TEST" "Go" "bug_go_code.go"
+fi
+
+# 11. Bug (Java) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "11" ]; then
+    log "========================================"
+    log "11. Testing cloud 'bug' command (Java) — no structural tests"
+    log "========================================"
+
+    cat > "bug_java.prompt" << 'JAVAEOF'
+Write a Java class PbjGrpcCall with a receiveRepliesLoop() method that uses
+PbjGrpcDatagramReader to process gRPC responses. The reader should respect
+the maxSize from PbjGrpcClientConfig instead of using a hardcoded 10MB limit.
+JAVAEOF
+
+    cat > "bug_java_code.java" << 'JAVAEOF'
+public class PbjGrpcCall {
+    private final PbjGrpcClientConfig config;
+
+    public PbjGrpcCall(PbjGrpcClientConfig config) {
+        this.config = config;
+    }
+
+    public byte[] receiveRepliesLoop(byte[] responseData) {
+        // BUG: does not pass config.getMaxSize() to the reader
+        PbjGrpcDatagramReader reader = new PbjGrpcDatagramReader();
+        return reader.readDatagram(responseData);
+    }
+}
+
+class PbjGrpcDatagramReader {
+    private static final int MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10 MB hardcoded
+
+    public byte[] readDatagram(byte[] data) {
+        if (data.length > MAX_BUFFER_SIZE) {
+            throw new BufferOverflowException();
+        }
+        return data;
+    }
+}
+
+class PbjGrpcClientConfig {
+    private final int maxSize;
+    public PbjGrpcClientConfig(int maxSize) { this.maxSize = maxSize; }
+    public int getMaxSize() { return maxSize; }
+}
+JAVAEOF
+
+    cat > "bug_java_program.java" << 'JAVAEOF'
+public class Main {
+    public static void main(String[] args) {
+        PbjGrpcClientConfig config = new PbjGrpcClientConfig(20 * 1024 * 1024);
+        PbjGrpcCall call = new PbjGrpcCall(config);
+        byte[] response = new byte[15 * 1024 * 1024]; // 15 MB
+        call.receiveRepliesLoop(response);
+        System.out.println("Success: 15 MB response processed");
+    }
+}
+JAVAEOF
+
+    echo 'Exception in thread "main" java.nio.BufferOverflowException' > "bug_java_current.txt"
+    echo 'Success: 15 MB response processed' > "bug_java_desired.txt"
+
+    BUG_JAVA_TEST="bug_test_java.java"
+    run_pdd_command bug --manual --output "$BUG_JAVA_TEST" --language Java \
+                        "bug_java.prompt" "bug_java_code.java" \
+                        "bug_java_program.java" \
+                        "bug_java_current.txt" "bug_java_desired.txt"
+    check_exists "$BUG_JAVA_TEST" "'bug' Java test output"
+    check_test_catches_bug "$BUG_JAVA_TEST" "Java" "bug_java_code.java"
+fi
+
+# 12. Bug (JavaScript) — Structural test regression guard
+if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "12" ]; then
+    log "========================================"
+    log "12. Testing cloud 'bug' command (JavaScript) — no structural tests"
+    log "========================================"
+
+    cat > "bug_js.prompt" << 'JSEOF'
+Write a JavaScript parser module that handles optional chaining (?.) with
+reserved words as property identifiers. Expressions like a?.delete(b) should
+parse the same as a.delete(b) — producing a call_expression, not an ERROR node.
+JSEOF
+
+    cat > "bug_js_code.js" << 'JSEOF'
+// tree-sitter JavaScript parser grammar excerpt
+// BUG: optional_chaining rule does not include reserved words
+// in the property identifier position
+
+function parse(source) {
+    const tree = parser.parse(source);
+    return tree.rootNode;
+}
+
+function getMemberProperty(node) {
+    // Returns the property name from a member expression
+    // Works for a.delete but fails for a?.delete
+    if (node.type === 'member_expression') {
+        return node.namedChildren.find(c => c.type === 'property_identifier');
+    }
+    return null;
+}
+JSEOF
+
+    cat > "bug_js_program.js" << 'JSEOF'
+const { parse } = require('./bug_js_code');
+const tree = parse('a?.delete(b);');
+console.log(tree.toString());
+JSEOF
+
+    cat > "bug_js_current.txt" << 'JSEOF'
+(program
+  (expression_statement
+    (call_expression
+      function: (identifier)
+      arguments: (arguments (identifier)))
+    (ERROR (identifier))))
+JSEOF
+
+    cat > "bug_js_desired.txt" << 'JSEOF'
+(program
+  (expression_statement
+    (call_expression
+      function: (member_expression
+        object: (identifier)
+        property: (property_identifier))
+      arguments: (arguments (identifier)))))
+JSEOF
+
+    BUG_JS_TEST="bug_test_js.js"
+    run_pdd_command bug --manual --output "$BUG_JS_TEST" --language JavaScript \
+                        "bug_js.prompt" "bug_js_code.js" \
+                        "bug_js_program.js" \
+                        "bug_js_current.txt" "bug_js_desired.txt"
+    check_exists "$BUG_JS_TEST" "'bug' JavaScript test output"
+    check_test_catches_bug "$BUG_JS_TEST" "JavaScript" "bug_js_code.js"
 fi
 
 # --- Final Summary ---

@@ -3168,3 +3168,196 @@ class TestClassifyStepOutput:
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
         output = "18 passed, 3 failed. The fix needs more work."
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
+
+
+class TestIssue673CheckE2ESubdirectory:
+    """Bug: _check_e2e_environment only checks repo root for playwright config.
+
+    In pdd_cloud, playwright.config.ts lives at frontend/playwright.config.ts.
+    The current check only looks at cwd/ and misses subdirectory configs,
+    causing Step 2 to be skipped unnecessarily.
+    """
+
+    def test_detects_playwright_config_in_frontend_subdir(self, tmp_path):
+        """_check_e2e_environment should find playwright.config.ts in frontend/."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "playwright.config.ts").write_text("export default {}")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is True, (
+            f"Should detect playwright.config.ts in frontend/ subdirectory. "
+            f"Got reason: {reason}"
+        )
+
+    def test_detects_playwright_config_in_e2e_subdir(self, tmp_path):
+        """_check_e2e_environment should find playwright.config.ts in e2e/."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        (tmp_path / "e2e").mkdir()
+        (tmp_path / "e2e" / "playwright.config.js").write_text("module.exports = {}")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is True, (
+            f"Should detect playwright.config.js in e2e/ subdirectory. "
+            f"Got reason: {reason}"
+        )
+
+    def test_still_returns_false_when_no_config_anywhere(self, tmp_path):
+        """_check_e2e_environment still returns False when no config exists at all."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "src").mkdir()
+        # No playwright config anywhere
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(tmp_path)
+
+        assert available is False
+
+    def test_does_not_crash_on_nonexistent_cwd(self):
+        """_check_e2e_environment should return False, not crash, for non-existent paths."""
+        from pdd.agentic_e2e_fix_orchestrator import _check_e2e_environment
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.shutil.which", return_value="/usr/bin/npx"):
+            available, reason = _check_e2e_environment(Path("/nonexistent/path"))
+
+        assert available is False
+
+
+class TestIssue673SkippedStepEarlyExit:
+    """Bug: Early exit when Step 1 passes + Step 2 skipped is unreachable on Cycle 2+.
+
+    On Cycle 1, Step 2 is skipped via _check_e2e_environment (which adds to
+    skipped_steps). On Cycle 2+, Step 2 is skipped via the skipped_steps block,
+    which has NO early exit check. So even when Step 1 says ALL_TESTS_PASS,
+    the workflow falls through to Step 3+ wasting cycles.
+    """
+
+    def test_early_exit_when_step1_passes_and_step2_skipped_cycle1(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """When Step 1 ALL_TESTS_PASS and Step 2 is E2E_SKIP, exit early on Cycle 1."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Step 1 returns ALL_TESTS_PASS
+        mock_run.return_value = (True, "**Status:** ALL_TESTS_PASS\n792 passed, 0 failed", 0.1, "gpt-4")
+
+        # Mock _check_e2e_environment to skip Step 2
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(False, "no playwright config found in project")), \
+             patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=[]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment"):
+
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, f"Should succeed when Step 1 passes and Step 2 skipped. msg={msg}"
+        assert mock_run.call_count == 1, (
+            f"Expected only 1 LLM call (Step 1) but got {mock_run.call_count}. "
+            f"Workflow should exit early, not fall through to Step 3+."
+        )
+
+    def test_early_exit_when_step1_passes_and_step2_skipped_cycle2(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """On Cycle 2, Step 2 is skipped via skipped_steps — early exit must still fire.
+
+        This is the critical bug: skipped_steps path (line 960) bypasses the
+        _check_e2e_environment block where the early exit lives, so on Cycle 2+
+        the early exit never fires.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        call_count = 0
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            label = kwargs.get('label', '')
+            # Cycle 1: Step 1 fails (tests not passing yet)
+            if 'cycle1_step1' in label:
+                return (True, "**Status:** CODE_BUG\n3 tests failing", 0.1, "gpt-4")
+            # Cycle 1: Steps 3-9 run normally, Step 9 says CONTINUE_CYCLE
+            if 'cycle1_step9' in label:
+                return (True, "**Status:** CONTINUE_CYCLE\n3 tests still failing", 0.1, "gpt-4")
+            # Cycle 2: Step 1 passes (fix was applied)
+            if 'cycle2_step1' in label:
+                return (True, "**Status:** ALL_TESTS_PASS\n792 passed, 0 failed", 0.1, "gpt-4")
+            # All other steps return generic output
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Step 2 skipped from Cycle 1
+        with patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(False, "no playwright config found in project")), \
+             patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=[]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment"):
+
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        # Cycle 2 should exit early at Step 2 skip, not continue to Step 3+
+        cycle2_labels = [c.kwargs.get('label', '') for c in mock_run.call_args_list if 'cycle2' in c.kwargs.get('label', '')]
+        assert success is True, f"Should succeed when Cycle 2 Step 1 passes. msg={msg}"
+        # Only cycle2_step1 should run — after that, Step 2 skip + early exit
+        cycle2_step_count = len(cycle2_labels)
+        assert cycle2_step_count == 1, (
+            f"Expected only 1 LLM call in Cycle 2 (Step 1) but got {cycle2_step_count}: {cycle2_labels}. "
+            f"Step 2 skip via skipped_steps should trigger early exit."
+        )
+
+
+class TestIssue673NotABugAfterFixesApplied:
+    """Bug: NOT_A_BUG is allowed on Cycle 2+ even after fixes were applied.
+
+    In pdd_cloud#673, the workflow applied fixes in Cycle 1, verified them
+    in Cycle 2, but then on Cycle 4 Step 3 misclassified an E2E infrastructure
+    issue as NOT_A_BUG, stopping the workflow with the wrong exit message.
+    """
+
+    def test_not_a_bug_blocked_after_fixes_applied(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """NOT_A_BUG should be ignored when dev_unit_states has fixed units.
+
+        If the workflow already applied fixes (dev_unit_states has entries
+        marked as fixed), NOT_A_BUG in Step 3 should be treated as
+        CONTINUE_CYCLE, not as a workflow terminator.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            # Cycle 1: normal flow, Step 8 reports fixes applied
+            if 'cycle1_step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: firestore_client, installation_service", 0.1, "gpt-4")
+            if 'cycle1_step8' in label:
+                return (True, "firestore_client: FIXED — added delete_installation\ninstallation_service: FIXED — added deduplication", 0.1, "gpt-4")
+            if 'cycle1_step9' in label:
+                return (True, "**Status:** CONTINUE_CYCLE\n2 tests still failing", 0.1, "gpt-4")
+            # Cycle 2: Step 3 says NOT_A_BUG (the bug we're testing)
+            if 'cycle2_step3' in label:
+                return (True, "**Status:** NOT_A_BUG\nThis is not a bug, the E2E skip is an infrastructure issue.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=[]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment"):
+
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        # The workflow should NOT have stopped with "not a bug" — fixes were already applied
+        assert "not a bug" not in msg.lower(), (
+            f"NOT_A_BUG should be blocked after fixes were applied in Cycle 1. "
+            f"Got: {msg}"
+        )

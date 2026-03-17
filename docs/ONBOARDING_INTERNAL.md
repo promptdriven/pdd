@@ -488,6 +488,35 @@ Before merging a PR, ensure it contains:
 | `make cloud-test` | Run full test suite on Cloud Batch (auto-rebuilds image) | CI validation before merging |
 | `make cloud-test-quick` | Run tests on Cloud Batch (skip image rebuild) | Typical day-to-day test runs |
 
+### Using Claude Code with OAuth Token
+
+Claude Code normally requires interactive onboarding on first run. To use it non-interactively (CI, Docker, scripts), you need two things:
+
+1. **`CLAUDE_CODE_OAUTH_TOKEN`** — the OAuth token for authentication
+2. **`~/.claude.json`** — a file that tells Claude Code onboarding is already complete
+
+Without the `~/.claude.json` file, `claude -p` exits with code 1 even when `CLAUDE_CODE_OAUTH_TOKEN` is set. See: https://github.com/anthropics/claude-code/issues/8938
+
+**Local setup with Infisical:**
+
+```bash
+# 1. Create the onboarding bypass file (one-time)
+mkdir -p ~/.claude
+echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
+
+# 2. Run Claude Code with the OAuth token injected by Infisical
+infisical run -- claude -p "your prompt here"
+```
+
+The `CLAUDE_CODE_OAUTH_TOKEN` secret is stored in Infisical and injected automatically by `infisical run`.
+
+**Docker setup (CI / GitHub App worker):**
+
+```dockerfile
+RUN mkdir -p /home/appuser/.claude && \
+    echo '{"hasCompletedOnboarding": true}' > /home/appuser/.claude.json
+```
+
 ### Important Notes
 
 - **Tests are permanent, code is ephemeral**: Tests accumulate over time; code is regenerated

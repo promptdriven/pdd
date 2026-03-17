@@ -14,10 +14,23 @@ from ..install_completion import (
 )
 
 def _first_pending_command(ctx: click.Context) -> Optional[str]:
-    """Return the first subcommand scheduled for this invocation."""
+    """Return the first subcommand scheduled for this invocation.
+
+    Click consumes protected_args when it starts invoking the subcommand,
+    so we also check ctx.invoked_subcommand (set by Click's Group) and the
+    invoked_subcommands list tracked by @track_cost on ctx.obj.
+    """
     for arg in ctx.protected_args:
         if not arg.startswith("-"):
             return arg
+    # Click sets invoked_subcommand on the Group context during invoke
+    if ctx.invoked_subcommand:
+        return ctx.invoked_subcommand
+    # track_cost records command names on ctx.obj
+    if isinstance(ctx.obj, dict):
+        invoked = ctx.obj.get("invoked_subcommands") or []
+        if invoked:
+            return invoked[-1]
     return None
 
 

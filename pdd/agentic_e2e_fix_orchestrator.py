@@ -153,13 +153,21 @@ def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
     if not shutil.which("npx"):
         return (False, "npx not found — playwright/browser infrastructure unavailable")
 
-    # Check for playwright config files
+    # Check for playwright config files (root + one level of subdirectories)
     playwright_configs = [
         "playwright.config.ts",
         "playwright.config.js",
         "playwright.config.mjs",
     ]
-    has_config = any((cwd / cfg).exists() for cfg in playwright_configs)
+    try:
+        search_dirs = [cwd] + [d for d in cwd.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    except (FileNotFoundError, NotADirectoryError):
+        search_dirs = [cwd]
+    has_config = any(
+        (d / cfg).exists()
+        for d in search_dirs
+        for cfg in playwright_configs
+    )
     if not has_config:
         return (False, "no playwright config found in project")
 
@@ -962,6 +970,25 @@ def run_agentic_e2e_fix_orchestrator(
                     console.print(f"[bold][Step {step_num}/9] Skipped (remembered): {skip_reason}[/bold]")
                     step_outputs[str(step_num)] = f"E2E_SKIP: {skip_reason}"
                     last_completed_step = step_num
+
+                    # Early exit: Step 1 ALL_TESTS_PASS + Step 2 skipped (via skipped_steps)
+                    if step_num == 2:
+                        step1_token = _classify_step_output(step_outputs.get("1", ""), step_num=1)
+                        if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+                            test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                            if test_files:
+                                verified, _ = _verify_tests_independently(test_files, cwd)
+                                if verified:
+                                    console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
+                                    success = True
+                                    final_message = "All tests passed (Step 1 verified, Step 2 skipped)."
+                                    break
+                            else:
+                                console.print("[green]ALL_TESTS_PASS (Step 1) — Step 2 skipped, no test files for verification. Exiting early.[/green]")
+                                success = True
+                                final_message = "All tests passed (Step 1, Step 2 skipped)."
+                                break
+
                     continue
 
                 # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
@@ -981,6 +1008,24 @@ def run_agentic_e2e_fix_orchestrator(
                         step_outputs[str(step_num)] = f"E2E_SKIP: {e2e_reason}"
                         skipped_steps[step_num] = e2e_reason
                         last_completed_step = step_num
+
+                        # Early exit: Step 1 ALL_TESTS_PASS + Step 2 skipped (first time)
+                        step1_token = _classify_step_output(step_outputs.get("1", ""), step_num=1)
+                        if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+                            test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                            if test_files:
+                                verified, _ = _verify_tests_independently(test_files, cwd)
+                                if verified:
+                                    console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
+                                    success = True
+                                    final_message = "All tests passed (Step 1 verified, Step 2 skipped)."
+                                    break
+                            else:
+                                console.print("[green]ALL_TESTS_PASS (Step 1) — Step 2 skipped, no test files for verification. Exiting early.[/green]")
+                                success = True
+                                final_message = "All tests passed (Step 1, Step 2 skipped)."
+                                break
+
                         continue
 
                 console.print(f"[bold][Step {step_num}/9] {description}...[/bold]")
@@ -1173,10 +1218,15 @@ def run_agentic_e2e_fix_orchestrator(
                 # Check Early Exit (Step 3): NOT_A_BUG
                 _step3_token = _classify_step_output(step_output, step_num=3) if step_num == 3 else None
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
-                    console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
-                    success = False
-                    final_message = "Issue determined to be not a bug."
-                    break
+                    # Block NOT_A_BUG if fixes were already applied in prior cycles
+                    has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
+                    if has_fixed_units:
+                        console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
+                    else:
+                        console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
+                        success = False
+                        final_message = "Issue determined to be not a bug."
+                        break
 
                 # Check Loop Control (Step 9)
                 if step_num == 9:
@@ -1218,7 +1268,8 @@ def run_agentic_e2e_fix_orchestrator(
                 break
 
             # Check if NOT_A_BUG was detected (exit outer loop too)
-            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG":
+            has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
+            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG" and not has_fixed_units:
                 break
 
             # Check if workflow was stopped due to missing loop control token or max cycles
