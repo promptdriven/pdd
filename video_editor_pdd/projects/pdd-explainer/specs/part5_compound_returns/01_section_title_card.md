@@ -1,90 +1,136 @@
 [title:]
 
-# Section 5.1: Compound Returns — Title Card
+# Section 5.1: Part 5 Title Card — Compound Returns
 
-**Tool:** Remotion
+**Tool:** Title
 **Duration:** ~4s (120 frames @ 30fps)
 **Timestamp:** 21:00 - 21:04
 
 ## Visual Description
-A section title card introducing Part 5. The heading "Compound Returns" fades in at center. Below the title, a stylized icon animates: two curves diverge from a shared origin — one curving exponentially upward (amber, representing compounding debt/cost) and one staying flat then gently declining (blue, representing PDD's compounding value). A small dollar sign marks the end of the upper curve; a small checkmark marks the end of the lower curve. The subtitle "Part 5" drifts upward below an accent line. Dark navy background consistent with the series.
+
+A clean section title card announces Part 5. "COMPOUND" appears first in large, bold weight, then "RETURNS" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines. Behind the text, two abstract ghost curves diverge from a shared origin — an amber curve (#D9944A) sweeping exponentially upward (debt) and a blue curve (#4A90D9) staying flat then gently declining (PDD) — foreshadowing the section's central divergence argument.
+
+The background is deep navy-black with a subtle ledger-paper grid — faint horizontal lines with slightly brighter vertical accents, continuing the economic visual language from Part 1.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
+- Background: `#0A0F1A` (deep navy-black)
+- Ledger grid: horizontal lines at 40px spacing, `#1E293B` at 0.04; vertical accents every 120px, `#1E293B` at 0.06
 
 ### Chart/Visual Elements
-- **Title Text:** "Compound Returns" — white `#FFFFFF`, centered at Y=370px
-- **Divergence Icon:** Centered at Y=460px, 280px wide x 70px tall
-  - Shared origin dot at left-center: `#FFFFFF` at 0.6 opacity, 4px radius
-  - Upper curve: Exponential upward arc, stroke `#D9944A` at 0.5 opacity, 2px (debt/cost)
-  - Lower curve: Flat then gentle decline, stroke `#4A90D9` at 0.5 opacity, 2px (PDD cost)
-  - Small dollar sign at end of upper curve: `#D9944A` at 0.3 opacity, 12px
-  - Small checkmark at end of lower curve: `#4A90D9` at 0.3 opacity, 12px
-- **Accent Line:** Thin horizontal rule — `rgba(255,255,255,0.7)`, centered at Y=550px, 400px wide x 2px tall
-- **Subtitle Text:** "Part 5" — muted slate `#94A3B8`, centered at Y=590px
+
+#### Title Text
+- "COMPOUND" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
+- "RETURNS" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 200px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+
+#### Section Number
+- "PART 5" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
+
+#### Background Shapes (ghost elements)
+- Diverging curves from shared origin at (960, 520):
+  - Amber curve: exponential rise to upper-right (1300, 350), `#D9944A` at 0.04, 2px stroke
+  - Blue curve: flat trajectory to lower-right (1300, 550), `#4A90D9` at 0.04, 2px stroke
+- Both have 8px Gaussian blur glow at respective colors, 0.02 opacity
+- Shared origin point: small circle, `#E2E8F0` at 0.03
 
 ### Animation Sequence
-1. **Frame 0-25 (0-0.83s):** Title text fades in (opacity 0→1) and scales up (0.85→1.0) from center
-2. **Frame 20-55 (0.67-1.83s):** Divergence icon draws in — origin dot appears, then both curves draw outward simultaneously from the shared origin, diverging. Dollar sign and checkmark fade in at endpoints
-3. **Frame 45-70 (1.50-2.33s):** Accent line expands from 0px to 400px width
-4. **Frame 60-85 (2.0-2.83s):** Subtitle "Part 5" fades in with 12px upward drift
-5. **Frame 85-120 (2.83-4.0s):** Hold at final state
+1. **Frame 0-15 (0-0.5s):** Background fades in from black. Ledger grid appears.
+2. **Frame 15-40 (0.5-1.33s):** "PART 5" fades in. Ghost curves begin drawing from shared origin (stroke-dashoffset animation), diverging outward.
+3. **Frame 40-60 (1.33-2s):** "COMPOUND" types on character-by-character (3 frames per character).
+4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
+5. **Frame 70-90 (2.33-3s):** "RETURNS" fades in with 10px upward slide.
+6. **Frame 90-120 (3-4s):** Hold. Ghost curves finish drawing. The divergence gap between them pulses gently.
 
 ### Typography
-- Title: Inter, 64px, bold (700), `#FFFFFF`
-- Subtitle: Inter, 28px, regular (400), `#94A3B8`
+- Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
+- Title words: Inter, 72px, bold (700), `#E2E8F0`
+- Rule: `#334155` at 0.5
 
 ### Easing
-- Title fade/scale: `easeOut(quad)`
-- Origin dot appear: `easeOut(cubic)`
-- Curve draws: `easeInOut(cubic)`
-- Accent line expand: `easeOut(cubic)`
-- Subtitle fade/drift: `easeOut(quad)`
+- Text fade-in: `easeOut(quad)` over 20 frames
+- "RETURNS" slide-up: `easeOut(cubic)` over 20 frames
+- Rule draw: `easeInOut(quad)` over 10 frames
+- Ghost curve draw: `easeInOut(cubic)` over 60 frames
+- Divergence pulse: `easeInOut(sine)` on 30-frame cycle
 
 ## Narration Sync
 > "Now let's zoom out. Because the numbers you just saw — individual patches, individual bugs — add up to something staggering."
 
+Segment: `part5_001`
+
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
-  <TitleText text="Compound Returns" fontSize={64} />
-  <Sequence from={20}>
-    <DivergenceIcon width={280} height={70} y={460}>
-      <OriginDot color="#FFFFFF" opacity={0.6} radius={4} />
-      <ExponentialCurve color="#D9944A" opacity={0.5} direction="up" />
-      <FlatCurve color="#4A90D9" opacity={0.5} direction="flat" />
-    </DivergenceIcon>
-  </Sequence>
-  <Sequence from={45}>
-    <AccentLine targetWidth={400} color="rgba(255,255,255,0.7)" />
-  </Sequence>
-  <Sequence from={60}>
-    <SubtitleText text="Part 5" />
-  </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <LedgerGrid hSpacing={40} vAccentEvery={120}
+      color="#1E293B" hOpacity={0.04} vOpacity={0.06} />
+
+    {/* Ghost shapes — diverging curves foreshadowed */}
+    <Sequence from={15}>
+      <StrokeDraw duration={60}>
+        <DivergingCurves
+          origin={[960, 520]}
+          amberEnd={[1300, 350]} blueEnd={[1300, 550]}
+          amberColor="#D9944A" blueColor="#4A90D9"
+          opacity={0.04} strokeWidth={2}
+          glow={{ blur: 8, opacity: 0.02 }} />
+      </StrokeDraw>
+    </Sequence>
+
+    {/* Section label */}
+    <Sequence from={15}>
+      <FadeIn duration={20}>
+        <Text text="PART 5" font="Inter" size={14}
+          weight={600} color="#64748B" opacity={0.5}
+          letterSpacing={4} x={960} y={400} align="center" />
+      </FadeIn>
+    </Sequence>
+
+    {/* Title: COMPOUND */}
+    <Sequence from={40}>
+      <TypeWriter text="COMPOUND" font="Inter" size={72}
+        weight={700} color="#E2E8F0"
+        charDelay={3} x={960} y={460} align="center" />
+    </Sequence>
+
+    {/* Horizontal rule */}
+    <Sequence from={60}>
+      <DrawLine from={[860, 505]} to={[1060, 505]}
+        color="#334155" opacity={0.5} width={2}
+        drawDuration={10} fromCenter />
+    </Sequence>
+
+    {/* Title: RETURNS */}
+    <Sequence from={70}>
+      <SlideUp distance={10} duration={20}>
+        <FadeIn duration={20}>
+          <Text text="RETURNS" font="Inter" size={72}
+            weight={700} color="#E2E8F0"
+            x={975} y={545} align="center" />
+        </FadeIn>
+      </SlideUp>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
-  "title": "Compound Returns",
-  "subtitle": "Part 5",
-  "accentLineWidth": 400,
-  "backgroundColor": "#0F172A",
-  "titleColor": "#FFFFFF",
-  "subtitleColor": "#94A3B8",
-  "icon": {
-    "width": 280,
-    "height": 70,
-    "upperCurveColor": "#D9944A",
-    "lowerCurveColor": "#4A90D9",
-    "originDotColor": "#FFFFFF",
-    "originDotOpacity": 0.6
-  }
+  "type": "title_card",
+  "sectionNumber": 5,
+  "sectionLabel": "PART 5",
+  "titleLine1": "COMPOUND",
+  "titleLine2": "RETURNS",
+  "backgroundColor": "#0A0F1A",
+  "ghostElements": [
+    { "shape": "exponential_curve", "color": "#D9944A", "component": "debt_growth" },
+    { "shape": "flat_curve", "color": "#4A90D9", "component": "pdd_flat" }
+  ],
+  "narrationSegments": ["part5_001"]
 }
 ```
 

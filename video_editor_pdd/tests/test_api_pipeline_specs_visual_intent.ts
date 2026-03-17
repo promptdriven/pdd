@@ -232,7 +232,7 @@ ${"A".repeat(8000)}
     await executor(jest.fn());
 
     expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
-    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(660_000);
+    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(840_000);
   });
 
   it("adds extra timeout budget for remotion-only sections with many visual beats", async () => {
@@ -273,7 +273,44 @@ ${"A".repeat(6000)}
     await executor(jest.fn());
 
     expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
-    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(600_000);
+    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBeGreaterThan(630_000);
+  });
+
+  it("adds a fixed finalization buffer for lighter sections so Claude can finish after the last write", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [
+        {
+          id: "lighter_section",
+          label: "Lighter Section",
+          specDir: "lighter_section",
+        },
+      ],
+      veo: { defaultAspectRatio: "16:9" },
+    });
+    mockExistsSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") return false;
+      return filePath.includes("narrative/main_script.md");
+    });
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (typeof filePath !== "string") {
+        return "";
+      }
+      if (filePath.includes("narrative/main_script.md")) {
+        return `
+## Lighter Section
+**[VISUAL: Clean title card.]**
+**NARRATOR:**
+A short narration block.
+        `.trim();
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(1);
+    expect(mockRunClaudeFix.mock.calls[0]?.[3]?.timeoutMs).toBe(660_000);
   });
 
   it("continues later sections after a section times out and reports an aggregated error", async () => {

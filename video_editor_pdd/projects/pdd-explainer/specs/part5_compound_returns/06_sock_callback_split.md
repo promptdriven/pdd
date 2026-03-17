@@ -1,144 +1,182 @@
 [split:]
 
-# Section 5.6: Sock Callback — Grandmother and Developer Return
+# Section 5.6: Sock Callback — Split Screen Emotional Payoff
 
-**Tool:** Remotion
-**Duration:** ~10s (300 frames @ 30fps)
-**Timestamp:** 21:52 - 22:02
+**Tool:** Split
+**Duration:** ~12s (360 frames @ 30fps)
+**Timestamp:** 21:58 - 22:10
 
 ## Visual Description
-The sock metaphor returns for its emotional payoff. A split-screen brings back both characters from the cold open: the 1950s grandmother on the left and the modern developer on the right. This time the framing is different — instead of showing them working, it shows the *realization*. The grandmother puts down her darning needle; the developer puts down their patching tools. Both recognize the economics have changed. The visual callbacks to the opening create narrative closure while driving the argument home: rational behavior changes when economics change.
+
+A vertical split screen delivers the emotional payoff of the sock metaphor. LEFT panel shows the 1960s grandmother from the cold open — but now she sets down her darning needle, looks at a new pack of socks, and reaches for them instead. RIGHT panel shows a modern developer — but now they close Cursor's diff view, and open a clean prompt file with `pdd generate` visible in the terminal. Both figures make the same realization simultaneously: the economics changed.
+
+The left side has a warm amber lamplight grade. The right side has a cool blue-white monitor glow. Both halves carry embedded Veo clips for the live-action feel, but the split-screen framing and text overlays are Remotion-controlled.
+
+Below the split, narration text appears as a subtitle: the grandmother's economic rationality mirrored in the developer's.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
+- Background: `#000000` (true black)
+- Split line: 2px vertical divider at x: 960, color `#334155` at 0.2
 
 ### Chart/Visual Elements
-- **Vertical Divider:** 2px line at X=960, full height, `rgba(255,255,255,0.12)`
-- **Left Panel — Grandmother (X: 0-958)**
-  - Label: "1960s" — `#94A3B8`, 20px, top-left at (80, 60)
-  - Stylized grandmother silhouette: Seated figure, simplified geometric shapes, stroke `#D9944A` at 0.4 opacity, 2px, centered at (480, 480)
-  - Darning needle: Small diagonal line, `#D9944A` at 0.6 opacity, starting in hand position
-  - Sock: Small rounded rectangle near hands, `#D9944A` at 0.3 opacity
-  - Decision: Needle drops away (rotates and fades), sock placed aside
-  - New sock pack: Appears to the right of figure, `#4A90D9` at 0.4 opacity, labeled "x12" in small text
-  - Caption: "Your great-grandmother wasn't stupid for darning socks." — `#FFFFFF` at 0.6 opacity, 16px, positioned at (480, 850), max-width 380px, centered
-- **Right Panel — Developer (X: 962-1920)**
-  - Label: "2025" — `#94A3B8`, 20px, top-left at (1040, 60)
-  - Stylized developer silhouette: Seated at desk, simplified geometric shapes, stroke `#4A90D9` at 0.4 opacity, 2px, centered at (1440, 480)
-  - Code editor: Rectangular outline behind developer, `rgba(255,255,255,0.08)`, representing IDE
-  - Patch icon: Small wrench/bandage icon near the editor, `#D9944A` at 0.6 opacity
-  - Decision: Patch icon drops away (rotates and fades), editor screen shifts to show a prompt file
-  - Terminal snippet: Small text block at bottom-right of editor: `pdd generate` — JetBrains Mono, `#5AAA6E` at 0.4 opacity, 12px
-  - Caption: "And you're not stupid for patching code." — `#FFFFFF` at 0.6 opacity, 16px, positioned at (1440, 850), max-width 380px, centered
+
+#### Panel Headers
+- LEFT: "1960" — Inter, 14px, semi-bold (600), `#D9944A` at 0.4, letter-spacing 2px, centered at y: 40
+- RIGHT: "NOW" — Inter, 14px, semi-bold (600), `#4A90D9` at 0.4, letter-spacing 2px, centered at y: 40
+
+#### Left Panel — Grandmother (x: 0 to x: 958)
+- Background: warm amber grade over Veo clip
+- Veo clip placeholder: grandmother's hands setting down darning needle, reaching for packaged socks
+- Color grade overlay: `#D4A043` at 0.04, warm sepia tone
+- Subtle vignette: radial gradient, edges darkened to `#0A0500` at 0.3
+- Bottom caption: "The economics made it rational." — Inter, 13px, italic, `#E2E8F0` at 0.6, centered at y: 920
+- Small darning needle icon (crossed out with thin line), `#D9944A` at 0.3, at (200, 900)
+
+#### Right Panel — Developer (x: 962 to x: 1920)
+- Background: cool blue grade over Veo clip
+- Veo clip placeholder: developer's hands closing diff view, typing `pdd generate` in terminal
+- Color grade overlay: `#4A90D9` at 0.03, cool blue tone
+- Subtle vignette: radial gradient, edges darkened to `#000510` at 0.3
+- Bottom caption: "Until now, the economics made it rational." — Inter, 13px, italic, `#E2E8F0` at 0.6, centered at y: 920
+- Small patch icon (crossed out with thin line), `#4A90D9` at 0.3, at (1680, 900)
+
+#### Transition Moment
+- At the midpoint, both panels briefly brighten — a shared "realization" moment
+- Brightness flash: 0.0 → 0.03 → 0.0 over 20 frames, white overlay
+- The split line briefly glows: `#E2E8F0` at 0.15 for 10 frames
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Divider draws top-to-bottom. Era labels "1960s" and "2025" fade in
-2. **Frame 20-60 (0.67-2.0s):** Both silhouettes fade in simultaneously with slight scale-up (0.95→1.0). Grandmother holds needle over sock; developer has cursor in code editor with patch icon
-3. **Frame 60-120 (2.0-4.0s):** Left: Grandmother pauses. The needle begins to rotate slowly (suggesting putting it down). Right: Developer pauses. The patch icon begins to rotate similarly
-4. **Frame 120-180 (4.0-6.0s):** Left: Needle drops away (falls with gravity, rotates 45deg, fades to 0). Sock placed aside. New sock pack slides in from right edge. Right: Patch icon drops away (same motion). Editor morphs — raw code fades, replaced by a clean prompt file outline. Terminal snippet appears
-5. **Frame 180-240 (6.0-8.0s):** Left caption fades in: "Your great-grandmother wasn't stupid for darning socks." Right caption fades in (20-frame stagger): "And you're not stupid for patching code."
-6. **Frame 240-300 (8.0-10.0s):** Hold. Both panels breathe — very subtle ambient pulse on the new items (sock pack, prompt file) at 0.02 opacity oscillation
+1. **Frame 0-20 (0-0.67s):** Split line draws. Panel headers "1960" and "NOW" fade in.
+2. **Frame 20-60 (0.67-2s):** Left panel: Veo clip plays — grandmother's hands visible, darning needle in use. Warm amber grade.
+3. **Frame 60-120 (2-4s):** Left panel: grandmother sets down needle. Right panel simultaneously: developer has Cursor open with a messy diff.
+4. **Frame 120-180 (4-6s):** Left panel: grandmother reaches for new sock pack. Right panel: developer closes diff view, opens prompt file.
+5. **Frame 180-200 (6-6.67s):** Shared "realization" flash. Both panels brighten briefly. Split line glows.
+6. **Frame 200-260 (6.67-8.67s):** Left caption fades in: "The economics made it rational." Right caption: "Until now, the economics made it rational."
+7. **Frame 260-300 (8.67-10s):** Crossed-out icons appear — darning needle (left), patch icon (right).
+8. **Frame 300-360 (10-12s):** Hold on complete split.
 
 ### Typography
-- Era Labels: Inter, 20px, medium (500), `#94A3B8`
-- Captions: Inter, 16px, regular (400), `#FFFFFF` at 0.6 opacity, max-width 380px, text-align center
-- Terminal Text: JetBrains Mono, 12px, regular (400), `#5AAA6E` at 0.4 opacity
+- Panel headers: Inter, 14px, semi-bold (600), respective colors at 0.4, letter-spacing 2px
+- Bottom captions: Inter, 13px, italic, `#E2E8F0` at 0.6
+- "Until now" emphasized: `#4A90D9` at 0.8
 
 ### Easing
-- Divider draw: `easeOut(cubic)`
-- Silhouette fade/scale: `easeOut(quad)`
-- Needle/patch drop: `easeIn(quad)` (gravity feel)
-- New item slide-in: `easeOut(cubic)`
-- Editor morph: `easeInOut(cubic)`
-- Caption fade: `easeOut(quad)`
+- Split line draw: `easeOut(cubic)` over 15 frames
+- Panel header fade: `easeOut(quad)` over 15 frames
+- Realization flash: `easeOut(quad)` brightness up, `easeIn(quad)` brightness down
+- Caption fade: `easeOut(quad)` over 20 frames
+- Icon appear: `easeOut(cubic)` scale 0→1, 15 frames
 
 ## Narration Sync
 > "Your great-grandmother wasn't stupid for darning socks. The economics made it rational."
 > "And you're not stupid for patching code. Until now, the economics made it rational."
 
+Segment: `part5_006`
+
+- **21:58** ("Your great-grandmother wasn't stupid"): Left panel active, grandmother darning
+- **22:02** ("The economics made it rational"): Left caption appears
+- **22:04** ("And you're not stupid for patching code"): Right panel active, developer with diff
+- **22:08** ("Until now, the economics made it rational"): Right caption appears, realization flash
+
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={300}>
-  {/* Divider */}
-  <Sequence from={0} durationInFrames={20}>
-    <VerticalDivider x={960} color="rgba(255,255,255,0.12)" />
-    <EraLabel text="1960s" x={80} y={60} />
-    <EraLabel text="2025" x={1040} y={60} />
-  </Sequence>
-
-  {/* Left Panel — Grandmother */}
-  <AbsoluteFill style={{ clipPath: "inset(0 50% 0 0)" }}>
-    <Sequence from={20} durationInFrames={40}>
-      <GrandmotherSilhouette x={480} y={480} color="#D9944A" />
-    </Sequence>
-    <Sequence from={60} durationInFrames={120}>
-      <NeedleDrop startFrame={60} endFrame={120} />
-      <Sequence from={60}>
-        <SockPackSlideIn x={620} color="#4A90D9" label="x12" />
+<Sequence from={0} durationInFrames={360}>
+  <AbsoluteFill style={{ backgroundColor: '#000000' }}>
+    {/* Left panel — 1960s grandmother */}
+    <Panel x={0} width={958}>
+      <VeoClip clipId="grandmother_callback"
+        src="/clips/grandmother_callback.mp4" fit="cover" />
+      <ColorGrade color="#D4A043" opacity={0.04} />
+      <Vignette edgeColor="#0A0500" edgeOpacity={0.3} />
+      <PanelHeader text="1960" color="#D9944A"
+        opacity={0.4} letterSpacing={2} y={40} />
+      <Sequence from={200}>
+        <FadeIn duration={20}>
+          <Text text="The economics made it rational."
+            font="Inter" size={13} color="#E2E8F0"
+            opacity={0.6} italic x={479} y={920} align="center" />
+        </FadeIn>
       </Sequence>
-    </Sequence>
+      <Sequence from={260}>
+        <ScaleIn duration={15}>
+          <CrossedOutIcon icon="darning_needle"
+            color="#D9944A" opacity={0.3} position={[200, 900]} />
+        </ScaleIn>
+      </Sequence>
+    </Panel>
+
+    {/* Split divider */}
+    <SplitLine x={960} color="#334155" opacity={0.2} drawDuration={15} />
+
+    {/* Realization flash */}
     <Sequence from={180}>
-      <Caption
-        text="Your great-grandmother wasn't stupid for darning socks."
-        x={480}
-        y={850}
-        maxWidth={380}
-      />
+      <FlashOverlay color="#FFFFFF" peakOpacity={0.03}
+        rampUp={10} rampDown={10} />
+      <GlowLine x={960} color="#E2E8F0" peakOpacity={0.15}
+        duration={10} />
     </Sequence>
-  </AbsoluteFill>
 
-  {/* Right Panel — Developer */}
-  <AbsoluteFill style={{ clipPath: "inset(0 0 0 50%)" }}>
-    <Sequence from={20} durationInFrames={40}>
-      <DeveloperSilhouette x={1440} y={480} color="#4A90D9" />
-      <CodeEditor x={1440} y={400} />
-    </Sequence>
-    <Sequence from={60} durationInFrames={120}>
-      <PatchIconDrop startFrame={60} endFrame={120} />
-      <Sequence from={60}>
-        <EditorMorph from="code" to="prompt" />
-        <TerminalSnippet text="pdd generate" color="#5AAA6E" />
+    {/* Right panel — Modern developer */}
+    <Panel x={962} width={958}>
+      <VeoClip clipId="developer_callback"
+        src="/clips/developer_callback.mp4" fit="cover" />
+      <ColorGrade color="#4A90D9" opacity={0.03} />
+      <Vignette edgeColor="#000510" edgeOpacity={0.3} />
+      <PanelHeader text="NOW" color="#4A90D9"
+        opacity={0.4} letterSpacing={2} y={40} />
+      <Sequence from={200}>
+        <FadeIn duration={20}>
+          <RichText font="Inter" size={13} color="#E2E8F0"
+            opacity={0.6} italic x={1441} y={920} align="center">
+            <Span opacity={0.6}>Until now, </Span>
+            <Span color="#4A90D9" opacity={0.8}>the economics made it rational.</Span>
+          </RichText>
+        </FadeIn>
       </Sequence>
-    </Sequence>
-    <Sequence from={200}>
-      <Caption
-        text="And you're not stupid for patching code."
-        x={1440}
-        y={850}
-        maxWidth={380}
-      />
-    </Sequence>
+      <Sequence from={260}>
+        <ScaleIn duration={15}>
+          <CrossedOutIcon icon="patch"
+            color="#4A90D9" opacity={0.3} position={[1680, 900]} />
+        </ScaleIn>
+      </Sequence>
+    </Panel>
   </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
-  "backgroundColor": "#0F172A",
-  "divider": {
-    "x": 960,
-    "color": "rgba(255,255,255,0.12)",
-    "width": 2
-  },
+  "type": "split_screen",
+  "layout": "vertical_split",
+  "splitPosition": 960,
   "leftPanel": {
-    "era": "1960s",
-    "silhouette": { "x": 480, "y": 480, "color": "#D9944A", "opacity": 0.4 },
-    "needle": { "color": "#D9944A", "dropRotation": 45 },
-    "sockPack": { "color": "#4A90D9", "opacity": 0.4, "label": "x12" },
-    "caption": "Your great-grandmother wasn't stupid for darning socks."
+    "label": "1960",
+    "content": "grandmother_callback_veo",
+    "colorGrade": { "color": "#D4A043", "opacity": 0.04 },
+    "caption": "The economics made it rational.",
+    "crossedOutIcon": "darning_needle",
+    "background": "#000000"
   },
   "rightPanel": {
-    "era": "2025",
-    "silhouette": { "x": 1440, "y": 480, "color": "#4A90D9", "opacity": 0.4 },
-    "patchIcon": { "color": "#D9944A", "dropRotation": 45 },
-    "terminal": { "text": "pdd generate", "color": "#5AAA6E" },
-    "caption": "And you're not stupid for patching code."
-  }
+    "label": "NOW",
+    "content": "developer_callback_veo",
+    "colorGrade": { "color": "#4A90D9", "opacity": 0.03 },
+    "caption": "Until now, the economics made it rational.",
+    "crossedOutIcon": "patch",
+    "background": "#000000"
+  },
+  "sharedMoment": {
+    "type": "realization_flash",
+    "frame": 180,
+    "peakOpacity": 0.03
+  },
+  "embeddedVeoClips": ["grandmother_callback", "developer_callback"],
+  "backgroundColor": "#000000",
+  "narrationSegments": ["part5_006"]
 }
 ```
 

@@ -19,6 +19,7 @@ import { getProjectDir } from "@/lib/projects";
 import { syncInferredVeoReferencesFromProjectSpecs } from "@/lib/veo-references";
 
 const BASE_SPECS_TIMEOUT_MS = 600_000;
+const SPECS_FINALIZATION_BUFFER_MS = 60_000;
 const MAX_SPECS_TIMEOUT_MS = 1_500_000;
 
 function normalizeSectionSpecDir(specDir: string): string {
@@ -64,6 +65,7 @@ function estimateSpecsTimeoutMs(params: {
   const combinedLength = params.specMd.length + params.scriptBody.length;
   const extraChars = Math.max(0, combinedLength - 20_000);
   const extraCharBuckets = Math.floor(extraChars / 10_000);
+  const estimatedSpecCount = Math.min(12, Math.max(4, Math.ceil(params.visualBeatCount / 2)));
   const visualComplexityBonusMs =
     params.visualIntentMode === "veo_favored"
       ? 120_000
@@ -79,12 +81,18 @@ function estimateSpecsTimeoutMs(params: {
         : params.visualIntentMode === "remotion_only"
           ? Math.min(180_000, Math.ceil(extraVisualBeats / 4) * 30_000)
           : 0;
+  const multiSpecBonusMs = Math.min(
+    120_000,
+    Math.max(0, estimatedSpecCount - 6) * 15_000
+  );
   const timestampBonusMs = params.hasWords ? 30_000 : 0;
   const scaledTimeoutMs =
     BASE_SPECS_TIMEOUT_MS +
+    SPECS_FINALIZATION_BUFFER_MS +
     extraCharBuckets * 120_000 +
     visualComplexityBonusMs +
     visualBeatBonusMs +
+    multiSpecBonusMs +
     timestampBonusMs;
 
   return Math.min(MAX_SPECS_TIMEOUT_MS, scaledTimeoutMs);

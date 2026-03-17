@@ -1,190 +1,225 @@
 [Remotion]
 
-# Section 5.5: Investment Comparison Table — Patching vs PDD
+# Section 5.5: Investment Comparison Table — Compounds For You
 
 **Tool:** Remotion
 **Duration:** ~14s (420 frames @ 30fps)
-**Timestamp:** 21:38 - 21:52
+**Timestamp:** 21:44 - 21:58
 
 ## Visual Description
-A clean data table materializes, making the compound returns argument concrete and actionable. Three rows compare identical investments (fixing a bug, improving code, documenting intent) and show radically different outcomes between Patching and PDD. Each row animates in with a stagger, and the PDD column glows progressively brighter as the pattern becomes clear: every investment in PDD compounds forward. Below the table, a pulsing summary line crystallizes the core thesis: "One side compounds against you. The other compounds for you." This is the table the viewer will screenshot and share.
+
+A clean data table materializes, comparing how identical investments play out under patching vs PDD. Three rows appear one by one: "Fix a bug", "Improve code", "Document intent." The Patching column shows limited, single-use outcomes ("One place, once", "One version", "One snapshot"). The PDD column shows compounding, permanent outcomes ("Impossible forever", "All future versions", "Living specification") — and each PDD cell glows progressively brighter as the rows stack up, visualizing the compounding effect.
+
+This is the "screenshot moment" — the cleanest summary of the entire section's argument. Below the table, a summary line appears: "One side compounds against you. The other compounds for you." The PDD column cells pulse once in unison to land the point.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
+- Background: `#0F172A` (dark navy)
+- Grid lines: none (clean data presentation)
 
 ### Chart/Visual Elements
-- **Table:** Centered at (960, 420), 1000px wide
-  - 3 columns: "Investment" (320px), "Patching" (320px), "PDD" (320px)
-  - Header row: `#FFFFFF` at 0.6 opacity, 18px bold, underline `rgba(255,255,255,0.1)`
-  - Column header "Patching": `#D9944A` at 0.8 opacity
-  - Column header "PDD": `#4A90D9` at 0.8 opacity
-  - Row dividers: `rgba(255,255,255,0.05)`, 1px
-  - Row height: 70px
-- **Row 1:**
-  - Investment: "Fix a bug" — `#FFFFFF`, 18px
-  - Patching: "One place, once" — `#D9944A` at 0.6 opacity, 18px
-  - PDD: "Impossible forever" — `#4A90D9`, 18px, with subtle glow `rgba(74,144,217,0.15)`
-- **Row 2:**
-  - Investment: "Improve code" — `#FFFFFF`, 18px
-  - Patching: "One version" — `#D9944A` at 0.6 opacity, 18px
-  - PDD: "All future versions" — `#4A90D9`, 18px, with subtle glow `rgba(74,144,217,0.15)`
-- **Row 3:**
-  - Investment: "Document intent" — `#FFFFFF`, 18px
-  - Patching: "One snapshot" — `#D9944A` at 0.6 opacity, 18px
-  - PDD: "Living specification" — `#4A90D9`, 18px, with subtle glow `rgba(74,144,217,0.15)`
-- **Summary Line (Y=700):** "One side compounds against you. The other compounds for you." — `#FFFFFF`, 22px semi-bold
-  - "against you" highlighted in `#D9944A`
-  - "for you" highlighted in `#4A90D9`
-- **Closing Line (Y=760):** "That's not a marginal difference. Over time, it's everything." — `#FFFFFF` at 0.5 opacity, 16px
+
+#### Table Container
+- Position: centered at (960, 460)
+- Width: 900px, auto-height
+- Border: 1px `#334155` at 0.3, rounded 8px
+- Background: `#0F172A`
+
+#### Table Header Row
+- Height: 50px
+- Background: `#1E293B` at 0.4
+- Columns:
+  - "INVESTMENT" — Inter, 12px, semi-bold (600), `#94A3B8` at 0.5, letter-spacing 2px, left-aligned, 300px wide
+  - "PATCHING" — Inter, 12px, semi-bold (600), `#D9944A` at 0.5, letter-spacing 2px, center-aligned, 300px wide
+  - "PDD" — Inter, 12px, semi-bold (600), `#4A90D9` at 0.5, letter-spacing 2px, center-aligned, 300px wide
+
+#### Row 1 — Fix a bug
+- Height: 70px
+- Background: `#0F172A`
+- Border-bottom: 1px `#1E293B` at 0.3
+- Investment cell: "Fix a bug" — Inter, 16px, `#E2E8F0`, left-aligned with 24px padding
+  - Icon: bug glyph, `#94A3B8` at 0.4, before text
+- Patching cell: "One place, once" — Inter, 15px, `#D9944A` at 0.6, center-aligned
+- PDD cell: "Impossible forever" — Inter, 15px, semi-bold (600), `#4A90D9` at 0.8, center-aligned
+  - Glow background: `#4A90D9` at 0.04
+
+#### Row 2 — Improve code
+- Height: 70px
+- Background: `#111827` at 0.3 (alternating)
+- Border-bottom: 1px `#1E293B` at 0.3
+- Investment cell: "Improve code" — Inter, 16px, `#E2E8F0`, left-aligned with 24px padding
+  - Icon: code arrow glyph, `#94A3B8` at 0.4, before text
+- Patching cell: "One version" — Inter, 15px, `#D9944A` at 0.6, center-aligned
+- PDD cell: "All future versions" — Inter, 15px, semi-bold (600), `#4A90D9` at 0.9, center-aligned
+  - Glow background: `#4A90D9` at 0.06 (brighter than row 1)
+
+#### Row 3 — Document intent
+- Height: 70px
+- Background: `#0F172A`
+- Investment cell: "Document intent" — Inter, 16px, `#E2E8F0`, left-aligned with 24px padding
+  - Icon: document glyph, `#94A3B8` at 0.4, before text
+- Patching cell: "One snapshot" — Inter, 15px, `#D9944A` at 0.6, center-aligned
+- PDD cell: "Living specification" — Inter, 15px, semi-bold (600), `#4A90D9` at 1.0, center-aligned
+  - Glow background: `#4A90D9` at 0.08 (brightest)
+
+#### Summary Line
+- Position: centered at y: 700
+- Text: "One side compounds against you. The other compounds for you."
+- Inter, 20px, semi-bold (600), `#E2E8F0`
+- "against you" colored `#D9944A`
+- "for you" colored `#4A90D9`
+- Background pill: `#1E293B` at 0.25, rounded 10px, padding 16px
 
 ### Animation Sequence
-1. **Frame 0-40 (0-1.33s):** Table header row draws in — column headers fade in left-to-right. Underline draws. "Patching" header in amber, "PDD" header in blue
-2. **Frame 40-100 (1.33-3.33s):** Row 1 animates in — Investment cell slides from left (20px drift), then Patching cell fades in, then PDD cell fades in with a brief blue glow pulse. 15-frame stagger between cells
-3. **Frame 100-160 (3.33-5.33s):** Row 2 animates in — same pattern, 15-frame cell stagger
-4. **Frame 160-220 (5.33-7.33s):** Row 3 animates in — same pattern, 15-frame cell stagger
-5. **Frame 220-280 (7.33-9.33s):** PDD column glows — all three PDD cells simultaneously pulse with `rgba(74,144,217,0.2)` backlight, emphasizing the compound pattern. Patching column dims slightly (opacity drops to 0.4)
-6. **Frame 280-350 (9.33-11.67s):** Summary line fades in. "against you" word group pulses amber. "for you" word group pulses blue. Both pulses are subtle (opacity 0.7→1.0→0.8)
-7. **Frame 350-390 (11.67-13.0s):** Closing line fades in below
-8. **Frame 390-420 (13.0-14.0s):** Hold at final state
+1. **Frame 0-30 (0-1s):** Table container fades in. Header row appears with column labels.
+2. **Frame 30-90 (1-3s):** Row 1 slides in from bottom. Investment cell first, then Patching cell types in, then PDD cell appears with glow.
+3. **Frame 90-150 (3-5s):** Row 2 slides in. Same sequence. PDD glow is slightly brighter.
+4. **Frame 150-210 (5-7s):** Row 3 slides in. Same sequence. PDD glow is brightest — the progressive brightening is now visible as a pattern.
+5. **Frame 210-270 (7-9s):** All three PDD cells pulse together — opacity scales from current to +0.1 and back. The compounding visual pattern lands.
+6. **Frame 270-330 (9-11s):** Summary line slides up from bottom: "One side compounds against you. The other compounds for you."
+7. **Frame 330-420 (11-14s):** Hold on complete table. This is the screenshot.
 
 ### Typography
-- Column Headers: Inter, 18px, bold (700), respective colors
-- Cell Text (Investment): Inter, 18px, medium (500), `#FFFFFF`
-- Cell Text (Patching): Inter, 18px, regular (400), `#D9944A` at 0.6 opacity
-- Cell Text (PDD): Inter, 18px, regular (400), `#4A90D9`
-- Summary Line: Inter, 22px, semi-bold (600), `#FFFFFF` (with color highlights)
-- Closing Line: Inter, 16px, regular (400), `#FFFFFF` at 0.5 opacity
+- Header labels: Inter, 12px, semi-bold (600), respective colors at 0.5, letter-spacing 2px
+- Investment text: Inter, 16px, `#E2E8F0`
+- Patching values: Inter, 15px, `#D9944A` at 0.6
+- PDD values: Inter, 15px, semi-bold (600), `#4A90D9` at 0.8-1.0 (progressive)
+- Summary: Inter, 20px, semi-bold (600), `#E2E8F0` with colored keywords
 
 ### Easing
-- Header draw: `easeOut(cubic)`
-- Cell slide-in: `easeOut(cubic)`
-- Cell fade: `easeOut(quad)`
-- PDD glow pulse: `easeInOut(sine)`
-- Patching dim: `easeOut(quad)`
-- Summary fade: `easeOut(quad)`
-- Highlight pulse: `easeInOut(sine)`
+- Table container fade: `easeOut(quad)` over 20 frames
+- Row slide-in: `easeOut(cubic)` from y+15, 20 frames
+- Cell type-in: staggered by 10 frames per column
+- PDD glow appear: `easeOut(quad)` over 15 frames
+- PDD pulse: `easeInOut(sine)` over 30 frames
+- Summary slide-up: `easeOut(cubic)` from y+20, 25 frames
 
 ## Narration Sync
 > "One side of this equation compounds against you. The other compounds for you. That's not a marginal difference. Over time, it's everything."
 
+Segment: `part5_005`
+
+- **21:44** ("One side of this equation"): Table rows appear with comparison data
+- **21:48** ("compounds against you"): Patching column visible, amber emphasis
+- **21:50** ("The other compounds for you"): PDD cells pulse together
+- **21:54** ("That's not a marginal difference"): Summary line appears
+- **21:56** ("Over time, it's everything"): Hold on complete table
+
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={420}>
-  {/* Header */}
-  <Sequence from={0} durationInFrames={40}>
-    <TableHeader
-      columns={[
-        { label: "Investment", color: "#FFFFFF" },
-        { label: "Patching", color: "#D9944A" },
-        { label: "PDD", color: "#4A90D9" }
-      ]}
-      columnWidths={[320, 320, 320]}
-    />
-  </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* Table container */}
+    <Sequence from={0}>
+      <FadeIn duration={20}>
+        <TableContainer
+          position={[960, 460]} width={900}
+          border={{ color: '#334155', opacity: 0.3, radius: 8 }}>
 
-  {/* Row 1 */}
-  <Sequence from={40} durationInFrames={60}>
-    <TableRow
-      cells={["Fix a bug", "One place, once", "Impossible forever"]}
-      cellColors={["#FFFFFF", "#D9944A", "#4A90D9"]}
-      cellStagger={15}
-      pddGlow={true}
-    />
-  </Sequence>
+          {/* Header row */}
+          <TableHeader bgColor="#1E293B" bgOpacity={0.4}>
+            <HeaderCell text="INVESTMENT" color="#94A3B8" width={300} align="left" />
+            <HeaderCell text="PATCHING" color="#D9944A" width={300} align="center" />
+            <HeaderCell text="PDD" color="#4A90D9" width={300} align="center" />
+          </TableHeader>
+        </TableContainer>
+      </FadeIn>
+    </Sequence>
 
-  {/* Row 2 */}
-  <Sequence from={100} durationInFrames={60}>
-    <TableRow
-      cells={["Improve code", "One version", "All future versions"]}
-      cellColors={["#FFFFFF", "#D9944A", "#4A90D9"]}
-      cellStagger={15}
-      pddGlow={true}
-    />
-  </Sequence>
+    {/* Row 1 — Fix a bug */}
+    <Sequence from={30}>
+      <SlideUp distance={15} duration={20}>
+        <TableRow icon="bug" investment="Fix a bug"
+          patching="One place, once"
+          pdd="Impossible forever"
+          pddGlow={0.04} />
+      </SlideUp>
+    </Sequence>
 
-  {/* Row 3 */}
-  <Sequence from={160} durationInFrames={60}>
-    <TableRow
-      cells={["Document intent", "One snapshot", "Living specification"]}
-      cellColors={["#FFFFFF", "#D9944A", "#4A90D9"]}
-      cellStagger={15}
-      pddGlow={true}
-    />
-  </Sequence>
+    {/* Row 2 — Improve code */}
+    <Sequence from={90}>
+      <SlideUp distance={15} duration={20}>
+        <TableRow icon="code_arrow" investment="Improve code"
+          patching="One version"
+          pdd="All future versions"
+          pddGlow={0.06} alternate />
+      </SlideUp>
+    </Sequence>
 
-  {/* Column Emphasis */}
-  <Sequence from={220} durationInFrames={60}>
-    <ColumnGlow column="pdd" color="rgba(74,144,217,0.2)" />
-    <ColumnDim column="patching" targetOpacity={0.4} />
-  </Sequence>
+    {/* Row 3 — Document intent */}
+    <Sequence from={150}>
+      <SlideUp distance={15} duration={20}>
+        <TableRow icon="document" investment="Document intent"
+          patching="One snapshot"
+          pdd="Living specification"
+          pddGlow={0.08} />
+      </SlideUp>
+    </Sequence>
 
-  {/* Summary */}
-  <Sequence from={280} durationInFrames={70}>
-    <HighlightedText
-      text="One side compounds against you. The other compounds for you."
-      highlights={[
-        { words: "against you", color: "#D9944A" },
-        { words: "for you", color: "#4A90D9" }
-      ]}
-      fontSize={22}
-      y={700}
-    />
-  </Sequence>
+    {/* PDD column pulse */}
+    <Sequence from={210}>
+      <PulseGroup targets={['pdd_cell_1','pdd_cell_2','pdd_cell_3']}
+        opacityDelta={0.1} duration={30} />
+    </Sequence>
 
-  {/* Closing */}
-  <Sequence from={350} durationInFrames={40}>
-    <FadeText
-      text="That's not a marginal difference. Over time, it's everything."
-      opacity={0.5}
-      y={760}
-    />
-  </Sequence>
+    {/* Summary line */}
+    <Sequence from={270}>
+      <SlideUp distance={20} duration={25}>
+        <PillLabel x={960} y={700}
+          bgColor="#1E293B" bgOpacity={0.25} borderRadius={10} padding={16}>
+          <RichText font="Inter" size={20} weight={600}>
+            <Span color="#E2E8F0">One side compounds </Span>
+            <Span color="#D9944A">against you</Span>
+            <Span color="#E2E8F0">. The other compounds </Span>
+            <Span color="#4A90D9">for you</Span>
+            <Span color="#E2E8F0">.</Span>
+          </RichText>
+        </PillLabel>
+      </SlideUp>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
-  "backgroundColor": "#0F172A",
-  "table": {
-    "width": 1000,
-    "center": { "x": 960, "y": 420 },
-    "columnWidths": [320, 320, 320],
-    "rowHeight": 70,
-    "headers": [
-      { "label": "Investment", "color": "#FFFFFF" },
-      { "label": "Patching", "color": "#D9944A" },
-      { "label": "PDD", "color": "#4A90D9" }
-    ],
-    "rows": [
-      {
-        "investment": "Fix a bug",
-        "patching": "One place, once",
-        "pdd": "Impossible forever"
-      },
-      {
-        "investment": "Improve code",
-        "patching": "One version",
-        "pdd": "All future versions"
-      },
-      {
-        "investment": "Document intent",
-        "patching": "One snapshot",
-        "pdd": "Living specification"
-      }
-    ]
-  },
-  "summary": {
-    "text": "One side compounds against you. The other compounds for you.",
-    "highlights": {
-      "against you": "#D9944A",
-      "for you": "#4A90D9"
+  "type": "comparison_table",
+  "chartId": "investment_comparison",
+  "columns": ["Investment", "Patching", "PDD"],
+  "rows": [
+    {
+      "investment": "Fix a bug",
+      "icon": "bug",
+      "patching": "One place, once",
+      "pdd": "Impossible forever",
+      "pddGlowIntensity": 0.04
+    },
+    {
+      "investment": "Improve code",
+      "icon": "code_arrow",
+      "patching": "One version",
+      "pdd": "All future versions",
+      "pddGlowIntensity": 0.06
+    },
+    {
+      "investment": "Document intent",
+      "icon": "document",
+      "patching": "One snapshot",
+      "pdd": "Living specification",
+      "pddGlowIntensity": 0.08
     }
-  }
+  ],
+  "summary": "One side compounds against you. The other compounds for you.",
+  "colors": {
+    "patching": "#D9944A",
+    "pdd": "#4A90D9",
+    "text": "#E2E8F0"
+  },
+  "backgroundColor": "#0F172A",
+  "narrationSegments": ["part5_005"]
 }
 ```
 

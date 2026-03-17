@@ -1,174 +1,210 @@
 [Remotion]
 
-# Section 6.5: No Big Bang — Gradual Migration Bar Chart
+# Section 6.5: No Big Bang Migration — Gradual Stacked Bar
 
 **Tool:** Remotion
 **Duration:** ~8s (240 frames @ 30fps)
-**Timestamp:** 22:52 - 23:00
+**Timestamp:** 23:47 - 23:55
 
 ## Visual Description
-A horizontal stacked bar chart showing a codebase gradually migrating from hand-written code to prompt-driven specification over time. Three time slices are stacked vertically: "Month 1," "Month 3," "Month 6." Each bar has two segments — amber for "Hand-Written Code" and blue for "Prompt-Driven Modules." In Month 1 the bar is 95% amber / 5% blue. By Month 3 it's 60/40. By Month 6 it's 20/80. The bars animate in sequence, making the gradual shift tangible. A crossed-out explosion icon at top-left reinforces "No big bang" — this is incremental. The visual counters the common objection that PDD requires a full rewrite.
+
+A horizontal stacked bar chart shows the gradual migration from hand-written code to prompt-driven modules over three time slices. Each bar spans the full width and is divided into two segments: amber (hand-written code) and blue (prompt-driven modules). The proportions shift dramatically across the three rows:
+
+- **Month 1:** 95% amber / 5% blue — you've converted one module
+- **Month 3:** 60% amber / 40% blue — steady progress, no disruption
+- **Month 6:** 20% amber / 80% blue — the codebase has organically migrated
+
+At the top-left, a crossed-out explosion icon with "No rewrite" label immediately dispels the fear of a big-bang migration. The bars animate sequentially, each sliding its blue segment rightward to claim more territory from amber. The visual rhythm conveys inevitability without urgency — this migration happens naturally as part of normal development.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: Subtle vertical lines at 25%, 50%, 75% marks — `rgba(255,255,255,0.04)`
+- Background: `#0F172A` (dark navy)
+- Grid lines: none
 
 ### Chart/Visual Elements
-- **Title:** "Gradual Migration" — `#FFFFFF` at 0.9 opacity, 28px, Inter Bold, top-center at (960, 80)
-- **Crossed-Out Explosion Icon:** Top-left at (140, 80)
-  - Explosion starburst: `#EF4444` at 0.3 opacity, 40px
-  - Red diagonal strikethrough line: `#EF4444` at 0.5 opacity, 2px
-  - Label: "No rewrite" — `#EF4444` at 0.4 opacity, 14px, Inter, below icon
-- **Bar Chart Area:** Centered, 1000px wide, starting at Y=200
-- **Row 1 — Month 1 (Y=220):**
-  - Row label: "Month 1" — `#94A3B8`, 16px, Inter, left-aligned at X=340
-  - Amber segment: 950px wide (95%), `#D9944A` at 0.7 opacity
-  - Blue segment: 50px wide (5%), `#4A90D9` at 0.7 opacity
-  - Bar height: 50px, border-radius 4px
-- **Row 2 — Month 3 (Y=340):**
-  - Row label: "Month 3" — `#94A3B8`, 16px
-  - Amber: 600px (60%), Blue: 400px (40%)
-- **Row 3 — Month 6 (Y=460):**
-  - Row label: "Month 6" — `#94A3B8`, 16px
-  - Amber: 200px (20%), Blue: 800px (80%)
-- **Legend (Y=600):** Two items side by side, centered
-  - Amber square + "Hand-Written Code" — `#D9944A`, 14px
-  - Blue square + "Prompt-Driven Modules" — `#4A90D9`, 14px
-- **Percentage Labels:** Inside each segment where space allows, `#FFFFFF` at 0.7 opacity, 14px, JetBrains Mono
+
+#### "No rewrite" Callout
+- Position: (200, 160)
+- Explosion icon: 24px, `#EF4444` at 0.4, with 2px diagonal strikethrough `#EF4444` at 0.6
+- Text: "No rewrite" — Inter, 14px, semi-bold (600), `#EF4444` at 0.6, 12px right of icon
+
+#### Chart Area
+- Left edge: 260, Right edge: 1660, total width: 1400px
+- Bar height: 64px, bar spacing: 100px center-to-center
+- First bar y-center: 380
+
+#### Bar Row 1 — Month 1
+- Time label: "Month 1" — Inter, 14px, semi-bold (600), `#94A3B8` at 0.6, right-aligned at x=240
+- Amber segment: 95% of 1400px = 1330px, `#D9944A` at 0.7, rounded left corners 6px
+- Blue segment: 5% of 1400px = 70px, `#4A90D9` at 0.7, rounded right corners 6px
+- Percentage labels inside segments: "95%" in amber, "5%" in blue — Inter, 12px, bold (700), `#FFFFFF` at 0.8
+- Y-center: 380
+
+#### Bar Row 2 — Month 3
+- Time label: "Month 3"
+- Amber segment: 60% = 840px
+- Blue segment: 40% = 560px
+- Labels: "60%" in amber, "40%" in blue
+- Y-center: 480
+
+#### Bar Row 3 — Month 6
+- Time label: "Month 6"
+- Amber segment: 20% = 280px
+- Blue segment: 80% = 1120px
+- Labels: "20%" in amber, "80%" in blue
+- Y-center: 580
+
+#### Legend
+- Position: centered at (960, 720)
+- Amber swatch: 16x16 rounded 3px, `#D9944A`, label "Hand-written code" — Inter, 12px, `#94A3B8` at 0.5
+- Blue swatch: 16x16 rounded 3px, `#4A90D9`, label "Prompt-driven modules" — Inter, 12px, `#94A3B8` at 0.5
+- 40px gap between items
 
 ### Animation Sequence
-1. **Frame 0-25 (0-0.83s):** Title fades in. Grid lines draw. Crossed-out explosion icon appears (starburst draws, then strikethrough slashes across it)
-2. **Frame 25-80 (0.83-2.67s):** Row 1 animates — row label fades in, then bar grows from left to right. Amber fills first, blue segment pops in at the end. Percentage labels ("95%" / "5%") fade in
-3. **Frame 80-135 (2.67-4.5s):** Row 2 animates same pattern. The blue segment is visibly larger now — 40% of the bar
-4. **Frame 135-190 (4.5-6.33s):** Row 3 animates. Blue dominates at 80%. The amber segment is small. This is the visual payoff — the gradual shift is clear
-5. **Frame 190-210 (6.33-7.0s):** Legend fades in below. A subtle sweep highlight crosses all three blue segments simultaneously (left-to-right, `rgba(74,144,217,0.15)`)
-6. **Frame 210-240 (7.0-8.0s):** Hold at final state
+1. **Frame 0-25 (0-0.83s):** "No rewrite" callout fades in — explosion icon appears, strikethrough draws across it.
+2. **Frame 25-50 (0.83-1.67s):** Legend fades in at bottom. Time labels for all three rows fade in.
+3. **Frame 50-100 (1.67-3.33s):** Bar 1 animates — amber fills left-to-right, then blue segment pops in at the right edge. "95%" and "5%" labels fade in.
+4. **Frame 100-150 (3.33-5s):** Bar 2 animates — amber fills shorter, blue fills larger. The shift is noticeable. Labels appear.
+5. **Frame 150-200 (5-6.67s):** Bar 3 animates — amber is now small, blue dominates. "80%" label scales up briefly for emphasis. Labels appear.
+6. **Frame 200-240 (6.67-8s):** Hold on complete chart. The 80% blue segment in Month 6 pulses once with a subtle glow.
 
 ### Typography
-- Title: Inter, 28px, bold (700), `#FFFFFF` at 0.9 opacity
-- Row Labels: Inter, 16px, regular (400), `#94A3B8`
-- Percentage Labels: JetBrains Mono, 14px, regular, `#FFFFFF` at 0.7 opacity
-- Legend Text: Inter, 14px, regular (400), respective colors
-- "No rewrite" Label: Inter, 14px, regular (400), `#EF4444` at 0.4 opacity
+- Time labels: Inter, 14px, semi-bold (600), `#94A3B8` at 0.6
+- Percentage labels: Inter, 12px, bold (700), `#FFFFFF` at 0.8
+- Legend labels: Inter, 12px, `#94A3B8` at 0.5
+- "No rewrite" text: Inter, 14px, semi-bold (600), `#EF4444` at 0.6
 
 ### Easing
-- Title fade: `easeOut(quad)`
-- Bar grow: `easeOut(cubic)`
-- Percentage label fade: `easeOut(quad)`
-- Explosion strikethrough: `easeInOut(cubic)`
-- Legend fade: `easeOut(quad)`
-- Sweep highlight: `linear`
+- Callout fade: `easeOut(quad)` over 20 frames
+- Strikethrough draw: `easeInOut(cubic)` over 15 frames
+- Amber segment fill: `easeOut(cubic)` over 30 frames
+- Blue segment fill: `easeOut(cubic)` over 25 frames
+- Label fade: `easeOut(quad)` over 12 frames
+- "80%" emphasis: `easeOut(back(1.2))` scale 1.0→1.15→1.0 over 15 frames
+- Final glow pulse: `easeInOut(sine)` over 20 frames
 
 ## Narration Sync
 > "No big bang. No rewrite. Just a gradual migration of where value lives, from code to specification."
 
-Segment: `where_to_start_002` (17.28s – 24.86s)
+Segment: `where_to_start_002`
+
+- **23:47** ("No big bang"): "No rewrite" callout appears with crossed-out explosion
+- **23:49** ("No rewrite"): Bar 1 fills — 95% code, 5% prompt
+- **23:51** ("Just a gradual migration"): Bar 2 fills — 60/40 shift
+- **23:53** ("from code to specification"): Bar 3 fills — 20/80, blue dominates
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={240}>
-  {/* Title + Icon */}
-  <Sequence from={0} durationInFrames={25}>
-    <Title text="Gradual Migration" y={80} />
-    <CrossedOutExplosion x={140} y={80} />
-    <GridLines positions={[0.25, 0.5, 0.75]} />
-  </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
+    {/* No rewrite callout */}
+    <Sequence from={0}>
+      <FadeIn duration={20}>
+        <StrikethroughIcon icon="explosion" iconColor="#EF4444"
+          iconOpacity={0.4} strikeColor="#EF4444"
+          strikeOpacity={0.6} size={24} x={200} y={160}
+          strikeDuration={15} />
+        <Text text="No rewrite" font="Inter" size={14}
+          weight={600} color="#EF4444" opacity={0.6}
+          x={236} y={160} />
+      </FadeIn>
+    </Sequence>
 
-  {/* Row 1: Month 1 */}
-  <Sequence from={25} durationInFrames={55}>
-    <MigrationBar
-      label="Month 1"
-      y={220}
-      segments={[
-        { ratio: 0.95, color: "#D9944A", label: "95%" },
-        { ratio: 0.05, color: "#4A90D9", label: "5%" }
-      ]}
-      totalWidth={1000}
-    />
-  </Sequence>
+    {/* Legend */}
+    <Sequence from={25}>
+      <FadeIn duration={15}>
+        <Legend x={960} y={720} items={[
+          { color: '#D9944A', label: 'Hand-written code' },
+          { color: '#4A90D9', label: 'Prompt-driven modules' }
+        ]} font="Inter" size={12} labelColor="#94A3B8" gap={40} />
+      </FadeIn>
+    </Sequence>
 
-  {/* Row 2: Month 3 */}
-  <Sequence from={80} durationInFrames={55}>
-    <MigrationBar
-      label="Month 3"
-      y={340}
-      segments={[
-        { ratio: 0.60, color: "#D9944A", label: "60%" },
-        { ratio: 0.40, color: "#4A90D9", label: "40%" }
-      ]}
-      totalWidth={1000}
-    />
-  </Sequence>
+    {/* Time labels */}
+    <Sequence from={25}>
+      <FadeIn duration={15}>
+        {['Month 1','Month 3','Month 6'].map((label, i) => (
+          <Text key={label} text={label} font="Inter" size={14}
+            weight={600} color="#94A3B8" opacity={0.6}
+            x={240} y={380 + i * 100} align="right" />
+        ))}
+      </FadeIn>
+    </Sequence>
 
-  {/* Row 3: Month 6 */}
-  <Sequence from={135} durationInFrames={55}>
-    <MigrationBar
-      label="Month 6"
-      y={460}
-      segments={[
-        { ratio: 0.20, color: "#D9944A", label: "20%" },
-        { ratio: 0.80, color: "#4A90D9", label: "80%" }
-      ]}
-      totalWidth={1000}
-    />
-  </Sequence>
+    {/* Bar 1 — Month 1: 95/5 */}
+    <Sequence from={50}>
+      <StackedBar x={260} y={348} width={1400} height={64}
+        segments={[
+          { percent: 0.95, color: '#D9944A', label: '95%' },
+          { percent: 0.05, color: '#4A90D9', label: '5%' }
+        ]}
+        fillDuration={30} labelDelay={25} borderRadius={6} />
+    </Sequence>
 
-  {/* Legend */}
-  <Sequence from={190} durationInFrames={20}>
-    <Legend
-      items={[
-        { color: "#D9944A", label: "Hand-Written Code" },
-        { color: "#4A90D9", label: "Prompt-Driven Modules" }
-      ]}
-      y={600}
-    />
-    <SweepHighlight color="rgba(74,144,217,0.15)" />
-  </Sequence>
+    {/* Bar 2 — Month 3: 60/40 */}
+    <Sequence from={100}>
+      <StackedBar x={260} y={448} width={1400} height={64}
+        segments={[
+          { percent: 0.60, color: '#D9944A', label: '60%' },
+          { percent: 0.40, color: '#4A90D9', label: '40%' }
+        ]}
+        fillDuration={30} labelDelay={25} borderRadius={6} />
+    </Sequence>
+
+    {/* Bar 3 — Month 6: 20/80 */}
+    <Sequence from={150}>
+      <StackedBar x={260} y={548} width={1400} height={64}
+        segments={[
+          { percent: 0.20, color: '#D9944A', label: '20%' },
+          { percent: 0.80, color: '#4A90D9', label: '80%',
+            emphasis: { easing: 'easeOut(back(1.2))', duration: 15 } }
+        ]}
+        fillDuration={30} labelDelay={25} borderRadius={6} />
+    </Sequence>
+
+    {/* Final glow pulse on 80% segment */}
+    <Sequence from={200}>
+      <GlowPulse target="bar3_segment2" color="#4A90D9"
+        blur={12} opacity={0.15} duration={20} />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
-  "backgroundColor": "#0F172A",
-  "chart": {
-    "totalWidth": 1000,
-    "barHeight": 50,
-    "borderRadius": 4
-  },
+  "type": "animated_chart",
+  "chartId": "no_big_bang_migration",
+  "chartType": "horizontal_stacked_bar",
   "rows": [
     {
       "label": "Month 1",
-      "y": 220,
       "segments": [
-        { "label": "Hand-Written Code", "ratio": 0.95, "color": "#D9944A" },
-        { "label": "Prompt-Driven", "ratio": 0.05, "color": "#4A90D9" }
+        { "label": "Hand-written code", "percent": 95, "color": "#D9944A" },
+        { "label": "Prompt-driven modules", "percent": 5, "color": "#4A90D9" }
       ]
     },
     {
       "label": "Month 3",
-      "y": 340,
       "segments": [
-        { "label": "Hand-Written Code", "ratio": 0.60, "color": "#D9944A" },
-        { "label": "Prompt-Driven", "ratio": 0.40, "color": "#4A90D9" }
+        { "label": "Hand-written code", "percent": 60, "color": "#D9944A" },
+        { "label": "Prompt-driven modules", "percent": 40, "color": "#4A90D9" }
       ]
     },
     {
       "label": "Month 6",
-      "y": 460,
       "segments": [
-        { "label": "Hand-Written Code", "ratio": 0.20, "color": "#D9944A" },
-        { "label": "Prompt-Driven", "ratio": 0.80, "color": "#4A90D9" }
+        { "label": "Hand-written code", "percent": 20, "color": "#D9944A" },
+        { "label": "Prompt-driven modules", "percent": 80, "color": "#4A90D9" }
       ]
     }
   ],
-  "legend": [
-    { "color": "#D9944A", "label": "Hand-Written Code" },
-    { "color": "#4A90D9", "label": "Prompt-Driven Modules" }
-  ]
+  "callout": { "text": "No rewrite", "icon": "explosion_strikethrough" },
+  "backgroundColor": "#0F172A",
+  "narrationSegments": ["where_to_start_002"]
 }
 ```
 

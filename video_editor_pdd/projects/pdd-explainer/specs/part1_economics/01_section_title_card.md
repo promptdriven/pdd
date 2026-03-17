@@ -1,72 +1,137 @@
 [title:]
 
-# Section 1.0: Part 1 Title Card
+# Section 1.1: Part 1 Title Card — The Economics of Darning
 
-**Tool:** Remotion
-**Duration:** ~4s
-**Timestamp:** 0:16 – 0:20
+**Tool:** Title
+**Duration:** ~4s (120 frames @ 30fps)
+**Timestamp:** 2:30 - 2:34
 
 ## Visual Description
-A bold title card introduces the section. The text "Part 1" fades in small above the main title "The Economics of Darning", which types on letter-by-letter. A thin horizontal rule expands outward from center beneath the title. Background is deep navy with a subtle radial gradient toward the center.
+
+A clean section title card announces Part 1. "THE ECONOMICS" appears first in large, bold weight, then "OF DARNING" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines. Behind the text, two abstract ghost shapes emerge at very low opacity — a price chart curve (left, amber) and a miniature sock silhouette (right, cool blue) — hinting at the sock-economics parallel that defines this section.
+
+The background is deep navy-black with a subtle ledger-paper grid — faint horizontal lines with slightly brighter vertical accents at regular intervals, evoking accounting paper and economic charts.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Deep navy (#0A1628) with radial gradient to (#122240) at center
-- No grid lines
+- Background: `#0A0F1A` (deep navy-black)
+- Ledger grid: horizontal lines at 40px spacing, `#1E293B` at 0.04; vertical accents every 120px, `#1E293B` at 0.06
 
 ### Chart/Visual Elements
-- Part label: "Part 1" — small caps, centered, positioned at y=380
-- Main title: "The Economics of Darning" — large, centered, positioned at y=460
-- Horizontal rule: 2px line, white at 40% opacity, centered at y=540, expands from 0px to 400px width
-- Subtle background texture: fine diagonal hatching at 3% opacity (#FFFFFF)
+
+#### Title Text
+- "THE ECONOMICS" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
+- "OF DARNING" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 200px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+
+#### Section Number
+- "PART 1" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
+
+#### Background Shapes (ghost elements)
+- Price chart curve: rising-then-crossing S-curve at (700, 480), `#D9944A` at 0.04, 2px stroke
+  - Two lines that cross, evoking the "threshold" moment
+- Sock silhouette: simple sock outline at (1220, 480), `#4A90D9` at 0.04, 2px stroke
+  - Classic tube-sock shape with ribbed cuff
+- Both have 8px Gaussian blur glow at respective colors, 0.02 opacity
 
 ### Animation Sequence
-1. **Frame 0–15 (0–0.5s):** Background fades in from black. "Part 1" fades in with slight upward drift (10px).
-2. **Frame 15–60 (0.5–2s):** Main title types on character-by-character with a blinking cursor. Monospaced typing cadence (~30ms per character).
-3. **Frame 60–75 (2–2.5s):** Cursor blinks twice, then disappears. Horizontal rule expands outward from center.
-4. **Frame 75–120 (2.5–4s):** Hold. All elements at full opacity. Gentle pulse on the rule (opacity 40% → 60% → 40%).
+1. **Frame 0-15 (0-0.5s):** Background fades in from black. Ledger grid appears.
+2. **Frame 15-40 (0.5-1.33s):** "PART 1" fades in. Two ghost shapes begin drawing themselves (stroke-dashoffset animation).
+3. **Frame 40-60 (1.33-2s):** "THE ECONOMICS" types on character-by-character (3 frames per character).
+4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
+5. **Frame 70-90 (2.33-3s):** "OF DARNING" fades in with 10px upward slide.
+6. **Frame 90-120 (3-4s):** Hold. Ghost shapes finish drawing. The two crossing lines pulse gently at the intersection point.
 
 ### Typography
-- Part label: Inter Medium, 20px, #8B9DC3 (muted blue-gray), letter-spacing 4px, uppercase
-- Main title: Inter Bold, 56px, #FFFFFF, letter-spacing -0.5px
-- Typing cursor: 3px wide, #4A90D9 (cool blue), blinking 500ms interval
+- Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
+- Title words: Inter, 72px, bold (700), `#E2E8F0`
+- Rule: `#334155` at 0.5
 
 ### Easing
-- Fade in: `easeOutCubic`
-- Title type-on: linear (constant typing speed)
-- Rule expansion: `easeInOutCubic`
+- Text fade-in: `easeOut(quad)` over 20 frames
+- "OF DARNING" slide-up: `easeOut(cubic)` over 20 frames
+- Rule draw: `easeInOut(quad)` over 10 frames
+- Ghost shape draw: `easeInOut(cubic)` over 60 frames
+- Crossing-point pulse: `easeInOut(sine)` on 30-frame cycle
 
 ## Narration Sync
-> "Now, let me show you why this matters."
+> "This isn't nostalgia. It's economics."
 
-Segment: `part1_economics_004` (16.16s – 19.22s)
+Segment: `part1_001`
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
-  <AbsoluteFill style={{ background: 'radial-gradient(circle, #122240, #0A1628)' }}>
-    <Sequence from={0} durationInFrames={15}>
-      <FadeIn>
-        <PartLabel text="Part 1" />
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <LedgerGrid hSpacing={40} vAccentEvery={120}
+      color="#1E293B" hOpacity={0.04} vOpacity={0.06} />
+
+    {/* Ghost shapes — economics + sock foreshadowed */}
+    <Sequence from={15}>
+      <StrokeDraw duration={60}>
+        <CrossingCurves position={[700, 480]} color="#D9944A"
+          opacity={0.04} strokeWidth={2}
+          glow={{ blur: 8, opacity: 0.02 }} />
+        <SockSilhouette position={[1220, 480]} color="#4A90D9"
+          opacity={0.04} strokeWidth={2}
+          glow={{ blur: 8, opacity: 0.02 }} />
+      </StrokeDraw>
+    </Sequence>
+
+    {/* Section label */}
+    <Sequence from={15}>
+      <FadeIn duration={20}>
+        <Text text="PART 1" font="Inter" size={14}
+          weight={600} color="#64748B" opacity={0.5}
+          letterSpacing={4} x={960} y={400} align="center" />
       </FadeIn>
     </Sequence>
-    <Sequence from={15} durationInFrames={45}>
-      <TypeOnText text="The Economics of Darning" />
+
+    {/* Title: THE ECONOMICS */}
+    <Sequence from={40}>
+      <TypeWriter text="THE ECONOMICS" font="Inter" size={72}
+        weight={700} color="#E2E8F0"
+        charDelay={3} x={960} y={460} align="center" />
     </Sequence>
-    <Sequence from={60} durationInFrames={15}>
-      <ExpandingRule />
+
+    {/* Horizontal rule */}
+    <Sequence from={60}>
+      <DrawLine from={[860, 505]} to={[1060, 505]}
+        color="#334155" opacity={0.5} width={2}
+        drawDuration={10} fromCenter />
+    </Sequence>
+
+    {/* Title: OF DARNING */}
+    <Sequence from={70}>
+      <SlideUp distance={10} duration={20}>
+        <FadeIn duration={20}>
+          <Text text="OF DARNING" font="Inter" size={72}
+            weight={700} color="#E2E8F0"
+            x={975} y={545} align="center" />
+        </FadeIn>
+      </SlideUp>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
-  "partNumber": 1,
-  "title": "The Economics of Darning",
-  "segmentId": "part1_economics_004"
+  "type": "title_card",
+  "sectionNumber": 1,
+  "sectionLabel": "PART 1",
+  "titleLine1": "THE ECONOMICS",
+  "titleLine2": "OF DARNING",
+  "backgroundColor": "#0A0F1A",
+  "ghostElements": [
+    { "shape": "crossing_curves", "color": "#D9944A", "component": "price_chart" },
+    { "shape": "sock_silhouette", "color": "#4A90D9", "component": "sock_metaphor" }
+  ],
+  "narrationSegments": ["part1_001"]
 }
 ```
+
+---

@@ -1,241 +1,179 @@
 [Remotion]
 
-# Section 1.4: Context Window Shrink — The Growing Grid
+# Section 1.5: Context Window Shrink — The Grid That Outgrows the Window
 
-**Tool:** Remotion **Duration:** ~48s **Timestamp:** 2:10 – 2:58
+**Tool:** Remotion
+**Duration:** ~22s (660 frames @ 30fps)
+**Timestamp:** 3:37 - 3:59
 
 ## Visual Description
 
-A vivid visualization of the context window problem. A small 4x4 grid of code
-blocks starts on screen with a glowing blue rectangle ("context window")
-covering ~80% of it. The grid progressively grows — 4x4 → 8x8 → 16x16 → 32x32 —
-while the context window stays exactly the same size. A "Context Coverage"
-counter drops from 80% → 40% → 10% → 2%. Inside the tiny remaining window, some
-blocks highlight red (irrelevant code grabbed by AI) while green blocks outside
-the window show what was actually needed. A small inset graph shows "Performance
-vs. Context Length" with a steadily declining line.
+The chart morphs into a new visualization. A glowing rectangular "context window" frame appears over a small codebase represented as a 4x4 grid of code blocks. The window covers ~80% of the grid. Each block is a stylized code-file icon with faint monospace text inside.
+
+Then the codebase grows: 4x4 → 8x8 → 16x16 → 32x32. The context window stays the SAME SIZE. A counter shows coverage dropping: "Context coverage: 80% → 40% → 10% → 2%." The window becomes a tiny rectangle over a massive grid — the visual metaphor for why AI tools degrade on large codebases.
+
+Inside the tiny window at the 32x32 stage, some blocks flash red — irrelevant code that the AI grabbed. Outside the window, green-highlighted blocks show the code that was actually needed but couldn't be seen. The AI is guessing, and guessing wrong.
 
 ## Technical Specifications
 
 ### Canvas
-
 - Resolution: 1920x1080 (16:9)
-- Background: #0F1923 (dark blue-black)
-- No grid lines
+- Background: `#0A0F1A` (deep navy-black)
+- Grid lines: None (the grid IS the content)
 
 ### Chart/Visual Elements
 
-- **Code grid:** Centered on screen. Each block is a rounded rectangle with
+#### Code Block Grid
+- **4x4 stage:** 16 blocks, each 100x100px, gap 8px, centered at (960, 480)
+  - Block style: rounded rect 6px, `#1E293B` fill, 1px `#334155` border
+  - Faint monospace text lines inside: 5 lines per block, `#475569` at 0.15
+- **8x8 stage:** 64 blocks, each 50x50px, gap 4px, same center
+- **16x16 stage:** 256 blocks, each 25x25px, gap 2px, same center
+- **32x32 stage:** 1024 blocks, each 12x12px, gap 1px, same center
 
-monospace text texture (simulated code). Blocks are #1E293B with 1px border
-#2D3F55.
+#### Context Window Frame
+- Fixed size: 340x340px
+- Border: 2px, `#4A90D9` at 0.7
+- Glow: 16px Gaussian blur, `#4A90D9` at 0.12
+- Corner markers: 8px L-shapes at each corner, `#4A90D9` at 0.9
+- Stays the same size throughout all grid stages
 
-  - 4x4 phase: 16 blocks, each ~80x80px
-  - 8x8 phase: 64 blocks, each ~40x40px
-  - 16x16 phase: 256 blocks, each ~20x20px
-  - 32x32 phase: 1024 blocks, each ~10x10px (appear as a dense mosaic)
-- **Context window:** Glowing blue rectangle (#4A90D9 border, 3px, with 8px
+#### Coverage Counter
+- Position: top-right, (1620, 100)
+- "Context coverage:" — Inter, 14px, `#94A3B8` at 0.5
+- Percentage: Inter, 36px, bold (700) — color transitions from `#5AAA6E` (80%) to `#D9944A` (40%) to `#EF4444` (10%, 2%)
+- Percentage animates between values with number-scroll effect
 
-outer glow at 30% opacity). Fixed size: 300×300px. Stays centered as grid grows
-around it.
-
-- **Coverage counter:** Top-right corner. Large number with "Context Coverage"
-
-label. Animates with counting effect.
-
-- **Red-highlighted blocks (inside window):** #EF4444 at 40% opacity —
-
-irrelevant code the AI grabbed
-
-- **Green-highlighted blocks (outside window):** #22C55E at 40% opacity — needed
-
-code the AI missed
-
-- **Performance inset graph (appears late):** 300×180px, bottom-right corner.
-
-Simple line chart: X = "Context Length", Y = "Performance". Line drops steadily.
-Label: "14–85% degradation (EMNLP, 2025)"
-
-- **"Context Rot" label:** Appears after performance graph, with a subtle
-
-glitch/static effect on the text
+#### Incorrect Retrieval (32x32 stage)
+- Inside window: 8-12 random blocks flash `#EF4444` at 0.3 (red — irrelevant code grabbed)
+- Outside window: 5-8 scattered blocks glow `#5AAA6E` at 0.3 (green — needed code missed)
+- Small labels on red blocks: "irrelevant" — Inter, 7px, `#EF4444` at 0.4
+- Small labels on green blocks: "needed" — Inter, 7px, `#5AAA6E` at 0.4
 
 ### Animation Sequence
-
-1. **Frame 0–45 (0–1.5s):** 4x4 grid fades in, block by block (staggered, 2
-
-frames per block). Context window appears with a glow pulse. Coverage counter
-shows "80%".
-
-2. **Frame 45–120 (1.5–4s):** Hold at 4x4. Context window glows warmly. Synced
-
-with "When your codebase is small, AI tools are brilliant..."
-
-3. **Frame 120–180 (4–6s):** Grid morphs from 4x4 → 8x8 with a smooth scale
-
-transition. Each block subdivides into 4 smaller blocks. Context window stays
-exactly the same size. Counter animates: 80% → 40%. Brief screen shake (2px,
-200ms) on the transition.
-
-4. **Frame 180–240 (6–8s):** Grid morphs 8x8 → 16x16. Counter: 40% → 10%. The
-
-window looks noticeably small now. Synced with "But codebases grow. And that
-window? It stays the same size."
-
-5. **Frame 240–300 (8–10s):** Grid morphs 16x16 → 32x32. Counter: 10% → 2%. The
-
-grid is now a dense mosaic and the window is a tiny rectangle in the middle.
-Counter number turns red.
-
-6. **Frame 300–480 (10–16s):** Hold at 32x32. Inside the window, 3–4 blocks
-
-flash red (irrelevant code). Outside, 6–8 blocks flash green (needed code).
-Visual tension between what AI sees and what it needs. Synced with "So now the
-AI has to guess what's relevant..."
-
-7. **Frame 480–720 (16–24s):** Blocks outside the window that are green get
-
-subtle arrow/line indicators pointing toward the window — "wanted but
-unreachable." Synced with description of Cursor embeddings, Claude Code agentic
-search, Jolt AI benchmarks.
-
-8. **Frame 720–960 (24–32s):** Performance inset graph draws on in the
-
-bottom-right. Line drops steadily from left to right. "14–85% degradation"
-annotation appears. Synced with "even when the model retrieves the right
-information, performance still degrades..."
-
-9. **Frame 960–1200 (32–40s):** "Context Rot" text appears large, center-bottom
-
-of screen with a digital glitch/static effect — letters briefly scramble then
-resolve. The whole grid dims slightly except the context window, which flickers.
-Synced with "they call it context rot."
-
-10. **Frame 1200–1440 (40–48s):** Hold and slowly dissolve. The grid pattern
-
-fades, leaving only the tiny context window floating in darkness before it too
-fades.
+1. **Frame 0-60 (0-2s):** Previous chart dissolves. 4x4 grid assembles — blocks pop in with stagger. Context window frame fades in, covering most of the grid. Counter shows "80%."
+2. **Frame 60-120 (2-4s):** Hold. The window comfortably covers the small codebase. This is the "AI tools are brilliant" state.
+3. **Frame 120-210 (4-7s):** Grid morphs to 8x8. Blocks shrink and multiply. Context window stays the same size. Coverage counter scrolls to "40%." A gap appears around the window edges.
+4. **Frame 210-300 (7-10s):** Grid morphs to 16x16. Blocks shrink further. Coverage scrolls to "10%." The window is now clearly smaller than the grid. Blocks outside are dimmer.
+5. **Frame 300-420 (10-14s):** Grid morphs to 32x32. The grid fills the screen. The context window is a small rectangle in the center. Coverage scrolls to "2%." The contrast is dramatic.
+6. **Frame 420-540 (14-18s):** Red blocks flash inside the window (irrelevant code). Green blocks glow outside (needed code). The AI is seeing the wrong things and missing the right things.
+7. **Frame 540-660 (18-22s):** Hold on the full picture. A subtle annotation appears: "Same tools. Different codebase size." The window pulses gently.
 
 ### Typography
-
-- Coverage counter number: Inter Bold, 72px, #FFFFFF (turns #EF4444 below 10%)
-- Coverage counter label: Inter Regular, 16px, #8B9DC3
-- Performance graph title: Inter Medium, 14px, #8B9DC3
-- Performance annotation: Inter Regular, 12px, #F59E0B (warning orange)
-- "Context Rot" text: Space Grotesk Bold, 48px, #EF4444, with glitch effect
+- Coverage label: Inter, 14px, `#94A3B8` at 0.5
+- Coverage percentage: Inter, 36px, bold (700), color-coded
+- Block labels: Inter, 7px, respective colors at 0.4
+- Annotation: Inter, 14px, `#CBD5E1` at 0.5
 
 ### Easing
-
-- Grid growth: `easeInOutCubic` (800ms per phase)
-- Counter decrement: `easeOutExpo`
-- Block highlight flash: `easeInOutSine` (pulse loop, 1.5s period)
-- Performance line draw: `easeInOutCubic`
-- Glitch effect: random jitter, 4 frames
+- Grid morph (block shrink/multiply): `easeInOut(cubic)` over 60 frames
+- Context window size hold: none (stays constant)
+- Coverage counter scroll: `easeOut(cubic)` with number interpolation
+- Red/green block flash: `easeOut(quad)` over 10 frames per block, staggered
+- Grid assembly stagger: 2-frame delay per block, `easeOut(back(1.2))`
 
 ## Narration Sync
+> "When your codebase is small, AI tools are brilliant. The context window covers almost everything."
+> "But codebases grow. And that window? It stays the same size. A typical enterprise codebase spans millions of tokens. Even the largest context windows hold a fraction of that."
+> "So now the AI has to guess what's relevant. Tools like Cursor use embeddings. Claude Code uses agentic search. When Jolt AI benchmarked these tools on real codebases like Django and Kubernetes, pure vector search failed to find the right files."
 
-> "But there's a second kind of debt hiding in there. One that's specific to
-> AI-assisted development."
+Segment: `part1_005`
 
-> "When your codebase is small, AI tools are brilliant. The context window —
-> what the model can actually see — covers almost everything. It understands how
-> the pieces connect."
-
-> "But codebases grow. And that window? It stays the same size. A typical
-> enterprise codebase spans millions of tokens. Even the largest context windows
-> hold a fraction of that."
-
-> "So now the AI has to guess what's relevant. Tools like Cursor use embeddings.
-> Claude Code uses agentic search — grep, file by file."
-
-> "And it gets worse. A 2025 EMNLP study proved that even when the model
-> retrieves the right information, performance still degrades — fourteen to
-> eighty-five percent — just from the sheer length of the input... they call it
-> context rot."
-
-Segments: `part1_economics_017` (150.08s – 155.70s) through
-`part1_economics_021` (203.86s – 235.74s)
+- **3:37** ("When your codebase is small"): 4x4 grid visible, window covers most of it
+- **3:41** ("But codebases grow"): Grid grows to 8x8, then 16x16
+- **3:46** ("that window stays the same size"): Grid at 32x32, window is tiny
+- **3:50** ("the AI has to guess"): Red/green blocks appear showing incorrect retrieval
+- **3:55** ("pure vector search failed"): Hold on full picture
 
 ## Code Structure (Remotion)
-
 ```typescript
-<Sequence from={0} durationInFrames={1440}>
-  <AbsoluteFill style={{ backgroundColor: '#0F1923' }}>
-    {/* Growing code grid */}
-    <GrowingCodeGrid
-      phases={[
-        { size: 4, startFrame: 0, endFrame: 120 },
-        { size: 8, startFrame: 120, endFrame: 180 },
-        { size: 16, startFrame: 180, endFrame: 240 },
-        { size: 32, startFrame: 240, endFrame: 1440 },
+<Sequence from={0} durationInFrames={660}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    {/* Code block grid — morphs through stages */}
+    <CodeBlockGrid
+      stages={[
+        { gridSize: 4, blockSize: 100, gap: 8, startFrame: 0 },
+        { gridSize: 8, blockSize: 50, gap: 4, startFrame: 120 },
+        { gridSize: 16, blockSize: 25, gap: 2, startFrame: 210 },
+        { gridSize: 32, blockSize: 12, gap: 1, startFrame: 300 }
       ]}
+      center={[960, 480]}
+      blockColor="#1E293B" borderColor="#334155"
+      morphDuration={60}
     />
 
-    {/* Fixed-size context window */}
-    <ContextWindowOverlay
-      width={300}
-      height={300}
-      glowColor="#4A90D9"
-    />
+    {/* Context window frame — stays fixed size */}
+    <Sequence from={0}>
+      <ContextWindowFrame
+        center={[960, 480]} size={[340, 340]}
+        borderColor="#4A90D9" borderWidth={2}
+        glowRadius={16} glowOpacity={0.12}
+        cornerMarkers={true}
+      />
+    </Sequence>
 
     {/* Coverage counter */}
-    <CoverageCounter
-      keyframes={[
-        { frame: 0, value: 80 },
-        { frame: 150, value: 40 },
-        { frame: 210, value: 10 },
-        { frame: 270, value: 2 },
-      ]}
-    />
-
-    {/* Highlighted blocks (relevant/irrelevant) */}
-    <Sequence from={300} durationInFrames={420}>
-      <HighlightedBlocks
-        insideWindow={redBlocks}
-        outsideWindow={greenBlocks}
+    <Sequence from={0}>
+      <CoverageCounter
+        position={[1620, 100]}
+        keyframes={[
+          { frame: 0, value: 80, color: '#5AAA6E' },
+          { frame: 120, value: 40, color: '#D9944A' },
+          { frame: 210, value: 10, color: '#EF4444' },
+          { frame: 300, value: 2, color: '#EF4444' }
+        ]}
       />
     </Sequence>
 
-    {/* Performance inset graph */}
-    <Sequence from={720} durationInFrames={240}>
-      <PerformanceInsetGraph
-        degradationRange="14-85%"
-        source="EMNLP, 2025"
+    {/* Incorrect retrieval highlights */}
+    <Sequence from={420}>
+      <RetrievalHighlights
+        insideWindow={{
+          blocks: [3,7,12,18,24,29,35,41,48,55,60,67],
+          color: '#EF4444', opacity: 0.3, label: 'irrelevant'
+        }}
+        outsideWindow={{
+          blocks: [120,256,400,580,700,850,920,990],
+          color: '#5AAA6E', opacity: 0.3, label: 'needed'
+        }}
+        staggerDelay={2} fadeDuration={10}
       />
     </Sequence>
 
-    {/* Context Rot label */}
-    <Sequence from={960} durationInFrames={240}>
-      <GlitchText text="Context Rot" />
+    {/* Annotation */}
+    <Sequence from={540}>
+      <FadeIn duration={20}>
+        <Text text="Same tools. Different codebase size."
+          font="Inter" size={14} color="#CBD5E1" opacity={0.5}
+          x={960} y={900} align="center" />
+      </FadeIn>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
-
+## Data Points JSON
 ```json
 {
-  "coveragePhases": [
-    { "gridSize": "4x4", "blocks": 16, "coverage": 80 },
-    { "gridSize": "8x8", "blocks": 64, "coverage": 40 },
-    { "gridSize": "16x16", "blocks": 256, "coverage": 10 },
-    { "gridSize": "32x32", "blocks": 1024, "coverage": 2 }
+  "type": "animated_diagram",
+  "diagramId": "context_window_shrink",
+  "gridStages": [
+    { "size": "4x4", "blocks": 16, "blockPx": 100, "coverage": 0.80 },
+    { "size": "8x8", "blocks": 64, "blockPx": 50, "coverage": 0.40 },
+    { "size": "16x16", "blocks": 256, "blockPx": 25, "coverage": 0.10 },
+    { "size": "32x32", "blocks": 1024, "blockPx": 12, "coverage": 0.02 }
   ],
-  "performanceDegradation": {
-    "source": "EMNLP, 2025",
-    "rangeMin": 14,
-    "rangeMax": 85,
-    "unit": "percent",
-    "cause": "context length alone"
+  "contextWindow": {
+    "fixedSize": [340, 340],
+    "color": "#4A90D9"
   },
-  "retrievalMethods": [
-    { "tool": "Cursor", "method": "embeddings", "accuracy": "low" },
-    { "tool": "Claude Code", "method": "agentic search", "accuracy": "higher", "latency": "3-5 min/query" }
-  ],
-  "chromaStudy": {
-    "modelsTestedCount": 18,
-    "finding": "context rot confirmed"
-  }
+  "retrievalErrors": {
+    "irrelevant": { "count": 12, "color": "#EF4444" },
+    "missed": { "count": 8, "color": "#5AAA6E" }
+  },
+  "backgroundColor": "#0A0F1A",
+  "narrationSegments": ["part1_005"]
 }
 ```
+
+---

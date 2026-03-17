@@ -1,88 +1,137 @@
 [title:]
 
-# Section 2.1: The Paradigm Shift — Title Card
+# Section 2.1: Part 2 Title Card — The Paradigm Shift
 
-**Tool:** Remotion
+**Tool:** Title
 **Duration:** ~4s (120 frames @ 30fps)
 **Timestamp:** 8:30 - 8:34
 
 ## Visual Description
-A section title card introducing Part 2. The heading "The Paradigm Shift" fades in at center with a subtle upward drift. Below the title, an animated icon pair appears: a small handcrafted object (simple wireframe chair) on the left morphs into a geometric mold cavity on the right, connected by a sweeping arrow — representing the shift from crafting to specification. The subtitle "Part 2" drifts upward below an expanding accent line. Dark navy background consistent with the series palette.
+
+A section title card announces Part 2. "THE PARADIGM" appears first in large, bold weight, then "SHIFT" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines. Behind the text, two abstract ghost shapes emerge at very low opacity — an injection mold cross-section (left, amber) and a circuit schematic fragment (right, cool blue) — foreshadowing the manufacturing and chip-design parallels that define this section.
+
+The background is deep navy-black with a subtle blueprint grid — faint horizontal and vertical lines evoking technical drafting paper, hinting at engineering and manufacturing.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark navy `#0F172A` (solid fill)
-- Grid lines: None
+- Background: `#0A0F1A` (deep navy-black)
+- Blueprint grid: horizontal and vertical lines at 40px spacing, `#1E293B` at 0.04; accent lines every 200px, `#1E293B` at 0.07
 
 ### Chart/Visual Elements
-- **Title Text:** "The Paradigm Shift" — white `#FFFFFF`, centered at Y=370px
-- **Shift Icon:** Centered at Y=460px, 300px wide x 60px tall
-  - Left: Wireframe chair outline (4 strokes), `#4A90D9` at 0.5 opacity, 2px stroke
-  - Arrow: Curved sweep from left to right, `rgba(255,255,255,0.4)`, 1.5px, with small arrowhead
-  - Right: Rectangular mold cavity outline, `#D9944A` at 0.5 opacity, 2px stroke
-- **Accent Line:** Thin horizontal rule — `rgba(255,255,255,0.7)`, centered at Y=520px, 400px wide x 2px tall
-- **Subtitle Text:** "Part 2" — muted slate `#94A3B8`, centered at Y=560px
+
+#### Title Text
+- "THE PARADIGM" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
+- "SHIFT" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 200px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+
+#### Section Number
+- "PART 2" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
+
+#### Background Shapes (ghost elements)
+- Injection mold cross-section: simplified mold cavity outline at (700, 480), `#D9944A` at 0.04, 2px stroke
+  - Rectangular cavity with tapered nozzle at top
+- Circuit schematic fragment: series of gate symbols and connecting wires at (1220, 480), `#4A90D9` at 0.04, 2px stroke
+  - AND/OR gates with traces, suggesting chip design
+- Both have 8px Gaussian blur glow at respective colors, 0.02 opacity
 
 ### Animation Sequence
-1. **Frame 0-25 (0-0.83s):** Title text fades in (opacity 0→1) and scales up (0.85→1.0) from center with 8px upward drift
-2. **Frame 20-55 (0.67-1.83s):** Shift icon draws in — wireframe chair strokes first, then arrow sweeps left-to-right, then mold cavity draws
-3. **Frame 45-65 (1.5-2.17s):** Accent line expands from 0px to 400px width
-4. **Frame 55-80 (1.83-2.67s):** Subtitle "Part 2" fades in with 12px upward drift
-5. **Frame 80-120 (2.67-4.0s):** Hold at final state
+1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
+2. **Frame 15-40 (0.5-1.33s):** "PART 2" fades in. Two ghost shapes begin drawing themselves (stroke-dashoffset animation).
+3. **Frame 40-60 (1.33-2s):** "THE PARADIGM" types on character-by-character (3 frames per character).
+4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
+5. **Frame 70-90 (2.33-3s):** "SHIFT" fades in with 10px upward slide.
+6. **Frame 90-120 (3-4s):** Hold. Ghost shapes finish drawing. The mold cavity pulses gently with a warm amber glow.
 
 ### Typography
-- Title: Inter, 64px, bold (700), `#FFFFFF`
-- Subtitle: Inter, 28px, regular (400), `#94A3B8`
+- Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
+- Title words: Inter, 72px, bold (700), `#E2E8F0`
+- Rule: `#334155` at 0.5
 
 ### Easing
-- Title fade/scale: `easeOut(quad)`
-- Chair wireframe draw: `easeOut(cubic)`
-- Arrow sweep: `easeInOut(cubic)`
-- Mold cavity draw: `easeOut(cubic)`
-- Accent line expand: `easeOut(cubic)`
-- Subtitle fade/drift: `easeOut(quad)`
+- Text fade-in: `easeOut(quad)` over 20 frames
+- "SHIFT" slide-up: `easeOut(cubic)` over 20 frames
+- Rule draw: `easeInOut(quad)` over 10 frames
+- Ghost shape draw: `easeInOut(cubic)` over 60 frames
+- Mold pulse: `easeInOut(sine)` on 30-frame cycle
 
 ## Narration Sync
-> "So let me put together what I just showed you."
+> "There's a pattern here that shows up across industries. Not just cheaper materials — a deeper shift in how things are made."
+
+Segment: `part2_001`
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
-  <TitleText text="The Paradigm Shift" fontSize={64} />
-  <Sequence from={20}>
-    <ShiftIcon width={300} height={60} y={460}>
-      <WireframeChair color="#4A90D9" side="left" />
-      <SweepArrow color="rgba(255,255,255,0.4)" />
-      <MoldCavity color="#D9944A" side="right" />
-    </ShiftIcon>
-  </Sequence>
-  <Sequence from={45}>
-    <AccentLine targetWidth={400} color="rgba(255,255,255,0.7)" />
-  </Sequence>
-  <Sequence from={55}>
-    <SubtitleText text="Part 2" />
-  </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <BlueprintGrid hSpacing={40} vSpacing={40}
+      accentEvery={200} color="#1E293B"
+      baseOpacity={0.04} accentOpacity={0.07} />
+
+    {/* Ghost shapes — mold + circuit foreshadowed */}
+    <Sequence from={15}>
+      <StrokeDraw duration={60}>
+        <MoldCavityOutline position={[700, 480]} color="#D9944A"
+          opacity={0.04} strokeWidth={2}
+          glow={{ blur: 8, opacity: 0.02 }} />
+        <CircuitSchematicFragment position={[1220, 480]} color="#4A90D9"
+          opacity={0.04} strokeWidth={2}
+          glow={{ blur: 8, opacity: 0.02 }} />
+      </StrokeDraw>
+    </Sequence>
+
+    {/* Section label */}
+    <Sequence from={15}>
+      <FadeIn duration={20}>
+        <Text text="PART 2" font="Inter" size={14}
+          weight={600} color="#64748B" opacity={0.5}
+          letterSpacing={4} x={960} y={400} align="center" />
+      </FadeIn>
+    </Sequence>
+
+    {/* Title: THE PARADIGM */}
+    <Sequence from={40}>
+      <TypeWriter text="THE PARADIGM" font="Inter" size={72}
+        weight={700} color="#E2E8F0"
+        charDelay={3} x={960} y={460} align="center" />
+    </Sequence>
+
+    {/* Horizontal rule */}
+    <Sequence from={60}>
+      <DrawLine from={[860, 505]} to={[1060, 505]}
+        color="#334155" opacity={0.5} width={2}
+        drawDuration={10} fromCenter />
+    </Sequence>
+
+    {/* Title: SHIFT */}
+    <Sequence from={70}>
+      <SlideUp distance={10} duration={20}>
+        <FadeIn duration={20}>
+          <Text text="SHIFT" font="Inter" size={72}
+            weight={700} color="#E2E8F0"
+            x={975} y={545} align="center" />
+        </FadeIn>
+      </SlideUp>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
-  "title": "The Paradigm Shift",
-  "subtitle": "Part 2",
-  "accentLineWidth": 400,
-  "backgroundColor": "#0F172A",
-  "titleColor": "#FFFFFF",
-  "subtitleColor": "#94A3B8",
-  "icon": {
-    "width": 300,
-    "height": 60,
-    "leftColor": "#4A90D9",
-    "rightColor": "#D9944A",
-    "arrowColor": "rgba(255,255,255,0.4)"
-  }
+  "type": "title_card",
+  "sectionNumber": 2,
+  "sectionLabel": "PART 2",
+  "titleLine1": "THE PARADIGM",
+  "titleLine2": "SHIFT",
+  "backgroundColor": "#0A0F1A",
+  "ghostElements": [
+    { "shape": "mold_cavity_outline", "color": "#D9944A", "component": "injection_mold" },
+    { "shape": "circuit_schematic", "color": "#4A90D9", "component": "chip_design" }
+  ],
+  "narrationSegments": ["part2_001"]
 }
 ```
 

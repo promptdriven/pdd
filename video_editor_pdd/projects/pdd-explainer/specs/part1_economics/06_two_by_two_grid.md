@@ -1,154 +1,229 @@
 [Remotion]
 
-# Section 1.5: Productivity Quadrant — The 2×2 Grid
+# Section 1.6: Two-by-Two Grid — Why Every Study Is Correct
 
 **Tool:** Remotion
-**Duration:** ~30s
-**Timestamp:** 2:58 – 3:28
+**Duration:** ~18s (540 frames @ 30fps)
+**Timestamp:** 3:59 - 4:17
 
 ## Visual Description
-A clean 2×2 quadrant grid resolves the apparent contradiction between AI productivity studies. The X-axis goes from "Greenfield" to "Brownfield", the Y-axis from "In-Distribution" to "Out-of-Distribution." Each quadrant fills in with a color and a study citation. Top-left (greenfield, in-distribution) glows green with "+55% (GitHub)". Bottom-right (brownfield, out-of-distribution) glows red with "-19% (METR)". The other two quadrants are neutral. A pulsing highlight on the bottom-right quadrant with the label "Most real enterprise work lives here" drives home the key point.
+
+A clean 2x2 grid appears, resolving the apparent contradiction between productivity studies. The X-axis goes from "Greenfield" (left) to "Brownfield" (right). The Y-axis goes from "In-Distribution" (top) to "Out-of-Distribution" (bottom).
+
+The four quadrants fill in one by one:
+- **Top-left** (Greenfield × In-Distribution) glows green: "GitHub study: +55%". This is the easy win — new code, familiar patterns.
+- **Top-right** (Greenfield × Out-of-Distribution) shows yellow-amber: intermediate zone.
+- **Bottom-left** (Brownfield × In-Distribution) shows yellow-amber: intermediate zone.
+- **Bottom-right** (Brownfield × Out-of-Distribution) glows red: "METR study: −19%". This is real enterprise work — legacy code, unfamiliar territory.
+
+A label appears below: "Every study is correct. They just measured different quadrants." Then a subtle highlight shows that most real enterprise work lives in the bottom-right quadrant — the red zone.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #0F1923 (dark blue-black)
-- No grid lines (the quadrant IS the grid)
+- Background: `#0A0F1A` (deep navy-black)
+- Grid lines: None
 
 ### Chart/Visual Elements
-- **Quadrant container:** 800×600px, centered on screen
-- **Dividing lines:** 2px, #FFFFFF at 30% opacity, forming the cross
-- **X-axis label (bottom):** "Greenfield" (left) ←→ "Brownfield" (right)
-- **Y-axis label (left):** "In-Distribution" (top) ←→ "Out-of-Distribution" (bottom)
-- **Quadrant fills:**
-  - **Top-Left (Greenfield + In-Dist):** #22C55E at 15% opacity fill → "+55%" in large text, "GitHub, 2022" below, "95 devs · HTTP server" fine print
-  - **Top-Right (Brownfield + In-Dist):** #F59E0B at 8% opacity fill → "~0%" in medium text, "mixed results" below
-  - **Bottom-Left (Greenfield + Out-of-Dist):** #F59E0B at 8% opacity fill → "variable" in medium text
-  - **Bottom-Right (Brownfield + Out-of-Dist):** #EF4444 at 15% opacity fill → "-19%" in large text, "METR, 2025" below, "experienced devs · mature repos" fine print
-- **Highlight ring:** Animated dashed border around bottom-right quadrant, #EF4444, 3px, slowly rotating dash pattern
-- **Callout label:** "Most real enterprise work lives here" — positioned below the bottom-right quadrant with an arrow pointing into it
-- **Summary text (bottom of screen):** "Every study is correct. They just measured different quadrants."
+
+#### Grid Container
+- Center: (960, 480)
+- Total size: 640x480
+- Border: 2px, `#334155` at 0.4
+- Internal dividers: 2px, `#334155` at 0.3
+
+#### Axis Labels
+- X-axis left: "Greenfield" — Inter, 16px, semi-bold (600), `#5AAA6E` at 0.6, positioned below grid at left
+- X-axis right: "Brownfield" — Inter, 16px, semi-bold (600), `#EF4444` at 0.6, positioned below grid at right
+- X-axis arrow: thin arrow from left to right, `#475569` at 0.3, below grid
+- Y-axis top: "In-Distribution" — Inter, 14px, semi-bold (600), `#94A3B8` at 0.5, rotated -90°, left of grid
+- Y-axis bottom: "Out-of-Distribution" — Inter, 14px, semi-bold (600), `#94A3B8` at 0.5, rotated -90°, left of grid
+- Y-axis arrow: thin arrow from top to bottom, `#475569` at 0.3, left of grid
+
+#### Quadrant — Top-Left (Greenfield × In-Distribution)
+- Fill: `#5AAA6E` at 0.12
+- Border glow: 4px, `#5AAA6E` at 0.15
+- Main text: "+55%" — Inter, 36px, bold (700), `#5AAA6E`
+- Subtitle: "GitHub study" — Inter, 12px, `#5AAA6E` at 0.5
+- Fine print: "95 devs, greenfield" — Inter, 9px, `#64748B` at 0.3
+
+#### Quadrant — Top-Right (Greenfield × Out-of-Distribution)
+- Fill: `#D9944A` at 0.06
+- Main text: "Moderate" — Inter, 18px, `#D9944A` at 0.4
+- No specific study cited
+
+#### Quadrant — Bottom-Left (Brownfield × In-Distribution)
+- Fill: `#D9944A` at 0.06
+- Main text: "Moderate" — Inter, 18px, `#D9944A` at 0.4
+- No specific study cited
+
+#### Quadrant — Bottom-Right (Brownfield × Out-of-Distribution)
+- Fill: `#EF4444` at 0.10
+- Border glow: 4px, `#EF4444` at 0.12
+- Main text: "−19%" — Inter, 36px, bold (700), `#EF4444`
+- Subtitle: "METR study" — Inter, 12px, `#EF4444` at 0.5
+- Fine print: "experienced devs, mature repos" — Inter, 9px, `#64748B` at 0.3
+
+#### Enterprise Indicator
+- A dashed outline appears around the bottom-right quadrant
+- Label: "Most enterprise work" — Inter, 11px, `#EF4444` at 0.4, with arrow pointing to bottom-right
+
+#### Reconciliation Label
+- Position: below grid at y: 820
+- Text: "Every study is correct. They just measured different quadrants."
+- Inter, 18px, semi-bold (600), `#E2E8F0` at 0.8
+- Background: subtle pill, `#1E293B` at 0.3, rounded 12px, padding 16px
 
 ### Animation Sequence
-1. **Frame 0–30 (0–1s):** The cross (dividing lines) draws on — horizontal first, then vertical. Axis labels fade in.
-2. **Frame 30–90 (1–3s):** Top-left quadrant fills green. "+55%" counts up from 0. "GitHub, 2022" fades in. Synced with "The GitHub study measured greenfield, in-distribution work..."
-3. **Frame 90–180 (3–6s):** Slight pause. Then bottom-right quadrant fills red. "-19%" counts down from 0. "METR, 2025" fades in. Synced with "The METR study measured brownfield, out-of-distribution work..."
-4. **Frame 180–270 (6–9s):** Top-right and bottom-left quadrants fill with neutral amber, very subtly. Their labels appear.
-5. **Frame 270–420 (9–14s):** Summary text types on at the bottom. The word "different quadrants" is highlighted in white while the rest is #8B9DC3. Synced with "They're not contradictory. They're measuring different quadrants."
-6. **Frame 420–600 (14–20s):** Animated highlight ring appears around bottom-right quadrant. Callout "Most real enterprise work lives here" slides in from right with spring animation.
-7. **Frame 600–780 (20–26s):** Top-left quadrant dims slightly (opacity drops to 50%). Bottom-right quadrant brightens. Visual emphasis shifts to where real work happens.
-8. **Frame 780–900 (26–30s):** Hold. Ambient animation: the rotating dashed border continues, "+55%" and "-19%" pulse gently in alternation.
+1. **Frame 0-40 (0-1.3s):** Grid container draws in — borders, dividers, axis labels.
+2. **Frame 40-120 (1.3-4s):** Top-left quadrant fills green. "+55%" appears with scale bounce. "GitHub study" subtitle fades in.
+3. **Frame 120-180 (4-6s):** Bottom-right quadrant fills red. "−19%" appears with scale bounce. "METR study" subtitle fades in. The diagonal contrast is stark.
+4. **Frame 180-240 (6-8s):** Middle quadrants fill with amber — "Moderate" labels appear. The gradient from green to red across the diagonal is complete.
+5. **Frame 240-330 (8-11s):** Enterprise indicator — dashed outline around bottom-right, "Most enterprise work" label with arrow.
+6. **Frame 330-420 (11-14s):** Reconciliation label slides up from bottom: "Every study is correct. They just measured different quadrants."
+7. **Frame 420-540 (14-18s):** Hold. The grid is the argument. Both extremes are validated.
 
 ### Typography
-- Axis labels: Inter Medium, 16px, #8B9DC3
-- Quadrant metric (±%): Inter Bold, 48px, matching quadrant color (green/red)
-- Study citation: Inter Medium, 16px, #FFFFFF at 80% opacity
-- Fine print: Inter Regular, 12px, #6B7C93
-- Summary text: Inter SemiBold, 22px, #8B9DC3 (with "different quadrants" in #FFFFFF)
-- Callout: Inter SemiBold, 18px, #EF4444
+- Quadrant percentages: Inter, 36px, bold (700), respective colors
+- Quadrant subtitles: Inter, 12px, respective colors at 0.5
+- Fine print: Inter, 9px, `#64748B` at 0.3
+- Axis labels: Inter, 14-16px, semi-bold (600), respective colors
+- Reconciliation text: Inter, 18px, semi-bold (600), `#E2E8F0`
+- Enterprise label: Inter, 11px, `#EF4444` at 0.4
 
 ### Easing
-- Cross draw-on: `easeInOutCubic`
-- Quadrant fill: `easeOutCubic` (400ms)
-- Number count: `easeOutExpo` (800ms)
-- Summary type-on: linear (30ms per character)
-- Highlight ring rotation: linear (continuous, 8s per revolution)
-- Callout slide-in: `spring({ damping: 12, stiffness: 100 })`
+- Grid draw: `easeOut(cubic)` over 30 frames
+- Quadrant fill: `easeOut(quad)` over 20 frames
+- Percentage appear: `easeOut(back(1.3))` scale from 0.7 to 1.0, 15 frames
+- Enterprise indicator: `easeOut(quad)` over 20 frames
+- Reconciliation slide: `easeOut(cubic)` from y+20, 25 frames
 
 ## Narration Sync
 > "This is why AI-assisted patching is really two stories — and why every productivity study seems to contradict every other one."
-
 > "The GitHub study measured greenfield, in-distribution work — exactly where AI shines. The METR study measured brownfield, out-of-distribution work — where AI flounders. They're not contradictory. They're measuring different quadrants. And most real enterprise work? It lives in the bottom-right."
 
-Segments: `part1_economics_022` (236.0s – ~240s), `part1_economics_023` (~240s – ~260s)
+Segment: `part1_006`
+
+- **3:59** ("This is why AI-assisted patching is really two stories"): Grid container appears
+- **4:03** ("GitHub study measured greenfield"): Top-left quadrant fills green
+- **4:07** ("METR study measured brownfield"): Bottom-right quadrant fills red
+- **4:11** ("They're measuring different quadrants"): All quadrants visible, reconciliation label appears
+- **4:15** ("most real enterprise work"): Enterprise indicator highlights bottom-right
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={900}>
-  <AbsoluteFill style={{ backgroundColor: '#0F1923' }}>
-    {/* Axes and cross */}
-    <Sequence from={0} durationInFrames={30}>
-      <DrawOnCross />
-      <FadeIn><AxisLabels /></FadeIn>
-    </Sequence>
-
-    {/* Quadrant fills */}
-    <Sequence from={30} durationInFrames={60}>
-      <QuadrantFill
-        position="top-left"
-        color="#22C55E"
-        metric="+55%"
-        source="GitHub, 2022"
-        detail="95 devs · HTTP server"
+<Sequence from={0} durationInFrames={540}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    {/* Grid container with axes */}
+    <Sequence from={0}>
+      <TwoByTwoGrid
+        center={[960, 480]} size={[640, 480]}
+        borderColor="#334155" dividerColor="#334155"
+        xLabels={{ left: 'Greenfield', right: 'Brownfield' }}
+        yLabels={{ top: 'In-Distribution', bottom: 'Out-of-Distribution' }}
+        drawDuration={30}
       />
     </Sequence>
 
-    <Sequence from={90} durationInFrames={90}>
+    {/* Top-left: GitHub +55% */}
+    <Sequence from={40}>
       <QuadrantFill
-        position="bottom-right"
-        color="#EF4444"
-        metric="-19%"
-        source="METR, 2025"
-        detail="experienced devs · mature repos"
+        quadrant="top-left"
+        fillColor="#5AAA6E" fillOpacity={0.12}
+        glowColor="#5AAA6E" glowWidth={4}
+        mainText="+55%" mainSize={36} mainColor="#5AAA6E"
+        subtitle="GitHub study" subtitleSize={12}
+        finePrint="95 devs, greenfield"
       />
     </Sequence>
 
-    <Sequence from={180} durationInFrames={90}>
-      <QuadrantFill position="top-right" color="#F59E0B" metric="~0%" />
-      <QuadrantFill position="bottom-left" color="#F59E0B" metric="variable" />
+    {/* Bottom-right: METR -19% */}
+    <Sequence from={120}>
+      <QuadrantFill
+        quadrant="bottom-right"
+        fillColor="#EF4444" fillOpacity={0.10}
+        glowColor="#EF4444" glowWidth={4}
+        mainText="−19%" mainSize={36} mainColor="#EF4444"
+        subtitle="METR study" subtitleSize={12}
+        finePrint="experienced devs, mature repos"
+      />
     </Sequence>
 
-    {/* Summary text */}
-    <Sequence from={270} durationInFrames={150}>
-      <TypeOnText text="Every study is correct. They just measured different quadrants." />
+    {/* Middle quadrants */}
+    <Sequence from={180}>
+      <QuadrantFill quadrant="top-right"
+        fillColor="#D9944A" fillOpacity={0.06}
+        mainText="Moderate" mainSize={18} mainColor="#D9944A" />
+      <QuadrantFill quadrant="bottom-left"
+        fillColor="#D9944A" fillOpacity={0.06}
+        mainText="Moderate" mainSize={18} mainColor="#D9944A" />
     </Sequence>
 
-    {/* Bottom-right highlight */}
-    <Sequence from={420} durationInFrames={480}>
-      <RotatingDashBorder quadrant="bottom-right" color="#EF4444" />
-      <SlideInCallout text="Most real enterprise work lives here" />
+    {/* Enterprise indicator */}
+    <Sequence from={240}>
+      <DashedOutline quadrant="bottom-right"
+        color="#EF4444" opacity={0.4}
+        label="Most enterprise work" />
+    </Sequence>
+
+    {/* Reconciliation label */}
+    <Sequence from={330}>
+      <SlideUp distance={20} duration={25}>
+        <PillLabel
+          text="Every study is correct. They just measured different quadrants."
+          font="Inter" size={18} weight={600}
+          color="#E2E8F0" bgColor="#1E293B"
+          x={960} y={820}
+        />
+      </SlideUp>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
 ```
 
-## Data Points
+## Data Points JSON
 ```json
 {
+  "type": "quadrant_grid",
+  "diagramId": "two_by_two_productivity",
+  "axes": {
+    "x": { "left": "Greenfield", "right": "Brownfield" },
+    "y": { "top": "In-Distribution", "bottom": "Out-of-Distribution" }
+  },
   "quadrants": [
     {
       "position": "top-left",
-      "xAxis": "Greenfield",
-      "yAxis": "In-Distribution",
-      "metric": "+55%",
+      "label": "+55%",
       "source": "GitHub, 2022",
-      "color": "green"
+      "color": "#5AAA6E",
+      "sentiment": "positive"
     },
     {
       "position": "top-right",
-      "xAxis": "Brownfield",
-      "yAxis": "In-Distribution",
-      "metric": "~0%",
-      "source": "mixed",
-      "color": "amber"
+      "label": "Moderate",
+      "color": "#D9944A",
+      "sentiment": "neutral"
     },
     {
       "position": "bottom-left",
-      "xAxis": "Greenfield",
-      "yAxis": "Out-of-Distribution",
-      "metric": "variable",
-      "source": "mixed",
-      "color": "amber"
+      "label": "Moderate",
+      "color": "#D9944A",
+      "sentiment": "neutral"
     },
     {
       "position": "bottom-right",
-      "xAxis": "Brownfield",
-      "yAxis": "Out-of-Distribution",
-      "metric": "-19%",
+      "label": "−19%",
       "source": "METR, 2025",
-      "color": "red"
+      "color": "#EF4444",
+      "sentiment": "negative",
+      "enterpriseWork": true
     }
-  ]
+  ],
+  "reconciliation": "Every study is correct. They just measured different quadrants.",
+  "backgroundColor": "#0A0F1A",
+  "narrationSegments": ["part1_006"]
 }
 ```
+
+---
