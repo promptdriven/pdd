@@ -516,6 +516,42 @@ export interface PromptGenerationResult {
   error?: string;
 }
 
+// Extract cache types
+export interface ExtractMetadata {
+  cache_key: string;
+  source_path: string;
+  query: string;
+  timestamp: string | null;
+  source_hash: string | null;
+  is_fresh: boolean | null;
+}
+
+export interface ExtractContent extends ExtractMetadata {
+  content: string;
+}
+
+export interface ExtractListResponse {
+  extracts: ExtractMetadata[];
+  total: number;
+  stale_count: number;
+}
+
+export interface PruneResponse {
+  deleted_count: number;
+  orphaned_keys: string[];
+  message: string;
+}
+
+export interface PromptExtractInfo {
+  include_path: string;
+  query: string;
+  cache_key: string;
+  has_cached_entry: boolean;
+  source_path?: string;
+  timestamp?: string;
+  is_fresh?: boolean | null;
+}
+
 // API Client
 class PDDApiClient {
   private baseUrl: string;
@@ -1321,6 +1357,25 @@ class PDDApiClient {
     }
 
     return response.json();
+  }
+
+  // Extracts cache
+  async listExtracts(checkFreshness: boolean = true): Promise<ExtractListResponse> {
+    return this.request(`/api/v1/extracts?check_freshness=${checkFreshness}`);
+  }
+
+  async getExtract(cacheKey: string): Promise<ExtractContent> {
+    return this.request(`/api/v1/extracts/${cacheKey}`);
+  }
+
+  async getExtractsForPrompt(promptPath: string): Promise<PromptExtractInfo[]> {
+    return this.request(`/api/v1/extracts/for-prompt?prompt_path=${encodeURIComponent(promptPath)}`);
+  }
+
+  async pruneExtracts(dryRun: boolean = false): Promise<PruneResponse> {
+    return this.request(`/api/v1/extracts/prune?dry_run=${dryRun}`, {
+      method: 'POST',
+    });
   }
 
   // WebSocket for job streaming

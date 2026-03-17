@@ -10,7 +10,7 @@ import os
 # Or mock within each test as currently done.
 
 # Import after potentially modifying sys.path
-from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy, get_language_outputs
+from pdd.construct_paths import construct_paths, list_available_contexts, _resolve_config_hierarchy, get_language_outputs, _strip_language_suffix_with_subdir
 
 # Helper to create absolute path for comparison
 def resolve_path(relative_path_str, base_dir):
@@ -3199,4 +3199,61 @@ def test_construct_paths_null_language_uses_prompt_suffix_not_python(tmpdir):
 
         assert language == 'typescriptreact', \
             f"Expected 'typescriptreact' from prompt suffix, got '{language}'"
+
+
+# ---------------------------------------------------------------------------
+# _strip_language_suffix — nested path preservation
+# ---------------------------------------------------------------------------
+
+class TestStripLanguageSuffixWithSubdir:
+    """_strip_language_suffix_with_subdir preserves subdirectory relative to prompts/ root."""
+
+    def test_flat_prompt_unchanged(self):
+        """Flat prompt path returns basename without directory."""
+        result = _strip_language_suffix_with_subdir(Path("ci_validation_python.prompt"))
+        assert result == "ci_validation"
+
+    def test_nested_prompt_preserves_subdir(self):
+        """Subdirectory under prompts/ is preserved."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/fix_python.prompt"))
+        assert result == "commands/fix"
+
+    def test_nested_relative_path_no_prompts_dir(self):
+        """Relative path without prompts/ parent still preserves subdirectory."""
+        result = _strip_language_suffix_with_subdir(Path("commands/fix_python.prompt"))
+        assert result == "commands/fix"
+
+    def test_nested_prompt_deep_subdir(self):
+        """Multiple subdirectory levels are preserved."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/sub/deep_javascript.prompt"))
+        assert result == "commands/sub/deep"
+
+    def test_no_language_suffix_nested(self):
+        """Nested path without a known language suffix preserves directory and full stem."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/fix.prompt"))
+        assert result == "commands/fix"
+
+    def test_flat_prompt_no_language_suffix(self):
+        """Flat path without language suffix still works."""
+        result = _strip_language_suffix_with_subdir(Path("fix.prompt"))
+        assert result == "fix"
+
+    def test_nested_prompt_with_underscores_in_name(self):
+        """Underscores in the module name are preserved."""
+        result = _strip_language_suffix_with_subdir(Path("prompts/commands/fix_main_python.prompt"))
+        assert result == "commands/fix_main"
+
+    def test_absolute_path_with_prompts_dir(self):
+        """Absolute paths with prompts/ component extract subdir correctly."""
+        result = _strip_language_suffix_with_subdir(
+            Path("/Users/me/project/prompts/commands/fix_python.prompt")
+        )
+        assert result == "commands/fix"
+
+    def test_absolute_path_flat_prompt(self):
+        """Absolute paths without subdirs return just the basename."""
+        result = _strip_language_suffix_with_subdir(
+            Path("/Users/me/project/prompts/ci_validation_python.prompt")
+        )
+        assert result == "ci_validation"
 

@@ -193,7 +193,7 @@ Tip: Prefer small, named sections using XML‑style tags to make context scannab
 
 ### Special XML Tags: pdd, shell, web
 
-The PDD preprocessor supports additional XML‑style tags to keep prompts clean, reproducible, and self‑contained. Processing order (per spec) is: `pdd` → `include`/`include-many` → `shell` → `web`. When `recursive=True`, `<shell>` and `<web>` are deferred until a non‑recursive pass.
+The PDD preprocessor supports additional XML‑style tags to keep prompts clean, reproducible, and self‑contained. Processing order (per spec) is: `pdd` → `include` → `include-many` → `shell` → `web`. When `recursive=True`, `<shell>`, `<web>`, `<include ... query="...">`, and `<include-many>` are deferred until a non‑recursive pass.
 
 - ``
   - Purpose: human‑only comment. Removed entirely during preprocessing.
@@ -212,9 +212,10 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
 
 > ⚠️ **Warning: Non-Deterministic Tags**
 >
-> `<shell>` and `<web>` introduce **non-determinism**:
+> `<shell>`, `<web>`, and `<include ... query="...">` introduce **non-determinism**:
 > - `<shell>` output varies by environment (different machines, different results)
 > - `<web>` content changes over time (same URL, different content)
+> - `<include ... query="...">` relies on LLM interpretation (may vary by model or seed)
 >
 > **Impact:** Same prompt file → different generations on different machines/times
 >
@@ -429,7 +430,48 @@ Use this pattern when:
 - **Shared constraints evolve** (e.g., coding standards, security policies). A single edit to the preamble file updates all prompts.
 - **Interface definitions change** (e.g., a dependency's example file). Prompts consuming that example stay current.
 
-*Tradeoff:* Large includes consume context tokens. If only a small portion of a file is relevant, consider extracting that portion into a dedicated include file (e.g., `docs/output_conventions.md` rather than the full `README.md`).
+### Selective Includes
+
+Use `select=` to include only specific parts of a file instead of the whole thing:
+
+```xml
+<include select="def:parse_user_id">src/utils.py</include>
+<include select="class:User">src/models.py</include>
+<include select="section:Environment Variables">docs/config.md</include>
+<include select="lines:10-50">src/config.py</include>
+<include select="pattern:/^API_.*=/">src/constants.py</include>
+```
+
+| Selector | File types | Example |
+|----------|-----------|---------|
+| `lines:N-M` | Any | `lines:10-20`, `lines:5-`, `lines:-3` |
+| `def:name` | Python | `def:process_request` |
+| `class:Name` | Python | `class:UserModel` |
+| `class:Name.method` | Python | `class:UserModel.validate` |
+| `section:Heading` | Markdown | `section:Installation` |
+| `pattern:/regex/` | Any | `pattern:/^import/` |
+| `path:key.nested` | JSON/YAML | `path:config.database.host` |
+
+Selectors are composable: `select="lines:1-5,def:main,def:helper"`. If a selector fails to match, PDD falls back to the full file with a warning.
+
+**Interface mode** (`mode="interface"`, Python only) extracts signatures, docstrings, and type hints with bodies replaced by `...`. Useful when you only need the contract, not the implementation:
+
+```xml
+<include select="class:BillingService" mode="interface">src/billing/service.py</include>
+<include mode="interface">src/billing/service.py</include>
+```
+
+**Attribute priority:** `select=` always wins over `query=` (deterministic, no LLM cost). `mode="interface"` is applied to the result of `select=`.
+
+### Semantic Query (`query=`)
+
+For large documents where structural selectors aren't enough, use `query=` for LLM-powered extraction:
+
+```xml
+<include query="Authentication flow and JWT handling">docs/large_api_reference.md</include>
+```
+
+Results are cached in `.pdd/extracts/` and auto-refreshed when the source file changes. Run `pdd extracts prune` to garbage-collect orphaned cache entries.
 
 ### Positive over Negative Constraints
 
@@ -662,47 +704,6 @@ Ask yourself:
 **Rule of Thumb:** Focus on **Interfaces**, **Invariants**, and **Outcomes**. Let the preamble handle coding style; let grounding handle implementation patterns.
 
 ---
-
-## Auth-Heavy Module Requirements
-
-Auth modules (OAuth, JWT, session auth, API key management) are one of the most common sources of test failures in generated code. This is because auth inherently depends on external identity providers that can't be called during testing, and because token lifecycle management spans multiple concerns.
-
-### Why Auth Modules Fail
-
-1. **External provider dependency**: OAuth flows require real network calls to providers (Google, GitHub, Auth0). Generated tests that attempt these calls fail without credentials.
-2. **Complex lifecycle**: Token issuance, validation, refresh, and revocation are separate operations that must all work correctly. Missing any stage causes subtle production failures.
-3. **Tight coupling**: Auth logic embedded in business modules makes both untestable. The auth logic can't be mocked because it's not a separate dependency.
-
-### Writing Prompts for Auth Modules
-
-When writing prompts for auth-related modules, include these requirements:
-
-1. **Testability**: "Use dependency injection for the OAuth client and token verifier. Accept these as constructor/function parameters so tests can substitute mock implementations without calling real identity providers."
-2. **Token lifecycle**: "Handle the full token lifecycle: issuance (or exchange), validation, refresh, revocation, and expiry detection."
-3. **Error handling**: "Handle auth-specific errors: expired tokens (return 401 with refresh hint), invalid tokens (return 401), missing scopes (return 403), CSRF state mismatch (return 400), and network failures during token exchange (retry with backoff)."
-4. **Security**: "Never log tokens or secrets at INFO level or above. Use CSRF state parameters for all OAuth redirect flows. Validate redirect URIs against an allowlist."
-5. **Test fixtures**: "Tests should use mock OAuth fixtures and pre-generated JWT tokens (see context/test.prompt Pattern 14 for concrete examples)."
-
-### Example Requirements Section for an OAuth Module
-
-```text
-Requirements
-1. Function: exchange_code_for_token(code, redirect_uri, oauth_client) -> TokenResponse
-2. Function: refresh_access_token(refresh_token, oauth_client) -> TokenResponse
-3. Function: revoke_token(token, oauth_client) -> bool
-4. Accept oauth_client as a parameter (dependency injection for testability)
-5. Handle errors: invalid_grant, expired refresh token, network timeout (retry 3x)
-6. Never log token values; log only token metadata (expiry, scopes)
-7. Validate redirect_uri against configured allowlist before exchange
-```
-
-### Architecture Guidance
-
-When using `pdd generate <issue>` with a PRD that mentions auth:
-- PDD automatically detects auth technologies and creates separate auth modules
-- Auth modules are tagged with "auth" and given low priority numbers
-- Business modules depend on auth modules, not the reverse
-- The completeness validation checks for full token lifecycle coverage
 
 ## Dependencies
 

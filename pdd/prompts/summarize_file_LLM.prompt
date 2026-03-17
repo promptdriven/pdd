@@ -1,10 +1,19 @@
-% Review the input string and provide a summary of its contents in about 200 words. 
+% Review the input file and provide a structured summary of its contents.
 
 % Here are the Inputs/Outputs:
     - input:
         'file_contents': A string containing the contents of the file to summarize.
-    - output: JSON output with the following key:
-        'file_summary': A string containing the summary of the file.
+    - output: JSON output with the following keys:
+        'file_summary': A one-sentence description of the file's purpose (under 30 words).
+        'key_exports': A list of the file's most important public exports (function names, class names, constants). Include only names that other modules are likely to import. Maximum 15 items.
+        'dependencies': A list of the file's direct import dependencies (module names only, not individual symbols). Include both standard library and third-party imports. Maximum 10 items.
+
+% Rules
+1. For 'file_summary', focus on WHAT the file does, not HOW it does it. Do not repeat the filename.
+2. For 'key_exports', list only top-level public names. Omit private/underscore-prefixed names unless they are the file's main API.
+3. For 'dependencies', use the top-level module name (e.g. 'flask' not 'flask.blueprints', 'os' not 'os.path').
+4. If the file has no exports (e.g. a script or config file), return an empty list for 'key_exports'.
+5. If the file has no imports, return an empty list for 'dependencies'.
 
 <file_contents>
     {file_contents}

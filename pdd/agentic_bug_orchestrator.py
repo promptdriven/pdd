@@ -14,7 +14,9 @@ from .agentic_common import (
     load_workflow_state,
     save_workflow_state,
     clear_workflow_state,
-    DEFAULT_MAX_RETRIES
+    set_agentic_progress,
+    clear_agentic_progress,
+    DEFAULT_MAX_RETRIES,
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
@@ -270,7 +272,10 @@ def run_agentic_bug_orchestrator(
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
-    
+
+    # Ensure any stale agentic progress from prior runs is cleared.
+    clear_agentic_progress()
+
     if not quiet:
         console.print(f"🔍 Investigating issue #{issue_number}: \"{issue_title}\"")
 
@@ -461,6 +466,20 @@ def run_agentic_bug_orchestrator(
         pre_step9_files = None
         if step_num == 9:
             pre_step9_files = set(_get_modified_and_untracked(current_cwd))
+
+        # Record progress so KeyboardInterrupt can report how far we got.
+        completed_list = (
+            list(range(1, last_completed_step_to_save + 1))
+            if last_completed_step_to_save
+            else []
+        )
+        set_agentic_progress(
+            workflow="bug",
+            current_step=step_num,
+            total_steps=12,
+            step_name=description,
+            completed_steps=completed_list,
+        )
 
         if not quiet:
             console.print(f"[bold][Step {step_num}/12][/bold] {description}...")
@@ -776,6 +795,9 @@ def run_agentic_bug_orchestrator(
         console.print(f"   Files changed: {', '.join(changed_files)}")
         if worktree_path:
             console.print(f"   Worktree: {worktree_path}")
+
+    # Clear progress on successful completion so future runs start clean.
+    clear_agentic_progress()
 
     return True, final_msg, total_cost, last_model_used, changed_files
 

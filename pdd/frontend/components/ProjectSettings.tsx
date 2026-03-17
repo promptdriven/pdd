@@ -4,6 +4,7 @@ import { PddrcConfig, PddrcContext, PddrcContextDefaults } from '../types';
 import { Cog6ToothIcon, ChevronDownIcon, ChevronUpIcon, TrashIcon, PlusIcon, FolderIcon, SpinnerIcon } from './Icon';
 import Tooltip from './Tooltip';
 import FilePickerInput from './FilePickerInput';
+import ExtractsPanel from './ExtractsPanel';
 
 // Available languages for dropdown
 const LANGUAGES = [
@@ -605,6 +606,22 @@ const ProjectSettings: React.FC = () => {
         <PlusIcon className="w-5 h-5" />
         Add Context
       </button>
+
+      {/* LLM Extracts Cache Section */}
+      <div className="mt-8 glass rounded-xl border border-surface-700/50 p-4 sm:p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+            <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-white">LLM Extracts Cache</h2>
+            <p className="text-sm text-surface-400">Browse cached extracts from &lt;include query="..."&gt; tags</p>
+          </div>
+        </div>
+        <ExtractsPanel />
+      </div>
 
       {/* PDD Cloud Authentication Section */}
       <div className="mt-8 glass rounded-xl border border-surface-700/50 p-4 sm:p-6">

@@ -352,6 +352,7 @@ def test(
                     console.print(f"Changed files: {', '.join(changed_files)}")
             else:
                 console.print(f"[bold red]Agentic test generation failed:[/bold red] {message}")
+                raise click.exceptions.Exit(1)
 
             result_dict = {
                 "success": success,
@@ -387,7 +388,7 @@ def test(
 
             return unit_test_code, cost, model
 
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
