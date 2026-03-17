@@ -139,7 +139,43 @@
     "model": "veo-3.1-generate-preview",
     "defaultAspectRatio": "16:9",
     "maxConcurrentGenerations": 4,
-    "references": [],
+    "references": [
+      {
+        "id": "chip_engineer",
+        "label": "Chip Engineer",
+        "imagePath": "outputs/veo/references/chip_engineer.png",
+        "sections": [
+          "part2_paradigm_shift"
+        ],
+        "referencePrompt": "Male engineer, 30s-40s, dress shirt with rolled sleeves, 1980s electronics lab, hunched over drafting desk drawing circuit schematics by hand",
+        "prompt": "Male engineer, 30s-40s, dress shirt with rolled sleeves, 1980s electronics lab, hunched over drafting desk drawing circuit schematics by hand",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "developer",
+        "label": "Developer",
+        "imagePath": "outputs/veo/references/developer.png",
+        "sections": [
+          "part3_mold_three_parts",
+          "part5_compound_returns"
+        ],
+        "referencePrompt": "Modern software developer at desk with large monitor, dark room lit by screen glow, mechanical keyboard, minimal home office setup",
+        "prompt": "Modern software developer at desk with large monitor, dark room lit by screen glow, mechanical keyboard, minimal home office setup",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "grandmother",
+        "label": "Great-Grandmother",
+        "imagePath": "outputs/veo/references/grandmother.png",
+        "sections": [
+          "cold_open",
+          "part5_compound_returns"
+        ],
+        "referencePrompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
+        "prompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
+        "source": "stage6-inferred"
+      }
+    ],
     "frameChains": []
   },
   "render": {

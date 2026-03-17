@@ -1,3 +1,36 @@
+## v0.0.179 (2026-03-16)
+
+### Feat
+
+- infer spec visual types from script intent
+- Implement markdown formatting, preview, and editor word wrapping in the spec generation stage.
+
+### Fix
+
+- restore README and prompting guide content overwritten by PR #552 cherry-pick
+- update test to expect exit code 1 on agentic fix failure
+- limit spec file reruns to owning section
+- harden stage6 veo reference sync and timeouts
+- agentic bug/test/fix exit with code 1 on failure (#593)
+- add mock assertion patterns to behavioral test validator
+- review fixes for PR #839 — grep compat, false positives, Java runtime validation
+- resolve VALIDATOR_SCRIPT path before cd changes working directory
+- update pytest assertions to match language-agnostic prompt wording
+- address PR review feedback on test assertions
+- pdd bug generates structural tests (param existence checks) instead of behavioral tests
+- E2E skip cascade — subdirectory config, early exit, NOT_A_BUG guard (#673)
+- improve stage6 timeout scaling and log timestamps
+- resolve command name in KeyboardInterrupt from 'unknown' to actual subcommand
+- resolve veo prompts from markdown sections
+- harden stage6 spec generation retries
+
+### Refactor
+
+- Reorganize and update video explainer project specifications, adjusting pipeline route and tests.
+- remove duplicated test files per PR review
+- make structural test blocking prompts language-agnostic
+- replace copy-paste E2E tests with shared _render_prompt helper
+
 ## v0.0.178 (2026-03-15)
 
 ### Feat
