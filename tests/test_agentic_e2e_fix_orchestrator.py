@@ -2937,10 +2937,11 @@ class TestIssue830MissingLoopControlToken:
             **e2e_fix_default_args
         )
 
-        # Should only run 9 steps (1 cycle), NOT 18+ (2+ cycles)
-        assert mock_run.call_count == 9, (
-            f"Expected exactly 9 step calls (1 cycle only) but got {mock_run.call_count}. "
-            f"Missing loop control token should break the loop, not default to CONTINUE_CYCLE."
+        # Should only run 1 cycle worth of steps plus a single Step 9 retry:
+        # 9 initial steps + 1 retry call = 10 total, NOT 18+ (2+ full cycles).
+        assert mock_run.call_count == 10, (
+            f"Expected 10 step calls (1 cycle + Step 9 retry) but got {mock_run.call_count}. "
+            "Missing loop control token should not start Cycle 2."
         )
 
     def test_no_loop_control_token_logs_warning(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
