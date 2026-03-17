@@ -38,7 +38,7 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 0.149333,
+      "durationSeconds": 0.213333,
       "offsetSeconds": 0.149333,
       "compositions": [
         "01_section_title_card",
@@ -61,9 +61,16 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 228.053292,
-      "offsetSeconds": 0.298666,
+      "offsetSeconds": 0.362666,
       "compositions": [
-        "part2_paradigm_shift_main"
+        "01_section_title_card",
+        "04_defect_fix_the_mold",
+        "05_value_migration_split",
+        "07_verilog_synthesis_triple",
+        "08_synopsys_pdd_equivalence",
+        "09_abstraction_staircase",
+        "10_netlist_zoom_unreviewable",
+        "11_prompt_replaces_review"
       ],
       "timelineSource": "generated"
     },
@@ -75,7 +82,18 @@
       "remotionDir": "S03-Part3MoldThreeParts",
       "compositionId": "Part3MoldThreePartsSection",
       "durationSeconds": 344.396583,
-      "offsetSeconds": 228.351958
+      "offsetSeconds": 228.415958,
+      "compositions": [
+        "01_section_title_card",
+        "02_mold_cross_section",
+        "03_test_walls_constraint",
+        "04_research_annotations_ai_quality",
+        "06_ratchet_split_comparison",
+        "07_five_generations_z3",
+        "08_prompt_capital_specification",
+        "10_three_components_table"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "part4_precision_tradeoff",
@@ -85,7 +103,18 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 112.000667,
-      "offsetSeconds": 572.748541
+      "offsetSeconds": 572.812541,
+      "compositions": [
+        "01_section_title_card",
+        "02_printer_vs_mold_split",
+        "03_precision_tradeoff_curve",
+        "04_prompt_comparison_split",
+        "05_test_accumulation_insight",
+        "06_takeaway_callout",
+        "07_embedded_code_document",
+        "08_prompt_code_spectrum"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "part5_compound_returns",
@@ -95,7 +124,18 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 115.321625,
-      "offsetSeconds": 684.7492080000001
+      "offsetSeconds": 684.813208,
+      "compositions": [
+        "01_section_title_card",
+        "02_maintenance_pie_chart",
+        "03_compound_debt_curve",
+        "04_diverging_cost_curves",
+        "05_investment_comparison_table",
+        "06_sock_callback_split",
+        "07_economics_crossing_callback",
+        "08_contrarian_quote_card"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "where_to_start",
@@ -105,7 +145,17 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 32.569083,
-      "offsetSeconds": 800.0708330000001
+      "offsetSeconds": 800.1348330000001,
+      "compositions": [
+        "01_section_title_card",
+        "02_legacy_codebase_reveal",
+        "03_module_highlight_update",
+        "04_source_of_truth_shift",
+        "05_regenerate_compare_loop",
+        "06_spreading_glow_migration",
+        "07_no_big_bang_callout"
+      ],
+      "timelineSource": "generated"
     },
     {
       "id": "closing",
@@ -115,7 +165,18 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 20.903208,
-      "offsetSeconds": 832.6399160000001
+      "offsetSeconds": 832.703916,
+      "compositions": [
+        "01_sock_callback_split",
+        "03_code_regenerate_workflow",
+        "04_pdd_triangle",
+        "05_dissolve_regenerate_loop",
+        "06_mold_glow_finale",
+        "07_the_beat",
+        "08_mold_is_what_matters",
+        "09_final_title_card"
+      ],
+      "timelineSource": "authored"
     }
   ],
   "audioSync": {
