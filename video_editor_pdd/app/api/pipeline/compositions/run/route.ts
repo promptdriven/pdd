@@ -128,6 +128,47 @@ function extractStructuredDataPoints(spec: string): string | null {
   return match?.[1]?.trim() || null;
 }
 
+type ComponentWorkspace = {
+  cwd: string;
+  remotionScopeDir: string;
+  cleanup: () => void;
+};
+
+function createComponentWorkspace(outputName: string): ComponentWorkspace {
+  const workspaceRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), `video-editor-stage8-${outputName}-`)
+  );
+  const remotionRoot = path.join(workspaceRoot, "remotion");
+  const remotionScopeDir = path.join(remotionRoot, "src", "remotion");
+
+  fs.mkdirSync(remotionScopeDir, { recursive: true });
+  fs.mkdirSync(path.join(remotionRoot, "public"), { recursive: true });
+
+  const sharedSourceDir = path.join(getRemotionScopeDir(), "_shared");
+  if (fs.existsSync(sharedSourceDir)) {
+    try {
+      fs.symlinkSync(sharedSourceDir, path.join(remotionScopeDir, "_shared"), "dir");
+    } catch {
+      // Best effort only. Claude can still generate code without traversing _shared.
+    }
+  }
+
+  const veoPublicDir = path.join(getAppRemotionPublicDir(), "veo");
+  if (fs.existsSync(veoPublicDir)) {
+    try {
+      fs.symlinkSync(veoPublicDir, path.join(remotionRoot, "public", "veo"), "dir");
+    } catch {
+      // Best effort only. Available asset filenames are already included in the prompt.
+    }
+  }
+
+  return {
+    cwd: workspaceRoot,
+    remotionScopeDir,
+    cleanup: () => fs.rmSync(workspaceRoot, { recursive: true, force: true }),
+  };
+}
+
 function buildComponentPrompt(baseName: string, outputName: string, spec: string, veoAssets: string[]): string {
   const veoSection = veoAssets.length > 0
     ? `\n--- VEO ASSETS ---\nThe following video files are available in remotion/public/veo/.\nUse staticFile("veo/<filename>") to reference them (NOT staticFile("public/veo/...")).\n${veoAssets.map((f) => `- ${f}`).join("\n")}\n--- END VEO ASSETS ---\n`
@@ -398,11 +439,11 @@ function compToRemotionId(compId: string, sectionId: string): string {
 }
 
 function getGeneratedArtifactCandidates(
+  remotionScopeDir: string,
   componentName: string,
   outputName: string,
   sectionId?: string,
 ): string[] {
-  const remotionScopeDir = getRemotionScopeDir();
   const candidates = new Set<string>();
 
   candidates.add(path.join(remotionScopeDir, `${outputName}.tsx`));
@@ -434,13 +475,52 @@ function getGeneratedArtifactCandidates(
 }
 
 function generatedArtifactExists(
+  remotionScopeDir: string,
   componentName: string,
   outputName: string,
   sectionId?: string,
 ): boolean {
-  return getGeneratedArtifactCandidates(componentName, outputName, sectionId).some((candidate) =>
-    fs.existsSync(candidate)
-  );
+  return getGeneratedArtifactCandidates(
+    remotionScopeDir,
+    componentName,
+    outputName,
+    sectionId,
+  ).some((candidate) => fs.existsSync(candidate));
+}
+
+function syncGeneratedArtifactToLiveScope(
+  generatedScopeDir: string,
+  componentName: string,
+  outputName: string,
+  sectionId?: string,
+): boolean {
+  const liveScopeDir = getRemotionScopeDir();
+
+  for (const candidate of getGeneratedArtifactCandidates(
+    generatedScopeDir,
+    componentName,
+    outputName,
+    sectionId,
+  )) {
+    if (!fs.existsSync(candidate)) {
+      continue;
+    }
+
+    if (candidate.endsWith(path.join("index.ts"))) {
+      const sourceDir = path.dirname(candidate);
+      const destDir = path.join(liveScopeDir, path.basename(sourceDir));
+      fs.rmSync(destDir, { recursive: true, force: true });
+      fs.cpSync(sourceDir, destDir, { recursive: true });
+      return true;
+    }
+
+    if (candidate.endsWith(".tsx")) {
+      fs.copyFileSync(candidate, path.join(liveScopeDir, path.basename(candidate)));
+      return true;
+    }
+  }
+
+  return false;
 }
 
 type ProjectSectionForValidation = {
@@ -648,9 +728,32 @@ registerExecutor("compositions", (params, send: SseSend) => {
             const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
 
             for (let attempt = 1; attempt <= 2; attempt++) {
-              await runClaudeFix(prompt, getRemotionScopeDir(), (line) => onLog(line));
+              const workspace = createComponentWorkspace(item.outputName);
+              try {
+                await runClaudeFix(prompt, workspace.cwd, (line) => onLog(line));
 
-              if (generatedArtifactExists(item.name, item.outputName, item.sectionId)) {
+                if (
+                  syncGeneratedArtifactToLiveScope(
+                    workspace.remotionScopeDir,
+                    item.name,
+                    item.outputName,
+                    item.sectionId,
+                  )
+                ) {
+                  break;
+                }
+              } finally {
+                workspace.cleanup();
+              }
+
+              if (
+                generatedArtifactExists(
+                  getRemotionScopeDir(),
+                  item.name,
+                  item.outputName,
+                  item.sectionId,
+                )
+              ) {
                 break;
               }
 
@@ -662,7 +765,14 @@ registerExecutor("compositions", (params, send: SseSend) => {
             }
           }
 
-          if (!generatedArtifactExists(item.name, item.outputName, item.sectionId)) {
+          if (
+            !generatedArtifactExists(
+              getRemotionScopeDir(),
+              item.name,
+              item.outputName,
+              item.sectionId,
+            )
+          ) {
             const msg = `Expected generated component output not found for ${item.outputName}`;
             send({ type: "component", name: item.name, status: "error" });
             onLog(`[compositions] Error generating ${item.name}: ${msg}`);

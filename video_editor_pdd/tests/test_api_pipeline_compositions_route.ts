@@ -18,7 +18,7 @@
  *   9. Component status: check if remotion/src/remotion/{componentName}.tsx exists
  *  10. CompositionEntry.lastError from last error job for that component (from DB)
  *  11. Asset staging: fs.copyFileSync for missing files in remotion/public/
- *  12. Claude scope: remotion/src/remotion/ for component generation
+ *  12. Claude runs in isolated temp workspaces and only copies validated artifacts back into remotion/src/remotion/
  */
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,9 @@ const mockCopyFileSync = jest.fn();
 const mockMkdirSync = jest.fn();
 const mockRmSync = jest.fn();
 const mockWriteFileSync = jest.fn();
+const mockMkdtempSync = jest.fn();
+const mockCpSync = jest.fn();
+const mockSymlinkSync = jest.fn();
 const mockOpenSync = jest.fn(() => 99);
 const mockReadSync = jest.fn();
 const mockCloseSync = jest.fn();
@@ -85,6 +88,9 @@ jest.mock("fs", () => ({
     mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
     rmSync: (...args: unknown[]) => mockRmSync(...args),
     writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+    mkdtempSync: (...args: unknown[]) => mockMkdtempSync(...args),
+    cpSync: (...args: unknown[]) => mockCpSync(...args),
+    symlinkSync: (...args: unknown[]) => mockSymlinkSync(...args),
     openSync: (...args: unknown[]) => mockOpenSync(...args),
     readSync: (...args: unknown[]) => mockReadSync(...args),
     closeSync: (...args: unknown[]) => mockCloseSync(...args),
@@ -96,6 +102,9 @@ jest.mock("fs", () => ({
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
   rmSync: (...args: unknown[]) => mockRmSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  mkdtempSync: (...args: unknown[]) => mockMkdtempSync(...args),
+  cpSync: (...args: unknown[]) => mockCpSync(...args),
+  symlinkSync: (...args: unknown[]) => mockSymlinkSync(...args),
   openSync: (...args: unknown[]) => mockOpenSync(...args),
   readSync: (...args: unknown[]) => mockReadSync(...args),
   closeSync: (...args: unknown[]) => mockCloseSync(...args),
@@ -313,6 +322,9 @@ beforeEach(() => {
   mockMkdirSync.mockReset();
   mockRmSync.mockReset();
   mockWriteFileSync.mockReset();
+  mockMkdtempSync.mockReset();
+  mockCpSync.mockReset();
+  mockSymlinkSync.mockReset();
   mockOpenSync.mockReset();
   mockReadSync.mockReset();
   mockCloseSync.mockReset();
@@ -334,6 +346,8 @@ beforeEach(() => {
   });
   mockHashDigest.mockReturnValue("test-generator-fingerprint");
   mockExecSync.mockReturnValue("");
+  let tempDirCounter = 0;
+  mockMkdtempSync.mockImplementation((prefix: string) => `${prefix}${++tempDirCounter}`);
   mockOpenSync.mockReturnValue(99);
   mockExistsSync.mockImplementation((p: string) => {
     if (typeof p !== "string") return false;
@@ -759,7 +773,7 @@ describe("compositions executor factory — component generation", () => {
     );
   });
 
-  it("scopes runClaudeFix to remotion/src/remotion/ directory", async () => {
+  it("runs Claude in an isolated temp workspace instead of the live remotion tree", async () => {
     mockGeneratedFlatArtifacts("HeroSection");
     mockReaddirSync.mockReturnValue([]);
     setupMockSpawn(0);
@@ -773,9 +787,9 @@ describe("compositions executor factory — component generation", () => {
 
     const scopeDir = mockRunClaudeFix.mock.calls[0][1];
     const pathMod = require("path");
-    expect(scopeDir).toBe(
-      pathMod.join(process.cwd(), "remotion/src/remotion")
-    );
+    expect(scopeDir).not.toBe(pathMod.join(process.cwd(), "remotion/src/remotion"));
+    expect(scopeDir).toContain(pathMod.join("video-editor-stage8-HeroSection-"));
+    expect(scopeDir).not.toContain(pathMod.join(process.cwd(), "remotion", "src", "remotion"));
   });
 
   it("passes a log callback to runClaudeFix", async () => {
@@ -2588,13 +2602,6 @@ describe("compositions executor — generated preview validation", () => {
 
     const pathMod = require("path");
     const specsDir = pathMod.join(process.cwd(), "specs", "veo_section");
-    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
-    const generatedIndex = pathMod.join(
-      remotionDir,
-      "VeoSection05SplitNatureComparison",
-      "index.ts"
-    );
-
     let artifactExists = false;
     let attemptCount = 0;
     mockRunClaudeFix.mockImplementation(async () => {
@@ -2604,7 +2611,19 @@ describe("compositions executor — generated preview validation", () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (typeof p !== "string") return false;
       if (p === specsDir) return true;
-      if (p === generatedIndex) return artifactExists;
+      if (
+        p.endsWith(
+          pathMod.join(
+            "remotion",
+            "src",
+            "remotion",
+            "VeoSection05SplitNatureComparison",
+            "index.ts"
+          )
+        )
+      ) {
+        return artifactExists;
+      }
       return false;
     });
     mockReaddirSync.mockImplementation((p: string) => {
@@ -2629,9 +2648,73 @@ describe("compositions executor — generated preview validation", () => {
     await expect(executor(onLog)).resolves.toBeUndefined();
 
     expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
+    expect(mockCpSync).toHaveBeenCalledWith(
+      expect.stringContaining(
+        pathMod.join(
+          "remotion",
+          "src",
+          "remotion",
+          "VeoSection05SplitNatureComparison"
+        )
+      ),
+      pathMod.join(
+        process.cwd(),
+        "remotion",
+        "src",
+        "remotion",
+        "VeoSection05SplitNatureComparison"
+      ),
+      { recursive: true }
+    );
     expect(onLog).toHaveBeenCalledWith(
       "[compositions] No generated artifact found for veo_section_05_split_nature_comparison after Claude run; retrying once."
     );
+  });
+
+  it("uses a distinct temp workspace per component generation", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "intro";
+    config.sections[0].specDir = "intro";
+    config.sections[1].id = "main";
+    config.sections[1].specDir = "main";
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.endsWith(path.join("remotion", "src", "remotion", "intro_title_card.tsx"))) return true;
+      if (p.endsWith(path.join("remotion", "src", "remotion", "main_title_card.tsx"))) return true;
+      if (p.includes(path.join("specs", "intro")) || p.includes(path.join("specs", "main"))) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return [];
+      if (p.includes(path.join("specs", "intro"))) {
+        return [{ name: "title_card.md", isFile: () => true }];
+      }
+      if (p.includes(path.join("specs", "main"))) {
+        return [{ name: "title_card.md", isFile: () => true }];
+      }
+      return [];
+    });
+    mockReadFileSync.mockReturnValue("# Spec content");
+
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "intro", components: ["title_card"] },
+          { sectionId: "main", components: ["title_card"] },
+        ],
+        wrappers: [],
+      },
+      jest.fn()
+    );
+
+    await expect(executor(jest.fn())).resolves.toBeUndefined();
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
+    expect(mockRunClaudeFix.mock.calls[0][1]).not.toBe(mockRunClaudeFix.mock.calls[1][1]);
   });
 
   it("only preview-validates compositions that were actually discovered into the section render graph", async () => {
