@@ -148,6 +148,9 @@ def fix(
                 status = "completed" if success else "failed"
                 console.print(f"[bold {style}]Agentic fix {status}:[/bold {style}] {message}")
 
+            if not success:
+                raise click.exceptions.Exit(1)
+
             return (
                 {
                     "success": success,
