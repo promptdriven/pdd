@@ -120,14 +120,10 @@ class PDDCLI(click.Group):
             # Handle keyboard interrupt (Ctrl+C) gracefully
             exception_to_handle = e
         except SystemExit as e:
-            # Let successful exits (code 0) pass through; for non-zero, treat as an
-            # intentional failure: write a core dump and route through handle_error.
+            # Let successful exits (code 0) pass through; for non-zero, exit with that code (e.g. intentional sys.exit(1) from a command)
             if e.code == 0 or e.code is None:
                 raise
-
-            exit_code = int(e.code) if e.code is not None else 1
-
-            # Write core dump on intentional failure exit so debugging has a record
+            # Write core dump on intentional failure exit so debugging has a record (same as exception path)
             try:
                 if ctx.obj is None:
                     ctx.obj = {}
@@ -151,28 +147,12 @@ class PDDCLI(click.Group):
                         if stderr_capture:
                             sys.stderr = stderr_capture.original_stream
                 _write_core_dump(
-                    ctx,
-                    [],
-                    invoked_subcommands,
-                    total_cost,
-                    terminal_output,
-                    exit_reason=f"Command exited with code {exit_code} (intentional failure).",
+                    ctx, [], invoked_subcommands, total_cost, terminal_output,
+                    exit_reason=f"Command exited with code {int(e.code) if e.code is not None else 1} (intentional failure).",
                 )
             except Exception:
                 pass
-
-            # Also route through handle_error so tests and downstream tooling
-            # see a consistent error-reporting path.
-            quiet = False
-            try:
-                if isinstance(ctx.obj, dict):
-                    quiet = ctx.obj.get("quiet", False)
-            except Exception:
-                pass
-            error_msg = f"Command exited with code {exit_code}"
-            handle_error(RuntimeError(error_msg), _first_pending_command(ctx) or "unknown", quiet)
-
-            ctx.exit(exit_code)
+            ctx.exit(int(e.code) if e.code is not None else 1)
             return
         except click.exceptions.Exit as e:
             # Let successful Click exits pass through, but handle error exits
