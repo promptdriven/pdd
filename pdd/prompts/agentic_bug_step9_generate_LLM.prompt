@@ -73,6 +73,18 @@ def test_caller_uses_correct_parameter():
 - Such tests always pass because the callee was never broken
 - Example of WRONG approach: `pytest.raises(TypeError, lambda: callee(limit=5))`
 
+% Critical: No Structural/Shape Tests — Behavioral Assertions Only
+
+Your generated tests must verify **observable behavior**, not code structure.
+
+**BLOCKED:** Any test that uses reflection, introspection, source code scanning, or existence checks to verify that a function, method, parameter, or property *exists* — rather than verifying what *happens* when it's used. This includes (but is not limited to) signature inspection, source string matching, attribute/method existence checks, parameter counting, and type-checking functions via reflection. These patterns are blocked in every language.
+
+**BAD test (structural — NEVER generate this):** A test that checks whether a function accepts a parameter or whether a method exists, without ever calling it and asserting on the result. Example: inspecting a function's signature to assert a parameter name is present, or reading source code to assert a keyword appears. These pass by adding an empty stub without implementing any logic.
+
+**GOOD test (behavioral — ALWAYS generate this instead):** A test that calls the function with the relevant input, and asserts on the observable output or side effect. Example: calling the function with the new parameter and asserting that the output changes, a dependency is called differently, or a side effect occurs.
+
+**Self-check:** Before writing each test, ask: "Could this test pass if someone just changed the function signature or added an empty stub without implementing any actual logic?" If yes, the test is structural — rewrite it to verify observable behavior.
+
 % Critical: Mock Accuracy Validation
 
 Before writing any mock or stub, verify it against the investigation findings:
@@ -162,7 +174,7 @@ Your comment should follow this format:
 
 - The test MUST fail on the current (buggy) code
 - The test should pass once the bug is fixed
-- Focus on testing behavior, not implementation details
+- Focus on testing behavior, not implementation details — do NOT use reflection, introspection, or source scanning to verify code structure
 - Write the test file to disk before posting the comment
 - Always post your findings as a GitHub comment before completing
 
