@@ -846,7 +846,7 @@ def _run_with_provider(
             cli_path,
             f"Read the file {prompt_path.name} for your full instructions and execute them.",
             "--yolo",
-            "--max-turns", "15",
+            "--max-turns", "25",
             "--output-format", "json"
         ]
         # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
