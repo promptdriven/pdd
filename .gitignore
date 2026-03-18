@@ -10,6 +10,7 @@ sync_order.sh
 
 staging_data_dump.json
 .pdd/core_dumps/*
+*_fixed.*
 
 .vscode/settings.json
 
