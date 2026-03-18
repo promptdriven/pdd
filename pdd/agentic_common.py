@@ -836,17 +836,10 @@ def _run_with_provider(
         # so passing a file path gives Gemini the path string instead of content.
         # Instead, pass a short instruction as positional argument telling Gemini
         # to read the prompt file (matches old _run_google_variants pattern).
-        #
-        # --max-turns 15: Gemini's agentic loop explores exhaustively without a
-        # cap (30-50+ tool calls per step), inflating step times to 3-5 min vs
-        # Claude's 15-40s.  15 turns is enough for any well-defined step (read
-        # prompt, search/read files, write output) while preventing runaway
-        # exploration.  Claude already finishes in 3-8 turns per step.
         cmd = [
             cli_path,
             f"Read the file {prompt_path.name} for your full instructions and execute them.",
             "--yolo",
-            "--max-turns", "25",
             "--output-format", "json"
         ]
         # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
