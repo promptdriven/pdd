@@ -950,12 +950,25 @@ def run_agentic_e2e_fix_orchestrator(
     success = False
     final_message = ""
     consecutive_provider_failures = 0
+    step_num = 0  # Ensure step_num is always defined for post_final_comment
 
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
-        
+
+        # Reset stale state: if a previous run exhausted all cycles, the saved
+        # current_cycle exceeds max_cycles. Without this reset the while-loop
+        # body never executes and step_num stays 0 / unbound.
+        if current_cycle > max_cycles:
+            console.print(
+                f"[yellow]Stale state detected (cycle {current_cycle} > max {max_cycles}). "
+                f"Resetting to cycle 1.[/yellow]"
+            )
+            current_cycle = 1
+            last_completed_step = 0
+            step_outputs = {}
+
         while current_cycle <= max_cycles:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
             
@@ -1374,7 +1387,7 @@ def run_agentic_e2e_fix_orchestrator(
                 issue_number=issue_number,
                 reason=final_message,
                 total_cost=total_cost,
-                steps_completed=last_completed_step or step_num,
+                steps_completed=last_completed_step or step_num or 0,
                 total_steps=10,
                 cwd=cwd,
             )
