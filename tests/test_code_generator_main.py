@@ -2888,7 +2888,7 @@ class TestIssue687ExampleOutputPath:
 
     def test_example_output_path_injected_into_env_vars(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
-        mock_local_generator_fixture, mock_env_vars
+        mock_env_vars
     ):
         """When resolved_config has example_output_path, it must be injected into
         env_vars as EXAMPLE_OUTPUT_PATH so _expand_vars can substitute it.
@@ -2925,7 +2925,7 @@ class TestIssue687ExampleOutputPath:
 
     def test_explicit_env_var_overrides_resolved_config(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
-        mock_local_generator_fixture, mock_env_vars
+        mock_env_vars
     ):
         """Explicit -e EXAMPLE_OUTPUT_PATH=value must take precedence over
         the value from resolved_config."""
@@ -2999,7 +2999,7 @@ class TestIssue687ExampleOutputPath:
 
     def test_resolved_config_overwrites_front_matter_default(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
-        mock_local_generator_fixture, mock_env_vars
+        mock_env_vars
     ):
         """resolved_config.example_output_path must overwrite the front-matter
         default 'context'. This test uses a template WITH front-matter to verify
@@ -3049,7 +3049,7 @@ class TestIssue687ExampleOutputPath:
 
     def test_front_matter_default_used_when_no_resolved_config(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
-        mock_local_generator_fixture, mock_env_vars
+        mock_env_vars
     ):
         """When resolved_config has no example_output_path, the front-matter
         default 'context' must be used. This is James's exact scenario:

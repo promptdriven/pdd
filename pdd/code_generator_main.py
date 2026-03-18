@@ -686,9 +686,9 @@ def code_generator_main(
     if (
         "EXAMPLE_OUTPUT_PATH" not in explicit_env_keys
         and resolved_config
-        and "example_output_path" in resolved_config
+        and resolved_config.get("example_output_path")
     ):
-        env_vars["EXAMPLE_OUTPUT_PATH"] = str(resolved_config["example_output_path"])
+        env_vars["EXAMPLE_OUTPUT_PATH"] = str(resolved_config["example_output_path"]).rstrip("/\\")
 
     # Expand variables in output path if provided
     if output_path:
