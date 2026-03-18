@@ -1432,6 +1432,33 @@ def run_agentic_e2e_fix_orchestrator(
                         if retry_model:
                             model_used = retry_model
 
+                        # Persist retry accounting immediately so resumed state
+                        # stays consistent (total_cost + which retry was used).
+                        try:
+                            step_outputs[f"{step_num}_retry"] = retry_output
+                            state_data["total_cost"] = total_cost
+                            state_data["model_used"] = model_used
+                            state_data["step_outputs"] = step_outputs.copy()
+                            state_data["last_saved_at"] = datetime.now().isoformat()
+
+                            new_gh_id = save_workflow_state(
+                                cwd,
+                                issue_number,
+                                workflow_name,
+                                state_data,
+                                state_dir,
+                                repo_owner,
+                                repo_name,
+                                use_github_state,
+                                github_comment_id,
+                            )
+                            if new_gh_id:
+                                github_comment_id = new_gh_id
+                                state_data["github_comment_id"] = github_comment_id
+                        except Exception:
+                            # Best-effort: state persistence should not break the workflow.
+                            pass
+
                         retry_token = _classify_step_output(retry_output, step_num=9)
                         if retry_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                             test_files = _extract_test_files(
@@ -1453,7 +1480,10 @@ def run_agentic_e2e_fix_orchestrator(
                                         "verification FAILED.[/bold red]"
                                     )
                                     step_outputs[str(step_num)] = (
-                                        "FAILED: VERIFICATION_FAILED: " f"{verify_output}"
+                                        "FAILED: VERIFICATION_FAILED: "
+                                        "LLM claimed tests pass at Step 9 retry but independent "
+                                        "verification FAILED.\n"
+                                        f"{verify_output}"
                                     )
                                     last_completed_step = step_num - 1
                             else:
@@ -1467,6 +1497,13 @@ def run_agentic_e2e_fix_orchestrator(
                             break
                         elif retry_token == "CONTINUE_CYCLE":
                             # Let the outer loop start the next cycle.
+                            break
+                        elif retry_token is None and not retry_success:
+                            # Provider/timeout failure with no control token: treat as transient.
+                            console.print(
+                                "[yellow]Step 9 retry failed with no parseable loop-control token; "
+                                "starting next cycle.[/yellow]"
+                            )
                             break
                         else:
                             console.print(
