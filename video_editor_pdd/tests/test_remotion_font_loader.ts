@@ -15,7 +15,7 @@ describe("Remotion font loading", () => {
     expect(fs.statSync(fontPath).size).toBeGreaterThan(0);
   });
 
-  it("loads the Inter font through a shared Remotion font loader", () => {
+  it("loads the Inter font through a shared non-blocking Remotion font loader", () => {
     const loaderPath = path.join(
       process.cwd(),
       "remotion",
@@ -28,12 +28,13 @@ describe("Remotion font loading", () => {
     expect(fs.existsSync(loaderPath)).toBe(true);
 
     const source = fs.readFileSync(loaderPath, "utf-8");
-    expect(source).toMatch(/delayRender/);
-    expect(source).toMatch(/continueRender/);
     expect(source).toMatch(/staticFile\("fonts\/InterVariable-latin\.woff2"\)/);
+    expect(source).toMatch(/FontFace/);
+    expect(source).not.toMatch(/delayRender/);
+    expect(source).not.toMatch(/continueRender/);
   });
 
-  it("imports the shared font loader from Root.tsx", () => {
+  it("does not import the shared font loader from Root.tsx", () => {
     const rootPath = path.join(
       process.cwd(),
       "remotion",
@@ -43,6 +44,6 @@ describe("Remotion font loading", () => {
     );
     const source = fs.readFileSync(rootPath, "utf-8");
 
-    expect(source).toMatch(/load-inter-font/);
+    expect(source).not.toMatch(/load-inter-font/);
   });
 });

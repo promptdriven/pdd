@@ -1,27 +1,28 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 import {
-  CANVAS_H,
   SPLIT_X,
-  SPLIT_LINE_W,
+  SPLIT_LINE_WIDTH,
   SPLIT_LINE_COLOR,
   SPLIT_LINE_OPACITY,
+  HEIGHT,
   SPLIT_LINE_DRAW_START,
-  SPLIT_LINE_DRAW_DUR,
+  SPLIT_LINE_DRAW_DURATION,
   REALIZATION_FLASH_START,
-  GLOW_LINE_COLOR,
+  GLOW_COLOR,
   GLOW_LINE_PEAK_OPACITY,
-} from "./constants";
+  GLOW_LINE_DURATION,
+} from './constants';
 
 export const SplitDivider: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Vertical draw animation: scaleY from 0→1
-  const drawProgress = interpolate(
+  // Split line draws top-to-bottom
+  const lineHeight = interpolate(
     frame,
-    [SPLIT_LINE_DRAW_START, SPLIT_LINE_DRAW_START + SPLIT_LINE_DRAW_DUR],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.bezier(0.33, 1, 0.68, 1)) }
+    [SPLIT_LINE_DRAW_START, SPLIT_LINE_DRAW_START + SPLIT_LINE_DRAW_DURATION],
+    [0, HEIGHT],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
 
   // Glow effect during realization moment
@@ -29,11 +30,11 @@ export const SplitDivider: React.FC = () => {
     frame,
     [
       REALIZATION_FLASH_START,
-      REALIZATION_FLASH_START + 5,
-      REALIZATION_FLASH_START + 10,
+      REALIZATION_FLASH_START + GLOW_LINE_DURATION / 2,
+      REALIZATION_FLASH_START + GLOW_LINE_DURATION,
     ],
     [0, GLOW_LINE_PEAK_OPACITY, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   return (
@@ -41,35 +42,30 @@ export const SplitDivider: React.FC = () => {
       {/* Main split line */}
       <div
         style={{
-          position: "absolute",
-          left: SPLIT_X - SPLIT_LINE_W / 2,
+          position: 'absolute',
+          left: SPLIT_X - SPLIT_LINE_WIDTH / 2,
           top: 0,
-          width: SPLIT_LINE_W,
-          height: CANVAS_H,
+          width: SPLIT_LINE_WIDTH,
+          height: lineHeight,
           backgroundColor: SPLIT_LINE_COLOR,
-          opacity: SPLIT_LINE_OPACITY * drawProgress,
-          transformOrigin: "top center",
-          transform: `scaleY(${drawProgress})`,
+          opacity: SPLIT_LINE_OPACITY,
         }}
       />
-
-      {/* Glow line during realization */}
+      {/* Glow overlay on the split line */}
       {glowOpacity > 0 && (
         <div
           style={{
-            position: "absolute",
-            left: SPLIT_X - 3,
+            position: 'absolute',
+            left: SPLIT_X - 4,
             top: 0,
-            width: 6,
-            height: CANVAS_H,
-            backgroundColor: GLOW_LINE_COLOR,
+            width: 8,
+            height: HEIGHT,
+            backgroundColor: GLOW_COLOR,
             opacity: glowOpacity,
-            filter: "blur(3px)",
+            filter: 'blur(4px)',
           }}
         />
       )}
     </>
   );
 };
-
-export default SplitDivider;

@@ -45,20 +45,6 @@ const getSpecsDir = () => path.join(getProjectDir(), "specs");
 /** Names that are section-level metadata, not visual components. */
 const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
 
-function hasAuthoredSectionTimeline(section: Pick<Section, "id" | "compositionId">): boolean {
-  const sectionPascal = toPascalCase(section.id);
-  const componentName = `${sectionPascal}Section`;
-  const remotionSrc = getAppRemotionSrcDir();
-  const candidates = [
-    path.join(remotionSrc, section.id, `${section.compositionId}.tsx`),
-    path.join(remotionSrc, section.id, `${componentName}.tsx`),
-    path.join(remotionSrc, `${section.compositionId}.tsx`),
-    path.join(remotionSrc, `${componentName}.tsx`),
-  ];
-
-  return candidates.some((candidate) => fs.existsSync(candidate));
-}
-
 // ---------------------------------------------------------------------------
 // Utility: find spec file content for a component (best effort)
 // ---------------------------------------------------------------------------
@@ -202,6 +188,7 @@ CRITICAL EXPORT REQUIREMENT:
 - index.ts MUST re-export the main component as BOTH named and default: export { ${exportName} } from './${exportName}'; export { default } from './${exportName}';
 - The main TSX MUST export as: export const ${exportName}: React.FC = () => { ... }; export default ${exportName};
 - Also export default props: export const default${exportName}Props = {};
+- Every exported symbol within a file must have a unique name. Do not reuse one export name for different meanings like a color token and a layout region.
 
 CRITICAL RENDERING REQUIREMENTS:
 - The component MUST render visible content from frame 0 (no delayed fade-ins).
@@ -211,14 +198,16 @@ CRITICAL RENDERING REQUIREMENTS:
 - Use only supported Remotion easing APIs. For quartic easing, use Easing.poly(4), NOT Easing.quart.
 - Do NOT import external data files (e.g., JSON word timestamps) that may not exist.
   If subtitles are needed, embed word data inline or skip subtitles.
-- If the component needs Veo media, import useVisualMediaSrc from ../_shared/visual-runtime
+- If the component needs Veo media, import useVisualMediaAssetSrc from ../_shared/visual-runtime
   and resolve media via that hook instead of hardcoding staticFile("veo/<section>.mp4").
   Wrapper code will provide per-visual media aliases like backgroundSrc, outputSrc,
   leftSrc, rightSrc, baseSrc, and revealSrc.
+- useVisualMediaAssetSrc() returns a path that is ready to pass directly to
+  <OffthreadVideo src={...}> or <Video src={...}>; do not wrap it in staticFile() again.
 - Never hardcode Veo filenames from the prose/spec unless the exact file is present
   in the available assets list below.
-- For split/compare or other multi-clip visuals, prefer useVisualMediaSrc('leftSrc'),
-  useVisualMediaSrc('rightSrc'), and useVisualMediaSrc('defaultSrc') fallbacks
+- For split/compare or other multi-clip visuals, prefer useVisualMediaAssetSrc('leftSrc'),
+  useVisualMediaAssetSrc('rightSrc'), and useVisualMediaAssetSrc('defaultSrc') fallbacks
   instead of inventing per-shot filenames.
 - Only import from "remotion" — do not import from other local files in the component directory.
 - Break complex visuals into sub-components (e.g., AnimatedLine.tsx, ChartAxes.tsx) for maintainability.
@@ -488,6 +477,140 @@ function generatedArtifactExists(
   ).some((candidate) => fs.existsSync(candidate));
 }
 
+function findGeneratedArtifactCandidate(
+  remotionScopeDir: string,
+  componentName: string,
+  outputName: string,
+  sectionId?: string,
+): string | null {
+  for (const candidate of getGeneratedArtifactCandidates(
+    remotionScopeDir,
+    componentName,
+    outputName,
+    sectionId,
+  )) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function listGeneratedSourceFiles(candidate: string): string[] {
+  if (!candidate.endsWith(path.join("index.ts"))) {
+    return [candidate];
+  }
+
+  const componentDir = path.dirname(candidate);
+  const sourceFiles = new Set<string>([candidate]);
+
+  try {
+    const entries = fs.readdirSync(componentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : entry.name;
+      const isFile = typeof entry === "string" ? true : entry.isFile?.() ?? false;
+      if (!isFile) {
+        continue;
+      }
+      if (!name.endsWith(".ts") && !name.endsWith(".tsx")) {
+        continue;
+      }
+      sourceFiles.add(path.join(componentDir, name));
+    }
+  } catch {
+    // Best effort. The entrypoint still gets validated below.
+  }
+
+  return Array.from(sourceFiles);
+}
+
+function collectDuplicateExportedNames(sourceText: string): string[] {
+  const counts = new Map<string, number>();
+  const add = (name: string | undefined) => {
+    if (!name) {
+      return;
+    }
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  };
+
+  const declarationPattern =
+    /^\s*export\s+(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  for (const match of sourceText.matchAll(declarationPattern)) {
+    add(match[1]);
+  }
+
+  const namedExportPattern = /^\s*export\s*{\s*([^}]+)\s*}/gm;
+  for (const match of sourceText.matchAll(namedExportPattern)) {
+    for (const rawSpecifier of match[1].split(",")) {
+      const specifier = rawSpecifier.trim();
+      if (!specifier) {
+        continue;
+      }
+
+      const aliasMatch = specifier.match(
+        /^(?:type\s+)?[A-Za-z_$][\w$]*\s+as\s+([A-Za-z_$][\w$]*)$/,
+      );
+      if (aliasMatch) {
+        add(aliasMatch[1]);
+        continue;
+      }
+
+      const directMatch = specifier.match(/^(?:type\s+)?([A-Za-z_$][\w$]*)$/);
+      if (directMatch) {
+        add(directMatch[1]);
+      }
+    }
+  }
+
+  return Array.from(counts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([name]) => name)
+    .sort();
+}
+
+function validateGeneratedArtifact(
+  remotionScopeDir: string,
+  componentName: string,
+  outputName: string,
+  sectionId?: string,
+): string | null {
+  const candidate = findGeneratedArtifactCandidate(
+    remotionScopeDir,
+    componentName,
+    outputName,
+    sectionId,
+  );
+  if (!candidate) {
+    return null;
+  }
+
+  for (const sourceFilePath of listGeneratedSourceFiles(candidate)) {
+    if (!fs.existsSync(sourceFilePath)) {
+      continue;
+    }
+
+    let sourceText: string;
+    try {
+      const raw = fs.readFileSync(sourceFilePath, "utf-8");
+      if (typeof raw !== "string") {
+        continue;
+      }
+      sourceText = raw;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return `Could not read ${path.basename(sourceFilePath)}: ${msg}`;
+    }
+
+    const duplicateNames = collectDuplicateExportedNames(sourceText);
+    if (duplicateNames.length > 0) {
+      return `Duplicate exported names in ${path.basename(sourceFilePath)}: ${duplicateNames.join(", ")}`;
+    }
+  }
+
+  return null;
+}
+
 function syncGeneratedArtifactToLiveScope(
   generatedScopeDir: string,
   componentName: string,
@@ -495,29 +618,27 @@ function syncGeneratedArtifactToLiveScope(
   sectionId?: string,
 ): boolean {
   const liveScopeDir = getRemotionScopeDir();
-
-  for (const candidate of getGeneratedArtifactCandidates(
+  const candidate = findGeneratedArtifactCandidate(
     generatedScopeDir,
     componentName,
     outputName,
     sectionId,
-  )) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
+  );
+  if (!candidate) {
+    return false;
+  }
 
-    if (candidate.endsWith(path.join("index.ts"))) {
-      const sourceDir = path.dirname(candidate);
-      const destDir = path.join(liveScopeDir, path.basename(sourceDir));
-      fs.rmSync(destDir, { recursive: true, force: true });
-      fs.cpSync(sourceDir, destDir, { recursive: true });
-      return true;
-    }
+  if (candidate.endsWith(path.join("index.ts"))) {
+    const sourceDir = path.dirname(candidate);
+    const destDir = path.join(liveScopeDir, path.basename(sourceDir));
+    fs.rmSync(destDir, { recursive: true, force: true });
+    fs.cpSync(sourceDir, destDir, { recursive: true });
+    return true;
+  }
 
-    if (candidate.endsWith(".tsx")) {
-      fs.copyFileSync(candidate, path.join(liveScopeDir, path.basename(candidate)));
-      return true;
-    }
+  if (candidate.endsWith(".tsx")) {
+    fs.copyFileSync(candidate, path.join(liveScopeDir, path.basename(candidate)));
+    return true;
   }
 
   return false;
@@ -726,15 +847,61 @@ registerExecutor("compositions", (params, send: SseSend) => {
             generateFallbackComponent(item.outputName, spec, veoAssets, onLog);
           } else {
             const prompt = buildComponentPrompt(item.name, item.outputName, spec, veoAssets);
+            let validationError: string | null = null;
+            let acceptedArtifact = false;
 
             for (let attempt = 1; attempt <= 2; attempt++) {
+              validationError = null;
+              let workspaceHasArtifact = false;
               const workspace = createComponentWorkspace(item.outputName);
               try {
                 await runClaudeFix(prompt, workspace.cwd, (line) => onLog(line));
 
-                if (
-                  syncGeneratedArtifactToLiveScope(
+                workspaceHasArtifact = generatedArtifactExists(
+                  workspace.remotionScopeDir,
+                  item.name,
+                  item.outputName,
+                  item.sectionId,
+                );
+
+                if (workspaceHasArtifact) {
+                  validationError = validateGeneratedArtifact(
                     workspace.remotionScopeDir,
+                    item.name,
+                    item.outputName,
+                    item.sectionId,
+                  );
+
+                  if (!validationError) {
+                    acceptedArtifact = syncGeneratedArtifactToLiveScope(
+                      workspace.remotionScopeDir,
+                      item.name,
+                      item.outputName,
+                      item.sectionId,
+                    );
+                  }
+                }
+              } finally {
+                workspace.cleanup();
+              }
+
+              if (acceptedArtifact) {
+                break;
+              }
+
+              if (validationError) {
+                if (attempt === 1) {
+                  onLog(
+                    `[compositions] Generated component validation failed for ${item.outputName} after Claude run; retrying once. ${validationError}`
+                  );
+                }
+                continue;
+              }
+
+              if (!workspaceHasArtifact) {
+                if (
+                  generatedArtifactExists(
+                    getRemotionScopeDir(),
                     item.name,
                     item.outputName,
                     item.sectionId,
@@ -742,8 +909,13 @@ registerExecutor("compositions", (params, send: SseSend) => {
                 ) {
                   break;
                 }
-              } finally {
-                workspace.cleanup();
+
+                if (attempt === 1) {
+                  onLog(
+                    `[compositions] No generated artifact found for ${item.outputName} after Claude run; retrying once.`
+                  );
+                }
+                continue;
               }
 
               if (
@@ -758,10 +930,12 @@ registerExecutor("compositions", (params, send: SseSend) => {
               }
 
               if (attempt === 1) {
-                onLog(
-                  `[compositions] No generated artifact found for ${item.outputName} after Claude run; retrying once.`
-                );
+                onLog(`[compositions] Could not stage generated artifact for ${item.outputName} after Claude run; retrying once.`);
               }
+            }
+
+            if (!acceptedArtifact && validationError) {
+              throw new Error(`Component validation failed for ${item.outputName}: ${validationError}`);
             }
           }
 
@@ -877,10 +1051,12 @@ registerExecutor("compositions", (params, send: SseSend) => {
             mergedCompositions.push(existing ?? compId);
           }
           section.compositions = mergedCompositions;
-          section.timelineSource =
-            section.timelineSource === "generated" || !hasAuthoredSectionTimeline(section)
-              ? "generated"
-              : "authored";
+          // Once Stage 8 has a discovered composition graph, that graph becomes the
+          // source of truth for both preview and section rendering. Preserving a
+          // legacy authored section timeline here causes Stage 9 to keep pointing
+          // at stale section-wide media placeholders instead of the generated
+          // clip-specific Veo mapping.
+          section.timelineSource = "generated";
           compositionsUpdated = true;
           onLog(`[compositions] Section "${section.id}" compositions: ${discoveredComponents.join(", ")}`);
         }

@@ -1,53 +1,59 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import { ICON_APPEAR_START, ICON_APPEAR_DUR } from "./constants";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import { ICON_APPEAR_START, ICON_APPEAR_DURATION } from './constants';
 
-/**
- * A simple crossed-out icon. Two variants:
- * - "needle": a darning needle shape with a cross-out line
- * - "patch": a patch/bandaid shape with a cross-out line
- */
-export const CrossedOutIcon: React.FC<{
-  variant: "needle" | "patch";
+interface CrossedOutIconProps {
+  type: 'needle' | 'patch';
   color: string;
   opacity: number;
   x: number;
   y: number;
-}> = ({ variant, color, opacity, x, y }) => {
+}
+
+/**
+ * A small icon (darning needle or patch) with a diagonal strike-through line.
+ */
+export const CrossedOutIcon: React.FC<CrossedOutIconProps> = ({
+  type,
+  color,
+  opacity,
+  x,
+  y,
+}) => {
   const frame = useCurrentFrame();
 
   const scale = interpolate(
     frame,
-    [ICON_APPEAR_START, ICON_APPEAR_START + ICON_APPEAR_DUR],
+    [ICON_APPEAR_START, ICON_APPEAR_START + ICON_APPEAR_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.bezier(0.33, 1, 0.68, 1)) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
 
-  const iconOpacity = interpolate(
-    frame,
-    [ICON_APPEAR_START, ICON_APPEAR_START + ICON_APPEAR_DUR],
-    [0, opacity],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  const size = 28;
+  const iconSize = 28;
 
   return (
     <div
       style={{
-        position: "absolute",
-        left: x - size / 2,
-        top: y - size / 2,
-        width: size,
-        height: size,
-        opacity: iconOpacity,
+        position: 'absolute',
+        left: x - iconSize / 2,
+        top: y - iconSize / 2,
+        width: iconSize,
+        height: iconSize,
+        opacity,
         transform: `scale(${scale})`,
+        transformOrigin: 'center center',
       }}
     >
-      <svg width={size} height={size} viewBox="0 0 28 28">
-        {variant === "needle" ? (
+      <svg
+        width={iconSize}
+        height={iconSize}
+        viewBox="0 0 28 28"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        {type === 'needle' ? (
           /* Darning needle icon */
-          <g>
+          <>
             {/* Needle body */}
             <line
               x1="6"
@@ -59,52 +65,48 @@ export const CrossedOutIcon: React.FC<{
               strokeLinecap="round"
             />
             {/* Needle eye */}
-            <circle cx="21" cy="7" r="2" fill="none" stroke={color} strokeWidth="1.5" />
-            {/* Thread */}
+            <circle cx="21" cy="7" r="2" stroke={color} strokeWidth="1.5" fill="none" />
+            {/* Thread hint */}
             <path
-              d="M23 5 Q26 2, 24 0"
-              fill="none"
+              d="M23 5 Q26 2 24 0"
               stroke={color}
               strokeWidth="1"
               strokeLinecap="round"
-            />
-          </g>
-        ) : (
-          /* Patch / bandaid icon */
-          <g>
-            <rect
-              x="4"
-              y="10"
-              width="20"
-              height="8"
-              rx="4"
               fill="none"
+              opacity={0.6}
+            />
+          </>
+        ) : (
+          /* Patch icon */
+          <>
+            {/* Patch square */}
+            <rect
+              x="7"
+              y="7"
+              width="14"
+              height="14"
+              rx="2"
               stroke={color}
               strokeWidth="1.5"
-              transform="rotate(-45 14 14)"
+              fill="none"
             />
             {/* Stitch marks */}
-            <circle cx="12" cy="12" r="1" fill={color} />
-            <circle cx="16" cy="16" r="1" fill={color} />
-            <circle cx="12" cy="16" r="1" fill={color} />
-            <circle cx="16" cy="12" r="1" fill={color} />
-          </g>
+            <line x1="7" y1="10" x2="21" y2="10" stroke={color} strokeWidth="0.8" strokeDasharray="2 2" />
+            <line x1="7" y1="14" x2="21" y2="14" stroke={color} strokeWidth="0.8" strokeDasharray="2 2" />
+            <line x1="7" y1="18" x2="21" y2="18" stroke={color} strokeWidth="0.8" strokeDasharray="2 2" />
+          </>
         )}
-
-        {/* Cross-out line */}
+        {/* Strike-through diagonal line */}
         <line
-          x1="3"
-          y1="25"
-          x2="25"
-          y2="3"
+          x1="4"
+          y1="24"
+          x2="24"
+          y2="4"
           stroke={color}
           strokeWidth="2"
           strokeLinecap="round"
-          opacity={0.8}
         />
       </svg>
     </div>
   );
 };
-
-export default CrossedOutIcon;

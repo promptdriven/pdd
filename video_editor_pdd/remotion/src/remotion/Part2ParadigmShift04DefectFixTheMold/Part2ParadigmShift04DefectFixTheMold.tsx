@@ -1,111 +1,111 @@
 import React from "react";
-import { AbsoluteFill, useCurrentFrame } from "remotion";
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  Sequence,
+  Video,
+  interpolate,
+} from "remotion";
+import { useVisualMediaAssetSrc } from "../_shared/visual-runtime";
+import {
+  BG_COLOR,
+  TOTAL_FRAMES,
+  MOLD_CENTER_X,
+  PART_W,
+  PART_H,
+} from "./constants";
+import { DraftGrid } from "./DraftGrid";
 import { MoldDiagram } from "./MoldDiagram";
 import { EjectedPart } from "./EjectedPart";
 import { DefectHighlight } from "./DefectHighlight";
 import { RejectedPatch } from "./RejectedPatch";
-import { MoldAdjustment } from "./MoldAdjustment";
-import { FixedPartsSequence } from "./FixedPartsSequence";
-import {
-  BG_COLOR,
-  GRID_SPACING,
-  GRID_COLOR,
-  GRID_OPACITY,
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
-  PART_EJECT_START,
-  DEFECT_PULSE_START,
-  GHOST_TOOL_START,
-  REJECTED_FADE_END,
-  WALL_ADJUST_START,
-  FIXED_PARTS_START,
-  DISSOLVE_START,
-} from "./constants";
+import { WallAdjustment } from "./WallAdjustment";
+import { FixedParts } from "./FixedParts";
 
 export const defaultPart2ParadigmShift04DefectFixTheMoldProps = {};
 
+/**
+ * Section 2.4 — Defect → Fix the Mold, Not the Part
+ *
+ * An animated diagram showing:
+ * 1. A mold ejects a defective part
+ * 2. The "patch the part" approach is rejected
+ * 3. The mold itself is fixed
+ * 4. All future parts come out perfect
+ *
+ * Duration: 420 frames @ 30fps (~14s)
+ */
 export const Part2ParadigmShift04DefectFixTheMold: React.FC = () => {
   const frame = useCurrentFrame();
+  const backgroundSrc = useVisualMediaAssetSrc("backgroundSrc");
 
-  // Grid lines for drafting aesthetic
-  const gridLinesVertical: number[] = [];
-  for (let x = 0; x <= CANVAS_WIDTH; x += GRID_SPACING) {
-    gridLinesVertical.push(x);
-  }
-  const gridLinesHorizontal: number[] = [];
-  for (let y = 0; y <= CANVAS_HEIGHT; y += GRID_SPACING) {
-    gridLinesHorizontal.push(y);
-  }
+  // Positions for the defective ejected part
+  const partFromY = 650;
+  const partToY = 780;
+  const defectEdgeX = MOLD_CENTER_X + PART_W / 2 - 12; // right edge where defect is
+  const defectEdgeY = partToY;
 
-  // Phase flags based on frame
-  const showEjectedPart = frame >= PART_EJECT_START;
-  const showDefect = frame >= DEFECT_PULSE_START;
-  const showRejectedPatch = frame >= GHOST_TOOL_START && frame < REJECTED_FADE_END;
-  const showMoldAdjustment = frame >= WALL_ADJUST_START;
-  const showFixedParts = frame >= FIXED_PARTS_START;
-  const showDissolve = frame >= DISSOLVE_START;
+  // Background video opacity — subtle, underlays the diagram
+  const bgOpacity = interpolate(frame, [0, 30], [0, 0.15], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
-    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
+    <AbsoluteFill
+      style={{
+        backgroundColor: BG_COLOR,
+        overflow: "hidden",
+      }}
+    >
+      {/* Optional Veo background video */}
+      {backgroundSrc && (
+        <AbsoluteFill style={{ opacity: bgOpacity }}>
+          <Video
+            src={backgroundSrc}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+            startFrom={0}
+            muted
+          />
+        </AbsoluteFill>
+      )}
+
       {/* Drafting grid */}
-      <svg
-        width={CANVAS_WIDTH}
-        height={CANVAS_HEIGHT}
-        style={{ position: "absolute", left: 0, top: 0 }}
-      >
-        {gridLinesVertical.map((x) => (
-          <line
-            key={`gv-${x}`}
-            x1={x}
-            y1={0}
-            x2={x}
-            y2={CANVAS_HEIGHT}
-            stroke={GRID_COLOR}
-            strokeWidth={1}
-            strokeOpacity={GRID_OPACITY}
-          />
-        ))}
-        {gridLinesHorizontal.map((y) => (
-          <line
-            key={`gh-${y}`}
-            x1={0}
-            y1={y}
-            x2={CANVAS_WIDTH}
-            y2={y}
-            stroke={GRID_COLOR}
-            strokeWidth={1}
-            strokeOpacity={GRID_OPACITY}
-          />
-        ))}
-      </svg>
+      <DraftGrid />
 
-      {/* Mold diagram — always visible, draws in Act 0 */}
-      <MoldDiagram showAdjustment={showMoldAdjustment} />
+      {/* Mold diagram — draws from frame 0 */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <MoldDiagram />
+      </Sequence>
 
-      {/* Original ejected part (defective) */}
-      {showEjectedPart && (
-        <EjectedPart showDefect={showDefect} dissolve={showDissolve} />
-      )}
+      {/* Defective part ejection — from frame 30 */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <EjectedPart fromY={partFromY} toY={partToY} showDefect />
+      </Sequence>
 
-      {/* Defect highlight — red pulse, magnifying glass, label */}
-      {showDefect && frame < REJECTED_FADE_END && (
-        <DefectHighlight />
-      )}
+      {/* Defect highlight — callout, magnifier, label */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <DefectHighlight partX={defectEdgeX} partY={defectEdgeY} />
+      </Sequence>
 
-      {/* Rejected "patch the part" approach — ghost tool + red X */}
-      {showRejectedPatch && (
-        <RejectedPatch />
-      )}
+      {/* Rejected "patch the part" approach */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <RejectedPatch partX={MOLD_CENTER_X} partY={partToY + PART_H / 2} />
+      </Sequence>
 
-      {/* Mold wall adjustment — cursor, amber glow, label */}
-      {showMoldAdjustment && (
-        <MoldAdjustment />
-      )}
+      {/* Fix the mold — wrench icon + label */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <WallAdjustment />
+      </Sequence>
 
-      {/* Fixed parts ejecting with green checkmarks */}
-      {showFixedParts && (
-        <FixedPartsSequence />
-      )}
+      {/* Fixed parts with green checkmarks */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <FixedParts />
+      </Sequence>
     </AbsoluteFill>
   );
 };

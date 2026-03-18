@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useMemo } from "react";
-import { Internals, useCurrentFrame, useVideoConfig } from "remotion";
+import { Internals, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
 import {
   buildSlotScaledSequenceContext,
   computeSlotScaledFrame,
@@ -52,6 +52,28 @@ export const useVisualMediaSrc = (
 ): string | null => {
   const media = useContext(VisualMediaContext);
   return media?.[key] ?? media?.defaultSrc ?? fallback ?? null;
+};
+
+export const useVisualMediaAssetSrc = (
+  key: keyof VisualMedia = "defaultSrc",
+  fallback?: string
+): string | null => {
+  const src = useVisualMediaSrc(key, fallback);
+  if (!src) {
+    return null;
+  }
+
+  if (
+    src.startsWith("/") ||
+    src.startsWith("http://") ||
+    src.startsWith("https://") ||
+    src.startsWith("data:") ||
+    src.startsWith("blob:")
+  ) {
+    return src;
+  }
+
+  return staticFile(src);
 };
 
 export const useVisualContractData = <

@@ -414,6 +414,11 @@ class TestGenerateRootTsx:
         root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
         assert "export const RemotionRoot: React.FC" in root
 
+    def test_root_does_not_import_async_font_loader(self):
+        sections = [{"id": "intro", "durationSeconds": 5}]
+        root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
+        assert 'load-inter-font' not in root
+
 
 # ===========================================================================
 # Tests: update_root_tsx / _merge_root_tsx
@@ -1498,6 +1503,52 @@ class TestSectionBaseResolution:
 
 class TestGeneratedTimelineWrapper:
     """Generated section timelines should render deterministically in the wrapper."""
+
+    def test_generated_timeline_wins_over_legacy_authored_section_component_when_constants_exist(self, tmp_path):
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        project_dir = tmp_path
+        section_dir = remotion_src / "cold_open"
+        component_dir = remotion_src / "ColdOpen01TitleCard"
+        section_dir.mkdir()
+        component_dir.mkdir()
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "01_title_card", desc: "Intro" }];'
+        )
+        (remotion_src / "ColdOpenSection.tsx").write_text(
+            "export const ColdOpenSection = () => null;\n"
+            "export default ColdOpenSection;\n"
+        )
+        (component_dir / "index.ts").write_text(
+            'export const ColdOpen01TitleCard = () => null;\n'
+            'export default ColdOpen01TitleCard;'
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "cold_open.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "cold_open" / "narration.wav").parent.mkdir(parents=True)
+        (remotion_public / "cold_open" / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 32)
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 12,
+            "offsetSeconds": 0,
+            "timelineSource": "authored",
+            "compositions": ["01_title_card"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { VISUAL_SEQUENCE } from "./constants";' in tsx
+        assert 'import { ColdOpen01TitleCard } from "../ColdOpen01TitleCard";' in tsx
+        assert "ColdOpenSectionBase" not in tsx
+        assert "<VisualComponent />" in tsx
 
     def test_generated_timeline_uses_constants_and_exact_component_imports(self, tmp_path):
         remotion_src = tmp_path

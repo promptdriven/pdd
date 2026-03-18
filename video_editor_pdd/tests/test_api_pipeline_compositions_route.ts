@@ -2707,6 +2707,101 @@ describe("compositions executor — generated preview validation", () => {
     );
   });
 
+  it("retries once when the generated artifact has duplicate exported names", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "part1_economics";
+    config.sections[0].specDir = "part1_economics";
+    config.sections[0].compositionId = "Part1Economics";
+    mockLoadProject.mockReturnValue(config);
+
+    const osMod = require("os");
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "part1_economics");
+    const componentDirName = "Part1Economics07SplitContextComparison";
+    const firstWorkspace = pathMod.join(
+      osMod.tmpdir(),
+      "video-editor-stage8-part1_economics_07_split_context_comparison-1",
+      "remotion",
+      "src",
+      "remotion",
+      componentDirName
+    );
+    const secondWorkspace = pathMod.join(
+      osMod.tmpdir(),
+      "video-editor-stage8-part1_economics_07_split_context_comparison-2",
+      "remotion",
+      "src",
+      "remotion",
+      componentDirName
+    );
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      if (p.endsWith(pathMod.join(componentDirName, "index.ts"))) return true;
+      if (p.endsWith(pathMod.join(componentDirName, "constants.ts"))) return true;
+      if (p.endsWith(pathMod.join(componentDirName, "LeftPanel.tsx"))) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return [];
+      if (p.includes(pathMod.join("specs", "part1_economics"))) {
+        return [{ name: "07_split_context_comparison.md", isFile: () => true }];
+      }
+      if (
+        p === firstWorkspace ||
+        p === secondWorkspace
+      ) {
+        return ["index.ts", "constants.ts", "LeftPanel.tsx"];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.endsWith("07_split_context_comparison.md")) {
+        return "# Spec content";
+      }
+      if (p.endsWith(pathMod.join(componentDirName, "index.ts"))) {
+        return "export { Part1Economics07SplitContextComparison } from './Part1Economics07SplitContextComparison';\nexport { default } from './Part1Economics07SplitContextComparison';";
+      }
+      if (p.endsWith(pathMod.join(componentDirName, "LeftPanel.tsx"))) {
+        return "export const LeftPanel = () => null;";
+      }
+      if (p.startsWith(firstWorkspace) && p.endsWith(pathMod.join(componentDirName, "constants.ts"))) {
+        return "export const GREEN_HIGHLIGHT = '#5AAA6E';\nexport const GREEN_HIGHLIGHT = { yFrac: 0.35, hFrac: 0.06 };";
+      }
+      if (p.startsWith(secondWorkspace) && p.endsWith(pathMod.join(componentDirName, "constants.ts"))) {
+        return "export const GREEN_HIGHLIGHT_COLOR = '#5AAA6E';\nexport const GREEN_HIGHLIGHT_REGION = { yFrac: 0.35, hFrac: 0.06 };";
+      }
+      return "";
+    });
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory(
+      {
+        sectionComponents: [
+          { sectionId: "part1_economics", components: ["07_split_context_comparison"] },
+        ],
+        wrappers: [],
+      },
+      jest.fn()
+    );
+
+    await expect(executor(onLog)).resolves.toBeUndefined();
+
+    expect(mockRunClaudeFix).toHaveBeenCalledTimes(2);
+    expect(onLog).toHaveBeenCalledWith(
+      "[compositions] Generated component validation failed for part1_economics_07_split_context_comparison after Claude run; retrying once. Duplicate exported names in constants.ts: GREEN_HIGHLIGHT"
+    );
+    expect(mockCpSync).toHaveBeenCalledWith(
+      secondWorkspace,
+      pathMod.join(process.cwd(), "remotion", "src", "remotion", componentDirName),
+      { recursive: true }
+    );
+  });
+
   it("uses a distinct temp workspace per component generation", async () => {
     setupMockSpawn(0);
 
@@ -2919,8 +3014,9 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
 
   it("instructs Claude to route multi-clip Veo visuals through media aliases instead of inventing filenames", () => {
     expect(compositionsSourceCode).toContain("Never hardcode Veo filenames");
-    expect(compositionsSourceCode).toContain("useVisualMediaSrc('leftSrc'");
-    expect(compositionsSourceCode).toContain("useVisualMediaSrc('rightSrc'");
+    expect(compositionsSourceCode).toContain("useVisualMediaAssetSrc('leftSrc'");
+    expect(compositionsSourceCode).toContain("useVisualMediaAssetSrc('rightSrc'");
+    expect(compositionsSourceCode).toContain("do not wrap it in staticFile() again");
   });
 
   it("buildComponentPrompt derives dirName from baseName, not scoped outputName", () => {
@@ -3145,6 +3241,53 @@ describe("compositions executor — generated section timelines", () => {
     const executor = registerCallArgs.factory(
       { components: ["01_chart"], wrappers: [], sectionId: "intro" },
       mockSend
+    );
+    await executor(jest.fn());
+
+    const savedConfig = mockSaveProject.mock.calls.at(-1)?.[0];
+    expect(savedConfig).toBeDefined();
+    expect(savedConfig.sections[0].timelineSource).toBe("generated");
+  });
+
+  it("marks discovered sections as generated even when a legacy authored section timeline exists", async () => {
+    const config = mockProjectConfig();
+    config.sections[0].id = "cold_open";
+    config.sections[0].specDir = "specs/cold_open";
+    config.sections[0].compositionId = "ColdOpenSection";
+    config.sections[0].timelineSource = "authored";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes(pathMod.join("specs", "specs/cold_open"))) return true;
+      if (p.endsWith("cold_open_01_chart.tsx")) return true;
+      if (p.endsWith("ColdOpenSection.tsx")) return true;
+      if (p.includes("_words.json")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string) => {
+      if (typeof dir === "string" && dir.includes("specs")) {
+        return [
+          { name: "01_chart.md", isDirectory: () => false, isFile: () => true },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("_words.json")) {
+        return JSON.stringify([]);
+      }
+      if (typeof p === "string" && p.includes("01_chart.md")) {
+        return "# Chart spec\nSome content";
+      }
+      return "";
+    });
+    setupMockSpawn(0);
+
+    const executor = registerCallArgs.factory(
+      { components: ["01_chart"], wrappers: [], sectionId: "cold_open" },
+      jest.fn()
     );
     await executor(jest.fn());
 

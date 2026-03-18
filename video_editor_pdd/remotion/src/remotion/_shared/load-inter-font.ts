@@ -1,24 +1,12 @@
-import { continueRender, delayRender, staticFile } from "remotion";
+import { staticFile } from "remotion";
 
 const INTER_FONT_URL = staticFile("fonts/InterVariable-latin.woff2");
 const INTER_FONT_WEIGHTS = ["300", "400", "500", "600", "700", "900"];
-const interFontHandle =
-  typeof document !== "undefined" ? delayRender("Loading Inter font") : null;
 
 let hasStartedLoading = false;
-let hasFinishedLoading = false;
-
-const finishFontLoad = () => {
-  if (interFontHandle === null || hasFinishedLoading) {
-    return;
-  }
-
-  hasFinishedLoading = true;
-  continueRender(interFontHandle);
-};
 
 const loadInterFont = async () => {
-  if (typeof document === "undefined") {
+  if (typeof document === "undefined" || typeof FontFace === "undefined") {
     return;
   }
 
@@ -41,7 +29,7 @@ const loadInterFont = async () => {
 
 if (!hasStartedLoading) {
   hasStartedLoading = true;
-  void loadInterFont().catch(() => undefined).finally(finishFontLoad);
+  void loadInterFont().catch(() => undefined);
 }
 
 export {};

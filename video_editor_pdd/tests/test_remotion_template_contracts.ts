@@ -27,6 +27,29 @@ describe("shared generated media renderer", () => {
     expect(source).toMatch(/visualOverlayConfig\s*\|\|\s*visualMedia\?\.leftSrc\s*\|\|\s*visualMedia\?\.rightSrc/);
     expect(source).toMatch(/<GeneratedMediaVisual config=\{visualOverlayConfig\} \/>/);
   });
+
+  it("uses asset-resolved media hooks in generated components that pass Veo sources directly to video elements", () => {
+    const directVideoComponents = [
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/ColdOpen01SplitScreenHook/ColdOpen01SplitScreenHook.tsx"
+      ),
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift04DefectFixTheMold/Part2ParadigmShift04DefectFixTheMold.tsx"
+      ),
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part5CompoundReturns06SockCallbackSplit/Part5CompoundReturns06SockCallbackSplit.tsx"
+      ),
+    ];
+
+    for (const componentPath of directVideoComponents) {
+      const source = fs.readFileSync(componentPath, "utf8");
+      expect(source).toContain("useVisualMediaAssetSrc");
+      expect(source).not.toMatch(/const\s+\w+Src\s*=\s*useVisualMediaSrc\(/);
+    }
+  });
 });
 
 describe("reusable animation template defaults", () => {

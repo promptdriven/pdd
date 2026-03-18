@@ -5,33 +5,27 @@ import {
   MOLD_CENTER_Y,
   MOLD_WIDTH,
   MOLD_HEIGHT,
-  MOLD_STROKE_COLOR,
-  MOLD_STROKE_OPACITY,
-  MOLD_STROKE_WIDTH,
+  MOLD_STROKE,
   MOLD_WALL_FILL,
-  MOLD_WALL_FILL_OPACITY,
-  MOLD_CAVITY_COLOR,
-  MOLD_CAVITY_OPACITY,
+  MOLD_CAVITY,
   MOLD_DRAW_START,
   MOLD_DRAW_END,
-  WALL_ADJUST_START,
-  WALL_ADJUST_END,
-  ADJUSTMENT_PX,
-  ADJUSTMENT_COLOR,
-  ADJUSTMENT_WALL_OPACITY_START,
-  ADJUSTMENT_WALL_OPACITY_END,
-  AMBIENT_GLOW_START,
-  AMBIENT_GLOW_CYCLE,
+  AMBER,
+  FIX_START,
+  FIX_END,
+  HOLD_START,
+  TOTAL_FRAMES,
 } from "./constants";
 
-interface MoldDiagramProps {
-  showAdjustment: boolean;
-}
-
-export const MoldDiagram: React.FC<MoldDiagramProps> = ({ showAdjustment }) => {
+/**
+ * Animated injection mold diagram drawn center-screen.
+ * Draws itself in from frame MOLD_DRAW_START → MOLD_DRAW_END.
+ * At FIX_START the right wall highlights amber and shifts 4px inward.
+ */
+export const MoldDiagram: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Draw progress — stroke-dasharray based reveal
+  // Draw progress (0→1)
   const drawProgress = interpolate(
     frame,
     [MOLD_DRAW_START, MOLD_DRAW_END],
@@ -39,149 +33,172 @@ export const MoldDiagram: React.FC<MoldDiagramProps> = ({ showAdjustment }) => {
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Wall adjustment — right wall shifts inward
-  const wallShift = showAdjustment
-    ? interpolate(
-        frame,
-        [WALL_ADJUST_START, WALL_ADJUST_END],
-        [0, ADJUSTMENT_PX],
-        { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
-      )
-    : 0;
+  // Wall adjustment (amber highlight + 4px shift)
+  const wallAdjust = interpolate(
+    frame,
+    [FIX_START, FIX_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
+  );
 
-  // Wall highlight opacity during adjustment
-  const wallHighlight = showAdjustment
-    ? interpolate(
-        frame,
-        [WALL_ADJUST_START, WALL_ADJUST_END],
-        [ADJUSTMENT_WALL_OPACITY_START, ADJUSTMENT_WALL_OPACITY_END],
-        { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-      )
-    : MOLD_WALL_FILL_OPACITY;
+  // Satisfied amber pulse during hold
+  const holdPulse =
+    frame >= HOLD_START
+      ? 0.3 +
+        0.15 *
+          Math.sin(
+            ((frame - HOLD_START) / 40) * Math.PI * 2
+          )
+      : 0;
 
-  // Ambient glow after adjustment is done
-  const ambientGlow = frame >= AMBIENT_GLOW_START
-    ? (() => {
-        const cycleFrame = (frame - AMBIENT_GLOW_START) % AMBIENT_GLOW_CYCLE;
-        const phase = cycleFrame / AMBIENT_GLOW_CYCLE;
-        const sineVal = Math.sin(phase * Math.PI * 2);
-        return interpolate(sineVal, [-1, 1], [0.4, 0.7]);
-      })()
-    : wallHighlight;
-
-  const finalWallOpacity = frame >= AMBIENT_GLOW_START ? ambientGlow : wallHighlight;
-
-  // Mold outline path length (approx perimeter)
-  const outlinePathLength = 2 * (MOLD_WIDTH + MOLD_HEIGHT);
-  const visibleLength = drawProgress * outlinePathLength;
-
-  // Coordinates
   const left = MOLD_CENTER_X - MOLD_WIDTH / 2;
   const top = MOLD_CENTER_Y - MOLD_HEIGHT / 2;
-  const wallThickness = 40;
-  const cavityWidth = MOLD_WIDTH - wallThickness * 2;
-  const cavityHeight = MOLD_HEIGHT - wallThickness;
+
+  // The mold is two halves with a cavity in between
+  const wallThickness = 60;
+  const cavityW = MOLD_WIDTH - wallThickness * 2;
+  const cavityH = MOLD_HEIGHT - 80; // open at bottom
+  const cavityX = left + wallThickness;
+  const cavityY = top + 40;
+
+  // Right wall shifts inward by up to 4px after fix
+  const rightWallShift = wallAdjust * 4;
+
+  // Right wall amber glow opacity
+  const rightWallGlow = interpolate(
+    frame,
+    [FIX_START, FIX_START + 15, FIX_START + 30, FIX_END],
+    [0.1, 0.6, 0.5, 0.3],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  const overallOpacity = drawProgress;
+
+  // Outline total perimeter for stroke-dashoffset animation
+  const perimeterLength = (MOLD_WIDTH + MOLD_HEIGHT) * 2;
+  const dashOffset = perimeterLength * (1 - drawProgress);
 
   return (
-    <svg
-      width={MOLD_WIDTH + 60}
-      height={MOLD_HEIGHT + 60}
-      viewBox={`${left - 30} ${top - 30} ${MOLD_WIDTH + 60} ${MOLD_HEIGHT + 60}`}
+    <div
       style={{
         position: "absolute",
-        left: left - 30,
-        top: top - 30,
+        left: 0,
+        top: 0,
+        width: "100%",
+        height: "100%",
+        opacity: overallOpacity,
       }}
     >
-      {/* Outer mold shell */}
-      <rect
-        x={left}
-        y={top}
-        width={MOLD_WIDTH}
-        height={MOLD_HEIGHT}
-        fill="none"
-        stroke={MOLD_STROKE_COLOR}
-        strokeWidth={MOLD_STROKE_WIDTH}
-        strokeOpacity={MOLD_STROKE_OPACITY}
-        strokeDasharray={outlinePathLength}
-        strokeDashoffset={outlinePathLength - visibleLength}
-      />
-
-      {/* Left wall */}
-      <rect
-        x={left}
-        y={top}
-        width={wallThickness}
-        height={MOLD_HEIGHT}
-        fill={MOLD_WALL_FILL}
-        fillOpacity={finalWallOpacity}
-        opacity={drawProgress}
-      />
-
-      {/* Right wall (adjustable) */}
-      <rect
-        x={left + MOLD_WIDTH - wallThickness - wallShift}
-        y={top}
-        width={wallThickness}
-        height={MOLD_HEIGHT}
-        fill={showAdjustment && frame >= WALL_ADJUST_START ? ADJUSTMENT_COLOR : MOLD_WALL_FILL}
-        fillOpacity={finalWallOpacity}
-        opacity={drawProgress}
-      />
-
-      {/* Top wall */}
-      <rect
-        x={left + wallThickness}
-        y={top}
-        width={cavityWidth}
-        height={wallThickness}
-        fill={MOLD_WALL_FILL}
-        fillOpacity={finalWallOpacity}
-        opacity={drawProgress}
-      />
-
-      {/* Cavity (open bottom for ejection) */}
-      <rect
-        x={left + wallThickness}
-        y={top + wallThickness}
-        width={cavityWidth - wallShift}
-        height={cavityHeight}
-        fill={MOLD_CAVITY_COLOR}
-        fillOpacity={MOLD_CAVITY_OPACITY}
-        opacity={drawProgress}
-      />
-
-      {/* Glow trail during adjustment */}
-      {showAdjustment && frame >= WALL_ADJUST_START && frame <= WALL_ADJUST_END + 20 && (
+      <svg
+        width="1920"
+        height="1080"
+        viewBox="0 0 1920 1080"
+        style={{ position: "absolute", left: 0, top: 0 }}
+      >
+        {/* Outer mold shell */}
         <rect
-          x={left + MOLD_WIDTH - wallThickness - wallShift - 6}
-          y={top + wallThickness}
-          width={12}
-          height={cavityHeight}
-          fill={ADJUSTMENT_COLOR}
-          fillOpacity={interpolate(
-            frame,
-            [WALL_ADJUST_START, WALL_ADJUST_END, WALL_ADJUST_END + 20],
-            [0, 0.4, 0],
-            { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-          )}
-        />
-      )}
-
-      {/* Ambient glow outline */}
-      {frame >= AMBIENT_GLOW_START && (
-        <rect
-          x={left - 3}
-          y={top - 3}
-          width={MOLD_WIDTH + 6}
-          height={MOLD_HEIGHT + 6}
+          x={left}
+          y={top}
+          width={MOLD_WIDTH}
+          height={MOLD_HEIGHT}
           fill="none"
-          stroke={ADJUSTMENT_COLOR}
+          stroke={MOLD_STROKE}
           strokeWidth={2}
-          strokeOpacity={ambientGlow * 0.3}
-          rx={4}
+          strokeOpacity={0.6}
+          strokeDasharray={perimeterLength}
+          strokeDashoffset={dashOffset}
         />
-      )}
-    </svg>
+
+        {/* Left wall fill */}
+        <rect
+          x={left}
+          y={top}
+          width={wallThickness}
+          height={MOLD_HEIGHT}
+          fill={MOLD_WALL_FILL}
+          fillOpacity={0.1 + holdPulse}
+        />
+
+        {/* Right wall fill (shifts inward during fix) */}
+        <rect
+          x={left + MOLD_WIDTH - wallThickness - rightWallShift}
+          y={top}
+          width={wallThickness + rightWallShift}
+          height={MOLD_HEIGHT}
+          fill={MOLD_WALL_FILL}
+          fillOpacity={frame >= FIX_START ? rightWallGlow + holdPulse : 0.1}
+        />
+
+        {/* Right wall amber glow trail during adjustment */}
+        {frame >= FIX_START && frame <= FIX_END && (
+          <rect
+            x={left + MOLD_WIDTH - wallThickness - rightWallShift - 6}
+            y={top + 60}
+            width={8}
+            height={MOLD_HEIGHT - 120}
+            fill={AMBER}
+            fillOpacity={interpolate(
+              frame,
+              [FIX_START, FIX_START + 15, FIX_START + 30],
+              [0, 0.5, 0],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+            )}
+            rx={4}
+          />
+        )}
+
+        {/* Cavity */}
+        <rect
+          x={cavityX}
+          y={cavityY}
+          width={cavityW - rightWallShift}
+          height={cavityH}
+          fill={MOLD_CAVITY}
+          fillOpacity={0.3}
+        />
+
+        {/* Cavity opening at bottom (nozzle area) */}
+        <rect
+          x={MOLD_CENTER_X - 30}
+          y={top + MOLD_HEIGHT - 10}
+          width={60}
+          height={20}
+          fill={MOLD_CAVITY}
+          fillOpacity={0.25}
+        />
+
+        {/* Top cap of mold */}
+        <rect
+          x={left + wallThickness}
+          y={top}
+          width={cavityW}
+          height={40}
+          fill={MOLD_WALL_FILL}
+          fillOpacity={0.1 + holdPulse}
+        />
+
+        {/* Nozzle indicator lines */}
+        <line
+          x1={MOLD_CENTER_X - 15}
+          y1={top - 10}
+          x2={MOLD_CENTER_X - 15}
+          y2={top + 10}
+          stroke={MOLD_STROKE}
+          strokeWidth={1.5}
+          strokeOpacity={0.4}
+        />
+        <line
+          x1={MOLD_CENTER_X + 15}
+          y1={top - 10}
+          x2={MOLD_CENTER_X + 15}
+          y2={top + 10}
+          stroke={MOLD_STROKE}
+          strokeWidth={1.5}
+          strokeOpacity={0.4}
+        />
+      </svg>
+    </div>
   );
 };
+
+export default MoldDiagram;

@@ -1271,12 +1271,12 @@ def generate_generated_timeline_wrapper(
     """Generate a deterministic wrapper for Stage 8-generated section timelines.
 
     Claude can generate component files and constants nondeterministically, but
-    the final section wrapper must remain deterministic. When Stage 8 marks a
-    section timeline as generated and constants.ts exists, we render the active
+    the final section wrapper must remain deterministic. When a section has a
+    generated composition graph and constants.ts exists, we render the active
     visual directly from VISUAL_SEQUENCE using exact filesystem-resolved imports.
     """
     section_id = section['id']
-    if section.get('timelineSource') != 'generated' or not remotion_src:
+    if not remotion_src:
         return None
 
     constants_path = os.path.join(remotion_src, section_id, 'constants.ts')
@@ -1653,7 +1653,6 @@ def generate_root_tsx(
         if preview_contract_records:
             imports.append('VisualContractProvider')
         lines.append(f'import {{ {", ".join(imports)} }} from "./_shared/visual-runtime";')
-    lines.append('import "./_shared/load-inter-font";')
     lines.append('')
 
     # Import all section components (always from wrapper directory)

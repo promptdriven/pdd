@@ -94,6 +94,11 @@ describe("shared Remotion runtime", () => {
     expect(source).toMatch(/VisualContractContext/);
   });
 
+  it("exposes a helper that resolves media aliases into staticFile-ready asset URLs", () => {
+    expect(source).toMatch(/useVisualMediaAssetSrc/);
+    expect(source).toMatch(/staticFile/);
+  });
+
   it("exposes a hook for reading structured visual contract data", () => {
     expect(source).toMatch(/useVisualContractData/);
   });
