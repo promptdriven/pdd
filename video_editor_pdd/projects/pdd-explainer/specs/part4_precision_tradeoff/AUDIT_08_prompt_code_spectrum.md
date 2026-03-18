@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame is sampled at 94.4% progress (frame 339/360), squarely in the final Hold phase (frames 320-360). At this point, all three key question/answer text lines should be fully visible below the spectrum bar. Line 1 ('The question isn't prompts OR code.' with strikethrough) should have appeared at frames 150-200. Line 2 ('It's how far into prompt space can you stay?' in blue bold) should have appeared at frames 200-260. Line 3 ('For most of the specification — further than you'd think.' with green bold) should have appeared at frames 260-320. None of these three lines are rendered. The entire bottom half of the frame is empty where the key thematic text — the payoff of the entire visual — should appear. This is the most important textual content in the composition and its absence fundamentally breaks the intended communication.

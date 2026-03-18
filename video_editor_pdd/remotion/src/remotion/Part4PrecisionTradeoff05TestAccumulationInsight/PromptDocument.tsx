@@ -2,66 +2,60 @@ import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
 
 interface PromptDocumentProps {
-  x: number;
-  y: number;
   width: number;
   height: number;
   lineCount: number;
   lineColor: string;
   lineOpacity: number;
-  animationStart: number;
-  bgColor?: string;
+  animStartFrame: number;
+  animDuration: number;
 }
 
-export const PromptDocument: React.FC<PromptDocumentProps> = ({
-  x,
-  y,
+/**
+ * Renders a rectangular "prompt document" with horizontal lines
+ * that draw in sequentially to represent lines of a prompt.
+ */
+const PromptDocument: React.FC<PromptDocumentProps> = ({
   width,
   height,
   lineCount,
   lineColor,
   lineOpacity,
-  animationStart,
-  bgColor = '#1E293B',
+  animStartFrame,
+  animDuration,
 }) => {
   const frame = useCurrentFrame();
   const padding = 10;
   const lineSpacing = (height - padding * 2) / (lineCount + 1);
 
-  // Overall fade in for the document
-  const docOpacity = interpolate(
-    frame,
-    [animationStart, animationStart + 20],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
-  );
-
   return (
     <div
       style={{
-        position: 'absolute',
-        left: x,
-        top: y,
         width,
         height,
-        backgroundColor: bgColor,
+        backgroundColor: '#1E293B',
         borderRadius: 4,
-        opacity: docOpacity,
+        position: 'relative',
         overflow: 'hidden',
       }}
     >
       {Array.from({ length: lineCount }).map((_, i) => {
-        // Stagger line drawing: 2 frames per line
-        const lineStart = animationStart + 5 + i * 2;
+        // Each line draws with a 2-frame stagger
+        const lineStart = animStartFrame + i * 2;
         const lineProgress = interpolate(
           frame,
           [lineStart, lineStart + 8],
           [0, 1],
-          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+          {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+            easing: Easing.out(Easing.quad),
+          }
         );
 
-        // Vary line widths for realism
-        const lineWidth = width - padding * 2 - (i % 3 === 0 ? 20 : i % 2 === 0 ? 10 : 0);
+        // Vary line widths for visual interest
+        const lineWidth = width - padding * 2 - (i % 3 === 2 ? 20 : i % 5 === 0 ? 30 : 0);
+        const yPos = padding + lineSpacing * (i + 1);
 
         return (
           <div
@@ -69,7 +63,7 @@ export const PromptDocument: React.FC<PromptDocumentProps> = ({
             style={{
               position: 'absolute',
               left: padding,
-              top: padding + lineSpacing * (i + 1) - 1,
+              top: yPos - 1,
               width: lineWidth * lineProgress,
               height: 2,
               backgroundColor: lineColor,
@@ -82,3 +76,5 @@ export const PromptDocument: React.FC<PromptDocumentProps> = ({
     </div>
   );
 };
+
+export default PromptDocument;

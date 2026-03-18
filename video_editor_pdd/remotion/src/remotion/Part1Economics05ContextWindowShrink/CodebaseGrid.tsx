@@ -1,133 +1,118 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React, { useMemo } from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  GRID_CENTER_X,
-  GRID_CENTER_Y,
-  GRID_MAX_SIZE,
+  GRID_STAGES,
+  GRID_AREA_SIZE,
+  GAP,
+  MORPH_DURATION,
   BLOCK_FILL,
   BLOCK_BORDER,
-  BLOCK_CODE_COLOR,
-  CODE_FONT_FAMILY,
-  GRID_STAGES,
-  GRID_APPEAR_START,
-  GRID_APPEAR_END,
-} from "./constants";
+  TEXT_MUTED,
+  FAUX_CODE_LINES,
+  GRID_CENTER_X,
+  GRID_CENTER_Y,
+} from './constants';
 
-const FAUX_CODE_LINES = [
-  "fn main() {",
-  "  let x = 42;",
-  "  loop { .. }",
-  "}",
-];
-
-/**
- * CodebaseGrid — renders the morphing grid of code blocks.
- *
- * Starts as 4x4 blocks, then grows to 8x8, 16x16, 32x32 while
- * the blocks shrink to maintain the overall grid size.
- */
 export const CodebaseGrid: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade in the grid
-  const gridOpacity = interpolate(
-    frame,
-    [GRID_APPEAR_START, GRID_APPEAR_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // Determine current grid size by interpolating between stages
-  let currentGridSize = GRID_STAGES[0].gridSize;
-
-  for (let i = 1; i < GRID_STAGES.length; i++) {
-    const stage = GRID_STAGES[i];
-    if (frame >= stage.morphStart) {
-      const progress = interpolate(
-        frame,
-        [stage.morphStart, stage.morphEnd],
-        [0, 1],
-        {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.inOut(Easing.cubic),
-        }
-      );
-      currentGridSize =
-        GRID_STAGES[i - 1].gridSize +
-        (stage.gridSize - GRID_STAGES[i - 1].gridSize) * progress;
+  // Determine the current grid size with smooth interpolation
+  const currentGridSize = useMemo(() => {
+    let size = GRID_STAGES[0].gridSize;
+    for (let i = 1; i < GRID_STAGES.length; i++) {
+      const stage = GRID_STAGES[i];
+      const prevStage = GRID_STAGES[i - 1];
+      if (frame >= stage.startFrame) {
+        size = stage.gridSize;
+      } else if (frame >= stage.startFrame - MORPH_DURATION) {
+        const progress = interpolate(
+          frame,
+          [stage.startFrame - MORPH_DURATION, stage.startFrame],
+          [0, 1],
+          { easing: Easing.inOut(Easing.cubic), extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+        );
+        size = prevStage.gridSize + (stage.gridSize - prevStage.gridSize) * progress;
+      }
     }
-  }
+    return size;
+  }, [frame]);
 
-  // Render with the nearest integer grid size for actual blocks
-  const renderGridSize = Math.round(currentGridSize);
-  const gap = renderGridSize <= 8 ? 8 : renderGridSize <= 16 ? 4 : 2;
-  const totalGap = (renderGridSize - 1) * gap;
-  const blockSize = (GRID_MAX_SIZE - totalGap) / renderGridSize;
-  const gridTotalSize = renderGridSize * blockSize + totalGap;
-  const gridLeft = GRID_CENTER_X - gridTotalSize / 2;
-  const gridTop = GRID_CENTER_Y - gridTotalSize / 2;
+  const roundedGridSize = Math.round(currentGridSize);
+  const blockSize = (GRID_AREA_SIZE - (roundedGridSize - 1) * GAP) / roundedGridSize;
+  const totalGridSize = roundedGridSize * blockSize + (roundedGridSize - 1) * GAP;
 
-  // Show faux code only when blocks are large enough
-  const showCode = blockSize > 30;
-  const codeFontSize = Math.max(5, Math.min(8, blockSize * 0.06));
+  // Fade in
+  const opacity = interpolate(frame, [0, 20], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
-  const blocks: React.ReactNode[] = [];
-  for (let row = 0; row < renderGridSize; row++) {
-    for (let col = 0; col < renderGridSize; col++) {
-      const x = gridLeft + col * (blockSize + gap);
-      const y = gridTop + row * (blockSize + gap);
-      blocks.push(
-        <div
-          key={`${row}-${col}`}
-          style={{
-            position: "absolute",
-            left: x,
-            top: y,
-            width: blockSize,
-            height: blockSize,
-            backgroundColor: BLOCK_FILL,
-            border: `1px solid ${BLOCK_BORDER}`,
-            borderRadius: Math.max(2, blockSize * 0.05),
-            opacity: 0.3,
-            overflow: "hidden",
-          }}
-        >
-          {showCode &&
-            FAUX_CODE_LINES.map((line, i) => (
-              <div
-                key={i}
-                style={{
-                  fontFamily: CODE_FONT_FAMILY,
-                  fontSize: codeFontSize,
-                  color: BLOCK_CODE_COLOR,
-                  opacity: 0.15,
-                  whiteSpace: "nowrap" as const,
-                  overflow: "hidden",
-                  lineHeight: 1.4,
-                  paddingLeft: 3,
-                }}
-              >
-                {line}
-              </div>
-            ))}
-        </div>
-      );
+  // Morph scale effect during transitions
+  const morphScale = useMemo(() => {
+    for (let i = 1; i < GRID_STAGES.length; i++) {
+      const stage = GRID_STAGES[i];
+      if (frame >= stage.startFrame - MORPH_DURATION && frame < stage.startFrame) {
+        const progress = interpolate(
+          frame,
+          [stage.startFrame - MORPH_DURATION, stage.startFrame - MORPH_DURATION / 2, stage.startFrame],
+          [1, 1.02, 1],
+          { easing: Easing.inOut(Easing.cubic), extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+        );
+        return progress;
+      }
     }
-  }
+    return 1;
+  }, [frame]);
+
+  const showFauxCode = blockSize > 20;
 
   return (
     <div
       style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: "100%",
-        height: "100%",
-        opacity: gridOpacity,
+        position: 'absolute',
+        left: GRID_CENTER_X - totalGridSize / 2,
+        top: GRID_CENTER_Y - totalGridSize / 2,
+        width: totalGridSize,
+        height: totalGridSize,
+        opacity,
+        transform: `scale(${morphScale})`,
       }}
     >
-      {blocks}
+      {Array.from({ length: roundedGridSize }).map((_, row) =>
+        Array.from({ length: roundedGridSize }).map((_, col) => (
+          <div
+            key={`${row}-${col}`}
+            style={{
+              position: 'absolute',
+              left: col * (blockSize + GAP),
+              top: row * (blockSize + GAP),
+              width: blockSize,
+              height: blockSize,
+              backgroundColor: BLOCK_FILL,
+              border: `1px solid ${BLOCK_BORDER}`,
+              borderRadius: Math.max(2, blockSize * 0.06),
+              opacity: 0.3,
+              overflow: 'hidden',
+            }}
+          >
+            {showFauxCode && (
+              <div
+                style={{
+                  padding: 3,
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: Math.min(6, blockSize * 0.08),
+                  color: TEXT_MUTED,
+                  opacity: 0.15,
+                  lineHeight: 1.4,
+                  whiteSpace: 'pre',
+                }}
+              >
+                {FAUX_CODE_LINES.join('\n')}
+              </div>
+            )}
+          </div>
+        ))
+      )}
     </div>
   );
 };

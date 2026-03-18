@@ -1,69 +1,60 @@
 import React from 'react';
-import {
-  AbsoluteFill,
-  Sequence,
-  useCurrentFrame,
-  interpolate,
-  Easing,
-} from 'remotion';
-import { CANVAS, TIMING } from './constants';
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing, Sequence } from 'remotion';
+import { CANVAS, GRID } from './constants';
 import { BlueprintGrid } from './BlueprintGrid';
 import { NetworkGraph } from './NetworkGraph';
-import {
-  TypewriterTitle,
-  SlideUpTitle,
-  SectionLabel,
-  HorizontalRule,
-} from './TitleText';
+import { SectionLabel, TitleLine1, HorizontalRule, TitleLine2 } from './TitleText';
 
 export const defaultWhereToStart01SectionTitleCardProps = {};
 
 export const WhereToStart01SectionTitleCard: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Background fade from black over first 15 frames
-  const bgOpacity = interpolate(
-    frame,
-    [TIMING.BG_FADE_START, TIMING.BG_FADE_END],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    },
-  );
+  // Background fades in from black over frames 0-15
+  const bgOpacity = interpolate(frame, [0, 15], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.poly(2)),
+  });
+
+  // Grid appears with background
+  const gridOpacity = interpolate(frame, [0, 15], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.poly(2)),
+  });
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#000000' }}>
-      {/* Main content with fade-in */}
-      <AbsoluteFill style={{ opacity: bgOpacity, backgroundColor: CANVAS.BG }}>
+      {/* Main content fades in from black */}
+      <AbsoluteFill style={{ opacity: bgOpacity, backgroundColor: CANVAS.backgroundColor }}>
         {/* Blueprint grid */}
-        <BlueprintGrid opacity={bgOpacity} />
+        <div style={{ opacity: gridOpacity }}>
+          <BlueprintGrid
+            spacing={GRID.spacing}
+            color={GRID.color}
+            opacity={GRID.opacity}
+            canvasWidth={CANVAS.width}
+            canvasHeight={CANVAS.height}
+          />
+        </div>
 
-        {/* Ghost codebase topology — starts at frame 15 */}
-        <Sequence from={TIMING.TOPOLOGY_START} layout="none">
+        {/* Ghost codebase topology — starts drawing at frame 15 */}
+        <Sequence from={15}>
           <NetworkGraph />
         </Sequence>
 
-        {/* Section label — starts at frame 15 */}
-        <Sequence from={TIMING.LABEL_START} layout="none">
-          <SectionLabel />
-        </Sequence>
+        {/* Section label */}
+        <SectionLabel />
 
-        {/* Title line 1: "WHERE TO" typewriter — starts at frame 40 */}
-        <Sequence from={TIMING.TITLE_LINE1_START} layout="none">
-          <TypewriterTitle />
-        </Sequence>
+        {/* Title line 1: "WHERE TO" — typewriter from frame 40 */}
+        <TitleLine1 />
 
-        {/* Horizontal rule — starts at frame 60 */}
-        <Sequence from={TIMING.RULE_START} layout="none">
-          <HorizontalRule />
-        </Sequence>
+        {/* Horizontal rule — draws from center at frame 60 */}
+        <HorizontalRule />
 
-        {/* Title line 2: "START" slide-up — starts at frame 70 */}
-        <Sequence from={TIMING.TITLE_LINE2_START} layout="none">
-          <SlideUpTitle />
-        </Sequence>
+        {/* Title line 2: "START" — fade+slide from frame 70 */}
+        <TitleLine2 />
       </AbsoluteFill>
     </AbsoluteFill>
   );

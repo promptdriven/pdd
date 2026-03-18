@@ -1,61 +1,47 @@
 import React from 'react';
+import { AbsoluteFill } from 'remotion';
+import { GRID_COLOR, GRID_OPACITY, GRID_SPACING, WIDTH, HEIGHT } from './constants';
 
-interface EngineeringGridProps {
-  spacing: number;
-  color: string;
-  opacity: number;
-  width: number;
-  height: number;
-}
-
-export const EngineeringGrid: React.FC<EngineeringGridProps> = ({
-  spacing,
-  color,
-  opacity,
-  width,
-  height,
-}) => {
+export const EngineeringGrid: React.FC = () => {
   const lines: React.ReactNode[] = [];
 
   // Vertical lines
-  for (let x = 0; x <= width; x += spacing) {
+  for (let x = 0; x <= WIDTH; x += GRID_SPACING) {
     lines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={height}
-        stroke={color}
+        y2={HEIGHT}
+        stroke={GRID_COLOR}
         strokeWidth={1}
-        opacity={opacity}
+        opacity={GRID_OPACITY}
       />
     );
   }
 
   // Horizontal lines
-  for (let y = 0; y <= height; y += spacing) {
+  for (let y = 0; y <= HEIGHT; y += GRID_SPACING) {
     lines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={width}
+        x2={WIDTH}
         y2={y}
-        stroke={color}
+        stroke={GRID_COLOR}
         strokeWidth={1}
-        opacity={opacity}
+        opacity={GRID_OPACITY}
       />
     );
   }
 
   return (
-    <svg
-      width={width}
-      height={height}
-      style={{ position: 'absolute', top: 0, left: 0 }}
-    >
-      {lines}
-    </svg>
+    <AbsoluteFill>
+      <svg width={WIDTH} height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
+        {lines}
+      </svg>
+    </AbsoluteFill>
   );
 };

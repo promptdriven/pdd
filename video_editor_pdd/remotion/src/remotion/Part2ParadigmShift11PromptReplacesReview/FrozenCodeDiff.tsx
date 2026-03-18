@@ -1,22 +1,19 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  CODE_DIFF_FADE_START,
-  CODE_DIFF_FADE_END,
-  DIFF_LINES,
-  CODE_MUTED,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { COLORS, DIFF_LINES } from './constants';
 
-export const FrozenCodeDiff: React.FC = () => {
+export const FrozenCodeDiff: React.FC<{
+  fadeInStart: number;
+}> = ({ fadeInStart }) => {
   const frame = useCurrentFrame();
 
   const opacity = interpolate(
     frame,
-    [CODE_DIFF_FADE_START, CODE_DIFF_FADE_END],
+    [fadeInStart, fadeInStart + 20],
     [0, 0.15],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
@@ -24,35 +21,48 @@ export const FrozenCodeDiff: React.FC = () => {
   return (
     <div
       style={{
-        position: "absolute",
-        left: 20,
+        position: 'absolute',
+        left: 40,
         top: 80,
-        right: 20,
-        bottom: 230,
-        overflow: "hidden",
+        width: 880,
+        height: 770,
         opacity,
+        overflow: 'hidden',
       }}
     >
       {DIFF_LINES.map((line, i) => {
-        const isAdd = line.startsWith("+");
-        const isDel = line.startsWith("-");
-        let color = CODE_MUTED;
-        if (isAdd) color = "#4ADE80";
-        if (isDel) color = "#F87171";
+        const color =
+          line.type === 'add'
+            ? '#4ADE80'
+            : line.type === 'remove'
+            ? '#F87171'
+            : COLORS.codeMuted;
+
+        const bgColor =
+          line.type === 'add'
+            ? 'rgba(34, 197, 94, 0.06)'
+            : line.type === 'remove'
+            ? 'rgba(239, 68, 68, 0.06)'
+            : 'transparent';
+
+        const prefix =
+          line.type === 'add' ? '+ ' : line.type === 'remove' ? '- ' : '  ';
 
         return (
           <div
             key={i}
             style={{
-              fontFamily: "JetBrains Mono, monospace",
+              fontFamily: 'JetBrains Mono, monospace',
               fontSize: 10,
-              lineHeight: "15px",
+              lineHeight: '14px',
               color,
-              whiteSpace: "pre",
-              opacity: 0.8,
+              backgroundColor: bgColor,
+              whiteSpace: 'pre',
+              paddingLeft: 8,
             }}
           >
-            {line || "\u00A0"}
+            {prefix}
+            {line.text}
           </div>
         );
       })}

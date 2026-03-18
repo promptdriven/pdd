@@ -1,103 +1,90 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
 import {
-  CODE_DIM_START,
-  CODE_DIM_END,
-  CODE_UNDERLAY_FINAL_OPACITY,
-  REGENERATED_CODE_LINES,
-} from "./constants";
+  CODE_LINES,
+  CODE_FONT_SIZE,
+  CODE_LINE_HEIGHT,
+  CODE_X_OFFSET,
+  CODE_Y_OFFSET,
+  CODE_COLORS,
+} from './constants';
 
 /**
- * Dimmed code underlay — the regenerated code from the previous shot
- * fades from full visibility to near-invisible over frames 0-30.
+ * Simple syntax-highlighted code block rendered as positioned spans.
+ * Purely decorative — used as a dimmed background texture.
  */
-export const CodeUnderlay: React.FC = () => {
-  const frame = useCurrentFrame();
 
-  const opacity = interpolate(
-    frame,
-    [CODE_DIM_START, CODE_DIM_END],
-    [0.6, CODE_UNDERLAY_FINAL_OPACITY],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.ease),
+type TokenType = 'keyword' | 'function' | 'string' | 'property' | 'punctuation' | 'default';
+
+interface Token {
+  text: string;
+  type: TokenType;
+}
+
+const KEYWORDS = new Set([
+  'async', 'function', 'const', 'await', 'return',
+]);
+
+function tokenizeLine(line: string): Token[] {
+  if (line.trim() === '') return [{ text: ' ', type: 'default' }];
+
+  const tokens: Token[] = [];
+  // Simple regex-based tokenizer for display purposes
+  const regex = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:async|function|const|await|return)\b)|([\w.]+(?=\s*\())|([{}();,:])|(\s+)|([\w.]+)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(line)) !== null) {
+    const [full, str, kw, fn, punct, ws, ident] = match;
+    if (str) {
+      tokens.push({ text: str, type: 'string' });
+    } else if (kw) {
+      tokens.push({ text: kw, type: 'keyword' });
+    } else if (fn) {
+      tokens.push({ text: fn, type: 'function' });
+    } else if (punct) {
+      tokens.push({ text: punct, type: 'punctuation' });
+    } else if (ws) {
+      tokens.push({ text: ws, type: 'default' });
+    } else if (ident) {
+      tokens.push({
+        text: ident,
+        type: KEYWORDS.has(ident) ? 'keyword' : 'property',
+      });
     }
-  );
+  }
 
+  return tokens.length > 0 ? tokens : [{ text: line, type: 'default' }];
+}
+
+export const CodeUnderlay: React.FC = () => {
   return (
-    <AbsoluteFill
+    <div
       style={{
-        opacity,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "120px 400px",
+        position: 'absolute',
+        top: CODE_Y_OFFSET,
+        left: CODE_X_OFFSET,
+        fontFamily: '"JetBrains Mono", "Fira Code", "Courier New", monospace',
+        fontSize: CODE_FONT_SIZE,
+        lineHeight: `${CODE_LINE_HEIGHT}px`,
+        whiteSpace: 'pre',
       }}
     >
-      <pre
-        style={{
-          fontFamily: '"JetBrains Mono", "Fira Code", monospace',
-          fontSize: 14,
-          lineHeight: 1.6,
-          color: "#E2E8F0",
-          margin: 0,
-          whiteSpace: "pre",
-          userSelect: "none",
-        }}
-      >
-        {REGENERATED_CODE_LINES.map((line, i) => (
-          <div key={i} style={{ minHeight: "1.6em" }}>
-            <span style={{ color: "#6B7280", marginRight: 16, display: "inline-block", width: 24, textAlign: "right" }}>
-              {i + 1}
-            </span>
-            <span>{colorizeCodeLine(line)}</span>
+      {CODE_LINES.map((line, i) => {
+        const tokens = tokenizeLine(line);
+        return (
+          <div key={i} style={{ height: CODE_LINE_HEIGHT }}>
+            {tokens.map((token, j) => (
+              <span
+                key={j}
+                style={{ color: CODE_COLORS[token.type] || CODE_COLORS.default }}
+              >
+                {token.text}
+              </span>
+            ))}
           </div>
-        ))}
-      </pre>
-    </AbsoluteFill>
+        );
+      })}
+    </div>
   );
 };
 
-/** Minimal syntax highlighting for the code underlay. */
-function colorizeCodeLine(line: string): React.ReactNode {
-  const keywords = /\b(import|from|export|const|interface|return|type)\b/g;
-  const strings = /(["'`])(?:(?!\1).)*\1/g;
-  const types = /\b(React|FC|FormProps|FormData|void)\b/g;
-
-  // Simple approach: just render as-is with a muted color
-  // Since this fades to 0.08 opacity, detailed highlighting isn't critical
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  const combined = new RegExp(
-    `(${keywords.source})|(${strings.source})|(${types.source})`,
-    "g"
-  );
-
-  let match: RegExpExecArray | null;
-  while ((match = combined.exec(line)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(line.slice(lastIndex, match.index));
-    }
-    const text = match[0];
-    let color = "#E2E8F0";
-    if (/^(import|from|export|const|interface|return|type)$/.test(text)) {
-      color = "#C586C0";
-    } else if (/^["'`]/.test(text)) {
-      color = "#CE9178";
-    } else if (/^(React|FC|FormProps|FormData|void)$/.test(text)) {
-      color = "#4EC9B0";
-    }
-    parts.push(
-      <span key={match.index} style={{ color }}>
-        {text}
-      </span>
-    );
-    lastIndex = match.index + text.length;
-  }
-  if (lastIndex < line.length) {
-    parts.push(line.slice(lastIndex));
-  }
-  if (parts.length === 0) return line;
-  return <>{parts}</>;
-}
+export default CodeUnderlay;

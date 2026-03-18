@@ -1,91 +1,86 @@
 import React from "react";
-import { interpolate, Easing } from "remotion";
-import { AMBER } from "./constants";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { LOOP_ARROW_START_FRAME, COLORS } from "./constants";
 
 /**
- * Curved dashed arrow from Step 4 back to Step 2, arcing above the pipeline.
- * Includes "iterate" label at the apex.
+ * Curved dashed arrow from step 4 back to step 2,
+ * arcing above the pipeline to indicate the iteration loop.
  */
-export const LoopArrow: React.FC<{ frame: number }> = ({ frame }) => {
-  // Draw progress over 20 frames with easeInOut cubic
-  const drawProgress = interpolate(frame, [0, 20], [0, 1], {
+export const LoopArrow: React.FC = () => {
+  const frame = useCurrentFrame();
+  const localFrame = frame - LOOP_ARROW_START_FRAME;
+
+  if (localFrame < 0) return null;
+
+  // Draw progress — easeInOut cubic over 20 frames
+  const drawProgress = interpolate(localFrame, [0, 20], [0, 1], {
+    extrapolateRight: "clamp",
     easing: Easing.inOut(Easing.cubic),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
   });
 
-  // Label fades in over 10 frames starting at frame 5
-  const labelOpacity = interpolate(frame, [5, 15], [0, 0.4], {
-    extrapolateLeft: "clamp",
+  // Label fade
+  const labelOpacity = interpolate(localFrame, [10, 20], [0, 0.4], {
     extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
   });
 
-  // Arc path from (1220, 380) to (540, 380), arcing upward
-  // Using a quadratic bezier with control point at midpoint, raised
-  const startX = 1220;
-  const startY = 380;
-  const endX = 540;
-  const endY = 380;
-  const cpX = (startX + endX) / 2; // 880
-  const cpY = 280; // arc height (100px above)
+  // Arc from step 4 (x:1220) back to step 2 (x:540), arcing above at y:380
+  // Control point at the apex
+  const fromX = 1220;
+  const toX = 540;
+  const y = 380;
+  const apexY = y - 100; // 100px above
+  const midX = (fromX + toX) / 2;
 
-  const path = `M ${startX} ${startY} Q ${cpX} ${cpY} ${endX} ${endY}`;
+  const pathD = `M ${fromX} ${y} Q ${midX} ${apexY} ${toX} ${y}`;
 
-  // Arrowhead at the end point — pointing left and slightly down
-  const arrowPath = `M ${endX + 10} ${endY - 5} L ${endX} ${endY} L ${endX + 10} ${endY + 5}`;
-
-  // Total path length estimate for dash offset animation
+  // Approximate path length for dash animation
   const pathLength = 800;
+  const visibleLength = pathLength * drawProgress;
 
   return (
-    <div style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}>
-      <svg
-        width="1920"
-        height="1080"
-        viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
-        {/* Dashed arc */}
-        <path
-          d={path}
-          fill="none"
-          stroke={AMBER}
-          strokeWidth={1.5}
-          strokeOpacity={0.3}
-          strokeDasharray="4 4"
-          strokeDashoffset={pathLength * (1 - drawProgress)}
-          style={{ transition: "none" }}
+    <svg
+      width={1920}
+      height={1080}
+      viewBox="0 0 1920 1080"
+      style={{ position: "absolute", top: 0, left: 0 }}
+    >
+      {/* Dashed arc */}
+      <path
+        d={pathD}
+        fill="none"
+        stroke={COLORS.amber}
+        strokeWidth={1.5}
+        strokeOpacity={0.3}
+        strokeDasharray="4 4"
+        strokeDashoffset={pathLength - visibleLength}
+        style={{
+          // Use the total path as the "visible" dash segment
+          strokeDasharray: `${visibleLength} ${pathLength}`,
+        }}
+      />
+
+      {/* Arrow head at the end (step 2) */}
+      {drawProgress > 0.9 && (
+        <polygon
+          points={`${toX},${y} ${toX + 6},${y - 5} ${toX + 6},${y + 5}`}
+          fill={COLORS.amber}
+          fillOpacity={0.3 * Math.min(1, (drawProgress - 0.9) * 10)}
         />
-        {/* Arrow head */}
-        {drawProgress > 0.9 && (
-          <path
-            d={arrowPath}
-            fill="none"
-            stroke={AMBER}
-            strokeWidth={1.5}
-            strokeOpacity={0.3 * Math.min(1, (drawProgress - 0.9) * 10)}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
-      </svg>
+      )}
 
       {/* "iterate" label at apex */}
-      <div
-        style={{
-          position: "absolute",
-          left: cpX,
-          top: cpY - 20,
-          transform: "translateX(-50%)",
-          fontFamily: "Inter, sans-serif",
-          fontSize: 9,
-          color: AMBER,
-          opacity: labelOpacity,
-          letterSpacing: 0.5,
-        }}
+      <text
+        x={midX}
+        y={apexY - 10}
+        textAnchor="middle"
+        fontSize={14}
+        fontFamily="Inter, sans-serif"
+        fill={COLORS.amber}
+        fillOpacity={labelOpacity}
       >
         iterate
-      </div>
-    </div>
+      </text>
+    </svg>
   );
 };

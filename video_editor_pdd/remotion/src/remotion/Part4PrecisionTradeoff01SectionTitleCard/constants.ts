@@ -1,97 +1,91 @@
-// Part 4 Section Title Card — The Precision Tradeoff
+// Part 4 Title Card — The Precision Tradeoff
 // Component-level constants
 
 export const CANVAS = {
   WIDTH: 1920,
   HEIGHT: 1080,
-  BACKGROUND: '#0A0F1A',
-} as const;
-
-export const GRID = {
-  SPACING: 60,
-  COLOR: '#1E293B',
-  OPACITY: 0.05,
+  FPS: 30,
+  DURATION_FRAMES: 120,
 } as const;
 
 export const COLORS = {
-  TITLE_TEXT: '#E2E8F0',
-  SECTION_LABEL: '#64748B',
-  RULE: '#334155',
-  DOT_GRID: '#94A3B8',
-  MOLD_OUTLINE: '#D9944A',
+  background: '#0A0F1A',
+  blueprintGrid: '#1E293B',
+  sectionLabel: '#64748B',
+  titleText: '#E2E8F0',
+  rule: '#334155',
+  dotGrid: '#94A3B8',
+  moldOutline: '#D9944A',
 } as const;
 
-export const TITLE = {
-  SECTION_LABEL: 'PART 4',
-  LINE1: 'THE PRECISION',
-  LINE2: 'TRADEOFF',
-  FONT_SIZE: 72,
-  FONT_WEIGHT: 700,
-  LABEL_SIZE: 14,
-  LABEL_WEIGHT: 600,
-  LABEL_LETTER_SPACING: 4,
+export const OPACITIES = {
+  blueprintGrid: 0.05,
+  sectionLabel: 0.5,
+  rule: 0.5,
+  ghostDots: 0.03,
+  ghostMold: 0.04,
+  ghostLabel: 0.03,
+  ghostGlow: 0.02,
+} as const;
+
+export const TYPOGRAPHY = {
+  sectionLabel: {
+    size: 14,
+    weight: 600,
+    letterSpacing: 4,
+  },
+  title: {
+    size: 72,
+    weight: 700,
+  },
+  ghostLabel: {
+    size: 8,
+  },
 } as const;
 
 export const POSITIONS = {
-  SECTION_LABEL_Y: 400,
-  TITLE_LINE1_Y: 460,
-  RULE_Y: 505,
-  TITLE_LINE2_Y: 545,
-  TITLE_LINE2_OFFSET_X: 15,
-  DOT_GRID: { x: 560, y: 480 },
-  MOLD_OUTLINE: { x: 1360, y: 480 },
-  CENTER_X: 960,
+  sectionLabel: { x: 960, y: 400 },
+  titleLine1: { x: 960, y: 460 },
+  titleLine2: { x: 975, y: 545 },
+  rule: { y: 505, halfWidth: 100 },
+  dotGrid: { x: 560, y: 480 },
+  moldOutline: { x: 1360, y: 480 },
 } as const;
 
-export const DOT_MATRIX = {
-  ROWS: 8,
-  COLS: 8,
-  DOT_SIZE: 4,
-  SPACING: 12,
-  OPACITY: 0.03,
-  GLOW_BLUR: 8,
-  GLOW_OPACITY: 0.02,
-  LABEL: 'EVERY POINT',
+export const DOT_GRID = {
+  rows: 8,
+  cols: 8,
+  dotSize: 4,
+  spacing: 12,
 } as const;
 
 export const MOLD = {
-  OPACITY: 0.04,
-  STROKE_WIDTH: 3,
-  GLOW_BLUR: 8,
-  GLOW_OPACITY: 0.02,
-  LABEL: 'WALLS ONLY',
-  WIDTH: 80,
-  HEIGHT: 60,
+  width: 100,
+  height: 80,
+  strokeWidth: 3,
 } as const;
 
-export const RULE = {
-  WIDTH: 200,
-  HEIGHT: 2,
-  OPACITY: 0.5,
-} as const;
-
-// Animation timing (frames)
 export const TIMING = {
-  BG_FADE_START: 0,
-  BG_FADE_END: 15,
-  GHOST_START: 15,
-  GHOST_DOTS_STAGGER: 1,       // frames per dot
-  GHOST_WALL_DURATION: 40,
-  SECTION_LABEL_START: 15,
-  SECTION_LABEL_FADE: 20,
-  TITLE_LINE1_START: 40,
-  TITLE_LINE1_CHAR_DELAY: 3,
-  RULE_START: 60,
-  RULE_DRAW_DURATION: 10,
-  TITLE_LINE2_START: 70,
-  TITLE_LINE2_FADE: 20,
-  TITLE_LINE2_SLIDE: 10,       // px slide-up distance
-  HOLD_START: 90,
-  TOTAL_FRAMES: 120,
-  PULSE_CYCLE: 30,
-} as const;
-
-export const GHOST_LABEL = {
-  FONT_SIZE: 8,
-  OPACITY: 0.03,
+  // Phase 1: Background + grid (0-15)
+  bgFadeEnd: 15,
+  // Phase 2: PART 4 label + ghost shapes (15-40)
+  ghostStart: 15,
+  labelFadeStart: 15,
+  labelFadeDuration: 20,
+  // Phase 3: THE PRECISION typewriter (40-60)
+  typewriterStart: 40,
+  charDelay: 3, // frames per character
+  // Phase 4: Horizontal rule (60-70)
+  ruleStart: 60,
+  ruleDuration: 10,
+  // Phase 5: TRADEOFF fade + slide (70-90)
+  tradeoffStart: 70,
+  tradeoffDuration: 20,
+  tradeoffSlideDistance: 10,
+  // Phase 6: Hold + pulse (90-120)
+  holdStart: 90,
+  pulseCycleFrames: 30,
+  // Ghost animation
+  wallDrawDuration: 40,
+  glowBlur: 8,
 } as const;

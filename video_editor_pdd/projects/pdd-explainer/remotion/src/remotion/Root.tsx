@@ -1,7 +1,6 @@
 import React from "react";
 import { Composition } from "remotion";
 import { VisualMediaProvider, VisualContractProvider } from "./_shared/visual-runtime";
-import "./_shared/load-inter-font";
 
 import { ColdOpenSection } from "./cold_open";
 import { Part1EconomicsSection } from "./part1_economics";
@@ -576,7 +575,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ColdOpenSection"
         component={ColdOpenSection}
-        durationInFrames={5}
+        durationInFrames={11}
         fps={30}
         width={1920}
         height={1080}
@@ -584,7 +583,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1EconomicsSection"
         component={Part1EconomicsSection}
-        durationInFrames={7}
+        durationInFrames={13}
         fps={30}
         width={1920}
         height={1080}

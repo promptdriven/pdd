@@ -1,182 +1,171 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from 'remotion';
 import {
-  ACCENT_BLUE,
-  TEXT_COLOR,
-  PROMPT_GRAY,
-  CMD_BLOCK_START,
-  CMD_BG_FADE_DURATION,
-  CMD_LINE1,
-  CMD_LINE2,
+  CMD_BLOCK_Y,
+  CMD_BLOCK_WIDTH,
+  CMD_BLOCK_BG,
+  CMD_BLOCK_BG_OPACITY,
+  CMD_BLOCK_BORDER_RADIUS,
+  CMD_BLOCK_PADDING_V,
+  CMD_BLOCK_PADDING_H,
+  CMD_BORDER_LEFT_WIDTH,
+  CMD_BORDER_LEFT_COLOR,
+  CMD_BORDER_LEFT_OPACITY,
+  CMD_FONT_SIZE,
+  CMD_LINE_HEIGHT,
+  CMD_TEXT_COLOR,
+  CMD_TEXT_OPACITY,
+  CMD_PROMPT_COLOR,
+  CMD_PROMPT_OPACITY,
+  CMD_KEYWORD_COLOR,
+  CMD_KEYWORD_OPACITY,
+  CMD_BLOCK_FADE_START,
+  CMD_BLOCK_BG_FADE_DURATION,
+  CMD_TYPE_FRAMES_PER_CHAR,
+  CMD_LINE_1,
+  CMD_LINE_2,
 } from './constants';
 
-/**
- * Renders a single terminal line with character-by-character typing.
- * Colorizes $ prompt, pdd keyword, and rest of text differently.
- */
-const TerminalLine: React.FC<{
+interface CommandSegment {
   text: string;
-  visibleChars: number;
-}> = ({ text, visibleChars }) => {
-  const visible = text.slice(0, visibleChars);
+  color: string;
+  opacity: number;
+}
 
-  // Parse the visible text into colored spans
-  const segments: { text: string; color: string; opacity: number }[] = [];
+const LINE_1_SEGMENTS: CommandSegment[] = [
+  { text: '$ ', color: CMD_PROMPT_COLOR, opacity: CMD_PROMPT_OPACITY },
+  { text: 'uv tool install ', color: CMD_TEXT_COLOR, opacity: CMD_TEXT_OPACITY },
+  { text: 'pdd-cli', color: CMD_KEYWORD_COLOR, opacity: CMD_KEYWORD_OPACITY },
+];
 
-  if (visible.startsWith('$')) {
-    // Dollar prompt
-    const dollarEnd = visible.indexOf(' ') >= 0 ? visible.indexOf(' ') + 1 : visible.length;
-    segments.push({
-      text: visible.slice(0, dollarEnd),
-      color: PROMPT_GRAY,
-      opacity: 0.4,
-    });
+const LINE_2_SEGMENTS: CommandSegment[] = [
+  { text: '$ ', color: CMD_PROMPT_COLOR, opacity: CMD_PROMPT_OPACITY },
+  { text: 'pdd', color: CMD_KEYWORD_COLOR, opacity: CMD_KEYWORD_OPACITY },
+  { text: ' update your_module.py', color: CMD_TEXT_COLOR, opacity: CMD_TEXT_OPACITY },
+];
 
-    const rest = visible.slice(dollarEnd);
+const TypedLine: React.FC<{
+  segments: CommandSegment[];
+  typeStartFrame: number;
+  framesPerChar: number;
+}> = ({ segments, typeStartFrame, framesPerChar }) => {
+  const frame = useCurrentFrame();
 
-    // Check if this line has "pdd" as a keyword (standalone or start of command)
-    if (text.includes('$ pdd ')) {
-      // "pdd" is the command itself
-      const pddLen = Math.min(3, rest.length);
-      if (pddLen > 0) {
-        segments.push({
-          text: rest.slice(0, pddLen),
-          color: ACCENT_BLUE,
-          opacity: 0.8,
-        });
-        if (rest.length > 3) {
-          segments.push({
-            text: rest.slice(3),
-            color: TEXT_COLOR,
-            opacity: 0.7,
-          });
-        }
-      }
-    } else if (text.includes('pdd-cli')) {
-      // "pdd-cli" is highlighted at end
-      const pddIdx = rest.indexOf('pdd-cli');
-      if (pddIdx >= 0) {
-        segments.push({
-          text: rest.slice(0, pddIdx),
-          color: TEXT_COLOR,
-          opacity: 0.7,
-        });
-        segments.push({
-          text: rest.slice(pddIdx),
-          color: ACCENT_BLUE,
-          opacity: 0.8,
-        });
-      } else {
-        segments.push({
-          text: rest,
-          color: TEXT_COLOR,
-          opacity: 0.7,
-        });
-      }
-    } else {
-      segments.push({
-        text: rest,
-        color: TEXT_COLOR,
-        opacity: 0.7,
-      });
-    }
-  } else {
-    segments.push({
-      text: visible,
-      color: TEXT_COLOR,
-      opacity: 0.7,
-    });
+  const fullText = segments.map((s) => s.text).join('');
+  const totalChars = fullText.length;
+
+  const elapsed = Math.max(0, frame - typeStartFrame);
+  const visibleChars = Math.min(totalChars, Math.floor(elapsed / framesPerChar));
+
+  if (visibleChars <= 0) return null;
+
+  // Build visible segments character by character
+  let charCount = 0;
+  const renderedSegments: React.ReactNode[] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const segStart = charCount;
+    const segEnd = charCount + seg.text.length;
+
+    if (segStart >= visibleChars) break;
+
+    const visibleEnd = Math.min(seg.text.length, visibleChars - segStart);
+    const visibleText = seg.text.slice(0, visibleEnd);
+
+    renderedSegments.push(
+      <span
+        key={i}
+        style={{
+          color: seg.color,
+          opacity: seg.opacity,
+        }}
+      >
+        {visibleText}
+      </span>,
+    );
+
+    charCount = segEnd;
   }
+
+  // Blinking cursor
+  const showCursor = visibleChars < totalChars && Math.floor(frame / 8) % 2 === 0;
 
   return (
     <div
       style={{
-        fontFamily: '"JetBrains Mono", "Fira Code", "Courier New", monospace',
-        fontSize: 15,
-        lineHeight: '28px',
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+        fontSize: CMD_FONT_SIZE,
+        lineHeight: `${CMD_LINE_HEIGHT}px`,
         whiteSpace: 'pre',
-        height: 28,
       }}
     >
-      {segments.map((seg, i) => (
-        <span key={i} style={{ color: seg.color, opacity: seg.opacity }}>
-          {seg.text}
-        </span>
-      ))}
-      {/* Blinking cursor during typing */}
-      {visibleChars < text.length && visibleChars > 0 && (
-        <span style={{ color: TEXT_COLOR, opacity: 0.6 }}>▌</span>
+      {renderedSegments}
+      {showCursor && (
+        <span style={{ color: CMD_TEXT_COLOR, opacity: 0.6 }}>|</span>
       )}
     </div>
   );
 };
 
-/**
- * Command block card with two terminal lines that type in sequentially.
- */
 export const CommandBlock: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Background card fades in
+  // Background card fade-in
   const bgOpacity = interpolate(
     frame,
-    [CMD_BLOCK_START, CMD_BLOCK_START + CMD_BG_FADE_DURATION],
-    [0, 0.4],
+    [CMD_BLOCK_FADE_START, CMD_BLOCK_FADE_START + CMD_BLOCK_BG_FADE_DURATION],
+    [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
-  // Border fades in with bg
-  const borderOpacity = interpolate(
-    frame,
-    [CMD_BLOCK_START, CMD_BLOCK_START + CMD_BG_FADE_DURATION],
-    [0, 0.15],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // Line 1 starts typing after the background has faded in
+  const line1TypeStart = CMD_BLOCK_FADE_START + CMD_BLOCK_BG_FADE_DURATION;
+  const line1FullText = CMD_LINE_1;
+  const line1Duration = line1FullText.length * CMD_TYPE_FRAMES_PER_CHAR;
 
-  // Line 1 starts typing after bg fades (CMD_BLOCK_START + 15)
-  const line1Start = CMD_BLOCK_START + 15;
-  const line1Chars = Math.floor(
-    interpolate(frame, [line1Start, line1Start + CMD_LINE1.length * 2], [0, CMD_LINE1.length], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    })
-  );
+  // Line 2 starts after line 1 finishes + small delay
+  const line2TypeStart = line1TypeStart + line1Duration + 8;
 
-  // Line 2 starts 20 frames after line 1 finishes
-  const line2Start = line1Start + CMD_LINE1.length * 2 + 20;
-  const line2Chars = Math.floor(
-    interpolate(frame, [line2Start, line2Start + CMD_LINE2.length * 2], [0, CMD_LINE2.length], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    })
-  );
+  // Total block height: padding + 2 lines
+  const blockHeight = CMD_BLOCK_PADDING_V * 2 + CMD_LINE_HEIGHT * 2;
 
   return (
-    <div
+    <AbsoluteFill
       style={{
-        position: 'absolute',
-        left: (1920 - 480) / 2,
-        top: 520 - 52, // center vertically around y=520
-        width: 480,
-        padding: '24px 32px',
-        backgroundColor: `rgba(15, 23, 42, ${bgOpacity})`,
-        borderRadius: 8,
-        borderLeft: `2px solid rgba(74, 144, 217, ${borderOpacity})`,
-        boxSizing: 'border-box',
+        justifyContent: 'flex-start',
+        alignItems: 'center',
+        zIndex: 2,
       }}
     >
-      {line1Chars > 0 && <TerminalLine text={CMD_LINE1} visibleChars={line1Chars} />}
-      {line2Chars > 0 && <TerminalLine text={CMD_LINE2} visibleChars={line2Chars} />}
-    </div>
+      <div
+        style={{
+          position: 'absolute',
+          top: CMD_BLOCK_Y - blockHeight / 2,
+          width: CMD_BLOCK_WIDTH,
+          opacity: bgOpacity,
+          backgroundColor: CMD_BLOCK_BG,
+          borderRadius: CMD_BLOCK_BORDER_RADIUS,
+          padding: `${CMD_BLOCK_PADDING_V}px ${CMD_BLOCK_PADDING_H}px`,
+          borderLeft: `${CMD_BORDER_LEFT_WIDTH}px solid rgba(74, 144, 217, ${CMD_BORDER_LEFT_OPACITY})`,
+          boxSizing: 'border-box',
+        }}
+      >
+        <TypedLine
+          segments={LINE_1_SEGMENTS}
+          typeStartFrame={line1TypeStart}
+          framesPerChar={CMD_TYPE_FRAMES_PER_CHAR}
+        />
+        <TypedLine
+          segments={LINE_2_SEGMENTS}
+          typeStartFrame={line2TypeStart}
+          framesPerChar={CMD_TYPE_FRAMES_PER_CHAR}
+        />
+      </div>
+    </AbsoluteFill>
   );
 };
-
-export default CommandBlock;

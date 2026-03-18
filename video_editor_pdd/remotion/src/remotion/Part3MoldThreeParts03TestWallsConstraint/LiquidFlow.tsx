@@ -1,246 +1,175 @@
 import React, { useMemo } from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, interpolate } from 'remotion';
 import {
-  PARTICLE_COUNT,
-  LIQUID_COLOR,
-  LIQUID_COLOR_HALF,
-  LIQUID_GLOW,
-  MOLD_LEFT,
-  MOLD_RIGHT,
-  MOLD_TOP,
-  MOLD_BOTTOM,
-  NOZZLE_X,
-  NOISE_SCALE,
-  NOISE_SPEED,
-  MOLD_CENTER_X,
+	CAVITY_LEFT,
+	CAVITY_RIGHT,
+	CAVITY_TOP,
+	CAVITY_BOTTOM,
+	MOLD_CENTER_X,
+	LIQUID_COLOR,
+	WALL_SEGMENTS,
 } from './constants';
 
-// Simple deterministic pseudo-random based on seed
+// Simple seeded pseudo-random for deterministic particles
 function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 12.9898 + seed * 78.233) * 43758.5453;
-  return x - Math.floor(x);
+	const x = Math.sin(seed * 12.9898 + seed * 78.233) * 43758.5453;
+	return x - Math.floor(x);
 }
 
-// Simple 2D noise approximation (deterministic, no external deps)
-function simpleNoise(x: number, y: number, t: number): number {
-  const n1 = Math.sin(x * 1.3 + t * 0.7) * Math.cos(y * 0.9 + t * 0.5);
-  const n2 = Math.sin(x * 2.1 + y * 1.7 + t * 1.1) * 0.5;
-  const n3 = Math.cos(x * 0.8 + y * 2.3 + t * 0.3) * 0.3;
-  return (n1 + n2 + n3) / 1.8;
+// Simplified 2D Perlin-like noise using sine harmonics
+function noise2D(x: number, y: number, seed: number): number {
+	return (
+		Math.sin(x * 1.7 + y * 2.3 + seed * 0.7) * 0.3 +
+		Math.sin(x * 3.1 - y * 1.9 + seed * 1.3) * 0.2 +
+		Math.sin(x * 0.8 + y * 4.1 + seed * 2.1) * 0.15 +
+		Math.cos(x * 2.5 + y * 0.6 + seed * 0.4) * 0.2
+	);
 }
 
 interface Particle {
-  id: number;
-  spawnFrame: number;
-  baseX: number; // initial x offset from nozzle center
-  speed: number; // downward speed multiplier
-  size: number;
-  noiseOffsetX: number;
-  noiseOffsetY: number;
+	id: number;
+	startFrame: number;
+	startX: number;
+	speed: number;
+	lateralBias: number;
+	size: number;
+	noiseSeed: number;
 }
 
+const PARTICLE_COUNT = 220;
+const NOZZLE_WIDTH = 50;
+
 const LiquidFlow: React.FC = () => {
-  const frame = useCurrentFrame();
+	const frame = useCurrentFrame();
 
-  // Generate particle pool deterministically
-  const particles = useMemo<Particle[]>(() => {
-    const ps: Particle[] = [];
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-      const r1 = seededRandom(i * 3 + 1);
-      const r2 = seededRandom(i * 3 + 2);
-      const r3 = seededRandom(i * 3 + 3);
-      const r4 = seededRandom(i * 7 + 5);
-      const r5 = seededRandom(i * 11 + 7);
-      ps.push({
-        id: i,
-        spawnFrame: Math.floor(r1 * 120), // particles spawn over first 120 frames, then recycle
-        baseX: (r2 - 0.5) * 30, // spread around nozzle
-        speed: 0.6 + r3 * 0.8,
-        size: 2 + r4 * 4,
-        noiseOffsetX: r5 * 1000,
-        noiseOffsetY: seededRandom(i * 13 + 11) * 1000,
-      });
-    }
-    return ps;
-  }, []);
+	// Generate deterministic particles
+	const particles = useMemo<Particle[]>(() => {
+		const result: Particle[] = [];
+		for (let i = 0; i < PARTICLE_COUNT; i++) {
+			const r1 = seededRandom(i * 7 + 1);
+			const r2 = seededRandom(i * 13 + 2);
+			const r3 = seededRandom(i * 19 + 3);
+			const r4 = seededRandom(i * 23 + 4);
+			const r5 = seededRandom(i * 31 + 5);
+			result.push({
+				id: i,
+				startFrame: Math.floor(r1 * 180), // staggered entry over first 6s
+				startX: MOLD_CENTER_X + (r2 - 0.5) * NOZZLE_WIDTH,
+				speed: 1.5 + r3 * 2.5, // pixels per frame downward
+				lateralBias: (r4 - 0.5) * 1.2,
+				size: 2 + r5 * 4,
+				noiseSeed: r1 * 100,
+			});
+		}
+		return result;
+	}, []);
 
-  // Compute liquid fill level (how far down the cavity is filled)
-  const fillLevel = interpolate(frame, [0, 280], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
+	// Calculate cavity bounds for collision
+	const cavityWidth = CAVITY_RIGHT - CAVITY_LEFT;
+	const cavityHeight = CAVITY_BOTTOM - CAVITY_TOP;
 
-  // Cavity bounds
-  const cavityTop = MOLD_TOP + 55;
-  const cavityBottom = MOLD_BOTTOM - 5;
-  const cavityLeft = MOLD_LEFT + 5;
-  const cavityRight = MOLD_RIGHT - 5;
-  const cavityH = cavityBottom - cavityTop;
+	return (
+		<svg
+			width={1920}
+			height={1080}
+			viewBox="0 0 1920 1080"
+			style={{ position: 'absolute', top: 0, left: 0 }}
+		>
+			<defs>
+				<filter id="liquidGlow" x="-100%" y="-100%" width="300%" height="300%">
+					<feGaussianBlur stdDeviation="3" result="blur" />
+					<feMerge>
+						<feMergeNode in="blur" />
+						<feMergeNode in="SourceGraphic" />
+					</feMerge>
+				</filter>
+				<radialGradient id="particleGrad" cx="50%" cy="50%" r="50%">
+					<stop offset="0%" stopColor={LIQUID_COLOR} stopOpacity={0.7} />
+					<stop offset="70%" stopColor={LIQUID_COLOR} stopOpacity={0.3} />
+					<stop offset="100%" stopColor={LIQUID_COLOR} stopOpacity={0} />
+				</radialGradient>
+			</defs>
 
-  // Entry flow opacity
-  const flowOpacity = interpolate(frame, [0, 15], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+			{particles.map((p) => {
+				const age = frame - p.startFrame;
+				if (age < 0) return null;
 
-  // After frame 280, particles start settling - reduce turbulence
-  const turbulence = interpolate(frame, [250, 320], [1, 0.15], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+				// Fade in over first 5 frames
+				const fadeIn = Math.min(1, age / 5);
 
-  // Solidification at end
-  const solidify = interpolate(frame, [300, 350], [0, 0.8], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
+				// Base position: flows downward from nozzle
+				const noiseScale = 0.04;
+				const noiseSpeed = 0.03;
+				const t = age * noiseSpeed;
 
-  const time = frame * NOISE_SPEED;
+				// Vertical progress
+				let baseY = CAVITY_TOP + age * p.speed;
 
-  // Compute particle positions
-  const renderedParticles = useMemo(() => {
-    const result: Array<{
-      x: number;
-      y: number;
-      size: number;
-      opacity: number;
-      id: number;
-    }> = [];
+				// Noise displacement for turbulence
+				const nx = noise2D(p.startX * noiseScale, t, p.noiseSeed);
+				const ny = noise2D(t, p.startX * noiseScale + 50, p.noiseSeed + 10);
 
-    for (const p of particles) {
-      // Particle lifecycle: spawns, falls, cycles
-      const age = frame - p.spawnFrame;
-      if (age < 0) continue;
+				let x = p.startX + nx * 40 + p.lateralBias * age * 0.5;
+				let y = baseY + ny * 15;
 
-      // Each particle cycles through the cavity
-      const cycleLength = 180 / p.speed;
-      const cycleAge = age % cycleLength;
-      const normalizedAge = cycleAge / cycleLength;
+				// Clamp to cavity bounds (simulate wall collision)
+				const marginLeft = CAVITY_LEFT + 6;
+				const marginRight = CAVITY_RIGHT - 6;
+				const marginTop = CAVITY_TOP + 4;
+				const marginBottom = CAVITY_BOTTOM - 4;
 
-      // Y position: falls from top, then pools at fill level
-      const fallY = cavityTop + normalizedAge * cavityH;
-      const fillY = cavityBottom - fillLevel * cavityH;
-      const baseY = Math.min(fallY, Math.max(fillY, fallY));
+				// Handle left wall contour (step at y ~350)
+				let effectiveLeft = marginLeft;
+				if (y > CAVITY_TOP + 200 && y < CAVITY_TOP + 350) {
+					effectiveLeft = marginLeft + ((y - (CAVITY_TOP + 200)) / 150) * 60;
+				} else if (y >= CAVITY_TOP + 350) {
+					effectiveLeft = marginLeft + 60;
+				}
 
-      // Noise displacement
-      const nx = simpleNoise(
-        (p.noiseOffsetX + fallY) * NOISE_SCALE,
-        time,
-        p.id * 0.1
-      );
-      const ny = simpleNoise(
-        time,
-        (p.noiseOffsetY + fallY) * NOISE_SCALE,
-        p.id * 0.2
-      );
+				// Handle right wall contour
+				let effectiveRight = marginRight;
+				if (y > CAVITY_TOP + 180 && y < CAVITY_TOP + 380) {
+					effectiveRight =
+						marginRight - ((y - (CAVITY_TOP + 180)) / 200) * 50;
+				} else if (y >= CAVITY_TOP + 380) {
+					effectiveRight = marginRight - 50;
+				}
 
-      // X position: starts near nozzle, spreads as it falls
-      const spreadFactor = Math.min(normalizedAge * 3, 1);
-      const lateralRange = (cavityRight - cavityLeft) / 2;
-      let x =
-        NOZZLE_X +
-        p.baseX * (1 + spreadFactor * 8) +
-        nx * lateralRange * 0.4 * turbulence * spreadFactor;
+				// Clamp
+				x = Math.max(effectiveLeft, Math.min(effectiveRight, x));
+				y = Math.max(marginTop, Math.min(marginBottom, y));
 
-      let y = baseY + ny * 20 * turbulence;
+				// Once settled at bottom, pile up
+				const fillProgress = interpolate(frame, [0, 300], [0, 1], {
+					extrapolateLeft: 'clamp',
+					extrapolateRight: 'clamp',
+				});
+				const fillLine = CAVITY_BOTTOM - fillProgress * cavityHeight * 0.85;
+				if (y > fillLine && age > 60) {
+					// Particle has "settled" - position it at the fill line with some lateral noise
+					y = fillLine + seededRandom(p.id * 41) * 10;
+					x =
+						effectiveLeft +
+						seededRandom(p.id * 53) * (effectiveRight - effectiveLeft);
+				}
 
-      // Clamp to cavity
-      x = Math.max(cavityLeft, Math.min(cavityRight, x));
-      y = Math.max(cavityTop, Math.min(cavityBottom, y));
+				// Opacity: liquid particles at 0.5 base
+				const opacity = fadeIn * 0.5;
 
-      // Opacity: fade in at spawn, brighter when settled
-      const spawnFade = interpolate(cycleAge, [0, 10], [0, 1], {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      });
-
-      // Particles in the filled zone are more opaque
-      const inFilledZone = y > fillY ? 0.7 : 0.4;
-      const opacity = spawnFade * flowOpacity * inFilledZone;
-
-      if (opacity > 0.01) {
-        result.push({ x, y, size: p.size * (1 - solidify * 0.3), opacity, id: p.id });
-      }
-    }
-    return result;
-  }, [frame, particles, fillLevel, turbulence, solidify, flowOpacity, time,
-      cavityTop, cavityBottom, cavityLeft, cavityRight, cavityH]);
-
-  // Filled liquid body (grows from bottom)
-  const filledTop = cavityBottom - fillLevel * cavityH;
-  const filledBodyOpacity = interpolate(frame, [30, 60], [0, 0.25], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-
-  // Final solidification color shift
-  const solidColor = solidify > 0
-    ? `rgba(74, 144, 217, ${0.25 + solidify * 0.35})`
-    : `rgba(74, 144, 217, ${filledBodyOpacity})`;
-
-  return (
-    <svg
-      width={1920}
-      height={1080}
-      viewBox="0 0 1920 1080"
-      style={{ position: 'absolute', top: 0, left: 0 }}
-    >
-      <defs>
-        <filter id="particleGlow">
-          <feGaussianBlur stdDeviation="3" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <radialGradient id="liquidGrad" cx="50%" cy="0%" r="80%">
-          <stop offset="0%" stopColor={LIQUID_COLOR} stopOpacity={0.6} />
-          <stop offset="100%" stopColor={LIQUID_COLOR} stopOpacity={0.1} />
-        </radialGradient>
-      </defs>
-
-      {/* Filled liquid body */}
-      {fillLevel > 0.02 && (
-        <rect
-          x={cavityLeft}
-          y={filledTop}
-          width={cavityRight - cavityLeft}
-          height={cavityBottom - filledTop}
-          fill={solidColor}
-          rx={2}
-        />
-      )}
-
-      {/* Entry stream from nozzle */}
-      {frame < 300 && (
-        <rect
-          x={NOZZLE_X - 8}
-          y={MOLD_TOP + 40}
-          width={16}
-          height={Math.min(40, frame * 2)}
-          fill={LIQUID_COLOR_HALF}
-          opacity={flowOpacity * 0.6}
-          rx={4}
-        />
-      )}
-
-      {/* Particles */}
-      <g filter="url(#particleGlow)">
-        {renderedParticles.map((p) => (
-          <circle
-            key={p.id}
-            cx={p.x}
-            cy={p.y}
-            r={p.size}
-            fill={LIQUID_COLOR}
-            opacity={p.opacity}
-          />
-        ))}
-      </g>
-    </svg>
-  );
+				return (
+					<circle
+						key={p.id}
+						cx={x}
+						cy={y}
+						r={p.size}
+						fill="url(#particleGrad)"
+						opacity={opacity}
+						filter="url(#liquidGlow)"
+					/>
+				);
+			})}
+		</svg>
+	);
 };
 
 export default LiquidFlow;

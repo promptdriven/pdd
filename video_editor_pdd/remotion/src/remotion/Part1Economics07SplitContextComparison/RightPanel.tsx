@@ -1,266 +1,311 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 import {
-  BLUE,
-  GREEN,
-  CODE_MUTED,
-  TEXT_LIGHT,
-  FONT_CODE,
-  FONT_UI,
+  RIGHT_COLOR,
+  GREEN_HIGHLIGHT as GREEN_COLOR,
+  CODE_COLOR,
+  PROMPT_TEXT_COLOR,
   PANEL_PADDING,
-  PANEL_WIDTH,
-  WINDOW_TOP,
-  WINDOW_HEIGHT,
-  SPLIT_X,
-  RIGHT_PROMPT_START,
-  RIGHT_PROMPT_END,
-  RIGHT_TESTS_START,
-  RIGHT_TESTS_END,
-  RIGHT_GROUNDING_START,
-  RIGHT_GROUNDING_END,
-  TOKEN_COUNT_START,
-  TOKEN_COUNT_END,
-  FILL_BAR_START,
-  FILL_BAR_END,
   PROMPT_LINES,
   TEST_LINES,
   GROUNDING_LINES,
-} from "./constants";
-
-const WINDOW_X = PANEL_PADDING;
-const WINDOW_WIDTH = PANEL_WIDTH - PANEL_PADDING * 2;
-const SECTION_LEFT_BORDER = 3;
-const SECTION_INDENT = 16;
-
-interface SectionBlockProps {
-  lines: string[];
-  label: string;
-  accentColor: string;
-  fontFamily: string;
-  fontSize: number;
-  textColor: string;
-  textOpacity: number;
-  top: number;
-  opacity: number;
-}
-
-const SectionBlock: React.FC<SectionBlockProps> = ({
-  lines,
-  label,
-  accentColor,
-  fontFamily,
-  fontSize,
-  textColor,
-  textOpacity,
-  top,
-  opacity,
-}) => {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: WINDOW_X + 16,
-        top: WINDOW_TOP + top,
-        width: WINDOW_WIDTH - 32,
-        opacity,
-      }}
-    >
-      {/* Section label */}
-      <div
-        style={{
-          fontFamily: FONT_UI,
-          fontSize: 8,
-          color: accentColor,
-          opacity: 0.4,
-          marginBottom: 4,
-          letterSpacing: 1,
-          textTransform: "uppercase",
-        }}
-      >
-        {label}
-      </div>
-
-      {/* Content with left border */}
-      <div
-        style={{
-          borderLeft: `${SECTION_LEFT_BORDER}px solid ${accentColor}4D`,
-          paddingLeft: SECTION_INDENT,
-        }}
-      >
-        {lines.map((line, i) => (
-          <div
-            key={i}
-            style={{
-              fontFamily,
-              fontSize,
-              color: textColor,
-              opacity: textOpacity,
-              lineHeight: "14px",
-              whiteSpace: "pre-wrap",
-            }}
-          >
-            {line || "\u00A0"}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
+  RIGHT_CONTENT_IN,
+  TOKEN_COUNTS_IN,
+  FILL_BARS_IN,
+} from './constants';
 
 export const RightPanel: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Prompt block fade
-  const promptOpacity = interpolate(
-    frame,
-    [RIGHT_PROMPT_START, RIGHT_PROMPT_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
+  // Panel header fade: frames 30-45
+  const headerOpacity = interpolate(frame, [30, 45], [0, 0.6], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  // Tests block fade
-  const testsOpacity = interpolate(
-    frame,
-    [RIGHT_TESTS_START, RIGHT_TESTS_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
+  // Prompt block: frames 150-170
+  const promptOpacity = interpolate(frame, [RIGHT_CONTENT_IN, RIGHT_CONTENT_IN + 20], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  // Grounding block fade
+  // Tests block: frames 180-200
+  const testsOpacity = interpolate(frame, [RIGHT_CONTENT_IN + 30, RIGHT_CONTENT_IN + 50], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
+
+  // Grounding block: frames 210-230
   const groundingOpacity = interpolate(
     frame,
-    [RIGHT_GROUNDING_START, RIGHT_GROUNDING_END],
+    [RIGHT_CONTENT_IN + 60, RIGHT_CONTENT_IN + 80],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Token count opacity
-  const tokenOpacity = interpolate(
-    frame,
-    [TOKEN_COUNT_START, TOKEN_COUNT_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
+  // Token count fade: frames 240-255
+  const tokenOpacity = interpolate(frame, [TOKEN_COUNTS_IN, TOKEN_COUNTS_IN + 15], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  // Fill bar width
-  const fillBarProgress = interpolate(
-    frame,
-    [FILL_BAR_START, FILL_BAR_END],
-    [0, 0.25],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
-  );
+  // Fill bar: frames 300-320
+  const fillBarWidth = interpolate(frame, [FILL_BARS_IN, FILL_BARS_IN + 20], [0, 25], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
+
+  const windowTop = 90;
+  const windowLeft = PANEL_PADDING;
+  const windowWidth = 960 - PANEL_PADDING * 2;
+  const windowHeight = 870;
 
   return (
     <div
       style={{
-        position: "absolute",
-        left: SPLIT_X + 2,
+        position: 'absolute',
+        left: 962,
         top: 0,
-        width: PANEL_WIDTH,
-        height: "100%",
+        width: 958,
+        height: 1080,
+        overflow: 'hidden',
       }}
     >
-      {/* Context window border */}
+      {/* Panel Header */}
       <div
         style={{
-          position: "absolute",
-          left: WINDOW_X,
-          top: WINDOW_TOP,
-          width: WINDOW_WIDTH,
-          height: WINDOW_HEIGHT,
-          border: `1px solid ${BLUE}4D`, // 0.3 opacity
-          borderRadius: 6,
-          overflow: "hidden",
+          position: 'absolute',
+          top: 30,
+          left: 0,
+          width: 958,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color: RIGHT_COLOR,
+          opacity: headerOpacity,
+          letterSpacing: 2,
+          textTransform: 'uppercase',
         }}
       >
-        {/* Fill indicator bar at bottom */}
+        PDD Regeneration
+      </div>
+
+      {/* Context Window Border */}
+      <div
+        style={{
+          position: 'absolute',
+          top: windowTop,
+          left: windowLeft,
+          width: windowWidth,
+          height: windowHeight,
+          border: `1px solid rgba(74, 144, 217, 0.3)`,
+          borderRadius: 8,
+          overflow: 'hidden',
+        }}
+      >
+        {/* Prompt block */}
         <div
           style={{
-            position: "absolute",
-            bottom: 0,
-            left: 0,
-            width: WINDOW_WIDTH,
-            height: 3,
-            backgroundColor: `${BLUE}0A`,
+            position: 'absolute',
+            top: 16,
+            left: 16,
+            right: 16,
+            opacity: promptOpacity,
           }}
         >
           <div
             style={{
-              width: `${fillBarProgress * 100}%`,
-              height: "100%",
-              backgroundColor: `${BLUE}33`,
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 8,
+              color: RIGHT_COLOR,
+              opacity: 0.4,
+              marginBottom: 6,
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+            }}
+          >
+            prompt
+          </div>
+          <div
+            style={{
+              borderLeft: `3px solid ${RIGHT_COLOR}`,
+              paddingLeft: 12,
+            }}
+          >
+            {PROMPT_LINES.map((line, i) => (
+              <div
+                key={i}
+                style={{
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: 10,
+                  lineHeight: '16px',
+                  color: PROMPT_TEXT_COLOR,
+                  opacity: 0.6,
+                  minHeight: 16,
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Tests block */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 270,
+            left: 16,
+            right: 16,
+            opacity: testsOpacity,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 8,
+              color: GREEN_COLOR,
+              opacity: 0.4,
+              marginBottom: 6,
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+            }}
+          >
+            tests
+          </div>
+          <div
+            style={{
+              borderLeft: `3px solid ${GREEN_COLOR}`,
+              paddingLeft: 12,
+            }}
+          >
+            {TEST_LINES.map((line, i) => (
+              <div
+                key={i}
+                style={{
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 8,
+                  lineHeight: '14px',
+                  color: GREEN_COLOR,
+                  opacity: 0.5,
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Grounding block */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 460,
+            left: 16,
+            right: 16,
+            opacity: groundingOpacity,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 8,
+              color: CODE_COLOR,
+              opacity: 0.3,
+              marginBottom: 6,
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+            }}
+          >
+            grounding
+          </div>
+          <div
+            style={{
+              borderLeft: `3px solid rgba(148, 163, 184, 0.3)`,
+              paddingLeft: 12,
+            }}
+          >
+            {GROUNDING_LINES.map((line, i) => (
+              <div
+                key={i}
+                style={{
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 8,
+                  lineHeight: '13px',
+                  color: CODE_COLOR,
+                  opacity: 0.3,
+                  whiteSpace: 'pre',
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Whitespace below — the window is ~30% empty (implicit, no content here) */}
+
+        {/* Fill indicator bar at bottom of window */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 36,
+            left: 8,
+            right: 8,
+            height: 4,
+            backgroundColor: 'rgba(74, 144, 217, 0.05)',
+            borderRadius: 2,
+          }}
+        >
+          <div
+            style={{
+              width: `${fillBarWidth}%`,
+              height: '100%',
+              backgroundColor: `rgba(74, 144, 217, 0.2)`,
+              borderRadius: 2,
             }}
           />
         </div>
+
+        {/* Token count */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 14,
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 11,
+            color: RIGHT_COLOR,
+            opacity: tokenOpacity * 0.5,
+          }}
+        >
+          2,300 tokens
+        </div>
       </div>
 
-      {/* Prompt section */}
-      <SectionBlock
-        lines={PROMPT_LINES}
-        label="prompt"
-        accentColor={BLUE}
-        fontFamily={FONT_UI}
-        fontSize={10}
-        textColor={TEXT_LIGHT}
-        textOpacity={0.6}
-        top={20}
-        opacity={promptOpacity}
-      />
-
-      {/* Tests section */}
-      <SectionBlock
-        lines={TEST_LINES}
-        label="tests"
-        accentColor={GREEN}
-        fontFamily={FONT_CODE}
-        fontSize={8}
-        textColor={GREEN}
-        textOpacity={0.5}
-        top={280}
-        opacity={testsOpacity}
-      />
-
-      {/* Grounding section */}
-      <SectionBlock
-        lines={GROUNDING_LINES}
-        label="grounding"
-        accentColor={CODE_MUTED}
-        fontFamily={FONT_CODE}
-        fontSize={8}
-        textColor={CODE_MUTED}
-        textOpacity={0.3}
-        top={500}
-        opacity={groundingOpacity}
-      />
-
-      {/* Token count */}
+      {/* Quality note below window */}
       <div
         style={{
-          position: "absolute",
-          left: WINDOW_X,
-          bottom: 38,
-          width: WINDOW_WIDTH,
-          textAlign: "center",
-          fontFamily: FONT_UI,
-          fontSize: 11,
-          color: BLUE,
-          opacity: tokenOpacity * 0.5,
-        }}
-      >
-        2,300 tokens
-      </div>
-
-      {/* Quality note */}
-      <div
-        style={{
-          position: "absolute",
-          left: WINDOW_X,
-          bottom: 22,
-          width: WINDOW_WIDTH,
-          textAlign: "center",
-          fontFamily: FONT_UI,
+          position: 'absolute',
+          top: windowTop + windowHeight + 8,
+          left: 0,
+          width: 958,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
           fontSize: 10,
-          color: GREEN,
+          color: GREEN_COLOR,
           opacity: tokenOpacity * 0.5,
         }}
       >

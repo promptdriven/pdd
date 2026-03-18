@@ -1,145 +1,104 @@
-import React from 'react';
-import { AbsoluteFill, useCurrentFrame } from 'remotion';
+import React from "react";
+import { AbsoluteFill, Sequence } from "remotion";
 import {
-  COLORS,
-  EDITOR,
-  NATURAL_LINES_1,
+  BG_COLOR,
+  DURATION_FRAMES,
+  EDITOR_Y,
+  CONTENT_START_Y,
+  LINE_HEIGHT,
+  NATURAL_LANGUAGE_1,
   CODE_LINES,
-  NATURAL_LINES_2,
-} from './constants';
-import { EditorWindow } from './EditorWindow';
-import { TypedLines } from './TypedLines';
-import { CodeBlockBg } from './CodeBlockBg';
-import { BracketLabel } from './BracketLabel';
-import { FloatingAnnotation } from './FloatingAnnotation';
+  NATURAL_LANGUAGE_2,
+  LABEL_NL_COLOR,
+  LABEL_CODE_COLOR,
+  NL1_TYPE_END,
+  CODE_TYPE_END,
+  NL2_TYPE_END,
+  LABELS_PULSE_START,
+  LABELS_PULSE_END,
+  TITLE_BAR_HEIGHT,
+} from "./constants";
+import { EditorWindow } from "./EditorWindow";
+import { BracketLabel } from "./BracketLabel";
+import { FloatingAnnotation } from "./FloatingAnnotation";
 
 export const defaultPart4PrecisionTradeoff07EmbeddedCodeDocumentProps = {};
 
-/**
- * 07_embedded_code_document — "The Fluid Boundary Between Prompt and Code"
- *
- * A .prompt file shown at large scale with natural language sections and an
- * embedded code block. The visual contrast between the two "materials" is
- * the central motif.
- *
- * 480 frames @ 30fps = 16 seconds
- */
+// Calculate absolute Y positions for bracket labels
+// These are relative to the AbsoluteFill (the whole canvas)
+const editorContentTop = EDITOR_Y + TITLE_BAR_HEIGHT + 12; // 12px padding
+const nl1Top = editorContentTop + CONTENT_START_Y;
+const nl1Bottom = nl1Top + NATURAL_LANGUAGE_1.length * LINE_HEIGHT;
+const codeTop = nl1Bottom;
+const codeBottom = codeTop + CODE_LINES.length * LINE_HEIGHT;
+const nl2Top = codeBottom;
+const nl2Bottom = nl2Top + NATURAL_LANGUAGE_2.length * LINE_HEIGHT;
+
 export const Part4PrecisionTradeoff07EmbeddedCodeDocument: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  // Y positions within the editor body for code block background
-  // Lines 1-8 are natural language (lineHeight=22, starting at y=12)
-  // Lines 9-18 are code block
-  const codeBlockYStart = 12 + 8 * 22; // after 8 natural language lines
-  const codeBlockHeight = 10 * 22; // 10 code lines
-
-  // Y positions for bracket labels (relative to the absolute canvas)
-  // Editor body starts at EDITOR.y + titleBarHeight (80 + 30 = 110)
-  const editorBodyTop = EDITOR.y + 30;
-  const naturalSection1Top = editorBodyTop + 12;
-  const naturalSection1Bottom = naturalSection1Top + 8 * 22;
-  const codeTop = naturalSection1Bottom;
-  const codeBottom = codeTop + 10 * 22;
-  const naturalSection2Top = codeBottom;
-  const naturalSection2Bottom = naturalSection2Top + 6 * 22;
-
-  // Label X position (right side of the editor window)
-  const labelX = EDITOR.x + EDITOR.width + 20;
-
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.background,
-        overflow: 'hidden',
+        backgroundColor: BG_COLOR,
+        overflow: "hidden",
       }}
     >
-      {/* Editor Window — visible from frame 0 */}
-      <EditorWindow>
-        {/* Natural language section 1 (lines 1-8): frames 30-120 */}
-        <TypedLines
-          lines={NATURAL_LINES_1}
-          startFrame={30}
-          startLineNumber={1}
-          isCode={false}
-        />
+      {/* Editor window with all typed content */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+        <EditorWindow />
+      </Sequence>
 
-        {/* Code block background: frames 120+ */}
-        {frame >= 120 && (
-          <CodeBlockBg
-            startFrame={120}
-            yOffset={codeBlockYStart}
-            height={codeBlockHeight}
-          />
-        )}
-
-        {/* Code lines (lines 9-18): frames 140-240 */}
-        {frame >= 140 && (
-          <TypedLines
-            lines={CODE_LINES}
-            startFrame={140}
-            startLineNumber={9}
-            isCode={true}
-          />
-        )}
-
-        {/* Natural language section 2 (lines 19-24): frames 260-340 */}
-        {frame >= 260 && (
-          <TypedLines
-            lines={NATURAL_LINES_2}
-            startFrame={260}
-            startLineNumber={19}
-            isCode={false}
-          />
-        )}
-      </EditorWindow>
-
-      {/* Section labels with brackets */}
-      {/* "Intent (natural language)" — appears at frame 120 */}
-      {frame >= 120 && (
+      {/* Section label: Intent (natural language) */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
         <BracketLabel
           text="Intent (natural language)"
-          color={COLORS.intentLabel}
-          startFrame={120}
-          yTop={naturalSection1Top}
-          yBottom={naturalSection1Bottom}
-          x={labelX}
-          pulseStart={340}
-          pulseEnd={420}
+          color={LABEL_NL_COLOR}
+          opacity={0.5}
+          yTop={nl1Top}
+          yBottom={nl1Bottom}
+          x={1400}
+          appearFrame={NL1_TYPE_END}
+          drawDuration={20}
+          pulseStart={LABELS_PULSE_START}
+          pulseEnd={LABELS_PULSE_END}
         />
-      )}
+      </Sequence>
 
-      {/* "Critical algorithm (code)" — appears at frame 240 */}
-      {frame >= 240 && (
+      {/* Section label: Critical algorithm (code) */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
         <BracketLabel
           text="Critical algorithm (code)"
-          color={COLORS.codeLabel}
-          startFrame={240}
+          color={LABEL_CODE_COLOR}
+          opacity={0.5}
           yTop={codeTop}
           yBottom={codeBottom}
-          x={labelX}
-          pulseStart={340}
-          pulseEnd={420}
+          x={1400}
+          appearFrame={CODE_TYPE_END}
+          drawDuration={20}
+          pulseStart={LABELS_PULSE_START}
+          pulseEnd={LABELS_PULSE_END}
         />
-      )}
+      </Sequence>
 
-      {/* "Constraints (natural language)" — appears at frame 340 */}
-      {frame >= 340 && (
+      {/* Section label: Constraints (natural language) */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
         <BracketLabel
           text="Constraints (natural language)"
-          color={COLORS.intentLabel}
-          startFrame={340}
-          yTop={naturalSection2Top}
-          yBottom={naturalSection2Bottom}
-          x={labelX}
-          pulseStart={370}
-          pulseEnd={420}
+          color={LABEL_NL_COLOR}
+          opacity={0.5}
+          yTop={nl2Top}
+          yBottom={nl2Bottom}
+          x={1400}
+          appearFrame={NL2_TYPE_END}
+          drawDuration={20}
+          pulseStart={LABELS_PULSE_START}
+          pulseEnd={LABELS_PULSE_END}
         />
-      )}
+      </Sequence>
 
-      {/* Floating annotation — appears at frame 420 */}
-      {frame >= 420 && (
-        <FloatingAnnotation startFrame={420} y={920} />
-      )}
+      {/* Floating annotation */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+        <FloatingAnnotation />
+      </Sequence>
     </AbsoluteFill>
   );
 };

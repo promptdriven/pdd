@@ -1,44 +1,56 @@
 import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { TYPOGRAPHY } from './constants';
 
 interface AnimatedLineProps {
-  /** Frame at which the animation begins */
+  text: string;
   startFrame: number;
-  /** Duration of the fade+slide animation in frames */
   duration: number;
-  /** Upward slide distance in pixels */
   slideDistance: number;
-  /** Y position (center of text) */
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  opacity: number;
   y: number;
-  children: React.ReactNode;
 }
 
 /**
- * Animates children with a combined fade-in and upward slide.
- * Uses easeOut(cubic) easing for a smooth deceleration.
+ * AnimatedLine renders a single text line with fade-in + upward slide animation.
  */
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
+  text,
   startFrame,
   duration,
   slideDistance,
+  fontSize,
+  fontWeight,
+  color,
+  opacity: targetOpacity,
   y,
-  children,
 }) => {
   const frame = useCurrentFrame();
 
-  const progress = interpolate(
+  const fadeOpacity = interpolate(
     frame,
     [startFrame, startFrame + duration],
-    [0, 1],
+    [0, targetOpacity],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
       easing: Easing.out(Easing.cubic),
-    }
+    },
   );
 
-  const opacity = progress;
-  const translateY = interpolate(progress, [0, 1], [slideDistance, 0]);
+  const translateY = interpolate(
+    frame,
+    [startFrame, startFrame + duration],
+    [slideDistance, 0],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.cubic),
+    },
+  );
 
   return (
     <div
@@ -46,14 +58,24 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
         position: 'absolute',
         top: y,
         left: 0,
-        right: 0,
+        width: 1920,
         display: 'flex',
         justifyContent: 'center',
-        opacity,
+        opacity: fadeOpacity,
         transform: `translateY(${translateY}px)`,
       }}
     >
-      {children}
+      <span
+        style={{
+          fontFamily: TYPOGRAPHY.FONT_FAMILY,
+          fontSize,
+          fontWeight,
+          color,
+          lineHeight: 1.4,
+        }}
+      >
+        {text}
+      </span>
     </div>
   );
 };

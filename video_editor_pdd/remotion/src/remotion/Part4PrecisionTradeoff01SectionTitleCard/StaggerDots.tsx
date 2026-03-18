@@ -1,108 +1,134 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import { Easing, interpolate, useCurrentFrame } from 'remotion';
 import {
-  DOT_MATRIX,
-  POSITIONS,
   COLORS,
-  GHOST_LABEL,
+  DOT_GRID,
+  OPACITIES,
+  POSITIONS,
   TIMING,
+  TYPOGRAPHY,
 } from './constants';
 
-export const StaggerDots: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
+export const StaggerDots: React.FC = () => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const localFrame = frame - TIMING.ghostStart;
 
-  const { ROWS, COLS, DOT_SIZE, SPACING, OPACITY, GLOW_BLUR, GLOW_OPACITY } =
-    DOT_MATRIX;
-  const { x: cx, y: cy } = POSITIONS.DOT_GRID;
+  if (localFrame < 0) return null;
 
-  const totalWidth = (COLS - 1) * SPACING;
-  const totalHeight = (ROWS - 1) * SPACING;
-  const startX = cx - totalWidth / 2;
-  const startY = cy - totalHeight / 2;
+  const { rows, cols, dotSize, spacing } = DOT_GRID;
+  const { x: cx, y: cy } = POSITIONS.dotGrid;
+
+  const gridWidth = (cols - 1) * spacing;
+  const gridHeight = (rows - 1) * spacing;
+  const startX = cx - gridWidth / 2;
+  const startY = cy - gridHeight / 2;
+
+  const totalDots = rows * cols;
+
+  // Pulse effect after hold starts
+  const pulseLocalFrame = frame - TIMING.holdStart;
+  const pulseMultiplier =
+    pulseLocalFrame >= 0
+      ? interpolate(
+          pulseLocalFrame % TIMING.pulseCycleFrames,
+          [0, TIMING.pulseCycleFrames / 2, TIMING.pulseCycleFrames],
+          [1, 1.6, 1],
+          { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
+        )
+      : 1;
 
   const dots: React.ReactNode[] = [];
-  let dotIndex = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const index = r * cols + c;
+      // Each dot appears 1 frame after the previous
+      const dotOpacity = interpolate(
+        localFrame,
+        [index, index + 1],
+        [0, OPACITIES.ghostDots * pulseMultiplier],
+        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+      );
 
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      const dotAppearFrame = dotIndex * TIMING.GHOST_DOTS_STAGGER;
-      const dotOpacity =
-        relFrame >= dotAppearFrame
-          ? interpolate(relFrame - dotAppearFrame, [0, 8], [0, 1], {
-              extrapolateRight: 'clamp',
-              easing: Easing.out(Easing.quad),
-            })
-          : 0;
-
-      // Pulse effect after frame 90
-      const pulsePhase =
-        frame >= TIMING.HOLD_START
-          ? interpolate(
-              (frame - TIMING.HOLD_START) % TIMING.PULSE_CYCLE,
-              [0, TIMING.PULSE_CYCLE / 2, TIMING.PULSE_CYCLE],
-              [1, 1.5, 1],
-              { easing: Easing.inOut(Easing.sin) }
-            )
-          : 1;
-
-      const dx = startX + c * SPACING;
-      const dy = startY + r * SPACING;
+      if (dotOpacity <= 0) continue;
 
       dots.push(
         <circle
           key={`dot-${r}-${c}`}
-          cx={dx}
-          cy={dy}
-          r={(DOT_SIZE / 2) * pulsePhase}
-          fill={COLORS.DOT_GRID}
-          opacity={OPACITY * dotOpacity}
+          cx={startX + c * spacing}
+          cy={startY + r * spacing}
+          r={dotSize / 2}
+          fill={COLORS.dotGrid}
+          opacity={dotOpacity}
         />
       );
-
-      dotIndex++;
     }
   }
 
-  const overallOpacity = relFrame < 0 ? 0 : 1;
+  // Glow filter
+  const glowOpacity = interpolate(
+    localFrame,
+    [0, totalDots],
+    [0, OPACITIES.ghostGlow],
+    { extrapolateRight: 'clamp' }
+  );
+
+  // Label opacity
+  const labelOpacity = interpolate(
+    localFrame,
+    [totalDots - 10, totalDots],
+    [0, OPACITIES.ghostLabel],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
 
   return (
-    <g opacity={overallOpacity}>
+    <svg
+      width={1920}
+      height={1080}
+      style={{ position: 'absolute', top: 0, left: 0 }}
+    >
       <defs>
-        <filter id="dot-glow">
-          <feGaussianBlur stdDeviation={GLOW_BLUR} result="blur" />
+        <filter id="dotGlow">
+          <feGaussianBlur stdDeviation={TIMING.glowBlur} result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
       </defs>
-      <g filter="url(#dot-glow)" opacity={1}>
+      <g filter="url(#dotGlow)" opacity={glowOpacity > 0 ? 1 : 1}>
         {dots}
       </g>
-      {/* Ghost label */}
+      {/* Glow layer */}
+      <g opacity={glowOpacity}>
+        {dots.map((_, i) => {
+          const r = Math.floor(i / cols);
+          const c = i % cols;
+          return (
+            <circle
+              key={`glow-${r}-${c}`}
+              cx={startX + c * spacing}
+              cy={startY + r * spacing}
+              r={dotSize}
+              fill={COLORS.dotGrid}
+              opacity={0.3}
+              filter="url(#dotGlow)"
+            />
+          );
+        })}
+      </g>
+      {/* Label */}
       <text
         x={cx}
-        y={startY + totalHeight + 24}
+        y={cy + gridHeight / 2 + 24}
         textAnchor="middle"
+        fill={COLORS.dotGrid}
+        opacity={labelOpacity}
         fontFamily="Inter, sans-serif"
-        fontSize={GHOST_LABEL.FONT_SIZE}
+        fontSize={TYPOGRAPHY.ghostLabel.size}
         fontWeight={600}
-        fill={COLORS.DOT_GRID}
-        opacity={
-          GHOST_LABEL.OPACITY *
-          (relFrame > 0
-            ? interpolate(relFrame, [0, 20], [0, 1], {
-                extrapolateRight: 'clamp',
-              })
-            : 0)
-        }
-        letterSpacing={2}
       >
-        {DOT_MATRIX.LABEL}
+        EVERY POINT
       </text>
-    </g>
+    </svg>
   );
 };

@@ -1,97 +1,57 @@
-// Colors
-export const COLORS = {
-	background: '#0F172A',
-	initialDev: '#4A90D9',
-	maintenance: '#D9944A',
-	segmentBorder: '#1E293B',
-	centerText: '#64748B',
-	calloutBg: '#1E293B',
-	calloutBorder: '#334155',
-	calloutMain: '#E2E8F0',
-	calloutSub: '#94A3B8',
-	calloutSource: '#64748B',
-} as const;
+// ── Colors ──────────────────────────────────────────────────────────
+export const BG_COLOR = "#0F172A";
+export const BLUE = "#4A90D9";
+export const AMBER = "#D9944A";
+export const BORDER_COLOR = "#1E293B";
+export const CARD_BG = "#1E293B";
+export const CARD_BORDER = "#334155";
+export const TEXT_PRIMARY = "#E2E8F0";
+export const TEXT_SECONDARY = "#94A3B8";
+export const TEXT_MUTED = "#64748B";
 
-// Chart dimensions
-export const CHART = {
-	centerX: 960,
-	centerY: 500,
-	outerRadius: 220,
-	innerRadius: 120,
-} as const;
+// ── Donut Dimensions ────────────────────────────────────────────────
+export const CENTER_X = 960;
+export const CENTER_Y = 500;
+export const OUTER_RADIUS = 220;
+export const INNER_RADIUS = 120;
+export const DONUT_WIDTH = OUTER_RADIUS - INNER_RADIUS; // 100px
 
-// Segment angles (degrees, starting from 12 o'clock / -90deg offset)
-// Using midpoint: Initial Dev = 15% (54deg), Maintenance = 85% (306deg)
-export const SEGMENTS = {
-	initialDev: {
-		startAngle: 0,
-		endAngle: 54,
-		label: 'Initial Development',
-		value: '10-20%',
-		color: COLORS.initialDev,
-		valueSize: 20,
-	},
-	maintenance: {
-		startAngle: 54,
-		endAngle: 360,
-		label: 'Maintenance',
-		value: '80-90%',
-		color: COLORS.maintenance,
-		valueSize: 28,
-	},
-} as const;
+// ── Segments ────────────────────────────────────────────────────────
+// Using 15% as the midpoint of 10-20%
+export const DEV_ANGLE_DEG = 54; // 15% of 360
+export const MAINT_ANGLE_DEG = 306; // 85% of 360
 
-// Callout card positions and data
-export const CALLOUTS = {
-	mckinsey: {
-		x: 1400,
-		y: 380,
-		width: 320,
-		height: 100,
-		mainText: '+40% maintenance cost',
-		subText: 'with high technical debt',
-		source: 'McKinsey Digital, 2024',
-		iconType: 'bar_chart' as const,
-	},
-	stripe: {
-		x: 1400,
-		y: 520,
-		width: 320,
-		height: 100,
-		mainText: '33% of work week',
-		subText: 'spent on technical debt',
-		source: 'Stripe Developer Coefficient, 2018',
-		iconType: 'clock' as const,
-	},
-} as const;
+// ── Canvas ──────────────────────────────────────────────────────────
+export const WIDTH = 1920;
+export const HEIGHT = 1080;
 
-// Animation frame timings
-export const TIMING = {
-	// Phase 1: Ring outline + center text fade in
-	ringFadeStart: 0,
-	ringFadeDuration: 20,
+// ── Frame Timings ───────────────────────────────────────────────────
+export const RING_FADE_START = 0;
+export const RING_FADE_DURATION = 20;
 
-	// Phase 2: Blue segment draws
-	blueSegmentStart: 30,
-	blueSegmentDuration: 30,
+export const BLUE_SEG_START = 30;
+export const BLUE_SEG_DRAW_DURATION = 30;
 
-	// Phase 3: Amber segment draws
-	amberSegmentStart: 60,
-	amberSegmentDuration: 90,
+export const AMBER_SEG_START = 60;
+export const AMBER_SEG_DRAW_DURATION = 90;
 
-	// Phase 4: Value emphasis
-	valueEmphasisDelay: 15, // after segment finishes
-	valueEmphasisDuration: 15,
+export const HOLD_START = 150;
 
-	// Phase 5: McKinsey callout
-	mckinseyStart: 210,
-	calloutSlideDuration: 25,
-	calloutPulseDelay: 25,
-	calloutPulseDuration: 20,
+export const MCKINSEY_SLIDE_START = 210;
+export const MCKINSEY_SLIDE_DURATION = 25;
+export const MCKINSEY_PULSE_START = 235;
+export const MCKINSEY_PULSE_DURATION = 20;
 
-	// Phase 6: Stripe callout
-	stripeStart: 270,
+export const STRIPE_SLIDE_START = 270;
+export const STRIPE_SLIDE_DURATION = 25;
+export const STRIPE_PULSE_START = 295;
+export const STRIPE_PULSE_DURATION = 20;
 
-	// Total
-	totalFrames: 420,
-} as const;
+export const TOTAL_FRAMES = 420;
+
+// ── Callout Positions ───────────────────────────────────────────────
+export const CALLOUT_X = 1400;
+export const MCKINSEY_Y = 380;
+export const STRIPE_Y = 520;
+export const CALLOUT_WIDTH = 320;
+export const CALLOUT_HEIGHT = 100;

@@ -1,57 +1,61 @@
-// constants.ts — PDD Triangle colors, dimensions, and node data
+// constants.ts — PDD Triangle visual constants
 
 export const CANVAS = {
-  WIDTH: 1920,
-  HEIGHT: 1080,
-  BG_COLOR: '#0A1225',
-  GLOW_COLOR: '#1E293B',
-  GLOW_OPACITY: 0.04,
-  GLOW_RADIUS: 600,
-  CENTER: { x: 960, y: 520 },
+  width: 1920,
+  height: 1080,
+  background: '#0A1225',
+} as const;
+
+export const GLOW = {
+  centerX: 960,
+  centerY: 520,
+  radius: 600,
+  color: '#1E293B',
+  opacity: 0.04,
 } as const;
 
 export const TRIANGLE = {
-  SIDE_LENGTH: 500,
-  EDGE_COLOR: '#475569',
-  EDGE_OPACITY: 0.6,
-  EDGE_WIDTH: 2,
-  EDGE_GLOW_BLUR: 4,
-  EDGE_GLOW_OPACITY: 0.06,
+  sideLength: 500,
+  edgeColor: '#475569',
+  edgeOpacity: 0.6,
+  edgeWidth: 2,
+  glowBlur: 4,
+  glowOpacity: 0.06,
 } as const;
 
 export const NODES = {
-  PROMPT: {
+  prompt: {
     id: 'prompt',
     label: 'PROMPT',
     descriptor: 'Encodes intent',
-    color: '#4A90D9',
     cx: 960,
     cy: 280,
+    color: '#4A90D9',
     labelY: 248,
     descriptorY: 232,
-    labelAnchor: 'above' as const,
+    labelBelow: false,
   },
-  TESTS: {
+  tests: {
     id: 'tests',
     label: 'TESTS',
     descriptor: 'Preserve behavior',
-    color: '#D9944A',
     cx: 710,
     cy: 713,
+    color: '#D9944A',
     labelY: 748,
     descriptorY: 768,
-    labelAnchor: 'below' as const,
+    labelBelow: true,
   },
-  GROUNDING: {
+  grounding: {
     id: 'grounding',
     label: 'GROUNDING',
     descriptor: 'Maintains style',
-    color: '#5AAA6E',
     cx: 1210,
     cy: 713,
+    color: '#5AAA6E',
     labelY: 748,
     descriptorY: 768,
-    labelAnchor: 'below' as const,
+    labelBelow: true,
   },
 } as const;
 
@@ -60,57 +64,34 @@ export const NODE_PULSE_MIN = 20;
 export const NODE_PULSE_MAX = 22;
 export const NODE_PULSE_PERIOD = 60;
 
-// Animation timing (frames)
+export const EDGES = [
+  { from: [960, 280] as const, to: [710, 713] as const, startFrame: 30 },
+  { from: [710, 713] as const, to: [1210, 713] as const, startFrame: 60 },
+  { from: [1210, 713] as const, to: [960, 280] as const, startFrame: 90 },
+] as const;
+
+// Animation timing
 export const TIMING = {
-  // Phase 1: Background fade-in
-  BG_START: 0,
-  BG_END: 30,
-
-  // Phase 2: PROMPT node + first edge
-  PROMPT_NODE_START: 30,
-  EDGE_1_START: 30,
-
-  // Phase 3: TESTS node + second edge
-  TESTS_NODE_START: 60,
-  EDGE_2_START: 60,
-
-  // Phase 4: GROUNDING node + third edge
-  GROUNDING_NODE_START: 90,
-  EDGE_3_START: 90,
-
-  // Phase 5: Descriptors
-  DESCRIPTOR_PROMPT_START: 120,
-  DESCRIPTOR_TESTS_START: 135,
-  DESCRIPTOR_GROUNDING_START: 150,
-
-  // Phase 6: Code lines
-  CODE_LINES_START: 170,
-
-  // Phase 7: Pulse hold
-  PULSE_START: 230,
-
-  // Durations
-  NODE_SCALE_DURATION: 15,
-  EDGE_DRAW_DURATION: 25,
-  LABEL_FADE_DURATION: 12,
-  DESCRIPTOR_FADE_DURATION: 15,
-  CODE_FADE_DURATION: 8,
-  CODE_STAGGER: 4,
-
-  TOTAL_FRAMES: 300,
+  bgFadeIn: { start: 0, duration: 30 },
+  promptNode: { start: 30, circleDuration: 15, labelDuration: 12 },
+  testsNode: { start: 60, circleDuration: 15, labelDuration: 12 },
+  groundingNode: { start: 90, circleDuration: 15, labelDuration: 12 },
+  descriptorPrompt: { start: 120, duration: 15 },
+  descriptorTests: { start: 135, duration: 15 },
+  descriptorGrounding: { start: 150, duration: 15 },
+  codeLines: { start: 170, fadeDuration: 8, stagger: 4 },
+  pulseStart: 230,
+  edgeDrawDuration: 25,
 } as const;
 
-// Code lines configuration
-export const CODE_LINES = {
-  COUNT: 9,
-  COLOR: '#94A3B8',
-  OPACITY: 0.15,
-  MIN_WIDTH: 60,
-  MAX_WIDTH: 180,
-  HEIGHT: 3,
-  GAP: 10,
+// Code lines config
+export const CODE_LINES_CONFIG = {
+  centerX: 960,
+  centerY: 520,
+  count: 9,
+  color: '#94A3B8',
+  opacity: 0.15,
+  lineHeight: 8,
+  gap: 4,
+  widths: [140, 100, 170, 80, 150, 120, 60, 180, 110],
 } as const;
-
-// Pre-computed code line widths (deterministic for consistent renders)
-export const CODE_LINE_WIDTHS = [120, 160, 80, 140, 100, 175, 65, 130, 95];
-export const CODE_LINE_OFFSETS = [-2, 1, -1, 3, 0, -3, 2, -1, 1]; // slight x offsets

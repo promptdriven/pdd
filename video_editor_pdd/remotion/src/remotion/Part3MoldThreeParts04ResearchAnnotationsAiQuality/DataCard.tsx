@@ -1,6 +1,6 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, spring, Easing } from 'remotion';
-import { COLORS, FONTS } from './constants';
+import { COLORS, FONT } from './constants';
 
 interface SubStatItem {
   text: string;
@@ -8,132 +8,149 @@ interface SubStatItem {
 }
 
 interface DataCardProps {
-  /** Frame at which this card starts animating in */
-  startFrame: number;
-  /** Position [x, y] */
-  position: [number, number];
-  /** Card dimensions [width, height] */
-  size: [number, number];
-  /** Border accent color */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
   borderColor: string;
-  /** Category header text */
-  header: string;
-  /** Main stat text */
+  headerText: string;
   mainStat: string;
-  /** Main stat color */
-  mainStatColor: string;
-  /** Sub-stats to stagger in */
+  mainColor: string;
   subStats: SubStatItem[];
-  /** Source citation text */
-  source: string;
-  /** FPS for spring calculations */
-  fps?: number;
+  sourceText: string;
+  /** Frame at which this card starts animating (relative to component start) */
+  startFrame: number;
+  fps: number;
 }
 
 export const DataCard: React.FC<DataCardProps> = ({
-  startFrame,
-  position,
-  size,
+  x,
+  y,
+  width,
+  height,
   borderColor,
-  header,
+  headerText,
   mainStat,
-  mainStatColor,
+  mainColor,
   subStats,
-  source,
-  fps = 30,
+  sourceText,
+  startFrame,
+  fps,
 }) => {
   const frame = useCurrentFrame();
   const localFrame = frame - startFrame;
 
   if (localFrame < 0) return null;
 
-  // Border draw: easeOut(cubic) over 20 frames
+  // Border draw progress (0→1 over 20 frames)
   const borderProgress = interpolate(localFrame, [0, 20], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.cubic),
   });
 
-  // Background fade: easeOut(quad) over 15 frames, starts at frame 5
+  // Background fade (starts at frame 5, over 15 frames)
   const bgOpacity = interpolate(localFrame, [5, 20], [0, 0.85], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  // Header types in
-  const headerOpacity = interpolate(localFrame, [10, 22], [0, 1], {
+  // Header type in (starts at frame 8)
+  const headerOpacity = interpolate(localFrame, [8, 23], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  // Main stat: spring scale from 0.8
-  const statSpring = spring({
-    frame: Math.max(0, localFrame - 20),
+  // Main stat spring scale (starts at frame 20)
+  const mainStatLocalFrame = Math.max(0, localFrame - 20);
+  const mainStatScale = spring({
+    frame: mainStatLocalFrame,
     fps,
     config: { stiffness: 200, damping: 12 },
+    from: 0.8,
+    to: 1,
   });
-  const statScale = interpolate(statSpring, [0, 1], [0.8, 1]);
-  const statOpacity = interpolate(localFrame, [20, 30], [0, 1], {
+  const mainStatOpacity = interpolate(localFrame, [20, 32], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
-  // Source fade
-  const sourceOpacity = interpolate(localFrame, [35, 45], [0, 0.5], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
+  // Sub-stats stagger (15 frames apart, each takes 12 frames)
+  const subStatOpacities = subStats.map((_, i) => {
+    const subStart = 30 + i * 15;
+    return interpolate(localFrame, [subStart, subStart + 12], [0, 1], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    });
+  });
+  const subStatTranslateYs = subStats.map((_, i) => {
+    const subStart = 30 + i * 15;
+    return interpolate(localFrame, [subStart, subStart + 12], [8, 0], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    });
   });
 
-  // Border perimeter for dash animation
-  const perimeter = 2 * (size[0] + size[1]);
+  // Source text
+  const sourceOpacity = interpolate(
+    localFrame,
+    [30 + subStats.length * 15, 30 + subStats.length * 15 + 12],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
+
+  // Calculate border dash for draw effect
+  const perimeter = 2 * (width + height);
   const dashOffset = perimeter * (1 - borderProgress);
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: position[0],
-        top: position[1],
-        width: size[0],
-        height: size[1],
+        left: x,
+        top: y,
+        width,
+        height,
       }}
     >
-      {/* Card background + border via SVG */}
+      {/* Card border (animated draw) */}
       <svg
-        width={size[0]}
-        height={size[1]}
+        width={width}
+        height={height}
         style={{ position: 'absolute', top: 0, left: 0 }}
       >
-        {/* Background fill */}
         <rect
-          x={1}
-          y={1}
-          width={size[0] - 2}
-          height={size[1] - 2}
+          x={0.5}
+          y={0.5}
+          width={width - 1}
+          height={height - 1}
           rx={8}
-          ry={8}
-          fill={COLORS.cardBg}
-          opacity={bgOpacity}
-        />
-        {/* Animated border */}
-        <rect
-          x={1}
-          y={1}
-          width={size[0] - 2}
-          height={size[1] - 2}
-          rx={8}
-          ry={8}
           fill="none"
           stroke={borderColor}
           strokeWidth={1}
-          opacity={0.3 * borderProgress}
+          strokeOpacity={0.3}
           strokeDasharray={perimeter}
           strokeDashoffset={dashOffset}
         />
       </svg>
+
+      {/* Card background */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width,
+          height,
+          borderRadius: 8,
+          backgroundColor: COLORS.cardBg,
+          opacity: bgOpacity,
+        }}
+      />
 
       {/* Card content */}
       <div
@@ -141,10 +158,9 @@ export const DataCard: React.FC<DataCardProps> = ({
           position: 'absolute',
           top: 0,
           left: 0,
-          width: size[0],
-          height: size[1],
+          width,
+          height,
           padding: '20px 24px',
-          boxSizing: 'border-box',
           display: 'flex',
           flexDirection: 'column',
           gap: 6,
@@ -153,26 +169,26 @@ export const DataCard: React.FC<DataCardProps> = ({
         {/* Header */}
         <div
           style={{
-            fontFamily: FONTS.family,
+            fontFamily: FONT.family,
             fontSize: 10,
             fontWeight: 600,
-            color: COLORS.label,
+            color: COLORS.muted,
             opacity: headerOpacity * 0.5,
             letterSpacing: 2,
           }}
         >
-          {header}
+          {headerText}
         </div>
 
         {/* Main stat */}
         <div
           style={{
-            fontFamily: FONTS.family,
+            fontFamily: FONT.family,
             fontSize: 28,
             fontWeight: 700,
-            color: mainStatColor,
-            opacity: statOpacity,
-            transform: `scale(${statScale})`,
+            color: mainColor,
+            opacity: mainStatOpacity,
+            transform: `scale(${mainStatScale})`,
             transformOrigin: 'left center',
             marginTop: 4,
             marginBottom: 4,
@@ -181,49 +197,33 @@ export const DataCard: React.FC<DataCardProps> = ({
           {mainStat}
         </div>
 
-        {/* Sub-stats, staggered */}
-        {subStats.map((sub, i) => {
-          const subDelay = 40 + i * 15;
-          const subOpacity = interpolate(localFrame, [subDelay, subDelay + 12], [0, 0.7], {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.out(Easing.quad),
-          });
-          const subTranslate = interpolate(localFrame, [subDelay, subDelay + 12], [8, 0], {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.out(Easing.quad),
-          });
-
-          return (
-            <div
-              key={i}
-              style={{
-                fontFamily: FONTS.family,
-                fontSize: 14,
-                fontWeight: 400,
-                color: sub.color,
-                opacity: subOpacity,
-                transform: `translateY(${subTranslate}px)`,
-              }}
-            >
-              {sub.text}
-            </div>
-          );
-        })}
+        {/* Sub-stats */}
+        {subStats.map((stat, i) => (
+          <div
+            key={i}
+            style={{
+              fontFamily: FONT.family,
+              fontSize: 14,
+              color: stat.color,
+              opacity: subStatOpacities[i] * 0.7,
+              transform: `translateY(${subStatTranslateYs[i]}px)`,
+            }}
+          >
+            {stat.text}
+          </div>
+        ))}
 
         {/* Source */}
         <div
           style={{
-            fontFamily: FONTS.family,
+            fontFamily: FONT.family,
             fontSize: 11,
-            fontWeight: 400,
-            color: COLORS.label,
-            opacity: sourceOpacity,
+            color: COLORS.muted,
+            opacity: sourceOpacity * 0.5,
             marginTop: 'auto',
           }}
         >
-          {source}
+          {sourceText}
         </div>
       </div>
     </div>

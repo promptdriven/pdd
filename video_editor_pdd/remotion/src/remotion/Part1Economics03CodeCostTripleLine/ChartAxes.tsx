@@ -1,177 +1,162 @@
 import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
-  WIDTH,
-  HEIGHT,
-  CHART_X,
-  CHART_Y,
   CHART_W,
   CHART_H,
+  MARGIN,
+  AXIS_COLOR,
+  LABEL_COLOR,
+  GRID_COLOR,
   X_MIN,
   X_MAX,
+  Y_MIN,
   Y_MAX,
-  AXIS_COLOR,
-  AXIS_LABEL_COLOR,
-  GRID_COLOR,
-  FONT_FAMILY,
+  Y_MAJOR,
   MORPH_END,
-  MILESTONE_START,
-  MILESTONE_END,
-  MILESTONES,
-  dataToPixelX,
-  dataToPixelY,
+  xToPixel,
+  yToPixel,
 } from "./constants";
-
-const Y_MAJOR_TICKS = [0, 5, 10, 15, 20];
-const X_MAJOR_YEARS = [2015, 2017, 2019, 2021, 2023, 2025];
-const X_MINOR_YEARS = [2016, 2018, 2020, 2022, 2024];
 
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Axes fade in during morph phase
-  const axesOpacity = interpolate(frame, [0, MORPH_END], [0, 1], {
+  // Morph-in opacity for the axis system (visible from frame 0 but labels transition)
+  const axisOpacity = interpolate(frame, [0, MORPH_END], [0.5, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: Easing.inOut(Easing.cubic),
+    easing: Easing.inOut(Easing.ease),
   });
 
-  // Grid fades in slightly after axes
-  const gridOpacity = interpolate(frame, [0, MORPH_END], [0, 0.08], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  // X-axis ticks: every year (minor), label every 2 years (major)
+  const xTicks: number[] = [];
+  for (let yr = X_MIN; yr <= X_MAX; yr++) {
+    xTicks.push(yr);
+  }
 
-  // Milestone markers fade in
-  const milestoneOpacity = interpolate(
-    frame,
-    [MILESTONE_START, MILESTONE_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // Y-axis major ticks
+  const yTicks: number[] = [];
+  for (let val = Y_MIN; val <= Y_MAX; val += Y_MAJOR) {
+    yTicks.push(val);
+  }
+
+  // Y-axis minor grid (every 5)
+  const yGridLines: number[] = [];
+  for (let val = Y_MIN + Y_MAJOR; val <= Y_MAX; val += Y_MAJOR) {
+    yGridLines.push(val);
+  }
 
   return (
-    <AbsoluteFill>
+    <div
+      style={{
+        position: "absolute",
+        left: MARGIN.left,
+        top: MARGIN.top,
+        width: CHART_W,
+        height: CHART_H,
+        opacity: axisOpacity,
+      }}
+    >
       <svg
-        width={WIDTH}
-        height={HEIGHT}
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        style={{ position: "absolute", top: 0, left: 0 }}
+        width={CHART_W}
+        height={CHART_H}
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        style={{ overflow: "visible" }}
       >
         {/* Horizontal grid lines (dashed) */}
-        {Y_MAJOR_TICKS.filter((v) => v > 0).map((val) => {
-          const y = dataToPixelY(val);
+        {yGridLines.map((val) => {
+          const py = yToPixel(val);
           return (
             <line
-              key={`grid-h-${val}`}
-              x1={CHART_X}
-              y1={y}
-              x2={CHART_X + CHART_W}
-              y2={y}
+              key={`grid-${val}`}
+              x1={0}
+              y1={py}
+              x2={CHART_W}
+              y2={py}
               stroke={GRID_COLOR}
+              strokeOpacity={0.08}
               strokeWidth={1}
               strokeDasharray="6 4"
-              opacity={gridOpacity}
             />
           );
         })}
 
-        {/* Y-axis line */}
-        <line
-          x1={CHART_X}
-          y1={CHART_Y}
-          x2={CHART_X}
-          y2={CHART_Y + CHART_H}
-          stroke={AXIS_COLOR}
-          strokeWidth={1}
-          opacity={axesOpacity * 0.25}
-        />
-
         {/* X-axis line */}
         <line
-          x1={CHART_X}
-          y1={CHART_Y + CHART_H}
-          x2={CHART_X + CHART_W}
-          y2={CHART_Y + CHART_H}
+          x1={0}
+          y1={CHART_H}
+          x2={CHART_W}
+          y2={CHART_H}
           stroke={AXIS_COLOR}
+          strokeOpacity={0.25}
           strokeWidth={1}
-          opacity={axesOpacity * 0.25}
         />
 
-        {/* X-axis major tick marks and labels */}
-        {X_MAJOR_YEARS.map((year) => {
-          const x = dataToPixelX(year);
+        {/* Y-axis line */}
+        <line
+          x1={0}
+          y1={0}
+          x2={0}
+          y2={CHART_H}
+          stroke={AXIS_COLOR}
+          strokeOpacity={0.25}
+          strokeWidth={1}
+        />
+
+        {/* X-axis ticks and labels */}
+        {xTicks.map((yr) => {
+          const px = xToPixel(yr);
+          const isMajor = (yr - X_MIN) % 2 === 0;
+          const tickLen = isMajor ? 8 : 4;
           return (
-            <g key={`xtick-major-${year}`}>
+            <g key={`xtick-${yr}`}>
               <line
-                x1={x}
-                y1={CHART_Y + CHART_H}
-                x2={x}
-                y2={CHART_Y + CHART_H + 8}
-                stroke={AXIS_LABEL_COLOR}
+                x1={px}
+                y1={CHART_H}
+                x2={px}
+                y2={CHART_H + tickLen}
+                stroke={AXIS_COLOR}
+                strokeOpacity={0.25}
                 strokeWidth={1}
-                opacity={axesOpacity * 0.25}
               />
-              <text
-                x={x}
-                y={CHART_Y + CHART_H + 28}
-                fill={AXIS_LABEL_COLOR}
-                fontSize={10}
-                fontFamily={FONT_FAMILY}
-                fontWeight={400}
-                textAnchor="middle"
-                opacity={axesOpacity * 0.25}
-              >
-                {year}
-              </text>
+              {isMajor && (
+                <text
+                  x={px}
+                  y={CHART_H + 28}
+                  textAnchor="middle"
+                  fill={LABEL_COLOR}
+                  fillOpacity={0.25}
+                  fontFamily="Inter, sans-serif"
+                  fontSize={10}
+                >
+                  {yr}
+                </text>
+              )}
             </g>
           );
         })}
 
-        {/* X-axis minor tick marks */}
-        {X_MINOR_YEARS.map((year) => {
-          const x = dataToPixelX(year);
-          return (
-            <line
-              key={`xtick-minor-${year}`}
-              x1={x}
-              y1={CHART_Y + CHART_H}
-              x2={x}
-              y2={CHART_Y + CHART_H + 5}
-              stroke={AXIS_LABEL_COLOR}
-              strokeWidth={1}
-              opacity={axesOpacity * 0.15}
-            />
-          );
-        })}
-
-        {/* Y-axis tick marks and labels */}
-        {Y_MAJOR_TICKS.map((val) => {
-          const y = dataToPixelY(val);
+        {/* Y-axis ticks and labels */}
+        {yTicks.map((val) => {
+          const py = yToPixel(val);
           return (
             <g key={`ytick-${val}`}>
               <line
-                x1={CHART_X - 6}
-                y1={y}
-                x2={CHART_X}
-                y2={y}
-                stroke={AXIS_LABEL_COLOR}
+                x1={-8}
+                y1={py}
+                x2={0}
+                y2={py}
+                stroke={AXIS_COLOR}
+                strokeOpacity={0.25}
                 strokeWidth={1}
-                opacity={axesOpacity * 0.25}
               />
               <text
-                x={CHART_X - 14}
-                y={y + 4}
-                fill={AXIS_LABEL_COLOR}
-                fontSize={10}
-                fontFamily={FONT_FAMILY}
-                fontWeight={400}
+                x={-16}
+                y={py + 4}
                 textAnchor="end"
-                opacity={axesOpacity * 0.25}
+                fill={LABEL_COLOR}
+                fillOpacity={0.25}
+                fontFamily="Inter, sans-serif"
+                fontSize={10}
               >
                 {val}
               </text>
@@ -179,70 +164,33 @@ export const ChartAxes: React.FC = () => {
           );
         })}
 
-        {/* X-axis title */}
+        {/* X-axis label */}
         <text
-          x={CHART_X + CHART_W / 2}
-          y={CHART_Y + CHART_H + 56}
-          fill={AXIS_LABEL_COLOR}
-          fontSize={12}
-          fontFamily={FONT_FAMILY}
-          fontWeight={400}
+          x={CHART_W / 2}
+          y={CHART_H + 60}
           textAnchor="middle"
-          opacity={axesOpacity * 0.3}
+          fill={LABEL_COLOR}
+          fillOpacity={0.3}
+          fontFamily="Inter, sans-serif"
+          fontSize={12}
         >
           Year
         </text>
 
-        {/* Y-axis title (rotated) */}
+        {/* Y-axis label (rotated) */}
         <text
-          x={CHART_X - 60}
-          y={CHART_Y + CHART_H / 2}
-          fill={AXIS_LABEL_COLOR}
-          fontSize={12}
-          fontFamily={FONT_FAMILY}
-          fontWeight={400}
+          x={-CHART_H / 2}
+          y={-60}
           textAnchor="middle"
-          transform={`rotate(-90, ${CHART_X - 60}, ${CHART_Y + CHART_H / 2})`}
-          opacity={axesOpacity * 0.3}
+          fill={LABEL_COLOR}
+          fillOpacity={0.3}
+          fontFamily="Inter, sans-serif"
+          fontSize={12}
+          transform="rotate(-90)"
         >
           Cost (Developer Hours)
         </text>
-
-        {/* AI milestone vertical markers */}
-        {MILESTONES.map((ms) => {
-          const x = dataToPixelX(ms.year);
-          return (
-            <g key={`ms-${ms.year}`} opacity={milestoneOpacity * 0.12}>
-              {/* Vertical dashed line */}
-              <line
-                x1={x}
-                y1={CHART_Y}
-                x2={x}
-                y2={CHART_Y + CHART_H}
-                stroke={AXIS_LABEL_COLOR}
-                strokeWidth={1}
-                strokeDasharray="4 3"
-              />
-              {/* Rotated label at top */}
-              <text
-                x={x}
-                y={CHART_Y - 8}
-                fill={AXIS_LABEL_COLOR}
-                fontSize={9}
-                fontFamily={FONT_FAMILY}
-                fontWeight={400}
-                textAnchor="end"
-                transform={`rotate(-45, ${x}, ${CHART_Y - 8})`}
-                opacity={milestoneOpacity * 0.3 / 0.12}
-              >
-                {ms.label}
-              </text>
-            </g>
-          );
-        })}
       </svg>
-    </AbsoluteFill>
+    </div>
   );
 };
-
-export default ChartAxes;

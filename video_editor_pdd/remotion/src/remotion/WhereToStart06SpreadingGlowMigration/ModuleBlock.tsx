@@ -1,151 +1,107 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
-  MODULE_W,
-  MODULE_H,
+  BLOCK_W,
+  BLOCK_H,
   UNCONVERTED,
   CONVERTING,
   CONVERTED,
-  FLASH_IN_FRAMES,
-  FLASH_HOLD_FRAMES,
-  FLASH_SETTLE_FRAMES,
-  PULSE_START_FRAME,
-  PULSE_PERIOD,
-  PULSE_AMPLITUDE,
+  BLUE_ACCENT,
+  LABEL_COLOR,
 } from './constants';
 
+export type ModuleState = 'unconverted' | 'converting' | 'converted';
+
 interface ModuleBlockProps {
-  id: number;
-  name: string;
   x: number;
   y: number;
-  conversionFrame: number | null; // null = never converts
-  staggerOffset: number;          // additional delay within a wave
-  isPreConverted: boolean;        // already converted at frame 0
+  name: string;
+  state: ModuleState;
+  /** 0-1 flash intensity, used during converting state */
+  flashIntensity: number;
+  /** extra ambient glow multiplier for pulse effect */
+  pulseOffset: number;
 }
 
-export const ModuleBlock: React.FC<ModuleBlockProps> = ({
-  name,
+const ModuleBlock: React.FC<ModuleBlockProps> = ({
   x,
   y,
-  conversionFrame,
-  staggerOffset,
-  isPreConverted,
+  name,
+  state,
+  flashIntensity,
+  pulseOffset,
 }) => {
-  const frame = useCurrentFrame();
-
-  // Determine module state
-  const effectiveConversionStart =
-    conversionFrame !== null ? conversionFrame + staggerOffset : Infinity;
-  const isConverting = !isPreConverted && frame >= effectiveConversionStart;
-  const flashEnd =
-    effectiveConversionStart + FLASH_IN_FRAMES + FLASH_HOLD_FRAMES + FLASH_SETTLE_FRAMES;
-  const isFullyConverted = isPreConverted || frame >= flashEnd;
-  const isInFlash = isConverting && !isFullyConverted;
-
-  // Compute visual properties
-  let fill = UNCONVERTED.fill;
-  let borderColor = UNCONVERTED.border;
-  let borderOpacity = UNCONVERTED.borderOpacity;
-  let borderWidth = UNCONVERTED.borderWidth;
-  let glowOpacity = 0;
-  let glowBlur = 0;
-  let glowColor = CONVERTING.glowColor;
+  let fill: string;
+  let borderColor: string;
+  let borderOpacity: number;
+  let borderWidth: number;
+  let boxShadow = 'none';
   let showLabel = false;
 
-  if (isPreConverted || isFullyConverted) {
+  if (state === 'unconverted') {
+    fill = UNCONVERTED.fill;
+    borderColor = UNCONVERTED.border;
+    borderOpacity = UNCONVERTED.borderOpacity;
+    borderWidth = UNCONVERTED.borderWidth;
+  } else if (state === 'converting') {
+    fill = UNCONVERTED.fill;
+    borderColor = CONVERTING.border;
+    const intensity = flashIntensity;
+    borderOpacity = UNCONVERTED.borderOpacity + (CONVERTING.borderOpacity - UNCONVERTED.borderOpacity) * intensity;
+    borderWidth = UNCONVERTED.borderWidth + (CONVERTING.borderWidth - UNCONVERTED.borderWidth) * intensity;
+    const glowOpacity = CONVERTING.glowOpacity * intensity;
+    boxShadow = `0 0 ${CONVERTING.glowBlur}px rgba(74, 144, 217, ${glowOpacity})`;
+    showLabel = intensity > 0.3;
+  } else {
+    // converted
     fill = CONVERTED.fill;
     borderColor = CONVERTED.border;
     borderOpacity = CONVERTED.borderOpacity;
     borderWidth = CONVERTED.borderWidth;
-    glowOpacity = CONVERTED.glowOpacity;
-    glowBlur = CONVERTED.glowBlur;
-    glowColor = CONVERTED.glowColor;
-
-    // Pulse effect after frame 170
-    if (frame >= PULSE_START_FRAME) {
-      const pulsePhase = ((frame - PULSE_START_FRAME) / PULSE_PERIOD) * Math.PI * 2;
-      const pulseDelta = Math.sin(pulsePhase) * PULSE_AMPLITUDE;
-      glowOpacity = CONVERTED.glowOpacity + pulseDelta;
-    }
-  } else if (isInFlash) {
-    const localFrame = frame - effectiveConversionStart;
-    fill = UNCONVERTED.fill; // stays same during flash
-    borderColor = CONVERTING.border;
-    borderWidth = CONVERTING.borderWidth;
-    showLabel = true;
-
-    if (localFrame < FLASH_IN_FRAMES) {
-      // Flash in: easeOut cubic, opacity 0 → 0.6
-      const t = interpolate(localFrame, [0, FLASH_IN_FRAMES - 1], [0, 1], {
-        easing: Easing.out(Easing.cubic),
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      });
-      borderOpacity = t * CONVERTING.borderOpacity;
-      glowOpacity = t * CONVERTING.glowOpacity;
-      glowBlur = CONVERTING.glowBlur;
-    } else if (localFrame < FLASH_IN_FRAMES + FLASH_HOLD_FRAMES) {
-      // Hold at peak
-      borderOpacity = CONVERTING.borderOpacity;
-      glowOpacity = CONVERTING.glowOpacity;
-      glowBlur = CONVERTING.glowBlur;
-    } else {
-      // Settle: easeOut quad, opacity 0.6 → 0.3
-      const settleLocal = localFrame - FLASH_IN_FRAMES - FLASH_HOLD_FRAMES;
-      const t = interpolate(settleLocal, [0, FLASH_SETTLE_FRAMES - 1], [0, 1], {
-        easing: Easing.out(Easing.quad),
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      });
-      borderOpacity = CONVERTING.borderOpacity - t * (CONVERTING.borderOpacity - CONVERTED.borderOpacity);
-      glowOpacity = CONVERTING.glowOpacity - t * (CONVERTING.glowOpacity - CONVERTED.glowOpacity);
-      glowBlur = CONVERTING.glowBlur - t * (CONVERTING.glowBlur - CONVERTED.glowBlur);
-    }
+    const glowOp = CONVERTED.glowOpacity + pulseOffset;
+    boxShadow = `0 0 ${CONVERTED.glowBlur}px rgba(74, 144, 217, ${glowOp})`;
   }
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x - MODULE_W / 2,
-        top: y - MODULE_H / 2,
-        width: MODULE_W,
-        height: MODULE_H,
+        left: x - BLOCK_W / 2,
+        top: y - BLOCK_H / 2,
+        width: BLOCK_W,
+        height: BLOCK_H,
         backgroundColor: fill,
-        border: `${borderWidth}px solid ${borderColor}`,
+        border: `${borderWidth}px solid`,
+        borderColor: `rgba(${hexToRgb(borderColor)}, ${borderOpacity})`,
         borderRadius: 4,
-        opacity: 1,
-        boxShadow:
-          glowOpacity > 0
-            ? `0 0 ${glowBlur}px rgba(74, 144, 217, ${glowOpacity})`
-            : 'none',
-        transition: 'none',
+        boxShadow,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
       }}
     >
-      {/* Module label — visible during flash or when converted */}
-      {(showLabel || isFullyConverted || isPreConverted) && (
-        <div
+      {showLabel && (
+        <span
           style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
             fontFamily: 'JetBrains Mono, monospace',
-            fontSize: 6,
-            color: '#E2E8F0',
-            opacity: showLabel ? 0.5 : 0.2,
+            fontSize: 8,
+            color: LABEL_COLOR,
+            opacity: 0.3 * flashIntensity,
             whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            maxWidth: MODULE_W - 8,
-            textAlign: 'center',
-            lineHeight: 1,
           }}
         >
           {name}
-        </div>
+        </span>
       )}
     </div>
   );
 };
+
+function hexToRgb(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `${r}, ${g}, ${b}`;
+}
+
+export default ModuleBlock;

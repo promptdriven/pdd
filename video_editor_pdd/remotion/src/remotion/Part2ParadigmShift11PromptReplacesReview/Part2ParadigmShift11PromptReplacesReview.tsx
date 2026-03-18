@@ -1,167 +1,169 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
 import {
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
-  BG_COLOR,
-  LEFT_BG,
-  RIGHT_BG,
-  DIVIDER_COLOR,
-  DIVIDER_OPACITY,
-  SPLIT_X,
-  LEFT_PANEL_WIDTH,
-  RIGHT_PANEL_START,
-  RIGHT_PANEL_WIDTH,
-  DIVIDER_WIDTH,
-  RED_ACCENT,
-  GREEN_ACCENT,
-  SPLIT_LINE_START,
-  SPLIT_LINE_END,
-  HEADER_FADE_START,
-  HEADER_FADE_END,
-  METER_Y,
-} from "./constants";
-import { FrozenCodeDiff } from "./FrozenCodeDiff";
-import { PulsingQuestionMark } from "./PulsingQuestionMark";
-import { PromptDocument } from "./PromptDocument";
-import { TestSuitePanel } from "./TestSuitePanel";
-import { CognitiveLoadMeter } from "./CognitiveLoadMeter";
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from 'remotion';
+import { COLORS, SPLIT_X } from './constants';
+import { FrozenCodeDiff } from './FrozenCodeDiff';
+import { PulsingQuestionMark } from './PulsingQuestionMark';
+import { PromptDocument } from './PromptDocument';
+import { TestSuitePanel } from './TestSuitePanel';
+import { CognitiveLoadMeter } from './CognitiveLoadMeter';
 
 export const defaultPart2ParadigmShift11PromptReplacesReviewProps = {};
 
 export const Part2ParadigmShift11PromptReplacesReview: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Split line draw animation
-  const splitLineHeight = interpolate(
-    frame,
-    [SPLIT_LINE_START, SPLIT_LINE_END],
-    [0, CANVAS_HEIGHT],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
+  // Split line draws from frame 0-15
+  const splitLineHeight = interpolate(frame, [0, 15], [0, 1080], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
 
-  // Header fade in
-  const headerOpacity = interpolate(
-    frame,
-    [HEADER_FADE_START, HEADER_FADE_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // Panel headers fade in from frame 0-20
+  const leftHeaderOpacity = interpolate(frame, [0, 20], [0, 0.4], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
+
+  const rightHeaderOpacity = interpolate(frame, [0, 20], [0, 0.5], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
+
+  // Strikethrough animation for LEFT header
+  const strikethroughWidth = interpolate(frame, [5, 20], [0, 100], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
 
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: BG_COLOR,
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
-        overflow: "hidden",
-      }}
-    >
-      {/* ========== LEFT PANEL — Old: Review the Code ========== */}
+    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
+      {/* LEFT PANEL — Old: Review the Code */}
       <div
         style={{
-          position: "absolute",
+          position: 'absolute',
           left: 0,
           top: 0,
-          width: LEFT_PANEL_WIDTH,
-          height: CANVAS_HEIGHT,
-          backgroundColor: LEFT_BG,
-          overflow: "hidden",
+          width: SPLIT_X - 2,
+          height: 1080,
+          backgroundColor: COLORS.leftPanelBg,
+          overflow: 'hidden',
         }}
       >
         {/* Panel header */}
         <div
           style={{
-            position: "absolute",
+            position: 'absolute',
             top: 40,
             left: 0,
-            right: 0,
-            textAlign: "center",
-            opacity: headerOpacity * 0.4,
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
           }}
         >
-          <span
-            style={{
-              fontFamily: "Inter, sans-serif",
-              fontSize: 14,
-              fontWeight: 600,
-              color: RED_ACCENT,
-              letterSpacing: 2,
-              textDecoration: "line-through",
-              textDecorationColor: RED_ACCENT,
-            }}
-          >
-            REVIEW THE CODE
-          </span>
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <span
+              style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 14,
+                fontWeight: 600,
+                color: COLORS.red,
+                opacity: leftHeaderOpacity,
+                letterSpacing: 2,
+                textTransform: 'uppercase',
+              }}
+            >
+              REVIEW THE CODE
+            </span>
+            {/* Strikethrough */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: 0,
+                width: `${strikethroughWidth}%`,
+                height: 2,
+                backgroundColor: COLORS.red,
+                opacity: leftHeaderOpacity * 0.8,
+                transform: 'translateY(-50%)',
+              }}
+            />
+          </div>
         </div>
 
-        {/* Frozen code diff */}
-        <FrozenCodeDiff />
+        {/* Frozen code diff — faded, overwhelming */}
+        <FrozenCodeDiff fadeInStart={20} />
 
-        {/* Pulsing red question mark */}
-        <PulsingQuestionMark />
+        {/* Red question mark overlay */}
+        <PulsingQuestionMark fadeInStart={60} />
 
-        {/* Cognitive load meter — LEFT */}
+        {/* Cognitive load meter */}
         <CognitiveLoadMeter
-          centerX={LEFT_PANEL_WIDTH / 2}
-          centerY={METER_Y}
+          x={480}
+          y={950}
+          width={300}
           fillPercent={100}
-          color={RED_ACCENT}
+          color={COLORS.red}
+          label="Cognitive load"
           status="OVERLOADED"
+          appearStart={220}
         />
       </div>
 
-      {/* ========== SPLIT DIVIDER ========== */}
+      {/* SPLIT DIVIDER */}
       <div
         style={{
-          position: "absolute",
-          left: SPLIT_X - DIVIDER_WIDTH / 2,
+          position: 'absolute',
+          left: SPLIT_X - 1,
           top: 0,
-          width: DIVIDER_WIDTH,
+          width: 2,
           height: splitLineHeight,
-          backgroundColor: DIVIDER_COLOR,
-          opacity: DIVIDER_OPACITY,
+          backgroundColor: COLORS.splitLine,
+          opacity: 0.25,
         }}
       />
 
-      {/* ========== RIGHT PANEL — New: Review the Spec ========== */}
+      {/* RIGHT PANEL — New: Review the Spec */}
       <div
         style={{
-          position: "absolute",
-          left: RIGHT_PANEL_START,
+          position: 'absolute',
+          left: SPLIT_X + 1,
           top: 0,
-          width: RIGHT_PANEL_WIDTH,
-          height: CANVAS_HEIGHT,
-          backgroundColor: RIGHT_BG,
-          overflow: "hidden",
+          width: 1920 - SPLIT_X - 1,
+          height: 1080,
+          backgroundColor: COLORS.rightPanelBg,
+          overflow: 'hidden',
         }}
       >
         {/* Panel header */}
         <div
           style={{
-            position: "absolute",
+            position: 'absolute',
             top: 40,
             left: 0,
-            right: 0,
-            textAlign: "center",
-            opacity: headerOpacity * 0.5,
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'center',
           }}
         >
           <span
             style={{
-              fontFamily: "Inter, sans-serif",
+              fontFamily: 'Inter, sans-serif',
               fontSize: 14,
               fontWeight: 600,
-              color: GREEN_ACCENT,
+              color: COLORS.green,
+              opacity: rightHeaderOpacity,
               letterSpacing: 2,
+              textTransform: 'uppercase',
             }}
           >
             REVIEW THE SPEC
@@ -169,18 +171,21 @@ export const Part2ParadigmShift11PromptReplacesReview: React.FC = () => {
         </div>
 
         {/* Prompt document */}
-        <PromptDocument />
+        <PromptDocument fadeInStart={20} highlightStart={60} />
 
-        {/* Test suite panel */}
-        <TestSuitePanel />
+        {/* Test suite with checkmarks */}
+        <TestSuitePanel appearStart={120} checkInterval={15} />
 
-        {/* Cognitive load meter — RIGHT */}
+        {/* Cognitive load meter */}
         <CognitiveLoadMeter
-          centerX={RIGHT_PANEL_WIDTH / 2}
-          centerY={METER_Y}
+          x={480}
+          y={950}
+          width={300}
           fillPercent={25}
-          color={GREEN_ACCENT}
+          color={COLORS.green}
+          label="Cognitive load"
           status="MANAGEABLE"
+          appearStart={220}
         />
       </div>
     </AbsoluteFill>

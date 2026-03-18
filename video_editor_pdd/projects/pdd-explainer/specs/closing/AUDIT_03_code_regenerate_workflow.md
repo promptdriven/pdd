@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame is sampled at 91.7% progress (frame 274/300, hold phase), but the visible state corresponds to approximately frame 100-160 (the code dissolve/regenerate phase). Multiple end-state elements are missing or incorrect: (1) The code block shows only ~5 lines instead of a full regenerated code block (~20 lines); it appears the code regeneration streamed in only partially or the dissolve left the panel mostly empty. (2) The 5th test 'test_null_injection' still shows a red ✗ instead of green ✓ — the check-flip animation that should occur at frames 160-200 has not happened. (3) The terminal is missing 'All tests passing.' output. (4) The 'Never opened the file.' annotation is completely absent. (5) The file tab dot remains red instead of green. The animation appears frozen around phase 3-4 (frames 70-160) rather than being in the final hold phase.

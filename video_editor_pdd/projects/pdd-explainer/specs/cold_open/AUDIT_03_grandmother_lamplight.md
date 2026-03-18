@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame at 95% progress (frame 142/150) accurately depicts the spec's requirements. Elderly weathered hands are darning a wool sock over a wooden darning egg by warm amber lamplight. The extreme close-up framing is correct for the 135-150 frame phase. Shallow depth of field produces creamy warm bokeh in the background. A steel needle and cream-colored thread are visible. Rembrandt-warm lighting with deep shadows is present. The lamp glow appears as soft amber orbs in the bokeh. The slight absence of fade-out at frame 142 is acceptable as the easeIn fade spans frames 135-150 and would be minimal at this point. All critical elements—hands, darning egg, sock, needle, thread, warm amber lighting, shallow DOF, and extreme close-up framing—are present and correctly rendered.

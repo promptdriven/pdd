@@ -1,182 +1,303 @@
 import React from "react";
 import {
   AbsoluteFill,
-  useCurrentFrame,
   interpolate,
   Easing,
+  useCurrentFrame,
+  Sequence,
 } from "remotion";
 import {
   BG_COLOR,
-  TOTAL_FRAMES,
   SPLIT_X,
+  LEFT_PANEL_WIDTH,
+  RIGHT_PANEL_WIDTH,
   DIVIDER_WIDTH,
   DIVIDER_COLOR,
   DIVIDER_OPACITY,
-  LEFT_PANEL_WIDTH,
-  RIGHT_PANEL_X,
-  RIGHT_PANEL_WIDTH,
-  ZOOM_START_FRAME,
-  ZOOM_DURATION,
-  ZOOM_END_FRAME,
   ZOOM_START_SCALE,
   ZOOM_END_SCALE,
-  PATCH_COUNTER_X,
-  PATCH_COUNTER_Y,
-  PATCH_COUNTER_COLOR,
-  PATCH_COUNTER_OPACITY,
-  PATCH_COUNTER_FINAL,
-  MENDED_COUNTER_X,
-  MENDED_COUNTER_Y,
-  MENDED_COUNTER_COLOR,
-  MENDED_COUNTER_OPACITY,
-  MENDED_COUNTER_FINAL,
+  ZOOM_START_FRAME,
+  ZOOM_DURATION,
+  COUNTER_START_FRAME,
+  COUNTER_DURATION,
+  PATCHES_FINAL,
+  MENDED_FINAL,
+  COUNTER_BLUE,
+  STITCH_AMBER,
+  HEIGHT,
+  CODE_TILE_BG,
+  CODE_TEXT_SLATE,
+  CODE_KEYWORD_PURPLE,
+  DIFF_GREEN,
+  GARMENT_SOCK,
 } from "./constants";
 import { CodeTileGrid } from "./CodeTileGrid";
 import { MendedDrawer } from "./MendedDrawer";
 import { AnimatedCounter } from "./AnimatedCounter";
-import { InitialCodeBlock } from "./InitialCodeBlock";
-import { InitialSock } from "./InitialSock";
+
+// ── Initial state components (what's shown during the hold at frames 0-15) ──
+
+/** Single code edit block visible before the zoom-out */
+const InitialCodeEdit: React.FC = () => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        width: 320,
+        height: 220,
+        backgroundColor: CODE_TILE_BG,
+        borderRadius: 8,
+        padding: 20,
+        boxSizing: "border-box",
+        border: "1px solid #1E293B",
+      }}
+    >
+      {/* Code lines */}
+      {[
+        { text: "function validateInput(data) {", color: CODE_KEYWORD_PURPLE },
+        { text: "  if (data === null) {", color: CODE_TEXT_SLATE },
+        {
+          text: "+   return { valid: false };",
+          color: DIFF_GREEN,
+        },
+        { text: "  }", color: CODE_TEXT_SLATE },
+        { text: "  const result = parse(data);", color: CODE_TEXT_SLATE },
+        { text: "+   if (!result.ok) return err;", color: DIFF_GREEN },
+        { text: "  return { valid: true };", color: CODE_TEXT_SLATE },
+        { text: "}", color: CODE_TEXT_SLATE },
+      ].map((line, i) => (
+        <div
+          key={i}
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 11,
+            lineHeight: "20px",
+            color: line.color,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {line.text}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/** Single darned sock visible before the zoom-out */
+const InitialDarnedSock: React.FC = () => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+      }}
+    >
+      {/* Sock shape */}
+      <div
+        style={{
+          width: 140,
+          height: 200,
+          backgroundColor: GARMENT_SOCK,
+          borderRadius: "30px 30px 60px 60px",
+          position: "relative",
+          overflow: "hidden",
+          border: "2px solid #7A6B5A",
+        }}
+      >
+        {/* Darning patch */}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 30,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 60,
+            height: 60,
+            borderRadius: "50%",
+            overflow: "hidden",
+          }}
+        >
+          {/* Crosshatch stitching */}
+          <svg width={60} height={60} viewBox="0 0 60 60">
+            {Array.from({ length: 10 }).map((_, i) => (
+              <React.Fragment key={i}>
+                <line
+                  x1={i * 7}
+                  y1={0}
+                  x2={i * 7}
+                  y2={60}
+                  stroke={STITCH_AMBER}
+                  strokeWidth={1.2}
+                  opacity={0.6}
+                />
+                <line
+                  x1={0}
+                  y1={i * 7}
+                  x2={60}
+                  y2={i * 7}
+                  stroke={STITCH_AMBER}
+                  strokeWidth={1.2}
+                  opacity={0.6}
+                />
+              </React.Fragment>
+            ))}
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Main component ──
 
 export const defaultColdOpen02ZoomOutAccumulatedProps = {};
 
 export const ColdOpen02ZoomOutAccumulated: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Zoom progress: 0 at frame 15, 1 at frame 120
+  // ── Zoom animation (frames 15-120) ──
   const zoomProgress = interpolate(
     frame,
-    [ZOOM_START_FRAME, ZOOM_END_FRAME],
+    [ZOOM_START_FRAME, ZOOM_START_FRAME + ZOOM_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    }
   );
 
-  // Smooth easeInOut(cubic) for the zoom
-  const easedZoom = Easing.bezier(0.42, 0, 0.58, 1)(zoomProgress);
-
-  // Scale interpolation: 1.0 → 0.15
-  const scale = interpolate(easedZoom, [0, 1], [ZOOM_START_SCALE, ZOOM_END_SCALE]);
-
-  // Initial items fade out as zoom progresses (they get replaced by grid)
-  const initialFadeOut = interpolate(
-    frame,
-    [ZOOM_START_FRAME, ZOOM_START_FRAME + 40],
-    [1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  // Reveal progress for tiles/garments (0 to 1 during zoom)
-  const revealProgress = interpolate(
-    frame,
-    [ZOOM_START_FRAME + 10, ZOOM_END_FRAME + 30],
+  const currentScale = interpolate(
+    zoomProgress,
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [ZOOM_START_SCALE, ZOOM_END_SCALE]
   );
+
+  // Fade from initial single-item view to the full grid
+  const initialOpacity = interpolate(frame, [15, 45], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  const gridOpacity = interpolate(frame, [15, 45], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
     <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
-      {/* LEFT PANEL — Code codebase zoom out */}
+      {/* ── Left Panel: Code ── */}
       <div
         style={{
           position: "absolute",
           left: 0,
           top: 0,
           width: LEFT_PANEL_WIDTH,
-          height: 1080,
+          height: HEIGHT,
           overflow: "hidden",
         }}
       >
-        {/* Zooming container */}
+        {/* Initial single edit (fades out during zoom) */}
+        <div style={{ opacity: initialOpacity }}>
+          <InitialCodeEdit />
+        </div>
+
+        {/* Full codebase grid (zooms out) */}
         <div
           style={{
             position: "absolute",
-            left: LEFT_PANEL_WIDTH / 2,
-            top: 540,
-            width: LEFT_PANEL_WIDTH,
-            height: 1080,
-            transform: `translate(-50%, -50%) scale(${scale})`,
+            inset: 0,
+            opacity: gridOpacity,
+            transform: `scale(${currentScale})`,
             transformOrigin: "center center",
           }}
         >
-          {/* Code tile grid (revealed during zoom) */}
-          <CodeTileGrid revealProgress={revealProgress} />
-
-          {/* Initial code block (visible before zoom, fades out) */}
-          <div style={{ opacity: initialFadeOut }}>
-            <InitialCodeBlock />
-          </div>
+          <CodeTileGrid revealStartFrame={20} />
         </div>
 
-        {/* Patch counter (outside zoom container, fixed position) */}
-        <AnimatedCounter
-          startValue={1}
-          endValue={PATCH_COUNTER_FINAL}
-          prefix="patches: "
-          fontFamily="'JetBrains Mono', monospace"
-          color={PATCH_COUNTER_COLOR}
-          opacity={PATCH_COUNTER_OPACITY}
-          x={PATCH_COUNTER_X}
-          y={PATCH_COUNTER_Y}
-          align="left"
-        />
+        {/* Patches counter */}
+        <Sequence from={COUNTER_START_FRAME}>
+          <AnimatedCounter
+            startValue={1}
+            endValue={PATCHES_FINAL}
+            prefix="patches: "
+            fontFamily="JetBrains Mono"
+            fontSize={14}
+            color={COUNTER_BLUE}
+            opacity={0.6}
+            x={40}
+            y={1020}
+            startFrame={0}
+            duration={COUNTER_DURATION}
+            align="left"
+          />
+        </Sequence>
       </div>
 
-      {/* SPLIT DIVIDER */}
+      {/* ── Split Divider ── */}
       <div
         style={{
           position: "absolute",
           left: SPLIT_X - DIVIDER_WIDTH / 2,
           top: 0,
           width: DIVIDER_WIDTH,
-          height: 1080,
+          height: HEIGHT,
           backgroundColor: DIVIDER_COLOR,
           opacity: DIVIDER_OPACITY,
         }}
       />
 
-      {/* RIGHT PANEL — Mended garments zoom out */}
+      {/* ── Right Panel: Garments ── */}
       <div
         style={{
           position: "absolute",
-          left: RIGHT_PANEL_X,
+          left: SPLIT_X + DIVIDER_WIDTH / 2,
           top: 0,
           width: RIGHT_PANEL_WIDTH,
-          height: 1080,
+          height: HEIGHT,
           overflow: "hidden",
         }}
       >
-        {/* Zooming container */}
+        {/* Initial single sock (fades out during zoom) */}
+        <div style={{ opacity: initialOpacity }}>
+          <InitialDarnedSock />
+        </div>
+
+        {/* Full mended drawer (zooms out) */}
         <div
           style={{
             position: "absolute",
-            left: RIGHT_PANEL_WIDTH / 2,
-            top: 540,
-            width: RIGHT_PANEL_WIDTH,
-            height: 1080,
-            transform: `translate(-50%, -50%) scale(${scale})`,
+            inset: 0,
+            opacity: gridOpacity,
+            transform: `scale(${currentScale})`,
             transformOrigin: "center center",
           }}
         >
-          {/* Mended drawer (revealed during zoom) */}
-          <MendedDrawer revealProgress={revealProgress} />
-
-          {/* Initial sock (visible before zoom, fades out) */}
-          <div style={{ opacity: initialFadeOut }}>
-            <InitialSock />
-          </div>
+          <MendedDrawer revealStartFrame={20} />
         </div>
 
-        {/* Mended counter (outside zoom container, fixed position) */}
-        <AnimatedCounter
-          startValue={1}
-          endValue={MENDED_COUNTER_FINAL}
-          prefix="mended: "
-          fontFamily="'Inter', sans-serif"
-          color={MENDED_COUNTER_COLOR}
-          opacity={MENDED_COUNTER_OPACITY}
-          x={MENDED_COUNTER_X}
-          y={MENDED_COUNTER_Y}
-          align="right"
-        />
+        {/* Mended counter */}
+        <Sequence from={COUNTER_START_FRAME}>
+          <AnimatedCounter
+            startValue={1}
+            endValue={MENDED_FINAL}
+            prefix="mended: "
+            fontFamily="Inter"
+            fontSize={14}
+            color={STITCH_AMBER}
+            opacity={0.6}
+            x={1860}
+            y={1020}
+            startFrame={0}
+            duration={COUNTER_DURATION}
+            align="right"
+          />
+        </Sequence>
       </div>
     </AbsoluteFill>
   );

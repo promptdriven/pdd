@@ -1,104 +1,72 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  QUESTION_MARK_START,
-  QUESTION_MARK_FADE_END,
-  PULSE_PERIOD,
-  QUESTION_MARK_SIZE,
-  QUESTION_MARK_X,
-  QUESTION_MARK_Y,
-  QUESTION_MARK_BASE_OPACITY,
-  QUESTION_MARK_PEAK_OPACITY,
-  QUESTION_MARK_GLOW_BLUR,
-  QUESTION_MARK_GLOW_OPACITY,
-  RED_ACCENT,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { COLORS } from './constants';
 
-export const PulsingQuestionMark: React.FC = () => {
+export const PulsingQuestionMark: React.FC<{
+  fadeInStart: number;
+}> = ({ fadeInStart }) => {
   const frame = useCurrentFrame();
 
-  if (frame < QUESTION_MARK_START) return null;
-
-  // Fade in
-  const fadeIn = interpolate(
+  const baseOpacity = interpolate(
     frame,
-    [QUESTION_MARK_START, QUESTION_MARK_FADE_END],
+    [fadeInStart, fadeInStart + 20],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  // Pulse using sine wave
-  const cycleFrame = frame - QUESTION_MARK_START;
-  const pulsePhase = (cycleFrame % PULSE_PERIOD) / PULSE_PERIOD;
-  const sineValue = Math.sin(pulsePhase * Math.PI * 2);
-  const pulseOpacity = interpolate(
-    sineValue,
-    [-1, 1],
-    [QUESTION_MARK_BASE_OPACITY, QUESTION_MARK_PEAK_OPACITY]
-  );
-
-  const finalOpacity = fadeIn * pulseOpacity;
+  // Pulsing between 0.15 and 0.3 on a 30-frame cycle
+  const pulseFrame = Math.max(0, frame - fadeInStart);
+  const pulseCycle = (pulseFrame % 30) / 30;
+  const pulseT = Math.sin(pulseCycle * Math.PI * 2) * 0.5 + 0.5; // 0..1
+  const pulseOpacity = 0.15 + pulseT * 0.15; // 0.15..0.30
 
   return (
-    <>
-      {/* Glow layer */}
+    <div
+      style={{
+        position: 'absolute',
+        left: 480 - 100,
+        top: 450 - 100,
+        width: 200,
+        height: 200,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: baseOpacity,
+      }}
+    >
+      {/* Glow */}
       <div
         style={{
-          position: "absolute",
-          left: QUESTION_MARK_X - QUESTION_MARK_SIZE / 2,
-          top: QUESTION_MARK_Y - QUESTION_MARK_SIZE / 2,
-          width: QUESTION_MARK_SIZE,
-          height: QUESTION_MARK_SIZE,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          filter: `blur(${QUESTION_MARK_GLOW_BLUR}px)`,
-          opacity: fadeIn * QUESTION_MARK_GLOW_OPACITY,
+          position: 'absolute',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 200,
+          fontWeight: 700,
+          color: COLORS.red,
+          opacity: 0.06,
+          filter: 'blur(30px)',
+          userSelect: 'none',
         }}
       >
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: QUESTION_MARK_SIZE,
-            fontWeight: 700,
-            color: RED_ACCENT,
-            lineHeight: 1,
-          }}
-        >
-          ?
-        </span>
+        ?
       </div>
-
-      {/* Main question mark */}
+      {/* Main character */}
       <div
         style={{
-          position: "absolute",
-          left: QUESTION_MARK_X - QUESTION_MARK_SIZE / 2,
-          top: QUESTION_MARK_Y - QUESTION_MARK_SIZE / 2,
-          width: QUESTION_MARK_SIZE,
-          height: QUESTION_MARK_SIZE,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: finalOpacity,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 200,
+          fontWeight: 700,
+          color: COLORS.red,
+          opacity: pulseOpacity,
+          lineHeight: 1,
+          userSelect: 'none',
         }}
       >
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: QUESTION_MARK_SIZE,
-            fontWeight: 700,
-            color: RED_ACCENT,
-            lineHeight: 1,
-          }}
-        >
-          ?
-        </span>
+        ?
       </div>
-    </>
+    </div>
   );
 };

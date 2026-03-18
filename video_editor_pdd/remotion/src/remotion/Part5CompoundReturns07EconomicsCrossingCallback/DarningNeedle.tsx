@@ -1,132 +1,130 @@
-// DarningNeedle.tsx — Darning needle icon with animated strikethrough
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, OPACITIES, NEEDLE_POS, FRAMES } from './constants';
-
-interface DarningNeedleProps {
-  /** Opacity (controlled by parent for fade-in) */
-  opacity: number;
-}
+import {interpolate, useCurrentFrame, Easing} from 'remotion';
+import {
+  NEEDLE_START, NEEDLE_SCALE_DURATION,
+  STRIKETHROUGH_START, STRIKETHROUGH_DURATION,
+  NEEDLE_X, NEEDLE_Y,
+  NEEDLE_COLOR, STRIKETHROUGH_COLOR,
+} from './constants';
 
 /**
- * Renders a darning needle icon with eye loop at NEEDLE_POS,
- * followed by a red strikethrough line that draws on after a delay.
+ * Darning needle icon with a red strikethrough.
+ * Appears at NEEDLE_START with a back-easing scale-in,
+ * then the strikethrough draws across at STRIKETHROUGH_START.
  */
-export const DarningNeedle: React.FC<DarningNeedleProps> = ({ opacity }) => {
+export const DarningNeedle: React.FC = () => {
   const frame = useCurrentFrame();
-  const { x, y } = NEEDLE_POS;
 
-  // Scale-in with back easing: 0→1 over 15 frames
-  const scaleIn = interpolate(frame, [0, FRAMES.needleScaleDuration], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.back(1.3)),
-  });
-
-  // Strikethrough draw progress: starts after 10 frames, draws over 10 frames
-  const strikeProgress = interpolate(
+  // Needle scale-in with back easing
+  const needleRawProgress = interpolate(
     frame,
-    [
-      FRAMES.strikethroughDelay,
-      FRAMES.strikethroughDelay + FRAMES.strikethroughDuration,
-    ],
+    [NEEDLE_START, NEEDLE_START + NEEDLE_SCALE_DURATION],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    },
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
   );
 
+  // Manual back easing: overshoot by 1.3
+  const s = 1.3;
+  const needleScale = needleRawProgress === 0
+    ? 0
+    : needleRawProgress >= 1
+      ? 1
+      : (() => {
+          const t = needleRawProgress;
+          // easeOut back: 1 - (1-t)^2 * ((s+1)*(1-t) - s)
+          const inv = 1 - t;
+          return 1 - inv * inv * ((s + 1) * inv - s);
+        })();
+
+  // Strikethrough draw progress
+  const strikeProgress = interpolate(
+    frame,
+    [STRIKETHROUGH_START, STRIKETHROUGH_START + STRIKETHROUGH_DURATION],
+    [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad)},
+  );
+
+  const visible = frame >= NEEDLE_START;
+  if (!visible) return null;
+
   // Needle dimensions
-  const needleLength = 50;
+  const needleLength = 60;
   const eyeRadius = 6;
 
-  // Needle is drawn at a 45-degree angle (upper-left to lower-right)
-  // Tip at bottom-right, eye at top-left
-  const tipX = x + needleLength / 2;
-  const tipY = y + needleLength / 2;
-  const eyeX = x - needleLength / 2;
-  const eyeY = y - needleLength / 2;
+  // Needle is drawn as a diagonal line pointing upper-left to lower-right
+  // with an eye loop at the top
+  const nx = NEEDLE_X;
+  const ny = NEEDLE_Y;
 
-  // Strikethrough line: perpendicular slash
-  const strikeFromX = x - 20;
-  const strikeFromY = y + 20;
-  const strikeToX = x + 20;
-  const strikeToY = y - 20;
+  // Strikethrough line endpoints (diagonal across needle)
+  const strikeX1 = nx - 25;
+  const strikeY1 = ny + 20;
+  const strikeX2 = nx + 25;
+  const strikeY2 = ny - 20;
 
-  // Interpolated end point of the strikethrough
-  const strikeEndX = strikeFromX + (strikeToX - strikeFromX) * strikeProgress;
-  const strikeEndY = strikeFromY + (strikeToY - strikeFromY) * strikeProgress;
+  // Interpolated strike endpoint
+  const currentStrikeX2 = strikeX1 + (strikeX2 - strikeX1) * strikeProgress;
+  const currentStrikeY2 = strikeY1 + (strikeY2 - strikeY1) * strikeProgress;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        opacity,
-      }}
+    <svg
+      width={1920}
+      height={1080}
+      style={{position: 'absolute', top: 0, left: 0}}
     >
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: 'absolute', top: 0, left: 0 }}
+      <g
+        transform={`translate(${nx}, ${ny}) scale(${needleScale}) translate(${-nx}, ${-ny})`}
+        opacity={0.4}
       >
-        <g
-          transform={`translate(${x}, ${y}) scale(${scaleIn}) translate(${-x}, ${-y})`}
-        >
-          {/* Needle shaft */}
-          <line
-            x1={eyeX + eyeRadius * 0.7}
-            y1={eyeY + eyeRadius * 0.7}
-            x2={tipX}
-            y2={tipY}
-            stroke={COLORS.needle}
-            strokeWidth={2}
-            strokeOpacity={OPACITIES.needle}
-            strokeLinecap="round"
-          />
-          {/* Needle eye (loop) */}
-          <ellipse
-            cx={eyeX}
-            cy={eyeY}
-            rx={eyeRadius}
-            ry={eyeRadius * 0.6}
-            fill="none"
-            stroke={COLORS.needle}
-            strokeWidth={1.5}
-            strokeOpacity={OPACITIES.needle}
-            transform={`rotate(45, ${eyeX}, ${eyeY})`}
-          />
-          {/* Needle point (sharper tip) */}
-          <line
-            x1={tipX - 3}
-            y1={tipY - 3}
-            x2={tipX + 1}
-            y2={tipY + 1}
-            stroke={COLORS.needle}
-            strokeWidth={1.5}
-            strokeOpacity={OPACITIES.needle + 0.1}
-            strokeLinecap="round"
-          />
-        </g>
+        {/* Needle shaft — diagonal line */}
+        <line
+          x1={nx - needleLength / 2 * 0.7}
+          y1={ny + needleLength / 2 * 0.7}
+          x2={nx + needleLength / 2 * 0.7}
+          y2={ny - needleLength / 2 * 0.7}
+          stroke={NEEDLE_COLOR}
+          strokeWidth={2.5}
+          strokeLinecap="round"
+        />
 
-        {/* Strikethrough — drawn on with progress */}
-        {strikeProgress > 0 && (
-          <line
-            x1={strikeFromX}
-            y1={strikeFromY}
-            x2={strikeEndX}
-            y2={strikeEndY}
-            stroke={COLORS.strikethrough}
-            strokeWidth={2.5}
-            strokeOpacity={OPACITIES.strikethrough}
-            strokeLinecap="round"
-          />
-        )}
-      </svg>
-    </div>
+        {/* Needle eye — small oval at top */}
+        <ellipse
+          cx={nx + needleLength / 2 * 0.7 - 2}
+          cy={ny - needleLength / 2 * 0.7 + 2}
+          rx={eyeRadius * 0.6}
+          ry={eyeRadius}
+          fill="none"
+          stroke={NEEDLE_COLOR}
+          strokeWidth={1.5}
+          transform={`rotate(-45, ${nx + needleLength / 2 * 0.7 - 2}, ${ny - needleLength / 2 * 0.7 + 2})`}
+        />
+
+        {/* Needle point — small triangle at bottom */}
+        <line
+          x1={nx - needleLength / 2 * 0.7}
+          y1={ny + needleLength / 2 * 0.7}
+          x2={nx - needleLength / 2 * 0.7 - 3}
+          y2={ny + needleLength / 2 * 0.7 + 5}
+          stroke={NEEDLE_COLOR}
+          strokeWidth={2}
+          strokeLinecap="round"
+        />
+      </g>
+
+      {/* Strikethrough line */}
+      {strikeProgress > 0 && (
+        <line
+          x1={strikeX1}
+          y1={strikeY1}
+          x2={currentStrikeX2}
+          y2={currentStrikeY2}
+          stroke={STRIKETHROUGH_COLOR}
+          strokeWidth={2.5}
+          strokeOpacity={0.5}
+          strokeLinecap="round"
+        />
+      )}
+    </svg>
   );
 };
 

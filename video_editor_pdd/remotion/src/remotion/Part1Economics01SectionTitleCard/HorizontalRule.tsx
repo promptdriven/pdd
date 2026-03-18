@@ -1,40 +1,33 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  RULE_DRAW_START,
-  RULE_DRAW_END,
-  RULE_Y,
-  RULE_MAX_WIDTH,
-  RULE_HEIGHT,
-  AMBER_ACCENT,
-  RULE_OPACITY,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import { COLORS, TIMING, LAYOUT } from './constants';
 
 export const HorizontalRule: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const width = interpolate(
+  const progress = interpolate(
     frame,
-    [RULE_DRAW_START, RULE_DRAW_END],
-    [0, RULE_MAX_WIDTH],
+    [0, TIMING.RULE_DURATION],
+    [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.cubic),
-    }
+    },
   );
+
+  const currentWidth = LAYOUT.ruleTotalWidth * progress;
 
   return (
     <div
       style={{
-        position: "absolute",
-        top: RULE_Y,
-        left: "50%",
-        transform: "translateX(-50%)",
-        width,
-        height: RULE_HEIGHT,
-        backgroundColor: AMBER_ACCENT,
-        opacity: RULE_OPACITY,
+        position: 'absolute',
+        top: LAYOUT.ruleY,
+        left: LAYOUT.centerX - currentWidth / 2,
+        width: currentWidth,
+        height: LAYOUT.ruleThickness,
+        backgroundColor: COLORS.amber,
+        opacity: 0.2,
       }}
     />
   );

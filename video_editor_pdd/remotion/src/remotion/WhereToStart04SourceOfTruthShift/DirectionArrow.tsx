@@ -1,23 +1,24 @@
 import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, TIMING, LAYOUT } from './constants';
+import { COLORS, TIMING } from './constants';
+
+interface DirectionArrowProps {
+  startX: number;
+  endX: number;
+  y: number;
+}
 
 /**
- * Curved arrow that starts pointing left→right (extraction)
- * and reverses to right→left (generation) at the specified frame.
+ * A horizontal curved arrow that reverses direction mid-animation.
+ * Initially points left→right (extraction). At reverseFrame, rotates 180°
+ * so it points right→left (generation).
  */
-export const DirectionArrow: React.FC = () => {
+const DirectionArrow: React.FC<DirectionArrowProps> = ({ startX, endX, y }) => {
   const frame = useCurrentFrame();
 
-  const { arrowFrom, arrowTo } = LAYOUT;
-
-  // Arrow rotation: 0 = pointing right (L→R), 180 = pointing left (R→L)
   const rotation = interpolate(
     frame,
-    [
-      TIMING.arrowReverseStart,
-      TIMING.arrowReverseStart + TIMING.arrowReverseDuration,
-    ],
+    [TIMING.arrowReverseStart, TIMING.arrowReverseStart + TIMING.arrowReverseDuration],
     [0, 180],
     {
       extrapolateLeft: 'clamp',
@@ -26,56 +27,49 @@ export const DirectionArrow: React.FC = () => {
     }
   );
 
-  const midX = (arrowFrom.x + arrowTo.x) / 2;
-  const midY = arrowFrom.y;
-  const arrowWidth = arrowTo.x - arrowFrom.x;
-  const arrowHeight = 60;
-
-  // SVG path for the curved arrow
-  const svgWidth = arrowWidth + 40;
-  const svgHeight = arrowHeight + 40;
-  const padX = 20;
-  const padY = 20;
-
-  // Curved path from left to right
-  const startX = padX;
-  const startY = padY + arrowHeight / 2;
-  const endX = padX + arrowWidth;
-  const endY = padY + arrowHeight / 2;
-  const ctrlY = padY - 10; // curve upward
-
+  const midX = (startX + endX) / 2;
+  const arrowWidth = endX - startX;
   const headSize = 8;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: midX - svgWidth / 2,
-        top: midY - svgHeight / 2,
-        width: svgWidth,
-        height: svgHeight,
+        left: midX - arrowWidth / 2,
+        top: y - 20,
+        width: arrowWidth,
+        height: 40,
         transform: `rotate(${rotation}deg)`,
         transformOrigin: 'center center',
       }}
     >
-      <svg width={svgWidth} height={svgHeight} viewBox={`0 0 ${svgWidth} ${svgHeight}`}>
-        {/* Curved line */}
+      <svg
+        width={arrowWidth}
+        height={40}
+        viewBox={`0 0 ${arrowWidth} 40`}
+        style={{ overflow: 'visible' }}
+      >
+        {/* Curved arrow path */}
         <path
-          d={`M ${startX} ${startY} Q ${padX + arrowWidth / 2} ${ctrlY} ${endX} ${endY}`}
+          d={`M 20 20 Q ${arrowWidth / 2} 6, ${arrowWidth - 20 - headSize} 20`}
           fill="none"
-          stroke={COLORS.arrow}
+          stroke={COLORS.promptBlue}
           strokeWidth={2}
-          opacity={0.4}
+          strokeOpacity={0.4}
         />
-        {/* Arrowhead at the end */}
+        {/* Arrowhead (pointing right) */}
         <polygon
-          points={`
-            ${endX},${endY}
-            ${endX - headSize * 1.5},${endY - headSize}
-            ${endX - headSize * 1.5},${endY + headSize}
-          `}
-          fill={COLORS.arrow}
-          opacity={0.4}
+          points={`${arrowWidth - 20 - headSize},${20 - headSize} ${arrowWidth - 20},20 ${arrowWidth - 20 - headSize},${20 + headSize}`}
+          fill={COLORS.promptBlue}
+          fillOpacity={0.4}
+        />
+        {/* Small tail circle */}
+        <circle
+          cx={20}
+          cy={20}
+          r={3}
+          fill={COLORS.promptBlue}
+          fillOpacity={0.3}
         />
       </svg>
     </div>

@@ -1,291 +1,286 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-	CANVAS_WIDTH,
-	CANVAS_HEIGHT,
-	WALL_COLOR,
-	NOZZLE_COLOR,
-	MATERIAL_COLOR,
-	WALL_POS,
-	NOZZLE_POS,
-	MATERIAL_POS,
-	GHOST_FILL_OPACITY,
-	GHOST_STROKE_WIDTH,
-	GHOST_GLOW_BLUR,
-	GHOST_GLOW_OPACITY,
-	GHOST_LABEL_OPACITY,
-	GHOST_LABEL_FONT_SIZE,
-	FONT_FAMILY,
-	GHOST_DRAW_START,
-	GHOST_DRAW_END,
-	PULSE_CYCLE_FRAMES,
-} from "./constants";
+import React from 'react';
+import { AbsoluteFill, Easing, interpolate, useCurrentFrame } from 'remotion';
+import { GHOST_ELEMENTS, TIMING } from './constants';
 
-// Path lengths for stroke-dashoffset animation
-const WALL_PATH_LENGTH = 480;
-const NOZZLE_PATH_LENGTH = 420;
-const MATERIAL_PATH_LENGTH = 500;
+/**
+ * Renders one of the three ghost shapes (wall, nozzle, material)
+ * with stroke-draw animation and gentle pulse.
+ */
+const GhostShape: React.FC<{
+  shape: 'wall' | 'nozzle' | 'material';
+  color: string;
+  x: number;
+  y: number;
+  label: string;
+  drawProgress: number;
+  pulseOpacity: number;
+}> = ({ shape, color, x, y, label, drawProgress, pulseOpacity }) => {
+  const baseOpacity = 0.04 + pulseOpacity;
+  const glowOpacity = 0.02 + pulseOpacity * 0.5;
+  const labelOpacity = 0.03;
 
-export const GhostShapes: React.FC = () => {
-	const frame = useCurrentFrame();
+  const filterId = `glow-${shape}`;
 
-	const drawProgress = interpolate(
-		frame,
-		[GHOST_DRAW_START, GHOST_DRAW_END],
-		[0, 1],
-		{
-			extrapolateLeft: "clamp",
-			extrapolateRight: "clamp",
-			easing: Easing.inOut(Easing.cubic),
-		},
-	);
+  return (
+    <g>
+      {/* Glow filter */}
+      <defs>
+        <filter id={filterId} x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="8" result="blur" />
+          <feFlood floodColor={color} floodOpacity={glowOpacity} result="color" />
+          <feComposite in="color" in2="blur" operator="in" result="glow" />
+          <feMerge>
+            <feMergeNode in="glow" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
 
-	// Gentle pulse after shapes are drawn (sinusoidal)
-	const pulseRaw =
-		frame >= 90
-			? Math.sin(((frame - 90) / PULSE_CYCLE_FRAMES) * Math.PI * 2)
-			: 0;
-	const pulse = pulseRaw * 0.01; // very subtle opacity modulation
+      {shape === 'wall' && (
+        <WallShape
+          x={x}
+          y={y}
+          color={color}
+          opacity={baseOpacity}
+          drawProgress={drawProgress}
+          filterId={filterId}
+        />
+      )}
+      {shape === 'nozzle' && (
+        <NozzleShape
+          x={x}
+          y={y}
+          color={color}
+          opacity={baseOpacity}
+          drawProgress={drawProgress}
+          filterId={filterId}
+        />
+      )}
+      {shape === 'material' && (
+        <MaterialShape
+          x={x}
+          y={y}
+          color={color}
+          opacity={baseOpacity}
+          drawProgress={drawProgress}
+          filterId={filterId}
+        />
+      )}
 
-	const wallOffset = WALL_PATH_LENGTH * (1 - drawProgress);
-	const nozzleOffset = NOZZLE_PATH_LENGTH * (1 - drawProgress);
-	const materialOffset = MATERIAL_PATH_LENGTH * (1 - drawProgress);
-
-	return (
-		<AbsoluteFill>
-			<svg
-				width={CANVAS_WIDTH}
-				height={CANVAS_HEIGHT}
-				viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
-			>
-				<defs>
-					<filter id="wallGlow">
-						<feGaussianBlur
-							stdDeviation={GHOST_GLOW_BLUR}
-							result="blur"
-						/>
-						<feMerge>
-							<feMergeNode in="blur" />
-							<feMergeNode in="SourceGraphic" />
-						</feMerge>
-					</filter>
-					<filter id="nozzleGlow">
-						<feGaussianBlur
-							stdDeviation={GHOST_GLOW_BLUR}
-							result="blur"
-						/>
-						<feMerge>
-							<feMergeNode in="blur" />
-							<feMergeNode in="SourceGraphic" />
-						</feMerge>
-					</filter>
-					<filter id="materialGlow">
-						<feGaussianBlur
-							stdDeviation={GHOST_GLOW_BLUR}
-							result="blur"
-						/>
-						<feMerge>
-							<feMergeNode in="blur" />
-							<feMergeNode in="SourceGraphic" />
-						</feMerge>
-					</filter>
-				</defs>
-
-				{/* Wall segment — rectangular blocks */}
-				<g
-					opacity={GHOST_FILL_OPACITY + pulse}
-					filter="url(#wallGlow)"
-				>
-					<path
-						d={`M ${WALL_POS.x - 60} ${WALL_POS.y - 50}
-							 h 40 v 100 h -40 Z
-							 M ${WALL_POS.x - 10} ${WALL_POS.y - 70}
-							 h 40 v 140 h -40 Z
-							 M ${WALL_POS.x + 40} ${WALL_POS.y - 40}
-							 h 40 v 90 h -40 Z`}
-						fill="none"
-						stroke={WALL_COLOR}
-						strokeWidth={GHOST_STROKE_WIDTH}
-						strokeDasharray={WALL_PATH_LENGTH}
-						strokeDashoffset={wallOffset}
-					/>
-				</g>
-
-				{/* Wall glow layer */}
-				<g opacity={GHOST_GLOW_OPACITY + pulse * 0.5}>
-					<path
-						d={`M ${WALL_POS.x - 60} ${WALL_POS.y - 50}
-							 h 40 v 100 h -40 Z
-							 M ${WALL_POS.x - 10} ${WALL_POS.y - 70}
-							 h 40 v 140 h -40 Z
-							 M ${WALL_POS.x + 40} ${WALL_POS.y - 40}
-							 h 40 v 90 h -40 Z`}
-						fill="none"
-						stroke={WALL_COLOR}
-						strokeWidth={GHOST_STROKE_WIDTH + 4}
-						strokeDasharray={WALL_PATH_LENGTH}
-						strokeDashoffset={wallOffset}
-						filter="url(#wallGlow)"
-					/>
-				</g>
-
-				{/* Wall label */}
-				<text
-					x={WALL_POS.x}
-					y={WALL_POS.y + 95}
-					textAnchor="middle"
-					fill={WALL_COLOR}
-					opacity={GHOST_LABEL_OPACITY * drawProgress}
-					fontSize={GHOST_LABEL_FONT_SIZE}
-					fontFamily={FONT_FAMILY}
-					fontWeight={600}
-					letterSpacing={2}
-				>
-					WALLS
-				</text>
-
-				{/* Injection nozzle — tapered funnel */}
-				<g
-					opacity={GHOST_FILL_OPACITY + pulse}
-					filter="url(#nozzleGlow)"
-				>
-					<path
-						d={`M ${NOZZLE_POS.x - 40} ${NOZZLE_POS.y - 60}
-							 L ${NOZZLE_POS.x + 40} ${NOZZLE_POS.y - 60}
-							 L ${NOZZLE_POS.x + 15} ${NOZZLE_POS.y + 20}
-							 L ${NOZZLE_POS.x + 10} ${NOZZLE_POS.y + 80}
-							 L ${NOZZLE_POS.x - 10} ${NOZZLE_POS.y + 80}
-							 L ${NOZZLE_POS.x - 15} ${NOZZLE_POS.y + 20}
-							 Z`}
-						fill="none"
-						stroke={NOZZLE_COLOR}
-						strokeWidth={GHOST_STROKE_WIDTH}
-						strokeDasharray={NOZZLE_PATH_LENGTH}
-						strokeDashoffset={nozzleOffset}
-					/>
-				</g>
-
-				{/* Nozzle glow layer */}
-				<g opacity={GHOST_GLOW_OPACITY + pulse * 0.5}>
-					<path
-						d={`M ${NOZZLE_POS.x - 40} ${NOZZLE_POS.y - 60}
-							 L ${NOZZLE_POS.x + 40} ${NOZZLE_POS.y - 60}
-							 L ${NOZZLE_POS.x + 15} ${NOZZLE_POS.y + 20}
-							 L ${NOZZLE_POS.x + 10} ${NOZZLE_POS.y + 80}
-							 L ${NOZZLE_POS.x - 10} ${NOZZLE_POS.y + 80}
-							 L ${NOZZLE_POS.x - 15} ${NOZZLE_POS.y + 20}
-							 Z`}
-						fill="none"
-						stroke={NOZZLE_COLOR}
-						strokeWidth={GHOST_STROKE_WIDTH + 4}
-						strokeDasharray={NOZZLE_PATH_LENGTH}
-						strokeDashoffset={nozzleOffset}
-						filter="url(#nozzleGlow)"
-					/>
-				</g>
-
-				{/* Nozzle label */}
-				<text
-					x={NOZZLE_POS.x}
-					y={NOZZLE_POS.y + 105}
-					textAnchor="middle"
-					fill={NOZZLE_COLOR}
-					opacity={GHOST_LABEL_OPACITY * drawProgress}
-					fontSize={GHOST_LABEL_FONT_SIZE}
-					fontFamily={FONT_FAMILY}
-					fontWeight={600}
-					letterSpacing={2}
-				>
-					NOZZLE
-				</text>
-
-				{/* Material swatch — organic flowing shape */}
-				<g
-					opacity={GHOST_FILL_OPACITY + pulse}
-					filter="url(#materialGlow)"
-				>
-					<path
-						d={`M ${MATERIAL_POS.x - 50} ${MATERIAL_POS.y - 40}
-							 C ${MATERIAL_POS.x - 30} ${MATERIAL_POS.y - 70},
-							   ${MATERIAL_POS.x + 30} ${MATERIAL_POS.y - 70},
-							   ${MATERIAL_POS.x + 50} ${MATERIAL_POS.y - 40}
-							 C ${MATERIAL_POS.x + 60} ${MATERIAL_POS.y - 10},
-							   ${MATERIAL_POS.x + 55} ${MATERIAL_POS.y + 30},
-							   ${MATERIAL_POS.x + 40} ${MATERIAL_POS.y + 55}
-							 C ${MATERIAL_POS.x + 20} ${MATERIAL_POS.y + 75},
-							   ${MATERIAL_POS.x - 20} ${MATERIAL_POS.y + 75},
-							   ${MATERIAL_POS.x - 40} ${MATERIAL_POS.y + 55}
-							 C ${MATERIAL_POS.x - 55} ${MATERIAL_POS.y + 30},
-							   ${MATERIAL_POS.x - 60} ${MATERIAL_POS.y - 10},
-							   ${MATERIAL_POS.x - 50} ${MATERIAL_POS.y - 40}
-							 Z`}
-						fill="none"
-						stroke={MATERIAL_COLOR}
-						strokeWidth={GHOST_STROKE_WIDTH}
-						strokeDasharray={MATERIAL_PATH_LENGTH}
-						strokeDashoffset={materialOffset}
-					/>
-					{/* Internal texture lines */}
-					<path
-						d={`M ${MATERIAL_POS.x - 30} ${MATERIAL_POS.y - 20}
-							 C ${MATERIAL_POS.x - 10} ${MATERIAL_POS.y - 5},
-							   ${MATERIAL_POS.x + 10} ${MATERIAL_POS.y + 10},
-							   ${MATERIAL_POS.x + 30} ${MATERIAL_POS.y - 5}
-							 M ${MATERIAL_POS.x - 25} ${MATERIAL_POS.y + 15}
-							 C ${MATERIAL_POS.x - 5} ${MATERIAL_POS.y + 30},
-							   ${MATERIAL_POS.x + 15} ${MATERIAL_POS.y + 35},
-							   ${MATERIAL_POS.x + 35} ${MATERIAL_POS.y + 20}`}
-						fill="none"
-						stroke={MATERIAL_COLOR}
-						strokeWidth={1}
-						strokeDasharray={200}
-						strokeDashoffset={200 * (1 - drawProgress)}
-					/>
-				</g>
-
-				{/* Material glow layer */}
-				<g opacity={GHOST_GLOW_OPACITY + pulse * 0.5}>
-					<path
-						d={`M ${MATERIAL_POS.x - 50} ${MATERIAL_POS.y - 40}
-							 C ${MATERIAL_POS.x - 30} ${MATERIAL_POS.y - 70},
-							   ${MATERIAL_POS.x + 30} ${MATERIAL_POS.y - 70},
-							   ${MATERIAL_POS.x + 50} ${MATERIAL_POS.y - 40}
-							 C ${MATERIAL_POS.x + 60} ${MATERIAL_POS.y - 10},
-							   ${MATERIAL_POS.x + 55} ${MATERIAL_POS.y + 30},
-							   ${MATERIAL_POS.x + 40} ${MATERIAL_POS.y + 55}
-							 C ${MATERIAL_POS.x + 20} ${MATERIAL_POS.y + 75},
-							   ${MATERIAL_POS.x - 20} ${MATERIAL_POS.y + 75},
-							   ${MATERIAL_POS.x - 40} ${MATERIAL_POS.y + 55}
-							 C ${MATERIAL_POS.x - 55} ${MATERIAL_POS.y + 30},
-							   ${MATERIAL_POS.x - 60} ${MATERIAL_POS.y - 10},
-							   ${MATERIAL_POS.x - 50} ${MATERIAL_POS.y - 40}
-							 Z`}
-						fill="none"
-						stroke={MATERIAL_COLOR}
-						strokeWidth={GHOST_STROKE_WIDTH + 4}
-						strokeDasharray={MATERIAL_PATH_LENGTH}
-						strokeDashoffset={materialOffset}
-						filter="url(#materialGlow)"
-					/>
-				</g>
-
-				{/* Material label */}
-				<text
-					x={MATERIAL_POS.x}
-					y={MATERIAL_POS.y + 100}
-					textAnchor="middle"
-					fill={MATERIAL_COLOR}
-					opacity={GHOST_LABEL_OPACITY * drawProgress}
-					fontSize={GHOST_LABEL_FONT_SIZE}
-					fontFamily={FONT_FAMILY}
-					fontWeight={600}
-					letterSpacing={2}
-				>
-					MATERIAL
-				</text>
-			</svg>
-		</AbsoluteFill>
-	);
+      {/* Label beneath shape */}
+      <text
+        x={x}
+        y={y + 80}
+        textAnchor="middle"
+        fontFamily="Inter, sans-serif"
+        fontSize={8}
+        fill={color}
+        opacity={labelOpacity * drawProgress}
+        letterSpacing={2}
+      >
+        {label}
+      </text>
+    </g>
+  );
 };
 
-export default GhostShapes;
+/** Wall segment — stacked rectangular blocks */
+const WallShape: React.FC<{
+  x: number;
+  y: number;
+  color: string;
+  opacity: number;
+  drawProgress: number;
+  filterId: string;
+}> = ({ x, y, color, opacity, drawProgress, filterId }) => {
+  // Three stacked blocks
+  const blockWidth = 80;
+  const blockHeight = 20;
+  const gap = 4;
+  const totalPathLength = 3 * 2 * (blockWidth + blockHeight);
+
+  return (
+    <g filter={`url(#${filterId})`}>
+      {[0, 1, 2].map((i) => {
+        const by = y - 30 + i * (blockHeight + gap);
+        const bx = x - blockWidth / 2 + (i % 2 === 1 ? 10 : -10);
+        const perimeter = 2 * (blockWidth + blockHeight);
+        const dashOffset = perimeter * (1 - drawProgress);
+        return (
+          <rect
+            key={i}
+            x={bx}
+            y={by}
+            width={blockWidth}
+            height={blockHeight}
+            fill="none"
+            stroke={color}
+            strokeWidth={2}
+            opacity={opacity}
+            strokeDasharray={perimeter}
+            strokeDashoffset={dashOffset}
+          />
+        );
+      })}
+    </g>
+  );
+};
+
+/** Injection nozzle — tapered funnel shape */
+const NozzleShape: React.FC<{
+  x: number;
+  y: number;
+  color: string;
+  opacity: number;
+  drawProgress: number;
+  filterId: string;
+}> = ({ x, y, color, opacity, drawProgress, filterId }) => {
+  // Funnel: wide top narrowing to bottom
+  const pathD = `
+    M ${x - 40} ${y - 30}
+    L ${x + 40} ${y - 30}
+    L ${x + 12} ${y + 30}
+    L ${x - 12} ${y + 30}
+    Z
+  `;
+  // Nozzle tip
+  const tipD = `
+    M ${x - 8} ${y + 30}
+    L ${x - 8} ${y + 50}
+    L ${x + 8} ${y + 50}
+    L ${x + 8} ${y + 30}
+  `;
+  const pathLen = 240;
+  const tipLen = 56;
+
+  return (
+    <g filter={`url(#${filterId})`}>
+      <path
+        d={pathD}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        opacity={opacity}
+        strokeDasharray={pathLen}
+        strokeDashoffset={pathLen * (1 - drawProgress)}
+      />
+      <path
+        d={tipD}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        opacity={opacity}
+        strokeDasharray={tipLen}
+        strokeDashoffset={tipLen * (1 - drawProgress)}
+      />
+    </g>
+  );
+};
+
+/** Material swatch — organic flowing shape */
+const MaterialShape: React.FC<{
+  x: number;
+  y: number;
+  color: string;
+  opacity: number;
+  drawProgress: number;
+  filterId: string;
+}> = ({ x, y, color, opacity, drawProgress, filterId }) => {
+  // Organic blob using cubic bezier
+  const pathD = `
+    M ${x - 40} ${y}
+    C ${x - 40} ${y - 35}, ${x - 15} ${y - 50}, ${x} ${y - 40}
+    C ${x + 15} ${y - 50}, ${x + 45} ${y - 30}, ${x + 40} ${y}
+    C ${x + 45} ${y + 30}, ${x + 15} ${y + 50}, ${x} ${y + 40}
+    C ${x - 15} ${y + 50}, ${x - 40} ${y + 35}, ${x - 40} ${y}
+    Z
+  `;
+  // Internal wavy lines for texture
+  const wave1 = `M ${x - 25} ${y - 10} Q ${x} ${y - 25}, ${x + 25} ${y - 10}`;
+  const wave2 = `M ${x - 25} ${y + 10} Q ${x} ${y - 5}, ${x + 25} ${y + 10}`;
+  const pathLen = 320;
+  const waveLen = 80;
+
+  return (
+    <g filter={`url(#${filterId})`}>
+      <path
+        d={pathD}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        opacity={opacity}
+        strokeDasharray={pathLen}
+        strokeDashoffset={pathLen * (1 - drawProgress)}
+      />
+      <path
+        d={wave1}
+        fill="none"
+        stroke={color}
+        strokeWidth={1}
+        opacity={opacity * 0.6}
+        strokeDasharray={waveLen}
+        strokeDashoffset={waveLen * (1 - drawProgress)}
+      />
+      <path
+        d={wave2}
+        fill="none"
+        stroke={color}
+        strokeWidth={1}
+        opacity={opacity * 0.6}
+        strokeDasharray={waveLen}
+        strokeDashoffset={waveLen * (1 - drawProgress)}
+      />
+    </g>
+  );
+};
+
+/** Container for all three ghost shapes with draw + pulse animation */
+export const GhostShapes: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  const localFrame = frame - TIMING.GHOST_DRAW_START;
+  if (localFrame < 0) return null;
+
+  // Stroke draw progress: 0 → 1 over GHOST_DRAW_DURATION frames
+  const drawProgress = interpolate(
+    localFrame,
+    [0, TIMING.GHOST_DRAW_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.cubic),
+    }
+  );
+
+  // Gentle pulse after shapes are drawn (sine wave on 30-frame cycle)
+  const pulsePhase = ((localFrame - TIMING.GHOST_DRAW_DURATION) / TIMING.PULSE_CYCLE) * Math.PI * 2;
+  const pulseActive = localFrame > TIMING.GHOST_DRAW_DURATION;
+  const pulseValue = pulseActive
+    ? interpolate(Math.sin(pulsePhase), [-1, 1], [0, 0.015])
+    : 0;
+
+  return (
+    <AbsoluteFill>
+      <svg
+        width={1920}
+        height={1080}
+        viewBox="0 0 1920 1080"
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        {GHOST_ELEMENTS.map((el) => (
+          <GhostShape
+            key={el.shape}
+            shape={el.shape}
+            color={el.color}
+            x={el.x}
+            y={el.y}
+            label={el.label}
+            drawProgress={drawProgress}
+            pulseOpacity={pulseValue}
+          />
+        ))}
+      </svg>
+    </AbsoluteFill>
+  );
+};

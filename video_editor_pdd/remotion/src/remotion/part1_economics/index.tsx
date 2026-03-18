@@ -53,7 +53,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const Part1EconomicsSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 0.149333;
+  const durationSeconds = 0.426667;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

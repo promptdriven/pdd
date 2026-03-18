@@ -1,57 +1,79 @@
+// ParticleScatter.tsx — Code lines dissolving into radial particles
 import React, { useMemo } from 'react';
 import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import { CodeLineData, CENTER_X, CENTER_Y, CODE_LINE_COLOR } from './constants';
+import { CODE_COLOR, TRIANGLE } from './constants';
 
-interface ParticleScatterProps {
-  lines: CodeLineData[];
-  particlesPerLine: number;
-  driftRadius: number;
-  fadeDuration: number;
-  totalFrames: number;
+interface CodeLineSpec {
+  readonly width: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
 }
 
 interface Particle {
   startX: number;
   startY: number;
-  angle: number;
-  speed: number; // 0-1 multiplier on driftRadius
+  angle: number; // radial direction
+  speed: number; // drift speed multiplier
   size: number;
+}
+
+interface ParticleScatterProps {
+  lines: readonly CodeLineSpec[];
+  centerX: number;
+  centerY: number;
+  particlesPerLine: number;
+  driftRadius: number;
+  fadeDuration: number;
+  totalDuration: number;
+}
+
+// Seeded pseudo-random for deterministic particles
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 16807 + 0) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
 }
 
 export const ParticleScatter: React.FC<ParticleScatterProps> = ({
   lines,
+  centerX,
+  centerY,
   particlesPerLine,
   driftRadius,
   fadeDuration,
-  totalFrames,
+  totalDuration,
 }) => {
   const frame = useCurrentFrame();
 
-  // Generate deterministic particles from lines
+  // Generate deterministic particles from each code line
   const particles = useMemo(() => {
+    const rng = seededRandom(
+      lines.length * 1000 + particlesPerLine * 100 + driftRadius
+    );
     const result: Particle[] = [];
-    lines.forEach((line, lineIdx) => {
-      const baseX = CENTER_X + line.offsetX;
-      const baseY = CENTER_Y + line.offsetY;
+
+    for (const line of lines) {
+      const lineX = centerX + line.offsetX;
+      const lineY = centerY + line.offsetY;
+
       for (let p = 0; p < particlesPerLine; p++) {
-        // Distribute particles along the line width
-        const t = particlesPerLine > 1 ? p / (particlesPerLine - 1) : 0.5;
-        const startX = baseX - line.width / 2 + line.width * t;
-        const startY = baseY;
-        // Radial angle from center, with some spread
-        const dx = startX - CENTER_X;
-        const dy = startY - CENTER_Y;
-        const baseAngle = Math.atan2(dy, dx);
-        // Add deterministic jitter
-        const jitter = ((lineIdx * 7 + p * 13) % 100) / 100 - 0.5;
-        const angle = baseAngle + jitter * 0.8;
-        const speed = 0.5 + ((lineIdx * 3 + p * 11) % 50) / 100;
-        const size = 1.5 + ((lineIdx * 5 + p * 9) % 30) / 20;
+        const startX = lineX - line.width / 2 + rng() * line.width;
+        const startY = lineY + (rng() - 0.5) * 4;
+        const angle = Math.atan2(startY - centerY, startX - centerX) + (rng() - 0.5) * 0.5;
+        const speed = 0.5 + rng() * 0.8;
+        const size = 1.5 + rng() * 2.5;
+
         result.push({ startX, startY, angle, speed, size });
       }
-    });
+    }
+
     return result;
-  }, [lines, particlesPerLine]);
+  }, [lines, centerX, centerY, particlesPerLine, driftRadius]);
+
+  // Triangle boundary check — particles should dissipate before edges
+  const maxDist = driftRadius * 0.85;
 
   return (
     <svg
@@ -61,23 +83,25 @@ export const ParticleScatter: React.FC<ParticleScatterProps> = ({
       style={{ position: 'absolute', top: 0, left: 0 }}
     >
       {particles.map((particle, i) => {
-        // Ease-out cubic for radial drift
-        const progress = interpolate(frame, [0, totalFrames], [0, 1], {
-          extrapolateRight: 'clamp',
+        // Eased progress
+        const progress = interpolate(frame, [0, totalDuration], [0, 1], {
           extrapolateLeft: 'clamp',
-          easing: Easing.out(Easing.poly(3)),
+          extrapolateRight: 'clamp',
+          easing: Easing.out(Easing.cubic),
         });
 
-        const dist = driftRadius * particle.speed * progress;
-        const x = particle.startX + Math.cos(particle.angle) * dist;
-        const y = particle.startY + Math.sin(particle.angle) * dist;
+        const dist = progress * driftRadius * particle.speed;
+        const clampedDist = Math.min(dist, maxDist);
+
+        const x = particle.startX + Math.cos(particle.angle) * clampedDist;
+        const y = particle.startY + Math.sin(particle.angle) * clampedDist;
 
         // Fade out over fadeDuration frames
         const opacity = interpolate(
           frame,
-          [0, Math.max(1, totalFrames - fadeDuration), totalFrames],
+          [0, Math.max(1, totalDuration - fadeDuration), totalDuration],
           [0.1, 0.1, 0],
-          { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' }
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
         );
 
         if (opacity <= 0) return null;
@@ -87,8 +111,8 @@ export const ParticleScatter: React.FC<ParticleScatterProps> = ({
             key={i}
             cx={x}
             cy={y}
-            r={particle.size * (1 - progress * 0.5)}
-            fill={CODE_LINE_COLOR}
+            r={particle.size}
+            fill={CODE_COLOR}
             opacity={opacity}
           />
         );

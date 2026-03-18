@@ -1,77 +1,82 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import { ARROW_COLOR, ARROW_OPACITY, CANVAS_WIDTH, CANVAS_HEIGHT } from "./constants";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { WIRE_COLOR } from './constants';
 
 interface FlowArrowProps {
-  fromX: number;
-  fromY: number;
-  toX: number;
-  toY: number;
-  drawStart: number;
-  drawEnd: number;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  startFrame: number;
+  drawDuration?: number;
+  color?: string;
+  opacity?: number;
 }
 
+/**
+ * An animated arrow that draws itself from point A to point B.
+ */
 export const FlowArrow: React.FC<FlowArrowProps> = ({
-  fromX,
-  fromY,
-  toX,
-  toY,
-  drawStart,
-  drawEnd,
+  x1,
+  y1,
+  x2,
+  y2,
+  startFrame,
+  drawDuration = 20,
+  color = WIRE_COLOR,
+  opacity = 0.3,
 }) => {
   const frame = useCurrentFrame();
+  const localFrame = frame - startFrame;
 
-  const progress = interpolate(
-    frame,
-    [drawStart, drawEnd],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
-  );
+  if (localFrame < 0) return null;
 
-  if (frame < drawStart) return null;
+  const progress = interpolate(localFrame, [0, drawDuration], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.inOut(Easing.cubic),
+  });
 
-  const dx = toX - fromX;
-  const dy = toY - fromY;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const currentX2 = x1 + dx * progress;
+  const currentY2 = y1 + dy * progress;
+
+  // Arrowhead
   const arrowSize = 6;
-
-  // Current endpoint based on progress
-  const curX = fromX + dx * progress;
-  const curY = fromY + dy * progress;
-
-  // Arrowhead direction
   const angle = Math.atan2(dy, dx);
-  const ax1 = curX - arrowSize * Math.cos(angle - Math.PI / 6);
-  const ay1 = curY - arrowSize * Math.sin(angle - Math.PI / 6);
-  const ax2 = curX - arrowSize * Math.cos(angle + Math.PI / 6);
-  const ay2 = curY - arrowSize * Math.sin(angle + Math.PI / 6);
+  const arrowX1 = currentX2 - arrowSize * Math.cos(angle - 0.4);
+  const arrowY1 = currentY2 - arrowSize * Math.sin(angle - 0.4);
+  const arrowX2 = currentX2 - arrowSize * Math.cos(angle + 0.4);
+  const arrowY2 = currentY2 - arrowSize * Math.sin(angle + 0.4);
 
   return (
     <svg
-      width={CANVAS_WIDTH}
-      height={CANVAS_HEIGHT}
-      viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
-      style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: 1920,
+        height: 1080,
+        pointerEvents: 'none',
+      }}
     >
-      {/* Main line */}
       <line
-        x1={fromX}
-        y1={fromY}
-        x2={curX}
-        y2={curY}
-        stroke={ARROW_COLOR}
+        x1={x1}
+        y1={y1}
+        x2={currentX2}
+        y2={currentY2}
+        stroke={color}
         strokeWidth={1}
-        opacity={ARROW_OPACITY}
+        opacity={opacity}
       />
-      {/* Arrowhead */}
-      {progress > 0.2 && (
+      {progress > 0.5 && (
         <polygon
-          points={`${curX},${curY} ${ax1},${ay1} ${ax2},${ay2}`}
-          fill={ARROW_COLOR}
-          opacity={ARROW_OPACITY}
+          points={`${currentX2},${currentY2} ${arrowX1},${arrowY1} ${arrowX2},${arrowY2}`}
+          fill={color}
+          opacity={opacity}
         />
       )}
     </svg>
   );
 };
-
-export default FlowArrow;

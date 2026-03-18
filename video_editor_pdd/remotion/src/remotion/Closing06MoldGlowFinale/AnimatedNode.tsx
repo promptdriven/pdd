@@ -1,101 +1,88 @@
 import React from 'react';
-import {useCurrentFrame, interpolate, interpolateColors, Easing} from 'remotion';
+import { useCurrentFrame, interpolate, interpolateColors, Easing } from 'remotion';
 import {
-	NODE_RADIUS_START,
-	NODE_RADIUS_END,
-	NODE_GROW_DURATION,
-	NODE_PULSE_PERIOD,
-	NODE_GLOW_RADIUS,
-	NODE_GLOW_OPACITY,
+  NODE_RADIUS_FROM,
+  NODE_RADIUS_TO,
+  NODE_GLOW_RADIUS,
+  NODE_GLOW_OPACITY,
+  NODE_GROW_DURATION,
+  NODE_PULSE_PERIOD,
+  NODE_ANIM_START,
+  NODES,
 } from './constants';
 
-interface AnimatedNodeProps {
-	center: [number, number];
-	fillFrom: string;
-	fillTo: string;
-	glowColor: string;
-	/** Frame offset within the Sequence (node animation starts at parent Sequence from=30) */
-}
+export const AnimatedNodes: React.FC = () => {
+  const frame = useCurrentFrame();
 
-export const AnimatedNode: React.FC<AnimatedNodeProps> = ({
-	center,
-	fillFrom,
-	fillTo,
-	glowColor,
-}) => {
-	const frame = useCurrentFrame();
+  return (
+    <svg
+      width={1920}
+      height={1080}
+      viewBox="0 0 1920 1080"
+      style={{ position: 'absolute', top: 0, left: 0 }}
+    >
+      <defs>
+        <filter id="nodeGlow">
+          <feGaussianBlur stdDeviation={NODE_GLOW_RADIUS / 3} />
+        </filter>
+      </defs>
 
-	// Growth animation (frames 0-50 within this sequence, which is globally 30-80)
-	const growProgress = interpolate(frame, [0, NODE_GROW_DURATION], [0, 1], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
-	});
+      {NODES.map((node, i) => {
+        // Growth animation starts at NODE_ANIM_START
+        const localFrame = Math.max(0, frame - NODE_ANIM_START);
 
-	const radius =
-		NODE_RADIUS_START +
-		(NODE_RADIUS_END - NODE_RADIUS_START) * growProgress;
+        const growProgress = interpolate(
+          localFrame,
+          [0, NODE_GROW_DURATION],
+          [0, 1],
+          { extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+        );
 
-	// Color brightening
-	const fillColor = interpolateColors(
-		growProgress,
-		[0, 1],
-		[fillFrom, fillTo]
-	);
+        const radius = interpolate(growProgress, [0, 1], [NODE_RADIUS_FROM, NODE_RADIUS_TO]);
 
-	// Slow radial pulse — sinusoidal, every NODE_PULSE_PERIOD frames
-	const pulsePhase = (frame % NODE_PULSE_PERIOD) / NODE_PULSE_PERIOD;
-	const pulseFactor = 1 + 0.08 * Math.sin(pulsePhase * Math.PI * 2);
-	const pulseRadius = radius * pulseFactor;
+        const fillColor = interpolateColors(
+          growProgress,
+          [0, 1],
+          [node.fillFrom, node.fillTo]
+        );
 
-	// Glow opacity fade-in
-	const glowOpacity = interpolate(frame, [0, 60], [0, NODE_GLOW_OPACITY], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
-	});
+        // Slow radial pulse every NODE_PULSE_PERIOD frames
+        const pulsePhase = ((localFrame % NODE_PULSE_PERIOD) / NODE_PULSE_PERIOD) * Math.PI * 2;
+        const pulseScale = 1 + Math.sin(pulsePhase) * 0.08;
+        const pulseRadius = radius * pulseScale;
 
-	// Glow pulse
-	const glowPulseRadius = NODE_GLOW_RADIUS * pulseFactor;
+        // Glow fade-in
+        const glowOpacity = interpolate(
+          localFrame,
+          [0, 60],
+          [0, NODE_GLOW_OPACITY],
+          { extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+        );
 
-	const filterId = `node-glow-${center[0]}-${center[1]}`;
+        // Glow pulse
+        const glowPulseOpacity = glowOpacity * (1 + Math.sin(pulsePhase) * 0.3);
 
-	return (
-		<svg
-			width={1920}
-			height={1080}
-			viewBox="0 0 1920 1080"
-			style={{position: 'absolute', top: 0, left: 0}}
-		>
-			<defs>
-				<filter
-					id={filterId}
-					x="-100%"
-					y="-100%"
-					width="300%"
-					height="300%"
-				>
-					<feGaussianBlur stdDeviation={glowPulseRadius / 2} result="blur" />
-				</filter>
-			</defs>
-
-			{/* Outer glow */}
-			<circle
-				cx={center[0]}
-				cy={center[1]}
-				r={pulseRadius + glowPulseRadius * 0.5}
-				fill={glowColor}
-				opacity={glowOpacity}
-				filter={`url(#${filterId})`}
-			/>
-
-			{/* Main node */}
-			<circle
-				cx={center[0]}
-				cy={center[1]}
-				r={pulseRadius}
-				fill={fillColor}
-			/>
-		</svg>
-	);
+        return (
+          <g key={i}>
+            {/* Outer glow */}
+            <circle
+              cx={node.center[0]}
+              cy={node.center[1]}
+              r={pulseRadius + NODE_GLOW_RADIUS * 0.5}
+              fill={node.glowColor}
+              opacity={glowPulseOpacity}
+              filter="url(#nodeGlow)"
+            />
+            {/* Main fill */}
+            <circle
+              cx={node.center[0]}
+              cy={node.center[1]}
+              r={pulseRadius}
+              fill={fillColor}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
 };

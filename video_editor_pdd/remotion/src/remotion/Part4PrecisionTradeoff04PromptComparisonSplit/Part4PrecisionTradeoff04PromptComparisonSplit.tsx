@@ -1,195 +1,139 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
+import { AbsoluteFill } from 'remotion';
 import {
   COLORS,
   CANVAS_WIDTH,
+  PANEL_WIDTH,
   SPLIT_X,
-  LEFT_WIDTH,
-  RIGHT_WIDTH,
-  SANS_FONT,
   DENSE_PROMPT_LINES,
   MINIMAL_PROMPT_LINES,
   TEST_RESULTS,
-  GENERATED_CODE_LINES,
 } from './constants';
-import SplitDivider from './SplitDivider';
-import FileHeader from './FileHeader';
-import ScrollingCode from './ScrollingCode';
-import TerminalWindow from './TerminalWindow';
-import CodeOutput from './CodeOutput';
-import Badge from './Badge';
+import { SplitDivider } from './SplitDivider';
+import { PanelHeader } from './PanelHeader';
+import { FileHeaderBar } from './FileHeaderBar';
+import { ScrollingCodeBlock } from './ScrollingCodeBlock';
+import { LineBadge } from './LineBadge';
+import { TerminalWindow } from './TerminalWindow';
+import { CodeOutput } from './CodeOutput';
 
 export const defaultPart4PrecisionTradeoff04PromptComparisonSplitProps = {};
 
 export const Part4PrecisionTradeoff04PromptComparisonSplit: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  // Panel header fade-in (frames 0-20)
-  const headerOpacity = interpolate(frame, [0, 20], [0, 0.5], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: COLORS.background,
-        overflow: 'hidden',
-      }}
-    >
-      {/* ===== LEFT PANEL — Dense Prompt ===== */}
+    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
+      {/* ── Left Panel Background ── */}
       <div
         style={{
           position: 'absolute',
           left: 0,
           top: 0,
-          width: LEFT_WIDTH,
-          height: 1080,
+          width: SPLIT_X - 2,
+          height: '100%',
           backgroundColor: COLORS.leftPanelBg,
         }}
-      >
-        {/* Panel header: "FEW TESTS" */}
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 8,
-            width: LEFT_WIDTH,
-            textAlign: 'center',
-            opacity: headerOpacity,
-          }}
-        >
-          <span
-            style={{
-              fontFamily: SANS_FONT,
-              fontSize: 14,
-              fontWeight: 600,
-              color: COLORS.leftAccent,
-              letterSpacing: 2,
-            }}
-          >
-            FEW TESTS
-          </span>
-        </div>
+      />
 
-        {/* File header bar */}
-        <FileHeader
-          filename="parser_v1.prompt"
-          x={0}
-          y={30}
-          width={LEFT_WIDTH}
-          appearFrame={5}
-        />
-
-        {/* Scrolling dense prompt content */}
-        <ScrollingCode
-          lines={DENSE_PROMPT_LINES}
-          x={0}
-          y={62}
-          width={LEFT_WIDTH}
-          maxHeight={770}
-          scrollSpeed={1.5}
-          startFrame={20}
-          showLineNumbers
-        />
-
-        {/* "50 lines" badge */}
-        <Badge
-          text="50 lines"
-          color={COLORS.leftAccent}
-          x={LEFT_WIDTH - 120}
-          y={820}
-          startFrame={90}
-        />
-      </div>
-
-      {/* ===== SPLIT DIVIDER ===== */}
-      <SplitDivider x={SPLIT_X} color={COLORS.splitLine} drawDuration={15} />
-
-      {/* ===== RIGHT PANEL — Minimal Prompt + Tests ===== */}
+      {/* ── Right Panel Background ── */}
       <div
         style={{
           position: 'absolute',
           left: SPLIT_X + 2,
           top: 0,
-          width: RIGHT_WIDTH,
-          height: 1080,
+          width: CANVAS_WIDTH - SPLIT_X - 2,
+          height: '100%',
           backgroundColor: COLORS.rightPanelBg,
         }}
-      >
-        {/* Panel header: "MANY TESTS" */}
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: 8,
-            width: RIGHT_WIDTH,
-            textAlign: 'center',
-            opacity: headerOpacity,
-          }}
-        >
-          <span
-            style={{
-              fontFamily: SANS_FONT,
-              fontSize: 14,
-              fontWeight: 600,
-              color: COLORS.rightAccent,
-              letterSpacing: 2,
-            }}
-          >
-            MANY TESTS
-          </span>
-        </div>
-
-        {/* File header bar */}
-        <FileHeader
-          filename="parser_v2.prompt"
-          x={0}
-          y={30}
-          width={RIGHT_WIDTH}
-          appearFrame={5}
-        />
-
-        {/* Minimal prompt content (instant reveal, not scrolling) */}
-        <ScrollingCode
-          lines={MINIMAL_PROMPT_LINES}
-          x={0}
-          y={62}
-          width={RIGHT_WIDTH}
-          maxHeight={180}
-          scrollSpeed={10}
-          startFrame={20}
-          showLineNumbers
-        />
-
-        {/* "10 lines" badge */}
-        <Badge
-          text="10 lines"
-          color={COLORS.rightAccent}
-          x={RIGHT_WIDTH - 120}
-          y={240}
-          startFrame={90}
-        />
-
-        {/* Terminal window with scrolling test results */}
-        <TerminalWindow
-          x={20}
-          y={290}
-          width={RIGHT_WIDTH - 40}
-          height={540}
-          command="pdd test parser"
-          testResults={TEST_RESULTS}
-          startFrame={150}
-          scrollSpeed={3}
-        />
-      </div>
-
-      {/* ===== BOTTOM — Identical Code Output ===== */}
-      <CodeOutput
-        codeLines={GENERATED_CODE_LINES}
-        startFrame={330}
-        y={870}
       />
+
+      {/* ── Split Divider (frames 0-15) ── */}
+      <SplitDivider />
+
+      {/* ── Panel Headers (frames 0-20 fade in) ── */}
+      <PanelHeader
+        text="FEW TESTS"
+        color={COLORS.leftAccent}
+        panelX={0}
+        panelWidth={PANEL_WIDTH}
+      />
+      <PanelHeader
+        text="MANY TESTS"
+        color={COLORS.rightAccent}
+        panelX={SPLIT_X + 2}
+        panelWidth={PANEL_WIDTH}
+      />
+
+      {/* ── Left File Header (frames 20+) ── */}
+      <FileHeaderBar
+        filename="parser_v1.prompt"
+        panelX={0}
+        panelWidth={PANEL_WIDTH}
+        y={42}
+        startFrame={20}
+      />
+
+      {/* ── Left Scrolling Code (frames 20-150+) ── */}
+      <ScrollingCodeBlock
+        lines={DENSE_PROMPT_LINES}
+        panelX={0}
+        panelWidth={PANEL_WIDTH}
+        y={74}
+        startFrame={20}
+        scrollSpeed={1.5}
+        maxHeight={750}
+      />
+
+      {/* ── Left "50 lines" badge (frame 90+) ── */}
+      <LineBadge
+        text="50 lines"
+        color={COLORS.leftAccent}
+        x={860}
+        y={830}
+        startFrame={90}
+      />
+
+      {/* ── Right File Header (frames 20+) ── */}
+      <FileHeaderBar
+        filename="parser_v2.prompt"
+        panelX={SPLIT_X + 2}
+        panelWidth={PANEL_WIDTH}
+        y={42}
+        startFrame={20}
+      />
+
+      {/* ── Right Minimal Code (frames 20+, instant reveal) ── */}
+      <ScrollingCodeBlock
+        lines={MINIMAL_PROMPT_LINES}
+        panelX={SPLIT_X + 2}
+        panelWidth={PANEL_WIDTH}
+        y={74}
+        startFrame={20}
+        scrollSpeed={10}
+        maxHeight={200}
+      />
+
+      {/* ── Right "10 lines" badge (frame 90+) ── */}
+      <LineBadge
+        text="10 lines"
+        color={COLORS.rightAccent}
+        x={SPLIT_X + 860}
+        y={270}
+        startFrame={90}
+      />
+
+      {/* ── Right Terminal Window (frame 150+) ── */}
+      <TerminalWindow
+        panelX={SPLIT_X + 2}
+        panelWidth={PANEL_WIDTH}
+        y={310}
+        command="pdd test parser"
+        testResults={TEST_RESULTS}
+        startFrame={150}
+        scrollSpeed={3}
+      />
+
+      {/* ── Bottom Code Output (frame 330+) ── */}
+      <CodeOutput startFrame={330} />
     </AbsoluteFill>
   );
 };

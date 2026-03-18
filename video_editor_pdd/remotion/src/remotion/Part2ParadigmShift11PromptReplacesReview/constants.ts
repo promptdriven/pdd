@@ -1,168 +1,111 @@
-// Canvas
+// Colors
+export const COLORS = {
+  background: '#000000',
+  leftPanelBg: '#0F172A',
+  rightPanelBg: '#0A0F1A',
+  splitLine: '#334155',
+  red: '#EF4444',
+  green: '#5AAA6E',
+  amber: '#D9944A',
+  textLight: '#E2E8F0',
+  codeMuted: '#94A3B8',
+  panelBg: '#1E293B',
+} as const;
+
+// Layout
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
-export const TOTAL_FRAMES = 360;
-export const FPS = 30;
-
-// Split layout
 export const SPLIT_X = 960;
 export const LEFT_PANEL_WIDTH = 958;
-export const RIGHT_PANEL_START = 962;
 export const RIGHT_PANEL_WIDTH = 958;
-export const DIVIDER_WIDTH = 2;
+export const TOTAL_FRAMES = 360;
 
-// Background colors
-export const BG_COLOR = "#000000";
-export const LEFT_BG = "#0F172A";
-export const RIGHT_BG = "#0A0F1A";
-export const DIVIDER_COLOR = "#334155";
-export const DIVIDER_OPACITY = 0.25;
-
-// Panel colors
-export const PANEL_BG = "#1E293B";
-
-// Left panel colors (red/danger)
-export const RED_ACCENT = "#EF4444";
-
-// Right panel colors (green/success)
-export const GREEN_ACCENT = "#5AAA6E";
-export const AMBER_ACCENT = "#D9944A";
-export const TEXT_LIGHT = "#E2E8F0";
-export const CODE_MUTED = "#94A3B8";
-
-// Animation timing (frames at 30fps)
-export const SPLIT_LINE_START = 0;
-export const SPLIT_LINE_END = 15;
-export const HEADER_FADE_START = 0;
-export const HEADER_FADE_END = 20;
-
-export const CODE_DIFF_FADE_START = 20;
-export const CODE_DIFF_FADE_END = 40;
-export const PROMPT_FADE_START = 20;
-export const PROMPT_FADE_END = 40;
-
-export const QUESTION_MARK_START = 60;
-export const QUESTION_MARK_FADE_END = 80;
-export const PULSE_PERIOD = 30;
-
-export const HIGHLIGHT_START = 80;
-export const HIGHLIGHT_END = 120;
-
-export const TEST_SUITE_START = 120;
-export const CHECKMARK_INTERVAL = 15;
-
-export const METERS_START = 220;
-export const METER_FILL_DURATION = 30;
-export const STATUS_LABEL_START = 250;
-export const STATUS_LABEL_FADE_DURATION = 15;
-
-// Cognitive load meter
-export const METER_WIDTH = 300;
-export const METER_HEIGHT = 16;
-export const METER_Y = 950;
-
-// Question mark
-export const QUESTION_MARK_SIZE = 200;
-export const QUESTION_MARK_X = 480;
-export const QUESTION_MARK_Y = 450;
-export const QUESTION_MARK_BASE_OPACITY = 0.15;
-export const QUESTION_MARK_PEAK_OPACITY = 0.3;
-export const QUESTION_MARK_GLOW_BLUR = 30;
-export const QUESTION_MARK_GLOW_OPACITY = 0.06;
-
-// Document panel positions
-export const PROMPT_PANEL_X = 480;
-export const PROMPT_PANEL_Y = 280;
-export const PROMPT_PANEL_WIDTH = 400;
-export const PROMPT_PANEL_HEIGHT = 250;
-
-export const TEST_PANEL_X = 480;
-export const TEST_PANEL_Y = 650;
-export const TEST_PANEL_WIDTH = 400;
-export const TEST_PANEL_HEIGHT = 250;
-
-// Code diff content (fake diff lines)
-export const DIFF_LINES: string[] = [
-  "+ import { useState, useEffect, useCallback, useMemo } from 'react';",
-  "- import { Component } from 'react';",
-  "+ import { validateInput, sanitizeOutput, transformData } from './utils';",
-  "  ",
-  "+ export const processPayload = async (data: PayloadInput): Promise<Result> => {",
-  "+   const validated = await validateInput(data);",
-  "+   if (!validated.success) {",
-  "+     throw new ValidationError(validated.errors);",
-  "+   }",
-  "-   return processLegacy(data);",
-  "+   const transformed = transformData(validated.data, {",
-  "+     normalize: true,",
-  "+     stripNull: true,",
-  "+     maxDepth: 10,",
-  "+   });",
-  "+   return sanitizeOutput(transformed);",
-  "+ };",
-  "  ",
-  "+ interface ProcessorConfig {",
-  "+   readonly mode: 'strict' | 'lenient';",
-  "+   readonly retries: number;",
-  "+   readonly timeout: number;",
-  "+   readonly fallback?: () => Promise<Result>;",
-  "+ }",
-  "  ",
-  "- class LegacyProcessor {",
-  "-   private cache: Map<string, any>;",
-  "-   constructor() { this.cache = new Map(); }",
-  "-   process(input: any) { return this.cache.get(input); }",
-  "- }",
-  "  ",
-  "+ export function createProcessor(config: ProcessorConfig) {",
-  "+   const cache = new WeakMap<object, Result>();",
-  "+   return {",
-  "+     async process(input: PayloadInput): Promise<Result> {",
-  "+       const cached = cache.get(input);",
-  "+       if (cached) return cached;",
-  "+       const result = await processPayload(input);",
-  "+       cache.set(input, result);",
-  "+       return result;",
-  "+     },",
-  "+     invalidate(key: object) { cache.delete(key); },",
-  "+   };",
-  "+ }",
-  "  ",
-  "+ // Error boundary for async operations",
-  "+ export const withRetry = async <T>(fn: () => Promise<T>, retries = 3): Promise<T> => {",
-  "+   for (let i = 0; i < retries; i++) {",
-  "+     try { return await fn(); }",
-  "+     catch (e) { if (i === retries - 1) throw e; }",
-  "+   }",
-  "+   throw new Error('Unreachable');",
-  "+ };",
+// Fake code diff lines for the left panel
+export const DIFF_LINES: Array<{ text: string; type: 'add' | 'remove' | 'context' }> = [
+  { text: '  const handleAuth = async (user: User) => {', type: 'context' },
+  { text: '-   if (user.token && validateToken(user.token)) {', type: 'remove' },
+  { text: '-     return await refreshSession(user);', type: 'remove' },
+  { text: '+   const validated = await validateAndRefresh(user);', type: 'add' },
+  { text: '+   if (!validated.success) {', type: 'add' },
+  { text: '+     throw new AuthError(validated.reason);', type: 'add' },
+  { text: '    }', type: 'context' },
+  { text: '-   const perms = getPermissions(user.role);', type: 'remove' },
+  { text: '+   const perms = await resolvePermissions({', type: 'add' },
+  { text: '+     role: user.role,', type: 'add' },
+  { text: '+     scope: validated.scope,', type: 'add' },
+  { text: '+     orgPolicy: user.org.policy,', type: 'add' },
+  { text: '+   });', type: 'add' },
+  { text: '    return { session, perms };', type: 'context' },
+  { text: '  };', type: 'context' },
+  { text: '', type: 'context' },
+  { text: '-  export function processQueue(items: Item[]) {', type: 'remove' },
+  { text: '-    return items.filter(i => i.valid).map(transform);', type: 'remove' },
+  { text: '+  export async function processQueue(', type: 'add' },
+  { text: '+    items: Item[],', type: 'add' },
+  { text: '+    opts: ProcessOpts = {}', type: 'add' },
+  { text: '+  ): Promise<Result[]> {', type: 'add' },
+  { text: '+    const validated = items.filter(i => {', type: 'add' },
+  { text: '+      return i.valid && checkPolicy(i, opts);', type: 'add' },
+  { text: '+    });', type: 'add' },
+  { text: '+    return Promise.all(validated.map(async i => {', type: 'add' },
+  { text: '+      const result = await transform(i, opts);', type: 'add' },
+  { text: '+      await audit.log(i.id, result.hash);', type: 'add' },
+  { text: '+      return result;', type: 'add' },
+  { text: '+    }));', type: 'add' },
+  { text: '  }', type: 'context' },
+  { text: '', type: 'context' },
+  { text: '-  function validateInput(data: unknown): data is Valid {', type: 'remove' },
+  { text: '-    return typeof data === "object" && data !== null;', type: 'remove' },
+  { text: '+  function validateInput(data: unknown): Result<Valid> {', type: 'add' },
+  { text: '+    if (data === null || data === undefined) {', type: 'add' },
+  { text: '+      return { ok: false, error: "null_input" };', type: 'add' },
+  { text: '+    }', type: 'add' },
+  { text: '+    if (typeof data !== "object") {', type: 'add' },
+  { text: '+      return { ok: false, error: "not_object" };', type: 'add' },
+  { text: '+    }', type: 'add' },
+  { text: '+    const schema = getSchema(data);', type: 'add' },
+  { text: '+    return schema.validate(data);', type: 'add' },
+  { text: '  }', type: 'context' },
+  { text: '', type: 'context' },
+  { text: '  class EventBus {', type: 'context' },
+  { text: '-    emit(event: string, payload: any) {', type: 'remove' },
+  { text: '-      this.handlers[event]?.forEach(h => h(payload));', type: 'remove' },
+  { text: '+    async emit<T extends EventType>(', type: 'add' },
+  { text: '+      event: T,', type: 'add' },
+  { text: '+      payload: EventPayload<T>', type: 'add' },
+  { text: '+    ): Promise<void> {', type: 'add' },
+  { text: '+      const handlers = this.handlers.get(event) ?? [];', type: 'add' },
+  { text: '+      await Promise.allSettled(', type: 'add' },
+  { text: '+        handlers.map(h => h(payload))', type: 'add' },
+  { text: '+      );', type: 'add' },
+  { text: '    }', type: 'context' },
+  { text: '  }', type: 'context' },
 ];
 
-// Prompt document content
+// Prompt document text for the right panel
 export const PROMPT_LINES: Array<{ text: string; highlight?: boolean }> = [
-  { text: "# Payment Processor Refactor" },
-  { text: "" },
-  { text: "Convert the legacy class-based payment", highlight: true },
-  { text: "processor to a functional architecture." },
-  { text: "" },
-  { text: "## Requirements" },
-  { text: "- Input validation with typed errors", highlight: true },
-  { text: "- WeakMap caching (not Map<string,any>)" },
-  { text: "- Retry logic with configurable attempts" },
-  { text: "- Null stripping + normalization", highlight: true },
-  { text: "- Strict/lenient processing modes" },
-  { text: "" },
-  { text: "## Constraints" },
-  { text: "- Must be tree-shakeable" },
-  { text: "- No runtime type assertions" },
+  { text: '# Auth Refactor Spec' },
+  { text: '' },
+  { text: 'Refactor the auth module to:', highlight: true },
+  { text: '- Async token validation' },
+  { text: '- Scoped permission resolution', highlight: true },
+  { text: '- Org-level policy checks' },
+  { text: '' },
+  { text: 'Process queue must:', highlight: true },
+  { text: '- Accept ProcessOpts config' },
+  { text: '- Filter by policy' },
+  { text: '- Audit each transform result' },
+  { text: '' },
+  { text: 'Input validation returns Result<T>', highlight: true },
+  { text: 'EventBus uses typed payloads' },
 ];
 
-// Test results
-export const TEST_ITEMS: string[] = [
-  "test_handles_null_input",
-  "test_returns_correct_format",
-  "test_unicode_support",
-  "test_edge_case_empty",
-  "test_performance_under_100ms",
-  "test_idempotent_behavior",
-];
+// Test suite items
+export const TEST_ITEMS = [
+  'test_handles_null_input',
+  'test_returns_correct_format',
+  'test_unicode_support',
+  'test_edge_case_empty',
+  'test_performance_under_100ms',
+  'test_idempotent_behavior',
+] as const;

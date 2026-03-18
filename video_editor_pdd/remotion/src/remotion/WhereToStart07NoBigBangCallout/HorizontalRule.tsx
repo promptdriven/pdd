@@ -1,9 +1,9 @@
 import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { RULE, COLORS, TIMING } from './constants';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { COLORS, TIMING } from './constants';
 
 /**
- * Animated horizontal rule that draws from center outward.
+ * HorizontalRule draws a centered line that expands outward from the center.
  */
 export const HorizontalRule: React.FC = () => {
   const frame = useCurrentFrame();
@@ -16,23 +16,23 @@ export const HorizontalRule: React.FC = () => {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
       easing: Easing.inOut(Easing.quad),
-    }
+    },
   );
 
-  const currentWidth = RULE.WIDTH * progress;
+  const ruleWidth = 160;
+  const currentWidth = ruleWidth * progress;
+  const centerX = 1920 / 2;
 
   return (
     <div
       style={{
         position: 'absolute',
-        top: RULE.Y,
-        left: '50%',
-        transform: 'translateX(-50%)',
+        top: 475,
+        left: centerX - currentWidth / 2,
         width: currentWidth,
-        height: RULE.HEIGHT,
-        backgroundColor: COLORS.RULE,
-        opacity: RULE.OPACITY,
-        borderRadius: 1,
+        height: 1.5,
+        backgroundColor: COLORS.RULE_COLOR,
+        opacity: 0.3,
       }}
     />
   );

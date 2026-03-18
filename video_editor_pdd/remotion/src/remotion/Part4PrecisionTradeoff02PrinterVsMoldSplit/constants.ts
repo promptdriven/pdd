@@ -1,58 +1,115 @@
-// Layout
-export const WIDTH = 1920;
-export const HEIGHT = 1080;
-export const SPLIT_X = 960;
-export const SPLIT_LINE_WIDTH = 2;
-export const FPS = 30;
-export const TOTAL_FRAMES = 600;
+// === Colors ===
+export const COLORS = {
+  // Backgrounds
+  sceneBg: '#000000',
+  leftPanelBg: '#0F172A',
+  rightPanelBg: '#0A0F1A',
 
-// Panel dimensions
-export const LEFT_PANEL_WIDTH = 958;
-export const RIGHT_PANEL_WIDTH = 958;
-export const RIGHT_PANEL_X = 962;
+  // Split divider
+  splitLine: '#334155',
 
-// Colors
-export const BG_COLOR = '#000000';
-export const LEFT_BG = '#0F172A';
-export const RIGHT_BG = '#0A0F1A';
-export const SPLIT_LINE_COLOR = '#334155';
+  // Left panel (3D Printing)
+  leftHeader: '#94A3B8',
+  gridLine: '#1E293B',
+  gridDot: '#334155',
+  activeDot: '#4A90D9',
+  nozzle: '#E2E8F0',
+  leftAnnotation: '#64748B',
 
-export const GRID_LINE_COLOR = '#1E293B';
-export const GRID_DOT_COLOR = '#334155';
-export const ACTIVE_DOT_COLOR = '#4A90D9';
-export const NOZZLE_COLOR = '#E2E8F0';
-export const LEFT_ACCENT = '#94A3B8';
+  // Right panel (Injection Molding)
+  rightHeader: '#D9944A',
+  wallColor: '#D9944A',
+  fluidColor: '#4A90D9',
+  moldNozzle: '#94A3B8',
+  rightAnnotation: '#D9944A',
 
-export const WALL_COLOR = '#D9944A';
-export const FLUID_COLOR = '#4A90D9';
-export const RIGHT_ACCENT = '#D9944A';
+  // Bottom callout
+  calloutText: '#E2E8F0',
+  calloutSpec: '#94A3B8',
+  calloutConstraint: '#D9944A',
+} as const;
 
-export const TEXT_COLOR = '#E2E8F0';
-export const DIM_TEXT_COLOR = '#64748B';
+// === Layout ===
+export const LAYOUT = {
+  width: 1920,
+  height: 1080,
+  splitX: 960,
+  splitLineWidth: 2,
 
-// Grid settings
-export const GRID_ROWS = 20;
-export const GRID_COLS = 20;
-export const GRID_SPACING = 36;
-export const GRID_CENTER_X = 480;
-export const GRID_CENTER_Y = 460;
-export const TOTAL_GRID_POINTS = GRID_ROWS * GRID_COLS;
+  leftPanelX: 0,
+  leftPanelWidth: 958,
+  rightPanelX: 962,
+  rightPanelWidth: 958,
 
-// Mold settings
-export const MOLD_WIDTH = 400;
-export const MOLD_HEIGHT = 500;
-export const MOLD_CENTER_X = 480;
-export const MOLD_CENTER_Y = 460;
-export const MOLD_WALL_WIDTH = 6;
+  headerY: 40,
+  counterY: 900,
+  annotationY: 930,
+  calloutY: 980,
+} as const;
 
-// Animation keyframes
-export const SPLIT_DRAW_END = 20;
-export const GRID_APPEAR_START = 20;
-export const GRID_APPEAR_END = 60;
-export const NOZZLE_START = 60;
-export const NOZZLE_END = 440;
-export const FLUID_START = 60;
-export const FLUID_END = 440;
-export const HOLD_START = 480;
-export const CALLOUT_START = 540;
-export const CALLOUT_FADE_FRAMES = 20;
+// === Grid ===
+export const GRID = {
+  rows: 20,
+  cols: 20,
+  spacing: 36,
+  // Center of left panel
+  centerX: 479,
+  centerY: 460,
+  dotRadius: 3,
+  activeDotRadius: 5,
+  totalPoints: 400,
+} as const;
+
+// === Mold ===
+export const MOLD = {
+  width: 400,
+  height: 500,
+  wallWidth: 6,
+  // Center of right panel (relative to right panel)
+  centerX: 479,
+  centerY: 460,
+} as const;
+
+// === Timing (frames) ===
+export const TIMING = {
+  // Phase 1: Split line + headers
+  splitStart: 0,
+  splitDuration: 15,
+  headerFadeStart: 5,
+  headerFadeDuration: 15,
+
+  // Phase 2: Grid + Mold walls appear
+  gridAppearStart: 20,
+  gridAppearDuration: 40,
+  moldWallDrawStart: 20,
+  moldWallDrawDuration: 30,
+
+  // Phase 3-6: Nozzle traversal + fluid fill
+  nozzleStart: 60,
+  nozzleEnd: 460,
+  nozzleDuration: 400, // frames 60-460
+  fluidStart: 60,
+  fluidEnd: 460,
+  fluidDuration: 400,
+
+  // Phase 7: Hold
+  holdStart: 480,
+  holdEnd: 540,
+
+  // Phase 8: Callout
+  calloutFadeStart: 540,
+  calloutFadeDuration: 20,
+
+  totalFrames: 600,
+} as const;
+
+// === Typography ===
+export const FONT = {
+  family: 'Inter, sans-serif',
+  headerSize: 14,
+  headerWeight: 600 as const,
+  headerLetterSpacing: 2,
+  counterSize: 14,
+  annotationSize: 11,
+  calloutSize: 14,
+} as const;

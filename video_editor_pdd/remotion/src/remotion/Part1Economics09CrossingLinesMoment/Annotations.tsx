@@ -1,134 +1,156 @@
 import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
-  WIDTH,
-  HEIGHT,
-  FONT_FAMILY,
-  AXIS_LABEL_COLOR,
-  RED_FORK_COLOR,
-  ANNOTATION_SAME_TOOLS_START,
-  ANNOTATION_SAME_TOOLS_FADE,
-  METR_ANNOTATION_START,
-  METR_FADE_DURATION,
-  dataToPixelX,
-  dataToPixelY,
+  SLATE_ANNOTATION,
+  RED_LARGE,
+  BLUE_GENERATE,
+  xToPixel,
+  yToPixel,
+  SMALL_CODEBASE_DATA,
+  LARGE_CODEBASE_DATA,
+  PHASE_ANNOTATION,
+  PHASE_METR,
+  PHASE_PROMPT_NOTE,
 } from "./constants";
 
 /**
- * Annotations: Renders the "Same tools. Different codebase sizes." text,
- * METR annotation, and connecting lines between the two forks.
+ * Text annotations:
+ * 1. "Same tools. Different codebase sizes." — between forks
+ * 2. METR annotations — near upper fork
+ * 3. Terminal breadcrumb — bottom-right
  */
 export const Annotations: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // "Same tools" annotation fades in
+  // "Same tools" annotation
   const sameToolsOpacity = interpolate(
     frame,
-    [ANNOTATION_SAME_TOOLS_START, ANNOTATION_SAME_TOOLS_START + ANNOTATION_SAME_TOOLS_FADE],
+    [PHASE_ANNOTATION.start, PHASE_ANNOTATION.start + 15],
     [0, 0.5],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // METR annotations fade in
-  const metrOpacity = interpolate(
+  // METR annotation
+  const metrOpacity1 = interpolate(
     frame,
-    [METR_ANNOTATION_START, METR_ANNOTATION_START + METR_FADE_DURATION],
-    [0, 1],
+    [PHASE_METR.start, PHASE_METR.start + 15],
+    [0, 0.45],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  // Positions for annotations (between the two forks around 2023)
-  const annotX = dataToPixelX(2022.5);
-  // Midpoint between upper fork (~10h at 2022) and lower fork (~4h at 2022)
-  const annotY = dataToPixelY(7);
+  const metrOpacity2 = interpolate(
+    frame,
+    [PHASE_METR.start + 30, PHASE_METR.start + 45],
+    [0, 0.35],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
 
-  // Upper fork endpoint for METR annotation
-  const metrX = dataToPixelX(2024.5);
-  const metrY = dataToPixelY(11.5);
+  // Terminal breadcrumb
+  const terminalOpacity = interpolate(
+    frame,
+    [PHASE_PROMPT_NOTE.start, PHASE_PROMPT_NOTE.start + 15],
+    [0, 0.12],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
 
-  // Connecting lines from annotation to each fork
-  const lowerY = dataToPixelY(4); // small codebase at 2022
-  const upperY = dataToPixelY(10); // large codebase at 2022
+  // Position: between forks, around 2022-2023 area
+  const midYear = 2022.5;
+  const lowerY2022 = 4; // approx small codebase at 2022
+  const upperY2022 = 10; // approx large codebase at 2022
+  const annoX = xToPixel(midYear);
+  const annoY = yToPixel((lowerY2022 + upperY2022) / 2);
+
+  // METR position — near upper fork end
+  const upperEnd = LARGE_CODEBASE_DATA[LARGE_CODEBASE_DATA.length - 1];
+  const metrX = xToPixel(upperEnd.x) - 180;
+  const metrY = yToPixel(upperEnd.y) - 40;
 
   return (
-    <AbsoluteFill>
-      <svg
-        width={WIDTH}
-        height={HEIGHT}
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
-        {/* "Same tools" annotation */}
-        {frame >= ANNOTATION_SAME_TOOLS_START && (
-          <g opacity={sameToolsOpacity}>
-            {/* Connecting dashed lines to both forks */}
-            <line
-              x1={annotX}
-              y1={annotY - 8}
-              x2={annotX}
-              y2={upperY + 4}
-              stroke={AXIS_LABEL_COLOR}
-              strokeWidth={1}
-              strokeDasharray="3 3"
-              opacity={0.15}
-            />
-            <line
-              x1={annotX}
-              y1={annotY + 8}
-              x2={annotX}
-              y2={lowerY - 4}
-              stroke={AXIS_LABEL_COLOR}
-              strokeWidth={1}
-              strokeDasharray="3 3"
-              opacity={0.15}
-            />
+    <svg
+      width={1920}
+      height={1080}
+      viewBox="0 0 1920 1080"
+      style={{ position: "absolute", top: 0, left: 0 }}
+    >
+      {/* "Same tools" annotation */}
+      {frame >= PHASE_ANNOTATION.start && (
+        <g opacity={sameToolsOpacity}>
+          <text
+            x={annoX}
+            y={annoY}
+            fill={SLATE_ANNOTATION}
+            fontSize={12}
+            fontFamily="Inter, sans-serif"
+            textAnchor="middle"
+          >
+            Same tools. Different codebase sizes.
+          </text>
 
-            {/* Text */}
-            <text
-              x={annotX}
-              y={annotY}
-              fill={AXIS_LABEL_COLOR}
-              fontSize={12}
-              fontFamily={FONT_FAMILY}
-              fontWeight={400}
-              textAnchor="middle"
-            >
-              Same tools. Different codebase sizes.
-            </text>
-          </g>
-        )}
+          {/* Thin dashed lines pointing to both forks */}
+          <line
+            x1={annoX}
+            y1={annoY + 6}
+            x2={annoX}
+            y2={yToPixel(lowerY2022) - 6}
+            stroke={SLATE_ANNOTATION}
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            opacity={0.15}
+          />
+          <line
+            x1={annoX}
+            y1={annoY - 14}
+            x2={annoX}
+            y2={yToPixel(upperY2022) + 6}
+            stroke={SLATE_ANNOTATION}
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            opacity={0.15}
+          />
+        </g>
+      )}
 
-        {/* METR annotations near upper fork endpoint */}
-        {frame >= METR_ANNOTATION_START && (
-          <g>
-            <text
-              x={metrX}
-              y={metrY - 28}
-              fill={RED_FORK_COLOR}
-              fontSize={9}
-              fontFamily={FONT_FAMILY}
-              fontWeight={400}
-              textAnchor="middle"
-              opacity={metrOpacity * 0.45}
-            >
-              METR, 2025: experienced devs 19% slower
-            </text>
-            <text
-              x={metrX}
-              y={metrY - 14}
-              fill={RED_FORK_COLOR}
-              fontSize={9}
-              fontFamily={FONT_FAMILY}
-              fontWeight={400}
-              textAnchor="middle"
-              opacity={metrOpacity * 0.35}
-            >
-              {"Developers believed +20%. Reality: \u221219%."}
-            </text>
-          </g>
-        )}
-      </svg>
-    </AbsoluteFill>
+      {/* METR annotations */}
+      {frame >= PHASE_METR.start && (
+        <g>
+          <text
+            x={metrX}
+            y={metrY}
+            fill={RED_LARGE}
+            fontSize={9}
+            fontFamily="Inter, sans-serif"
+            opacity={metrOpacity1}
+          >
+            METR, 2025: experienced devs 19% slower
+          </text>
+          <text
+            x={metrX}
+            y={metrY + 16}
+            fill={RED_LARGE}
+            fontSize={9}
+            fontFamily="Inter, sans-serif"
+            opacity={metrOpacity2}
+          >
+            {"Developers believed +20%. Reality: \u221219%."}
+          </text>
+        </g>
+      )}
+
+      {/* Terminal breadcrumb */}
+      {frame >= PHASE_PROMPT_NOTE.start && (
+        <text
+          x={1800}
+          y={1040}
+          fill={BLUE_GENERATE}
+          fontSize={10}
+          fontFamily="'JetBrains Mono', monospace"
+          textAnchor="end"
+          opacity={terminalOpacity}
+        >
+          pdd generate
+        </text>
+      )}
+    </svg>
   );
 };
 

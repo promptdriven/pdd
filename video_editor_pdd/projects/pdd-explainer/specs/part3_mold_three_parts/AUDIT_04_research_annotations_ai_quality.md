@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+At 93.3% progress (phase 6: hold on complete picture), the frame is missing several critical elements that should all be visible. (1) The DORA card (Card 2) is missing its sub-stat text ('AI + strong tests = accelerated') and source citation '(DORA, 2025)'. (2) The connecting dashed arrow from the DORA card to the mold walls with 'Tests are the walls' label is entirely absent. (3) The visual equation at the bottom (~y:850) is completely missing — no red/green equation text, no 'vs.' divider, no bracket pointing to walls. Both annotation cards are present and correctly positioned with proper styling, and the dimmed mold diagram with amber wall glow is visible in the center. However, the missing bottom-half equation and connecting arrow represent substantial content omissions at a frame that should show 'all annotations visible.'

@@ -962,14 +962,21 @@ def resolve_component_intrinsic_duration_frames(
         os.path.join(remotion_src, f'{import_path}.tsx'),
     ]
 
-    duration_re = re.compile(r'totalDuration\s*[:=]\s*(\d+)', re.IGNORECASE)
+    duration_patterns = (
+        re.compile(r'\bTOTAL_FRAMES\s*[:=]\s*(\d+)\b'),
+        re.compile(r'\btotalFrames\s*[:=]\s*(\d+)\b'),
+        re.compile(r'\bTOTAL_DURATION_FRAMES\s*[:=]\s*(\d+)\b'),
+        re.compile(r'\btotalDuration\s*[:=]\s*(\d+)\b', re.IGNORECASE),
+    )
 
     for candidate in constants_candidates:
         content = _read_text_if_exists(candidate)
         if not content:
             continue
-        match = duration_re.search(content)
-        if match:
+        for duration_re in duration_patterns:
+            match = duration_re.search(content)
+            if not match:
+                continue
             try:
                 duration = int(match.group(1))
             except ValueError:
@@ -1712,8 +1719,6 @@ def generate_root_tsx(
                 lines.append(');')
                 generated_preview_wrappers.add(preview_wrapper_name)
         lines.append('')
-    lines.append('const PREVIEW_DURATION = 150; // 5s at 30fps')
-    lines.append('')
     lines.append('export const RemotionRoot: React.FC = () => {')
     lines.append('  return (')
     lines.append('    <>')
@@ -1753,13 +1758,21 @@ def generate_root_tsx(
                 if comp_pascal in registered:
                     continue
                 preview_component = preview_wrapper_names.get(comp_pascal, comp_pascal)
+                preview_duration = (
+                    resolve_component_intrinsic_duration_frames(
+                        comp_id,
+                        section_id,
+                        remotion_src,
+                    )
+                    or 150
+                )
                 # Use hyphenated comp_pascal as the Remotion composition ID
                 # to ensure uniqueness across sections
                 remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
                 lines.append(f'      <Composition')
                 lines.append(f'        id="{remotion_id}"')
                 lines.append(f'        component={{{preview_component}}}')
-                lines.append(f'        durationInFrames={{PREVIEW_DURATION}}')
+                lines.append(f'        durationInFrames={{{preview_duration}}}')
                 lines.append(f'        fps={{{fps}}}')
                 lines.append(f'        width={{{width}}}')
                 lines.append(f'        height={{{height}}}')
@@ -1861,11 +1874,19 @@ def _merge_root_tsx(
                 import_line = f'import {{ {comp_pascal} }} from "./{import_path}";'
                 import_lines.append(import_line)
                 remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
+                preview_duration = (
+                    resolve_component_intrinsic_duration_frames(
+                        comp_id,
+                        section_id,
+                        remotion_src,
+                    )
+                    or 150
+                )
                 comp_block = (
                     f'      <Composition\n'
                     f'        id="{remotion_id}"\n'
                     f'        component={{{comp_pascal}}}\n'
-                    f'        durationInFrames={{150}}\n'
+                    f'        durationInFrames={{{preview_duration}}}\n'
                     f'        fps={{{fps}}}\n'
                     f'        width={{{width}}}\n'
                     f'        height={{{height}}}\n'

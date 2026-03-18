@@ -1,207 +1,234 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
-  WIDTH,
-  HEIGHT,
   GRID_X,
   GRID_Y,
   GRID_W,
   GRID_H,
   GRID_CENTER_X,
   GRID_CENTER_Y,
-  GRID_RIGHT,
-  GRID_BOTTOM,
   BORDER_COLOR,
   GREEN,
   RED,
-  FONT_FAMILY,
-  GRID_DRAW_START,
-  GRID_DRAW_END,
-} from "./constants";
+} from './constants';
 
-export const QuadrantGrid: React.FC = () => {
+interface QuadrantGridProps {
+  startFrame: number;
+  drawDuration: number;
+}
+
+/**
+ * Draws the 2×2 grid border, cross dividers, axis labels, and arrow indicators.
+ * Animates the grid drawing in from the center outward.
+ */
+export const QuadrantGrid: React.FC<QuadrantGridProps> = ({
+  startFrame,
+  drawDuration,
+}) => {
   const frame = useCurrentFrame();
+  const localFrame = frame - startFrame;
 
-  const drawProgress = interpolate(
-    frame,
-    [GRID_DRAW_START, GRID_DRAW_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
+  if (localFrame < 0) return null;
 
-  const labelOpacity = interpolate(
-    frame,
-    [GRID_DRAW_START + 20, GRID_DRAW_END],
+  // Draw progress: 0 → 1
+  const draw = interpolate(localFrame, [0, drawDuration], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
+
+  // Label fade-in (starts at 50% of draw, finishes at 100%)
+  const labelAlpha = interpolate(
+    localFrame,
+    [drawDuration * 0.5, drawDuration],
     [0, 0.6],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
     }
   );
 
-  // Border perimeter for stroke-dashoffset animation
-  const borderPerimeter = 2 * (GRID_W + GRID_H);
-  const borderOffset = borderPerimeter * (1 - drawProgress);
+  // Outer border grows from center
+  const halfW = (GRID_W / 2) * draw;
+  const halfH = (GRID_H / 2) * draw;
+  const borderLeft = GRID_CENTER_X - halfW;
+  const borderTop = GRID_CENTER_Y - halfH;
+  const borderWidth = halfW * 2;
+  const borderHeight = halfH * 2;
 
-  // Vertical divider: from center top to center bottom
-  const vertDividerLength = GRID_H;
-  const vertOffset = vertDividerLength * (1 - drawProgress);
-
-  // Horizontal divider: from center left to center right
-  const horizDividerLength = GRID_W;
-  const horizOffset = horizDividerLength * (1 - drawProgress);
+  // Cross dividers grow from center
+  const vertLineTop = GRID_CENTER_Y - halfH;
+  const vertLineBottom = GRID_CENTER_Y + halfH;
+  const horizLineLeft = GRID_CENTER_X - halfW;
+  const horizLineRight = GRID_CENTER_X + halfW;
 
   return (
-    <svg
-      width={WIDTH}
-      height={HEIGHT}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      style={{ position: "absolute", top: 0, left: 0 }}
+    <div
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+      }}
     >
-      {/* Outer border */}
-      <rect
-        x={GRID_X}
-        y={GRID_Y}
-        width={GRID_W}
-        height={GRID_H}
-        fill="none"
-        stroke={BORDER_COLOR}
-        strokeWidth={2}
-        opacity={0.3}
-        strokeDasharray={`${borderPerimeter} ${borderPerimeter}`}
-        strokeDashoffset={borderOffset}
-      />
+      {/* SVG for grid lines */}
+      <svg
+        width="1920"
+        height="1080"
+        viewBox="0 0 1920 1080"
+        style={{ position: 'absolute', left: 0, top: 0 }}
+      >
+        {/* Outer border */}
+        <rect
+          x={borderLeft}
+          y={borderTop}
+          width={borderWidth}
+          height={borderHeight}
+          fill="none"
+          stroke={BORDER_COLOR}
+          strokeOpacity={0.3}
+          strokeWidth={2}
+        />
+        {/* Vertical divider */}
+        <line
+          x1={GRID_CENTER_X}
+          y1={vertLineTop}
+          x2={GRID_CENTER_X}
+          y2={vertLineBottom}
+          stroke={BORDER_COLOR}
+          strokeOpacity={0.2}
+          strokeWidth={1}
+        />
+        {/* Horizontal divider */}
+        <line
+          x1={horizLineLeft}
+          y1={GRID_CENTER_Y}
+          x2={horizLineRight}
+          y2={GRID_CENTER_Y}
+          stroke={BORDER_COLOR}
+          strokeOpacity={0.2}
+          strokeWidth={1}
+        />
 
-      {/* Vertical divider */}
-      <line
-        x1={GRID_CENTER_X}
-        y1={GRID_Y}
-        x2={GRID_CENTER_X}
-        y2={GRID_BOTTOM}
-        stroke={BORDER_COLOR}
-        strokeWidth={1}
-        opacity={0.2}
-        strokeDasharray={`${vertDividerLength} ${vertDividerLength}`}
-        strokeDashoffset={vertOffset}
-      />
+        {/* X-axis arrow (below grid) */}
+        <defs>
+          <linearGradient id="xAxisGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor={GREEN} stopOpacity={0.3 * draw} />
+            <stop offset="100%" stopColor={RED} stopOpacity={0.3 * draw} />
+          </linearGradient>
+          <linearGradient id="yAxisGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={GREEN} stopOpacity={0.3 * draw} />
+            <stop offset="100%" stopColor={RED} stopOpacity={0.3 * draw} />
+          </linearGradient>
+        </defs>
+        {/* X-axis arrow line */}
+        <line
+          x1={GRID_X + 20}
+          y1={GRID_Y + GRID_H + 30}
+          x2={GRID_X + GRID_W - 20}
+          y2={GRID_Y + GRID_H + 30}
+          stroke="url(#xAxisGrad)"
+          strokeWidth={1.5}
+          opacity={draw}
+        />
+        {/* X-axis arrowhead */}
+        <polygon
+          points={`${GRID_X + GRID_W - 20},${GRID_Y + GRID_H + 26} ${GRID_X + GRID_W - 20},${GRID_Y + GRID_H + 34} ${GRID_X + GRID_W - 10},${GRID_Y + GRID_H + 30}`}
+          fill={RED}
+          opacity={0.3 * draw}
+        />
 
-      {/* Horizontal divider */}
-      <line
-        x1={GRID_X}
-        y1={GRID_CENTER_Y}
-        x2={GRID_RIGHT}
-        y2={GRID_CENTER_Y}
-        stroke={BORDER_COLOR}
-        strokeWidth={1}
-        opacity={0.2}
-        strokeDasharray={`${horizDividerLength} ${horizDividerLength}`}
-        strokeDashoffset={horizOffset}
-      />
+        {/* Y-axis arrow line */}
+        <line
+          x1={GRID_X - 30}
+          y1={GRID_Y + 20}
+          x2={GRID_X - 30}
+          y2={GRID_Y + GRID_H - 20}
+          stroke="url(#yAxisGrad)"
+          strokeWidth={1.5}
+          opacity={draw}
+        />
+        {/* Y-axis arrowhead */}
+        <polygon
+          points={`${GRID_X - 34},${GRID_Y + GRID_H - 20} ${GRID_X - 26},${GRID_Y + GRID_H - 20} ${GRID_X - 30},${GRID_Y + GRID_H - 10}`}
+          fill={RED}
+          opacity={0.3 * draw}
+        />
+      </svg>
 
-      {/* X-axis labels */}
-      <text
-        x={GRID_X}
-        y={GRID_BOTTOM + 30}
-        fill={GREEN}
-        fontSize={14}
-        fontFamily={FONT_FAMILY}
-        fontWeight={600}
-        opacity={labelOpacity}
-        textAnchor="start"
+      {/* Axis Labels */}
+      {/* X-axis: Greenfield (left) */}
+      <div
+        style={{
+          position: 'absolute',
+          left: GRID_X,
+          top: GRID_Y + GRID_H + 40,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color: GREEN,
+          opacity: labelAlpha,
+        }}
       >
         Greenfield
-      </text>
-      <text
-        x={GRID_RIGHT}
-        y={GRID_BOTTOM + 30}
-        fill={RED}
-        fontSize={14}
-        fontFamily={FONT_FAMILY}
-        fontWeight={600}
-        opacity={labelOpacity}
-        textAnchor="end"
+      </div>
+      {/* X-axis: Brownfield (right) */}
+      <div
+        style={{
+          position: 'absolute',
+          right: 1920 - (GRID_X + GRID_W),
+          top: GRID_Y + GRID_H + 40,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color: RED,
+          opacity: labelAlpha,
+          textAlign: 'right',
+        }}
       >
         Brownfield
-      </text>
-
-      {/* X-axis arrow */}
-      <line
-        x1={GRID_X + 90}
-        y1={GRID_BOTTOM + 26}
-        x2={GRID_RIGHT - 90}
-        y2={GRID_BOTTOM + 26}
-        stroke={BORDER_COLOR}
-        strokeWidth={1}
-        opacity={labelOpacity * 0.4}
-        markerEnd="url(#arrowRight)"
-      />
-      <defs>
-        <marker
-          id="arrowRight"
-          markerWidth={8}
-          markerHeight={6}
-          refX={8}
-          refY={3}
-          orient="auto"
-        >
-          <path d="M0,0 L8,3 L0,6" fill={BORDER_COLOR} opacity={0.4} />
-        </marker>
-        <marker
-          id="arrowDown"
-          markerWidth={6}
-          markerHeight={8}
-          refX={3}
-          refY={8}
-          orient="auto"
-        >
-          <path d="M0,0 L3,8 L6,0" fill={BORDER_COLOR} opacity={0.4} />
-        </marker>
-      </defs>
-
-      {/* Y-axis labels */}
-      <text
-        x={GRID_X - 15}
-        y={GRID_Y + 10}
-        fill={GREEN}
-        fontSize={14}
-        fontFamily={FONT_FAMILY}
-        fontWeight={600}
-        opacity={labelOpacity}
-        textAnchor="end"
-        dominantBaseline="middle"
+      </div>
+      {/* Y-axis: In-Distribution (top) */}
+      <div
+        style={{
+          position: 'absolute',
+          left: GRID_X - 50,
+          top: GRID_Y - 8,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color: GREEN,
+          opacity: labelAlpha,
+          transformOrigin: 'center center',
+          transform: 'rotate(-90deg)',
+          whiteSpace: 'nowrap',
+        }}
       >
         In-Distribution
-      </text>
-      <text
-        x={GRID_X - 15}
-        y={GRID_BOTTOM - 10}
-        fill={RED}
-        fontSize={14}
-        fontFamily={FONT_FAMILY}
-        fontWeight={600}
-        opacity={labelOpacity}
-        textAnchor="end"
-        dominantBaseline="middle"
+      </div>
+      {/* Y-axis: Out-of-Distribution (bottom) */}
+      <div
+        style={{
+          position: 'absolute',
+          left: GRID_X - 70,
+          bottom: 1080 - (GRID_Y + GRID_H) + 8,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color: RED,
+          opacity: labelAlpha,
+          transformOrigin: 'center center',
+          transform: 'rotate(-90deg)',
+          whiteSpace: 'nowrap',
+        }}
       >
         Out-of-Distribution
-      </text>
-
-      {/* Y-axis arrow */}
-      <line
-        x1={GRID_X - 15}
-        y1={GRID_Y + 25}
-        x2={GRID_X - 15}
-        y2={GRID_BOTTOM - 25}
-        stroke={BORDER_COLOR}
-        strokeWidth={1}
-        opacity={labelOpacity * 0.4}
-        markerEnd="url(#arrowDown)"
-      />
-    </svg>
+      </div>
+    </div>
   );
 };
+
+export default QuadrantGrid;

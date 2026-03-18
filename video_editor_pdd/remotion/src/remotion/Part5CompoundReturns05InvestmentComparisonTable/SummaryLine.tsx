@@ -1,45 +1,43 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, ANIM } from './constants';
+import React from "react";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
+import {
+  SUMMARY_START,
+  SUMMARY_SLIDE_DURATION,
+  SUMMARY_Y,
+  PILL_PADDING,
+  PILL_RADIUS,
+  TEXT_COLOR,
+  PATCHING_COLOR,
+  PDD_COLOR,
+} from "./constants";
 
 export const SummaryLine: React.FC = () => {
   const frame = useCurrentFrame();
-  const relativeFrame = frame - ANIM.summary.start;
+  const relFrame = frame - SUMMARY_START;
 
-  // Slide up from y+20 over 25 frames
-  const slideY = interpolate(
-    relativeFrame,
-    [0, ANIM.summary.slideDuration],
-    [20, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
-  );
+  if (relFrame < 0) return null;
 
-  const opacity = interpolate(
-    relativeFrame,
-    [0, ANIM.summary.slideDuration],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  const slideY = interpolate(relFrame, [0, SUMMARY_SLIDE_DURATION], [20, 0], {
+    easing: Easing.out(Easing.cubic),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
-  if (relativeFrame < 0) return null;
+  const opacity = interpolate(relFrame, [0, SUMMARY_SLIDE_DURATION], [0, 1], {
+    easing: Easing.out(Easing.quad),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
     <div
       style={{
-        position: 'absolute',
-        top: 700,
+        position: "absolute",
+        top: SUMMARY_Y,
         left: 0,
         right: 0,
-        display: 'flex',
-        justifyContent: 'center',
+        display: "flex",
+        justifyContent: "center",
         transform: `translateY(${slideY}px)`,
         opacity,
       }}
@@ -47,28 +45,25 @@ export const SummaryLine: React.FC = () => {
       <div
         style={{
           backgroundColor: `rgba(30, 41, 59, 0.25)`,
-          borderRadius: 10,
-          padding: '16px 32px',
-          display: 'inline-flex',
+          borderRadius: PILL_RADIUS,
+          padding: `${PILL_PADDING}px ${PILL_PADDING * 2}px`,
         }}
       >
         <span
           style={{
-            fontFamily: 'Inter, sans-serif',
+            fontFamily: "Inter, sans-serif",
             fontSize: 20,
             fontWeight: 600,
             lineHeight: 1.4,
           }}
         >
-          <span style={{ color: COLORS.text }}>One side compounds </span>
-          <span style={{ color: COLORS.patching }}>against you</span>
-          <span style={{ color: COLORS.text }}>. The other compounds </span>
-          <span style={{ color: COLORS.pdd }}>for you</span>
-          <span style={{ color: COLORS.text }}>.</span>
+          <span style={{ color: TEXT_COLOR }}>One side compounds </span>
+          <span style={{ color: PATCHING_COLOR }}>against you</span>
+          <span style={{ color: TEXT_COLOR }}>. The other compounds </span>
+          <span style={{ color: PDD_COLOR }}>for you</span>
+          <span style={{ color: TEXT_COLOR }}>.</span>
         </span>
       </div>
     </div>
   );
 };
-
-export default SummaryLine;

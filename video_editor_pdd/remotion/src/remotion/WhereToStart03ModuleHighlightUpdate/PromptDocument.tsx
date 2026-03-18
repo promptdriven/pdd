@@ -1,78 +1,83 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
-  PROMPT_POS,
-  PROMPT_SIZE,
-  TITLE_BAR_H,
-  SELECTION_BLUE,
+  PROMPT_X,
+  PROMPT_Y,
+  PROMPT_W,
+  PROMPT_H,
+  PROMPT_TITLE_BAR_H,
+  PROMPT_LINES,
   BLOCK_FILL,
   EDITOR_BG,
+  BLUE_ACCENT,
   TEXT_MUTED,
-  PROMPT_LINES,
 } from './constants';
 
-/**
- * The .prompt file document that materializes as particles arrive.
- * Window chrome + staggered lines of natural language.
- */
-export const PromptDocument: React.FC<{ startFrame: number }> = ({ startFrame }) => {
+const PromptDocument: React.FC<{ startFrame: number }> = ({ startFrame }) => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const relativeFrame = frame - startFrame;
 
-  if (relFrame < 0) return null;
+  if (relativeFrame < 0) return null;
 
-  // Document frame fades in over 20 frames
-  const docOpacity = interpolate(relFrame, [0, 20], [0, 1], {
+  // Document frame materializes: scale from 0.9 to 1, opacity 0 to 1
+  const docOpacity = interpolate(relativeFrame, [0, 20], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
+    easing: Easing.out(Easing.cubic),
   });
 
-  // Ambient glow grows in
-  const glowOpacity = interpolate(relFrame, [0, 40], [0, 0.06], {
+  const docScale = interpolate(relativeFrame, [0, 20], [0.92, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.poly(3)),
+    easing: Easing.out(Easing.cubic),
+  });
+
+  // Document glow ramps up
+  const glowOpacity = interpolate(relativeFrame, [20, 60], [0, 0.06], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
   });
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: PROMPT_POS.x,
-        top: PROMPT_POS.y,
-        width: PROMPT_SIZE.w,
-        height: PROMPT_SIZE.h,
+        left: PROMPT_X - PROMPT_W / 2,
+        top: PROMPT_Y - PROMPT_H / 2,
+        width: PROMPT_W,
+        height: PROMPT_H,
         opacity: docOpacity,
-        boxShadow: `0 0 16px rgba(74, 144, 217, ${glowOpacity})`,
+        transform: `scale(${docScale})`,
         borderRadius: 6,
         overflow: 'hidden',
+        boxShadow: `0 0 16px rgba(74, 144, 217, ${glowOpacity}), 0 4px 24px rgba(0, 0, 0, 0.4)`,
       }}
     >
       {/* Title bar */}
       <div
         style={{
-          height: TITLE_BAR_H,
+          height: PROMPT_TITLE_BAR_H,
           backgroundColor: BLOCK_FILL,
-          borderTopLeftRadius: 6,
-          borderTopRightRadius: 6,
           display: 'flex',
           alignItems: 'center',
           paddingLeft: 10,
-          gap: 6,
+          borderTopLeftRadius: 6,
+          borderTopRightRadius: 6,
         }}
       >
         {/* Window dots */}
-        <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#EF4444', opacity: 0.4 }} />
-        <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#EAB308', opacity: 0.4 }} />
-        <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#22C55E', opacity: 0.4 }} />
+        <div style={{ display: 'flex', gap: 4, marginRight: 8 }}>
+          <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#3B3B3B' }} />
+          <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#3B3B3B' }} />
+          <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#3B3B3B' }} />
+        </div>
         <span
           style={{
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: '"JetBrains Mono", monospace',
             fontSize: 10,
-            color: SELECTION_BLUE,
+            color: BLUE_ACCENT,
             opacity: 0.6,
-            marginLeft: 8,
           }}
         >
           auth_handler.prompt
@@ -83,17 +88,20 @@ export const PromptDocument: React.FC<{ startFrame: number }> = ({ startFrame })
       <div
         style={{
           backgroundColor: EDITOR_BG,
-          height: PROMPT_SIZE.h - TITLE_BAR_H,
+          height: PROMPT_H - PROMPT_TITLE_BAR_H,
           padding: '8px 12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
           overflow: 'hidden',
         }}
       >
-        {PROMPT_LINES.map((line, idx) => {
-          // Lines appear staggered: 8 frames per line, starting 10 frames after document appears
-          const lineStart = 10 + idx * 8;
+        {PROMPT_LINES.map((line, i) => {
+          // Lines appear staggered: 8 frames per line, starting after document materializes
+          const lineStartFrame = 15 + i * 8;
           const lineOpacity = interpolate(
-            relFrame,
-            [lineStart, lineStart + 8],
+            relativeFrame,
+            [lineStartFrame, lineStartFrame + 8],
             [0, 0.6],
             {
               extrapolateLeft: 'clamp',
@@ -103,8 +111,8 @@ export const PromptDocument: React.FC<{ startFrame: number }> = ({ startFrame })
           );
 
           const lineTranslateY = interpolate(
-            relFrame,
-            [lineStart, lineStart + 8],
+            relativeFrame,
+            [lineStartFrame, lineStartFrame + 8],
             [4, 0],
             {
               extrapolateLeft: 'clamp',
@@ -117,18 +125,16 @@ export const PromptDocument: React.FC<{ startFrame: number }> = ({ startFrame })
 
           return (
             <div
-              key={idx}
+              key={i}
               style={{
-                fontFamily: isHeading ? 'JetBrains Mono, monospace' : 'Inter, sans-serif',
+                fontFamily: isHeading ? '"JetBrains Mono", monospace' : 'Inter, sans-serif',
                 fontSize: isHeading ? 11 : 9,
-                fontWeight: isHeading ? 600 : 400,
-                color: isHeading ? SELECTION_BLUE : TEXT_MUTED,
+                color: isHeading ? BLUE_ACCENT : TEXT_MUTED,
                 opacity: lineOpacity,
                 transform: `translateY(${lineTranslateY}px)`,
+                fontWeight: isHeading ? 600 : 400,
                 lineHeight: '14px',
                 whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
               }}
             >
               {line}

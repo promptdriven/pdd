@@ -1,156 +1,203 @@
 import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
 
+interface GlowConfig {
+  color: string;
+  blur: number;
+  opacity: number;
+}
+
 interface MoldCrossSectionProps {
-  x: number;
-  y: number;
   width: number;
   height: number;
   wallCount: number;
   wallColor: string;
-  wallOpacity: number;
   wallStroke: number;
   fillColor: string;
   fillOpacity: number;
-  animationStart: number;
-  glow?: { color: string; blur: number; opacity: number };
+  animStartFrame: number;
+  animDuration: number;
+  glow?: GlowConfig;
 }
 
-export const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
-  x,
-  y,
+/**
+ * Renders a mold cross-section with wall segments and interior fill.
+ * Walls draw in with easeInOut animation.
+ */
+const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
   width,
   height,
   wallCount,
   wallColor,
-  wallOpacity,
   wallStroke,
   fillColor,
   fillOpacity,
-  animationStart,
+  animStartFrame,
+  animDuration,
   glow,
 }) => {
   const frame = useCurrentFrame();
+  const svgWidth = width;
+  const svgHeight = height;
+  const inset = 8;
 
-  // Overall section fade in
-  const sectionOpacity = interpolate(
+  // Overall draw progress for all walls
+  const wallsProgress = interpolate(
     frame,
-    [animationStart, animationStart + 20],
+    [animStartFrame, animStartFrame + animDuration],
     [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
   );
 
-  // Generate wall segments as SVG lines within the mold
-  const generateWalls = () => {
-    const walls: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
-    const margin = 8;
-    const innerW = width - margin * 2;
-    const innerH = height - margin * 2;
+  // Generate wall segments distributed within the mold
+  const walls: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
 
-    // Outer border walls (always present)
-    // top
-    walls.push({ x1: margin, y1: margin, x2: width - margin, y2: margin });
-    // bottom
-    walls.push({ x1: margin, y1: height - margin, x2: width - margin, y2: height - margin });
-    // left
-    walls.push({ x1: margin, y1: margin, x2: margin, y2: height - margin });
+  if (wallCount <= 6) {
+    // Few walls: simple horizontal + vertical partitions
+    const hCount = Math.ceil(wallCount / 2);
+    const vCount = wallCount - hCount;
+    for (let i = 0; i < hCount; i++) {
+      const y = inset + ((svgHeight - inset * 2) / (hCount + 1)) * (i + 1);
+      walls.push({
+        x1: inset + 5,
+        y1: y,
+        x2: svgWidth - inset - 5,
+        y2: y,
+      });
+    }
+    for (let i = 0; i < vCount; i++) {
+      const x = inset + ((svgWidth - inset * 2) / (vCount + 1)) * (i + 1);
+      walls.push({
+        x1: x,
+        y1: inset + 5,
+        x2: x,
+        y2: svgHeight - inset - 5,
+      });
+    }
+  } else {
+    // Many walls: grid-like pattern with some diagonal variation
+    const gridCols = Math.ceil(Math.sqrt(wallCount * (svgWidth / svgHeight)));
+    const gridRows = Math.ceil(wallCount / gridCols);
+    const cellW = (svgWidth - inset * 2) / gridCols;
+    const cellH = (svgHeight - inset * 2) / gridRows;
 
-    // Generate internal walls (horizontal and vertical partitions)
-    const internalCount = Math.max(0, wallCount - 3);
-    for (let i = 0; i < internalCount; i++) {
-      const isHorizontal = i % 2 === 0;
-      if (isHorizontal) {
-        // Horizontal internal wall
-        const yPos = margin + (innerH * ((i / 2 + 1) / (Math.ceil(internalCount / 2) + 1)));
-        const xStart = margin + (i % 4 === 0 ? 0 : innerW * 0.2);
-        const xEnd = margin + (i % 4 === 2 ? innerW : innerW * 0.8);
-        walls.push({ x1: xStart, y1: yPos, x2: xEnd, y2: yPos });
-      } else {
-        // Vertical internal wall
-        const xPos = margin + (innerW * ((Math.floor(i / 2) + 1) / (Math.ceil(internalCount / 2) + 1)));
-        const yStart = margin + (i % 4 === 1 ? 0 : innerH * 0.15);
-        const yEnd = margin + (i % 4 === 3 ? innerH : innerH * 0.85);
-        walls.push({ x1: xPos, y1: yStart, x2: xPos, y2: yEnd });
+    let wallIdx = 0;
+    for (let r = 0; r < gridRows && wallIdx < wallCount; r++) {
+      for (let c = 0; c < gridCols && wallIdx < wallCount; c++) {
+        const cx = inset + c * cellW + cellW / 2;
+        const cy = inset + r * cellH + cellH / 2;
+        const halfLen = Math.min(cellW, cellH) * 0.4;
+
+        // Alternate between horizontal, vertical, and diagonal walls
+        const variant = wallIdx % 3;
+        if (variant === 0) {
+          // Horizontal
+          walls.push({ x1: cx - halfLen, y1: cy, x2: cx + halfLen, y2: cy });
+        } else if (variant === 1) {
+          // Vertical
+          walls.push({ x1: cx, y1: cy - halfLen, x2: cx, y2: cy + halfLen });
+        } else {
+          // Diagonal
+          walls.push({
+            x1: cx - halfLen * 0.7,
+            y1: cy - halfLen * 0.7,
+            x2: cx + halfLen * 0.7,
+            y2: cy + halfLen * 0.7,
+          });
+        }
+        wallIdx++;
       }
     }
-
-    return walls;
-  };
-
-  const walls = generateWalls();
+  }
 
   // Glow animation for Stage 3
   const glowOpacity = glow
     ? interpolate(
         frame,
-        [animationStart + 25, animationStart + 35, animationStart + 45],
-        [0, glow.opacity, glow.opacity * 0.5],
+        [animStartFrame + animDuration, animStartFrame + animDuration + 20, animStartFrame + animDuration + 40],
+        [0, glow.opacity, 0],
         { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
       )
     : 0;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        left: x,
-        top: y,
-        width,
-        height,
-        opacity: sectionOpacity,
-      }}
-    >
-      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+    <div style={{ width, height, position: 'relative' }}>
+      <svg
+        width={svgWidth}
+        height={svgHeight}
+        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        style={{ display: 'block' }}
+      >
         {/* Interior fill */}
         <rect
-          x={8}
-          y={8}
-          width={width - 16}
-          height={height - 16}
+          x={inset}
+          y={inset}
+          width={svgWidth - inset * 2}
+          height={svgHeight - inset * 2}
           fill={fillColor}
-          opacity={fillOpacity}
+          opacity={fillOpacity * wallsProgress}
           rx={2}
         />
-        {/* Wall segments with staggered draw-in */}
+
+        {/* Outer border (the mold frame) */}
+        <rect
+          x={inset}
+          y={inset}
+          width={svgWidth - inset * 2}
+          height={svgHeight - inset * 2}
+          fill="none"
+          stroke={wallColor}
+          strokeWidth={wallStroke}
+          opacity={0.7 * Math.min(1, wallsProgress * 3)}
+          rx={2}
+        />
+
+        {/* Wall segments */}
         {walls.map((wall, i) => {
-          const wallStart = animationStart + 5 + i * (20 / Math.max(walls.length, 1));
-          const drawProgress = interpolate(
-            frame,
-            [wallStart, wallStart + 10],
-            [0, 1],
-            {
-              extrapolateLeft: 'clamp',
-              extrapolateRight: 'clamp',
-              easing: Easing.inOut(Easing.cubic),
-            }
-          );
+          const wallFraction = (i + 1) / walls.length;
+          const wallVisible = wallsProgress >= wallFraction ? 1 : wallsProgress >= wallFraction - 1 / walls.length
+            ? interpolate(
+                wallsProgress,
+                [wallFraction - 1 / walls.length, wallFraction],
+                [0, 1],
+                { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+              )
+            : 0;
 
           const dx = wall.x2 - wall.x1;
           const dy = wall.y2 - wall.y1;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          const dashOffset = len * (1 - wallVisible);
 
           return (
             <line
               key={i}
               x1={wall.x1}
               y1={wall.y1}
-              x2={wall.x1 + dx * drawProgress}
-              y2={wall.y1 + dy * drawProgress}
+              x2={wall.x2}
+              y2={wall.y2}
               stroke={wallColor}
-              strokeOpacity={wallOpacity}
               strokeWidth={wallStroke}
+              opacity={0.7}
+              strokeDasharray={len}
+              strokeDashoffset={dashOffset}
               strokeLinecap="round"
             />
           );
         })}
       </svg>
-      {/* Glow effect for Stage 3 */}
-      {glow && (
+
+      {/* Glow overlay */}
+      {glow && glowOpacity > 0 && (
         <div
           style={{
             position: 'absolute',
-            inset: 0,
-            borderRadius: 4,
-            boxShadow: `0 0 ${glow.blur}px ${glow.color}, inset 0 0 ${glow.blur / 2}px ${glow.color}`,
+            top: 0,
+            left: -glow.blur,
+            width: width + glow.blur * 2,
+            height: height + glow.blur * 2,
+            borderRadius: 6,
+            boxShadow: `0 0 ${glow.blur}px ${glow.blur / 2}px ${glow.color}`,
             opacity: glowOpacity,
             pointerEvents: 'none',
           }}
@@ -159,3 +206,5 @@ export const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
     </div>
   );
 };
+
+export default MoldCrossSection;

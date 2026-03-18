@@ -1,58 +1,42 @@
-// Part1Economics01SectionTitleCard constants
+// Part1Economics01SectionTitleCard - constants
 
-export const PART_LABEL = "PART 1";
-export const TITLE_TEXT = "The Economics of Darning";
-export const SUBTITLE_TEXT =
-  "Why patching was rational \u2014 and when it stopped.";
+export const CANVAS = {
+  WIDTH: 1920,
+  HEIGHT: 1080,
+  FPS: 30,
+  DURATION_FRAMES: 120,
+} as const;
 
-// Animation timing (frames at 30fps)
-export const BG_FADE_START = 0;
-export const BG_FADE_END = 15;
+export const COLORS = {
+  background: '#0D1117',
+  amber: '#D9944A',
+  slate: '#94A3B8',
+} as const;
 
-export const LABEL_FADE_START = 15;
-export const LABEL_FADE_END = 30;
-export const LABEL_SLIDE_PX = 6;
+export const TIMING = {
+  // Frame 0-15: Background settles
+  BG_SETTLE_END: 15,
+  // Frame 15-35: Part label fade-in + slide
+  PART_LABEL_START: 15,
+  PART_LABEL_DURATION: 15,
+  // Frame 35-60: Title fade-in + slide
+  TITLE_START: 35,
+  TITLE_DURATION: 20,
+  // Frame 60-70: Horizontal rule draws
+  RULE_START: 60,
+  RULE_DURATION: 10,
+  // Frame 70-90: Subtitle fade-in
+  SUBTITLE_START: 70,
+  SUBTITLE_DURATION: 15,
+  // Frame 90-120: Hold
+} as const;
 
-export const TITLE_FADE_START = 35;
-export const TITLE_FADE_END = 55;
-export const TITLE_SLIDE_PX = 10;
-
-export const RULE_DRAW_START = 60;
-export const RULE_DRAW_END = 70;
-
-export const SUBTITLE_FADE_START = 70;
-export const SUBTITLE_FADE_END = 85;
-
-export const TOTAL_FRAMES = 120;
-
-// Layout (1920x1080)
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
-
-export const LABEL_Y = 420;
-export const TITLE_Y = 500;
-export const RULE_Y = 555;
-export const RULE_MAX_WIDTH = 120;
-export const RULE_HEIGHT = 2;
-export const SUBTITLE_Y = 585;
-
-// Colors
-export const BG_COLOR = "#0D1117";
-export const AMBER_ACCENT = "#D9944A";
-export const SLATE_TEXT = "#94A3B8";
-
-// Typography
-export const LABEL_FONT_SIZE = 14;
-export const LABEL_LETTER_SPACING = "4px";
-export const LABEL_FONT_WEIGHT = 600;
-export const LABEL_OPACITY = 0.4;
-
-export const TITLE_FONT_SIZE = 52;
-export const TITLE_FONT_WEIGHT = 700;
-export const TITLE_OPACITY = 0.92;
-
-export const SUBTITLE_FONT_SIZE = 16;
-export const SUBTITLE_FONT_WEIGHT = 300;
-export const SUBTITLE_OPACITY = 0.4;
-
-export const RULE_OPACITY = 0.2;
+export const LAYOUT = {
+  partLabelY: 420,
+  titleY: 500,
+  ruleY: 555,
+  subtitleY: 585,
+  ruleTotalWidth: 120,
+  ruleThickness: 2,
+  centerX: 960,
+} as const;

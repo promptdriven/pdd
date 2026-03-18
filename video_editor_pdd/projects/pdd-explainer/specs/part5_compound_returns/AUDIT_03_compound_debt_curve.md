@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+Three significant issues visible at frame 329 (91.7% progress, hold phase). (1) CISQ callout is entirely absent — the '$1.52T' large text, '/year in US tech debt' subtitle, 'CISQ, 2022' source line, and background card are all missing. This is the central data anchor of the beat and should be fully visible and scale-emphasized by this frame. (2) The sawtooth regeneration line terminates prematurely around the Year 5 mark and shows only 2 peaks instead of the spec's 5 peaks spanning the full chart width. No line endpoint label is visible. (3) The formula label text reads 'Debt × (1 + Rate)^Tim' with the final 'e' truncated — should be '^Time'. The gap gradient between curves is also not visible. Axes, exponential curve shape, color palette, and background are correct.

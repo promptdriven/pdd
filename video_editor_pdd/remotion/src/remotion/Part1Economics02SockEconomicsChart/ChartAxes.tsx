@@ -1,232 +1,242 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
   MARGIN_LEFT,
   MARGIN_TOP,
   CHART_WIDTH,
   CHART_HEIGHT,
-  X_MIN,
-  X_MAX,
-  Y_MIN,
-  Y_MAX,
-  X_MAJOR_INTERVAL,
-  X_MINOR_INTERVAL,
-  Y_MAJOR_INTERVAL,
   AXIS_COLOR,
   AXIS_OPACITY,
   GRID_COLOR,
   GRID_OPACITY,
   LABEL_COLOR,
-  AXIS_LABEL_SIZE,
-  TICK_LABEL_SIZE,
-  AXES_DRAW_START,
-  AXES_DRAW_END,
-  GRID_FADE_START,
-  GRID_FADE_END,
-} from "./constants";
+  LABEL_OPACITY,
+  TICK_LABEL_OPACITY,
+  FONT_FAMILY,
+  X_MIN,
+  X_MAX,
+  Y_MIN,
+  Y_MAX,
+  AXES_START,
+  AXES_DURATION,
+} from './constants';
 
-/** Map data x to pixel x */
-const xToPixel = (x: number): number =>
+/** Map data‑space X → pixel X inside the chart area */
+export const xToPixel = (x: number): number =>
   MARGIN_LEFT + ((x - X_MIN) / (X_MAX - X_MIN)) * CHART_WIDTH;
 
-/** Map data y to pixel y (inverted: higher y = higher on screen) */
-const yToPixel = (y: number): number =>
-  MARGIN_TOP + CHART_HEIGHT - ((y - Y_MIN) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
+/** Map data‑space Y → pixel Y inside the chart area */
+export const yToPixel = (y: number): number =>
+  MARGIN_TOP + ((Y_MAX - y) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
 
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const axisProgress = interpolate(
+  // Progress 0→1 for axis draw animation (easeOut cubic)
+  const progress = interpolate(
     frame,
-    [AXES_DRAW_START, AXES_DRAW_END],
+    [AXES_START, AXES_START + AXES_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) },
   );
 
-  const gridOpacity = interpolate(
+  const gridFade = interpolate(
     frame,
-    [GRID_FADE_START, GRID_FADE_END],
+    [AXES_START + 10, AXES_START + AXES_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) },
   );
 
-  // X-axis origin and extent
-  const xAxisY = yToPixel(Y_MIN);
-  const xAxisEndX = MARGIN_LEFT + CHART_WIDTH * axisProgress;
+  // ── Derived positions ──────────────────────────────────────────────────
+  const originX = MARGIN_LEFT;
+  const originY = MARGIN_TOP + CHART_HEIGHT;
+  const xEnd = MARGIN_LEFT + CHART_WIDTH;
+  const yEnd = MARGIN_TOP;
 
-  // Y-axis origin and extent
-  const yAxisX = MARGIN_LEFT;
-  const yAxisStartY = yToPixel(Y_MIN);
-  const yAxisEndY = yToPixel(Y_MIN) - CHART_HEIGHT * axisProgress;
+  // X-axis draws left → right
+  const xAxisRight = originX + CHART_WIDTH * progress;
+  // Y-axis draws bottom → top
+  const yAxisTop = originY - CHART_HEIGHT * progress;
 
-  // Build major x ticks
-  const xMajorTicks: number[] = [];
-  for (let x = X_MIN; x <= X_MAX; x += X_MAJOR_INTERVAL) {
-    xMajorTicks.push(x);
+  // Major ticks on X (every 5 years)
+  const majorXTicks: number[] = [];
+  for (let yr = X_MIN; yr <= X_MAX; yr += 5) majorXTicks.push(yr);
+
+  // Minor ticks on X (every year)
+  const minorXTicks: number[] = [];
+  for (let yr = X_MIN; yr <= X_MAX; yr += 1) {
+    if (yr % 5 !== 0) minorXTicks.push(yr);
   }
 
-  // Build minor x ticks
-  const xMinorTicks: number[] = [];
-  for (let x = X_MIN; x <= X_MAX; x += X_MINOR_INTERVAL) {
-    if (x % X_MAJOR_INTERVAL !== 0) {
-      xMinorTicks.push(x);
-    }
-  }
-
-  // Build y ticks
-  const yMajorTicks: number[] = [];
-  for (let y = Y_MIN; y <= Y_MAX; y += Y_MAJOR_INTERVAL) {
-    yMajorTicks.push(y);
-  }
+  // Major ticks on Y (every 25%)
+  const majorYTicks: number[] = [];
+  for (let v = Y_MIN; v <= Y_MAX; v += 25) majorYTicks.push(v);
 
   return (
     <svg
       width={1920}
       height={1080}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      {/* Horizontal grid lines */}
-      {yMajorTicks.map((y) => {
-        if (y === Y_MIN) return null; // skip baseline
-        const py = yToPixel(y);
+      {/* ── Horizontal grid lines ─────────────────────────────────── */}
+      {majorYTicks.map((v) => {
+        const py = yToPixel(v);
+        if (v === Y_MIN) return null; // skip baseline
         return (
           <line
-            key={`grid-y-${y}`}
-            x1={MARGIN_LEFT}
+            key={`grid-y-${v}`}
+            x1={originX}
             y1={py}
-            x2={MARGIN_LEFT + CHART_WIDTH}
+            x2={xEnd}
             y2={py}
             stroke={GRID_COLOR}
-            strokeOpacity={GRID_OPACITY * gridOpacity}
+            strokeOpacity={GRID_OPACITY * gridFade}
             strokeWidth={1}
             strokeDasharray="6 4"
           />
         );
       })}
 
-      {/* X-axis line */}
+      {/* ── X axis line ───────────────────────────────────────────── */}
       <line
-        x1={MARGIN_LEFT}
-        y1={xAxisY}
-        x2={xAxisEndX}
-        y2={xAxisY}
+        x1={originX}
+        y1={originY}
+        x2={xAxisRight}
+        y2={originY}
         stroke={AXIS_COLOR}
         strokeOpacity={AXIS_OPACITY}
         strokeWidth={1}
       />
 
-      {/* Y-axis line */}
+      {/* ── Y axis line ───────────────────────────────────────────── */}
       <line
-        x1={yAxisX}
-        y1={yAxisStartY}
-        x2={yAxisX}
-        y2={yAxisEndY}
+        x1={originX}
+        y1={originY}
+        x2={originX}
+        y2={yAxisTop}
         stroke={AXIS_COLOR}
         strokeOpacity={AXIS_OPACITY}
         strokeWidth={1}
       />
 
-      {/* X major ticks + labels */}
-      {xMajorTicks.map((x) => {
-        const px = xToPixel(x);
-        const tickVisible = px <= xAxisEndX ? 1 : 0;
+      {/* ── X major ticks + labels ────────────────────────────────── */}
+      {majorXTicks.map((yr) => {
+        const px = xToPixel(yr);
+        // Only render if the axis has drawn past this point
+        if (px > xAxisRight) return null;
+        const tickOpacity = interpolate(
+          xAxisRight,
+          [px - 10, px],
+          [0, 1],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+        );
         return (
-          <g key={`xtick-${x}`} opacity={tickVisible * axisProgress}>
+          <g key={`xtick-${yr}`} opacity={tickOpacity}>
             <line
               x1={px}
-              y1={xAxisY}
+              y1={originY}
               x2={px}
-              y2={xAxisY + 8}
+              y2={originY + 8}
               stroke={AXIS_COLOR}
               strokeOpacity={AXIS_OPACITY}
               strokeWidth={1}
             />
             <text
               x={px}
-              y={xAxisY + 24}
+              y={originY + 28}
               textAnchor="middle"
               fill={LABEL_COLOR}
-              fillOpacity={0.25}
-              fontSize={TICK_LABEL_SIZE}
-              fontFamily="'Inter', sans-serif"
+              fillOpacity={TICK_LABEL_OPACITY}
+              fontFamily={FONT_FAMILY}
+              fontSize={10}
             >
-              {x}
+              {yr}
             </text>
           </g>
         );
       })}
 
-      {/* X minor ticks */}
-      {xMinorTicks.map((x) => {
-        const px = xToPixel(x);
-        const tickVisible = px <= xAxisEndX ? 1 : 0;
+      {/* ── X minor ticks ─────────────────────────────────────────── */}
+      {minorXTicks.map((yr) => {
+        const px = xToPixel(yr);
+        if (px > xAxisRight) return null;
+        const tickOpacity = interpolate(
+          xAxisRight,
+          [px - 10, px],
+          [0, 1],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+        );
         return (
           <line
-            key={`xminor-${x}`}
+            key={`xm-${yr}`}
             x1={px}
-            y1={xAxisY}
+            y1={originY}
             x2={px}
-            y2={xAxisY + 4}
+            y2={originY + 4}
             stroke={AXIS_COLOR}
-            strokeOpacity={AXIS_OPACITY * 0.5 * tickVisible * axisProgress}
+            strokeOpacity={AXIS_OPACITY * tickOpacity}
             strokeWidth={1}
           />
         );
       })}
 
-      {/* Y major ticks + labels */}
-      {yMajorTicks.map((y) => {
-        const py = yToPixel(y);
-        const tickVisible = py >= yAxisEndY ? 1 : 0;
+      {/* ── Y major ticks + labels ────────────────────────────────── */}
+      {majorYTicks.map((v) => {
+        const py = yToPixel(v);
+        if (py < yAxisTop) return null;
+        const tickOpacity = interpolate(
+          yAxisTop,
+          [py + 10, py],
+          [0, 1],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+        );
         return (
-          <g key={`ytick-${y}`} opacity={tickVisible * axisProgress}>
+          <g key={`ytick-${v}`} opacity={tickOpacity}>
             <line
-              x1={MARGIN_LEFT - 8}
+              x1={originX - 6}
               y1={py}
-              x2={MARGIN_LEFT}
+              x2={originX}
               y2={py}
               stroke={AXIS_COLOR}
               strokeOpacity={AXIS_OPACITY}
               strokeWidth={1}
             />
             <text
-              x={MARGIN_LEFT - 14}
+              x={originX - 14}
               y={py + 4}
               textAnchor="end"
               fill={LABEL_COLOR}
-              fillOpacity={0.25}
-              fontSize={TICK_LABEL_SIZE}
-              fontFamily="'Inter', sans-serif"
+              fillOpacity={TICK_LABEL_OPACITY}
+              fontFamily={FONT_FAMILY}
+              fontSize={10}
             >
-              {y}%
+              {v}%
             </text>
           </g>
         );
       })}
 
-      {/* X-axis label: "Year" */}
+      {/* ── Axis labels ───────────────────────────────────────────── */}
       <text
         x={MARGIN_LEFT + CHART_WIDTH / 2}
-        y={xAxisY + 60}
+        y={originY + 64}
         textAnchor="middle"
         fill={LABEL_COLOR}
-        fillOpacity={0.3 * axisProgress}
-        fontSize={AXIS_LABEL_SIZE}
-        fontFamily="'Inter', sans-serif"
+        fillOpacity={LABEL_OPACITY * gridFade}
+        fontFamily={FONT_FAMILY}
+        fontSize={12}
       >
         Year
       </text>
-
-      {/* Y-axis label: "Cost (% of hourly wage)" — rotated */}
       <text
-        x={MARGIN_LEFT - 70}
-        y={MARGIN_TOP + CHART_HEIGHT / 2}
+        x={0}
+        y={0}
         textAnchor="middle"
         fill={LABEL_COLOR}
-        fillOpacity={0.3 * axisProgress}
-        fontSize={AXIS_LABEL_SIZE}
-        fontFamily="'Inter', sans-serif"
-        transform={`rotate(-90, ${MARGIN_LEFT - 70}, ${MARGIN_TOP + CHART_HEIGHT / 2})`}
+        fillOpacity={LABEL_OPACITY * gridFade}
+        fontFamily={FONT_FAMILY}
+        fontSize={12}
+        transform={`translate(${MARGIN_LEFT - 68}, ${MARGIN_TOP + CHART_HEIGHT / 2}) rotate(-90)`}
       >
         Cost (% of hourly wage)
       </text>

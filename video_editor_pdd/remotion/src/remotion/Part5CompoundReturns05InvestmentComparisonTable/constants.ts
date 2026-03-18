@@ -1,75 +1,86 @@
 // Colors
-export const COLORS = {
-  background: '#0F172A',
-  headerBg: '#1E293B',
-  border: '#334155',
-  text: '#E2E8F0',
-  muted: '#94A3B8',
-  patching: '#D9944A',
-  pdd: '#4A90D9',
-  altRowBg: '#111827',
-  pillBg: '#1E293B',
-} as const;
+export const BG_COLOR = "#0F172A";
+export const TABLE_BG = "#0F172A";
+export const HEADER_BG = "#1E293B";
+export const BORDER_COLOR = "#334155";
+export const ALT_ROW_BG = "#111827";
 
-// Table dimensions
-export const TABLE = {
-  width: 900,
-  headerHeight: 50,
-  rowHeight: 70,
-  colWidth: 300,
-  borderRadius: 8,
-  centerX: 960,
-  centerY: 460,
-} as const;
+export const TEXT_COLOR = "#E2E8F0";
+export const LABEL_COLOR = "#94A3B8";
+export const PATCHING_COLOR = "#D9944A";
+export const PDD_COLOR = "#4A90D9";
+
+// Dimensions
+export const TABLE_WIDTH = 900;
+export const COL_WIDTH = 300;
+export const HEADER_HEIGHT = 50;
+export const ROW_HEIGHT = 70;
+export const TABLE_BORDER_RADIUS = 8;
+export const CELL_PADDING = 24;
+
+// Table position (centered)
+export const TABLE_X = (1920 - TABLE_WIDTH) / 2;
+export const TABLE_Y = 260;
+
+// Summary
+export const SUMMARY_Y = 700;
+export const PILL_PADDING = 16;
+export const PILL_RADIUS = 10;
+
+// Animation timing (frames)
+export const TOTAL_FRAMES = 420;
+
+// Phase 1: Table container fade-in
+export const TABLE_FADE_START = 0;
+export const TABLE_FADE_DURATION = 20;
+
+// Phase 2: Row 1
+export const ROW1_START = 30;
+export const ROW_SLIDE_DURATION = 20;
+export const CELL_STAGGER = 10;
+export const GLOW_DURATION = 15;
+
+// Phase 3: Row 2
+export const ROW2_START = 90;
+
+// Phase 4: Row 3
+export const ROW3_START = 150;
+
+// Phase 5: PDD pulse
+export const PULSE_START = 210;
+export const PULSE_DURATION = 30;
+
+// Phase 6: Summary
+export const SUMMARY_START = 270;
+export const SUMMARY_SLIDE_DURATION = 25;
 
 // Row data
-export interface RowData {
-  investment: string;
-  icon: 'bug' | 'code' | 'document';
-  patching: string;
-  pdd: string;
-  pddGlow: number;
-  pddOpacity: number;
-  alternate: boolean;
-}
-
-export const ROWS: RowData[] = [
+export const TABLE_ROWS = [
   {
-    investment: 'Fix a bug',
-    icon: 'bug',
-    patching: 'One place, once',
-    pdd: 'Impossible forever',
+    investment: "Fix a bug",
+    icon: "bug",
+    patching: "One place, once",
+    pdd: "Impossible forever",
     pddGlow: 0.04,
     pddOpacity: 0.8,
     alternate: false,
   },
   {
-    investment: 'Improve code',
-    icon: 'code',
-    patching: 'One version',
-    pdd: 'All future versions',
+    investment: "Improve code",
+    icon: "code",
+    patching: "One version",
+    pdd: "All future versions",
     pddGlow: 0.06,
     pddOpacity: 0.9,
     alternate: true,
   },
   {
-    investment: 'Document intent',
-    icon: 'document',
-    patching: 'One snapshot',
-    pdd: 'Living specification',
+    investment: "Document intent",
+    icon: "doc",
+    patching: "One snapshot",
+    pdd: "Living specification",
     pddGlow: 0.08,
     pddOpacity: 1.0,
     alternate: false,
   },
-];
-
-// Animation frame ranges
-export const ANIM = {
-  tableAppear: { start: 0, duration: 20 },
-  row1: { start: 30, slideDuration: 20, cellStagger: 10 },
-  row2: { start: 90, slideDuration: 20, cellStagger: 10 },
-  row3: { start: 150, slideDuration: 20, cellStagger: 10 },
-  pddPulse: { start: 210, duration: 30 },
-  summary: { start: 270, slideDuration: 25 },
-  totalFrames: 420,
-} as const;
+] as const;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, TIMING } from './constants';
+import { COLORS } from './constants';
 
 interface EditorWindowProps {
   x: number;
@@ -8,80 +8,97 @@ interface EditorWindowProps {
   width: number;
   height: number;
   filename: string;
-  lines: string[];
-  isCode: boolean;
-  /** If true, desaturates over time */
-  desaturate?: boolean;
-  /** If true, applies glowing border effect */
-  glow?: boolean;
+  lines: readonly string[];
+  /** If true, text uses monospace font for code; otherwise Inter for prose */
+  isCode?: boolean;
+  /** Animate opacity from this value... */
+  opacityFrom?: number;
+  /** ...to this value */
+  opacityTo?: number;
+  /** Frame at which opacity animation starts */
+  fadeStartFrame?: number;
+  /** Duration of opacity fade in frames */
+  fadeDuration?: number;
+  /** Border color */
+  borderColor?: string;
+  /** Border opacity from */
+  borderOpacityFrom?: number;
+  /** Border opacity to */
+  borderOpacityTo?: number;
+  /** Border width */
+  borderWidth?: number;
+  /** Glow color */
+  glowColor?: string;
+  /** Glow intensity from (box-shadow spread multiplier) */
+  glowFrom?: number;
+  /** Glow intensity to */
+  glowTo?: number;
+  /** Text color */
+  textColor?: string;
+  /** Text opacity */
+  textOpacity?: number;
 }
 
-export const EditorWindow: React.FC<EditorWindowProps> = ({
+const EditorWindow: React.FC<EditorWindowProps> = ({
   x,
   y,
   width,
   height,
   filename,
   lines,
-  isCode,
-  desaturate = false,
-  glow = false,
+  isCode = false,
+  opacityFrom = 0.5,
+  opacityTo = 0.5,
+  fadeStartFrame = 0,
+  fadeDuration = 1,
+  borderColor = COLORS.codeBorder,
+  borderOpacityFrom = 0.3,
+  borderOpacityTo = 0.3,
+  borderWidth = 1,
+  glowColor,
+  glowFrom = 0,
+  glowTo = 0,
+  textColor = COLORS.codeText,
+  textOpacity = 0.5,
 }) => {
   const frame = useCurrentFrame();
 
-  // Code desaturation animation
-  const contentOpacity = desaturate
-    ? interpolate(
-        frame,
-        [TIMING.desaturationStart, TIMING.desaturationStart + TIMING.desaturationDuration],
-        [0.5, 0.2],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
-      )
-    : 0.7;
+  const contentOpacity = interpolate(
+    frame,
+    [fadeStartFrame, fadeStartFrame + fadeDuration],
+    [opacityFrom, opacityTo],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
+  );
 
-  const borderOpacity = desaturate
-    ? interpolate(
-        frame,
-        [TIMING.desaturationStart, TIMING.desaturationStart + TIMING.desaturationDuration],
-        [0.3, 0.1],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
-      )
-    : 0.3;
+  const borderOp = interpolate(
+    frame,
+    [fadeStartFrame, fadeStartFrame + fadeDuration],
+    [borderOpacityFrom, borderOpacityTo],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
+  );
 
-  // Prompt glow intensification
-  const glowIntensity = glow
+  const glowIntensity = glowColor
     ? interpolate(
         frame,
-        [TIMING.desaturationStart, TIMING.desaturationStart + TIMING.desaturationDuration],
-        [0.06, 0.12],
+        [fadeStartFrame, fadeStartFrame + fadeDuration],
+        [glowFrom, glowTo],
         { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
       )
     : 0;
 
-  const glowBlur = glow ? 16 : 0;
+  const fontFamily = isCode ? '"JetBrains Mono", monospace' : '"Inter", sans-serif';
 
-  const textColor = desaturate
-    ? interpolate(
-        frame,
-        [TIMING.desaturationStart, TIMING.desaturationStart + TIMING.desaturationDuration],
-        [0, 1],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
-      )
-    : 0;
+  // Parse hex color to rgba
+  const hexToRgba = (hex: string, alpha: number) => {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
 
-  // Interpolate between initial and final code colors
-  const codeColorR = Math.round(148 + (100 - 148) * textColor);
-  const codeColorG = Math.round(163 + (116 - 163) * textColor);
-  const codeColorB = Math.round(184 + (139 - 184) * textColor);
-  const computedTextColor = desaturate
-    ? `rgb(${codeColorR}, ${codeColorG}, ${codeColorB})`
-    : COLORS.promptText;
-
-  const borderColor = desaturate
-    ? `rgba(51, 65, 85, ${borderOpacity})`
-    : `rgba(74, 144, 217, ${borderOpacity})`;
-
-  const titleBarHeight = 28;
+  const boxShadow = glowColor && glowIntensity > 0
+    ? `0 0 ${16 * glowIntensity / 0.06}px ${8 * glowIntensity / 0.06}px ${hexToRgba(glowColor, glowIntensity)}`
+    : 'none';
 
   return (
     <div
@@ -90,60 +107,47 @@ export const EditorWindow: React.FC<EditorWindowProps> = ({
         left: x,
         top: y,
         width,
-        height: height + titleBarHeight,
-        borderRadius: 8,
+        height,
+        borderRadius: 6,
         overflow: 'hidden',
-        border: glow ? `2px solid ${borderColor}` : `1px solid ${borderColor}`,
-        boxShadow: glow
-          ? `0 0 ${glowBlur}px rgba(74, 144, 217, ${glowIntensity}), 0 0 ${glowBlur * 2}px rgba(74, 144, 217, ${glowIntensity * 0.5})`
-          : 'none',
+        border: `${borderWidth}px solid ${hexToRgba(borderColor, borderOp)}`,
+        boxShadow,
       }}
     >
       {/* Title bar */}
       <div
         style={{
-          height: titleBarHeight,
+          height: 24,
           backgroundColor: COLORS.titleBar,
           display: 'flex',
           alignItems: 'center',
           paddingLeft: 10,
-          paddingRight: 10,
           gap: 6,
         }}
       >
-        {/* Traffic lights */}
-        {COLORS.titleBarDots.map((color, i) => (
-          <div
-            key={i}
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              backgroundColor: color,
-              opacity: 0.6,
-            }}
-          />
-        ))}
-        <div
+        {/* Window dots */}
+        <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#EF4444', opacity: 0.6 }} />
+        <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#F59E0B', opacity: 0.6 }} />
+        <div style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#22C55E', opacity: 0.6 }} />
+        <span
           style={{
-            flex: 1,
-            textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 10,
-            color: COLORS.titleBarText,
+            marginLeft: 8,
+            fontFamily: '"JetBrains Mono", monospace',
+            fontSize: 9,
+            color: COLORS.codeText,
             opacity: 0.6,
           }}
         >
           {filename}
-        </div>
+        </span>
       </div>
 
       {/* Editor content */}
       <div
         style={{
           backgroundColor: COLORS.editorBg,
-          padding: '8px 12px',
-          height: height,
+          padding: '8px 10px',
+          height: height - 24,
           overflow: 'hidden',
         }}
       >
@@ -151,19 +155,14 @@ export const EditorWindow: React.FC<EditorWindowProps> = ({
           <div
             key={i}
             style={{
-              fontFamily: isCode ? '"JetBrains Mono", monospace' : 'Inter, sans-serif',
+              fontFamily,
               fontSize: 9,
               lineHeight: '13px',
-              color: computedTextColor,
-              opacity: contentOpacity,
+              color: textColor,
+              opacity: contentOpacity * (textOpacity / 0.5),
               whiteSpace: 'pre',
             }}
           >
-            {isCode && (
-              <span style={{ color: COLORS.codeTextFinal, opacity: 0.3, marginRight: 8, display: 'inline-block', width: 16, textAlign: 'right' }}>
-                {i + 1}
-              </span>
-            )}
             {line || '\u00A0'}
           </div>
         ))}

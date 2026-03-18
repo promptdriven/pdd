@@ -1,163 +1,150 @@
 import React from 'react';
-import {useCurrentFrame, Easing, interpolate} from 'remotion';
-import {
-	TERMINAL_BG,
-	TEXT_DEFAULT,
-	TEXT_MUTED,
-	HEADER_COLOR,
-	STRING_GREEN,
-	MONO_FONT,
-	TERMINAL_STRIP,
-	TERMINAL_COMMANDS,
-	FRAME_PDD_BUG_START,
-	FRAME_PDD_FIX_START,
-	FRAME_TESTS_PASS,
-} from './constants';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { COLORS, FONTS, LAYOUT } from './constants';
 
 const CHAR_DELAY = 2; // frames per character
 
-/** Typing animation: reveals characters one by one */
-const TypedText: React.FC<{
-	text: string;
-	startFrame: number;
-	color: string;
-	fontSize: number;
-}> = ({text, startFrame, color, fontSize}) => {
-	const frame = useCurrentFrame();
-	const elapsed = frame - startFrame;
-	const charsVisible = Math.max(0, Math.floor(elapsed / CHAR_DELAY));
-	const visibleText = text.substring(0, charsVisible);
+interface CommandEntry {
+  startFrame: number;
+  command: string;
+  output: string;
+  outputColor?: string;
+}
 
-	// Blinking cursor
-	const showCursor = charsVisible < text.length && elapsed >= 0;
-	const cursorBlink = showCursor && Math.floor(frame / 8) % 2 === 0;
+const COMMANDS: CommandEntry[] = [
+  {
+    startFrame: 30,
+    command: 'pdd bug user_parser',
+    output: 'Creating failing test...',
+  },
+  {
+    startFrame: 70,
+    command: 'pdd fix user_parser',
+    output: 'Regenerating...',
+  },
+];
 
-	return (
-		<span style={{fontFamily: MONO_FONT, fontSize, color}}>
-			{visibleText}
-			{cursorBlink && (
-				<span style={{opacity: 0.7}}>▊</span>
-			)}
-		</span>
-	);
+const FINAL_OUTPUT = {
+  startFrame: 160,
+  text: 'All tests passing.',
+  color: COLORS.greenCheck,
 };
 
-/** A terminal command line with prompt, command, and output */
-const TerminalCommand: React.FC<{
-	command: string;
-	output: string;
-	startFrame: number;
-	outputColor?: string;
-}> = ({command, output, startFrame, outputColor = TEXT_MUTED}) => {
-	const frame = useCurrentFrame();
-	const commandDuration = command.length * CHAR_DELAY;
-	const outputStartFrame = startFrame + commandDuration + 6; // small pause after command
+const TypedText: React.FC<{
+  text: string;
+  startFrame: number;
+  color: string;
+}> = ({ text, startFrame, color }) => {
+  const frame = useCurrentFrame();
+  if (frame < startFrame) return null;
 
-	const outputOpacity = interpolate(
-		frame,
-		[outputStartFrame, outputStartFrame + 8],
-		[0, 0.7],
-		{extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
-	);
+  const elapsed = frame - startFrame;
+  const visibleChars = Math.min(Math.floor(elapsed / CHAR_DELAY), text.length);
 
-	if (frame < startFrame) return null;
-
-	return (
-		<div style={{marginBottom: 6}}>
-			{/* Command line */}
-			<div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-				<span style={{fontFamily: MONO_FONT, fontSize: 12, color: HEADER_COLOR}}>
-					$
-				</span>
-				<TypedText
-					text={command}
-					startFrame={startFrame}
-					color={TEXT_DEFAULT}
-					fontSize={13}
-				/>
-			</div>
-
-			{/* Output */}
-			{frame >= outputStartFrame && (
-				<div style={{paddingLeft: 20, marginTop: 2, opacity: outputOpacity}}>
-					<span style={{fontFamily: MONO_FONT, fontSize: 11, color: outputColor}}>
-						{output}
-					</span>
-				</div>
-			)}
-		</div>
-	);
+  return (
+    <span style={{ color }}>
+      {text.slice(0, visibleChars)}
+      {visibleChars < text.length && (
+        <span
+          style={{
+            display: 'inline-block',
+            width: 7,
+            height: 14,
+            backgroundColor: COLORS.textDefault,
+            opacity: 0.7,
+            marginLeft: 1,
+            verticalAlign: 'middle',
+          }}
+        />
+      )}
+    </span>
+  );
 };
 
 export const TerminalStrip: React.FC = () => {
-	const frame = useCurrentFrame();
+  const frame = useCurrentFrame();
+  const { x, y, width, height } = LAYOUT.terminal;
 
-	// Layout fade-in
-	const layoutOpacity = interpolate(frame, [0, 20], [0, 1], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
-	});
+  // Layout fade-in
+  const panelOpacity = interpolate(frame, [0, 20], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-	// "All tests passing." output
-	const allPassFrame = FRAME_TESTS_PASS + 4;
-	const allPassOpacity = interpolate(frame, [allPassFrame, allPassFrame + 10], [0, 0.8], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-	});
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y,
+        width,
+        height,
+        backgroundColor: `rgba(15, 23, 42, 0.6)`,
+        borderRadius: 8,
+        opacity: panelOpacity,
+        padding: '14px 20px',
+        fontFamily: FONTS.mono,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+      }}
+    >
+      {COMMANDS.map((cmd, i) => {
+        if (frame < cmd.startFrame) return null;
+        const cmdEndFrame = cmd.startFrame + cmd.command.length * CHAR_DELAY;
+        const outputStart = cmdEndFrame + 4; // small pause after command
+        const showOutput = frame >= outputStart;
 
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				left: TERMINAL_STRIP.x,
-				top: TERMINAL_STRIP.y,
-				width: TERMINAL_STRIP.width,
-				height: TERMINAL_STRIP.height,
-				backgroundColor: `${TERMINAL_BG}99`,
-				borderRadius: 8,
-				opacity: layoutOpacity,
-				padding: '14px 20px',
-				overflow: 'hidden',
-			}}
-		>
-			{/* Terminal header bar */}
-			<div
-				style={{
-					display: 'flex',
-					gap: 6,
-					marginBottom: 10,
-				}}
-			>
-				<div style={{width: 10, height: 10, borderRadius: '50%', backgroundColor: '#EF4444', opacity: 0.6}} />
-				<div style={{width: 10, height: 10, borderRadius: '50%', backgroundColor: '#F59E0B', opacity: 0.6}} />
-				<div style={{width: 10, height: 10, borderRadius: '50%', backgroundColor: '#22C55E', opacity: 0.6}} />
-			</div>
+        return (
+          <React.Fragment key={i}>
+            {/* Command line */}
+            <div style={{ display: 'flex', gap: 8, height: 20 }}>
+              <span style={{ color: COLORS.textDim, fontSize: 12 }}>$</span>
+              <TypedText
+                text={cmd.command}
+                startFrame={cmd.startFrame}
+                color={COLORS.textDefault}
+              />
+            </div>
 
-			{/* Command 1: pdd bug */}
-			<TerminalCommand
-				command={TERMINAL_COMMANDS[0].command}
-				output={TERMINAL_COMMANDS[0].output}
-				startFrame={FRAME_PDD_BUG_START}
-			/>
+            {/* Output */}
+            {showOutput && (
+              <div style={{ paddingLeft: 16, height: 18 }}>
+                <span
+                  style={{
+                    color: cmd.outputColor || COLORS.textMuted,
+                    fontSize: 11,
+                  }}
+                >
+                  {cmd.output}
+                </span>
+              </div>
+            )}
+          </React.Fragment>
+        );
+      })}
 
-			{/* Command 2: pdd fix */}
-			<TerminalCommand
-				command={TERMINAL_COMMANDS[1].command}
-				output={TERMINAL_COMMANDS[1].output}
-				startFrame={FRAME_PDD_FIX_START}
-			/>
-
-			{/* Final output: All tests passing */}
-			{frame >= allPassFrame && (
-				<div style={{paddingLeft: 20, marginTop: 4, opacity: allPassOpacity}}>
-					<span style={{fontFamily: MONO_FONT, fontSize: 12, color: STRING_GREEN, fontWeight: 600}}>
-						All tests passing.
-					</span>
-				</div>
-			)}
-		</div>
-	);
+      {/* Final output: "All tests passing." */}
+      {frame >= FINAL_OUTPUT.startFrame && (
+        <div style={{ paddingLeft: 16, height: 18 }}>
+          <span
+            style={{
+              color: FINAL_OUTPUT.color,
+              fontSize: 11,
+              opacity: interpolate(
+                frame,
+                [FINAL_OUTPUT.startFrame, FINAL_OUTPUT.startFrame + 10],
+                [0, 1],
+                { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+              ),
+            }}
+          >
+            {FINAL_OUTPUT.text}
+          </span>
+        </div>
+      )}
+    </div>
+  );
 };
-
-export default TerminalStrip;

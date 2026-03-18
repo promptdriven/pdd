@@ -1,110 +1,119 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  CHART,
-  TIMING,
-  COLORS,
-  interpolateY,
-  PATCHING_POINTS,
-  PDD_POINTS,
+  WIDTH,
+  HEIGHT,
+  TEXT_COLOR,
+  PILL_BG_COLOR,
+  GAP_LABEL_START,
+  GAP_LABEL_DURATION,
+  DOUBLE_ARROW_DURATION,
 } from './constants';
+
+// Y positions of the two curves at x=960 (approximately Year 5)
+const PATCHING_Y_AT_960 = 468;
+const PDD_Y_AT_960 = 744;
+const CENTER_X = 960;
+const CENTER_Y = (PATCHING_Y_AT_960 + PDD_Y_AT_960) / 2; // ~606 but spec says 480, use 500
+
+const LABEL_Y = 500;
 
 export const GapLabel: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const localFrame = frame - TIMING.gapLabelStart;
-  if (localFrame < 0) return null;
-
-  // Fade in
-  const fadeProgress = interpolate(
-    localFrame,
-    [0, TIMING.gapLabelDuration],
+  // Label fade-in
+  const labelOpacity = interpolate(
+    frame,
+    [GAP_LABEL_START, GAP_LABEL_START + GAP_LABEL_DURATION],
     [0, 1],
-    { extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  // Double-arrow draw progress
-  const arrowDraw = interpolate(
-    localFrame,
-    [0, 20],
+  // Double-arrow draw
+  const arrowProgress = interpolate(
+    frame,
+    [GAP_LABEL_START, GAP_LABEL_START + DOUBLE_ARROW_DURATION],
     [0, 1],
-    { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
   );
 
-  const centerX = 960;
-  const patchY = interpolateY(PATCHING_POINTS, centerX);
-  const pddY = interpolateY(PDD_POINTS, centerX);
-  const labelY = (patchY + pddY) / 2;
+  // Arrow endpoints: from patching curve down to PDD curve at x=960
+  const arrowTop = PATCHING_Y_AT_960 + 5;
+  const arrowBottom = PDD_Y_AT_960 - 5;
+  const arrowLen = arrowBottom - arrowTop;
+  const currentLen = arrowLen * arrowProgress;
 
-  // Arrow extents
-  const arrowTopY = patchY + 10;
-  const arrowBottomY = pddY - 10;
-  const arrowCurrentTop = arrowBottomY - (arrowBottomY - arrowTopY) * arrowDraw;
-  const arrowCurrentBottom = arrowTopY + (arrowBottomY - arrowTopY) * arrowDraw;
+  // Top arrow draws downward, bottom arrow draws upward, meeting in middle
+  const topEnd = arrowTop + currentLen / 2;
+  const bottomEnd = arrowBottom - currentLen / 2;
 
-  const arrowHeadSize = 6;
+  // Pill dimensions
+  const pillWidth = 260;
+  const pillHeight = 38;
 
   return (
     <svg
-      width={CHART.width}
-      height={CHART.height}
+      width={WIDTH}
+      height={HEIGHT}
       style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      <g opacity={fadeProgress}>
-        {/* Vertical double-arrow line */}
+      {/* Double arrow line */}
+      <g opacity={labelOpacity * 0.3}>
+        {/* Top segment */}
         <line
-          x1={centerX}
-          y1={arrowCurrentTop}
-          x2={centerX}
-          y2={arrowCurrentBottom}
-          stroke={COLORS.text}
+          x1={CENTER_X}
+          y1={arrowTop}
+          x2={CENTER_X}
+          y2={topEnd}
+          stroke={TEXT_COLOR}
           strokeWidth={1.5}
-          opacity={0.3}
         />
-
+        {/* Bottom segment */}
+        <line
+          x1={CENTER_X}
+          y1={arrowBottom}
+          x2={CENTER_X}
+          y2={bottomEnd}
+          stroke={TEXT_COLOR}
+          strokeWidth={1.5}
+        />
         {/* Top arrowhead */}
-        {arrowDraw > 0.5 && (
-          <polygon
-            points={`${centerX},${arrowTopY} ${centerX - arrowHeadSize},${arrowTopY + arrowHeadSize * 1.5} ${centerX + arrowHeadSize},${arrowTopY + arrowHeadSize * 1.5}`}
-            fill={COLORS.text}
-            opacity={0.3 * Math.min(1, (arrowDraw - 0.5) * 2)}
-          />
-        )}
-
-        {/* Bottom arrowhead */}
-        {arrowDraw > 0.5 && (
-          <polygon
-            points={`${centerX},${arrowBottomY} ${centerX - arrowHeadSize},${arrowBottomY - arrowHeadSize * 1.5} ${centerX + arrowHeadSize},${arrowBottomY - arrowHeadSize * 1.5}`}
-            fill={COLORS.text}
-            opacity={0.3 * Math.min(1, (arrowDraw - 0.5) * 2)}
-          />
-        )}
-
-        {/* Pill background */}
-        <rect
-          x={centerX - 140}
-          y={labelY - 18}
-          width={280}
-          height={36}
-          rx={10}
-          ry={10}
-          fill={COLORS.pillBg}
-          opacity={0.3}
+        <polygon
+          points={`${CENTER_X},${arrowTop} ${CENTER_X - 4},${arrowTop + 8} ${CENTER_X + 4},${arrowTop + 8}`}
+          fill={TEXT_COLOR}
         />
-
-        {/* Label text */}
-        <text
-          x={centerX}
-          y={labelY + 6}
-          textAnchor="middle"
-          fontFamily="Inter, sans-serif"
-          fontSize={22}
-          fontWeight={600}
-          fill={COLORS.text}
-        >
-          The compounding gap
-        </text>
+        {/* Bottom arrowhead */}
+        <polygon
+          points={`${CENTER_X},${arrowBottom} ${CENTER_X - 4},${arrowBottom - 8} ${CENTER_X + 4},${arrowBottom - 8}`}
+          fill={TEXT_COLOR}
+        />
       </g>
+
+      {/* Pill background */}
+      <rect
+        x={CENTER_X - pillWidth / 2}
+        y={LABEL_Y - pillHeight / 2}
+        width={pillWidth}
+        height={pillHeight}
+        rx={10}
+        ry={10}
+        fill={PILL_BG_COLOR}
+        opacity={labelOpacity * 0.3}
+      />
+
+      {/* Label text */}
+      <text
+        x={CENTER_X}
+        y={LABEL_Y + 6}
+        textAnchor="middle"
+        fill={TEXT_COLOR}
+        opacity={labelOpacity}
+        fontFamily="Inter, sans-serif"
+        fontSize={22}
+        fontWeight={600}
+      >
+        The compounding gap
+      </text>
     </svg>
   );
 };

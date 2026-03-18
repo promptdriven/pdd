@@ -1,23 +1,28 @@
+// CodeLines.tsx — Horizontal code-representation lines streaming into center
 import React from 'react';
 import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import {
-  CodeLineData,
-  CENTER_X,
-  CENTER_Y,
-  CODE_LINE_COLOR,
-  CODE_LINE_OPACITY,
-} from './constants';
+import { CODE_COLOR, CODE_OPACITY } from './constants';
+
+interface CodeLineSpec {
+  readonly width: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+}
 
 interface CodeLinesProps {
-  lines: CodeLineData[];
-  staggerFrames: number;
-  totalFrames: number;
+  lines: readonly CodeLineSpec[];
+  centerX: number;
+  centerY: number;
+  stagger: number;
+  totalDuration: number;
 }
 
 export const CodeLines: React.FC<CodeLinesProps> = ({
   lines,
-  staggerFrames,
-  totalFrames,
+  centerX,
+  centerY,
+  stagger,
+  totalDuration,
 }) => {
   const frame = useCurrentFrame();
 
@@ -29,78 +34,48 @@ export const CodeLines: React.FC<CodeLinesProps> = ({
       style={{ position: 'absolute', top: 0, left: 0 }}
     >
       {lines.map((line, i) => {
-        const staggerDelay = i * staggerFrames;
-        const lineStart = staggerDelay;
-        const lineEnd = Math.min(lineStart + 8, totalFrames);
+        const lineDelay = i * stagger;
+        const lineDuration = Math.max(1, totalDuration - lineDelay);
 
-        // Width animates from 0 to full — streaming in from center
-        const widthProgress = interpolate(
+        // Scale from 0 to full width (stream in from center)
+        const scaleProgress = interpolate(
           frame,
-          [lineStart, lineEnd],
+          [lineDelay, lineDelay + Math.min(lineDuration, 12)],
           [0, 1],
           {
-            extrapolateRight: 'clamp',
             extrapolateLeft: 'clamp',
-            easing: Easing.out(Easing.poly(2)),
+            extrapolateRight: 'clamp',
+            easing: Easing.out(Easing.quad),
           }
         );
 
-        // Opacity fades in
+        // Fade in
         const opacity = interpolate(
           frame,
-          [lineStart, Math.min(lineStart + 5, totalFrames)],
-          [0, CODE_LINE_OPACITY],
-          { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' }
+          [lineDelay, lineDelay + Math.min(lineDuration, 8)],
+          [0, CODE_OPACITY],
+          {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+          }
         );
 
-        if (widthProgress <= 0) return null;
+        if (opacity <= 0) return null;
 
-        const currentWidth = line.width * widthProgress;
-        const x = CENTER_X + line.offsetX - currentWidth / 2;
-        const y = CENTER_Y + line.offsetY;
+        const x = centerX + line.offsetX - (line.width * scaleProgress) / 2;
+        const y = centerY + line.offsetY;
+        const displayWidth = line.width * scaleProgress;
 
         return (
           <rect
             key={i}
             x={x}
             y={y}
-            width={currentWidth}
-            height={2}
-            rx={1}
-            fill={CODE_LINE_COLOR}
+            width={Math.max(0, displayWidth)}
+            height={3}
+            rx={1.5}
+            fill={CODE_COLOR}
             opacity={opacity}
-          />
-        );
-      })}
-    </svg>
-  );
-};
-
-/** Static code lines (no animation, just rendered at full opacity) */
-export const StaticCodeLines: React.FC<{ lines: CodeLineData[] }> = ({
-  lines,
-}) => {
-  return (
-    <svg
-      width={1920}
-      height={1080}
-      viewBox="0 0 1920 1080"
-      style={{ position: 'absolute', top: 0, left: 0 }}
-    >
-      {lines.map((line, i) => {
-        const x = CENTER_X + line.offsetX - line.width / 2;
-        const y = CENTER_Y + line.offsetY;
-
-        return (
-          <rect
-            key={i}
-            x={x}
-            y={y}
-            width={line.width}
-            height={2}
-            rx={1}
-            fill={CODE_LINE_COLOR}
-            opacity={CODE_LINE_OPACITY}
           />
         );
       })}

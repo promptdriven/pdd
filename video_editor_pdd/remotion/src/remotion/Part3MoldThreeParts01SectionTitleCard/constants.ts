@@ -1,72 +1,63 @@
-// Canvas
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
-export const TOTAL_FRAMES = 120;
+// constants.ts — Part3MoldThreeParts01SectionTitleCard
 
-// Colors
-export const BG_COLOR = "#0A0F1A";
-export const GRID_COLOR = "#1E293B";
-export const GRID_OPACITY = 0.05;
-export const GRID_SPACING = 60;
+export const CANVAS = {
+  WIDTH: 1920,
+  HEIGHT: 1080,
+  BG_COLOR: '#0A0F1A',
+} as const;
 
-export const TITLE_COLOR = "#E2E8F0";
-export const LABEL_COLOR = "#64748B";
-export const RULE_COLOR = "#334155";
+export const GRID = {
+  SPACING: 60,
+  COLOR: '#1E293B',
+  OPACITY: 0.05,
+} as const;
 
-export const WALL_COLOR = "#D9944A";
-export const NOZZLE_COLOR = "#4A90D9";
-export const MATERIAL_COLOR = "#5AAA6E";
+export const COLORS = {
+  TITLE: '#E2E8F0',
+  SECTION_LABEL: '#64748B',
+  RULE: '#334155',
+  WALL: '#D9944A',
+  NOZZLE: '#4A90D9',
+  MATERIAL: '#5AAA6E',
+} as const;
 
-export const GHOST_FILL_OPACITY = 0.04;
-export const GHOST_STROKE_WIDTH = 2;
-export const GHOST_GLOW_BLUR = 8;
-export const GHOST_GLOW_OPACITY = 0.02;
-export const GHOST_LABEL_OPACITY = 0.03;
+export const GHOST_ELEMENTS = [
+  {
+    shape: 'wall' as const,
+    label: 'WALLS',
+    color: COLORS.WALL,
+    x: 560,
+    y: 480,
+  },
+  {
+    shape: 'nozzle' as const,
+    label: 'NOZZLE',
+    color: COLORS.NOZZLE,
+    x: 960,
+    y: 430,
+  },
+  {
+    shape: 'material' as const,
+    label: 'MATERIAL',
+    color: COLORS.MATERIAL,
+    x: 1360,
+    y: 480,
+  },
+] as const;
 
-// Layout
-export const LABEL_Y = 400;
-export const TITLE_LINE1_Y = 460;
-export const RULE_Y = 505;
-export const TITLE_LINE2_Y = 545;
-export const TITLE_LINE2_OFFSET_X = 15;
-export const RULE_WIDTH = 200;
-export const RULE_HEIGHT = 2;
-
-// Ghost shape positions
-export const WALL_POS = { x: 560, y: 480 };
-export const NOZZLE_POS = { x: 960, y: 430 };
-export const MATERIAL_POS = { x: 1360, y: 480 };
-
-// Text content
-export const SECTION_LABEL = "PART 3";
-export const TITLE_LINE1 = "THE MOLD HAS";
-export const TITLE_LINE2 = "THREE PARTS";
-
-// Font
-export const FONT_FAMILY = "'Inter', sans-serif";
-export const TITLE_FONT_SIZE = 72;
-export const LABEL_FONT_SIZE = 14;
-export const GHOST_LABEL_FONT_SIZE = 8;
-export const LABEL_LETTER_SPACING = 4;
-
-// Animation timing (frames at 30fps)
-export const BG_FADE_START = 0;
-export const BG_FADE_END = 15;
-
-export const LABEL_FADE_START = 15;
-export const LABEL_FADE_END = 35;
-
-export const GHOST_DRAW_START = 15;
-export const GHOST_DRAW_END = 75;
-
-export const TYPEWRITER_START = 40;
-export const TYPEWRITER_CHAR_DELAY = 3;
-
-export const RULE_DRAW_START = 60;
-export const RULE_DRAW_END = 70;
-
-export const LINE2_FADE_START = 70;
-export const LINE2_FADE_END = 90;
-export const LINE2_SLIDE_DISTANCE = 10;
-
-export const PULSE_CYCLE_FRAMES = 30;
+export const TIMING = {
+  BG_FADE_END: 15,
+  PART3_FADE_START: 15,
+  GHOST_DRAW_START: 15,
+  GHOST_DRAW_DURATION: 60,
+  TITLE1_START: 40,
+  TITLE1_TEXT: 'THE MOLD HAS',
+  TITLE1_CHAR_DELAY: 3,
+  RULE_START: 60,
+  RULE_DRAW_DURATION: 10,
+  TITLE2_START: 70,
+  TITLE2_FADE_DURATION: 20,
+  TITLE2_SLIDE_DISTANCE: 10,
+  PULSE_CYCLE: 30,
+  TOTAL_FRAMES: 120,
+} as const;

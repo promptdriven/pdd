@@ -54,7 +54,6 @@ type AuditRenderSource =
       reason: string;
     };
 
-const DEFAULT_PREVIEW_DURATION_FRAMES = 150;
 const DECORATIVE_DISCREPANCY_RE =
   /\b(glow|shadow|blur|bloom|rule|separator|trail|streak|opacity|gradient|halo|flare)\b/i;
 const MILD_DIFFERENCE_RE =
@@ -511,10 +510,7 @@ async function auditSection(
     );
 
     if (renderSource.kind === "preview-composition") {
-      const sampleFrame = Math.min(
-        DEFAULT_PREVIEW_DURATION_FRAMES - 1,
-        Math.max(0, sampleWindow.intrinsicSampleFrame)
-      );
+      const sampleFrame = Math.max(0, sampleWindow.intrinsicSampleFrame);
       onLog(
         `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
       );

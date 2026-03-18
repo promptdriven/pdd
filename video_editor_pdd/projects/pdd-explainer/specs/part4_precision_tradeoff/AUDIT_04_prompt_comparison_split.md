@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+Two major elements are entirely missing from the rendered frame at 94% progress (hold phase). First, the terminal window on the right panel — which should display 'pdd test parser' with 47 green checkmark test results and a '47 passed ✓' summary line — is completely absent. This is the central visual payoff of the composition: showing that a 10-line prompt + 47 tests equals the same safety as a 50-line prompt. Second, the code output blocks at the bottom of both panels with the centered label 'Same output. Different specification strategy.' are also missing. Both elements should have been fully visible since frame 330 (code output) and frame 280 (terminal results), well before the current frame 394. The split layout, headers, prompt content, line numbers, and badges are all correctly rendered.

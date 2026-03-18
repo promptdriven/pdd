@@ -1,5 +1,5 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { interpolate, Easing, useCurrentFrame } from "remotion";
 import {
   GRID_ROWS,
   GRID_COLS,
@@ -7,86 +7,93 @@ import {
   TILE_HEIGHT,
   TILE_GAP,
   TILE_PADDING,
-  TILE_BG,
-  TILE_BORDER_RADIUS,
-  DIFF_MARKER_WIDTH,
+  CODE_TILE_BG,
   DIFF_GREEN,
   DIFF_RED,
-  DIFF_MARKER_PERCENT,
-  TILE_STAGGER_FRAMES,
-  TODO_COLOR,
-  TODO_OPACITY,
-  TODO_FONT_SIZE,
-  COMMENT_COLOR,
-  COMMENT_FONT_SIZE,
-  SYNTAX_KEYWORD,
-  SYNTAX_STRING,
-  SYNTAX_FUNCTION,
-  SYNTAX_OPERATOR,
-  ZOOM_START_FRAME,
+  TODO_RED,
+  COMMENT_GRAY,
+  CODE_TEXT_SLATE,
+  CODE_KEYWORD_PURPLE,
+  CODE_STRING_GREEN,
   INLINE_COMMENTS,
 } from "./constants";
 
-// Deterministic pseudo-random based on index
-const pseudoRandom = (seed: number): number => {
-  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+// Deterministic pseudo-random from seed
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 9301 + 49297) * 49297;
   return x - Math.floor(x);
-};
+}
 
-const CodeTile: React.FC<{
+// Small code snippets to fill tiles
+const CODE_SNIPPETS = [
+  ["fn check(x) {", "  if x == nil {", "    return err", "  }", "}"],
+  ["let val = db", "  .query(id)", "  .await?;", "ok(val)"],
+  ["match res {", "  Ok(v) => v,", "  Err(_) => {", "    log(e);", "  }", "}"],
+  ["for item in", "  items.iter()", "{", "  process(item)", "}"],
+  ["pub fn new()", "  -> Self {", "  Self {", "    count: 0,", "  }", "}"],
+  ["use std::io;", "use crate::", "  config;", "use super::", "  util;"],
+  ["impl Display", "  for Node {", '  fn fmt(&self', '    f: &mut', '  ) {}', '}'],
+  ["#[derive(", "  Debug,", "  Clone,", "  Serialize", ")]"],
+];
+
+interface CodeTileProps {
   row: number;
   col: number;
-  index: number;
-  revealProgress: number;
-}> = ({ row, col, index, revealProgress }) => {
+  tileIndex: number;
+  revealFrame: number;
+}
+
+const CodeTile: React.FC<CodeTileProps> = ({
+  row,
+  col,
+  tileIndex,
+  revealFrame,
+}) => {
   const frame = useCurrentFrame();
-  const staggerDelay = row * TILE_STAGGER_FRAMES;
-  const tileProgress = interpolate(
-    revealProgress,
-    [staggerDelay / 105, Math.min(1, (staggerDelay + 30) / 105)],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  const seed = tileIndex * 37 + 7;
+  const rand = seededRandom(seed);
 
-  const tileOpacity = tileProgress;
-  const rand = pseudoRandom(index);
-  const hasDiff = rand < DIFF_MARKER_PERCENT;
-  const diffColor = pseudoRandom(index + 100) > 0.5 ? DIFF_GREEN : DIFF_RED;
-  const hasTodo = pseudoRandom(index + 200) < 0.15;
-  const commentIndex = Math.floor(pseudoRandom(index + 300) * INLINE_COMMENTS.length);
-  const hasComment = pseudoRandom(index + 400) < 0.4;
-
-  // Skip center tile area (that's the initial code block)
-  const centerRow = Math.floor(GRID_ROWS / 2);
-  const centerCol = Math.floor(GRID_COLS / 2);
-  const isCenter = row >= centerRow - 1 && row <= centerRow && col >= centerCol - 1 && col <= centerCol;
-
-  const totalGridWidth = GRID_COLS * (TILE_WIDTH + TILE_GAP) - TILE_GAP;
-  const totalGridHeight = GRID_ROWS * (TILE_HEIGHT + TILE_GAP) - TILE_GAP;
-  const offsetX = (958 - totalGridWidth) / 2;
-  const offsetY = (1080 - totalGridHeight) / 2;
-
-  const x = offsetX + col * (TILE_WIDTH + TILE_GAP);
-  const y = offsetY + row * (TILE_HEIGHT + TILE_GAP);
-
-  // TODO badge pop-in with back easing
-  const todoPopIn = hasTodo
-    ? interpolate(
-        frame,
-        [ZOOM_START_FRAME + staggerDelay + 20, ZOOM_START_FRAME + staggerDelay + 35],
-        [0, 1],
-        { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-      )
-    : 0;
-
-  // Generate fake code lines
-  const lineCount = 3 + Math.floor(pseudoRandom(index + 500) * 3);
-  const codeLines = Array.from({ length: lineCount }, (_, i) => {
-    const lineWidth = 30 + pseudoRandom(index * 10 + i) * 60;
-    return lineWidth;
+  // Tile reveal animation
+  const opacity = interpolate(frame, [revealFrame, revealFrame + 12], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
   });
 
-  if (isCenter) return null;
+  const scale = interpolate(
+    frame,
+    [revealFrame, revealFrame + 12],
+    [0.7, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const hasDiff = rand < 0.6;
+  const diffIsGreen = seededRandom(seed + 1) > 0.4;
+  const hasTodo = seededRandom(seed + 2) < 0.15;
+  const hasComment =
+    seededRandom(seed + 3) < 0.3 && !hasTodo;
+  const snippetIdx = Math.floor(seededRandom(seed + 4) * CODE_SNIPPETS.length);
+  const commentIdx = Math.floor(
+    seededRandom(seed + 5) * INLINE_COMMENTS.length
+  );
+
+  const snippet = CODE_SNIPPETS[snippetIdx];
+
+  const x = col * (TILE_WIDTH + TILE_GAP);
+  const y = row * (TILE_HEIGHT + TILE_GAP);
+
+  // TODO badge pop-in
+  const todoBadgeScale = hasTodo
+    ? interpolate(frame, [revealFrame + 8, revealFrame + 18], [0, 1], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.back(1.3)),
+      })
+    : 0;
 
   return (
     <div
@@ -96,63 +103,68 @@ const CodeTile: React.FC<{
         top: y,
         width: TILE_WIDTH,
         height: TILE_HEIGHT,
-        backgroundColor: TILE_BG,
-        borderRadius: TILE_BORDER_RADIUS,
-        opacity: tileOpacity,
+        backgroundColor: CODE_TILE_BG,
+        borderRadius: 4,
+        opacity,
+        transform: `scale(${scale})`,
         overflow: "hidden",
         padding: TILE_PADDING,
+        boxSizing: "border-box",
       }}
     >
-      {/* Diff marker */}
+      {/* Diff marker bar */}
       {hasDiff && (
         <div
           style={{
             position: "absolute",
             left: 0,
-            top: 0,
-            width: DIFF_MARKER_WIDTH,
-            height: "100%",
-            backgroundColor: diffColor,
+            top: 4,
+            bottom: 4,
+            width: 3,
+            backgroundColor: diffIsGreen ? DIFF_GREEN : DIFF_RED,
+            borderRadius: 1,
             opacity: 0.7,
           }}
         />
       )}
 
-      {/* Fake code lines */}
-      {codeLines.map((width, i) => {
-        const colors = [SYNTAX_KEYWORD, SYNTAX_STRING, SYNTAX_FUNCTION, SYNTAX_OPERATOR];
-        const color = colors[Math.floor(pseudoRandom(index * 100 + i) * colors.length)];
-        return (
-          <div
-            key={i}
-            style={{
-              width: `${width}%`,
-              height: 3,
-              backgroundColor: color,
-              opacity: 0.4,
-              marginBottom: 4,
-              marginLeft: hasDiff ? DIFF_MARKER_WIDTH + 2 : 0,
-              borderRadius: 1,
-            }}
-          />
-        );
-      })}
+      {/* Code lines */}
+      {snippet.map((line, i) => (
+        <div
+          key={i}
+          style={{
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 7,
+            lineHeight: "11px",
+            color: CODE_TEXT_SLATE,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+          }}
+        >
+          {line.startsWith("fn ") || line.startsWith("pub ") || line.startsWith("use ") ? (
+            <span style={{ color: CODE_KEYWORD_PURPLE }}>{line}</span>
+          ) : line.includes('"') || line.includes("'") ? (
+            <span style={{ color: CODE_STRING_GREEN }}>{line}</span>
+          ) : (
+            line
+          )}
+        </div>
+      ))}
 
       {/* Inline comment */}
       {hasComment && (
         <div
           style={{
-            position: "absolute",
-            bottom: 4,
-            left: TILE_PADDING,
             fontFamily: "'JetBrains Mono', monospace",
-            fontSize: COMMENT_FONT_SIZE,
-            color: COMMENT_COLOR,
-            opacity: tileOpacity * 0.5,
+            fontSize: 7,
+            lineHeight: "10px",
+            color: COMMENT_GRAY,
+            opacity: 0.3,
             whiteSpace: "nowrap",
+            marginTop: 2,
           }}
         >
-          {INLINE_COMMENTS[commentIndex]}
+          {INLINE_COMMENTS[commentIdx]}
         </div>
       )}
 
@@ -163,15 +175,15 @@ const CodeTile: React.FC<{
             position: "absolute",
             top: 4,
             right: 4,
-            backgroundColor: TODO_COLOR,
-            opacity: TODO_OPACITY * todoPopIn,
+            backgroundColor: TODO_RED,
             color: "#FFFFFF",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: TODO_FONT_SIZE,
-            fontWeight: 700,
+            fontFamily: "Inter, sans-serif",
+            fontSize: 6,
+            fontWeight: 600,
             padding: "1px 4px",
             borderRadius: 2,
-            transform: `scale(${interpolate(todoPopIn, [0, 1], [0.5, 1])})`,
+            opacity: 0.5,
+            transform: `scale(${todoBadgeScale})`,
           }}
         >
           TODO
@@ -181,24 +193,48 @@ const CodeTile: React.FC<{
   );
 };
 
-export const CodeTileGrid: React.FC<{ revealProgress: number }> = ({
-  revealProgress,
+interface CodeTileGridProps {
+  /** Frame at which the grid starts revealing (stagger offset is added per row) */
+  revealStartFrame: number;
+}
+
+export const CodeTileGrid: React.FC<CodeTileGridProps> = ({
+  revealStartFrame,
 }) => {
   const tiles: React.ReactNode[] = [];
+
   for (let row = 0; row < GRID_ROWS; row++) {
     for (let col = 0; col < GRID_COLS; col++) {
-      const index = row * GRID_COLS + col;
+      const tileIndex = row * GRID_COLS + col;
+      // 3-frame stagger per row
+      const revealFrame = revealStartFrame + row * 3;
       tiles.push(
         <CodeTile
-          key={index}
+          key={tileIndex}
           row={row}
           col={col}
-          index={index}
-          revealProgress={revealProgress}
+          tileIndex={tileIndex}
+          revealFrame={revealFrame}
         />
       );
     }
   }
 
-  return <>{tiles}</>;
+  const gridWidth = GRID_COLS * (TILE_WIDTH + TILE_GAP) - TILE_GAP;
+  const gridHeight = GRID_ROWS * (TILE_HEIGHT + TILE_GAP) - TILE_GAP;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        width: gridWidth,
+        height: gridHeight,
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+      }}
+    >
+      {tiles}
+    </div>
+  );
 };

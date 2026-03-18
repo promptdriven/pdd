@@ -1,135 +1,141 @@
-import React, { useMemo } from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React, { useMemo } from 'react';
+import { useCurrentFrame, interpolate, Easing, AbsoluteFill } from 'remotion';
 import {
-	CodeLine,
-	PARTICLE_COUNT,
-	PARTICLE_MIN_SIZE,
-	PARTICLE_MAX_SIZE,
-	PARTICLE_GRAVITY,
-	PARTICLE_DRIFT_X,
-	PARTICLE_DURATION,
-	DELETE_START,
-	LINE_HEIGHT,
-	CODE_FONT_SIZE,
-} from "./constants";
+  PARTICLE_COUNT,
+  PARTICLE_GRAVITY,
+  PARTICLE_MIN_SIZE,
+  PARTICLE_MAX_SIZE,
+  PARTICLE_FADE_DURATION,
+  OLD_CODE,
+  TOKEN_COLORS,
+  EDITOR_LEFT,
+  TAB_BAR_HEIGHT,
+  LINE_HEIGHT,
+  CodeLine,
+} from './constants';
 
 interface Particle {
-	x: number;
-	y: number;
-	size: number;
-	color: string;
-	driftX: number;
-	delay: number;
+  x: number;
+  y: number;
+  size: number;
+  color: string;
+  vx: number; // horizontal drift velocity
+  delay: number; // stagger frames (0-5)
 }
 
-function seededRandom(seed: number): () => number {
-	let s = seed;
-	return () => {
-		s = (s * 16807 + 0) % 2147483647;
-		return (s - 1) / 2147483646;
-	};
+/**
+ * Generates a deterministic set of particles derived from old code positions.
+ * Each particle inherits a syntax color and starts near a character position.
+ */
+function generateParticles(codeLines: CodeLine[]): Particle[] {
+  const particles: Particle[] = [];
+  const allColors: string[] = [];
+
+  // Collect all character-level colors from old code
+  for (const line of codeLines) {
+    for (const token of line.tokens) {
+      const color = TOKEN_COLORS[token.type];
+      for (let i = 0; i < token.text.length; i++) {
+        allColors.push(color);
+      }
+    }
+  }
+
+  // Seeded pseudo-random (deterministic across renders)
+  let seed = 42;
+  const rand = () => {
+    seed = (seed * 16807 + 0) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    // Distribute particles across the 18 lines
+    const lineIdx = Math.floor(rand() * codeLines.length);
+    const line = codeLines[lineIdx];
+    const charCount = line.tokens.reduce((s, t) => s + t.text.length, 0);
+    const charIdx = Math.floor(rand() * Math.max(charCount, 1));
+
+    // Pick a color from the token at that char position
+    let colorIdx = 0;
+    let acc = 0;
+    for (const token of line.tokens) {
+      acc += token.text.length;
+      if (charIdx < acc) {
+        break;
+      }
+      colorIdx += token.text.length;
+    }
+    const globalIdx = (() => {
+      let total = 0;
+      for (let l = 0; l < lineIdx; l++) {
+        for (const t of codeLines[l].tokens) total += t.text.length;
+      }
+      return total + charIdx;
+    })();
+
+    const color = allColors[globalIdx % allColors.length] || '#C9D1D9';
+
+    particles.push({
+      x: EDITOR_LEFT + charIdx * 8.4, // approximate monospace char width at 14px
+      y: TAB_BAR_HEIGHT + lineIdx * LINE_HEIGHT + 6,
+      size: PARTICLE_MIN_SIZE + rand() * (PARTICLE_MAX_SIZE - PARTICLE_MIN_SIZE),
+      color,
+      vx: (rand() - 0.5) * 2, // drift range [-1, 1]
+      delay: Math.floor(rand() * 5),
+    });
+  }
+
+  return particles;
 }
 
-interface ParticleDissolveProps {
-	codeLines: CodeLine[];
-}
+const ParticleDissolve: React.FC = () => {
+  const frame = useCurrentFrame();
+  const particles = useMemo(() => generateParticles(OLD_CODE), []);
 
-export const ParticleDissolve: React.FC<ParticleDissolveProps> = ({
-	codeLines,
-}) => {
-	const frame = useCurrentFrame();
+  return (
+    <AbsoluteFill>
+      {particles.map((p, i) => {
+        const localFrame = Math.max(0, frame - p.delay);
+        const t = localFrame; // time in frames since this particle started
 
-	// Generate particles deterministically
-	const particles = useMemo<Particle[]>(() => {
-		const rand = seededRandom(42);
-		const result: Particle[] = [];
+        // Gravity: easeIn(quad) vertical displacement
+        const dy = 0.5 * PARTICLE_GRAVITY * t * t;
+        // Horizontal drift: linear
+        const dx = p.vx * t;
 
-		// Collect all color samples from the code
-		const colorSamples: string[] = [];
-		codeLines.forEach((line) => {
-			line.forEach((token) => {
-				if (token.text.trim()) {
-					colorSamples.push(token.color);
-				}
-			});
-		});
+        // Fade: easeIn(cubic) over PARTICLE_FADE_DURATION frames
+        const opacity = interpolate(
+          localFrame,
+          [0, PARTICLE_FADE_DURATION],
+          [1, 0],
+          {
+            easing: Easing.in(Easing.cubic),
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+          },
+        );
 
-		for (let i = 0; i < PARTICLE_COUNT; i++) {
-			const lineIdx = Math.floor(rand() * codeLines.length);
-			const x = 64 + rand() * 800;
-			const y = lineIdx * LINE_HEIGHT + rand() * CODE_FONT_SIZE;
-			const size =
-				PARTICLE_MIN_SIZE +
-				rand() * (PARTICLE_MAX_SIZE - PARTICLE_MIN_SIZE);
-			const color =
-				colorSamples[Math.floor(rand() * colorSamples.length)] ||
-				"#C9D1D9";
-			const driftX = (rand() - 0.5) * 2 * PARTICLE_DRIFT_X;
-			const delay = rand() * 5; // slight stagger
+        if (opacity <= 0) return null;
 
-			result.push({ x, y, size, color, driftX, delay });
-		}
-
-		return result;
-	}, [codeLines]);
-
-	const dissolveFrame = frame - DELETE_START;
-	if (dissolveFrame < 0) return null;
-
-	return (
-		<div
-			style={{
-				position: "absolute",
-				left: 0,
-				top: 0,
-				width: "100%",
-				height: "100%",
-				pointerEvents: "none",
-			}}
-		>
-			{particles.map((p, i) => {
-				const pFrame = Math.max(0, dissolveFrame - p.delay);
-				if (pFrame <= 0) return null;
-
-				// Gravity: accelerating downward
-				const gravityY =
-					0.5 * PARTICLE_GRAVITY * pFrame * pFrame;
-
-				// Linear horizontal drift
-				const driftXOffset = p.driftX * pFrame;
-
-				// Fade out
-				const opacity = interpolate(
-					pFrame,
-					[0, PARTICLE_DURATION],
-					[1, 0],
-					{
-						extrapolateLeft: "clamp",
-						extrapolateRight: "clamp",
-						easing: Easing.in(Easing.cubic),
-					},
-				);
-
-				if (opacity <= 0) return null;
-
-				return (
-					<div
-						key={i}
-						style={{
-							position: "absolute",
-							left: p.x + driftXOffset,
-							top: p.y + gravityY,
-							width: p.size,
-							height: p.size,
-							borderRadius: p.size / 2,
-							backgroundColor: p.color,
-							opacity,
-						}}
-					/>
-				);
-			})}
-		</div>
-	);
+        return (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: p.x + dx,
+              top: p.y + dy,
+              width: p.size,
+              height: p.size,
+              borderRadius: '50%',
+              backgroundColor: p.color,
+              opacity,
+              willChange: 'transform',
+            }}
+          />
+        );
+      })}
+    </AbsoluteFill>
+  );
 };
 
 export default ParticleDissolve;

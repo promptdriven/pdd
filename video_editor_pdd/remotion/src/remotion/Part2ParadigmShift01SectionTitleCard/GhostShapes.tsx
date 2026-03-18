@@ -1,150 +1,182 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { Easing, interpolate, useCurrentFrame } from 'remotion';
 import {
-  MOLD_X,
-  MOLD_Y,
-  CIRCUIT_X,
-  CIRCUIT_Y,
-  MOLD_COLOR,
-  CIRCUIT_COLOR,
-  GHOST_OPACITY,
-  GHOST_STROKE_WIDTH,
-  GHOST_GLOW_BLUR,
-  GHOST_GLOW_OPACITY,
-  GHOST_DRAW_START,
-  GHOST_DRAW_END,
-  PULSE_START,
-  PULSE_CYCLE_FRAMES,
-  TOTAL_FRAMES,
-} from "./constants";
+	MOLD_POS,
+	CIRCUIT_POS,
+	MOLD_COLOR,
+	CIRCUIT_COLOR,
+	GHOST_OPACITY,
+	GHOST_STROKE_WIDTH,
+	GHOST_GLOW_BLUR,
+	GHOST_GLOW_OPACITY,
+	GHOST_DRAW_DURATION,
+	MOLD_PULSE_CYCLE,
+} from './constants';
 
 /**
- * Simplified injection mold cavity cross-section:
- * A rectangular cavity shape with a tapered nozzle at top.
+ * Simplified injection mold cavity cross-section.
+ * Rectangular cavity with a tapered nozzle at top.
  */
-const moldPath =
-  "M -40 -50 L -40 50 L 40 50 L 40 -50 L 15 -50 L 8 -70 L -8 -70 L -15 -50 Z";
-
-/**
- * Simplified circuit schematic fragment:
- * AND/OR gate shapes with connecting wires.
- */
-const circuitPath =
-  "M -60 -20 L -30 -20 M -60 20 L -30 20 " + // input wires
-  "M -30 -30 L -30 30 Q 10 30 10 0 Q 10 -30 -30 -30 " + // AND gate body
-  "M 10 0 L 40 0 " + // output wire
-  "M 40 -15 L 40 15 L 60 0 Z " + // triangle (OR-ish)
-  "M 60 0 L 80 0"; // final output
-
-const MOLD_PATH_LENGTH = 340;
-const CIRCUIT_PATH_LENGTH = 380;
-
-export const GhostShapes: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  const drawProgress = interpolate(
-    frame,
-    [GHOST_DRAW_START, GHOST_DRAW_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
-
-  const moldDashOffset = MOLD_PATH_LENGTH * (1 - drawProgress);
-  const circuitDashOffset = CIRCUIT_PATH_LENGTH * (1 - drawProgress);
-
-  // Gentle amber pulse on mold after frame 90
-  const pulseProgress =
-    frame >= PULSE_START
-      ? ((frame - PULSE_START) % PULSE_CYCLE_FRAMES) / PULSE_CYCLE_FRAMES
-      : 0;
-  const pulseGlow = interpolate(
-    Math.sin(pulseProgress * Math.PI * 2),
-    [-1, 1],
-    [GHOST_GLOW_OPACITY, GHOST_GLOW_OPACITY * 3],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
-  return (
-    <AbsoluteFill>
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
-        <defs>
-          <filter id="moldGlow">
-            <feGaussianBlur stdDeviation={GHOST_GLOW_BLUR} result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="circuitGlow">
-            <feGaussianBlur stdDeviation={GHOST_GLOW_BLUR} result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-
-        {/* Mold cavity outline */}
-        <g transform={`translate(${MOLD_X}, ${MOLD_Y})`}>
-          {/* Glow layer */}
-          <path
-            d={moldPath}
-            fill="none"
-            stroke={MOLD_COLOR}
-            strokeWidth={GHOST_STROKE_WIDTH + 4}
-            opacity={frame >= PULSE_START ? pulseGlow : GHOST_GLOW_OPACITY}
-            filter="url(#moldGlow)"
-            strokeDasharray={MOLD_PATH_LENGTH}
-            strokeDashoffset={moldDashOffset}
-          />
-          {/* Main stroke */}
-          <path
-            d={moldPath}
-            fill="none"
-            stroke={MOLD_COLOR}
-            strokeWidth={GHOST_STROKE_WIDTH}
-            opacity={GHOST_OPACITY}
-            strokeDasharray={MOLD_PATH_LENGTH}
-            strokeDashoffset={moldDashOffset}
-          />
-        </g>
-
-        {/* Circuit schematic fragment */}
-        <g transform={`translate(${CIRCUIT_X}, ${CIRCUIT_Y})`}>
-          {/* Glow layer */}
-          <path
-            d={circuitPath}
-            fill="none"
-            stroke={CIRCUIT_COLOR}
-            strokeWidth={GHOST_STROKE_WIDTH + 4}
-            opacity={GHOST_GLOW_OPACITY}
-            filter="url(#circuitGlow)"
-            strokeDasharray={CIRCUIT_PATH_LENGTH}
-            strokeDashoffset={circuitDashOffset}
-          />
-          {/* Main stroke */}
-          <path
-            d={circuitPath}
-            fill="none"
-            stroke={CIRCUIT_COLOR}
-            strokeWidth={GHOST_STROKE_WIDTH}
-            opacity={GHOST_OPACITY}
-            strokeDasharray={CIRCUIT_PATH_LENGTH}
-            strokeDashoffset={circuitDashOffset}
-          />
-        </g>
-      </svg>
-    </AbsoluteFill>
-  );
+const MoldCavityPath = (): string => {
+	// Nozzle (tapered triangle at top)
+	const nozzle = 'M -8,-60 L 0,-40 L 8,-60';
+	// Cavity body (rectangular with slight chamfers)
+	const cavity = [
+		'M -40,-40',
+		'L -40,40',
+		'L -30,50',
+		'L 30,50',
+		'L 40,40',
+		'L 40,-40',
+		'L 30,-40',
+		'L 30,30',
+		'L -30,30',
+		'L -30,-40',
+		'Z',
+	].join(' ');
+	return `${nozzle} ${cavity}`;
 };
 
-export default GhostShapes;
+/**
+ * Simplified circuit schematic fragment with gate symbols and traces.
+ */
+const CircuitSchematicPath = (): string => {
+	// AND gate (curved front)
+	const andGate = [
+		'M -50,-20 L -50,20 L -20,20',
+		'Q 10,20 10,0',
+		'Q 10,-20 -20,-20',
+		'L -50,-20',
+	].join(' ');
+	// OR gate (curved body)
+	const orGate = [
+		'M 20,-20 Q 30,-20 40,-10',
+		'Q 50,0 40,10',
+		'Q 30,20 20,20',
+		'Q 30,10 30,0',
+		'Q 30,-10 20,-20',
+	].join(' ');
+	// Connecting wires / traces
+	const traces = [
+		'M -70,-10 L -50,-10',
+		'M -70,10 L -50,10',
+		'M 10,0 L 20,0',
+		'M 50,0 L 70,0',
+		// Extra horizontal traces
+		'M -70,35 L 70,35',
+		'M -70,-35 L 70,-35',
+		// Small vias/dots simulated as tiny cross marks
+		'M -60,35 L -60,30',
+		'M 60,35 L 60,30',
+		'M -60,-35 L -60,-30',
+		'M 60,-35 L 60,-30',
+	].join(' ');
+	return `${andGate} ${orGate} ${traces}`;
+};
+
+const moldPath = MoldCavityPath();
+const circuitPath = CircuitSchematicPath();
+
+// Approximate total path lengths for dashoffset animation
+const MOLD_PATH_LENGTH = 600;
+const CIRCUIT_PATH_LENGTH = 700;
+
+export const GhostShapes: React.FC = () => {
+	const frame = useCurrentFrame();
+
+	// Draw progress (0 to 1 over GHOST_DRAW_DURATION frames)
+	const drawProgress = interpolate(frame, [0, GHOST_DRAW_DURATION], [0, 1], {
+		extrapolateLeft: 'clamp',
+		extrapolateRight: 'clamp',
+		easing: Easing.inOut(Easing.cubic),
+	});
+
+	// Mold pulse — gentle amber glow starting at frame 90 (relative to ghost start at 15, so localFrame 75)
+	const pulseFrame = Math.max(0, frame - 75);
+	const pulsePhase = (pulseFrame % MOLD_PULSE_CYCLE) / MOLD_PULSE_CYCLE;
+	const pulseOpacity = interpolate(
+		Math.sin(pulsePhase * Math.PI * 2),
+		[-1, 1],
+		[GHOST_GLOW_OPACITY, GHOST_GLOW_OPACITY * 3],
+		{ extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+	);
+
+	const moldDashOffset = MOLD_PATH_LENGTH * (1 - drawProgress);
+	const circuitDashOffset = CIRCUIT_PATH_LENGTH * (1 - drawProgress);
+
+	return (
+		<svg
+			width={1920}
+			height={1080}
+			viewBox="0 0 1920 1080"
+			style={{ position: 'absolute', top: 0, left: 0 }}
+		>
+			<defs>
+				<filter id="moldGlow" x="-50%" y="-50%" width="200%" height="200%">
+					<feGaussianBlur stdDeviation={GHOST_GLOW_BLUR} result="blur" />
+					<feMerge>
+						<feMergeNode in="blur" />
+						<feMergeNode in="SourceGraphic" />
+					</feMerge>
+				</filter>
+				<filter id="circuitGlow" x="-50%" y="-50%" width="200%" height="200%">
+					<feGaussianBlur stdDeviation={GHOST_GLOW_BLUR} result="blur" />
+					<feMerge>
+						<feMergeNode in="blur" />
+						<feMergeNode in="SourceGraphic" />
+					</feMerge>
+				</filter>
+			</defs>
+
+			{/* Mold cavity outline */}
+			<g transform={`translate(${MOLD_POS.x}, ${MOLD_POS.y})`}>
+				{/* Glow layer */}
+				<path
+					d={moldPath}
+					fill="none"
+					stroke={MOLD_COLOR}
+					strokeWidth={GHOST_STROKE_WIDTH + 4}
+					opacity={pulseFrame > 0 ? pulseOpacity : GHOST_GLOW_OPACITY}
+					strokeDasharray={MOLD_PATH_LENGTH}
+					strokeDashoffset={moldDashOffset}
+					filter="url(#moldGlow)"
+				/>
+				{/* Main stroke */}
+				<path
+					d={moldPath}
+					fill="none"
+					stroke={MOLD_COLOR}
+					strokeWidth={GHOST_STROKE_WIDTH}
+					opacity={GHOST_OPACITY}
+					strokeDasharray={MOLD_PATH_LENGTH}
+					strokeDashoffset={moldDashOffset}
+				/>
+			</g>
+
+			{/* Circuit schematic fragment */}
+			<g transform={`translate(${CIRCUIT_POS.x}, ${CIRCUIT_POS.y})`}>
+				{/* Glow layer */}
+				<path
+					d={circuitPath}
+					fill="none"
+					stroke={CIRCUIT_COLOR}
+					strokeWidth={GHOST_STROKE_WIDTH + 4}
+					opacity={GHOST_GLOW_OPACITY}
+					strokeDasharray={CIRCUIT_PATH_LENGTH}
+					strokeDashoffset={circuitDashOffset}
+					filter="url(#circuitGlow)"
+				/>
+				{/* Main stroke */}
+				<path
+					d={circuitPath}
+					fill="none"
+					stroke={CIRCUIT_COLOR}
+					strokeWidth={GHOST_STROKE_WIDTH}
+					opacity={GHOST_OPACITY}
+					strokeDasharray={CIRCUIT_PATH_LENGTH}
+					strokeDashoffset={circuitDashOffset}
+				/>
+			</g>
+		</svg>
+	);
+};

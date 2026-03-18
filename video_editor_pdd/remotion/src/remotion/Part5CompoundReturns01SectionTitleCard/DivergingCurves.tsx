@@ -1,136 +1,173 @@
-import React from 'react';
-import { AbsoluteFill, useCurrentFrame, Easing, interpolate } from 'remotion';
-import { CANVAS, COLORS, CURVES, TIMING } from './constants';
+import React, { useMemo } from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import {
+  WIDTH,
+  HEIGHT,
+  CURVE_ORIGIN,
+  AMBER_END,
+  BLUE_END,
+  AMBER_CURVE,
+  BLUE_CURVE,
+  CURVE_STROKE_WIDTH,
+  CURVE_OPACITY,
+  CURVE_GLOW_BLUR,
+  CURVE_GLOW_OPACITY,
+  ORIGIN_DOT_OPACITY,
+  TITLE_COLOR,
+  CURVE_START,
+  CURVE_DURATION,
+  PULSE_CYCLE,
+} from './constants';
 
 /**
- * Two ghost curves diverging from a shared origin:
- * - Amber curve sweeps exponentially upward (debt growth)
- * - Blue curve stays relatively flat (PDD)
- * Both drawn with stroke-dashoffset animation and subtle glow.
+ * Builds an SVG path for an exponential-style curve from origin to end.
+ * The amber (debt) curve sweeps upward via a control point high-right.
+ * The blue (PDD) curve drifts gently lower-right via a flatter control point.
  */
+function buildCurvePath(
+  origin: [number, number],
+  end: [number, number],
+  direction: 'up' | 'flat',
+): string {
+  const [ox, oy] = origin;
+  const [ex, ey] = end;
+  const midX = (ox + ex) / 2;
+
+  if (direction === 'up') {
+    // Exponential rise — control point pulls strongly upward
+    const cp1x = ox + (ex - ox) * 0.3;
+    const cp1y = oy;
+    const cp2x = midX;
+    const cp2y = ey - (oy - ey) * 0.4;
+    return `M${ox},${oy} C${cp1x},${cp1y} ${cp2x},${cp2y} ${ex},${ey}`;
+  }
+
+  // Flat trajectory — control point stays near horizontal
+  const cp1x = ox + (ex - ox) * 0.4;
+  const cp1y = oy + 5;
+  const cp2x = midX + (ex - midX) * 0.3;
+  const cp2y = ey - 10;
+  return `M${ox},${oy} C${cp1x},${cp1y} ${cp2x},${cp2y} ${ex},${ey}`;
+}
+
 export const DivergingCurves: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Draw progress: easeInOut(cubic) over 60 frames
-  const drawProgress = interpolate(frame, [0, TIMING.curvesDrawDuration], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.inOut(Easing.cubic),
-  });
+  const amberPath = useMemo(
+    () => buildCurvePath(CURVE_ORIGIN, AMBER_END, 'up'),
+    [],
+  );
+  const bluePath = useMemo(
+    () => buildCurvePath(CURVE_ORIGIN, BLUE_END, 'flat'),
+    [],
+  );
 
-  // Pulse effect for the divergence gap (starts at frame 90 relative to component mount,
-  // but since this component mounts at frame 15, the pulse starts at local frame 75)
-  const pulseLocalStart = TIMING.holdStart - TIMING.curvesDrawStart; // 75
-  const pulsePhase =
-    frame >= pulseLocalStart
+  // Approximate path length for dash animation
+  const pathLength = 600;
+
+  // Draw progress: curves start drawing at CURVE_START and finish over CURVE_DURATION
+  const localFrame = frame - CURVE_START;
+  const drawProgress = interpolate(
+    localFrame,
+    [0, CURVE_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.bezier(0.42, 0, 0.58, 1), // easeInOut(cubic)
+    },
+  );
+
+  const dashOffset = pathLength * (1 - drawProgress);
+
+  // Gentle divergence pulse after curves are drawn (frame 90-120)
+  const pulseFrame = frame - 90;
+  const pulseOpacity =
+    pulseFrame >= 0
       ? interpolate(
-          (frame - pulseLocalStart) % TIMING.pulseCycleFrames,
-          [0, TIMING.pulseCycleFrames],
-          [0, Math.PI * 2],
-          { extrapolateRight: 'clamp' }
+          pulseFrame % PULSE_CYCLE,
+          [0, PULSE_CYCLE / 2, PULSE_CYCLE],
+          [0, 0.015, 0],
+          {
+            extrapolateRight: 'clamp',
+            easing: Easing.bezier(0.37, 0, 0.63, 1), // easeInOut(sine approx)
+          },
         )
       : 0;
-  const pulseScale = frame >= pulseLocalStart ? 1 + 0.15 * Math.sin(pulsePhase) : 1;
 
-  const { origin, amberEnd, blueEnd } = CURVES;
-
-  // Amber exponential curve path (quadratic bezier with control point creating upward sweep)
-  const amberCP = {
-    x: origin.x + (amberEnd.x - origin.x) * 0.6,
-    y: origin.y - (origin.y - amberEnd.y) * 0.15,
-  };
-  const amberPath = `M ${origin.x} ${origin.y} Q ${amberCP.x} ${amberCP.y} ${amberEnd.x} ${amberEnd.y}`;
-
-  // Blue flat/declining curve path
-  const blueCP = {
-    x: origin.x + (blueEnd.x - origin.x) * 0.5,
-    y: origin.y + (blueEnd.y - origin.y) * 0.3,
-  };
-  const bluePath = `M ${origin.x} ${origin.y} Q ${blueCP.x} ${blueCP.y} ${blueEnd.x} ${blueEnd.y}`;
-
-  // Approximate path lengths for dash animation
-  const amberLength = 500;
-  const blueLength = 400;
+  // Fade-in for the whole SVG alongside background (frames 0-15)
+  const svgOpacity = interpolate(frame, [0, 15], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
-    <AbsoluteFill>
-      <svg
-        width={CANVAS.width}
-        height={CANVAS.height}
-        style={{ position: 'absolute', top: 0, left: 0 }}
-      >
-        <defs>
-          <filter id="amberGlow">
-            <feGaussianBlur stdDeviation={CURVES.glowBlur} result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="blueGlow">
-            <feGaussianBlur stdDeviation={CURVES.glowBlur} result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
+    <svg
+      width={WIDTH}
+      height={HEIGHT}
+      style={{ position: 'absolute', top: 0, left: 0, opacity: svgOpacity }}
+    >
+      <defs>
+        <filter id="amber-glow">
+          <feGaussianBlur stdDeviation={CURVE_GLOW_BLUR} />
+        </filter>
+        <filter id="blue-glow">
+          <feGaussianBlur stdDeviation={CURVE_GLOW_BLUR} />
+        </filter>
+      </defs>
 
-        {/* Amber glow layer */}
-        <path
-          d={amberPath}
-          fill="none"
-          stroke={COLORS.amberCurve}
-          strokeWidth={CURVES.strokeWidth + 4}
-          opacity={CURVES.glowOpacity * pulseScale}
-          strokeDasharray={amberLength}
-          strokeDashoffset={amberLength * (1 - drawProgress)}
-          filter="url(#amberGlow)"
-        />
+      {/* Glow layers */}
+      <path
+        d={amberPath}
+        fill="none"
+        stroke={AMBER_CURVE}
+        strokeWidth={CURVE_STROKE_WIDTH + 4}
+        strokeOpacity={CURVE_GLOW_OPACITY + pulseOpacity}
+        strokeDasharray={pathLength}
+        strokeDashoffset={dashOffset}
+        filter="url(#amber-glow)"
+      />
+      <path
+        d={bluePath}
+        fill="none"
+        stroke={BLUE_CURVE}
+        strokeWidth={CURVE_STROKE_WIDTH + 4}
+        strokeOpacity={CURVE_GLOW_OPACITY + pulseOpacity}
+        strokeDasharray={pathLength}
+        strokeDashoffset={dashOffset}
+        filter="url(#blue-glow)"
+      />
 
-        {/* Amber main stroke */}
-        <path
-          d={amberPath}
-          fill="none"
-          stroke={COLORS.amberCurve}
-          strokeWidth={CURVES.strokeWidth}
-          opacity={CURVES.opacity * pulseScale}
-          strokeDasharray={amberLength}
-          strokeDashoffset={amberLength * (1 - drawProgress)}
-        />
+      {/* Main curve strokes */}
+      <path
+        d={amberPath}
+        fill="none"
+        stroke={AMBER_CURVE}
+        strokeWidth={CURVE_STROKE_WIDTH}
+        strokeOpacity={CURVE_OPACITY}
+        strokeDasharray={pathLength}
+        strokeDashoffset={dashOffset}
+        strokeLinecap="round"
+      />
+      <path
+        d={bluePath}
+        fill="none"
+        stroke={BLUE_CURVE}
+        strokeWidth={CURVE_STROKE_WIDTH}
+        strokeOpacity={CURVE_OPACITY}
+        strokeDasharray={pathLength}
+        strokeDashoffset={dashOffset}
+        strokeLinecap="round"
+      />
 
-        {/* Blue glow layer */}
-        <path
-          d={bluePath}
-          fill="none"
-          stroke={COLORS.blueCurve}
-          strokeWidth={CURVES.strokeWidth + 4}
-          opacity={CURVES.glowOpacity * pulseScale}
-          strokeDasharray={blueLength}
-          strokeDashoffset={blueLength * (1 - drawProgress)}
-          filter="url(#blueGlow)"
-        />
-
-        {/* Blue main stroke */}
-        <path
-          d={bluePath}
-          fill="none"
-          stroke={COLORS.blueCurve}
-          strokeWidth={CURVES.strokeWidth}
-          opacity={CURVES.opacity * pulseScale}
-          strokeDasharray={blueLength}
-          strokeDashoffset={blueLength * (1 - drawProgress)}
-        />
-
-        {/* Shared origin dot */}
-        <circle
-          cx={origin.x}
-          cy={origin.y}
-          r={CURVES.originDotRadius}
-          fill={COLORS.originDot}
-          opacity={CURVES.originDotOpacity * drawProgress}
-        />
-      </svg>
-    </AbsoluteFill>
+      {/* Shared origin dot */}
+      <circle
+        cx={CURVE_ORIGIN[0]}
+        cy={CURVE_ORIGIN[1]}
+        r={3}
+        fill={TITLE_COLOR}
+        opacity={ORIGIN_DOT_OPACITY * drawProgress}
+      />
+    </svg>
   );
 };

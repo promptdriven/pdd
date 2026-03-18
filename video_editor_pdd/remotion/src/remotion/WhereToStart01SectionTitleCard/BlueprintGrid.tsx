@@ -1,45 +1,59 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
-import { CANVAS, GRID } from './constants';
 
-export const BlueprintGrid: React.FC<{ opacity: number }> = ({ opacity }) => {
-  const lines: React.ReactNode[] = [];
-  const { WIDTH, HEIGHT } = CANVAS;
-  const { SPACING, COLOR } = GRID;
+interface BlueprintGridProps {
+  spacing: number;
+  color: string;
+  opacity: number;
+  canvasWidth: number;
+  canvasHeight: number;
+}
 
-  // Vertical lines
-  for (let x = 0; x <= WIDTH; x += SPACING) {
-    lines.push(
+export const BlueprintGrid: React.FC<BlueprintGridProps> = ({
+  spacing,
+  color,
+  opacity,
+  canvasWidth,
+  canvasHeight,
+}) => {
+  const verticalLines: React.ReactNode[] = [];
+  const horizontalLines: React.ReactNode[] = [];
+
+  for (let x = 0; x <= canvasWidth; x += spacing) {
+    verticalLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={HEIGHT}
-        stroke={COLOR}
+        y2={canvasHeight}
+        stroke={color}
         strokeWidth={1}
-      />,
+        opacity={opacity}
+      />
     );
   }
-  // Horizontal lines
-  for (let y = 0; y <= HEIGHT; y += SPACING) {
-    lines.push(
+
+  for (let y = 0; y <= canvasHeight; y += spacing) {
+    horizontalLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={WIDTH}
+        x2={canvasWidth}
         y2={y}
-        stroke={COLOR}
+        stroke={color}
         strokeWidth={1}
-      />,
+        opacity={opacity}
+      />
     );
   }
 
   return (
-    <AbsoluteFill style={{ opacity: opacity * GRID.OPACITY }}>
-      <svg width={WIDTH} height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
-        {lines}
+    <AbsoluteFill>
+      <svg width={canvasWidth} height={canvasHeight}>
+        {verticalLines}
+        {horizontalLines}
       </svg>
     </AbsoluteFill>
   );

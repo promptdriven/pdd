@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+At frame 269/300 (90% progress, deep in the 'hold' phase at frames 240-300), two spec-required elements are incorrect or missing: (1) The post-crossing area label reads 'Darning irrational' but should have morphed to 'Patching irrational' by frame 150-210. This is a narrative-critical label — the whole point of the morph is to show the parallel between sock-darning economics and code-patching economics, so retaining the old label undermines the visual argument. (2) The darning needle icon with red strikethrough is entirely absent. Per spec, it should appear at frame 210-240 and hold through frame 300 — it's the punchline visual that syncs with the narrator saying 'darning socks.' The chart structure, line colors, morphed line labels ('Patching cost (per fix)', 'Generation cost'), X-axis date range (2020-2030), crossing point with 'Now' label, pulsing glow, and shaded areas all match the spec correctly.

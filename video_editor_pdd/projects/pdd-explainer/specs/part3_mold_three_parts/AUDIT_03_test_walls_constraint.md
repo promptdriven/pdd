@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+Two significant issues at frame 329/360 (91.7%, phase 6 'Final shape solidifies'): (1) The terminal overlay is completely missing — the spec requires a 320×140px terminal panel in the bottom-right showing '$ pdd generate user_parser' with green checkmark output lines. This element should have appeared by frame 150 and be fully visible with green checkmarks by this point. (2) The cavity fill state does not match the expected visual — at 91.7% progress, the spec calls for the liquid to have 'taken the shape defined by the walls' with the 'final shape solidified,' but the render shows particles still streaming in a narrow column with only a faint blue wash in the lower cavity, not a filled/solidified shape. The mold structure, wall labels, nozzle, particle colors, and background are all correct.

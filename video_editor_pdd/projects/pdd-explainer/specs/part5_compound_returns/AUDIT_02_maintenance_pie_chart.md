@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The donut chart itself renders correctly — background color, donut shape, blue 'Initial Development' segment (10-20%), amber 'Maintenance' segment (80-90%), center 'SOFTWARE COST' text, leader lines, and labels are all present and visually match the spec. However, the two research callout cards (McKinsey and Stripe) are completely missing from the frame. At 89.3% progress (frame 374/420), the animation is deep in phase 7 (frames 330-420: 'Hold on complete layout. Both callouts and chart visible'). The McKinsey card should have appeared at frames 210-270 and the Stripe card at frames 270-330, meaning both should have been fully visible for roughly 1.5-4 seconds by this sample point. These callout cards contain critical content — the McKinsey '+40% maintenance cost' data point and the Stripe '33% of work week' data point — which are essential to the scene's narrative purpose of grounding the pie chart in credible research.

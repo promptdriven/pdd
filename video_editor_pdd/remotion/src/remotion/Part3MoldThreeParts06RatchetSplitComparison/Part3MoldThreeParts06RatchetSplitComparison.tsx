@@ -1,175 +1,133 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
 import {
-  BG_COLOR,
-  LEFT_BG,
-  RIGHT_BG,
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from 'remotion';
+import '../_shared/load-inter-font';
+import {
+  BG_BLACK,
   SPLIT_X,
-  LEFT_PANEL_WIDTH,
-  RIGHT_PANEL_X,
-  RIGHT_PANEL_WIDTH,
-  ROW_START_Y,
-  ROW_HEIGHT,
-  TRADITIONAL_ROWS,
-  PDD_ROWS,
-  FONT_SANS,
+  SPLIT_LINE_COLOR,
+  TEXT_PRIMARY,
   GREEN,
-  RED,
-  FRAMES,
+  CALLOUT_Y,
+  FRAME,
 } from './constants';
-import { SplitLine } from './SplitLine';
-import { PanelHeader } from './PanelHeader';
-import { TraditionalRow } from './TraditionalRow';
-import { PddRow } from './PddRow';
-import { EffortCounter } from './EffortCounter';
-import { MiniMold } from './MiniMold';
+import { TraditionalPanel } from './TraditionalPanel';
+import { PddPanel } from './PddPanel';
 import { TimelineBar } from './TimelineBar';
-import { CalloutText } from './CalloutText';
 
-export const defaultPart3MoldThreeParts06RatchetSplitComparisonProps = {};
-
-// Frame at which each traditional row appears
-const TRADITIONAL_APPEAR_FRAMES = [
-  FRAMES.leftRow1, // 20
-  FRAMES.leftRow2, // 60
-  FRAMES.leftRow3, // 80
-  FRAMES.leftRow4, // 120
-  FRAMES.leftRow5, // 140
-  FRAMES.leftRow6, // 160
-  180, // row 7
-  200, // row 8
-  230, // row 9
-  260, // row 10
-];
-
-// Frame at which each PDD row appears
-const PDD_APPEAR_FRAMES = [
-  FRAMES.rightRow1, // 20
-  FRAMES.rightRow2, // 60
-  FRAMES.rightRow3, // 120
-];
-
-export const Part3MoldThreeParts06RatchetSplitComparison: React.FC = () => {
+// ── Split Divider ──
+const SplitDivider: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // After frame 200, the left panel slowly scrolls to show the overwhelming nature
-  const scrollOffset =
-    frame > FRAMES.autoScrollStart
-      ? (frame - FRAMES.autoScrollStart) * 0.5
-      : 0;
-
-  // PDD subtitle
-  const subtitleOpacity = interpolate(frame, [FRAMES.pddSubtitle, FRAMES.pddSubtitle + 20], [0, 0.8], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  const lineHeight = interpolate(
+    frame,
+    [FRAME.SPLIT_DRAW_START, FRAME.SPLIT_DRAW_START + FRAME.SPLIT_DRAW_DUR],
+    [0, 100],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.cubic),
+    }
+  );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
-      {/* ========== LEFT PANEL — Traditional ========== */}
-      <div
+    <div
+      style={{
+        position: 'absolute',
+        left: SPLIT_X - 1,
+        top: 0,
+        width: 2,
+        height: `${lineHeight}%`,
+        backgroundColor: SPLIT_LINE_COLOR,
+        opacity: 0.25,
+      }}
+    />
+  );
+};
+
+// ── Callout Text ──
+const CalloutText: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  const opacity = interpolate(
+    frame,
+    [FRAME.CALLOUT_START, FRAME.CALLOUT_START + FRAME.CALLOUT_DUR],
+    [0, 0.7],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Pulse on "everywhere, forever"
+  const pulsePhase = Math.max(0, frame - FRAME.CALLOUT_START - FRAME.CALLOUT_DUR);
+  const pulse = pulsePhase > 0
+    ? 0.8 + 0.2 * Math.sin(pulsePhase * 0.1)
+    : 0.8;
+
+  if (frame < FRAME.CALLOUT_START) return null;
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: CALLOUT_Y,
+        width: 1920,
+        textAlign: 'center',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: 14,
+        color: TEXT_PRIMARY,
+        opacity,
+      }}
+    >
+      A bug fix helps one place. A test prevents that bug{' '}
+      <span
         style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: LEFT_PANEL_WIDTH,
-          height: 1080,
-          backgroundColor: LEFT_BG,
-          overflow: 'hidden',
+          fontWeight: 700,
+          color: GREEN,
+          opacity: pulse,
         }}
       >
-        <PanelHeader text="TRADITIONAL" color={RED} centerX={LEFT_PANEL_WIDTH / 2} />
+        everywhere, forever
+      </span>
+      .
+    </div>
+  );
+};
 
-        {/* Scrolling rows container */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            transform: `translateY(-${scrollOffset}px)`,
-          }}
-        >
-          {TRADITIONAL_ROWS.map((row, i) => (
-            <TraditionalRow
-              key={i}
-              bug={row.bug}
-              fix={row.fix}
-              icon={row.icon}
-              appearFrame={TRADITIONAL_APPEAR_FRAMES[i] ?? 200 + i * 30}
-              y={ROW_START_Y + i * ROW_HEIGHT}
-            />
-          ))}
-        </div>
+// ── Main Component ──
+export const Part3MoldThreeParts06RatchetSplitComparison: React.FC = () => {
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: BG_BLACK,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Left Panel — Traditional */}
+      <TraditionalPanel />
 
-        {/* Effort counter */}
-        <EffortCounter rowAppearFrames={TRADITIONAL_APPEAR_FRAMES} />
-      </div>
+      {/* Split divider */}
+      <SplitDivider />
 
-      {/* ========== SPLIT DIVIDER ========== */}
-      <SplitLine />
+      {/* Right Panel — PDD */}
+      <PddPanel />
 
-      {/* ========== RIGHT PANEL — PDD ========== */}
-      <div
-        style={{
-          position: 'absolute',
-          left: RIGHT_PANEL_X,
-          top: 0,
-          width: RIGHT_PANEL_WIDTH,
-          height: 1080,
-          backgroundColor: RIGHT_BG,
-          overflow: 'hidden',
-        }}
-      >
-        <PanelHeader text="PDD" color={GREEN} centerX={RIGHT_PANEL_WIDTH / 2} />
+      {/* Timeline bar at bottom */}
+      <TimelineBar />
 
-        {/* PDD rows */}
-        {PDD_ROWS.map((row, i) => (
-          <PddRow
-            key={i}
-            text={row.text}
-            icon={row.icon}
-            color={row.color}
-            isMono={row.isMono}
-            appearFrame={PDD_APPEAR_FRAMES[i]}
-            y={ROW_START_Y + i * ROW_HEIGHT}
-          />
-        ))}
-
-        {/* "Bug impossible forever" subtitle */}
-        <div
-          style={{
-            position: 'absolute',
-            top: ROW_START_Y + 3 * ROW_HEIGHT + 20,
-            left: 0,
-            width: '100%',
-            textAlign: 'center',
-            fontFamily: FONT_SANS,
-            fontSize: 14,
-            fontWeight: 700,
-            color: GREEN,
-            opacity: subtitleOpacity,
-          }}
-        >
-          Bug impossible forever ∞
-        </div>
-
-        {/* Mini mold icon */}
-        <MiniMold
-          appearFrame={FRAMES.moldIcon}
-          x={RIGHT_PANEL_WIDTH / 2}
-          y={ROW_START_Y + 3 * ROW_HEIGHT + 110}
-        />
-      </div>
-
-      {/* ========== TIMELINE BAR ========== */}
-      <TimelineBar appearFrame={FRAMES.timelineStart} />
-
-      {/* ========== CALLOUT TEXT ========== */}
-      <CalloutText appearFrame={FRAMES.calloutStart} />
+      {/* Callout text */}
+      <CalloutText />
     </AbsoluteFill>
   );
 };
+
+export const defaultPart3MoldThreeParts06RatchetSplitComparisonProps = {};
 
 export default Part3MoldThreeParts06RatchetSplitComparison;

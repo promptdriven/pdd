@@ -1,57 +1,62 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
-  DASHED_LINE_COLOR,
-  DASHED_LINE_OPACITY,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import { CONNECTION_COLOR, SYNOPSYS_Y, PDD_Y } from './constants';
 
 interface DashedConnectionProps {
   x: number;
-  fromY: number;
-  toY: number;
-  drawStart: number;
+  delay: number;
   drawDuration: number;
 }
 
 export const DashedConnection: React.FC<DashedConnectionProps> = ({
   x,
-  fromY,
-  toY,
-  drawStart,
+  delay,
   drawDuration,
 }) => {
+  // useCurrentFrame() is already relative to the parent <Sequence>
   const frame = useCurrentFrame();
+  const relFrame = frame - delay;
+
+  // The connection runs from below the top row icons to above the bottom row icons
+  const topY = SYNOPSYS_Y + 55;
+  const bottomY = PDD_Y - 55;
+  const lineHeight = bottomY - topY;
 
   const progress = interpolate(
-    frame,
-    [drawStart, drawStart + drawDuration],
+    relFrame,
+    [0, drawDuration],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
   );
 
-  if (frame < drawStart) return null;
+  if (progress <= 0) return null;
 
-  const totalLength = toY - fromY;
-  const currentEndY = fromY + totalLength * progress;
+  const drawnHeight = lineHeight * progress;
 
   return (
     <svg
-      width={CANVAS_WIDTH}
-      height={CANVAS_HEIGHT}
-      viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
-      style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
+      style={{
+        position: 'absolute',
+        left: x - 1,
+        top: topY,
+        width: 2,
+        height: lineHeight,
+        overflow: 'visible',
+      }}
     >
       <line
-        x1={x}
-        y1={fromY}
-        x2={x}
-        y2={currentEndY}
-        stroke={DASHED_LINE_COLOR}
+        x1={1}
+        y1={0}
+        x2={1}
+        y2={drawnHeight}
+        stroke={CONNECTION_COLOR}
         strokeWidth={1}
-        opacity={DASHED_LINE_OPACITY}
         strokeDasharray="6 4"
+        opacity={0.15}
       />
     </svg>
   );

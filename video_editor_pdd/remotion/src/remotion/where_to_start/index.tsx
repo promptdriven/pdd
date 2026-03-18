@@ -41,7 +41,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const WhereToStartSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 32.569083;
+  const durationSeconds = 32.661333;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

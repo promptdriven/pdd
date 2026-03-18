@@ -1,282 +1,209 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  GRID_X,
-  GRID_Y,
-  GRID_W,
-  GRID_H,
-  TL_CENTER_X,
-  TL_CENTER_Y,
-  TR_CENTER_X,
-  TR_CENTER_Y,
-  BL_CENTER_X,
-  BL_CENTER_Y,
-  BR_CENTER_X,
-  BR_CENTER_Y,
-  GREEN,
-  RED,
-  AMBER,
-  LABEL_MUTED,
-  FONT_FAMILY,
-  TL_GLOW_START,
-  TL_GLOW_END,
-  TL_STAT_START,
-  TL_STAT_END,
-  BR_GLOW_START,
-  BR_GLOW_END,
-  BR_STAT_START,
-  BR_STAT_END,
-  AMBER_START,
-  AMBER_END,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import { GRID_X, GRID_Y, GRID_W, GRID_H, SUBTEXT_COLOR } from './constants';
 
-interface QuadrantFillProps {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+interface StudyQuadrantProps {
+  quadrant: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
   color: string;
-  glowStart: number;
-  glowEnd: number;
-  glowOpacity: number;
+  bgOpacity: number;
+  startFrame: number;
+  scaleDuration: number;
+  studyName?: string;
+  stat?: string;
+  subtext?: string;
+  mixedLabel?: string;
 }
 
-const QuadrantFill: React.FC<QuadrantFillProps> = ({
-  x,
-  y,
-  w,
-  h,
+/**
+ * Renders the content for a single quadrant of the 2×2 grid.
+ * Study quadrants show name, stat, and subtext with scale-up animation.
+ * Mixed quadrants show a simple label with fade-in.
+ */
+export const QuadrantContent: React.FC<StudyQuadrantProps> = ({
+  quadrant,
   color,
-  glowStart,
-  glowEnd,
-  glowOpacity,
-}) => {
-  const frame = useCurrentFrame();
-
-  const opacity = interpolate(frame, [glowStart, glowEnd], [0, glowOpacity], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  return <rect x={x} y={y} width={w} height={h} fill={color} opacity={opacity} />;
-};
-
-interface StudyLabelProps {
-  cx: number;
-  cy: number;
-  studyName: string;
-  stat: string;
-  subtext: string;
-  color: string;
-  statStart: number;
-  statEnd: number;
-}
-
-const StudyLabel: React.FC<StudyLabelProps> = ({
-  cx,
-  cy,
+  bgOpacity,
+  startFrame,
+  scaleDuration,
   studyName,
   stat,
   subtext,
-  color,
-  statStart,
-  statEnd,
+  mixedLabel,
 }) => {
   const frame = useCurrentFrame();
+  const localFrame = frame - startFrame;
 
-  const scaleRaw = interpolate(frame, [statStart, statEnd], [0.3, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  if (localFrame < 0) return null;
+
+  // Calculate quadrant position
+  const halfW = GRID_W / 2;
+  const halfH = GRID_H / 2;
+  let qLeft: number, qTop: number;
+
+  switch (quadrant) {
+    case 'top-left':
+      qLeft = GRID_X;
+      qTop = GRID_Y;
+      break;
+    case 'top-right':
+      qLeft = GRID_X + halfW;
+      qTop = GRID_Y;
+      break;
+    case 'bottom-left':
+      qLeft = GRID_X;
+      qTop = GRID_Y + halfH;
+      break;
+    case 'bottom-right':
+      qLeft = GRID_X + halfW;
+      qTop = GRID_Y + halfH;
+      break;
+  }
+
+  // Background glow fade-in
+  const glowAlpha = interpolate(localFrame, [0, scaleDuration], [0, bgOpacity], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
+
+  if (mixedLabel) {
+    // Simple mixed result quadrant
+    const labelAlpha = interpolate(localFrame, [0, scaleDuration], [0, 0.4], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    });
+
+    return (
+      <>
+        {/* Amber background tint */}
+        <div
+          style={{
+            position: 'absolute',
+            left: qLeft + 1,
+            top: qTop + 1,
+            width: halfW - 2,
+            height: halfH - 2,
+            backgroundColor: color,
+            opacity: glowAlpha,
+          }}
+        />
+        {/* Label overlay */}
+        <div
+          style={{
+            position: 'absolute',
+            left: qLeft,
+            top: qTop,
+            width: halfW,
+            height: halfH,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 11,
+              color: color,
+              opacity: labelAlpha,
+            }}
+          >
+            {mixedLabel}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // Study quadrant with scale-up stat
+  // Easing.out(Easing.back(1.4)) gives a slight overshoot
+  const statScale = interpolate(localFrame, [0, scaleDuration], [0.3, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
     easing: Easing.out(Easing.back(1.4)),
   });
 
-  const textOpacity = interpolate(frame, [statStart, statEnd], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  const contentAlpha = interpolate(localFrame, [0, scaleDuration * 0.6], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
-
-  return (
-    <g opacity={textOpacity}>
-      {/* Study name */}
-      <text
-        x={cx}
-        y={cy - 30}
-        fill={color}
-        fontSize={13}
-        fontFamily={FONT_FAMILY}
-        fontWeight={700}
-        opacity={0.7}
-        textAnchor="middle"
-        dominantBaseline="middle"
-      >
-        {studyName}
-      </text>
-
-      {/* Stat with scale-up */}
-      <text
-        x={cx}
-        y={cy + 5}
-        fill={color}
-        fontSize={32}
-        fontFamily={FONT_FAMILY}
-        fontWeight={700}
-        opacity={0.85}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        transform={`translate(${cx}, ${cy + 5}) scale(${scaleRaw}) translate(${-cx}, ${-(cy + 5)})`}
-      >
-        {stat}
-      </text>
-
-      {/* Subtext */}
-      <text
-        x={cx}
-        y={cy + 38}
-        fill={LABEL_MUTED}
-        fontSize={9}
-        fontFamily={FONT_FAMILY}
-        fontWeight={400}
-        opacity={0.35}
-        textAnchor="middle"
-        dominantBaseline="middle"
-      >
-        {subtext}
-      </text>
-    </g>
-  );
-};
-
-interface MixedLabelProps {
-  cx: number;
-  cy: number;
-  fadeStart: number;
-  fadeEnd: number;
-}
-
-const MixedLabel: React.FC<MixedLabelProps> = ({
-  cx,
-  cy,
-  fadeStart,
-  fadeEnd,
-}) => {
-  const frame = useCurrentFrame();
-
-  const opacity = interpolate(frame, [fadeStart, fadeEnd], [0, 0.4], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  return (
-    <text
-      x={cx}
-      y={cy}
-      fill={AMBER}
-      fontSize={11}
-      fontFamily={FONT_FAMILY}
-      fontWeight={400}
-      opacity={opacity}
-      textAnchor="middle"
-      dominantBaseline="middle"
-    >
-      Mixed results
-    </text>
-  );
-};
-
-export const QuadrantContent: React.FC = () => {
-  const halfW = GRID_W / 2;
-  const halfH = GRID_H / 2;
 
   return (
     <>
-      {/* Top-left quadrant fill (green) */}
-      <QuadrantFill
-        x={GRID_X}
-        y={GRID_Y}
-        w={halfW}
-        h={halfH}
-        color={GREEN}
-        glowStart={TL_GLOW_START}
-        glowEnd={TL_GLOW_END}
-        glowOpacity={0.08}
+      {/* Background glow */}
+      <div
+        style={{
+          position: 'absolute',
+          left: qLeft + 1,
+          top: qTop + 1,
+          width: halfW - 2,
+          height: halfH - 2,
+          backgroundColor: color,
+          opacity: glowAlpha,
+        }}
       />
-
-      {/* Bottom-right quadrant fill (red) */}
-      <QuadrantFill
-        x={GRID_X + halfW}
-        y={GRID_Y + halfH}
-        w={halfW}
-        h={halfH}
-        color={RED}
-        glowStart={BR_GLOW_START}
-        glowEnd={BR_GLOW_END}
-        glowOpacity={0.08}
-      />
-
-      {/* Top-right quadrant fill (amber) */}
-      <QuadrantFill
-        x={GRID_X + halfW}
-        y={GRID_Y}
-        w={halfW}
-        h={halfH}
-        color={AMBER}
-        glowStart={AMBER_START}
-        glowEnd={AMBER_END}
-        glowOpacity={0.04}
-      />
-
-      {/* Bottom-left quadrant fill (amber) */}
-      <QuadrantFill
-        x={GRID_X}
-        y={GRID_Y + halfH}
-        w={halfW}
-        h={halfH}
-        color={AMBER}
-        glowStart={AMBER_START}
-        glowEnd={AMBER_END}
-        glowOpacity={0.04}
-      />
-
-      {/* GitHub study label */}
-      <StudyLabel
-        cx={TL_CENTER_X}
-        cy={TL_CENTER_Y}
-        studyName="GitHub study"
-        stat="+55%"
-        subtext="95 devs, greenfield"
-        color={GREEN}
-        statStart={TL_STAT_START}
-        statEnd={TL_STAT_END}
-      />
-
-      {/* METR study label */}
-      <StudyLabel
-        cx={BR_CENTER_X}
-        cy={BR_CENTER_Y}
-        studyName="METR study"
-        stat={"\u221219%"}
-        subtext="experienced devs, mature repos"
-        color={RED}
-        statStart={BR_STAT_START}
-        statEnd={BR_STAT_END}
-      />
-
-      {/* Mixed results labels */}
-      <MixedLabel
-        cx={TR_CENTER_X}
-        cy={TR_CENTER_Y}
-        fadeStart={AMBER_START}
-        fadeEnd={AMBER_END}
-      />
-      <MixedLabel
-        cx={BL_CENTER_X}
-        cy={BL_CENTER_Y}
-        fadeStart={AMBER_START}
-        fadeEnd={AMBER_END}
-      />
+      {/* Content */}
+      <div
+        style={{
+          position: 'absolute',
+          left: qLeft,
+          top: qTop,
+          width: halfW,
+          height: halfH,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+        }}
+      >
+        {/* Study name */}
+        {studyName && (
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 13,
+              fontWeight: 700,
+              color,
+              opacity: 0.7 * contentAlpha,
+            }}
+          >
+            {studyName}
+          </div>
+        )}
+        {/* Stat with scale-up */}
+        {stat && (
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 32,
+              fontWeight: 700,
+              color,
+              opacity: 0.85 * contentAlpha,
+              transform: `scale(${statScale})`,
+            }}
+          >
+            {stat}
+          </div>
+        )}
+        {/* Subtext */}
+        {subtext && (
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 9,
+              color: SUBTEXT_COLOR,
+              opacity: 0.35 * contentAlpha,
+            }}
+          >
+            {subtext}
+          </div>
+        )}
+      </div>
     </>
   );
 };
+
+export default QuadrantContent;

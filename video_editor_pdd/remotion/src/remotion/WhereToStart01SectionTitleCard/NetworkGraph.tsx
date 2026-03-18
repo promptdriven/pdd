@@ -1,127 +1,122 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
-  CANVAS,
-  COLORS,
-  TOPOLOGY,
+  TOPOLOGY_NODES,
+  TOPOLOGY_EDGES,
+  HIGHLIGHT_NODE_INDEX,
+  OPACITIES,
   TIMING,
-  NODES,
-  EDGES,
+  COLORS,
+  CANVAS,
 } from './constants';
 
 export const NetworkGraph: React.FC = () => {
   const frame = useCurrentFrame();
+  const totalNodes = TOPOLOGY_NODES.length;
 
-  // Node stagger: each node appears 1 frame apart starting from frame 0 (relative to Sequence)
-  const nodeElements = NODES.map((node, i) => {
-    const nodeAppearFrame = i * TIMING.TOPOLOGY_NODE_STAGGER;
-    const nodeOpacity = interpolate(frame, [nodeAppearFrame, nodeAppearFrame + 10], [0, 1], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    });
+  // Pulse cycle for highlighted node
+  const pulsePhase = (frame % TIMING.nodePulsePeriod) / TIMING.nodePulsePeriod;
+  const pulseOpacity = interpolate(
+    Math.sin(pulsePhase * Math.PI * 2),
+    [-1, 1],
+    [OPACITIES.highlightPulseMin, OPACITIES.highlightPulseMax]
+  );
 
-    const isHighlight = i === TOPOLOGY.HIGHLIGHT_INDEX;
-
-    if (isHighlight) {
-      // Pulsing node
-      const pulsePhase = ((frame - 90 + TOPOLOGY.PULSE_PERIOD) % TOPOLOGY.PULSE_PERIOD) / TOPOLOGY.PULSE_PERIOD;
-      const pulseOpacity = interpolate(
-        Math.sin(pulsePhase * Math.PI * 2),
-        [-1, 1],
-        [TOPOLOGY.PULSE_MIN, TOPOLOGY.PULSE_MAX],
-      );
-      const currentOpacity = frame >= 90 ? pulseOpacity : TOPOLOGY.HIGHLIGHT_OPACITY;
-
-      return (
-        <g key={i} opacity={nodeOpacity}>
-          {/* Glow */}
-          <circle
-            cx={node.x}
-            cy={node.y}
-            r={TOPOLOGY.NODE_RADIUS + TOPOLOGY.GLOW_BLUR}
-            fill={COLORS.HIGHLIGHT}
-            opacity={TOPOLOGY.GLOW_OPACITY * nodeOpacity}
-            filter="url(#highlightGlow)"
-          />
-          {/* Core node */}
-          <circle
-            cx={node.x}
-            cy={node.y}
-            r={TOPOLOGY.NODE_RADIUS}
-            fill={COLORS.HIGHLIGHT}
-            opacity={currentOpacity}
-          />
-        </g>
-      );
-    }
-
-    return (
-      <circle
-        key={i}
-        cx={node.x}
-        cy={node.y}
-        r={TOPOLOGY.NODE_RADIUS}
-        fill={COLORS.NODE}
-        opacity={TOPOLOGY.NODE_OPACITY * nodeOpacity}
-      />
-    );
-  });
-
-  // Edge draw animation: all edges draw over TOPOLOGY_EDGE_DRAW frames
-  // starting after all nodes have appeared
-  const edgeStartFrame = NODES.length * TIMING.TOPOLOGY_NODE_STAGGER;
-  const edgeElements = EDGES.map(([a, b], i) => {
-    const n1 = NODES[a];
-    const n2 = NODES[b];
-    const edgeDelay = (i / EDGES.length) * TIMING.TOPOLOGY_EDGE_DRAW * 0.5;
-    const drawProgress = interpolate(
-      frame,
-      [edgeStartFrame + edgeDelay, edgeStartFrame + edgeDelay + TIMING.TOPOLOGY_EDGE_DRAW],
-      [0, 1],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.out(Easing.cubic),
-      },
-    );
-
-    if (drawProgress <= 0) return null;
-
-    const x2 = n1.x + (n2.x - n1.x) * drawProgress;
-    const y2 = n1.y + (n2.y - n1.y) * drawProgress;
-
-    // Check if either end is the highlight node
-    const isHighlightEdge = a === TOPOLOGY.HIGHLIGHT_INDEX || b === TOPOLOGY.HIGHLIGHT_INDEX;
-
-    return (
-      <line
-        key={`e-${i}`}
-        x1={n1.x}
-        y1={n1.y}
-        x2={x2}
-        y2={y2}
-        stroke={isHighlightEdge ? COLORS.HIGHLIGHT : COLORS.NODE}
-        strokeWidth={1}
-        opacity={isHighlightEdge ? TOPOLOGY.EDGE_OPACITY * 2 : TOPOLOGY.EDGE_OPACITY}
-      />
-    );
-  });
+  // Edge draw progress (starts after all nodes have begun appearing)
+  const edgeStart = totalNodes * TIMING.topologyDraw.nodeStagger;
+  const edgeProgress = interpolate(
+    frame,
+    [edgeStart, edgeStart + TIMING.topologyDraw.edgeDrawDuration],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.poly(3)) }
+  );
 
   return (
     <AbsoluteFill>
-      <svg
-        width={CANVAS.WIDTH}
-        height={CANVAS.HEIGHT}
-        viewBox={`0 0 ${CANVAS.WIDTH} ${CANVAS.HEIGHT}`}
-      >
+      <svg width={CANVAS.width} height={CANVAS.height}>
+        {/* Edges */}
+        {TOPOLOGY_EDGES.map(([from, to], i) => {
+          const n1 = TOPOLOGY_NODES[from];
+          const n2 = TOPOLOGY_NODES[to];
+          // Stagger each edge slightly across the draw duration
+          const edgeFrac = i / TOPOLOGY_EDGES.length;
+          const thisEdgeProgress = interpolate(
+            edgeProgress,
+            [edgeFrac * 0.5, edgeFrac * 0.5 + 0.5],
+            [0, 1],
+            { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+          );
+
+          if (thisEdgeProgress <= 0) return null;
+
+          const dx = n2.x - n1.x;
+          const dy = n2.y - n1.y;
+          const endX = n1.x + dx * thisEdgeProgress;
+          const endY = n1.y + dy * thisEdgeProgress;
+
+          return (
+            <line
+              key={`e-${i}`}
+              x1={n1.x}
+              y1={n1.y}
+              x2={endX}
+              y2={endY}
+              stroke={COLORS.nodeColor}
+              strokeWidth={1}
+              opacity={OPACITIES.edgeBase}
+            />
+          );
+        })}
+
+        {/* Nodes */}
+        {TOPOLOGY_NODES.map((node, i) => {
+          const nodeAppearFrame = i * TIMING.topologyDraw.nodeStagger;
+          const nodeOpacity = interpolate(
+            frame,
+            [nodeAppearFrame, nodeAppearFrame + 10],
+            [0, 1],
+            { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.poly(2)) }
+          );
+
+          if (nodeOpacity <= 0) return null;
+
+          const isHighlight = i === HIGHLIGHT_NODE_INDEX;
+          const baseOpacity = isHighlight ? pulseOpacity : OPACITIES.nodeBase;
+
+          return (
+            <React.Fragment key={`n-${i}`}>
+              {/* Glow for highlight node */}
+              {isHighlight && (
+                <circle
+                  cx={node.x}
+                  cy={node.y}
+                  r={18}
+                  fill={COLORS.highlightNode}
+                  opacity={OPACITIES.highlightGlow * nodeOpacity}
+                  filter="url(#glowFilter)"
+                />
+              )}
+              <circle
+                cx={node.x}
+                cy={node.y}
+                r={6}
+                fill={isHighlight ? COLORS.highlightNode : COLORS.nodeColor}
+                opacity={baseOpacity * nodeOpacity}
+              />
+            </React.Fragment>
+          );
+        })}
+
+        {/* SVG filter for Gaussian blur glow */}
         <defs>
-          <filter id="highlightGlow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation={TOPOLOGY.GLOW_BLUR} />
+          <filter id="glowFilter" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="12" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
           </filter>
         </defs>
-        {edgeElements}
-        {nodeElements}
       </svg>
     </AbsoluteFill>
   );

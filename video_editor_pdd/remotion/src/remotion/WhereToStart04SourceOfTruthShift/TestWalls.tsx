@@ -1,24 +1,24 @@
 import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, TIMING, LAYOUT } from './constants';
+import { COLORS, TEST_WALLS, TEST_WALL_Y, TIMING } from './constants';
 
 /**
- * Three small amber wall icons with staggered scale-in animation,
- * each with a label below.
+ * Three small amber "wall" icons representing test constraints,
+ * staggered scale-in animation.
  */
-export const TestWalls: React.FC = () => {
+const TestWalls: React.FC = () => {
   const frame = useCurrentFrame();
-
-  const wallsStartFrame = TIMING.labelsStart;
+  const wallStart = TIMING.labelsStart;
 
   return (
     <>
-      {LAYOUT.walls.map((wall, index) => {
-        const wallDelay = wallsStartFrame + index * TIMING.wallStagger;
+      {TEST_WALLS.map((wall, i) => {
+        const staggerOffset = i * TIMING.wallStagger;
+        const wallFrame = wallStart + staggerOffset;
 
         const scale = interpolate(
           frame,
-          [wallDelay, wallDelay + TIMING.wallScaleDuration],
+          [wallFrame, wallFrame + TIMING.wallDuration],
           [0, 1],
           {
             extrapolateLeft: 'clamp',
@@ -27,54 +27,47 @@ export const TestWalls: React.FC = () => {
           }
         );
 
-        const opacity = interpolate(
+        const labelOpacity = interpolate(
           frame,
-          [wallDelay, wallDelay + TIMING.wallScaleDuration],
-          [0, 1],
-          {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-          }
+          [wallFrame + 5, wallFrame + TIMING.wallDuration + 5],
+          [0, 0.3],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
         );
 
         return (
-          <div
-            key={index}
-            style={{
-              position: 'absolute',
-              left: wall.x,
-              top: wall.y,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              transform: `scale(${scale})`,
-              opacity,
-            }}
-          >
-            {/* Wall icon — small rectangle */}
+          <React.Fragment key={wall.label}>
+            {/* Wall icon — a small rectangle */}
             <div
               style={{
+                position: 'absolute',
+                left: wall.x - 4,
+                top: TEST_WALL_Y,
                 width: 8,
                 height: 24,
-                backgroundColor: COLORS.wallColor,
+                backgroundColor: COLORS.amber,
                 opacity: 0.5,
                 borderRadius: 2,
+                transform: `scale(${scale})`,
+                transformOrigin: 'center bottom',
               }}
             />
-            {/* Wall label */}
+            {/* Label below wall */}
             <div
               style={{
-                marginTop: 6,
+                position: 'absolute',
+                left: wall.x,
+                top: TEST_WALL_Y + 30,
+                transform: 'translateX(-50%)',
                 fontFamily: '"JetBrains Mono", monospace',
                 fontSize: 7,
-                color: COLORS.wallColor,
-                opacity: 0.3,
+                color: COLORS.amber,
+                opacity: labelOpacity,
                 whiteSpace: 'nowrap',
               }}
             >
-              {LAYOUT.wallLabels[index]}
+              {wall.label}
             </div>
-          </div>
+          </React.Fragment>
         );
       })}
     </>

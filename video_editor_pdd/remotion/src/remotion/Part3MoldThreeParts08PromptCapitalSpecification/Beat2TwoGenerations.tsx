@@ -7,102 +7,117 @@ import {
   spring,
   useVideoConfig,
 } from 'remotion';
-import {
-  NOZZLE_BLUE,
-  CHECK_GREEN,
-  MUTED_GRAY,
-  PANEL_BG,
-  PANEL_BORDER,
-  TEXT_LIGHT,
-  CODE_V1,
-  CODE_V2,
-} from './constants';
+import { COLORS, CODE_A, CODE_B } from './constants';
 
-// ── Syntax highlighting (simplified) ──
-const highlightPython = (line: string): React.ReactNode[] => {
-  const parts: React.ReactNode[] = [];
-  const keywords =
-    /\b(class|def|return|if|not|isinstance|try|except|for|in|import|from|match|case|with)\b/g;
-  const strings = /(["'])(?:(?=(\\?))\2.)*?\1|f["'].*?["']/g;
-  const comments = /#.*/g;
-  const decorators = /@\w+/g;
-  const numbers = /\b\d+\b/g;
+/**
+ * Beat 2 — Two Generations, Same Spec (frames 0-210 relative, 150-360 absolute)
+ * Split view showing same prompt generating different code.
+ * Both pass with green checkmarks.
+ */
 
-  // Simple approach: color the whole line based on content
-  const trimmed = line.trimStart();
-  if (trimmed.startsWith('#') || trimmed.startsWith('"""')) {
-    return [
-      <span key="c" style={{ color: '#6A9955' }}>
-        {line}
-      </span>,
-    ];
-  }
-  if (trimmed.startsWith('@')) {
-    return [
-      <span key="d" style={{ color: '#DCDCAA' }}>
-        {line}
-      </span>,
-    ];
-  }
+// Simple syntax highlighting for Python
+const highlightPython = (code: string, visibleChars: number): React.ReactNode[] => {
+  const truncated = code.slice(0, visibleChars);
+  const lines = truncated.split('\n');
 
-  // Split by keywords and strings
-  let remaining = line;
-  let idx = 0;
+  const keywords = [
+    'import', 'from', 'class', 'def', 'return', 'if', 'not', 'try',
+    'except', 'for', 'in', 'self', 'None', 'True', 'False', 'Optional',
+  ];
+  const builtins = ['str', 'dict', 'bool', 'list', 'isinstance', 'int'];
 
-  // Token-based simple highlight
-  const tokens = line.split(/(\b(?:class|def|return|if|not|isinstance|try|except|for|in|import|from|match|case|with|None|True|False|self)\b|["'].*?["']|#.*$|\d+)/);
+  return lines.map((line, lineIdx) => {
+    const parts: React.ReactNode[] = [];
+    let remaining = line;
+    let partKey = 0;
 
-  return tokens.map((token, ti) => {
-    const kw = [
-      'class', 'def', 'return', 'if', 'not', 'isinstance', 'try',
-      'except', 'for', 'in', 'import', 'from', 'match', 'case', 'with',
-    ];
-    const constants = ['None', 'True', 'False', 'self'];
+    // Simple token-based highlighting
+    while (remaining.length > 0) {
+      // Comments
+      if (remaining.startsWith('#')) {
+        parts.push(
+          <span key={partKey++} style={{ color: '#6A9955' }}>
+            {remaining}
+          </span>
+        );
+        remaining = '';
+        continue;
+      }
 
-    if (kw.includes(token)) {
-      return (
-        <span key={ti} style={{ color: '#C586C0' }}>
-          {token}
+      // Strings (double or single quoted)
+      const strMatch = remaining.match(/^(["'])(?:(?!\1).)*\1/);
+      if (strMatch) {
+        parts.push(
+          <span key={partKey++} style={{ color: '#CE9178' }}>
+            {strMatch[0]}
+          </span>
+        );
+        remaining = remaining.slice(strMatch[0].length);
+        continue;
+      }
+
+      // Triple-quoted strings
+      const tripleMatch = remaining.match(/^("""|''')[\s\S]*?\1/);
+      if (tripleMatch) {
+        parts.push(
+          <span key={partKey++} style={{ color: '#CE9178' }}>
+            {tripleMatch[0]}
+          </span>
+        );
+        remaining = remaining.slice(tripleMatch[0].length);
+        continue;
+      }
+
+      // Words (keywords, builtins, identifiers)
+      const wordMatch = remaining.match(/^[a-zA-Z_]\w*/);
+      if (wordMatch) {
+        const word = wordMatch[0];
+        let color = '#D4D4D4'; // default
+        if (keywords.includes(word)) color = '#C586C0';
+        else if (builtins.includes(word)) color = '#4EC9B0';
+        else if (word.startsWith('_') || /^[A-Z]/.test(word))
+          color = '#4FC1FF';
+
+        parts.push(
+          <span key={partKey++} style={{ color }}>
+            {word}
+          </span>
+        );
+        remaining = remaining.slice(word.length);
+        continue;
+      }
+
+      // Decorators
+      if (remaining.startsWith('@')) {
+        const decMatch = remaining.match(/^@\w+/);
+        if (decMatch) {
+          parts.push(
+            <span key={partKey++} style={{ color: '#DCDCAA' }}>
+              {decMatch[0]}
+            </span>
+          );
+          remaining = remaining.slice(decMatch[0].length);
+          continue;
+        }
+      }
+
+      // Other chars
+      parts.push(
+        <span key={partKey++} style={{ color: '#D4D4D4' }}>
+          {remaining[0]}
         </span>
       );
+      remaining = remaining.slice(1);
     }
-    if (constants.includes(token)) {
-      return (
-        <span key={ti} style={{ color: '#569CD6' }}>
-          {token}
-        </span>
-      );
-    }
-    if (token.startsWith('"') || token.startsWith("'") || token.startsWith('f"') || token.startsWith("f'")) {
-      return (
-        <span key={ti} style={{ color: '#CE9178' }}>
-          {token}
-        </span>
-      );
-    }
-    if (token.startsWith('#')) {
-      return (
-        <span key={ti} style={{ color: '#6A9955' }}>
-          {token}
-        </span>
-      );
-    }
-    if (/^\d+$/.test(token)) {
-      return (
-        <span key={ti} style={{ color: '#B5CEA8' }}>
-          {token}
-        </span>
-      );
-    }
+
     return (
-      <span key={ti} style={{ color: '#D4D4D4' }}>
-        {token}
-      </span>
+      <div key={lineIdx} style={{ minHeight: 14, lineHeight: '14px' }}>
+        {parts.length > 0 ? parts : '\u00A0'}
+      </div>
     );
   });
 };
 
-// ── Code panel ──
 const CodePanel: React.FC<{
   x: number;
   y: number;
@@ -110,12 +125,25 @@ const CodePanel: React.FC<{
   height: number;
   filename: string;
   code: string;
-  charsVisible: number;
+  frame: number;
   showCheckmark: boolean;
-  checkScale: number;
-}> = ({ x, y, width, height, filename, code, charsVisible, showCheckmark, checkScale }) => {
-  const lines = code.split('\n');
-  let charCount = 0;
+  checkmarkProgress: number;
+  panelOpacity: number;
+}> = ({
+  x,
+  y,
+  width,
+  height,
+  filename,
+  code,
+  frame,
+  showCheckmark,
+  checkmarkProgress,
+  panelOpacity,
+}) => {
+  // Type code at ~2 frames per char, starting at frame 30 (relative to beat start)
+  const typingFrame = Math.max(0, frame - 30);
+  const visibleChars = Math.floor(typingFrame / 2);
 
   return (
     <div
@@ -125,9 +153,9 @@ const CodePanel: React.FC<{
         top: y,
         width,
         height,
-        backgroundColor: PANEL_BG,
-        opacity: 0.85,
-        border: `1px solid ${PANEL_BORDER}`,
+        backgroundColor: COLORS.codePanel,
+        opacity: panelOpacity * 0.6,
+        border: `1px solid ${COLORS.codeBorder}`,
         borderRadius: 6,
         overflow: 'hidden',
         display: 'flex',
@@ -137,80 +165,40 @@ const CodePanel: React.FC<{
       {/* Title bar */}
       <div
         style={{
-          height: 28,
-          backgroundColor: '#151D2E',
+          padding: '6px 12px',
+          borderBottom: `1px solid ${COLORS.codeBorder}`,
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10,
+          color: COLORS.labelMuted,
           display: 'flex',
           alignItems: 'center',
-          paddingLeft: 10,
           gap: 6,
-          borderBottom: `1px solid ${PANEL_BORDER}`,
-          flexShrink: 0,
         }}
       >
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            backgroundColor: '#EF4444',
-            opacity: 0.5,
-          }}
-        />
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            backgroundColor: '#F59E0B',
-            opacity: 0.5,
-          }}
-        />
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            backgroundColor: '#22C55E',
-            opacity: 0.5,
-          }}
-        />
         <span
           style={{
-            fontFamily: 'JetBrains Mono, monospace',
-            fontSize: 10,
-            color: MUTED_GRAY,
-            marginLeft: 8,
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            backgroundColor: '#374151',
+            display: 'inline-block',
           }}
-        >
-          {filename}
-        </span>
+        />
+        {filename}
       </div>
 
-      {/* Code content */}
+      {/* Code area */}
       <div
         style={{
-          padding: '8px 10px',
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 9,
-          lineHeight: '14px',
-          whiteSpace: 'pre',
-          overflow: 'hidden',
           flex: 1,
+          padding: '8px 12px',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10,
+          overflow: 'hidden',
+          position: 'relative',
         }}
       >
-        {lines.map((line, li) => {
-          const lineStart = charCount;
-          charCount += line.length + 1; // +1 for newline
-          if (lineStart >= charsVisible) return null;
-          const visibleLen = Math.min(line.length, charsVisible - lineStart);
-          const visibleLine = line.substring(0, visibleLen);
-
-          return (
-            <div key={li} style={{ height: 14 }}>
-              {highlightPython(visibleLine)}
-            </div>
-          );
-        })}
+        {highlightPython(code, visibleChars)}
       </div>
 
       {/* Green checkmark */}
@@ -218,26 +206,32 @@ const CodePanel: React.FC<{
         <div
           style={{
             position: 'absolute',
-            right: 12,
-            bottom: 12,
+            bottom: 16,
+            right: 16,
             width: 40,
             height: 40,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            transform: `scale(${checkScale})`,
+            transform: `scale(${checkmarkProgress})`,
+            opacity: checkmarkProgress,
           }}
         >
           <svg width={40} height={40} viewBox="0 0 40 40">
-            <circle cx={20} cy={20} r={18} fill={CHECK_GREEN} opacity={0.15} />
-            <path
-              d="M 12 20 L 18 26 L 28 14"
-              stroke={CHECK_GREEN}
-              strokeWidth={3}
+            <circle
+              cx={20}
+              cy={20}
+              r={18}
+              fill={COLORS.checkmarkGreen}
+              opacity={0.6}
+            />
+            <polyline
+              points="12,20 18,26 28,14"
               fill="none"
+              stroke="white"
+              strokeWidth={3}
               strokeLinecap="round"
               strokeLinejoin="round"
-              opacity={0.6}
             />
           </svg>
         </div>
@@ -250,96 +244,99 @@ export const Beat2TwoGenerations: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // Panel fade-in (frame 0-30 of this beat, absolute 150-180)
+  // Panels appear at frame 0 (relative), which is frame 150 absolute
   const panelOpacity = interpolate(frame, [0, 30], [0, 1], {
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  // Code typing: starts at frame 30, 2 frames per char
-  const charsVisible = Math.max(0, Math.floor((frame - 30) / 2));
-
-  // Checkmarks at frame 120 (absolute 270) — spring animation
-  const checkFrame = frame - 120;
+  // Checkmarks appear at frame 120 relative
   const showCheckmark = frame >= 120;
-  const checkScale = showCheckmark
+  const checkmarkProgress = showCheckmark
     ? spring({
-        frame: checkFrame,
+        frame: frame - 120,
         fps,
         config: { stiffness: 200, damping: 10 },
       })
     : 0;
 
-  // Labels at frame 120
-  const labelOpacity = interpolate(frame, [120, 135], [0, 1], {
+  // Labels appear at frame 120
+  const labelsOpacity = interpolate(frame, [120, 135], [0, 1], {
+    extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
-  // Caption at frame 140
+  // Caption appears at frame 140
   const captionOpacity = interpolate(frame, [140, 160], [0, 1], {
+    extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
   return (
-    <AbsoluteFill style={{ opacity: panelOpacity }}>
+    <AbsoluteFill>
+      {/* Left Panel: Generation A */}
       <CodePanel
         x={160}
         y={200}
         width={340}
         height={500}
         filename="user_parser_v1.py"
-        code={CODE_V1}
-        charsVisible={charsVisible}
+        code={CODE_A}
+        frame={frame}
         showCheckmark={showCheckmark}
-        checkScale={checkScale}
+        checkmarkProgress={checkmarkProgress}
+        panelOpacity={panelOpacity}
       />
+
+      {/* Right Panel: Generation B */}
       <CodePanel
         x={540}
         y={200}
         width={340}
         height={500}
         filename="user_parser_v2.py"
-        code={CODE_V2}
-        charsVisible={charsVisible}
+        code={CODE_B}
+        frame={frame}
         showCheckmark={showCheckmark}
-        checkScale={checkScale}
+        checkmarkProgress={checkmarkProgress}
+        panelOpacity={panelOpacity}
       />
 
-      {/* Shared prompt indicator at top */}
+      {/* Shared prompt indicator above both panels */}
       <div
         style={{
           position: 'absolute',
-          left: 340,
+          left: 160,
           top: 160,
-          width: 360,
+          width: 720,
           textAlign: 'center',
           fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 10,
-          color: NOZZLE_BLUE,
-          opacity: panelOpacity * 0.5,
+          fontSize: 11,
+          color: COLORS.nozzleBlue,
+          opacity: panelOpacity * 0.6,
         }}
       >
-        user_parser.prompt → two generations
+        user_parser.prompt → generate ×2
       </div>
 
-      {/* Center comparison labels */}
+      {/* Center labels: ≠ code, = behavior */}
       <div
         style={{
           position: 'absolute',
-          left: 510,
+          left: 500,
           top: 430,
-          transform: 'translateX(-50%)',
+          width: 40,
           textAlign: 'center',
-          opacity: labelOpacity,
+          opacity: labelsOpacity,
         }}
       >
         <div
           style={{
             fontFamily: 'Inter, sans-serif',
             fontSize: 20,
-            color: MUTED_GRAY,
+            color: COLORS.labelMuted,
             opacity: 0.4,
-            marginBottom: 8,
+            marginBottom: 12,
           }}
         >
           ≠ code
@@ -348,7 +345,7 @@ export const Beat2TwoGenerations: React.FC = () => {
           style={{
             fontFamily: 'Inter, sans-serif',
             fontSize: 20,
-            color: CHECK_GREEN,
+            color: COLORS.behaviorGreen,
             opacity: 0.6,
           }}
         >
@@ -361,18 +358,19 @@ export const Beat2TwoGenerations: React.FC = () => {
         style={{
           position: 'absolute',
           left: 160,
-          top: 730,
+          top: 740,
           width: 720,
           textAlign: 'center',
           fontFamily: 'Inter, sans-serif',
           fontSize: 14,
-          color: TEXT_LIGHT,
+          color: COLORS.textLight,
           opacity: captionOpacity * 0.7,
           lineHeight: '22px',
         }}
       >
-        What's locked is the <strong>behavior</strong>. The code is flexible;
-        the <strong>contract</strong> is fixed.
+        What&apos;s locked is the{' '}
+        <span style={{ fontWeight: 700 }}>behavior</span>. The code is flexible;
+        the <span style={{ fontWeight: 700 }}>contract</span> is fixed.
       </div>
     </AbsoluteFill>
   );

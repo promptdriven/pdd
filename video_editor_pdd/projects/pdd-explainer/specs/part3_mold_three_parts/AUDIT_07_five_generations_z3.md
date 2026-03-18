@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame is sampled at 94.4% progress (frame 509/540), which should be deep into Beat 2 — the Z3 Formal Proof section (frames 480-540). Instead, the frame shows Beat 1 content: five code panels with test results still fully visible. The entire Beat 2 sequence is missing: no cross-dissolve transition (frames 300-330), no Z3/Synopsys logos (frames 330-390), no mathematical proof notation (frames 390-450), no 'PROVEN ✓' stamp (frames 450-480), and no annotation text (frames 480-540). Additionally, even within the displayed Beat 1 content, several issues are visible: (1) Panel 5 is missing its 'Style violations' yellow triangle result, (2) the winner highlight on Panel 3 is absent — no green glow, no 1.05× scale, no dimming of other panels to 0.3 opacity, and (3) the caption and sub-caption text are missing from below the panels.

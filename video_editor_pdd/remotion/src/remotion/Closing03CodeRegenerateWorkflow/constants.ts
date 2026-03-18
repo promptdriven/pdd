@@ -1,98 +1,87 @@
-// === Colors ===
-export const BG_COLOR = '#0A1628';
-export const PANEL_BG = '#1E293B';
-export const TERMINAL_BG = '#0F172A';
-export const TEXT_DEFAULT = '#E2E8F0';
-export const TEXT_MUTED = '#94A3B8';
-export const HEADER_COLOR = '#64748B';
-export const KEYWORD_BLUE = '#4A90D9';
-export const STRING_GREEN = '#5AAA6E';
-export const BUG_RED = '#EF4444';
-export const AMBER_HIGHLIGHT = '#D9944A';
-export const PASS_GREEN = '#22C55E';
-export const ANNOTATION_UNDERLINE = '#4A90D9';
+// Colors
+export const COLORS = {
+  background: '#0A1628',
+  panelBg: '#1E293B',
+  terminalBg: '#0F172A',
+  textDefault: '#E2E8F0',
+  textMuted: '#94A3B8',
+  textDim: '#64748B',
+  keyword: '#4A90D9',
+  string: '#5AAA6E',
+  green: '#22C55E',
+  greenCheck: '#5AAA6E',
+  red: '#EF4444',
+  amber: '#D9944A',
+  blue: '#3B82F6',
+  accentBlue: '#4A90D9',
+} as const;
 
-// === Dimensions ===
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
+// Layout
+export const LAYOUT = {
+  codePanel: { x: 60, y: 80, width: 860, height: 700 },
+  testPanel: { x: 940, y: 80, width: 920, height: 700 },
+  terminal: { x: 60, y: 820, width: 1800, height: 200 },
+} as const;
 
-export const CODE_PANEL = { x: 60, y: 80, width: 860, height: 700 };
-export const TEST_PANEL = { x: 940, y: 80, width: 920, height: 700 };
-export const TERMINAL_STRIP = { x: 60, y: 820, width: 1800, height: 200 };
+// Font families
+export const FONTS = {
+  mono: 'JetBrains Mono, Menlo, Monaco, Consolas, monospace',
+  sans: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif',
+} as const;
 
-// === Frame timings ===
-export const FRAME_LAYOUT_IN = 0;
-export const FRAME_PDD_BUG_START = 30;
-export const FRAME_PDD_FIX_START = 70;
-export const FRAME_CODE_DISSOLVE_START = 100;
-export const FRAME_CODE_STREAM_START = 130;
-export const FRAME_TESTS_PASS = 160;
-export const FRAME_ANNOTATION = 200;
-export const FRAME_HOLD = 250;
-export const TOTAL_FRAMES = 300;
-
-// === Fonts ===
-export const MONO_FONT = 'JetBrains Mono, Menlo, Monaco, Consolas, monospace';
-export const SANS_FONT = 'Inter, system-ui, sans-serif';
-
-// === Original code (with bug on line index 11) ===
-export const ORIGINAL_CODE: Array<{text: string; type: 'default' | 'keyword' | 'string' | 'comment' | 'bug'}> = [
-	{ text: 'import re', type: 'keyword' },
-	{ text: 'from typing import Optional', type: 'keyword' },
-	{ text: '', type: 'default' },
-	{ text: 'class UserParser:', type: 'keyword' },
-	{ text: '    """Parse and validate user input."""', type: 'string' },
-	{ text: '', type: 'default' },
-	{ text: '    def __init__(self, strict=True):', type: 'keyword' },
-	{ text: '        self.strict = strict', type: 'default' },
-	{ text: '        self._cache = {}', type: 'default' },
-	{ text: '', type: 'default' },
-	{ text: '    def parse_name(self, raw: str) -> str:', type: 'keyword' },
-	{ text: '        name = raw.strip()', type: 'default' },
-	{ text: '        # BUG: no null-byte sanitization', type: 'bug' },
-	{ text: '        return name', type: 'bug' },
-	{ text: '', type: 'default' },
-	{ text: '    def validate(self, data: dict) -> bool:', type: 'keyword' },
-	{ text: '        if not data.get("name"):', type: 'default' },
-	{ text: '            return False', type: 'default' },
-	{ text: '        return len(data["name"]) <= 255', type: 'default' },
+// Original Python code (with bug on line 12)
+export const ORIGINAL_CODE: Array<{ text: string; tokens: Array<{ value: string; color: string }> }> = [
+  { text: 'import re', tokens: [{ value: 'import', color: COLORS.keyword }, { value: ' re', color: COLORS.textDefault }] },
+  { text: 'from typing import Optional', tokens: [{ value: 'from', color: COLORS.keyword }, { value: ' typing ', color: COLORS.textDefault }, { value: 'import', color: COLORS.keyword }, { value: ' Optional', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
+  { text: 'class UserParser:', tokens: [{ value: 'class', color: COLORS.keyword }, { value: ' UserParser:', color: COLORS.textDefault }] },
+  { text: '    """Parse user input strings."""', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: '"""Parse user input strings."""', color: COLORS.string }] },
+  { text: '', tokens: [] },
+  { text: '    def __init__(self, strict=True):', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: 'def', color: COLORS.keyword }, { value: ' __init__(self, strict=', color: COLORS.textDefault }, { value: 'True', color: COLORS.keyword }, { value: '):', color: COLORS.textDefault }] },
+  { text: '        self.strict = strict', tokens: [{ value: '        self.strict = strict', color: COLORS.textDefault }] },
+  { text: '        self.pattern = re.compile(r"\\w+")', tokens: [{ value: '        self.pattern = re.compile(r', color: COLORS.textDefault }, { value: '"\\\\w+"', color: COLORS.string }, { value: ')', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
+  { text: '    def parse(self, raw: str) -> Optional[dict]:', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: 'def', color: COLORS.keyword }, { value: ' parse(self, raw: str) -> Optional[dict]:', color: COLORS.textDefault }] },
+  { text: '        name = raw.split("|")[0]  # BUG: no sanitization', tokens: [{ value: '        name = raw.split(', color: COLORS.textDefault }, { value: '"|"', color: COLORS.string }, { value: ')[0]  ', color: COLORS.textDefault }, { value: '# BUG: no sanitization', color: COLORS.textDim }] },
+  { text: '        return {"name": name, "valid": True}', tokens: [{ value: '        ', color: COLORS.textDefault }, { value: 'return', color: COLORS.keyword }, { value: ' {', color: COLORS.textDefault }, { value: '"name"', color: COLORS.string }, { value: ': name, ', color: COLORS.textDefault }, { value: '"valid"', color: COLORS.string }, { value: ': ', color: COLORS.textDefault }, { value: 'True', color: COLORS.keyword }, { value: '}', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
+  { text: '    def validate(self, data: dict) -> bool:', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: 'def', color: COLORS.keyword }, { value: ' validate(self, data: dict) -> bool:', color: COLORS.textDefault }] },
+  { text: '        if not data.get("name"):', tokens: [{ value: '        ', color: COLORS.textDefault }, { value: 'if', color: COLORS.keyword }, { value: ' ', color: COLORS.textDefault }, { value: 'not', color: COLORS.keyword }, { value: ' data.get(', color: COLORS.textDefault }, { value: '"name"', color: COLORS.string }, { value: '):', color: COLORS.textDefault }] },
+  { text: '            return False', tokens: [{ value: '            ', color: COLORS.textDefault }, { value: 'return', color: COLORS.keyword }, { value: ' ', color: COLORS.textDefault }, { value: 'False', color: COLORS.keyword }] },
+  { text: '        return len(data["name"]) <= 255', tokens: [{ value: '        ', color: COLORS.textDefault }, { value: 'return', color: COLORS.keyword }, { value: ' len(data[', color: COLORS.textDefault }, { value: '"name"', color: COLORS.string }, { value: ']) <= 255', color: COLORS.textDefault }] },
 ];
 
-// === Regenerated code (clean, no bug) ===
-export const REGENERATED_CODE: Array<{text: string; type: 'default' | 'keyword' | 'string' | 'comment'}> = [
-	{ text: 'import re', type: 'keyword' },
-	{ text: 'from typing import Optional', type: 'keyword' },
-	{ text: '', type: 'default' },
-	{ text: 'class UserParser:', type: 'keyword' },
-	{ text: '    """Parse and validate user input fields."""', type: 'string' },
-	{ text: '', type: 'default' },
-	{ text: '    def __init__(self, mode="strict"):', type: 'keyword' },
-	{ text: '        self.mode = mode', type: 'default' },
-	{ text: '        self._seen = set()', type: 'default' },
-	{ text: '', type: 'default' },
-	{ text: '    def parse_name(self, raw: str) -> str:', type: 'keyword' },
-	{ text: '        cleaned = raw.strip()', type: 'default' },
-	{ text: '        cleaned = cleaned.replace("\\x00", "")', type: 'string' },
-	{ text: '        cleaned = re.sub(r"[\\x00-\\x1f]", "", cleaned)', type: 'string' },
-	{ text: '        return cleaned', type: 'default' },
-	{ text: '', type: 'default' },
-	{ text: '    def validate(self, fields: dict) -> bool:', type: 'keyword' },
-	{ text: '        name = fields.get("name", "")', type: 'default' },
-	{ text: '        return bool(name) and len(name) <= 255', type: 'default' },
+// Bug line index (0-based)
+export const BUG_LINE_INDEX = 11;
+
+// Regenerated Python code (clean, different variable names)
+export const REGENERATED_CODE: Array<{ text: string; tokens: Array<{ value: string; color: string }> }> = [
+  { text: 'import re', tokens: [{ value: 'import', color: COLORS.keyword }, { value: ' re', color: COLORS.textDefault }] },
+  { text: 'from typing import Optional', tokens: [{ value: 'from', color: COLORS.keyword }, { value: ' typing ', color: COLORS.textDefault }, { value: 'import', color: COLORS.keyword }, { value: ' Optional', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
+  { text: 'class UserParser:', tokens: [{ value: 'class', color: COLORS.keyword }, { value: ' UserParser:', color: COLORS.textDefault }] },
+  { text: '    """Safely parse and validate user input."""', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: '"""Safely parse and validate user input."""', color: COLORS.string }] },
+  { text: '', tokens: [] },
+  { text: '    SAFE_PATTERN = re.compile(r"^[\\w\\s.-]+$")', tokens: [{ value: '    SAFE_PATTERN = re.compile(r', color: COLORS.textDefault }, { value: '"^[\\\\w\\\\s.-]+$"', color: COLORS.string }, { value: ')', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
+  { text: '    def __init__(self, strict_mode=True):', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: 'def', color: COLORS.keyword }, { value: ' __init__(self, strict_mode=', color: COLORS.textDefault }, { value: 'True', color: COLORS.keyword }, { value: '):', color: COLORS.textDefault }] },
+  { text: '        self.strict_mode = strict_mode', tokens: [{ value: '        self.strict_mode = strict_mode', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
+  { text: '    def parse(self, raw_input: str) -> Optional[dict]:', tokens: [{ value: '    ', color: COLORS.textDefault }, { value: 'def', color: COLORS.keyword }, { value: ' parse(self, raw_input: str) -> Optional[dict]:', color: COLORS.textDefault }] },
+  { text: '        sanitized = re.sub(r"[^\\w\\s.-]", "", raw_input)', tokens: [{ value: '        sanitized = re.sub(r', color: COLORS.textDefault }, { value: '"[^\\\\w\\\\s.-]"', color: COLORS.string }, { value: ', ', color: COLORS.textDefault }, { value: '""', color: COLORS.string }, { value: ', raw_input)', color: COLORS.textDefault }] },
+  { text: '        if not self.SAFE_PATTERN.match(sanitized):', tokens: [{ value: '        ', color: COLORS.textDefault }, { value: 'if', color: COLORS.keyword }, { value: ' ', color: COLORS.textDefault }, { value: 'not', color: COLORS.keyword }, { value: ' self.SAFE_PATTERN.match(sanitized):', color: COLORS.textDefault }] },
+  { text: '            return None', tokens: [{ value: '            ', color: COLORS.textDefault }, { value: 'return', color: COLORS.keyword }, { value: ' ', color: COLORS.textDefault }, { value: 'None', color: COLORS.keyword }] },
+  { text: '        user_name = sanitized.strip()', tokens: [{ value: '        user_name = sanitized.strip()', color: COLORS.textDefault }] },
+  { text: '        return {"name": user_name, "valid": True}', tokens: [{ value: '        ', color: COLORS.textDefault }, { value: 'return', color: COLORS.keyword }, { value: ' {', color: COLORS.textDefault }, { value: '"name"', color: COLORS.string }, { value: ': user_name, ', color: COLORS.textDefault }, { value: '"valid"', color: COLORS.string }, { value: ': ', color: COLORS.textDefault }, { value: 'True', color: COLORS.keyword }, { value: '}', color: COLORS.textDefault }] },
+  { text: '', tokens: [] },
 ];
 
-// === Test lines ===
+// Test lines
 export const EXISTING_TESTS = [
-	'test_basic_parse',
-	'test_empty_input',
-	'test_unicode_name',
-	'test_max_length',
+  'test_basic_parse',
+  'test_empty_input',
+  'test_unicode_name',
+  'test_max_length',
 ];
 
 export const NEW_TEST = 'test_null_injection';
-
-// === Terminal commands ===
-export const TERMINAL_COMMANDS = [
-	{ command: 'pdd bug user_parser', output: 'Creating failing test...' },
-	{ command: 'pdd fix user_parser', output: 'Regenerating...' },
-];

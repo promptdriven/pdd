@@ -1,110 +1,66 @@
-// Part2ParadigmShift05ValueMigrationSplit constants
-
-// Canvas
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
-export const TOTAL_FRAMES = 480;
-export const FPS = 30;
-
-// Split layout
+// === Layout ===
+export const WIDTH = 1920;
+export const HEIGHT = 1080;
 export const SPLIT_X = 960;
-export const SPLIT_LINE_WIDTH = 2;
 export const LEFT_PANEL_WIDTH = 958;
-export const RIGHT_PANEL_START = 962;
 export const RIGHT_PANEL_WIDTH = 958;
+export const FPS = 30;
+export const TOTAL_FRAMES = 480;
 
-// Colors
-export const BG_COLOR = "#000000";
-export const LEFT_BG = "#0F172A";
-export const RIGHT_BG = "#0A0F1A";
-export const SPLIT_LINE_COLOR = "#334155";
-export const SPLIT_LINE_OPACITY = 0.25;
+// === Colors ===
+export const BG_COLOR = '#000000';
+export const LEFT_BG = '#0F172A';
+export const RIGHT_BG = '#0A0F1A';
+export const SPLIT_LINE_COLOR = '#334155';
 
-// Crafting colors
-export const CRAFT_ACCENT = "#C4956A";
-export const WOOD_BODY = "#8B6D45";
-export const WOOD_GRAIN = "#6B5233";
-export const CHISEL_COLOR = "#6B5233";
+// Left panel (Crafting)
+export const CRAFT_ACCENT = '#C4956A';
+export const WOOD_BODY = '#8B6D45';
+export const WOOD_GRAIN = '#6B5233';
 
-// Molding colors
-export const MOLD_ACCENT = "#D9944A";
-export const MOLD_WALL_COLOR = "#D9944A";
-export const MOLD_CAVITY_COLOR = "#1E293B";
-export const PLASTIC_COLOR = "#94A3B8";
-export const PLASTIC_LABEL_COLOR = "#64748B";
+// Right panel (Molding)
+export const MOLD_ACCENT = '#D9944A';
+export const MOLD_CAVITY = '#1E293B';
+export const PLASTIC_COLOR = '#94A3B8';
+export const DISPOSABLE_LABEL_COLOR = '#64748B';
 
-// Panel headers
-export const HEADER_FONT_SIZE = 14;
-export const HEADER_FONT_WEIGHT = 600;
-export const HEADER_LETTER_SPACING = "2px";
-export const HEADER_OPACITY = 0.5;
-export const HEADER_Y = 40;
+// === Positions (relative to panel, not global) ===
+export const CHAIR_CENTER = { x: 479, y: 450 };
+export const CHAIR_SIZE = { w: 300, h: 400 };
 
-// Chair dimensions (within left panel coordinate space)
-export const CHAIR_CENTER_X = 480;
-export const CHAIR_CENTER_Y = 450;
-export const CHAIR_WIDTH = 300;
-export const CHAIR_HEIGHT = 400;
+export const MOLD_CENTER = { x: 479, y: 350 };
+export const MOLD_SIZE = { w: 300, h: 250 };
 
-// Mold dimensions (within right panel coordinate space)
-export const MOLD_CENTER_X = 480;
-export const MOLD_CENTER_Y = 350;
-export const MOLD_WIDTH = 300;
-export const MOLD_HEIGHT = 400;
+export const PLASTIC_CENTER = { x: 479, y: 650 };
 
-// Plastic part
-export const PLASTIC_CENTER_X = 480;
-export const PLASTIC_CENTER_Y = 650;
-export const PLASTIC_OPACITY = 0.4;
-
-// Value aura
+// === Aura ===
 export const AURA_BLUR = 40;
 export const AURA_BASE_OPACITY = 0.12;
 export const AURA_PULSE_MIN = 0.08;
 export const AURA_PULSE_MAX = 0.15;
-export const AURA_PULSE_PERIOD = 40; // frames per cycle
+export const AURA_PULSE_PERIOD = 40; // frames
 
-// Summary labels
-export const SUMMARY_Y = 980;
-export const SUMMARY_FONT_SIZE = 13;
-export const SUMMARY_OPACITY = 0.6;
+// === Animation Timing (frames) ===
+export const PHASE_1_END = 20;      // Split line + headers
+export const PHASE_2_START = 20;
+export const PHASE_2_END = 80;      // Chair/mold draw, first marks
+export const PHASE_3_START = 80;
+export const PHASE_3_END = 160;     // More marks, plastic flows
+export const PHASE_4_START = 160;
+export const PHASE_4_END = 240;     // Auras begin
+export const PHASE_5_START = 240;
+export const PHASE_5_END = 320;     // Part dissolve/regen
+export const PHASE_6_START = 320;
+export const PHASE_6_END = 400;     // Both hold, auras pulse
+export const PHASE_7_START = 400;
+export const PHASE_7_END = 440;     // Summary labels appear
+export const PHASE_8_START = 440;
+export const PHASE_8_END = 480;     // Final hold
 
-// History labels
-export const HISTORY_FONT_SIZE = 8;
-export const HISTORY_OPACITY = 0.2;
-export const HISTORY_STACK_X = 750;
-export const HISTORY_STACK_Y = 300;
-
-// Animation timing (frames)
-export const SPLIT_LINE_DRAW_START = 0;
-export const SPLIT_LINE_DRAW_END = 15;
-
-export const HEADER_FADE_START = 5;
-export const HEADER_FADE_END = 20;
-
-export const CHAIR_DRAW_START = 20;
-export const CHAIR_DRAW_END = 60;
-
-export const MOLD_DRAW_START = 20;
-export const MOLD_DRAW_END = 60;
-
-export const CHISEL_MARK_START = 40;
-export const CHISEL_MARK_STAGGER = 5;
-export const CHISEL_MARK_COUNT = 12;
-
-export const PLASTIC_FLOW_START = 80;
-export const PLASTIC_FLOW_END = 130;
-
-export const HISTORY_LABEL_START = 80;
-export const HISTORY_LABEL_STAGGER = 8;
-export const HISTORY_LABEL_COUNT = 12;
-
-export const AURA_START = 160;
-
-export const DISSOLVE_START = 240;
+// === Easing durations ===
+export const SPLIT_LINE_DRAW_DURATION = 15;
+export const OUTLINE_DRAW_DURATION = 40;
+export const CHISEL_STAGGER = 5;
 export const DISSOLVE_DURATION = 20;
-export const REGEN_START = 265;
 export const REGEN_DURATION = 15;
-
-export const SUMMARY_APPEAR_START = 400;
-export const SUMMARY_APPEAR_END = 420;
+export const SUMMARY_FADE_DURATION = 20;

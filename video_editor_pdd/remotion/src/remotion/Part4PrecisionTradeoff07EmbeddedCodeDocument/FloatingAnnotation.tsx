@@ -1,57 +1,64 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, FONTS } from './constants';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
+import {
+  FONT_SANS,
+  ANNOTATION_TEXT_COLOR,
+  LABEL_NL_COLOR,
+  LABEL_CODE_COLOR,
+  ANNOTATION_START,
+} from "./constants";
 
-interface FloatingAnnotationProps {
-  startFrame: number;
-  y: number;
-}
-
-export const FloatingAnnotation: React.FC<FloatingAnnotationProps> = ({
-  startFrame,
-  y,
-}) => {
+export const FloatingAnnotation: React.FC = () => {
   const frame = useCurrentFrame();
-  const elapsed = Math.max(0, frame - startFrame);
 
-  // Fade in with easeOut(quad) over 20 frames
-  const opacity = interpolate(elapsed, [0, 20], [0, 0.6], {
-    easing: Easing.out(Easing.quad),
-    extrapolateRight: 'clamp',
-    extrapolateLeft: 'clamp',
-  });
+  const opacity = interpolate(
+    frame,
+    [ANNOTATION_START, ANNOTATION_START + 20],
+    [0, 0.6],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
 
-  const translateY = interpolate(elapsed, [0, 20], [8, 0], {
-    easing: Easing.out(Easing.quad),
-    extrapolateRight: 'clamp',
-    extrapolateLeft: 'clamp',
-  });
+  const translateY = interpolate(
+    frame,
+    [ANNOTATION_START, ANNOTATION_START + 20],
+    [8, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  if (frame < ANNOTATION_START) return null;
 
   return (
     <div
       style={{
-        position: 'absolute',
-        top: y,
+        position: "absolute",
         left: 0,
-        right: 0,
-        display: 'flex',
-        justifyContent: 'center',
+        top: 920,
+        width: 1920,
+        display: "flex",
+        justifyContent: "center",
         opacity,
         transform: `translateY(${translateY}px)`,
       }}
     >
       <span
         style={{
-          fontFamily: FONTS.sans,
+          fontFamily: FONT_SANS,
           fontSize: 14,
-          color: COLORS.annotationText,
+          color: ANNOTATION_TEXT_COLOR,
         }}
       >
-        Stay in{' '}
-        <span style={{ color: COLORS.intentLabel }}>prompt space</span>{' '}
-        as long as possible. Dip into{' '}
-        <span style={{ color: COLORS.codeLabel }}>code</span>{' '}
-        when you must.
+        Stay in{" "}
+        <span style={{ color: LABEL_NL_COLOR }}>prompt space</span> as long as
+        possible. Dip into{" "}
+        <span style={{ color: LABEL_CODE_COLOR }}>code</span> when you must.
       </span>
     </div>
   );

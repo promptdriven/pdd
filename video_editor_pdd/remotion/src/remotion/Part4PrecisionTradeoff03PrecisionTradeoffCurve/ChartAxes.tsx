@@ -1,16 +1,6 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import {
-  CHART_LEFT,
-  CHART_RIGHT,
-  CHART_TOP,
-  CHART_BOTTOM,
-  AXIS_COLOR,
-  AXIS_LABEL_COLOR,
-  X_TICKS,
-  Y_TICK_LABELS,
-  ANIM,
-} from './constants';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import { CHART, COLORS, TIMING, X_TICKS, Y_TICK_LABELS } from './constants';
 
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
@@ -18,33 +8,21 @@ export const ChartAxes: React.FC = () => {
   // Axes draw progress (0-30 frames)
   const axisProgress = interpolate(
     frame,
-    [ANIM.AXES_START, ANIM.AXES_END],
+    [TIMING.axesDrawStart, TIMING.axesDrawEnd],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
 
   // Ticks and labels fade (30-60 frames)
   const tickOpacity = interpolate(
     frame,
-    [ANIM.TICKS_START, ANIM.TICKS_END],
+    [TIMING.ticksStart, TIMING.ticksEnd],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  // X-axis: horizontal line
-  const xAxisEndX = CHART_LEFT + (CHART_RIGHT - CHART_LEFT) * axisProgress;
-  // Y-axis: vertical line (draws from bottom up)
-  const yAxisEndY = CHART_BOTTOM - (CHART_BOTTOM - CHART_TOP) * axisProgress;
-
-  const xTickSpacing = (CHART_RIGHT - CHART_LEFT) / 50;
+  const xAxisWidth = CHART.width * axisProgress;
+  const yAxisHeight = (CHART.originY - CHART.topY) * axisProgress;
 
   return (
     <svg
@@ -52,50 +30,77 @@ export const ChartAxes: React.FC = () => {
       height={1080}
       style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      {/* X-axis line */}
+      {/* X-axis */}
       <line
-        x1={CHART_LEFT}
-        y1={CHART_BOTTOM}
-        x2={xAxisEndX}
-        y2={CHART_BOTTOM}
-        stroke={AXIS_COLOR}
-        strokeWidth={2}
+        x1={CHART.originX}
+        y1={CHART.originY}
+        x2={CHART.originX + xAxisWidth}
+        y2={CHART.originY}
+        stroke={COLORS.axisLine}
         strokeOpacity={0.4}
+        strokeWidth={2}
       />
 
-      {/* Y-axis line */}
+      {/* Y-axis */}
       <line
-        x1={CHART_LEFT}
-        y1={CHART_BOTTOM}
-        x2={CHART_LEFT}
-        y2={yAxisEndY}
-        stroke={AXIS_COLOR}
-        strokeWidth={2}
+        x1={CHART.originX}
+        y1={CHART.originY}
+        x2={CHART.originX}
+        y2={CHART.originY - yAxisHeight}
+        stroke={COLORS.axisLine}
         strokeOpacity={0.4}
+        strokeWidth={2}
       />
 
-      {/* X-axis ticks and labels */}
+      {/* X-axis label */}
+      <text
+        x={CHART.endX}
+        y={CHART.originY + 45}
+        fill={COLORS.axisLabel}
+        opacity={tickOpacity * 0.5}
+        fontSize={12}
+        fontFamily="Inter, sans-serif"
+        textAnchor="end"
+      >
+        Number of Tests →
+      </text>
+
+      {/* Y-axis label (rotated) */}
+      <text
+        x={CHART.originX - 50}
+        y={(CHART.originY + CHART.topY) / 2}
+        fill={COLORS.axisLabel}
+        opacity={tickOpacity * 0.5}
+        fontSize={12}
+        fontFamily="Inter, sans-serif"
+        textAnchor="middle"
+        transform={`rotate(-90, ${CHART.originX - 50}, ${(CHART.originY + CHART.topY) / 2})`}
+      >
+        Required Prompt Precision ↑
+      </text>
+
+      {/* X-axis tick marks and labels */}
       {X_TICKS.map((tick) => {
-        const x = CHART_LEFT + tick * xTickSpacing;
+        const x = CHART.originX + (tick / 50) * CHART.width;
         return (
           <g key={`x-tick-${tick}`} opacity={tickOpacity}>
             <line
               x1={x}
-              y1={CHART_BOTTOM}
+              y1={CHART.originY}
               x2={x}
-              y2={CHART_BOTTOM + 6}
-              stroke={AXIS_COLOR}
-              strokeWidth={1}
+              y2={CHART.originY + 6}
+              stroke={COLORS.axisLine}
               strokeOpacity={0.3}
+              strokeWidth={1}
             />
             <text
               x={x}
-              y={CHART_BOTTOM + 22}
-              textAnchor="middle"
-              fill={AXIS_LABEL_COLOR}
-              fillOpacity={0.3}
+              y={CHART.originY + 22}
+              fill={COLORS.axisLabel}
+              opacity={0.3}
               fontSize={10}
               fontFamily="Inter, sans-serif"
+              textAnchor="middle"
             >
               {tick}
             </text>
@@ -105,61 +110,22 @@ export const ChartAxes: React.FC = () => {
 
       {/* Y-axis tick labels */}
       {Y_TICK_LABELS.map((label, i) => {
-        const yRange = CHART_BOTTOM - CHART_TOP;
-        // "Low" at bottom, "High" at top
-        const y = CHART_BOTTOM - (i / (Y_TICK_LABELS.length - 1)) * yRange;
+        const y = CHART.originY - ((i + 1) / (Y_TICK_LABELS.length + 1)) * (CHART.originY - CHART.topY);
         return (
-          <g key={`y-tick-${label}`} opacity={tickOpacity}>
-            <line
-              x1={CHART_LEFT - 6}
-              y1={y}
-              x2={CHART_LEFT}
-              y2={y}
-              stroke={AXIS_COLOR}
-              strokeWidth={1}
-              strokeOpacity={0.3}
-            />
-            <text
-              x={CHART_LEFT - 12}
-              y={y + 4}
-              textAnchor="end"
-              fill={AXIS_LABEL_COLOR}
-              fillOpacity={0.3}
-              fontSize={10}
-              fontFamily="Inter, sans-serif"
-            >
-              {label}
-            </text>
-          </g>
+          <text
+            key={`y-tick-${label}`}
+            x={CHART.originX - 15}
+            y={y + 4}
+            fill={COLORS.axisLabel}
+            opacity={tickOpacity * 0.3}
+            fontSize={10}
+            fontFamily="Inter, sans-serif"
+            textAnchor="end"
+          >
+            {label}
+          </text>
         );
       })}
-
-      {/* X-axis label */}
-      <text
-        x={CHART_RIGHT}
-        y={CHART_BOTTOM + 48}
-        textAnchor="end"
-        fill={AXIS_LABEL_COLOR}
-        fillOpacity={0.5 * tickOpacity}
-        fontSize={12}
-        fontFamily="Inter, sans-serif"
-      >
-        {'Number of Tests →'}
-      </text>
-
-      {/* Y-axis label (rotated) */}
-      <text
-        x={CHART_LEFT - 55}
-        y={(CHART_TOP + CHART_BOTTOM) / 2}
-        textAnchor="middle"
-        fill={AXIS_LABEL_COLOR}
-        fillOpacity={0.5 * tickOpacity}
-        fontSize={12}
-        fontFamily="Inter, sans-serif"
-        transform={`rotate(-90, ${CHART_LEFT - 55}, ${(CHART_TOP + CHART_BOTTOM) / 2})`}
-      >
-        {'Required Prompt Precision ↑'}
-      </text>
     </svg>
   );
 };

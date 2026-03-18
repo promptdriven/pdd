@@ -1,83 +1,81 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { MONO_FONT, SANS_FONT, COLORS } from './constants';
+import { COLORS, TERMINAL_HEIGHT } from './constants';
 
-const TerminalWindow: React.FC<{
-  x: number;
+interface TerminalWindowProps {
+  panelX: number;
+  panelWidth: number;
   y: number;
-  width: number;
-  height: number;
   command: string;
   testResults: string[];
+  /** Frame at which the terminal opens (relative to component mount) */
   startFrame: number;
+  /** Test results per frame */
   scrollSpeed: number;
-}> = ({
-  x,
+}
+
+export const TerminalWindow: React.FC<TerminalWindowProps> = ({
+  panelX,
+  panelWidth,
   y,
-  width,
-  height,
   command,
   testResults,
   startFrame,
   scrollSpeed,
 }) => {
   const frame = useCurrentFrame();
-  const elapsed = Math.max(0, frame - startFrame);
 
-  // Terminal window open animation
-  const openProgress = interpolate(elapsed, [0, 15], [0, 1], {
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.cubic),
-  });
+  // Terminal fade-in
+  const terminalOpacity = interpolate(
+    frame,
+    [startFrame, startFrame + 15],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) },
+  );
 
-  // Command appears after terminal opens
-  const commandOpacity = interpolate(elapsed, [10, 18], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  if (frame < startFrame) return null;
 
-  // Test results scroll
-  const testStartElapsed = 20;
-  const testsElapsed = Math.max(0, elapsed - testStartElapsed);
+  const elapsed = frame - startFrame;
+
+  // Command appears first for 10 frames, then results scroll
+  const commandVisible = elapsed >= 0;
+  const resultsElapsed = Math.max(0, elapsed - 10);
   const revealedTests = Math.min(
     testResults.length,
-    Math.floor(testsElapsed * scrollSpeed)
+    Math.floor(resultsElapsed * scrollSpeed),
   );
 
-  // Summary line
-  const allTestsDone =
-    elapsed >= testStartElapsed + testResults.length / scrollSpeed;
-  const summaryElapsed = Math.max(
-    0,
-    elapsed - (testStartElapsed + testResults.length / scrollSpeed + 10)
+  // "47 passed" line appears after all tests
+  const allTestsRevealed = revealedTests >= testResults.length;
+  const passedLineFrame = startFrame + 10 + Math.ceil(testResults.length / scrollSpeed) + 10;
+  const passedOpacity = interpolate(
+    frame,
+    [passedLineFrame, passedLineFrame + 15],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
-  const summaryOpacity = interpolate(summaryElapsed, [0, 10], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
 
-  // Scroll offset for tests (scroll up as more appear)
+  // Calculate scroll offset to keep the latest tests visible
   const testLineHeight = 14;
-  const testAreaHeight = height - 60; // minus header and summary
-  const maxVisibleTests = Math.floor(testAreaHeight / testLineHeight);
+  const maxVisibleTests = Math.floor((TERMINAL_HEIGHT - 60) / testLineHeight);
   const scrollOffset = Math.max(0, revealedTests - maxVisibleTests);
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x,
+        left: panelX + 10,
         top: y,
-        width,
-        height: height * openProgress,
+        width: panelWidth - 20,
+        height: TERMINAL_HEIGHT,
         backgroundColor: COLORS.terminalBg,
-        borderRadius: 4,
+        borderRadius: 6,
         border: '1px solid rgba(51, 65, 85, 0.3)',
         overflow: 'hidden',
-        opacity: openProgress,
+        opacity: terminalOpacity,
       }}
     >
-      {/* Terminal header */}
+      {/* Terminal title bar */}
       <div
         style={{
           height: 28,
@@ -88,149 +86,92 @@ const TerminalWindow: React.FC<{
           gap: 6,
         }}
       >
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            backgroundColor: '#EF4444',
-            opacity: 0.6,
-          }}
-        />
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            backgroundColor: '#F59E0B',
-            opacity: 0.6,
-          }}
-        />
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            backgroundColor: '#22C55E',
-            opacity: 0.6,
-          }}
-        />
+        <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#EF4444', opacity: 0.6 }} />
+        <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#F59E0B', opacity: 0.6 }} />
+        <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#22C55E', opacity: 0.6 }} />
         <span
           style={{
-            fontFamily: MONO_FONT,
+            fontFamily: '"JetBrains Mono", monospace',
             fontSize: 10,
-            color: COLORS.commandColor,
+            color: COLORS.terminalCommandColor,
             marginLeft: 8,
-            opacity: 0.5,
+            opacity: 0.6,
           }}
         >
           terminal
         </span>
       </div>
 
-      {/* Command line */}
-      <div
-        style={{
-          padding: '6px 10px',
-          opacity: commandOpacity,
-        }}
-      >
-        <span
-          style={{
-            fontFamily: MONO_FONT,
-            fontSize: 11,
-            color: '#5AAA6E',
-            opacity: 0.7,
-          }}
-        >
-          ${' '}
-        </span>
-        <span
-          style={{
-            fontFamily: MONO_FONT,
-            fontSize: 11,
-            color: COLORS.commandColor,
-          }}
-        >
-          {command}
-        </span>
-      </div>
-
-      {/* Test results */}
-      <div
-        style={{
-          padding: '0 10px',
-          height: testAreaHeight,
-          overflow: 'hidden',
-          position: 'relative',
-        }}
-      >
-        <div
-          style={{
-            transform: `translateY(-${scrollOffset * testLineHeight}px)`,
-          }}
-        >
-          {testResults.slice(0, revealedTests).map((test, i) => (
-            <div
-              key={i}
-              style={{
-                height: testLineHeight,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              <span
-                style={{
-                  fontFamily: MONO_FONT,
-                  fontSize: 9,
-                  color: COLORS.testColor,
-                  opacity: 0.7,
-                }}
-              >
-                ✓
-              </span>
-              <span
-                style={{
-                  fontFamily: MONO_FONT,
-                  fontSize: 9,
-                  color: COLORS.testColor,
-                  opacity: 0.7,
-                }}
-              >
-                {test}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Summary line */}
-      {allTestsDone && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 8,
-            left: 0,
-            right: 0,
-            textAlign: 'center',
-            opacity: summaryOpacity,
-          }}
-        >
-          <span
+      {/* Terminal content */}
+      <div style={{ padding: '8px 12px', overflow: 'hidden', height: TERMINAL_HEIGHT - 28 }}>
+        {/* Command line */}
+        {commandVisible && (
+          <div
             style={{
-              fontFamily: SANS_FONT,
-              fontSize: 12,
-              fontWeight: 700,
-              color: COLORS.testColor,
+              fontFamily: '"JetBrains Mono", monospace',
+              fontSize: 11,
+              color: COLORS.terminalCommandColor,
+              marginBottom: 6,
             }}
           >
-            47 passed ✓
-          </span>
+            <span style={{ color: COLORS.rightAccent, opacity: 0.7 }}>$</span>{' '}
+            {command}
+          </div>
+        )}
+
+        {/* Scrolling test results */}
+        <div style={{ overflow: 'hidden', height: TERMINAL_HEIGHT - 70 }}>
+          <div
+            style={{
+              transform: `translateY(${-scrollOffset * testLineHeight}px)`,
+            }}
+          >
+            {testResults.map((test, i) => {
+              if (i >= revealedTests) return null;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    fontFamily: '"JetBrains Mono", monospace',
+                    fontSize: 9,
+                    color: COLORS.testCheckColor,
+                    opacity: 0.7,
+                    height: testLineHeight,
+                    display: 'flex',
+                    alignItems: 'center',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ marginRight: 6, fontSize: 10 }}>✓</span>
+                  {test}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      )}
+
+        {/* Summary line */}
+        {allTestsRevealed && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 8,
+              left: 12,
+              right: 12,
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12,
+              fontWeight: 700,
+              color: COLORS.rightAccent,
+              textAlign: 'center',
+              opacity: passedOpacity,
+              backgroundColor: COLORS.terminalBg,
+              paddingTop: 4,
+            }}
+          >
+            {testResults.length} passed ✓
+          </div>
+        )}
+      </div>
     </div>
   );
 };
-
-export default TerminalWindow;

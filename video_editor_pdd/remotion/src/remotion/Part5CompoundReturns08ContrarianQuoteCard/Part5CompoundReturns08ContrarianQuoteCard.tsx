@@ -1,121 +1,114 @@
-import React from "react";
+import React from 'react';
 import {
   AbsoluteFill,
-  Sequence,
   useCurrentFrame,
   Easing,
   interpolate,
-} from "remotion";
-import "../_shared/load-inter-font";
-import { COLORS, FRAMES } from "./constants";
-import { NoiseBackground } from "./NoiseBackground";
-import { QuoteTyper } from "./QuoteTyper";
-import { ReframeSubtitle } from "./ReframeSubtitle";
+} from 'remotion';
+import { COLORS, QUOTE_TEXT, ATTRIBUTION_TEXT, TIMING } from './constants';
+import { NoiseTexture } from './NoiseTexture';
+import { WordByWord } from './WordByWord';
+import { NarratorReframe } from './NarratorReframe';
 
 export const defaultPart5CompoundReturns08ContrarianQuoteCardProps = {};
 
 /**
- * 08_contrarian_quote_card — "The Bet"
+ * Section 5.8: Contrarian Quote Card — "The Bet"
  *
- * A clean typographic quote card with word-by-word reveal,
- * color-coded highlights (blue / amber), and a narrator reframe.
- * 300 frames @ 30 fps (~10 s).
+ * A clean, typographic quote card with word-by-word reveal,
+ * color-coded highlights, and a narrator reframe.
+ * 300 frames @ 30fps = 10 seconds.
  */
 export const Part5CompoundReturns08ContrarianQuoteCard: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // --- Decorative opening quote mark ---
-  const quoteMarkOpacity = interpolate(frame, [0, 15], [0, 0.15], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
+  // ── Background fade ──────────────────────────────────────────────────────
+  const bgOpacity = interpolate(
+    frame,
+    [TIMING.bgFadeStart, TIMING.bgFadeStart + TIMING.bgFadeDuration],
+    [0, 1],
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateRight: 'clamp',
+    }
+  );
 
-  // --- Attribution fade ---
-  const attrLocalFrame = frame - FRAMES.attributionStart;
-  const attrOpacity =
-    attrLocalFrame < 0
-      ? 0
-      : interpolate(attrLocalFrame, [0, FRAMES.attributionFadeDuration], [0, 0.4], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.out(Easing.quad),
-        });
+  // ── Decorative quote mark fade ───────────────────────────────────────────
+  const quoteMarkOpacity = interpolate(
+    frame,
+    [TIMING.quoteMarkStart, TIMING.quoteMarkStart + TIMING.quoteMarkFadeDuration],
+    [0, 0.15],
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateRight: 'clamp',
+    }
+  );
 
-  // --- Em-dash draw before attribution ---
-  const dashWidth =
-    attrLocalFrame < 0
-      ? 0
-      : interpolate(attrLocalFrame, [0, 10], [0, 16], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.out(Easing.quad),
-        });
+  // ── Attribution fade ─────────────────────────────────────────────────────
+  const attributionOpacity = interpolate(
+    frame,
+    [TIMING.attributionStart, TIMING.attributionStart + TIMING.attributionFadeDuration],
+    [0, 0.4],
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
+  );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.background }}>
-      {/* Background with noise */}
-      <NoiseBackground />
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.background,
+        opacity: bgOpacity,
+      }}
+    >
+      {/* Noise texture overlay */}
+      <NoiseTexture />
 
       {/* Decorative opening quote mark */}
       <div
         style={{
-          position: "absolute",
+          position: 'absolute',
           left: 320,
-          top: 290,
-          fontFamily: "Georgia, serif",
+          top: 340,
+          fontFamily: 'Georgia, serif',
           fontSize: 120,
           color: COLORS.decorativeQuote,
           opacity: quoteMarkOpacity,
           lineHeight: 1,
-          userSelect: "none",
+          userSelect: 'none',
         }}
       >
-        {"\u201C"}
+        {'\u201C'}
       </div>
 
-      {/* Quote text – word by word with highlights */}
-      <QuoteTyper />
+      {/* Quote text — word by word with highlights */}
+      <WordByWord
+        text={QUOTE_TEXT}
+        startFrame={TIMING.wordTypingStart}
+        highlightStartFrame={TIMING.highlightStart}
+      />
 
       {/* Attribution */}
       <div
         style={{
-          position: "absolute",
-          top: 560,
-          right: 320,
-          display: "flex",
-          alignItems: "center",
-          gap: 0,
-          opacity: attrOpacity,
+          position: 'absolute',
+          right: 640,
+          top: 580,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          color: COLORS.attribution,
+          opacity: attributionOpacity,
+          textAlign: 'right',
+          whiteSpace: 'nowrap',
         }}
       >
-        {/* Animated em-dash drawn before text */}
-        <span
-          style={{
-            display: "inline-block",
-            width: dashWidth,
-            height: 1,
-            backgroundColor: COLORS.attribution,
-            marginRight: 8,
-            flexShrink: 0,
-          }}
-        />
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 14,
-            color: COLORS.attribution,
-            whiteSpace: "nowrap",
-          }}
-        >
-          Research engineer, after seeing PDD for the first time
-        </span>
+        {ATTRIBUTION_TEXT}
       </div>
 
-      {/* Narrator reframe subtitle */}
-      <Sequence from={FRAMES.reframeStart} durationInFrames={FRAMES.total - FRAMES.reframeStart}>
-        <ReframeSubtitle />
-      </Sequence>
+      {/* Narrator reframe */}
+      <NarratorReframe startFrame={TIMING.reframeStart} />
     </AbsoluteFill>
   );
 };

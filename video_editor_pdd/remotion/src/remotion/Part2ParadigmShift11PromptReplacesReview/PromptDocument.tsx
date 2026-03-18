@@ -1,41 +1,20 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  PROMPT_FADE_START,
-  PROMPT_FADE_END,
-  HIGHLIGHT_START,
-  HIGHLIGHT_END,
-  PROMPT_PANEL_X,
-  PROMPT_PANEL_Y,
-  PROMPT_PANEL_WIDTH,
-  PROMPT_PANEL_HEIGHT,
-  PANEL_BG,
-  AMBER_ACCENT,
-  TEXT_LIGHT,
-  PROMPT_LINES,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { COLORS, PROMPT_LINES } from './constants';
 
-export const PromptDocument: React.FC = () => {
+export const PromptDocument: React.FC<{
+  fadeInStart: number;
+  highlightStart: number;
+}> = ({ fadeInStart, highlightStart }) => {
   const frame = useCurrentFrame();
 
-  const fadeIn = interpolate(
+  const opacity = interpolate(
     frame,
-    [PROMPT_FADE_START, PROMPT_FADE_END],
+    [fadeInStart, fadeInStart + 20],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  const highlightProgress = interpolate(
-    frame,
-    [HIGHLIGHT_START, HIGHLIGHT_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
@@ -43,55 +22,97 @@ export const PromptDocument: React.FC = () => {
   return (
     <div
       style={{
-        position: "absolute",
-        left: PROMPT_PANEL_X - PROMPT_PANEL_WIDTH / 2,
-        top: PROMPT_PANEL_Y - PROMPT_PANEL_HEIGHT / 2,
-        width: PROMPT_PANEL_WIDTH,
-        height: PROMPT_PANEL_HEIGHT,
-        backgroundColor: PANEL_BG,
-        opacity: fadeIn,
+        position: 'absolute',
+        left: 280,
+        top: 155,
+        width: 400,
+        height: 250,
+        backgroundColor: `rgba(30, 41, 59, 0.3)`,
         borderRadius: 4,
-        padding: 16,
-        boxSizing: "border-box",
-        overflow: "hidden",
+        opacity,
+        overflow: 'hidden',
       }}
     >
       {/* Header */}
       <div
         style={{
-          fontFamily: "JetBrains Mono, monospace",
+          fontFamily: 'JetBrains Mono, monospace',
           fontSize: 10,
-          color: AMBER_ACCENT,
+          color: COLORS.amber,
           opacity: 0.4,
-          marginBottom: 8,
+          padding: '8px 12px 4px',
+          borderBottom: '1px solid rgba(30, 41, 59, 0.5)',
         }}
       >
         prompt.md
       </div>
 
-      {/* Content lines */}
-      {PROMPT_LINES.map((line, i) => {
-        const isHighlighted = line.highlight && highlightProgress > 0;
-        const lineColor = isHighlighted ? AMBER_ACCENT : TEXT_LIGHT;
-        const lineOpacity = isHighlighted ? 0.3 + highlightProgress * 0.2 : 0.6;
+      {/* Content */}
+      <div style={{ padding: '8px 12px' }}>
+        {PROMPT_LINES.map((line, i) => {
+          const isHighlighted = line.highlight;
 
-        return (
-          <div
-            key={i}
-            style={{
-              fontFamily: "Inter, sans-serif",
-              fontSize: 12,
-              lineHeight: "16px",
-              color: lineColor,
-              opacity: lineOpacity,
-              whiteSpace: "pre-wrap",
-              minHeight: line.text === "" ? 8 : undefined,
-            }}
-          >
-            {line.text || "\u00A0"}
-          </div>
-        );
-      })}
+          // Highlight animation for key phrases
+          const highlightProgress = isHighlighted
+            ? interpolate(
+                frame,
+                [highlightStart, highlightStart + 30],
+                [0, 1],
+                {
+                  extrapolateLeft: 'clamp',
+                  extrapolateRight: 'clamp',
+                  easing: Easing.out(Easing.quad),
+                }
+              )
+            : 0;
+
+          const textColor = isHighlighted
+            ? interpolateColor(highlightProgress, COLORS.textLight, COLORS.amber)
+            : COLORS.textLight;
+
+          const textOpacity = isHighlighted
+            ? 0.6 + highlightProgress * 0.15
+            : 0.6;
+
+          if (line.text === '') {
+            return <div key={i} style={{ height: 6 }} />;
+          }
+
+          return (
+            <div
+              key={i}
+              style={{
+                fontFamily: 'Inter, sans-serif',
+                fontSize: 12,
+                lineHeight: '16px',
+                color: textColor,
+                opacity: textOpacity,
+              }}
+            >
+              {line.text}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
+
+/** Simple hex color interpolation */
+function interpolateColor(t: number, from: string, to: string): string {
+  const f = hexToRgb(from);
+  const tt = hexToRgb(to);
+  const r = Math.round(f.r + (tt.r - f.r) * t);
+  const g = Math.round(f.g + (tt.g - f.g) * t);
+  const b = Math.round(f.b + (tt.b - f.b) * t);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+function hexToRgb(hex: string) {
+  const h = hex.replace('#', '');
+  return {
+    r: parseInt(h.substring(0, 2), 16),
+    g: parseInt(h.substring(2, 4), 16),
+    b: parseInt(h.substring(4, 6), 16),
+  };
+}

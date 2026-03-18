@@ -14,7 +14,6 @@ export const ChartGrid: React.FC = () => {
   const frame = useCurrentFrame();
 
   const opacity = interpolate(frame, [0, GRID_FADE_DURATION], [0, GRID_OPACITY], {
-    extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });

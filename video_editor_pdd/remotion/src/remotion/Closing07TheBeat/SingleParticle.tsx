@@ -9,91 +9,86 @@ import {
   PARTICLE_GLINT_Y,
   PARTICLE_GLINT_PEAK_OPACITY,
   PARTICLE_GLINT_DURATION,
-  PARTICLE_DRIFT_DURATION,
-  WIDTH,
-  HEIGHT,
 } from './constants';
 
 /**
- * A single particle that drifts upward through the ghost triangle center,
- * catching a brief glint as it passes through the triangle's center point.
- * This component expects to be placed inside a <Sequence from={30}>.
+ * A single particle that drifts upward through the ghost triangle center.
+ * Starts at frame 30 (handled by parent Sequence), runs for 90 frames.
+ * Brief glint when passing through triangle center at y=520.
  */
 export const SingleParticle: React.FC = () => {
-  const frame = useCurrentFrame();
+  const frame = useCurrentFrame(); // 0-based relative to Sequence from={30}
+  const driftDuration = 90;
 
-  // Linear vertical drift from start to end over drift duration
-  const y = interpolate(frame, [0, PARTICLE_DRIFT_DURATION], [PARTICLE_START[1], PARTICLE_END[1]], {
+  // Linear vertical drift
+  const y = interpolate(frame, [0, driftDuration], [PARTICLE_START[1], PARTICLE_END[1]], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
   const x = PARTICLE_START[0]; // Straight vertical path
 
-  // Calculate the frame when particle reaches glint Y (center of triangle)
-  // The particle travels from 650 to 350, total = 300px over 90 frames
-  const totalDistance = PARTICLE_START[1] - PARTICLE_END[1]; // 300
-  const glintDistance = PARTICLE_START[1] - PARTICLE_GLINT_Y; // 130
-  const glintFrame = (glintDistance / totalDistance) * PARTICLE_DRIFT_DURATION; // ~39
+  // Calculate the frame at which particle passes through glint Y
+  // Linear mapping: glintFrame = driftDuration * (startY - glintY) / (startY - endY)
+  const glintFrame =
+    driftDuration *
+    (PARTICLE_START[1] - PARTICLE_GLINT_Y) /
+    (PARTICLE_START[1] - PARTICLE_END[1]);
+  const halfGlint = PARTICLE_GLINT_DURATION / 2;
 
-  const halfGlint = PARTICLE_GLINT_DURATION / 2; // 3 frames
-
-  // Glint opacity: spike from base to peak and back
-  const glintOpacity = interpolate(
+  // Base opacity — fades in at start, fades out at end
+  const baseOpacity = interpolate(
     frame,
-    [
-      glintFrame - halfGlint,
-      glintFrame,
-      glintFrame + halfGlint,
-    ],
-    [PARTICLE_BASE_OPACITY, PARTICLE_GLINT_PEAK_OPACITY, PARTICLE_BASE_OPACITY],
+    [0, 8, driftDuration - 20, driftDuration],
+    [0, PARTICLE_BASE_OPACITY, PARTICLE_BASE_OPACITY, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
     }
   );
 
-  // Fade out as particle approaches top
-  const fadeOut = interpolate(frame, [PARTICLE_DRIFT_DURATION - 30, PARTICLE_DRIFT_DURATION], [1, 0], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
+  // Glint — opacity spike when passing through center
+  const glintOpacity = (() => {
+    const glintStart = glintFrame - halfGlint;
+    const glintEnd = glintFrame + halfGlint;
 
-  // Fade in at the start
-  const fadeIn = interpolate(frame, [0, 10], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
+    if (frame < glintStart || frame > glintEnd) return 0;
 
-  const opacity = glintOpacity * fadeOut * fadeIn;
+    if (frame <= glintFrame) {
+      // Rising: easeOut(quad)
+      return interpolate(frame, [glintStart, glintFrame], [0, PARTICLE_GLINT_PEAK_OPACITY - PARTICLE_BASE_OPACITY], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.out(Easing.quad),
+      });
+    } else {
+      // Falling: easeIn(quad)
+      return interpolate(frame, [glintFrame, glintEnd], [PARTICLE_GLINT_PEAK_OPACITY - PARTICLE_BASE_OPACITY, 0], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.in(Easing.quad),
+      });
+    }
+  })();
 
-  // Don't render after drift is complete
-  if (frame > PARTICLE_DRIFT_DURATION + 5) return null;
+  const opacity = Math.min(1, baseOpacity + glintOpacity);
+
+  if (opacity < 0.001) return null;
 
   return (
-    <svg
-      width={WIDTH}
-      height={HEIGHT}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+    <div
       style={{
         position: 'absolute',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
+        left: x - PARTICLE_SIZE,
+        top: y - PARTICLE_SIZE,
+        width: PARTICLE_SIZE * 2,
+        height: PARTICLE_SIZE * 2,
+        borderRadius: '50%',
+        backgroundColor: PARTICLE_COLOR,
+        opacity,
+        pointerEvents: 'none',
       }}
-    >
-      <circle
-        cx={x}
-        cy={y}
-        r={PARTICLE_SIZE}
-        fill={PARTICLE_COLOR}
-        opacity={opacity}
-      />
-    </svg>
+    />
   );
 };
 

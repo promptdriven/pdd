@@ -1,225 +1,299 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 import {
-  AMBER,
-  RED,
-  GREEN,
-  CODE_MUTED,
-  FONT_CODE,
-  FONT_UI,
+  LEFT_COLOR,
+  CODE_COLOR,
+  RED_HIGHLIGHT,
+  GREEN_HIGHLIGHT as GREEN_COLOR,
   PANEL_PADDING,
-  WINDOW_TOP,
-  WINDOW_HEIGHT,
-  PANEL_WIDTH,
-  LEFT_CODE_START,
-  LEFT_CODE_END,
-  LEFT_HIGHLIGHT_START,
-  LEFT_HIGHLIGHT_STAGGER,
-  TOKEN_COUNT_START,
-  TOKEN_COUNT_END,
-  FILL_BAR_START,
-  FILL_BAR_END,
+  FAKE_CODE_LINES,
+  RED_HIGHLIGHTS,
+  GREEN_HIGHLIGHT_REGION,
+  LEFT_CODE_IN,
+  LEFT_CODE_DURATION,
+  TOKEN_COUNTS_IN,
+  FILL_BARS_IN,
+  HOLD_START,
   PULSE_CYCLE,
-  PULSE_MIN,
-  PULSE_MAX,
-  CODE_LINES,
-  IRRELEVANT_RANGES,
-  RELEVANT_RANGE,
-} from "./constants";
+} from './constants';
 
 const LINE_HEIGHT = 10;
-const CODE_X = PANEL_PADDING + 12;
-const CODE_Y_START = WINDOW_TOP + 20;
-const WINDOW_X = PANEL_PADDING;
-const WINDOW_WIDTH = PANEL_WIDTH - PANEL_PADDING * 2;
 
 export const LeftPanel: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Code fill progress
-  const codeFill = interpolate(
-    frame,
-    [LEFT_CODE_START, LEFT_CODE_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
-  );
+  // Panel header fade: frames 30-45
+  const headerOpacity = interpolate(frame, [30, 45], [0, 0.6], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  const visibleLines = Math.floor(codeFill * CODE_LINES.length);
+  // Code fill progress: frames 60-150
+  const codeFill = interpolate(frame, [LEFT_CODE_IN, LEFT_CODE_IN + LEFT_CODE_DURATION], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
 
-  // Token count opacity
-  const tokenOpacity = interpolate(
-    frame,
-    [TOKEN_COUNT_START, TOKEN_COUNT_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
+  // Token count fade: frames 240-255
+  const tokenOpacity = interpolate(frame, [TOKEN_COUNTS_IN, TOKEN_COUNTS_IN + 15], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  // Fill bar width
-  const fillBarProgress = interpolate(
-    frame,
-    [FILL_BAR_START, FILL_BAR_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
-  );
+  // Fill bar: frames 300-320
+  const fillBarWidth = interpolate(frame, [FILL_BARS_IN, FILL_BARS_IN + 20], [0, 100], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
+  });
 
-  // Red highlight pulse (after frame 360)
-  const pulsePhase = frame > 360
-    ? interpolate(
-        frame % PULSE_CYCLE,
-        [0, PULSE_CYCLE / 2, PULSE_CYCLE],
-        [PULSE_MIN, PULSE_MAX, PULSE_MIN],
-        { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sin) }
-      )
-    : PULSE_MIN;
+  // Red highlight pulse after HOLD_START
+  const pulseOpacity =
+    frame >= HOLD_START
+      ? interpolate(
+          frame % PULSE_CYCLE,
+          [0, PULSE_CYCLE / 2, PULSE_CYCLE],
+          [0.08, 0.12, 0.08],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
+        )
+      : 0.08;
 
-  // Highlight block renderer
-  const renderHighlightBlock = (
-    range: { start: number; end: number },
-    color: string,
-    bgOpacity: number,
-    borderOpacity: number,
-    label: string,
-    index: number,
-    highlightDelay: number
-  ) => {
-    const blockOpacity = interpolate(
-      frame,
-      [highlightDelay, highlightDelay + 15],
-      [0, 1],
-      { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-    );
+  const windowTop = 90;
+  const windowLeft = PANEL_PADDING;
+  const windowWidth = 960 - PANEL_PADDING * 2;
+  const windowHeight = 870;
 
-    if (blockOpacity <= 0) return null;
-
-    const yTop = CODE_Y_START + range.start * LINE_HEIGHT - 2;
-    const blockHeight = (range.end - range.start + 1) * LINE_HEIGHT + 4;
-
-    return (
-      <div
-        key={`highlight-${index}`}
-        style={{
-          position: "absolute",
-          left: WINDOW_X + 8,
-          top: yTop,
-          width: WINDOW_WIDTH - 16,
-          height: blockHeight,
-          backgroundColor: `${color}${Math.round(bgOpacity * 255).toString(16).padStart(2, "0")}`,
-          border: `1px solid ${color}${Math.round(borderOpacity * 255).toString(16).padStart(2, "0")}`,
-          borderRadius: 2,
-          opacity: blockOpacity,
-        }}
-      >
-        <span
-          style={{
-            position: "absolute",
-            right: 4,
-            top: 1,
-            fontFamily: FONT_UI,
-            fontSize: 7,
-            color: color,
-            opacity: label === "relevant" ? 0.5 : 0.4,
-          }}
-        >
-          {label}
-        </span>
-      </div>
-    );
-  };
+  const visibleLines = Math.floor(codeFill * FAKE_CODE_LINES.length);
 
   return (
-    <div style={{ position: "absolute", left: 0, top: 0, width: PANEL_WIDTH, height: "100%" }}>
-      {/* Context window border */}
+    <div
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: 958,
+        height: 1080,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Panel Header */}
       <div
         style={{
-          position: "absolute",
-          left: WINDOW_X,
-          top: WINDOW_TOP,
-          width: WINDOW_WIDTH,
-          height: WINDOW_HEIGHT,
-          border: `1px solid ${AMBER}4D`, // 0.3 opacity
-          borderRadius: 6,
-          overflow: "hidden",
+          position: 'absolute',
+          top: 30,
+          left: 0,
+          width: 958,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color: LEFT_COLOR,
+          opacity: headerOpacity,
+          letterSpacing: 2,
+          textTransform: 'uppercase',
         }}
       >
-        {/* Code lines */}
-        <div style={{ position: "relative", padding: "16px 12px" }}>
-          {CODE_LINES.slice(0, visibleLines).map((line, i) => (
+        Agentic Patching
+      </div>
+
+      {/* Context Window Border */}
+      <div
+        style={{
+          position: 'absolute',
+          top: windowTop,
+          left: windowLeft,
+          width: windowWidth,
+          height: windowHeight,
+          border: `1px solid rgba(217, 148, 74, 0.3)`,
+          borderRadius: 8,
+          overflow: 'hidden',
+        }}
+      >
+        {/* Dense code lines */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            right: 8,
+            bottom: 60,
+            overflow: 'hidden',
+          }}
+        >
+          {FAKE_CODE_LINES.slice(0, visibleLines).map((line, i) => (
             <div
               key={i}
               style={{
-                fontFamily: FONT_CODE,
+                fontFamily: 'JetBrains Mono, monospace',
                 fontSize: 8,
-                color: CODE_MUTED,
-                opacity: 0.35,
                 lineHeight: `${LINE_HEIGHT}px`,
-                whiteSpace: "pre",
-                overflow: "hidden",
+                color: CODE_COLOR,
+                opacity: 0.35,
+                whiteSpace: 'pre',
+                height: LINE_HEIGHT,
               }}
             >
-              {line || "\u00A0"}
+              {line}
             </div>
           ))}
+          {/* Repeat lines to fill the window densely */}
+          {codeFill > 0.5 &&
+            FAKE_CODE_LINES.slice(0, Math.floor((codeFill - 0.5) * 2 * FAKE_CODE_LINES.length)).map(
+              (line, i) => (
+                <div
+                  key={`r-${i}`}
+                  style={{
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 8,
+                    lineHeight: `${LINE_HEIGHT}px`,
+                    color: CODE_COLOR,
+                    opacity: 0.3,
+                    whiteSpace: 'pre',
+                    height: LINE_HEIGHT,
+                  }}
+                >
+                  {line}
+                </div>
+              )
+            )}
         </div>
 
-        {/* Fill indicator bar at bottom */}
+        {/* Red highlight regions */}
+        {RED_HIGHLIGHTS.map((h, idx) => {
+          const staggerFrame = LEFT_CODE_IN + 30 + idx * 10;
+          const hOpacity = interpolate(frame, [staggerFrame, staggerFrame + 15], [0, 1], {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+            easing: Easing.out(Easing.quad),
+          });
+
+          return (
+            <div
+              key={`red-${idx}`}
+              style={{
+                position: 'absolute',
+                top: 8 + h.yFrac * (windowHeight - 68),
+                left: 8,
+                right: 8,
+                height: h.hFrac * (windowHeight - 68),
+                backgroundColor: `rgba(231, 76, 60, ${frame >= HOLD_START ? pulseOpacity : 0.08})`,
+                border: `1px solid rgba(231, 76, 60, 0.2)`,
+                borderRadius: 3,
+                opacity: hOpacity,
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'flex-end',
+                padding: 4,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: 7,
+                  color: RED_HIGHLIGHT,
+                  opacity: 0.4,
+                }}
+              >
+                irrelevant
+              </span>
+            </div>
+          );
+        })}
+
+        {/* Green highlight region */}
+        {(() => {
+          const greenFrame = LEFT_CODE_IN + 60;
+          const gOpacity = interpolate(frame, [greenFrame, greenFrame + 15], [0, 1], {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+            easing: Easing.out(Easing.quad),
+          });
+          return (
+            <div
+              style={{
+                position: 'absolute',
+                top: 8 + GREEN_HIGHLIGHT_REGION.yFrac * (windowHeight - 68),
+                left: 8,
+                right: 8,
+                height: GREEN_HIGHLIGHT_REGION.hFrac * (windowHeight - 68),
+                backgroundColor: `rgba(90, 170, 110, 0.10)`,
+                border: `1px solid rgba(90, 170, 110, 0.3)`,
+                borderRadius: 3,
+                opacity: gOpacity,
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'flex-end',
+                padding: 4,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'Inter, sans-serif',
+                  fontSize: 7,
+                  color: GREEN_COLOR,
+                  opacity: 0.5,
+                }}
+              >
+                relevant
+              </span>
+            </div>
+          );
+        })()}
+
+        {/* Fill indicator bar at bottom of window */}
         <div
           style={{
-            position: "absolute",
-            bottom: 0,
-            left: 0,
-            width: WINDOW_WIDTH,
-            height: 3,
-            backgroundColor: `${RED}0A`,
+            position: 'absolute',
+            bottom: 36,
+            left: 8,
+            right: 8,
+            height: 4,
+            backgroundColor: 'rgba(231, 76, 60, 0.05)',
+            borderRadius: 2,
           }}
         >
           <div
             style={{
-              width: `${fillBarProgress * 100}%`,
-              height: "100%",
-              backgroundColor: `${RED}33`, // 0.2
+              width: `${fillBarWidth}%`,
+              height: '100%',
+              backgroundColor: `rgba(231, 76, 60, 0.2)`,
+              borderRadius: 2,
             }}
           />
         </div>
+
+        {/* Token count */}
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 14,
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 11,
+            color: LEFT_COLOR,
+            opacity: tokenOpacity * 0.5,
+          }}
+        >
+          15,000 tokens
+        </div>
       </div>
 
-      {/* Irrelevant highlights (red) */}
-      {IRRELEVANT_RANGES.map((range, i) => {
-        const delay = LEFT_HIGHLIGHT_START + i * LEFT_HIGHLIGHT_STAGGER;
-        const currentOpacity = frame > 360 ? pulsePhase : PULSE_MIN;
-        return renderHighlightBlock(range, RED, currentOpacity, 0.2, "irrelevant", i, delay);
-      })}
-
-      {/* Relevant highlight (green) */}
-      {renderHighlightBlock(RELEVANT_RANGE, GREEN, 0.1, 0.3, "relevant", 99, LEFT_HIGHLIGHT_START + 30)}
-
-      {/* Token count */}
+      {/* Quality note below window */}
       <div
         style={{
-          position: "absolute",
-          left: WINDOW_X,
-          bottom: 38,
-          width: WINDOW_WIDTH,
-          textAlign: "center",
-          fontFamily: FONT_UI,
-          fontSize: 11,
-          color: AMBER,
-          opacity: tokenOpacity * 0.5,
-        }}
-      >
-        15,000 tokens
-      </div>
-
-      {/* Quality note */}
-      <div
-        style={{
-          position: "absolute",
-          left: WINDOW_X,
-          bottom: 22,
-          width: WINDOW_WIDTH,
-          textAlign: "center",
-          fontFamily: FONT_UI,
+          position: 'absolute',
+          top: windowTop + windowHeight + 8,
+          left: 0,
+          width: 958,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
           fontSize: 10,
-          color: RED,
+          color: RED_HIGHLIGHT,
           opacity: tokenOpacity * 0.4,
         }}
       >

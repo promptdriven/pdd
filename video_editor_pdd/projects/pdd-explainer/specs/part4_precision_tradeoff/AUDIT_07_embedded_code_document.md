@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+At frame 449/480 (93.7% progress, within the final hold phase 420-480), the document is severely incomplete. The code block (lines 9-18) shows only the opening fence '```python' and 'def' — the remaining code lines with the scoring algorithm (np.multiply, np.argpartition, etc.) are missing. The entire third section of natural language (lines 19-24, constraints) is absent. Only the 'Intent (natural language)' section label is rendered; 'Critical algorithm (code)' and 'Constraints (natural language)' labels are missing. The floating annotation ('Stay in prompt space as long as possible. Dip into code when you must.') is also absent. By this point in the animation (final hold phase), the full document with all three labeled sections and the floating annotation should be fully visible and held on screen.

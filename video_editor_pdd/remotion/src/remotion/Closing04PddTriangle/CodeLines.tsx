@@ -1,62 +1,55 @@
 import React from 'react';
 import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import {
-  CANVAS,
-  CODE_LINES,
-  CODE_LINE_WIDTHS,
-  CODE_LINE_OFFSETS,
-  TIMING,
-} from './constants';
+import { CODE_LINES_CONFIG, TIMING } from './constants';
 
-const CodeLines: React.FC = () => {
+export const CodeLines: React.FC = () => {
   const frame = useCurrentFrame();
+  const { centerX, centerY, count, color, opacity, lineHeight, gap, widths } =
+    CODE_LINES_CONFIG;
+  const { start, fadeDuration, stagger } = TIMING.codeLines;
 
-  const lines = [];
-  const totalHeight =
-    CODE_LINES.COUNT * CODE_LINES.HEIGHT +
-    (CODE_LINES.COUNT - 1) * CODE_LINES.GAP;
-  const startY = CANVAS.CENTER.y - totalHeight / 2;
+  const totalHeight = count * lineHeight + (count - 1) * gap;
+  const startY = centerY - totalHeight / 2;
 
-  for (let i = 0; i < CODE_LINES.COUNT; i++) {
-    const lineStartFrame =
-      TIMING.CODE_LINES_START + i * TIMING.CODE_STAGGER;
+  return (
+    <svg
+      width={1920}
+      height={1080}
+      style={{ position: 'absolute', top: 0, left: 0 }}
+    >
+      {Array.from({ length: count }).map((_, i) => {
+        const lineStart = start + i * stagger;
+        const lineOpacity = interpolate(
+          frame,
+          [lineStart, lineStart + fadeDuration],
+          [0, opacity],
+          {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+            easing: Easing.out(Easing.quad),
+          },
+        );
 
-    const opacity = interpolate(
-      frame,
-      [lineStartFrame, lineStartFrame + TIMING.CODE_FADE_DURATION],
-      [0, CODE_LINES.OPACITY],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.out(Easing.quad),
-      },
-    );
+        if (lineOpacity <= 0) return null;
 
-    if (opacity <= 0) continue;
+        const w = widths[i % widths.length];
+        const y = startY + i * (lineHeight + gap);
+        // Slight random-ish horizontal offset per line for visual variety
+        const xOffset = ((i * 37 + 13) % 60) - 30;
 
-    const width = CODE_LINE_WIDTHS[i];
-    const xOffset = CODE_LINE_OFFSETS[i];
-    const y = startY + i * (CODE_LINES.HEIGHT + CODE_LINES.GAP);
-    const x = CANVAS.CENTER.x - width / 2 + xOffset;
-
-    lines.push(
-      <div
-        key={i}
-        style={{
-          position: 'absolute',
-          left: x,
-          top: y,
-          width,
-          height: CODE_LINES.HEIGHT,
-          backgroundColor: CODE_LINES.COLOR,
-          opacity,
-          borderRadius: 1.5,
-        }}
-      />,
-    );
-  }
-
-  return <>{lines}</>;
+        return (
+          <rect
+            key={i}
+            x={centerX - w / 2 + xOffset}
+            y={y}
+            width={w}
+            height={lineHeight - 2}
+            rx={2}
+            fill={color}
+            opacity={lineOpacity}
+          />
+        );
+      })}
+    </svg>
+  );
 };
-
-export default CodeLines;

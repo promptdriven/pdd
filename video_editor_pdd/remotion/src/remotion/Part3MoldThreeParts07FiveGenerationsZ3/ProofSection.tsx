@@ -1,326 +1,403 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing, spring, useVideoConfig, AbsoluteFill } from 'remotion';
-import { COLORS, TIMING } from './constants';
+import { useCurrentFrame, Easing, interpolate, spring, useVideoConfig } from 'remotion';
+import {
+  FONT_MONO,
+  FONT_SANS,
+  COLOR_PASS,
+  COLOR_PURPLE,
+  COLOR_BLUE,
+  COLOR_AMBER,
+  TEXT_PRIMARY,
+  TEXT_SECONDARY,
+  TEXT_MUTED,
+  PROOF_LINES,
+  PROOF_STEPS,
+  BG_DARK,
+} from './constants';
 
-// Typewriter effect for proof notation
-const TypewriterText: React.FC<{
-  text: string;
-  startFrame: number;
-  charDelay: number;
-  style: React.CSSProperties;
-}> = ({ text, startFrame, charDelay, style }) => {
-  const frame = useCurrentFrame();
-  const localFrame = frame - startFrame;
-  if (localFrame < 0) return null;
-
-  const charsVisible = Math.floor(localFrame / charDelay);
-  const visibleText = text.substring(0, Math.min(charsVisible, text.length));
-  const showCursor = charsVisible < text.length && localFrame % 6 < 3;
-
-  return (
-    <div style={style}>
-      {visibleText}
-      {showCursor && (
-        <span style={{ opacity: 0.7 }}>▌</span>
-      )}
-    </div>
-  );
-};
-
-// Logo placeholder (text-based since we don't have SVG files)
-const LogoPlaceholder: React.FC<{
-  label: string;
-  x: number;
-  y: number;
-  opacity: number;
-}> = ({ label, x, y, opacity }) => (
-  <div
-    style={{
-      position: 'absolute',
-      left: x,
-      top: y,
-      width: 120,
-      height: 60,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      border: `1px solid ${COLORS.textSecondary}`,
-      borderRadius: 8,
-      opacity,
-      color: COLORS.textSecondary,
-      fontFamily: 'Inter, sans-serif',
-      fontSize: 14,
-      fontWeight: 600,
-      letterSpacing: 1,
-    }}
-  >
-    {label}
-  </div>
-);
+// All frame offsets are relative to Beat 2 start (parent Sequence from={300})
+const LOGOS_IN = 30;       // 330 absolute
+const PROOF_IN = 90;       // 390 absolute
+const STAMP_IN = 150;      // 450 absolute
+const ANNOTATION_IN = 180; // 480 absolute
 
 export const ProofSection: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // This component receives frames relative to beat 2 start (frame 300 globally)
-  // But since we're called from a Sequence with from={300}, useCurrentFrame() is local.
-  // Actually, we're inside the main component, so frame is global.
-  // We'll use global frame references from TIMING.
-
-  // Cross-dissolve: fade in the dark overlay
-  const dissolveOpacity = interpolate(
-    frame,
-    [TIMING.beat2Start, TIMING.beat2Start + TIMING.crossDissolveDuration],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
-  );
-
-  // Logo fade
+  // Logo fade-in (frames 30-50 local)
   const logoOpacity = interpolate(
     frame,
-    [TIMING.logoStart, TIMING.logoStart + 20],
-    [0, 0.5],
+    [LOGOS_IN, LOGOS_IN + 20],
+    [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  // Proof line 1
-  const line1Opacity = interpolate(
+  // Proof line 1 typewriter (frames 90+)
+  const line1Chars = PROOF_LINES[0].text.length;
+  const line1Progress = interpolate(
     frame,
-    [TIMING.proofLine1Start, TIMING.proofLine1Start + 10],
+    [PROOF_IN, PROOF_IN + line1Chars * 3],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
+  const line1Visible = Math.floor(line1Progress * line1Chars);
 
-  // Proof line 2
-  const line2Opacity = interpolate(
+  // Proof line 2 typewriter (frames 90+30 chars offset)
+  const line2Start = PROOF_IN + 30;
+  const line2Chars = PROOF_LINES[1].text.length;
+  const line2Progress = interpolate(
     frame,
-    [TIMING.proofLine2Start, TIMING.proofLine2Start + 10],
+    [line2Start, line2Start + line2Chars * 2],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
+  const line2Visible = Math.floor(line2Progress * line2Chars);
 
-  // Proof steps
+  // Proof steps fade
   const stepsOpacity = interpolate(
     frame,
-    [TIMING.proofStepsStart, TIMING.proofStepsStart + 15],
-    [0, 0.5],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-
-  // PROVEN stamp spring animation
-  const stampSpring = spring({
-    frame: Math.max(0, frame - TIMING.stampStart),
-    fps,
-    config: { stiffness: 300, damping: 8 },
-  });
-  const stampScale = interpolate(stampSpring, [0, 1], [1.5, 1], { extrapolateRight: 'clamp' });
-  const stampOpacity = interpolate(
-    frame,
-    [TIMING.stampStart, TIMING.stampStart + 4],
+    [PROOF_IN + 50, PROOF_IN + 70],
     [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  // Green flash on stamp
-  const flashOpacity = interpolate(
-    frame,
-    [TIMING.stampStart, TIMING.stampStart + 6, TIMING.stampStart + 20],
-    [0, 0.3, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
+  // PROVEN stamp spring
+  const stampSpring = frame >= STAMP_IN
+    ? spring({
+        frame: frame - STAMP_IN,
+        fps,
+        config: { stiffness: 300, damping: 8 },
+      })
+    : 0;
+  const stampScale = 1.5 - stampSpring * 0.5; // 1.5 -> 1.0
+  const stampOpacity = Math.min(1, stampSpring * 2);
+
+  // Green flash behind stamp
+  const flashOpacity = frame >= STAMP_IN
+    ? interpolate(
+        frame,
+        [STAMP_IN, STAMP_IN + 6, STAMP_IN + 20],
+        [0, 0.3, 0],
+        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+      )
+    : 0;
 
   // Annotation fade
   const annotationOpacity = interpolate(
     frame,
-    [TIMING.annotationStart, TIMING.annotationStart + 20],
+    [ANNOTATION_IN, ANNOTATION_IN + 20],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  if (frame < TIMING.beat2Start) return null;
-
   return (
-    <AbsoluteFill style={{ opacity: dissolveOpacity }}>
-      <AbsoluteFill style={{ backgroundColor: COLORS.bgDarker }} />
-
-      {/* Subtle grid for beat 2 */}
-      <AbsoluteFill style={{ opacity: 0.02 }}>
-        <svg width={1920} height={1080}>
-          {Array.from({ length: 20 }).map((_, i) => (
-            <line
-              key={`h${i}`}
-              x1={0} y1={i * 60} x2={1920} y2={i * 60}
-              stroke={COLORS.gridDot}
-              strokeWidth={0.5}
-            />
-          ))}
-          {Array.from({ length: 33 }).map((_, i) => (
-            <line
-              key={`v${i}`}
-              x1={i * 60} y1={0} x2={i * 60} y2={1080}
-              stroke={COLORS.gridDot}
-              strokeWidth={0.5}
-            />
-          ))}
-        </svg>
-      </AbsoluteFill>
-
-      {/* Logos */}
-      <LogoPlaceholder label="Z3" x={750} y={160} opacity={logoOpacity} />
-      <LogoPlaceholder label="Synopsys" x={1050} y={160} opacity={logoOpacity} />
-
-      {/* Connecting label */}
+    <div
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: 1920,
+        height: 1080,
+        backgroundColor: BG_DARK,
+      }}
+    >
+      {/* Logos section */}
       <div
         style={{
           position: 'absolute',
+          top: 180,
           left: 0,
-          right: 0,
-          top: 235,
-          textAlign: 'center',
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 13,
-          color: COLORS.textMuted,
+          width: 1920,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
           opacity: logoOpacity,
-          letterSpacing: 0.5,
         }}
       >
-        Same class of SMT solver used in chip verification
-      </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 60 }}>
+          {/* Z3 Logo (text-based) */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: 60,
+                height: 60,
+                borderRadius: 8,
+                border: `2px solid ${TEXT_MUTED}50`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontFamily: FONT_MONO,
+                fontSize: 28,
+                fontWeight: 700,
+                color: TEXT_MUTED,
+                opacity: 0.7,
+              }}
+            >
+              Z3
+            </div>
+            <span
+              style={{
+                fontFamily: FONT_SANS,
+                fontSize: 10,
+                color: TEXT_MUTED,
+                opacity: 0.5,
+                marginTop: 6,
+              }}
+            >
+              Z3 SMT Solver
+            </span>
+          </div>
 
-      {/* Proof notation line 1 */}
-      <div style={{ opacity: line1Opacity }}>
-        <TypewriterText
-          text="∀ input ∈ String:"
-          startFrame={TIMING.proofLine1Start}
-          charDelay={3}
+          {/* Connecting line */}
+          <div
+            style={{
+              width: 80,
+              height: 2,
+              backgroundColor: TEXT_MUTED,
+              opacity: 0.2,
+            }}
+          />
+
+          {/* Synopsys Formality Logo (text-based) */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: 60,
+                height: 60,
+                borderRadius: 8,
+                border: `2px solid ${TEXT_MUTED}50`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontFamily: FONT_SANS,
+                fontSize: 11,
+                fontWeight: 600,
+                color: TEXT_MUTED,
+                opacity: 0.7,
+                textAlign: 'center',
+                lineHeight: '13px',
+              }}
+            >
+              SYN
+            </div>
+            <span
+              style={{
+                fontFamily: FONT_SANS,
+                fontSize: 10,
+                color: TEXT_MUTED,
+                opacity: 0.5,
+                marginTop: 6,
+              }}
+            >
+              Synopsys Formality
+            </span>
+          </div>
+        </div>
+
+        {/* Connecting label */}
+        <span
           style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 340,
-            textAlign: 'center',
-            fontFamily: 'JetBrains Mono, monospace',
-            fontSize: 28,
-            color: COLORS.proofPurple,
-            letterSpacing: 1,
+            fontFamily: FONT_SANS,
+            fontSize: 11,
+            color: TEXT_SECONDARY,
+            opacity: 0.5,
+            marginTop: 16,
           }}
-        />
+        >
+          Same class of SMT solver used in chip verification
+        </span>
       </div>
 
-      {/* Proof notation line 2 */}
-      <div style={{ opacity: line2Opacity }}>
-        <TypewriterText
-          text="parse(input) ∈ {Valid(id), None}"
-          startFrame={TIMING.proofLine2Start}
-          charDelay={2}
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 400,
-            textAlign: 'center',
-            fontFamily: 'JetBrains Mono, monospace',
-            fontSize: 22,
-            color: COLORS.proofBlue,
-            letterSpacing: 0.5,
-          }}
-        />
-      </div>
-
-      {/* Proof steps */}
+      {/* Proof notation */}
       <div
         style={{
           position: 'absolute',
+          top: 380,
           left: 0,
-          right: 0,
-          top: 460,
-          textAlign: 'center',
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 14,
-          color: COLORS.textSecondary,
-          opacity: stepsOpacity,
-          lineHeight: '24px',
+          width: 1920,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
         }}
       >
-        <div>1. Enumerate all branches of parse()</div>
-        <div>2. Verify each branch → Valid(id) | None</div>
-        <div>3. No third outcome exists ∎</div>
+        {/* Line 1: ∀ input ∈ String: */}
+        <div
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: PROOF_LINES[0].size,
+            color: PROOF_LINES[0].color,
+            minHeight: 32,
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          {PROOF_LINES[0].text.substring(0, line1Visible)}
+          {line1Visible < line1Chars && line1Visible > 0 && (
+            <span
+              style={{
+                display: 'inline-block',
+                width: 10,
+                height: 22,
+                backgroundColor: COLOR_PURPLE,
+                marginLeft: 1,
+                opacity: frame % 16 < 8 ? 0.8 : 0,
+              }}
+            />
+          )}
+        </div>
+
+        {/* Line 2: parse(input) ∈ {Valid(id), None} */}
+        <div
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: PROOF_LINES[1].size,
+            color: PROOF_LINES[1].color,
+            minHeight: 28,
+            marginTop: 16,
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          {PROOF_LINES[1].text.substring(0, line2Visible)}
+          {line2Visible < line2Chars && line2Visible > 0 && (
+            <span
+              style={{
+                display: 'inline-block',
+                width: 8,
+                height: 18,
+                backgroundColor: COLOR_BLUE,
+                marginLeft: 1,
+                opacity: frame % 16 < 8 ? 0.8 : 0,
+              }}
+            />
+          )}
+        </div>
+
+        {/* Proof steps */}
+        <div
+          style={{
+            marginTop: 30,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 6,
+            opacity: stepsOpacity * 0.5,
+          }}
+        >
+          {PROOF_STEPS.map((step, i) => (
+            <span
+              key={i}
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 14,
+                color: TEXT_MUTED,
+              }}
+            >
+              {step}
+            </span>
+          ))}
+        </div>
       </div>
 
-      {/* Green flash overlay */}
+      {/* Green flash */}
       {flashOpacity > 0 && (
-        <AbsoluteFill
+        <div
           style={{
-            backgroundColor: COLORS.pass,
+            position: 'absolute',
+            top: 520,
+            left: 760,
+            width: 400,
+            height: 80,
+            borderRadius: 12,
+            backgroundColor: COLOR_PASS,
             opacity: flashOpacity,
+            filter: 'blur(30px)',
           }}
         />
       )}
 
-      {/* PROVEN stamp */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          top: 560,
-          display: 'flex',
-          justifyContent: 'center',
-          opacity: stampOpacity,
-        }}
-      >
+      {/* PROVEN ✓ stamp */}
+      {stampOpacity > 0 && (
         <div
           style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 40,
-            fontWeight: 700,
-            color: COLORS.pass,
-            border: `3px solid ${COLORS.pass}`,
-            borderRadius: 8,
-            padding: '8px 32px',
-            transform: `scale(${stampScale}) rotate(-5deg)`,
-            letterSpacing: 3,
-            textShadow: `0 0 20px ${COLORS.pass}`,
+            position: 'absolute',
+            top: 530,
+            left: 0,
+            width: 1920,
+            display: 'flex',
+            justifyContent: 'center',
           }}
         >
-          PROVEN ✓
+          <div
+            style={{
+              fontFamily: FONT_SANS,
+              fontSize: 36,
+              fontWeight: 700,
+              color: COLOR_PASS,
+              border: `2px solid ${COLOR_PASS}`,
+              borderRadius: 8,
+              padding: '6px 24px',
+              transform: `scale(${stampScale}) rotate(-5deg)`,
+              opacity: stampOpacity,
+              letterSpacing: 3,
+            }}
+          >
+            PROVEN ✓
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Annotation */}
       <div
         style={{
           position: 'absolute',
+          top: 680,
           left: 0,
-          right: 0,
-          top: 700,
-          textAlign: 'center',
+          width: 1920,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
           opacity: annotationOpacity,
         }}
       >
-        <div
+        <span
           style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 18,
+            fontFamily: FONT_SANS,
+            fontSize: 16,
             fontWeight: 700,
-            color: COLORS.textPrimary,
+            color: TEXT_PRIMARY,
             opacity: 0.8,
           }}
         >
           Not sampling. Mathematical proof.
-        </div>
-        <div
+        </span>
+        <span
           style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            color: COLORS.textAccent,
+            fontFamily: FONT_SANS,
+            fontSize: 13,
+            color: COLOR_AMBER,
             opacity: 0.6,
             marginTop: 12,
           }}
         >
-          The chip design analogy isn't a metaphor. It's the same technology.
-        </div>
+          The chip design analogy isn&apos;t a metaphor. It&apos;s the same technology.
+        </span>
       </div>
-    </AbsoluteFill>
+    </div>
   );
 };
+
+export default ProofSection;

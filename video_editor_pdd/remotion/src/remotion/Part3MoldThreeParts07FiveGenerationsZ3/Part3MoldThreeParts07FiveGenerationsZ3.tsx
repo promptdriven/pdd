@@ -1,16 +1,25 @@
 import React from 'react';
 import {
   AbsoluteFill,
+  Sequence,
   useCurrentFrame,
-  interpolate,
   Easing,
+  interpolate,
 } from 'remotion';
 import {
-  COLORS,
-  PANEL_POSITIONS,
+  BG_COLOR,
+  DURATION_FRAMES,
+  PANEL_X_STARTS,
+  PANEL_Y,
   CODE_VARIANTS,
   TEST_RESULTS,
-  TIMING,
+  FONT_SANS,
+  TEXT_PRIMARY,
+  TEXT_SECONDARY,
+  BEAT1_END,
+  BEAT2_START,
+  DISSOLVE_END,
+  CAPTION_START,
 } from './constants';
 import { DotGrid } from './DotGrid';
 import { CodePanel } from './CodePanel';
@@ -21,129 +30,98 @@ export const defaultPart3MoldThreeParts07FiveGenerationsZ3Props = {};
 export const Part3MoldThreeParts07FiveGenerationsZ3: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Beat 1 fade-out during cross-dissolve
+  // Beat 1 fade-out / Beat 2 fade-in cross-dissolve (frames 300-330)
   const beat1Opacity = interpolate(
     frame,
-    [TIMING.beat2Start, TIMING.beat2Start + TIMING.crossDissolveDuration],
+    [BEAT2_START, DISSOLVE_END],
     [1, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
   );
 
-  // Caption fade-in
+  const beat2Opacity = interpolate(
+    frame,
+    [BEAT2_START, DISSOLVE_END],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
+  );
+
+  // Caption fade-in (frames 240-260)
   const captionOpacity = interpolate(
     frame,
-    [TIMING.captionStart, TIMING.captionStart + 20],
+    [CAPTION_START, CAPTION_START + 20],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
-  const captionSlideY = interpolate(
-    frame,
-    [TIMING.captionStart, TIMING.captionStart + 20],
-    [12, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  const filenames = [
-    'user_parser_v1.py',
-    'user_parser_v2.py',
-    'user_parser_v3.py',
-    'user_parser_v4.py',
-    'user_parser_v5.py',
-  ];
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.bg }}>
-      {/* Dot grid background */}
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
       <DotGrid />
 
-      {/* Beat 1: Five Code Panels */}
-      <AbsoluteFill style={{ opacity: beat1Opacity }}>
-        {/* Section title */}
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 100,
-            textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            color: COLORS.textMuted,
-            opacity: interpolate(frame, [0, 15], [0, 0.5], {
-              extrapolateLeft: 'clamp',
-              extrapolateRight: 'clamp',
-            }),
-            letterSpacing: 3,
-            textTransform: 'uppercase',
-          }}
-        >
-          Five Generations
-        </div>
+      {/* Beat 1: Five Generations */}
+      {frame < DISSOLVE_END && (
+        <AbsoluteFill style={{ opacity: beat1Opacity }}>
+          {/* Five code panels */}
+          {PANEL_X_STARTS.map((x, i) => (
+            <CodePanel
+              key={i}
+              x={x}
+              y={PANEL_Y}
+              panelIndex={i}
+              filename={`user_parser_v${i + 1}.py`}
+              codeLines={CODE_VARIANTS[i]}
+              testResult={TEST_RESULTS[i]}
+              staggerDelay={i * 5}
+            />
+          ))}
 
-        {/* Five code panels */}
-        {PANEL_POSITIONS.map((pos, i) => (
-          <CodePanel
-            key={i}
-            x={pos.x}
-            y={pos.y}
-            panelIndex={i}
-            code={CODE_VARIANTS[i]}
-            filename={filenames[i]}
-            testResult={TEST_RESULTS[i]}
-            isWinner={i === 2}
-          />
-        ))}
+          {/* Caption */}
+          {frame >= CAPTION_START && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 740,
+                left: 0,
+                width: 1920,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                opacity: captionOpacity,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: FONT_SANS,
+                  fontSize: 16,
+                  color: TEXT_PRIMARY,
+                  opacity: 0.7,
+                }}
+              >
+                Generate five. Pick the one that passes all tests.
+              </span>
+              <span
+                style={{
+                  fontFamily: FONT_SANS,
+                  fontSize: 13,
+                  color: TEXT_SECONDARY,
+                  opacity: 0.5,
+                  marginTop: 12,
+                }}
+              >
+                The walls don&apos;t care how many attempts it took.
+              </span>
+            </div>
+          )}
+        </AbsoluteFill>
+      )}
 
-        {/* Caption */}
-        <div
-          style={{
-            position: 'absolute',
-            left: 0,
-            right: 0,
-            top: 750 + captionSlideY,
-            textAlign: 'center',
-            opacity: captionOpacity,
-          }}
-        >
-          <div
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 18,
-              color: COLORS.textPrimary,
-              opacity: 0.7,
-              lineHeight: '28px',
-            }}
-          >
-            Generate five. Pick the one that passes all tests.
-          </div>
-          <div
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 14,
-              color: COLORS.textMuted,
-              opacity: 0.5,
-              marginTop: 10,
-            }}
-          >
-            The walls don't care how many attempts it took.
-          </div>
-        </div>
-      </AbsoluteFill>
-
-      {/* Beat 2: Z3 Formal Proof (overlays with its own background) */}
-      <ProofSection />
+      {/* Beat 2: Z3 Formal Proof */}
+      {frame >= BEAT2_START && (
+        <AbsoluteFill style={{ opacity: beat2Opacity }}>
+          <Sequence from={BEAT2_START} durationInFrames={DURATION_FRAMES - BEAT2_START}>
+            <ProofSection />
+          </Sequence>
+        </AbsoluteFill>
+      )}
     </AbsoluteFill>
   );
 };

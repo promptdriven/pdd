@@ -1,351 +1,192 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+// Part2ParadigmShift09AbstractionStaircase.tsx
+// Animated ascending staircase showing chip design abstraction levels through decades.
+// ~16s (480 frames @ 30fps)
+import React from 'react';
 import {
-  BACKGROUND_COLOR,
-  GRID_COLOR,
-  GRID_OPACITY,
-  Y_AXIS_COLOR,
-  Y_AXIS_OPACITY,
-  ACTIVE_COLOR,
+  AbsoluteFill,
+  useCurrentFrame,
+  useVideoConfig,
+  Easing,
+  interpolate,
+} from 'remotion';
+import {
+  COLORS,
+  OPACITIES,
   STEPS,
-  ANIM,
-  STEP_WIDTH,
-} from "./constants";
-import { StaircaseStep } from "./StaircaseStep";
-import { AbstractionIcon } from "./AbstractionIcon";
-import { ScaleArrow } from "./ScaleArrow";
-import { PulsingGlow, ParticleDrift } from "./PulsingGlow";
+  STEP_START_FRAMES,
+  ARROW_START_FRAMES,
+} from './constants';
+import StaircaseStep from './StaircaseStep';
+import ScaleArrow from './ScaleArrow';
+import AbstractionIcon from './AbstractionIcon';
+import PulsingGlow from './PulsingGlow';
 
 export const defaultPart2ParadigmShift09AbstractionStaircaseProps = {};
 
 export const Part2ParadigmShift09AbstractionStaircase: React.FC = () => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
-  // Background & grid fade in
-  const gridOpacity = interpolate(frame, [0, ANIM.BG_END], [0, GRID_OPACITY], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  // Grid fade-in (frames 0-30)
+  const gridOpacity = interpolate(frame, [0, 30], [0, OPACITIES.grid], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
     easing: Easing.out(Easing.cubic),
   });
 
-  // Y-axis label fade in
-  const yAxisOpacity = interpolate(
-    frame,
-    [0, ANIM.BG_END],
-    [0, Y_AXIS_OPACITY],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
+  // Y-axis label fade-in (frames 0-20)
+  const axisOpacity = interpolate(frame, [0, 20], [0, OPACITIES.axisLabel], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
-    <AbsoluteFill style={{ backgroundColor: BACKGROUND_COLOR }}>
-      {/* Perspective grid */}
+    <AbsoluteFill
+      style={{
+        backgroundColor: COLORS.background,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Perspective grid lines converging upper-right */}
       <PerspectiveGrid opacity={gridOpacity} />
 
       {/* Y-axis label */}
       <div
         style={{
-          position: "absolute",
-          left: 30,
-          top: 350,
-          opacity: yAxisOpacity,
+          position: 'absolute',
+          left: 35,
+          top: 400,
+          opacity: axisOpacity,
+          transform: 'rotate(-90deg)',
+          transformOrigin: 'center center',
+          whiteSpace: 'nowrap',
         }}
       >
-        {/* Upward arrow */}
-        <svg
-          width={20}
-          height={200}
-          style={{ position: "absolute", left: 10, top: 0 }}
-        >
+        <svg width={200} height={30}>
+          {/* Upward arrow */}
           <line
             x1={10}
-            y1={190}
+            y1={20}
             x2={10}
-            y2={10}
-            stroke={Y_AXIS_COLOR}
+            y2={6}
+            stroke={COLORS.axisLabel}
             strokeWidth={1}
-            opacity={Y_AXIS_OPACITY}
+            opacity={OPACITIES.axisLabel}
           />
           <polygon
-            points="10,5 6,15 14,15"
-            fill={Y_AXIS_COLOR}
-            opacity={Y_AXIS_OPACITY}
+            points="10,4 7,9 13,9"
+            fill={COLORS.axisLabel}
+            opacity={OPACITIES.axisLabel}
           />
+          <text
+            x={20}
+            y={18}
+            fill={COLORS.axisLabel}
+            fontSize={11}
+            fontFamily="Inter, sans-serif"
+            opacity={OPACITIES.axisLabel}
+          >
+            Abstraction level
+          </text>
         </svg>
-        {/* Vertical text */}
-        <div
-          style={{
-            position: "absolute",
-            left: -50,
-            top: 60,
-            transform: "rotate(-90deg)",
-            transformOrigin: "center center",
-            fontFamily: "Inter, sans-serif",
-            fontSize: 11,
-            color: Y_AXIS_COLOR,
-            opacity: Y_AXIS_OPACITY,
-            whiteSpace: "nowrap",
-            letterSpacing: 1,
-          }}
-        >
-          Abstraction level
-        </div>
       </div>
 
-      {/* Steps, arrows, icons, and labels */}
-      {STEPS.map((step, i) => {
-        const stepStartFrame = ANIM.STEP_BASE_FRAME + i * ANIM.STEP_INTERVAL;
-        const localFrame = frame - stepStartFrame;
+      {/* Staircase steps */}
+      {STEPS.map((step, i) => (
+        <React.Fragment key={step.level}>
+          <StaircaseStep
+            x={step.x}
+            y={step.y}
+            startFrame={STEP_START_FRAMES[i]}
+            drawDuration={20}
+          />
+          <AbstractionIcon
+            step={step}
+            startFrame={STEP_START_FRAMES[i]}
+            fps={fps}
+          />
+        </React.Fragment>
+      ))}
 
-        return (
-          <React.Fragment key={step.level}>
-            {/* "Couldn't scale" arrow from previous step */}
-            {i > 0 && (
-              <ScaleArrow
-                fromX={STEPS[i - 1].x}
-                fromY={STEPS[i - 1].y}
-                toX={step.x}
-                toY={step.y}
-                localFrame={localFrame}
-                isDramatic={i === 4}
-              />
-            )}
+      {/* "Couldn't scale" arrows between steps */}
+      {STEPS.slice(1).map((step, i) => (
+        <ScaleArrow
+          key={`arrow-${i}`}
+          fromX={STEPS[i].x}
+          fromY={STEPS[i].y}
+          toX={step.x}
+          toY={step.y}
+          startFrame={ARROW_START_FRAMES[i]}
+          dramatic={i === 3}
+        />
+      ))}
 
-            {/* Step platform */}
-            <StaircaseStep
-              x={step.x}
-              y={step.y}
-              localFrame={localFrame}
-            />
-
-            {/* Abstraction icon */}
-            <AbstractionIcon
-              type={step.iconType}
-              x={step.x}
-              y={step.y}
-              color={step.color}
-              localFrame={localFrame}
-              isActive={step.isActive}
-              glowFrame={frame - ANIM.STEP5_GLOW_START}
-            />
-
-            {/* Step label */}
-            <StepLabel
-              text={step.label}
-              decade={step.decade}
-              x={step.x}
-              y={step.y}
-              color={step.color}
-              localFrame={localFrame}
-              isActive={step.isActive}
-            />
-          </React.Fragment>
-        );
-      })}
-
-      {/* Step 5 pulsing glow */}
+      {/* Pulsing glow + particles on step 5 */}
       <PulsingGlow
         x={STEPS[4].x}
         y={STEPS[4].y}
-        startFrame={ANIM.STEP5_GLOW_START}
-      />
-
-      {/* Particle drift on step 5 */}
-      <ParticleDrift
-        x={STEPS[4].x + STEP_WIDTH / 2}
-        y={STEPS[4].y}
-        startFrame={ANIM.PARTICLE_START}
-      />
-
-      {/* Dashed future line from step 5 */}
-      <FutureLine
-        x={STEPS[4].x + STEP_WIDTH}
-        y={STEPS[4].y - 80}
-        frame={frame}
+        startFrame={240}
       />
     </AbsoluteFill>
   );
 };
 
-// Perspective grid sub-component
+// Perspective grid: faint lines converging toward upper-right
 const PerspectiveGrid: React.FC<{ opacity: number }> = ({ opacity }) => {
   if (opacity <= 0) return null;
 
-  const lines: React.ReactNode[] = [];
-  const vanishX = 1600;
-  const vanishY = 100;
+  // Vanish point upper-right
+  const vpX = 1600;
+  const vpY = 100;
 
-  // Horizontal guide lines
-  for (let i = 0; i < 8; i++) {
-    const y = 200 + i * 120;
-    lines.push(
+  // Horizontal grid lines
+  const hLines = Array.from({ length: 12 }).map((_, i) => {
+    const y = 200 + i * 80;
+    return (
       <line
-        key={`h${i}`}
+        key={`h-${i}`}
         x1={0}
         y1={y}
         x2={1920}
         y2={y}
-        stroke={GRID_COLOR}
+        stroke={COLORS.gridLine}
         strokeWidth={0.5}
         opacity={opacity}
       />
     );
-  }
+  });
 
   // Converging lines toward vanish point
-  for (let i = 0; i < 6; i++) {
-    const startX = i * 350;
-    lines.push(
+  const cLines = Array.from({ length: 10 }).map((_, i) => {
+    const startX = i * 200;
+    const startY = 1080;
+    return (
       <line
-        key={`v${i}`}
+        key={`c-${i}`}
         x1={startX}
-        y1={1080}
-        x2={vanishX}
-        y2={vanishY}
-        stroke={GRID_COLOR}
+        y1={startY}
+        x2={vpX}
+        y2={vpY}
+        stroke={COLORS.gridLine}
         strokeWidth={0.5}
         opacity={opacity * 0.5}
       />
     );
-  }
+  });
 
   return (
     <svg
-      width={1920}
-      height={1080}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: 1920,
+        height: 1080,
+        pointerEvents: 'none',
+      }}
     >
-      {lines}
-    </svg>
-  );
-};
-
-// Step label sub-component
-interface StepLabelProps {
-  text: string;
-  decade: string;
-  x: number;
-  y: number;
-  color: string;
-  localFrame: number;
-  isActive?: boolean;
-}
-
-const StepLabel: React.FC<StepLabelProps> = ({
-  text,
-  decade,
-  x,
-  y,
-  color,
-  localFrame,
-  isActive,
-}) => {
-  const labelDelay = ANIM.STEP_DRAW_DURATION + 5;
-  const labelOpacity = interpolate(
-    localFrame,
-    [labelDelay, labelDelay + ANIM.LABEL_FADE_DURATION],
-    [0, isActive ? 0.7 : 0.5],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
-
-  const decadeOpacity = interpolate(
-    localFrame,
-    [labelDelay + 5, labelDelay + 5 + ANIM.LABEL_FADE_DURATION],
-    [0, isActive ? 0.4 : 0.3],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
-  if (labelOpacity <= 0) return null;
-
-  const decadeColor = isActive ? ACTIVE_COLOR : "#475569";
-
-  return (
-    <>
-      <div
-        style={{
-          position: "absolute",
-          left: x + 80,
-          top: y - 75,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 14,
-          fontWeight: isActive ? 600 : 400,
-          color,
-          opacity: labelOpacity,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {text}
-      </div>
-      <div
-        style={{
-          position: "absolute",
-          left: x + 80,
-          top: y - 55,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 10,
-          color: decadeColor,
-          opacity: decadeOpacity,
-          whiteSpace: "nowrap",
-        }}
-      >
-        {decade}
-      </div>
-    </>
-  );
-};
-
-// Dashed future line from step 5
-const FutureLine: React.FC<{ x: number; y: number; frame: number }> = ({
-  x,
-  y,
-  frame,
-}) => {
-  const startFrame = ANIM.HOLD_START;
-  const opacity = interpolate(
-    frame,
-    [startFrame, startFrame + 30],
-    [0, 0.2],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
-
-  if (opacity <= 0) return null;
-
-  return (
-    <svg
-      width={300}
-      height={100}
-      style={{ position: "absolute", left: x, top: y }}
-    >
-      <line
-        x1={0}
-        y1={50}
-        x2={250}
-        y2={10}
-        stroke={ACTIVE_COLOR}
-        strokeWidth={1.5}
-        strokeDasharray="6 4"
-        opacity={opacity}
-      />
-      {/* Small arrow at end */}
-      <polygon
-        points="250,10 242,8 244,16"
-        fill={ACTIVE_COLOR}
-        opacity={opacity}
-      />
+      {hLines}
+      {cLines}
     </svg>
   );
 };

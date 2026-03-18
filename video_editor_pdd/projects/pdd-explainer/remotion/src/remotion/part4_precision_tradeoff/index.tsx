@@ -12,7 +12,7 @@ import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "../08_prompt_code_sp
 
 export const Part4PrecisionTradeoffSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 572.812541;
+  const offsetSeconds = 573.2392090000001;
   const durationSeconds = 112.000667;
 
   return (

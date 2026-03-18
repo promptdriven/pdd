@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame is sampled at 91.7% progress (frame 329/360), well into Phase 8 (Hold on complete split, frames 300-360). The split-screen layout, color grading (warm amber left, cool blue right), panel headers ('1960' and 'NOW'), and center divider are all correctly rendered. However, two categories of elements that should be fully visible at this point are entirely absent: (1) The bottom captions — 'The economics made it rational.' (left panel, ~y:920) and 'Until now, the economics made it rational.' (right panel, ~y:920) — which should have faded in during frames 200-260 and be held through frame 360. (2) The crossed-out icons — darning needle icon on the left and patch icon on the right — which should have appeared during frames 260-300 and be held through frame 360. Both elements are specified as key visual payoff elements in the hold phase.

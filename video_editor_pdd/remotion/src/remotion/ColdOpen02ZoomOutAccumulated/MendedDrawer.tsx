@@ -1,112 +1,120 @@
 import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import { interpolate, Easing, useCurrentFrame } from "remotion";
 import {
+  STITCH_AMBER,
   DRAWER_BG,
-  DRAWER_BORDER,
-  GARMENT_STAGGER_FRAMES,
-  STITCH_COLOR,
-  STITCH_OPACITY,
-  GARMENT_COLORS,
-  ZOOM_START_FRAME,
+  GARMENT_SOCK,
+  GARMENT_SHIRT,
+  GARMENT_TROUSER,
 } from "./constants";
 
-// Deterministic pseudo-random
-const pseudoRandom = (seed: number): number => {
-  const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 9301 + 49297) * 49297;
   return x - Math.floor(x);
-};
+}
 
 interface GarmentItem {
   x: number;
   y: number;
   width: number;
   height: number;
-  color: string;
   type: "sock" | "shirt" | "trouser";
   rotation: number;
+  seed: number;
 }
 
-// Generate 47 mended garment items in a drawer layout
-const generateGarments = (): GarmentItem[] => {
+function generateGarments(): GarmentItem[] {
   const items: GarmentItem[] = [];
-  const drawerWidth = 800;
-  const drawerHeight = 700;
-  const offsetX = (958 - drawerWidth) / 2;
-  const offsetY = (1080 - drawerHeight) / 2 + 40;
+  const types: Array<"sock" | "shirt" | "trouser"> = [
+    "sock",
+    "shirt",
+    "trouser",
+  ];
 
-  for (let i = 0; i < 47; i++) {
-    const row = Math.floor(i / 7);
-    const col = i % 7;
-    const types: Array<"sock" | "shirt" | "trouser"> = ["sock", "shirt", "trouser"];
-    const type = types[Math.floor(pseudoRandom(i + 50) * 3)];
+  // Place 47 garments in a roughly grid-like but organic layout
+  const cols = 7;
+  const rows = 7;
+  const cellW = 120;
+  const cellH = 100;
+  let count = 0;
 
-    let w: number, h: number;
-    if (type === "sock") {
-      w = 50 + pseudoRandom(i + 10) * 20;
-      h = 70 + pseudoRandom(i + 20) * 20;
-    } else if (type === "shirt") {
-      w = 80 + pseudoRandom(i + 30) * 20;
-      h = 60 + pseudoRandom(i + 40) * 20;
-    } else {
-      w = 55 + pseudoRandom(i + 60) * 15;
-      h = 90 + pseudoRandom(i + 70) * 20;
+  for (let r = 0; r < rows && count < 47; r++) {
+    for (let c = 0; c < cols && count < 47; c++) {
+      const seed = count * 31 + 11;
+      const rand = seededRandom(seed);
+      const type = types[count % 3];
+
+      // Slight random offset within the cell for organic look
+      const offsetX = (seededRandom(seed + 1) - 0.5) * 20;
+      const offsetY = (seededRandom(seed + 2) - 0.5) * 16;
+
+      const baseW =
+        type === "sock" ? 50 : type === "shirt" ? 80 : 65;
+      const baseH =
+        type === "sock" ? 30 : type === "shirt" ? 60 : 70;
+
+      items.push({
+        x: c * cellW + 20 + offsetX,
+        y: r * cellH + 15 + offsetY,
+        width: baseW + seededRandom(seed + 3) * 15,
+        height: baseH + seededRandom(seed + 4) * 10,
+        type,
+        rotation: (seededRandom(seed + 5) - 0.5) * 12,
+        seed,
+      });
+      count++;
     }
-
-    const colorIndex = Math.floor(pseudoRandom(i + 80) * GARMENT_COLORS.length);
-    const jitterX = (pseudoRandom(i + 90) - 0.5) * 16;
-    const jitterY = (pseudoRandom(i + 100) - 0.5) * 12;
-    const rotation = (pseudoRandom(i + 110) - 0.5) * 12;
-
-    items.push({
-      x: offsetX + col * (drawerWidth / 7) + (drawerWidth / 7 - w) / 2 + jitterX,
-      y: offsetY + row * (drawerHeight / 7) + (drawerHeight / 7 - h) / 2 + jitterY,
-      width: w,
-      height: h,
-      color: GARMENT_COLORS[colorIndex],
-      type,
-      rotation,
-    });
   }
-
   return items;
+}
+
+const GARMENTS = generateGarments();
+
+const garmentColor = (type: "sock" | "shirt" | "trouser") => {
+  switch (type) {
+    case "sock":
+      return GARMENT_SOCK;
+    case "shirt":
+      return GARMENT_SHIRT;
+    case "trouser":
+      return GARMENT_TROUSER;
+  }
 };
 
-const garments = generateGarments();
+interface StitchPatternProps {
+  width: number;
+  height: number;
+}
 
-const StitchMarks: React.FC<{ width: number; height: number }> = ({
-  width,
-  height,
-}) => {
-  // Draw crosshatch stitch lines
+const StitchPattern: React.FC<StitchPatternProps> = ({ width, height }) => {
+  // Cross-hatch stitch marks
   const lines: React.ReactNode[] = [];
-  const spacing = 10;
-  for (let i = 0; i < Math.floor(width / spacing); i++) {
-    const x = i * spacing + 4;
+  const step = 8;
+  for (let i = 0; i < Math.max(width, height); i += step) {
+    // Diagonal one way
     lines.push(
       <line
-        key={`v${i}`}
-        x1={x}
-        y1={2}
-        x2={x + 4}
-        y2={height - 2}
-        stroke={STITCH_COLOR}
+        key={`a${i}`}
+        x1={i}
+        y1={0}
+        x2={i + 12}
+        y2={12}
+        stroke={STITCH_AMBER}
         strokeWidth={0.8}
-        opacity={STITCH_OPACITY}
+        opacity={0.3}
       />
     );
-  }
-  for (let i = 0; i < Math.floor(height / spacing); i++) {
-    const y = i * spacing + 4;
+    // Diagonal other way
     lines.push(
       <line
-        key={`h${i}`}
-        x1={2}
-        y1={y}
-        x2={width - 2}
-        y2={y + 4}
-        stroke={STITCH_COLOR}
+        key={`b${i}`}
+        x1={i + 12}
+        y1={0}
+        x2={i}
+        y2={12}
+        stroke={STITCH_AMBER}
         strokeWidth={0.8}
-        opacity={STITCH_OPACITY}
+        opacity={0.3}
       />
     );
   }
@@ -115,25 +123,132 @@ const StitchMarks: React.FC<{ width: number; height: number }> = ({
       width={width}
       height={height}
       style={{ position: "absolute", top: 0, left: 0 }}
+      viewBox={`0 0 ${width} ${height}`}
     >
       {lines}
     </svg>
   );
 };
 
-const GarmentTile: React.FC<{
+interface MendedGarmentProps {
   item: GarmentItem;
-  index: number;
-  revealProgress: number;
-}> = ({ item, index, revealProgress }) => {
+  revealFrame: number;
+}
+
+const MendedGarment: React.FC<MendedGarmentProps> = ({
+  item,
+  revealFrame,
+}) => {
   const frame = useCurrentFrame();
-  const staggerDelay = index * GARMENT_STAGGER_FRAMES;
-  const itemProgress = interpolate(
-    revealProgress,
-    [staggerDelay / 200, Math.min(1, (staggerDelay + 40) / 200)],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+
+  const opacity = interpolate(frame, [revealFrame, revealFrame + 15], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+
+  const scale = interpolate(
+    frame,
+    [revealFrame, revealFrame + 15],
+    [0.5, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
+
+  const color = garmentColor(item.type);
+
+  // Different shapes per garment type
+  const shape =
+    item.type === "sock" ? (
+      // Sock: rounded rectangle
+      <div
+        style={{
+          width: item.width,
+          height: item.height,
+          backgroundColor: color,
+          borderRadius: "12px 12px 20px 20px",
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        <StitchPattern width={item.width} height={item.height} />
+        {/* Darning patch circle */}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 4,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: item.width * 0.4,
+            height: item.height * 0.5,
+            borderRadius: "50%",
+            border: `1.5px solid ${STITCH_AMBER}`,
+            opacity: 0.5,
+          }}
+        />
+      </div>
+    ) : item.type === "shirt" ? (
+      // Shirt: wider rectangle with button dots
+      <div
+        style={{
+          width: item.width,
+          height: item.height,
+          backgroundColor: color,
+          borderRadius: 4,
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        <StitchPattern width={item.width} height={item.height} />
+        {/* Button line */}
+        {[0.2, 0.4, 0.6, 0.8].map((pct, i) => (
+          <div
+            key={i}
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: `${pct * 100}%`,
+              width: 4,
+              height: 4,
+              borderRadius: "50%",
+              backgroundColor: STITCH_AMBER,
+              opacity: 0.5,
+              transform: "translateX(-50%)",
+            }}
+          />
+        ))}
+      </div>
+    ) : (
+      // Trousers: tall rectangle
+      <div
+        style={{
+          width: item.width,
+          height: item.height,
+          backgroundColor: color,
+          borderRadius: "4px 4px 2px 2px",
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        <StitchPattern width={item.width} height={item.height} />
+        {/* Knee reinforcement */}
+        <div
+          style={{
+            position: "absolute",
+            top: item.height * 0.55,
+            left: 4,
+            right: 4,
+            height: item.height * 0.2,
+            border: `1px solid ${STITCH_AMBER}`,
+            borderRadius: 3,
+            opacity: 0.4,
+          }}
+        />
+      </div>
+    );
 
   return (
     <div
@@ -141,59 +256,57 @@ const GarmentTile: React.FC<{
         position: "absolute",
         left: item.x,
         top: item.y,
-        width: item.width,
-        height: item.height,
-        backgroundColor: item.color,
-        borderRadius: item.type === "sock" ? "40% 40% 20% 20%" : 4,
-        opacity: itemProgress,
-        transform: `rotate(${item.rotation}deg) scale(${interpolate(itemProgress, [0, 1], [0.7, 1])})`,
-        boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-        overflow: "hidden",
+        opacity,
+        transform: `scale(${scale}) rotate(${item.rotation}deg)`,
+        transformOrigin: "center center",
       }}
     >
-      {/* Visible stitch marks on each garment */}
-      <StitchMarks width={item.width} height={item.height} />
+      {shape}
     </div>
   );
 };
 
-export const MendedDrawer: React.FC<{ revealProgress: number }> = ({
-  revealProgress,
+interface MendedDrawerProps {
+  revealStartFrame: number;
+}
+
+export const MendedDrawer: React.FC<MendedDrawerProps> = ({
+  revealStartFrame,
 }) => {
-  const drawerWidth = 840;
-  const drawerHeight = 740;
-  const offsetX = (958 - drawerWidth) / 2;
-  const offsetY = (1080 - drawerHeight) / 2 + 20;
+  const drawerWidth = 860;
+  const drawerHeight = 720;
 
   return (
-    <>
-      {/* Wooden drawer background */}
+    <div
+      style={{
+        position: "absolute",
+        width: drawerWidth,
+        height: drawerHeight,
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+      }}
+    >
+      {/* Drawer background */}
       <div
         style={{
           position: "absolute",
-          left: offsetX,
-          top: offsetY,
-          width: drawerWidth,
-          height: drawerHeight,
+          inset: 0,
           backgroundColor: DRAWER_BG,
-          border: `3px solid ${DRAWER_BORDER}`,
           borderRadius: 8,
-          opacity: interpolate(revealProgress, [0, 0.15], [0, 1], {
-            extrapolateRight: "clamp",
-          }),
-          boxShadow: "inset 0 4px 20px rgba(0,0,0,0.4)",
+          border: "2px solid #5C4333",
+          boxShadow: "inset 0 4px 20px rgba(0,0,0,0.5)",
         }}
       />
 
       {/* Garment items */}
-      {garments.map((item, i) => (
-        <GarmentTile
-          key={i}
+      {GARMENTS.map((item, idx) => (
+        <MendedGarment
+          key={idx}
           item={item}
-          index={i}
-          revealProgress={revealProgress}
+          revealFrame={revealStartFrame + idx * 1.5}
         />
       ))}
-    </>
+    </div>
   );
 };

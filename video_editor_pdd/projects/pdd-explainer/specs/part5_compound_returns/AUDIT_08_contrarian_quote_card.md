@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The narrator reframe subtitle is completely absent from the frame. Per the spec, at frame 289 (96.7% progress, within the 'Hold' phase 280-300), the text 'He’s right — it’s a contrarian bet. But the economics are on our side.' should be visible centered at approximately y:720, with a thin horizontal rule drawn above it and the word 'economics' rendered in blue (#4A90D9). This element should have appeared during frames 210-260 and remained visible through frame 300. All other elements (background, decorative quote mark, quote text with blue/amber highlights, 'spectacularly' in italic amber, and attribution line) are present and correctly rendered. The missing reframe subtitle eliminates the narrator's interpretive callback to Part 1's economics thesis, which is a critical narrative beat.

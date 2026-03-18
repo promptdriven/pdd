@@ -1,73 +1,48 @@
-import React, { useMemo } from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import {
-  CURVE_COLOR,
-  SLIDER_COLOR,
-  ANIM,
-  generateCurvePoints,
-} from './constants';
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import { COLORS, TIMING, curvePoint } from './constants';
 
 export const CurveSlider: React.FC = () => {
   const frame = useCurrentFrame();
-  const points = useMemo(() => generateCurvePoints(200), []);
 
-  // During curve draw (60-180), slider follows the drawing edge
-  const drawProgress = interpolate(
+  // During curve draw (60-180): slider follows drawing edge
+  const drawT = interpolate(
     frame,
-    [ANIM.CURVE_START, ANIM.CURVE_END],
+    [TIMING.curveStart, TIMING.curveEnd],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
   );
 
-  // During slider travel (300-390), slider moves along entire curve
-  const sliderTravelProgress = interpolate(
+  // During slider travel (300-390): slider moves left to right on completed curve
+  const travelT = interpolate(
     frame,
-    [ANIM.SLIDER_START, ANIM.SLIDER_END],
+    [TIMING.sliderStart, TIMING.sliderEnd],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
   );
 
-  // Determine current slider position
-  let sliderX: number;
-  let sliderY: number;
+  let testCount: number;
   let visible = false;
 
-  if (frame >= ANIM.CURVE_START && frame < ANIM.CURVE_END) {
-    // Follow drawing edge
-    const idx = Math.min(
-      Math.floor(drawProgress * (points.length - 1)),
-      points.length - 1
-    );
-    sliderX = points[idx][0];
-    sliderY = points[idx][1];
+  if (frame >= TIMING.curveStart && frame < TIMING.curveEnd) {
+    // Following the draw edge
+    testCount = drawT * 50;
     visible = true;
-  } else if (frame >= ANIM.SLIDER_START && frame <= ANIM.HOLD_END) {
-    // Travel along completed curve
-    const progress =
-      frame < ANIM.SLIDER_END ? sliderTravelProgress : 1;
-    const idx = Math.min(
-      Math.floor(progress * (points.length - 1)),
-      points.length - 1
-    );
-    sliderX = points[idx][0];
-    sliderY = points[idx][1];
+  } else if (frame >= TIMING.curveEnd && frame < TIMING.sliderStart) {
+    // Parked at right end after draw
+    testCount = 50;
     visible = true;
-  } else if (frame >= ANIM.CURVE_END && frame < ANIM.SLIDER_START) {
-    // Hold at end of curve after draw, before travel
-    sliderX = points[points.length - 1][0];
-    sliderY = points[points.length - 1][1];
+  } else if (frame >= TIMING.sliderStart) {
+    // Traveling left to right
+    testCount = travelT * 50;
     visible = true;
+  } else {
+    testCount = 0;
   }
 
   if (!visible) return null;
+
+  const pos = curvePoint(testCount);
 
   return (
     <svg
@@ -76,31 +51,27 @@ export const CurveSlider: React.FC = () => {
       style={{ position: 'absolute', top: 0, left: 0 }}
     >
       <defs>
-        <filter id="slider-glow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
+        <filter id="sliderGlow" x="-100%" y="-100%" width="300%" height="300%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="8" />
         </filter>
       </defs>
 
       {/* Glow */}
       <circle
-        cx={sliderX!}
-        cy={sliderY!}
-        r={8}
-        fill={CURVE_COLOR}
+        cx={pos.x}
+        cy={pos.y}
+        r={16}
+        fill={COLORS.curve}
         fillOpacity={0.3}
-        filter="url(#slider-glow)"
+        filter="url(#sliderGlow)"
       />
 
-      {/* Main slider dot */}
+      {/* Slider dot */}
       <circle
-        cx={sliderX!}
-        cy={sliderY!}
+        cx={pos.x}
+        cy={pos.y}
         r={5}
-        fill={SLIDER_COLOR}
+        fill={COLORS.slider}
       />
     </svg>
   );

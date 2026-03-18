@@ -1,146 +1,163 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import { TITLE, POSITIONS, COLORS, TIMING } from './constants';
+import { Easing, interpolate, useCurrentFrame } from 'remotion';
+import { COLORS, OPACITIES, POSITIONS, TIMING, TYPOGRAPHY } from './constants';
 
-/** Typewriter effect for title line 1 */
-export const TypewriterText: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
+/** Section label "PART 4" */
+export const SectionLabel: React.FC = () => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const localFrame = frame - TIMING.labelFadeStart;
 
-  const text = TITLE.LINE1;
-  const visibleChars =
-    relFrame < 0
-      ? 0
-      : Math.min(
-          text.length,
-          Math.floor(relFrame / TIMING.TITLE_LINE1_CHAR_DELAY) + 1
-        );
-
-  const displayed = text.slice(0, visibleChars);
+  const opacity = interpolate(
+    localFrame,
+    [0, TIMING.labelFadeDuration],
+    [0, OPACITIES.sectionLabel],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+  );
 
   return (
-    <text
-      x={POSITIONS.CENTER_X}
-      y={POSITIONS.TITLE_LINE1_Y}
-      textAnchor="middle"
-      fontFamily="Inter, sans-serif"
-      fontSize={TITLE.FONT_SIZE}
-      fontWeight={TITLE.FONT_WEIGHT}
-      fill={COLORS.TITLE_TEXT}
-      dominantBaseline="central"
+    <div
+      style={{
+        position: 'absolute',
+        top: POSITIONS.sectionLabel.y,
+        left: 0,
+        width: '100%',
+        textAlign: 'center',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: TYPOGRAPHY.sectionLabel.size,
+        fontWeight: TYPOGRAPHY.sectionLabel.weight,
+        letterSpacing: TYPOGRAPHY.sectionLabel.letterSpacing,
+        color: COLORS.sectionLabel,
+        opacity,
+      }}
     >
-      {displayed}
-    </text>
+      PART 4
+    </div>
   );
 };
 
-/** Fade-in + slide-up for title line 2 */
-export const SlideUpText: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
+/** Typewriter "THE PRECISION" */
+export const TitleLine1: React.FC = () => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const text = 'THE PRECISION';
+  const localFrame = frame - TIMING.typewriterStart;
 
-  const opacity =
-    relFrame < 0
-      ? 0
-      : interpolate(relFrame, [0, TIMING.TITLE_LINE2_FADE], [0, 1], {
-          extrapolateRight: 'clamp',
-          easing: Easing.out(Easing.quad),
-        });
+  const charsVisible = localFrame >= 0
+    ? Math.min(Math.floor(localFrame / TIMING.charDelay) + 1, text.length)
+    : 0;
 
-  const translateY =
-    relFrame < 0
-      ? TIMING.TITLE_LINE2_SLIDE
-      : interpolate(
-          relFrame,
-          [0, TIMING.TITLE_LINE2_FADE],
-          [TIMING.TITLE_LINE2_SLIDE, 0],
-          {
-            extrapolateRight: 'clamp',
-            easing: Easing.out(Easing.cubic),
-          }
-        );
+  const displayText = text.slice(0, charsVisible);
+
+  // Even at frame 0 of the typewriter, we show the first character
+  // Opacity is 1 as soon as the sequence starts
+  const opacity = localFrame >= 0 ? 1 : 0;
 
   return (
-    <text
-      x={POSITIONS.CENTER_X + POSITIONS.TITLE_LINE2_OFFSET_X}
-      y={POSITIONS.TITLE_LINE2_Y + translateY}
-      textAnchor="middle"
-      fontFamily="Inter, sans-serif"
-      fontSize={TITLE.FONT_SIZE}
-      fontWeight={TITLE.FONT_WEIGHT}
-      fill={COLORS.TITLE_TEXT}
-      opacity={opacity}
-      dominantBaseline="central"
+    <div
+      style={{
+        position: 'absolute',
+        top: POSITIONS.titleLine1.y,
+        left: 0,
+        width: '100%',
+        textAlign: 'center',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: TYPOGRAPHY.title.size,
+        fontWeight: TYPOGRAPHY.title.weight,
+        color: COLORS.titleText,
+        opacity,
+        whiteSpace: 'pre',
+      }}
     >
-      {TITLE.LINE2}
-    </text>
+      {displayText}
+      {charsVisible < text.length && charsVisible > 0 && (
+        <span
+          style={{
+            display: 'inline-block',
+            width: 3,
+            height: TYPOGRAPHY.title.size * 0.8,
+            backgroundColor: COLORS.titleText,
+            marginLeft: 2,
+            verticalAlign: 'middle',
+            opacity: frame % 16 < 8 ? 0.7 : 0,
+          }}
+        />
+      )}
+    </div>
   );
 };
 
-/** Section label "PART 4" with fade-in */
-export const SectionLabel: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
+/** Horizontal rule between title lines */
+export const HorizontalRule: React.FC = () => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const localFrame = frame - TIMING.ruleStart;
 
-  const opacity =
-    relFrame < 0
-      ? 0
-      : interpolate(relFrame, [0, TIMING.SECTION_LABEL_FADE], [0, 0.5], {
-          extrapolateRight: 'clamp',
-          easing: Easing.out(Easing.quad),
-        });
+  if (localFrame < 0) return null;
 
-  return (
-    <text
-      x={POSITIONS.CENTER_X}
-      y={POSITIONS.SECTION_LABEL_Y}
-      textAnchor="middle"
-      fontFamily="Inter, sans-serif"
-      fontSize={TITLE.LABEL_SIZE}
-      fontWeight={TITLE.LABEL_WEIGHT}
-      fill={COLORS.SECTION_LABEL}
-      opacity={opacity}
-      letterSpacing={TITLE.LABEL_LETTER_SPACING}
-      dominantBaseline="central"
-    >
-      {TITLE.SECTION_LABEL}
-    </text>
+  const drawProgress = interpolate(
+    localFrame,
+    [0, TIMING.ruleDuration],
+    [0, 1],
+    { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.quad) }
   );
-};
 
-/** Horizontal rule that draws from center outward */
-export const HorizontalRule: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
-  const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
-
-  const progress =
-    relFrame < 0
-      ? 0
-      : interpolate(relFrame, [0, TIMING.RULE_DRAW_DURATION], [0, 1], {
-          extrapolateRight: 'clamp',
-          easing: Easing.inOut(Easing.quad),
-        });
-
-  const halfWidth = 100; // 200px / 2
-  const currentHalf = halfWidth * progress;
+  const halfWidth = POSITIONS.rule.halfWidth;
+  const currentHalf = halfWidth * drawProgress;
 
   return (
-    <line
-      x1={POSITIONS.CENTER_X - currentHalf}
-      y1={POSITIONS.RULE_Y}
-      x2={POSITIONS.CENTER_X + currentHalf}
-      y2={POSITIONS.RULE_Y}
-      stroke={COLORS.RULE}
-      strokeWidth={2}
-      opacity={0.5 * progress}
+    <div
+      style={{
+        position: 'absolute',
+        top: POSITIONS.rule.y,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: currentHalf * 2,
+        height: 2,
+        backgroundColor: COLORS.rule,
+        opacity: OPACITIES.rule,
+      }}
     />
+  );
+};
+
+/** Fade-in + slide-up "TRADEOFF" */
+export const TitleLine2: React.FC = () => {
+  const frame = useCurrentFrame();
+  const localFrame = frame - TIMING.tradeoffStart;
+
+  if (localFrame < 0) return null;
+
+  const opacity = interpolate(
+    localFrame,
+    [0, TIMING.tradeoffDuration],
+    [0, 1],
+    { extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+  );
+
+  const translateY = interpolate(
+    localFrame,
+    [0, TIMING.tradeoffDuration],
+    [TIMING.tradeoffSlideDistance, 0],
+    { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+  );
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: POSITIONS.titleLine2.y,
+        left: 0,
+        width: '100%',
+        textAlign: 'center',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: TYPOGRAPHY.title.size,
+        fontWeight: TYPOGRAPHY.title.weight,
+        color: COLORS.titleText,
+        opacity,
+        transform: `translateY(${translateY}px)`,
+        // offset-right 15px
+        paddingLeft: 30,
+      }}
+    >
+      TRADEOFF
+    </div>
   );
 };

@@ -1,109 +1,149 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import { Easing, interpolate, useCurrentFrame } from 'remotion';
 import {
-  MOLD,
-  POSITIONS,
   COLORS,
-  GHOST_LABEL,
+  MOLD,
+  OPACITIES,
+  POSITIONS,
   TIMING,
+  TYPOGRAPHY,
 } from './constants';
 
-export const MoldOutline: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
+export const MoldOutline: React.FC = () => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const localFrame = frame - TIMING.ghostStart;
 
-  const { x: cx, y: cy } = POSITIONS.MOLD_OUTLINE;
-  const { WIDTH, HEIGHT, STROKE_WIDTH, OPACITY, GLOW_BLUR } = MOLD;
+  if (localFrame < 0) return null;
 
-  const halfW = WIDTH / 2;
-  const halfH = HEIGHT / 2;
+  const { x: cx, y: cy } = POSITIONS.moldOutline;
+  const { width, height, strokeWidth } = MOLD;
 
-  // Four wall segments as a rectangular path
-  // Total perimeter = 2*(WIDTH + HEIGHT) = 2*(80+60) = 280
-  const perimeter = 2 * (WIDTH + HEIGHT);
+  const halfW = width / 2;
+  const halfH = height / 2;
 
-  const drawProgress =
-    relFrame < 0
-      ? 0
-      : interpolate(relFrame, [0, TIMING.GHOST_WALL_DURATION], [0, 1], {
+  // Draw progress for 4 wall segments over wallDrawDuration
+  const drawProgress = interpolate(
+    localFrame,
+    [0, TIMING.wallDrawDuration],
+    [0, 1],
+    { extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
+  );
+
+  // Total perimeter
+  const perimeter = 2 * (width + height);
+  const drawnLength = drawProgress * perimeter;
+
+  // Build path segments: top, right, bottom, left
+  const segments = [
+    { length: width, x1: cx - halfW, y1: cy - halfH, x2: cx + halfW, y2: cy - halfH },
+    { length: height, x1: cx + halfW, y1: cy - halfH, x2: cx + halfW, y2: cy + halfH },
+    { length: width, x1: cx + halfW, y1: cy + halfH, x2: cx - halfW, y2: cy + halfH },
+    { length: height, x1: cx - halfW, y1: cy + halfH, x2: cx - halfW, y2: cy - halfH },
+  ];
+
+  let remaining = drawnLength;
+  const lines: React.ReactNode[] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    if (remaining <= 0) break;
+
+    const segDrawn = Math.min(remaining, seg.length);
+    const t = segDrawn / seg.length;
+
+    const endX = seg.x1 + (seg.x2 - seg.x1) * t;
+    const endY = seg.y1 + (seg.y2 - seg.y1) * t;
+
+    lines.push(
+      <line
+        key={`wall-${i}`}
+        x1={seg.x1}
+        y1={seg.y1}
+        x2={endX}
+        y2={endY}
+        stroke={COLORS.moldOutline}
+        strokeWidth={strokeWidth}
+        opacity={OPACITIES.ghostMold}
+        strokeLinecap="square"
+      />
+    );
+
+    remaining -= seg.length;
+  }
+
+  // Steady glow after hold starts (no pulse, just steady)
+  const glowLocalFrame = frame - TIMING.holdStart;
+  const glowOpacity =
+    glowLocalFrame >= 0
+      ? OPACITIES.ghostGlow * 1.5
+      : interpolate(localFrame, [0, TIMING.wallDrawDuration], [0, OPACITIES.ghostGlow], {
           extrapolateRight: 'clamp',
-          easing: Easing.inOut(Easing.cubic),
         });
 
-  // Steady glow after hold
-  const glowOpacity =
-    frame >= TIMING.HOLD_START
-      ? interpolate(
-          (frame - TIMING.HOLD_START) % TIMING.PULSE_CYCLE,
-          [0, TIMING.PULSE_CYCLE / 2, TIMING.PULSE_CYCLE],
-          [MOLD.GLOW_OPACITY, MOLD.GLOW_OPACITY * 2, MOLD.GLOW_OPACITY],
-          { easing: Easing.inOut(Easing.sin) }
-        )
-      : MOLD.GLOW_OPACITY;
-
-  const overallOpacity = relFrame < 0 ? 0 : 1;
-
-  const rectPath = `M ${cx - halfW} ${cy - halfH}
-    L ${cx + halfW} ${cy - halfH}
-    L ${cx + halfW} ${cy + halfH}
-    L ${cx - halfW} ${cy + halfH} Z`;
+  // Label
+  const labelOpacity = interpolate(
+    localFrame,
+    [TIMING.wallDrawDuration - 10, TIMING.wallDrawDuration],
+    [0, OPACITIES.ghostLabel],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
 
   return (
-    <g opacity={overallOpacity}>
+    <svg
+      width={1920}
+      height={1080}
+      style={{ position: 'absolute', top: 0, left: 0 }}
+    >
       <defs>
-        <filter id="mold-glow">
-          <feGaussianBlur stdDeviation={GLOW_BLUR} result="blur" />
+        <filter id="moldGlow">
+          <feGaussianBlur stdDeviation={TIMING.glowBlur} result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
       </defs>
+      {/* Main wall lines */}
+      <g>{lines}</g>
       {/* Glow layer */}
-      <path
-        d={rectPath}
-        fill="none"
-        stroke={COLORS.MOLD_OUTLINE}
-        strokeWidth={STROKE_WIDTH + 4}
-        opacity={glowOpacity * drawProgress}
-        strokeDasharray={perimeter}
-        strokeDashoffset={perimeter * (1 - drawProgress)}
-        filter="url(#mold-glow)"
-      />
-      {/* Main outline */}
-      <path
-        d={rectPath}
-        fill="none"
-        stroke={COLORS.MOLD_OUTLINE}
-        strokeWidth={STROKE_WIDTH}
-        opacity={OPACITY * drawProgress}
-        strokeDasharray={perimeter}
-        strokeDashoffset={perimeter * (1 - drawProgress)}
-        strokeLinejoin="miter"
-      />
-      {/* Ghost label */}
+      <g opacity={glowOpacity} filter="url(#moldGlow)">
+        {lines.map((_, i) => {
+          const seg = segments[i];
+          if (!seg) return null;
+          const segDrawn = Math.min(
+            Math.max(drawnLength - segments.slice(0, i).reduce((a, s) => a + s.length, 0), 0),
+            seg.length
+          );
+          if (segDrawn <= 0) return null;
+          const t = segDrawn / seg.length;
+          return (
+            <line
+              key={`glow-wall-${i}`}
+              x1={seg.x1}
+              y1={seg.y1}
+              x2={seg.x1 + (seg.x2 - seg.x1) * t}
+              y2={seg.y1 + (seg.y2 - seg.y1) * t}
+              stroke={COLORS.moldOutline}
+              strokeWidth={strokeWidth + 2}
+              opacity={0.3}
+              strokeLinecap="square"
+            />
+          );
+        })}
+      </g>
+      {/* Label */}
       <text
         x={cx}
         y={cy + halfH + 24}
         textAnchor="middle"
+        fill={COLORS.moldOutline}
+        opacity={labelOpacity}
         fontFamily="Inter, sans-serif"
-        fontSize={GHOST_LABEL.FONT_SIZE}
+        fontSize={TYPOGRAPHY.ghostLabel.size}
         fontWeight={600}
-        fill={COLORS.MOLD_OUTLINE}
-        opacity={
-          GHOST_LABEL.OPACITY *
-          (relFrame > 0
-            ? interpolate(relFrame, [0, 20], [0, 1], {
-                extrapolateRight: 'clamp',
-              })
-            : 0)
-        }
-        letterSpacing={2}
       >
-        {MOLD.LABEL}
+        WALLS ONLY
       </text>
-    </g>
+    </svg>
   );
 };

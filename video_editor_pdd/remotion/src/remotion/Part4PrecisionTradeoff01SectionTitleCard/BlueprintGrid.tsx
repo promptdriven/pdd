@@ -1,49 +1,65 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
-import { CANVAS, GRID } from './constants';
+import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion';
+import { CANVAS, COLORS, OPACITIES, TIMING } from './constants';
 
-export const BlueprintGrid: React.FC<{ opacity: number }> = ({ opacity }) => {
-  const { SPACING, COLOR } = GRID;
-  const lines: React.ReactNode[] = [];
+export const BlueprintGrid: React.FC = () => {
+  const frame = useCurrentFrame();
+  const spacing = 60;
 
-  // Vertical lines
-  for (let x = 0; x <= CANVAS.WIDTH; x += SPACING) {
-    lines.push(
+  const bgOpacity = interpolate(frame, [0, TIMING.bgFadeEnd], [0, 1], {
+    extrapolateRight: 'clamp',
+  });
+
+  const gridOpacity = interpolate(frame, [0, TIMING.bgFadeEnd], [0, OPACITIES.blueprintGrid], {
+    extrapolateRight: 'clamp',
+  });
+
+  const verticalLines: React.ReactNode[] = [];
+  const horizontalLines: React.ReactNode[] = [];
+
+  for (let x = 0; x <= CANVAS.WIDTH; x += spacing) {
+    verticalLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
         y2={CANVAS.HEIGHT}
-        stroke={COLOR}
+        stroke={COLORS.blueprintGrid}
         strokeWidth={0.5}
       />
     );
   }
 
-  // Horizontal lines
-  for (let y = 0; y <= CANVAS.HEIGHT; y += SPACING) {
-    lines.push(
+  for (let y = 0; y <= CANVAS.HEIGHT; y += spacing) {
+    horizontalLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
         x2={CANVAS.WIDTH}
         y2={y}
-        stroke={COLOR}
+        stroke={COLORS.blueprintGrid}
         strokeWidth={0.5}
       />
     );
   }
 
   return (
-    <AbsoluteFill style={{ opacity: GRID.OPACITY * opacity }}>
+    <AbsoluteFill>
+      <AbsoluteFill
+        style={{
+          backgroundColor: COLORS.background,
+          opacity: bgOpacity,
+        }}
+      />
       <svg
         width={CANVAS.WIDTH}
         height={CANVAS.HEIGHT}
-        viewBox={`0 0 ${CANVAS.WIDTH} ${CANVAS.HEIGHT}`}
+        style={{ opacity: gridOpacity, position: 'absolute' }}
       >
-        {lines}
+        {verticalLines}
+        {horizontalLines}
       </svg>
     </AbsoluteFill>
   );

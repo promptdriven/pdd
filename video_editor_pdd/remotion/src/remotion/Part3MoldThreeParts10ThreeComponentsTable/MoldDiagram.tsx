@@ -1,209 +1,241 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { AMBER, BLUE, GREEN, TEXT_PRIMARY, TIMING } from './constants';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { AMBER, BLUE, GREEN, TEXT_PRIMARY, TIMING } from "./constants";
 
 /**
- * MoldDiagram — renders the cross-section mold with three glowing regions
- * and a flow animation (text particles → grounding → walls → code output).
- * Slides left and shrinks at TIMING.MOLD_SLIDE_START.
+ * Cross-section mold diagram showing all three PDD components:
+ * - Amber walls (Tests)
+ * - Blue nozzle (Prompt)
+ * - Green cavity fill (Grounding)
+ *
+ * Animates: starts centered at full scale, then slides left and shrinks.
  */
 export const MoldDiagram: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Slide + scale transition
-  const slideProgress = interpolate(
+  // Position & scale animation (frames 60-100)
+  const centerX = interpolate(
     frame,
-    [TIMING.MOLD_SLIDE_START, TIMING.MOLD_SLIDE_END],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
+    [TIMING.moldSlideStart, TIMING.moldSlideEnd],
+    [960, 350],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
   );
-
-  const centerX = interpolate(slideProgress, [0, 1], [960, 350]);
   const centerY = 500;
-  const scale = interpolate(slideProgress, [0, 1], [1, 0.5]);
-
-  // Flow animation — cycles through phases
-  const flowPhase = interpolate(
-    frame % 90,
-    [0, 30, 60, 90],
-    [0, 1, 2, 3],
-    { extrapolateRight: 'clamp' }
+  const scale = interpolate(
+    frame,
+    [TIMING.moldSlideStart, TIMING.moldSlideEnd],
+    [1, 0.5],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
   );
 
   // Glow pulse for all regions
   const glowPulse = interpolate(
-    Math.sin(frame * 0.08),
-    [-1, 1],
-    [0.6, 1.0]
+    frame % 60,
+    [0, 30, 60],
+    [0.6, 1, 0.6],
+    { extrapolateRight: "clamp" }
   );
+
+  // Flow animation progress (loops during first 60 frames, then static)
+  const flowProgress = frame < 60
+    ? interpolate(frame % 30, [0, 30], [0, 1])
+    : 1;
+
+  // After mold slides, keep a subtler flow
+  const postSlideFlow = frame >= TIMING.moldSlideEnd
+    ? interpolate(frame % 60, [0, 60], [0, 1])
+    : 0;
+
+  const activeFlow = frame < TIMING.moldSlideEnd ? flowProgress : postSlideFlow;
 
   return (
     <div
       style={{
-        position: 'absolute',
+        position: "absolute",
         left: centerX,
         top: centerY,
         transform: `translate(-50%, -50%) scale(${scale})`,
-        width: 400,
+        width: 500,
         height: 600,
-        transformOrigin: 'center center',
+        transformOrigin: "center center",
       }}
     >
-      <svg width={400} height={600} viewBox="0 0 400 600">
-        {/* Glow filters */}
+      <svg width={500} height={600} viewBox="0 0 500 600">
+        {/* Outer glow */}
         <defs>
-          <filter id="glow-amber" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="6" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          <filter id="moldGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="8" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
           </filter>
-          <filter id="glow-blue" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="6" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
-          <filter id="glow-green" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="6" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          <filter id="flowGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
           </filter>
         </defs>
 
-        {/* Mold outline */}
+        {/* Mold walls (amber) — left and right boundaries */}
         <rect
-          x={20}
-          y={20}
-          width={360}
-          height={560}
+          x={40}
+          y={100}
+          width={30}
+          height={400}
+          rx={4}
+          fill={AMBER}
+          opacity={glowPulse * 0.7}
+          filter="url(#moldGlow)"
+        />
+        <rect
+          x={430}
+          y={100}
+          width={30}
+          height={400}
+          rx={4}
+          fill={AMBER}
+          opacity={glowPulse * 0.7}
+          filter="url(#moldGlow)"
+        />
+        {/* Wall labels */}
+        <text
+          x={55}
+          y={90}
+          textAnchor="middle"
+          fill={AMBER}
+          fontSize={14}
+          fontFamily="Inter"
+          fontWeight={600}
+          opacity={0.8}
+        >
+          Tests
+        </text>
+        <text
+          x={445}
+          y={90}
+          textAnchor="middle"
+          fill={AMBER}
+          fontSize={14}
+          fontFamily="Inter"
+          fontWeight={600}
+          opacity={0.8}
+        >
+          Tests
+        </text>
+
+        {/* Nozzle (blue) — top funnel */}
+        <path
+          d={`M 200,20 L 300,20 L 280,100 L 220,100 Z`}
+          fill={BLUE}
+          opacity={glowPulse * 0.6}
+          filter="url(#moldGlow)"
+        />
+        <text
+          x={250}
+          y={15}
+          textAnchor="middle"
+          fill={BLUE}
+          fontSize={14}
+          fontFamily="Inter"
+          fontWeight={600}
+          opacity={0.8}
+        >
+          Prompt
+        </text>
+
+        {/* Cavity / Grounding (green) — center fill area */}
+        <rect
+          x={80}
+          y={100}
+          width={340}
+          height={400}
+          rx={8}
+          fill={GREEN}
+          opacity={glowPulse * 0.15}
+        />
+        <rect
+          x={80}
+          y={100}
+          width={340}
+          height={400}
           rx={8}
           fill="none"
-          stroke="#334155"
-          strokeWidth={1}
-          opacity={0.3}
-        />
-
-        {/* Amber walls (left + right) */}
-        <rect
-          x={20}
-          y={100}
-          width={50}
-          height={400}
-          fill={AMBER}
-          opacity={0.25 * glowPulse}
-          filter="url(#glow-amber)"
-        />
-        <rect
-          x={330}
-          y={100}
-          width={50}
-          height={400}
-          fill={AMBER}
-          opacity={0.25 * glowPulse}
-          filter="url(#glow-amber)"
-        />
-        {/* Wall inner edges */}
-        <line x1={70} y1={100} x2={70} y2={500} stroke={AMBER} strokeWidth={2} opacity={0.7 * glowPulse} />
-        <line x1={330} y1={100} x2={330} y2={500} stroke={AMBER} strokeWidth={2} opacity={0.7 * glowPulse} />
-        {/* Wall labels */}
-        <text x={45} y={300} fill={AMBER} fontSize={11} fontFamily="Inter" fontWeight={600} opacity={0.6}
-          textAnchor="middle" transform="rotate(-90, 45, 300)">
-          TESTS
-        </text>
-        <text x={355} y={300} fill={AMBER} fontSize={11} fontFamily="Inter" fontWeight={600} opacity={0.6}
-          textAnchor="middle" transform="rotate(90, 355, 300)">
-          TESTS
-        </text>
-
-        {/* Blue nozzle (top) */}
-        <path
-          d="M 160 20 L 240 20 L 220 100 L 180 100 Z"
-          fill={BLUE}
-          opacity={0.3 * glowPulse}
-          filter="url(#glow-blue)"
-        />
-        <path
-          d="M 160 20 L 240 20 L 220 100 L 180 100 Z"
-          fill="none"
-          stroke={BLUE}
-          strokeWidth={1.5}
-          opacity={0.8 * glowPulse}
-        />
-        <text x={200} y={65} fill={BLUE} fontSize={11} fontFamily="Inter" fontWeight={600} opacity={0.7}
-          textAnchor="middle">
-          PROMPT
-        </text>
-
-        {/* Green cavity (center) */}
-        <rect
-          x={80}
-          y={140}
-          width={240}
-          height={280}
-          rx={6}
-          fill={GREEN}
-          opacity={0.12 * glowPulse}
-          filter="url(#glow-green)"
-        />
-        <rect
-          x={80}
-          y={140}
-          width={240}
-          height={280}
-          rx={6}
-          fill="none"
           stroke={GREEN}
-          strokeWidth={1}
-          opacity={0.5 * glowPulse}
+          strokeWidth={2}
+          opacity={glowPulse * 0.5}
+          filter="url(#moldGlow)"
         />
-        <text x={200} y={290} fill={GREEN} fontSize={11} fontFamily="Inter" fontWeight={600} opacity={0.5}
-          textAnchor="middle">
-          GROUNDING
+        <text
+          x={250}
+          y={310}
+          textAnchor="middle"
+          fill={GREEN}
+          fontSize={16}
+          fontFamily="Inter"
+          fontWeight={600}
+          opacity={0.7}
+        >
+          Grounding
         </text>
 
-        {/* Flow particles */}
-        {frame < TIMING.MOLD_SLIDE_END && (
-          <>
-            {/* Input text particles entering nozzle */}
-            {[0, 20, 40, 60].map((offset) => {
-              const p = ((frame + offset) % 90) / 90;
-              const py = interpolate(p, [0, 0.15, 0.3, 0.85, 1], [30, 100, 160, 420, 530]);
-              const px = 200 + Math.sin(p * Math.PI * 3) * 15;
-              const particleOpacity = p < 0.15 ? 0.6 : p < 0.3 ? 0.5 : 0.4;
-              const particleColor = p < 0.15 ? BLUE : p < 0.85 ? GREEN : TEXT_PRIMARY;
-              return (
-                <circle
-                  key={`p-${offset}`}
-                  cx={px}
-                  cy={py}
-                  r={3}
-                  fill={particleColor}
-                  opacity={particleOpacity}
-                />
-              );
-            })}
+        {/* Flow particles — animated dots moving through the mold */}
+        {[0, 0.2, 0.4, 0.6, 0.8].map((offset, i) => {
+          const t = (activeFlow + offset) % 1;
+          // Path: nozzle top → through cavity → bottom
+          const py = 20 + t * 560;
+          const px = 250 + Math.sin(t * Math.PI * 2 + i) * 30;
+          // Color transitions: blue at top → green in middle → white at bottom
+          const color = t < 0.3 ? BLUE : t < 0.7 ? GREEN : TEXT_PRIMARY;
+          const particleOpacity = t < 0.1 || t > 0.95 ? 0.2 : 0.6;
+          return (
+            <circle
+              key={i}
+              cx={px}
+              cy={py}
+              r={4}
+              fill={color}
+              opacity={particleOpacity}
+              filter="url(#flowGlow)"
+            />
+          );
+        })}
 
-            {/* Wall flash when particles near walls */}
-            {flowPhase > 1.5 && (
-              <>
-                <rect x={70} y={250} width={3} height={40} fill={AMBER}
-                  opacity={interpolate(flowPhase, [1.5, 2, 2.5], [0, 0.6, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })} />
-                <rect x={327} y={250} width={3} height={40} fill={AMBER}
-                  opacity={interpolate(flowPhase, [1.5, 2, 2.5], [0, 0.6, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })} />
-              </>
-            )}
-          </>
-        )}
-
-        {/* Output code area (bottom) */}
+        {/* Output slot — code emerges at bottom */}
         <rect
-          x={100}
-          y={500}
+          x={150}
+          y={510}
           width={200}
-          height={60}
+          height={40}
           rx={4}
-          fill="#0F172A"
-          opacity={0.6}
+          fill={TEXT_PRIMARY}
+          opacity={0.1}
         />
-        <text x={200} y={535} fill={TEXT_PRIMARY} fontSize={9} fontFamily="JetBrains Mono, monospace" opacity={0.5}
-          textAnchor="middle">
-          {'{ code output }'}
+        <text
+          x={250}
+          y={535}
+          textAnchor="middle"
+          fill={TEXT_PRIMARY}
+          fontSize={11}
+          fontFamily="monospace"
+          opacity={0.5}
+        >
+          {"{ code output }"}
+        </text>
+
+        {/* Bottom label */}
+        <text
+          x={250}
+          y={580}
+          textAnchor="middle"
+          fill={TEXT_PRIMARY}
+          fontSize={12}
+          fontFamily="Inter"
+          opacity={0.4}
+        >
+          The Mold
         </text>
       </svg>
     </div>

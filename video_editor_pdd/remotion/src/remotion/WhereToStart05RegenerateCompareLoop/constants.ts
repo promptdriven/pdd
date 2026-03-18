@@ -1,50 +1,45 @@
-// Component-level constants for WhereToStart05RegenerateCompareLoop
+// constants.ts — Colors, dimensions, and step configuration
 
-export const DURATION_FRAMES = 180;
-export const FPS = 30;
+export const CANVAS = {
+  width: 1920,
+  height: 1080,
+  background: "#0A0F1A",
+} as const;
 
-// Canvas
-export const WIDTH = 1920;
-export const HEIGHT = 1080;
-export const BG_COLOR = "#0A0F1A";
+export const COLORS = {
+  blue: "#4A90D9",
+  amber: "#D9944A",
+  green: "#5AAA6E",
+  textPrimary: "#E2E8F0",
+  textSecondary: "#64748B",
+  border: "#334155",
+  cardFill: "#0F172A",
+  trackBg: "#1E293B",
+  codeLine: "#CBD5E1",
+} as const;
 
-// Pipeline positions (x, y)
-export const PIPELINE_Y = 420;
-export const STEP_POSITIONS: [number, number][] = [
-  [200, PIPELINE_Y],
-  [540, PIPELINE_Y],
-  [880, PIPELINE_Y],
-  [1220, PIPELINE_Y],
-];
-
-// Colors
-export const BLUE = "#4A90D9";
-export const AMBER = "#D9944A";
-export const GREEN = "#5AAA6E";
-export const DIM_BORDER = "#334155";
-export const DARK_FILL = "#0F172A";
-export const TEXT_LIGHT = "#E2E8F0";
-export const TEXT_DIM = "#64748B";
-export const TRACK_COLOR = "#1E293B";
-export const LINE_COLOR = "#CBD5E1";
-
-// Progress bar
-export const PROGRESS_Y = 620;
-export const PROGRESS_WIDTH = 1100;
-export const PROGRESS_HEIGHT = 6;
-
-// Animation frame ranges
-export const STEP1_START = 20;
-export const STEP2_START = 50;
-export const STEP3_START = 80;
-export const STEP4_START = 110;
-export const LOOP_START = 140;
-export const HOLD_START = 165;
-
-// Step data
-export const STEPS = [
-  { label: "Generate prompt", sublabel: "pdd update" },
-  { label: "Add tests", sublabel: "pdd bug" },
-  { label: "Regenerate", sublabel: "pdd fix" },
-  { label: "Compare", sublabel: "pdd test" },
+export const STEP_POSITIONS = [
+  { x: 200, y: 420 },
+  { x: 540, y: 420 },
+  { x: 880, y: 420 },
+  { x: 1220, y: 420 },
 ] as const;
+
+export const STEPS = [
+  { label: "Generate prompt", sublabel: "pdd update", startFrame: 20 },
+  { label: "Add tests", sublabel: "pdd bug", startFrame: 50 },
+  { label: "Regenerate", sublabel: "pdd fix", startFrame: 80 },
+  { label: "Compare", sublabel: "pdd test", startFrame: 110 },
+] as const;
+
+export const PROGRESS_KEYFRAMES = [
+  { frame: 20, value: 0 },
+  { frame: 50, value: 0.25 },
+  { frame: 80, value: 0.5 },
+  { frame: 110, value: 0.75 },
+  { frame: 140, value: 1.0 },
+  { frame: 155, value: 0.8 },
+] as const;
+
+export const LOOP_ARROW_START_FRAME = 140;
+export const TOTAL_FRAMES = 180;

@@ -2,79 +2,94 @@ import React from 'react';
 import {
   AbsoluteFill,
   useCurrentFrame,
-  Easing,
   interpolate,
-  Sequence,
+  Easing,
 } from 'remotion';
-import {
-  BG_COLOR,
-  LEFT_BG,
-  RIGHT_BG,
-  SPLIT_X,
-  SPLIT_LINE_COLOR,
-  SPLIT_LINE_WIDTH,
-  LEFT_ACCENT,
-  RIGHT_ACCENT,
-  TEXT_COLOR,
-  SPLIT_DRAW_END,
-  CALLOUT_START,
-  CALLOUT_FADE_FRAMES,
-  TOTAL_FRAMES,
-  HEIGHT,
-} from './constants';
+import { COLORS, LAYOUT, GRID, TIMING, FONT } from './constants';
 import { CoordinateGrid } from './CoordinateGrid';
-import { MoldCavity } from './MoldCavity';
+import { PrinterNozzle } from './PrinterNozzle';
+import { MoldCrossSection } from './MoldCrossSection';
+import { FluidFill } from './FluidFill';
 
 export const defaultPart4PrecisionTradeoff02PrinterVsMoldSplitProps = {};
 
 export const Part4PrecisionTradeoff02PrinterVsMoldSplit: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Split line draw animation (vertical line from center outward)
+  // ──────────── SPLIT LINE ────────────
   const splitLineProgress = interpolate(
     frame,
-    [0, SPLIT_DRAW_END],
+    [TIMING.splitStart, TIMING.splitStart + TIMING.splitDuration],
     [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
-  const splitLineHeight = splitLineProgress * HEIGHT;
-  const splitLineTop = (HEIGHT - splitLineHeight) / 2;
 
-  // Panel header fade-in
+  // ──────────── HEADER FADE ────────────
   const headerOpacity = interpolate(
     frame,
-    [5, SPLIT_DRAW_END],
+    [TIMING.headerFadeStart, TIMING.headerFadeStart + TIMING.headerFadeDuration],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+  );
+
+  // ──────────── GRID APPEAR ────────────
+  const gridAppearProgress = interpolate(
+    frame,
+    [TIMING.gridAppearStart, TIMING.gridAppearStart + TIMING.gridAppearDuration],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+  );
+
+  // ──────────── NOZZLE TRAVERSAL / DOT COUNT ────────────
+  const nozzleRawProgress = interpolate(
+    frame,
+    [TIMING.nozzleStart, TIMING.nozzleEnd],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
+  const activeDotCount = Math.round(nozzleRawProgress * GRID.totalPoints);
 
-  // Bottom callout fade
-  const calloutOpacity = interpolate(
+  // ──────────── MOLD WALL DRAW ────────────
+  const wallDrawProgress = interpolate(
     frame,
-    [CALLOUT_START, CALLOUT_START + CALLOUT_FADE_FRAMES],
-    [0, 0.6],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
+    [TIMING.moldWallDrawStart, TIMING.moldWallDrawStart + TIMING.moldWallDrawDuration],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic) }
   );
 
+  // ──────────── FLUID FILL ────────────
+  const fluidProgress = interpolate(
+    frame,
+    [TIMING.fluidStart, TIMING.fluidEnd],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+  );
+
+  // ──────────── CALLOUT FADE ────────────
+  const calloutOpacity = interpolate(
+    frame,
+    [TIMING.calloutFadeStart, TIMING.calloutFadeStart + TIMING.calloutFadeDuration],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+  );
+
+  // Counter display value
+  const counterValue = activeDotCount;
+
+  // Is the nozzle actively traversing?
+  const nozzleVisible = frame >= TIMING.nozzleStart && frame <= TIMING.nozzleEnd;
+
   return (
-    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
-      {/* Left Panel — 3D Printing */}
+    <AbsoluteFill style={{ backgroundColor: COLORS.sceneBg }}>
+      {/* ═══════ LEFT PANEL — 3D PRINTING ═══════ */}
       <div
         style={{
           position: 'absolute',
-          left: 0,
+          left: LAYOUT.leftPanelX,
           top: 0,
-          width: SPLIT_X - SPLIT_LINE_WIDTH / 2,
-          height: HEIGHT,
-          backgroundColor: LEFT_BG,
+          width: LAYOUT.leftPanelWidth,
+          height: LAYOUT.height,
+          backgroundColor: COLORS.leftPanelBg,
           overflow: 'hidden',
         }}
       >
@@ -82,48 +97,89 @@ export const Part4PrecisionTradeoff02PrinterVsMoldSplit: React.FC = () => {
         <div
           style={{
             position: 'absolute',
-            top: 40,
-            left: 0,
+            top: LAYOUT.headerY,
             width: '100%',
             textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            fontWeight: 600,
-            letterSpacing: 2,
-            color: LEFT_ACCENT,
-            opacity: headerOpacity * 0.5,
-            zIndex: 10,
+            fontFamily: FONT.family,
+            fontSize: FONT.headerSize,
+            fontWeight: FONT.headerWeight,
+            letterSpacing: FONT.headerLetterSpacing,
+            color: COLORS.leftHeader,
+            opacity: 0.5 * headerOpacity,
           }}
         >
           3D PRINTING
         </div>
 
-        {/* Coordinate Grid with nozzle */}
-        <CoordinateGrid />
+        {/* Coordinate grid + active dots */}
+        <CoordinateGrid
+          gridAppearProgress={gridAppearProgress}
+          activeDotCount={activeDotCount}
+        />
+
+        {/* Printer nozzle */}
+        <PrinterNozzle
+          activeDotCount={activeDotCount}
+          visible={nozzleVisible}
+        />
+
+        {/* Counter */}
+        <div
+          style={{
+            position: 'absolute',
+            top: LAYOUT.counterY,
+            width: '100%',
+            textAlign: 'center',
+            fontFamily: FONT.family,
+            fontSize: FONT.counterSize,
+            color: COLORS.leftHeader,
+          }}
+        >
+          Points specified:{' '}
+          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {counterValue}
+          </span>
+        </div>
+
+        {/* Annotation */}
+        <div
+          style={{
+            position: 'absolute',
+            top: LAYOUT.annotationY,
+            width: '100%',
+            textAlign: 'center',
+            fontFamily: FONT.family,
+            fontSize: FONT.annotationSize,
+            color: COLORS.leftAnnotation,
+            opacity: 0.4,
+          }}
+        >
+          Every point must be specified
+        </div>
       </div>
 
-      {/* Split divider line */}
+      {/* ═══════ SPLIT DIVIDER ═══════ */}
       <div
         style={{
           position: 'absolute',
-          left: SPLIT_X - SPLIT_LINE_WIDTH / 2,
-          top: splitLineTop,
-          width: SPLIT_LINE_WIDTH,
-          height: splitLineHeight,
-          backgroundColor: SPLIT_LINE_COLOR,
+          left: LAYOUT.splitX - 1,
+          top: 0,
+          width: LAYOUT.splitLineWidth,
+          height: LAYOUT.height * splitLineProgress,
+          backgroundColor: COLORS.splitLine,
           opacity: 0.25,
         }}
       />
 
-      {/* Right Panel — Injection Molding */}
+      {/* ═══════ RIGHT PANEL — INJECTION MOLDING ═══════ */}
       <div
         style={{
           position: 'absolute',
-          left: SPLIT_X + SPLIT_LINE_WIDTH / 2,
+          left: LAYOUT.rightPanelX,
           top: 0,
-          width: 1920 - SPLIT_X - SPLIT_LINE_WIDTH / 2,
-          height: HEIGHT,
-          backgroundColor: RIGHT_BG,
+          width: LAYOUT.rightPanelWidth,
+          height: LAYOUT.height,
+          backgroundColor: COLORS.rightPanelBg,
           overflow: 'hidden',
         }}
       >
@@ -131,47 +187,78 @@ export const Part4PrecisionTradeoff02PrinterVsMoldSplit: React.FC = () => {
         <div
           style={{
             position: 'absolute',
-            top: 40,
-            left: 0,
+            top: LAYOUT.headerY,
             width: '100%',
             textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            fontWeight: 600,
-            letterSpacing: 2,
-            color: RIGHT_ACCENT,
-            opacity: headerOpacity * 0.5,
-            zIndex: 10,
+            fontFamily: FONT.family,
+            fontSize: FONT.headerSize,
+            fontWeight: FONT.headerWeight,
+            letterSpacing: FONT.headerLetterSpacing,
+            color: COLORS.rightHeader,
+            opacity: 0.5 * headerOpacity,
           }}
         >
           INJECTION MOLDING
         </div>
 
-        {/* Mold with fluid fill */}
-        <MoldCavity />
-      </div>
+        {/* Mold cross-section (walls) */}
+        <MoldCrossSection wallDrawProgress={wallDrawProgress} />
 
-      {/* Bottom callout */}
-      <Sequence from={CALLOUT_START} durationInFrames={TOTAL_FRAMES - CALLOUT_START}>
+        {/* Fluid fill */}
+        {frame >= TIMING.fluidStart && (
+          <FluidFill fillProgress={fluidProgress} />
+        )}
+
+        {/* Counter (static) */}
         <div
           style={{
             position: 'absolute',
-            bottom: 100,
-            left: 0,
-            width: 1920,
+            top: LAYOUT.counterY,
+            width: '100%',
             textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            color: TEXT_COLOR,
-            opacity: calloutOpacity,
+            fontFamily: FONT.family,
+            fontSize: FONT.counterSize,
+            color: COLORS.rightHeader,
           }}
         >
-          Precision through{' '}
-          <span style={{ color: LEFT_ACCENT }}>specification</span>
-          {' '}vs. precision through{' '}
-          <span style={{ color: RIGHT_ACCENT }}>constraint</span>
+          Walls defined: 4
         </div>
-      </Sequence>
+
+        {/* Annotation */}
+        <div
+          style={{
+            position: 'absolute',
+            top: LAYOUT.annotationY,
+            width: '100%',
+            textAlign: 'center',
+            fontFamily: FONT.family,
+            fontSize: FONT.annotationSize,
+            color: COLORS.rightAnnotation,
+            opacity: 0.4,
+          }}
+        >
+          Precision comes from the walls
+        </div>
+      </div>
+
+      {/* ═══════ BOTTOM CALLOUT ═══════ */}
+      <div
+        style={{
+          position: 'absolute',
+          top: LAYOUT.calloutY,
+          width: LAYOUT.width,
+          textAlign: 'center',
+          fontFamily: FONT.family,
+          fontSize: FONT.calloutSize,
+          color: COLORS.calloutText,
+          opacity: 0.6 * calloutOpacity,
+        }}
+      >
+        Precision through{' '}
+        <span style={{ color: COLORS.calloutSpec }}>specification</span>
+        {' '}vs. precision through{' '}
+        <span style={{ color: COLORS.calloutConstraint }}>constraint</span>
+      </div>
     </AbsoluteFill>
   );
 };

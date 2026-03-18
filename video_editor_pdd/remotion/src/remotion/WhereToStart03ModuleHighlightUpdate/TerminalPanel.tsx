@@ -1,115 +1,106 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
-  TERMINAL_POS,
-  TERMINAL_SIZE,
-  EDITOR_BG,
-  TERMINAL_TEXT,
+  TERMINAL_X,
+  TERMINAL_Y,
+  TERMINAL_W,
+  TERMINAL_H,
+  TERMINAL_BG,
+  TEXT_DIM,
   SUCCESS_GREEN,
-  TERMINAL_CMD,
+  TERMINAL_COMMAND,
   TERMINAL_ANALYZING,
   TERMINAL_SUCCESS,
 } from './constants';
 
-/**
- * Bottom-right terminal panel showing the pdd update command,
- * analysis progress, and success message.
- */
-export const TerminalPanel: React.FC<{ startFrame: number }> = ({ startFrame }) => {
+const TerminalPanel: React.FC<{ startFrame: number }> = ({ startFrame }) => {
   const frame = useCurrentFrame();
-  const relFrame = frame - startFrame;
+  const relativeFrame = frame - startFrame;
 
-  if (relFrame < 0) return null;
+  if (relativeFrame < 0) return null;
 
-  // Terminal container fades in over 15 frames
-  const containerOpacity = interpolate(relFrame, [0, 15], [0, 1], {
+  // Terminal fades in over 15 frames
+  const terminalOpacity = interpolate(relativeFrame, [0, 15], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  // Typing the command starts at relFrame 20 (absolute frame 40)
-  // 3 chars per frame => total chars / 3 = frames needed
+  // Command typing starts at relative frame 20
+  // 3 characters per frame, total chars in command
   const typingStart = 20;
-  const charsPerFrame = 3;
-  const typingRelFrame = relFrame - typingStart;
-  const visibleChars = typingRelFrame > 0
-    ? Math.min(Math.floor(typingRelFrame * charsPerFrame), TERMINAL_CMD.length)
-    : 0;
-  const typedCommand = TERMINAL_CMD.slice(0, visibleChars);
-  const showCursor = typingRelFrame > 0 && visibleChars < TERMINAL_CMD.length;
+  const typingFrame = relativeFrame - typingStart;
+  const commandChars = typingFrame > 0 ? Math.min(
+    Math.floor(typingFrame * 3),
+    TERMINAL_COMMAND.length,
+  ) : 0;
+  const typedCommand = TERMINAL_COMMAND.substring(0, commandChars);
+  const showCursor = typingFrame >= 0 && commandChars < TERMINAL_COMMAND.length;
 
-  // "Analyzing module..." appears at relFrame 50 (absolute frame 70)
-  const analyzeStart = 50;
-  const analyzeOpacity = interpolate(
-    relFrame,
-    [analyzeStart, analyzeStart + 8],
-    [0, 0.4],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
-  );
+  // "Analyzing module..." appears at relative frame 50
+  const analyzingFrame = relativeFrame - 50;
+  const analyzingOpacity = interpolate(analyzingFrame, [0, 8], [0, 0.4], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
-  // Success message at relFrame 120 (absolute frame 140)
-  const successStart = 120;
-  const successOpacity = interpolate(
-    relFrame,
-    [successStart, successStart + 8],
-    [0, 0.6],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
-  );
+  // Success line appears at relative frame 140
+  const successRelFrame = relativeFrame - 120; // 120 frames after terminal start = frame 140
+  const successOpacity = interpolate(successRelFrame, [0, 8], [0, 0.6], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: TERMINAL_POS.x,
-        top: TERMINAL_POS.y,
-        width: TERMINAL_SIZE.w,
-        height: TERMINAL_SIZE.h,
-        backgroundColor: EDITOR_BG,
-        opacity: containerOpacity,
+        left: TERMINAL_X - TERMINAL_W / 2,
+        top: TERMINAL_Y - TERMINAL_H / 2,
+        width: TERMINAL_W,
+        height: TERMINAL_H,
+        backgroundColor: TERMINAL_BG,
+        opacity: terminalOpacity * 0.85,
         borderRadius: 6,
         padding: '12px 14px',
         display: 'flex',
         flexDirection: 'column',
         gap: 6,
-        boxShadow: '0 2px 12px rgba(0,0,0,0.3)',
+        boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
       }}
     >
       {/* Command line */}
       <div
         style={{
-          fontFamily: 'JetBrains Mono, monospace',
+          fontFamily: '"JetBrains Mono", monospace',
           fontSize: 10,
-          color: TERMINAL_TEXT,
+          color: TEXT_DIM,
           opacity: 0.5,
-          whiteSpace: 'pre',
+          whiteSpace: 'nowrap',
         }}
       >
         {typedCommand}
         {showCursor && (
           <span
             style={{
-              display: 'inline-block',
-              width: 5,
-              height: 12,
-              backgroundColor: TERMINAL_TEXT,
-              opacity: Math.sin(frame * 0.3) > 0 ? 0.6 : 0,
-              marginLeft: 1,
-              verticalAlign: 'middle',
+              opacity: Math.sin(frame * 0.3) > 0 ? 1 : 0,
+              color: TEXT_DIM,
             }}
-          />
+          >
+            ▋
+          </span>
         )}
       </div>
 
       {/* Analyzing line */}
-      {relFrame >= analyzeStart && (
+      {analyzingFrame >= 0 && (
         <div
           style={{
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: '"JetBrains Mono", monospace',
             fontSize: 10,
-            color: TERMINAL_TEXT,
-            opacity: analyzeOpacity,
-            whiteSpace: 'pre',
+            color: TEXT_DIM,
+            opacity: analyzingOpacity,
+            whiteSpace: 'nowrap',
           }}
         >
           {TERMINAL_ANALYZING}
@@ -117,14 +108,14 @@ export const TerminalPanel: React.FC<{ startFrame: number }> = ({ startFrame }) 
       )}
 
       {/* Success line */}
-      {relFrame >= successStart && (
+      {successRelFrame >= 0 && (
         <div
           style={{
-            fontFamily: 'JetBrains Mono, monospace',
+            fontFamily: '"JetBrains Mono", monospace',
             fontSize: 10,
             color: SUCCESS_GREEN,
             opacity: successOpacity,
-            whiteSpace: 'pre',
+            whiteSpace: 'nowrap',
           }}
         >
           {TERMINAL_SUCCESS}

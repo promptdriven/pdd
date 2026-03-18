@@ -1,51 +1,65 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
-import { CANVAS, GRID, COLORS } from './constants';
+import {
+  WIDTH,
+  HEIGHT,
+  GRID_H_SPACING,
+  GRID_V_ACCENT_EVERY,
+  GRID_COLOR,
+  GRID_H_OPACITY,
+  GRID_V_OPACITY,
+} from './constants';
 
-export const LedgerGrid: React.FC = () => {
-  const horizontalLines: React.ReactNode[] = [];
-  const verticalLines: React.ReactNode[] = [];
+/**
+ * Faint ledger-paper grid — horizontal lines at 40px spacing
+ * with slightly brighter vertical accents every 120px.
+ */
+export const LedgerGrid: React.FC<{ opacity: number }> = ({ opacity }) => {
+  const hLines: React.ReactNode[] = [];
+  const vLines: React.ReactNode[] = [];
 
-  for (let y = 0; y <= CANVAS.height; y += GRID.hSpacing) {
-    horizontalLines.push(
+  for (let y = GRID_H_SPACING; y < HEIGHT; y += GRID_H_SPACING) {
+    hLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={CANVAS.width}
+        x2={WIDTH}
         y2={y}
-        stroke={COLORS.gridLine}
+        stroke={GRID_COLOR}
+        strokeOpacity={GRID_H_OPACITY}
         strokeWidth={1}
-        opacity={GRID.hOpacity}
-      />
+      />,
     );
   }
 
-  for (let x = 0; x <= CANVAS.width; x += GRID.vAccentEvery) {
-    verticalLines.push(
+  for (let x = GRID_V_ACCENT_EVERY; x < WIDTH; x += GRID_V_ACCENT_EVERY) {
+    vLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={CANVAS.height}
-        stroke={COLORS.gridLine}
+        y2={HEIGHT}
+        stroke={GRID_COLOR}
+        strokeOpacity={GRID_V_OPACITY}
         strokeWidth={1}
-        opacity={GRID.vOpacity}
-      />
+      />,
     );
   }
 
   return (
-    <AbsoluteFill>
-      <svg
-        width={CANVAS.width}
-        height={CANVAS.height}
-        style={{ position: 'absolute', top: 0, left: 0 }}
-      >
-        {horizontalLines}
-        {verticalLines}
-      </svg>
-    </AbsoluteFill>
+    <svg
+      width={WIDTH}
+      height={HEIGHT}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        opacity,
+      }}
+    >
+      {hLines}
+      {vLines}
+    </svg>
   );
 };

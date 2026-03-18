@@ -3,168 +3,188 @@ import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
   METER_WIDTH,
   METER_HEIGHT,
-  METER_RADIUS,
+  METER_BORDER_RADIUS,
   METER_CENTER_Y,
-  TRACK_FILL,
+  TRACK_BG,
   TRACK_BORDER,
-  SCALE_LABEL_COLOR,
-  FONT_FAMILY,
-  TRACK_FADE_START,
-  TRACK_FADE_DURATION,
-  SCALE_FADE_START,
-  SCALE_FADE_DURATION,
+  SCALE_COLOR,
+  TRACKS_APPEAR,
+  SCALES_APPEAR,
   FILL_START,
   FILL_DURATION,
-  PEAK_PULSE_START,
-  PEAK_PULSE_DURATION,
-  ONGOING_PULSE_START,
-  ONGOING_PULSE_CYCLE,
+  PULSE_START,
+  PULSE_END,
+  HOLD_START,
+  CHALLENGE_START,
 } from "./constants";
 
-type VerticalMeterProps = {
+interface VerticalMeterProps {
   x: number;
   label: string;
   color: string;
-  scaleMarkers: string[];
+  scaleMarkers: readonly string[];
   maxValue: number;
-  valuePrefix: string;
-  valueSuffix: string;
-};
+  unit: string;
+  prefix?: string;
+  iconPath: string; // SVG path data for the icon
+}
 
-export const VerticalMeter: React.FC<VerticalMeterProps> = ({
+// The VerticalMeter is placed inside <Sequence from={TRACKS_APPEAR}>,
+// so useCurrentFrame() is relative to that Sequence start.
+// We offset all global frame references by TRACKS_APPEAR.
+const SEQ_OFFSET = TRACKS_APPEAR;
+
+const VerticalMeter: React.FC<VerticalMeterProps> = ({
   x,
   label,
   color,
   scaleMarkers,
   maxValue,
-  valuePrefix,
-  valueSuffix,
+  unit,
+  prefix = "",
+  iconPath,
 }) => {
   const frame = useCurrentFrame();
+  // Convert to global frame for constants reference
+  const globalFrame = frame + SEQ_OFFSET;
 
-  const meterTop = METER_CENTER_Y - METER_HEIGHT / 2;
-  const meterLeft = x - METER_WIDTH / 2;
-
-  // Track fade-in
+  // ── Track fade-in (global 45-65, local 0-20) ──
   const trackOpacity = interpolate(
-    frame,
-    [TRACK_FADE_START, TRACK_FADE_START + TRACK_FADE_DURATION],
+    globalFrame,
+    [TRACKS_APPEAR, TRACKS_APPEAR + 20],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Scale markers fade-in
+  // ── Scale markers fade-in (global 75-95) ──
   const scaleOpacity = interpolate(
-    frame,
-    [SCALE_FADE_START, SCALE_FADE_START + SCALE_FADE_DURATION],
-    [0, 0.4],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    globalFrame,
+    [SCALES_APPEAR, SCALES_APPEAR + 20],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Fill progress (0 to 1)
+  // ── Fill progress (global 105-225) ──
   const fillProgress = interpolate(
-    frame,
+    globalFrame,
     [FILL_START, FILL_START + FILL_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.bezier(0.42, 0, 0.58, 1) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.bezier(0.42, 0, 0.58, 1),
+    }
   );
 
   const fillHeight = fillProgress * METER_HEIGHT;
-  const currentValue = fillProgress * maxValue;
 
-  // Format the display value
-  const displayValue =
-    valueSuffix === "×"
-      ? `${currentValue.toFixed(1)}${valueSuffix}`
-      : `${valuePrefix}${Math.round(currentValue)}${valueSuffix}`;
+  // ── Current value counter ──
+  const currentValue = Math.round(fillProgress * maxValue);
 
-  // Peak pulse glow
+  // ── Peak pulse (global 225-270) ──
   const peakGlow = interpolate(
-    frame,
-    [
-      PEAK_PULSE_START,
-      PEAK_PULSE_START + PEAK_PULSE_DURATION * 0.4,
-      PEAK_PULSE_START + PEAK_PULSE_DURATION,
-    ],
-    [0, 0.25, 0.08],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    globalFrame,
+    [PULSE_START, PULSE_START + 15, PULSE_END],
+    [0, 0.2, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
   );
 
-  // Ongoing gentle pulse after frame 390
+  // ── Ongoing gentle pulse (global 390-480) ──
   const ongoingPulse =
-    frame >= ONGOING_PULSE_START
-      ? 0.05 *
-        Math.sin(
-          ((frame - ONGOING_PULSE_START) / ONGOING_PULSE_CYCLE) * Math.PI * 2
+    globalFrame >= HOLD_START && globalFrame < CHALLENGE_START
+      ? interpolate(
+          (globalFrame - HOLD_START) % 60,
+          [0, 30, 60],
+          [0, 0.05, 0],
+          { extrapolateRight: "clamp" }
         )
       : 0;
 
-  const totalGlow = peakGlow + ongoingPulse;
+  const glowOpacity = peakGlow + ongoingPulse;
 
-  // Label opacity
-  const labelOpacity = interpolate(
-    frame,
-    [TRACK_FADE_START, TRACK_FADE_START + TRACK_FADE_DURATION],
-    [0, 0.7],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
+  // Positions
+  const trackLeft = x - METER_WIDTH / 2;
+  const trackTop = METER_CENTER_Y;
 
-  // Value opacity (appears as fill starts)
-  const valueOpacity = interpolate(
-    frame,
-    [FILL_START, FILL_START + 15],
-    [0, 0.85],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  // Hex helper for glow alpha
+  const glowHex = (opacity: number) =>
+    Math.round(Math.min(1, Math.max(0, opacity)) * 255)
+      .toString(16)
+      .padStart(2, "0");
 
   return (
-    <div style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%" }}>
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: "100%",
+        height: "100%",
+        opacity: trackOpacity,
+      }}
+    >
+      {/* Icon above meter */}
+      <div
+        style={{
+          position: "absolute",
+          left: x - 16,
+          top: trackTop - 80,
+          width: 32,
+          height: 32,
+          opacity: 0.3 * trackOpacity,
+        }}
+      >
+        <svg viewBox="0 0 24 24" width={32} height={32} fill="none">
+          <path
+            d={iconPath}
+            stroke={color}
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </div>
+
       {/* Label above meter */}
       <div
         style={{
           position: "absolute",
           left: x,
-          top: meterTop - 60,
+          top: trackTop - 40,
           transform: "translateX(-50%)",
-          fontFamily: FONT_FAMILY,
+          fontFamily: "Inter, sans-serif",
           fontSize: 14,
           fontWeight: 600,
-          color,
-          opacity: labelOpacity,
+          color: color,
+          opacity: 0.7 * trackOpacity,
           whiteSpace: "nowrap",
-          textAlign: "center",
         }}
       >
         {label}
       </div>
 
-      {/* Icon above label */}
+      {/* Meter track */}
       <div
         style={{
           position: "absolute",
-          left: x,
-          top: meterTop - 90,
-          transform: "translateX(-50%)",
-          fontSize: 22,
-          opacity: labelOpacity * 0.5,
-          textAlign: "center",
-        }}
-      >
-        {color === "#4A90D9" ? "⊞" : "◈"}
-      </div>
-
-      {/* Meter track background */}
-      <div
-        style={{
-          position: "absolute",
-          left: meterLeft,
-          top: meterTop,
+          left: trackLeft,
+          top: trackTop,
           width: METER_WIDTH,
           height: METER_HEIGHT,
-          borderRadius: METER_RADIUS,
-          backgroundColor: TRACK_FILL,
+          borderRadius: METER_BORDER_RADIUS,
+          backgroundColor: TRACK_BG,
           border: `1px solid ${TRACK_BORDER}`,
-          opacity: trackOpacity,
           overflow: "hidden",
         }}
       >
@@ -176,52 +196,51 @@ export const VerticalMeter: React.FC<VerticalMeterProps> = ({
             left: 0,
             width: "100%",
             height: fillHeight,
-            borderRadius: `0 0 ${METER_RADIUS - 1}px ${METER_RADIUS - 1}px`,
+            borderRadius: `0 0 ${METER_BORDER_RADIUS}px ${METER_BORDER_RADIUS}px`,
             background: `linear-gradient(to top, ${color}88, ${color})`,
-            boxShadow: totalGlow > 0
-              ? `0 0 ${20 + totalGlow * 40}px ${color}${Math.round(totalGlow * 255).toString(16).padStart(2, "0")}`
-              : "none",
-            transition: "box-shadow 0.1s",
+            boxShadow:
+              glowOpacity > 0
+                ? `0 0 20px ${color}${glowHex(glowOpacity)}`
+                : "none",
           }}
         />
+
+        {/* Glow overlay when pulsing */}
+        {glowOpacity > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: 0,
+              left: -10,
+              width: METER_WIDTH + 20,
+              height: fillHeight + 10,
+              borderRadius: METER_BORDER_RADIUS,
+              background: `radial-gradient(ellipse at center bottom, ${color}${glowHex(glowOpacity)}, transparent 70%)`,
+              pointerEvents: "none",
+            }}
+          />
+        )}
       </div>
 
-      {/* Glow overlay on track when pulsing */}
-      {totalGlow > 0.01 && (
-        <div
-          style={{
-            position: "absolute",
-            left: meterLeft - 10,
-            top: meterTop - 10,
-            width: METER_WIDTH + 20,
-            height: METER_HEIGHT + 20,
-            borderRadius: METER_RADIUS + 4,
-            boxShadow: `0 0 ${30 + totalGlow * 60}px ${color}${Math.round(totalGlow * 200).toString(16).padStart(2, "0")}`,
-            pointerEvents: "none",
-            opacity: trackOpacity,
-          }}
-        />
-      )}
-
-      {/* Scale markers (left side of left meter, right side of right meter) */}
+      {/* Scale markers */}
       {scaleMarkers.map((marker, i) => {
         const markerY =
-          meterTop + METER_HEIGHT - (i / (scaleMarkers.length - 1)) * METER_HEIGHT;
-        const isLeft = color === "#4A90D9";
+          trackTop +
+          METER_HEIGHT -
+          (i / (scaleMarkers.length - 1)) * METER_HEIGHT;
         return (
           <div
             key={marker}
             style={{
               position: "absolute",
-              left: isLeft ? meterLeft - 8 : meterLeft + METER_WIDTH + 8,
-              top: markerY,
-              transform: isLeft
-                ? "translate(-100%, -50%)"
-                : "translate(0, -50%)",
-              fontFamily: FONT_FAMILY,
+              left: trackLeft - 65,
+              top: markerY - 8,
+              width: 55,
+              textAlign: "right",
+              fontFamily: "Inter, sans-serif",
               fontSize: 12,
-              color: SCALE_LABEL_COLOR,
-              opacity: scaleOpacity,
+              color: SCALE_COLOR,
+              opacity: 0.4 * scaleOpacity,
               whiteSpace: "nowrap",
             }}
           >
@@ -230,27 +249,50 @@ export const VerticalMeter: React.FC<VerticalMeterProps> = ({
         );
       })}
 
-      {/* Current value readout */}
-      {fillProgress > 0.01 && (
+      {/* Tick marks for scale */}
+      {scaleMarkers.map((marker, i) => {
+        const markerY =
+          trackTop +
+          METER_HEIGHT -
+          (i / (scaleMarkers.length - 1)) * METER_HEIGHT;
+        return (
+          <div
+            key={`tick-${marker}`}
+            style={{
+              position: "absolute",
+              left: trackLeft - 6,
+              top: markerY - 0.5,
+              width: 6,
+              height: 1,
+              backgroundColor: SCALE_COLOR,
+              opacity: 0.3 * scaleOpacity,
+            }}
+          />
+        );
+      })}
+
+      {/* Current value display */}
+      {fillProgress > 0 && (
         <div
           style={{
             position: "absolute",
-            left: x,
-            top: meterTop + METER_HEIGHT - fillHeight - 30,
-            transform: "translateX(-50%)",
-            fontFamily: FONT_FAMILY,
+            left: trackLeft + METER_WIDTH + 14,
+            top: trackTop + METER_HEIGHT - fillHeight - 14,
+            fontFamily: "Inter, sans-serif",
             fontSize: 24,
             fontWeight: 700,
-            color,
-            opacity: valueOpacity,
+            color: color,
+            opacity: 0.85,
             whiteSpace: "nowrap",
-            textAlign: "center",
-            textShadow: `0 0 12px ${color}44`,
           }}
         >
-          {displayValue}
+          {prefix}
+          {currentValue}
+          {unit}
         </div>
       )}
     </div>
   );
 };
+
+export default VerticalMeter;

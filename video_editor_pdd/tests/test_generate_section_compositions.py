@@ -494,6 +494,31 @@ class TestUpdateRootTsx:
         assert "IntroSection" in content
         assert 'id="IntroSection"' in content
 
+    def test_uses_component_intrinsic_duration_for_preview_compositions(self, tmp_path):
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        component_dir = remotion_src / "Part2ParadigmShift07VerilogSynthesisTriple"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "constants.ts").write_text(
+            'export const TOTAL_FRAMES = 540;\n',
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "part2_paradigm_shift",
+                "durationSeconds": 12,
+                "compositions": ["07_verilog_synthesis_triple"],
+            }
+        ]
+
+        update_root_tsx(sections, fps=30, remotion_dir=str(remotion_dir))
+
+        root_path = remotion_src / "Root.tsx"
+        content = root_path.read_text(encoding="utf-8")
+        assert 'id="part2-paradigm-shift07-verilog-synthesis-triple"' in content
+        assert 'durationInFrames={540}' in content
+
 
 class TestMergeRootTsx:
     """Test _merge_root_tsx for regex-based merging."""
@@ -549,6 +574,39 @@ class TestMergeRootTsx:
         # Should have only one import for intro
         import_count = result.count('import { IntroSection } from "./intro";')
         assert import_count == 1
+
+    def test_uses_component_intrinsic_duration_for_preview_compositions(self, tmp_path):
+        existing = (
+            'import React from "react";\n'
+            'import { Composition } from "remotion";\n'
+            '\n'
+            'export const RemotionRoot: React.FC = () => {\n'
+            '  return (\n'
+            '    <>\n'
+            '    </>\n'
+            '  );\n'
+            '};\n'
+        )
+        remotion_dir = str(tmp_path / "remotion")
+        remotion_src = Path(remotion_dir) / "src" / "remotion"
+        component_dir = remotion_src / "Part2ParadigmShift07VerilogSynthesisTriple"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "constants.ts").write_text(
+            'export const TOTAL_FRAMES = 540;\n',
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "part2_paradigm_shift",
+                "durationSeconds": 12,
+                "compositions": ["07_verilog_synthesis_triple"],
+            }
+        ]
+
+        result = _merge_root_tsx(existing, sections, fps=30, remotion_dir=remotion_dir)
+        assert 'id="part2-paradigm-shift07-verilog-synthesis-triple"' in result
+        assert 'durationInFrames={540}' in result
 
 
 # ===========================================================================

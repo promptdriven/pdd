@@ -57,7 +57,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const Part2ParadigmShiftSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 228.053292;
+  const durationSeconds = 228.117333;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

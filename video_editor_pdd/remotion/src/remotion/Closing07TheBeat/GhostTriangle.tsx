@@ -2,86 +2,104 @@ import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   TRIANGLE_VERTICES,
-  EDGE_COLOR,
-  EDGE_OPACITY_START,
-  EDGE_OPACITY_END,
-  EDGE_WIDTH_START,
-  EDGE_WIDTH_END,
-  NODE_COLORS,
-  NODE_RADIUS_START,
-  NODE_RADIUS_END,
-  NODE_OPACITY_START,
-  NODE_OPACITY_END,
-  GHOST_FADE_DURATION,
-  NODE_SHRINK_DURATION,
-  WIDTH,
-  HEIGHT,
+  GHOST_EDGE_COLOR,
+  GHOST_EDGE_OPACITY,
+  GHOST_EDGE_WIDTH,
+  LUMINOUS_EDGE_OPACITY,
+  LUMINOUS_EDGE_WIDTH,
+  GHOST_NODE_RADIUS,
+  GHOST_NODE_OPACITY,
+  LUMINOUS_NODE_RADIUS,
+  LUMINOUS_NODE_OPACITY,
+  NODE_PROMPT_COLOR,
+  NODE_TESTS_COLOR,
+  NODE_GROUNDING_COLOR,
 } from './constants';
+
+const NODE_COLORS = [NODE_PROMPT_COLOR, NODE_TESTS_COLOR, NODE_GROUNDING_COLOR];
 
 export const GhostTriangle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Edge animation: fade from luminous to ghost over 30 frames
-  const edgeOpacity = interpolate(frame, [0, GHOST_FADE_DURATION], [EDGE_OPACITY_START, EDGE_OPACITY_END], {
+  // Edge transition: luminous → ghost over 30 frames with easeIn(quad)
+  const edgeOpacity = interpolate(frame, [0, 30], [LUMINOUS_EDGE_OPACITY, GHOST_EDGE_OPACITY], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.in(Easing.quad),
   });
 
-  const edgeWidth = interpolate(frame, [0, GHOST_FADE_DURATION], [EDGE_WIDTH_START, EDGE_WIDTH_END], {
+  const edgeWidth = interpolate(frame, [0, 30], [LUMINOUS_EDGE_WIDTH, GHOST_EDGE_WIDTH], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.in(Easing.quad),
   });
 
-  // Node animation: shrink and fade over 25 frames
-  const nodeRadius = interpolate(frame, [0, NODE_SHRINK_DURATION], [NODE_RADIUS_START, NODE_RADIUS_END], {
+  // Node shrink over 25 frames with easeIn(quad)
+  const nodeRadius = interpolate(frame, [0, 25], [LUMINOUS_NODE_RADIUS, GHOST_NODE_RADIUS], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.in(Easing.quad),
   });
 
-  const nodeOpacity = interpolate(frame, [0, NODE_SHRINK_DURATION], [NODE_OPACITY_START, NODE_OPACITY_END], {
+  const nodeOpacity = interpolate(frame, [0, 25], [LUMINOUS_NODE_OPACITY, GHOST_NODE_OPACITY], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.in(Easing.quad),
   });
 
-  const [[x0, y0], [x1, y1], [x2, y2]] = TRIANGLE_VERTICES;
-  const trianglePath = `M ${x0} ${y0} L ${x1} ${y1} L ${x2} ${y2} Z`;
+  // Glow dissolve over 20 frames
+  const glowOpacity = interpolate(frame, [0, 20], [0.4, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.in(Easing.quad),
+  });
 
-  const nodeColors = [NODE_COLORS.PROMPT, NODE_COLORS.TESTS, NODE_COLORS.GROUNDING];
+  const [v0, v1, v2] = TRIANGLE_VERTICES;
+  const pathD = `M ${v0[0]} ${v0[1]} L ${v1[0]} ${v1[1]} L ${v2[0]} ${v2[1]} Z`;
 
   return (
     <svg
-      width={WIDTH}
-      height={HEIGHT}
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-      }}
+      width={1920}
+      height={1080}
+      viewBox="0 0 1920 1080"
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      {/* Triangle edges */}
+      {/* Glow layer — dissolves first */}
+      {glowOpacity > 0.001 && (
+        <defs>
+          <filter id="triangleGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="12" result="blur" />
+          </filter>
+        </defs>
+      )}
+      {glowOpacity > 0.001 && (
+        <path
+          d={pathD}
+          fill="none"
+          stroke={GHOST_EDGE_COLOR}
+          strokeWidth={edgeWidth * 3}
+          opacity={glowOpacity}
+          filter="url(#triangleGlow)"
+        />
+      )}
+
+      {/* Triangle edges — hairline */}
       <path
-        d={trianglePath}
+        d={pathD}
         fill="none"
-        stroke={EDGE_COLOR}
+        stroke={GHOST_EDGE_COLOR}
         strokeWidth={edgeWidth}
         opacity={edgeOpacity}
       />
 
-      {/* Nodes at each vertex */}
-      {TRIANGLE_VERTICES.map(([cx, cy], i) => (
+      {/* Nodes */}
+      {TRIANGLE_VERTICES.map((vertex, i) => (
         <circle
           key={i}
-          cx={cx}
-          cy={cy}
+          cx={vertex[0]}
+          cy={vertex[1]}
           r={nodeRadius}
-          fill={nodeColors[i]}
+          fill={NODE_COLORS[i]}
           opacity={nodeOpacity}
         />
       ))}

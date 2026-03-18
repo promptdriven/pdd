@@ -1,10 +1,10 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
-import { REGIONS, BAR_Y, BORDER_COLOR, ANIM } from './constants';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { REGIONS, BAR_Y, BORDER_COLOR, TIMING } from './constants';
 
 /**
- * Region labels above the spectrum bar with staggered fade-in
- * and thin connector lines down to the bar.
+ * Region labels above the spectrum bar with downward connector lines.
+ * They fade in left-to-right with staggered timing starting at frame 30.
  */
 export const RegionLabels: React.FC = () => {
   const frame = useCurrentFrame();
@@ -12,10 +12,10 @@ export const RegionLabels: React.FC = () => {
   return (
     <>
       {REGIONS.map((region, i) => {
-        const entryFrame = ANIM.regionStart + i * ANIM.regionStagger;
+        const startFrame = TIMING.regionStart + i * TIMING.regionStagger;
         const opacity = interpolate(
           frame,
-          [entryFrame, entryFrame + ANIM.regionFadeDuration],
+          [startFrame, startFrame + TIMING.regionFadeDuration],
           [0, 1],
           {
             extrapolateLeft: 'clamp',
@@ -24,11 +24,12 @@ export const RegionLabels: React.FC = () => {
           }
         );
 
-        const connectorTop = region.y + 16;
-        const connectorBottom = BAR_Y;
+        // Connector line from label to spectrum bar
+        const connectorTop = region.y + 16; // below text
+        const connectorHeight = BAR_Y - connectorTop;
 
         return (
-          <React.Fragment key={i}>
+          <React.Fragment key={region.label}>
             {/* Label text */}
             <div
               style={{
@@ -47,16 +48,17 @@ export const RegionLabels: React.FC = () => {
               {region.label}
             </div>
 
-            {/* Connector line from label to bar */}
+            {/* Connector line */}
             <div
               style={{
                 position: 'absolute',
                 left: region.x,
                 top: connectorTop,
                 width: 1,
-                height: (connectorBottom - connectorTop) * opacity,
+                height: connectorHeight * opacity,
                 backgroundColor: BORDER_COLOR,
                 opacity: 0.15 * opacity,
+                transformOrigin: 'top',
               }}
             />
           </React.Fragment>

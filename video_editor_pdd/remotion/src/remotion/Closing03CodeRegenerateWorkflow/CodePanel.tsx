@@ -1,275 +1,240 @@
-import React, {useMemo} from 'react';
-import {useCurrentFrame, Easing, interpolate} from 'remotion';
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-	PANEL_BG,
-	TEXT_DEFAULT,
-	HEADER_COLOR,
-	KEYWORD_BLUE,
-	STRING_GREEN,
-	BUG_RED,
-	PASS_GREEN,
-	MONO_FONT,
-	CODE_PANEL,
-	ORIGINAL_CODE,
-	REGENERATED_CODE,
-	FRAME_CODE_DISSOLVE_START,
-	FRAME_CODE_STREAM_START,
-	FRAME_ANNOTATION,
+  COLORS,
+  FONTS,
+  LAYOUT,
+  ORIGINAL_CODE,
+  REGENERATED_CODE,
+  BUG_LINE_INDEX,
 } from './constants';
 
-const LINE_HEIGHT = 28;
-const CODE_OFFSET_Y = 50;
-const CODE_OFFSET_X = 20;
+const LINE_HEIGHT = 22;
+const CODE_PADDING_TOP = 44;
+const CODE_PADDING_LEFT = 20;
 
-const getColor = (type: string): string => {
-	switch (type) {
-		case 'keyword': return KEYWORD_BLUE;
-		case 'string': return STRING_GREEN;
-		case 'comment': return HEADER_COLOR;
-		case 'bug': return BUG_RED;
-		default: return TEXT_DEFAULT;
-	}
-};
-
-/** Dissolving character with upward drift */
+// Character dissolve: each character drifts upward and fades
 const DissolveChar: React.FC<{
-	char: string;
-	charIndex: number;
-	lineIndex: number;
-	color: string;
-	dissolveFrame: number;
-}> = ({char, charIndex, lineIndex, color, dissolveFrame}) => {
-	const frame = useCurrentFrame();
-	const staggerDelay = lineIndex * 2 + charIndex * 0.3;
-	const localFrame = frame - dissolveFrame - staggerDelay;
+  char: string;
+  color: string;
+  charIndex: number;
+  lineIndex: number;
+  dissolveStart: number;
+}> = ({ char, color, charIndex, lineIndex, dissolveStart }) => {
+  const frame = useCurrentFrame();
+  const delay = dissolveStart + lineIndex * 1 + charIndex * 0.3;
+  const duration = 25;
 
-	const opacity = interpolate(localFrame, [0, 20], [0.7, 0], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-		easing: Easing.in(Easing.quad),
-	});
+  if (frame < delay) {
+    return <span style={{ color }}>{char}</span>;
+  }
 
-	const yOffset = interpolate(localFrame, [0, 20], [0, -30], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-		easing: Easing.in(Easing.quad),
-	});
+  const progress = interpolate(frame, [delay, delay + duration], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.in(Easing.quad),
+  });
 
-	const xJitter = interpolate(localFrame, [0, 20], [0, (charIndex % 3 - 1) * 8], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-	});
+  const yOffset = interpolate(progress, [0, 1], [0, -30]);
+  const opacity = interpolate(progress, [0, 1], [1, 0]);
 
-	return (
-		<span
-			style={{
-				color,
-				opacity,
-				display: 'inline-block',
-				transform: `translate(${xJitter}px, ${yOffset}px)`,
-				whiteSpace: 'pre',
-			}}
-		>
-			{char}
-		</span>
-	);
+  return (
+    <span
+      style={{
+        color,
+        display: 'inline-block',
+        transform: `translateY(${yOffset}px)`,
+        opacity,
+      }}
+    >
+      {char}
+    </span>
+  );
 };
 
-/** A single code line that can dissolve or stream in */
-const CodeLine: React.FC<{
-	text: string;
-	type: string;
-	lineIndex: number;
-	phase: 'original' | 'dissolving' | 'empty' | 'streaming';
-	streamDelay: number;
-}> = ({text, type, lineIndex, phase, streamDelay}) => {
-	const frame = useCurrentFrame();
-	const isBugLine = type === 'bug';
-	const color = getColor(type);
+// Stream-in line animation
+const StreamLine: React.FC<{
+  tokens: Array<{ value: string; color: string }>;
+  lineIndex: number;
+  streamStart: number;
+  lineDelay: number;
+}> = ({ tokens, lineIndex, streamStart, lineDelay }) => {
+  const frame = useCurrentFrame();
+  const lineStart = streamStart + lineIndex * lineDelay;
 
-	if (phase === 'empty') {
-		return <div style={{height: LINE_HEIGHT}} />;
-	}
+  const opacity = interpolate(frame, [lineStart, lineStart + 8], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-	if (phase === 'dissolving') {
-		return (
-			<div
-				style={{
-					height: LINE_HEIGHT,
-					display: 'flex',
-					alignItems: 'center',
-					paddingLeft: CODE_OFFSET_X,
-					position: 'relative',
-					...(isBugLine ? {
-						backgroundColor: `${BUG_RED}14`,
-						borderLeft: `2px solid ${BUG_RED}`,
-					} : {}),
-				}}
-			>
-				{text.split('').map((char, ci) => (
-					<DissolveChar
-						key={ci}
-						char={char}
-						charIndex={ci}
-						lineIndex={lineIndex}
-						color={color}
-						dissolveFrame={FRAME_CODE_DISSOLVE_START}
-					/>
-				))}
-			</div>
-		);
-	}
+  const yOffset = interpolate(frame, [lineStart, lineStart + 8], [6, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-	if (phase === 'streaming') {
-		const lineFrame = frame - FRAME_CODE_STREAM_START - streamDelay;
-		const lineOpacity = interpolate(lineFrame, [0, 8], [0, 0.7], {
-			extrapolateLeft: 'clamp',
-			extrapolateRight: 'clamp',
-			easing: Easing.out(Easing.quad),
-		});
-		const lineSlide = interpolate(lineFrame, [0, 8], [10, 0], {
-			extrapolateLeft: 'clamp',
-			extrapolateRight: 'clamp',
-			easing: Easing.out(Easing.quad),
-		});
+  if (frame < lineStart) return null;
 
-		return (
-			<div
-				style={{
-					height: LINE_HEIGHT,
-					display: 'flex',
-					alignItems: 'center',
-					paddingLeft: CODE_OFFSET_X,
-					opacity: lineOpacity,
-					transform: `translateY(${lineSlide}px)`,
-				}}
-			>
-				<span style={{color, whiteSpace: 'pre', fontSize: 12, fontFamily: MONO_FONT}}>
-					{text}
-				</span>
-			</div>
-		);
-	}
-
-	// 'original' phase
-	return (
-		<div
-			style={{
-				height: LINE_HEIGHT,
-				display: 'flex',
-				alignItems: 'center',
-				paddingLeft: CODE_OFFSET_X,
-				position: 'relative',
-				...(isBugLine ? {
-					backgroundColor: `${BUG_RED}14`,
-					borderLeft: `2px solid ${BUG_RED}`,
-				} : {}),
-			}}
-		>
-			<span style={{color, opacity: 0.7, whiteSpace: 'pre', fontSize: 12, fontFamily: MONO_FONT}}>
-				{text}
-			</span>
-		</div>
-	);
+  return (
+    <div
+      style={{
+        opacity,
+        transform: `translateY(${yOffset}px)`,
+        height: LINE_HEIGHT,
+        whiteSpace: 'pre',
+      }}
+    >
+      {tokens.map((tok, i) => (
+        <span key={i} style={{ color: tok.color }}>
+          {tok.value}
+        </span>
+      ))}
+    </div>
+  );
 };
 
 export const CodePanel: React.FC = () => {
-	const frame = useCurrentFrame();
+  const frame = useCurrentFrame();
+  const { x, y, width, height } = LAYOUT.codePanel;
 
-	// Determine phase
-	const dissolveEnd = FRAME_CODE_DISSOLVE_START + 55; // ~all chars dissolved by frame 155
-	const streamEnd = FRAME_CODE_STREAM_START + REGENERATED_CODE.length * 3 + 10;
+  // Layout fade-in
+  const panelOpacity = interpolate(frame, [0, 20], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-	const phase: 'original' | 'dissolving' | 'empty' | 'streaming' = useMemo(() => {
-		if (frame < FRAME_CODE_DISSOLVE_START) return 'original';
-		if (frame < FRAME_CODE_STREAM_START) return 'dissolving';
-		if (frame < FRAME_CODE_STREAM_START + 2) return 'empty';
-		return 'streaming';
-	}, [frame]);
+  // Phase: original code visible 0-100, dissolve 100-160, regen 130+
+  const isDissolving = frame >= 100 && frame < 160;
+  const showOriginal = frame < 130;
+  const showRegenerated = frame >= 130;
 
-	// Layout fade-in
-	const layoutOpacity = interpolate(frame, [0, 20], [0, 1], {
-		extrapolateLeft: 'clamp',
-		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
-	});
+  // File tab dot color: red before fix, green after
+  const dotColor = frame >= 200 ? COLORS.greenCheck : COLORS.red;
 
-	// File tab dot color
-	const dotColor = frame >= FRAME_ANNOTATION ? PASS_GREEN : BUG_RED;
-	const dotTransition = frame >= FRAME_ANNOTATION
-		? interpolate(frame, [FRAME_ANNOTATION, FRAME_ANNOTATION + 15], [0, 1], {
-			extrapolateLeft: 'clamp',
-			extrapolateRight: 'clamp',
-		})
-		: 0;
+  // Dot color transition
+  const dotOpacity = frame >= 200
+    ? interpolate(frame, [200, 210], [0.5, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+      })
+    : 1;
 
-	const codeLines = phase === 'streaming' ? REGENERATED_CODE : ORIGINAL_CODE;
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y,
+        width,
+        height,
+        backgroundColor: `rgba(30, 41, 59, 0.4)`,
+        borderRadius: 8,
+        opacity: panelOpacity,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 16px',
+          borderBottom: '1px solid rgba(100, 116, 139, 0.15)',
+        }}
+      >
+        <div
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            backgroundColor: dotColor,
+            opacity: dotOpacity,
+          }}
+        />
+        <span
+          style={{
+            fontFamily: FONTS.mono,
+            fontSize: 11,
+            color: COLORS.textDim,
+            opacity: 0.5,
+          }}
+        >
+          user_parser.py
+        </span>
+      </div>
 
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				left: CODE_PANEL.x,
-				top: CODE_PANEL.y,
-				width: CODE_PANEL.width,
-				height: CODE_PANEL.height,
-				backgroundColor: `${PANEL_BG}66`,
-				borderRadius: 8,
-				opacity: layoutOpacity,
-				overflow: 'hidden',
-			}}
-		>
-			{/* Header */}
-			<div
-				style={{
-					display: 'flex',
-					alignItems: 'center',
-					gap: 8,
-					padding: '10px 16px',
-					borderBottom: '1px solid rgba(100, 116, 139, 0.15)',
-				}}
-			>
-				<div
-					style={{
-						width: 8,
-						height: 8,
-						borderRadius: '50%',
-						backgroundColor: dotColor,
-						opacity: frame >= FRAME_ANNOTATION ? 1 : 0.8,
-						transition: 'background-color 0.3s',
-					}}
-				/>
-				<span
-					style={{
-						fontFamily: MONO_FONT,
-						fontSize: 11,
-						color: HEADER_COLOR,
-						opacity: 0.5,
-					}}
-				>
-					user_parser.py
-				</span>
-			</div>
+      {/* Code content */}
+      <div
+        style={{
+          padding: `8px ${CODE_PADDING_LEFT}px`,
+          fontFamily: FONTS.mono,
+          fontSize: 12,
+          lineHeight: `${LINE_HEIGHT}px`,
+        }}
+      >
+        {/* Original code (with dissolve) */}
+        {showOriginal &&
+          ORIGINAL_CODE.map((line, lineIdx) => {
+            const isBugLine = lineIdx === BUG_LINE_INDEX;
+            return (
+              <div
+                key={`orig-${lineIdx}`}
+                style={{
+                  height: LINE_HEIGHT,
+                  whiteSpace: 'pre',
+                  position: 'relative',
+                  ...(isBugLine
+                    ? {
+                        backgroundColor: `rgba(239, 68, 68, 0.08)`,
+                        borderLeft: `2px solid ${COLORS.red}`,
+                        paddingLeft: 8,
+                        marginLeft: -10,
+                      }
+                    : {}),
+                }}
+              >
+                {isDissolving
+                  ? line.tokens.map((tok, tIdx) =>
+                      tok.value.split('').map((char, cIdx) => (
+                        <DissolveChar
+                          key={`${tIdx}-${cIdx}`}
+                          char={char}
+                          color={tok.color}
+                          charIndex={
+                            line.tokens
+                              .slice(0, tIdx)
+                              .reduce((a, t) => a + t.value.length, 0) + cIdx
+                          }
+                          lineIndex={lineIdx}
+                          dissolveStart={100}
+                        />
+                      ))
+                    )
+                  : line.tokens.map((tok, i) => (
+                      <span key={i} style={{ color: tok.color }}>
+                        {tok.value}
+                      </span>
+                    ))}
+              </div>
+            );
+          })}
 
-			{/* Code content */}
-			<div style={{padding: '8px 0'}}>
-				{phase === 'empty' ? (
-					<div style={{height: CODE_PANEL.height - 50}} />
-				) : (
-					codeLines.map((line, i) => (
-						<CodeLine
-							key={`${phase}-${i}`}
-							text={line.text}
-							type={line.type}
-							lineIndex={i}
-							phase={phase}
-							streamDelay={i * 3}
-						/>
-					))
-				)}
-			</div>
-		</div>
-	);
+        {/* Regenerated code (streams in) */}
+        {showRegenerated &&
+          !showOriginal &&
+          REGENERATED_CODE.map((line, lineIdx) => (
+            <StreamLine
+              key={`regen-${lineIdx}`}
+              tokens={line.tokens}
+              lineIndex={lineIdx}
+              streamStart={130}
+              lineDelay={3}
+            />
+          ))}
+      </div>
+    </div>
+  );
 };
-
-export default CodePanel;

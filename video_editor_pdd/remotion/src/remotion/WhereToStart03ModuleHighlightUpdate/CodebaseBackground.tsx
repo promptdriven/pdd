@@ -1,68 +1,76 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
   CODEBASE_BLOCKS,
   CODEBASE_EDGES,
   BLOCK_FILL,
   EDGE_COLOR,
-  MODULE_POS,
-  MODULE_SIZE,
-  SELECTION_BLUE,
+  BLUE_ACCENT,
+  TEXT_LIGHT,
+  MODULE_X,
+  MODULE_Y,
+  MODULE_W,
+  MODULE_H,
 } from './constants';
 
-/**
- * Renders the dimmed codebase graph with blocks and dependency edges.
- * The selected module (index 5) gets a pulsing blue glow.
- */
-export const CodebaseBackground: React.FC = () => {
+const CodebaseBackground: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Entire codebase dims to 0.3 over frames 0-20
-  const dimOpacity = interpolate(frame, [0, 20], [0.6, 0.3], {
+  // Codebase dims to 0.3 opacity over first 20 frames
+  const codebaseOpacity = interpolate(frame, [0, 20], [0.6, 0.3], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  // Pulsing glow for selected module — sine cycle of 30 frames
-  const pulsePhase = (frame % 30) / 30;
-  const pulseVal = 0.5 + 0.5 * Math.sin(pulsePhase * Math.PI * 2);
-  const glowOpacity = 0.08 + pulseVal * 0.08; // 0.08 - 0.16
-  const borderOpacity = 0.3 + pulseVal * 0.2; // 0.3 - 0.5
+  // Selection glow pulse: easeInOut sine on 30-frame cycle
+  const glowPhase = (frame % 30) / 30;
+  const glowIntensity = interpolate(
+    Math.sin(glowPhase * Math.PI * 2),
+    [-1, 1],
+    [0.08, 0.2],
+  );
+
+  // Label fade-in from frame 20
+  const labelOpacity = interpolate(frame, [20, 35], [0, 0.7], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
   return (
-    <div style={{ position: 'absolute', inset: 0 }}>
-      {/* Edges */}
+    <>
+      {/* Dimmed codebase edges */}
       <svg
         width={1920}
         height={1080}
-        style={{ position: 'absolute', top: 0, left: 0, opacity: dimOpacity }}
+        style={{ position: 'absolute', top: 0, left: 0, opacity: codebaseOpacity }}
       >
-        {CODEBASE_EDGES.map(([from, to], idx) => {
-          const a = CODEBASE_BLOCKS[from];
-          const b = CODEBASE_BLOCKS[to];
+        {CODEBASE_EDGES.map(([fromIdx, toIdx], i) => {
+          const from = CODEBASE_BLOCKS[fromIdx];
+          const to = CODEBASE_BLOCKS[toIdx];
+          if (!from || !to) return null;
           return (
             <line
-              key={idx}
-              x1={a.x + a.w / 2}
-              y1={a.y + a.h / 2}
-              x2={b.x + b.w / 2}
-              y2={b.y + b.h / 2}
+              key={i}
+              x1={from.x + from.w / 2}
+              y1={from.y + from.h / 2}
+              x2={to.x + to.w / 2}
+              y2={to.y + to.h / 2}
               stroke={EDGE_COLOR}
               strokeWidth={1}
-              strokeOpacity={0.08}
+              opacity={0.08}
             />
           );
         })}
       </svg>
 
-      {/* Blocks (non-selected) */}
-      {CODEBASE_BLOCKS.map((block, idx) => {
-        const isSelected = idx === 5;
-        if (isSelected) return null;
+      {/* Dimmed codebase blocks (excluding the selected module at index 3) */}
+      {CODEBASE_BLOCKS.map((block, i) => {
+        if (i === 3) return null; // selected module handled separately
         return (
           <div
-            key={idx}
+            key={i}
             style={{
               position: 'absolute',
               left: block.x,
@@ -71,8 +79,8 @@ export const CodebaseBackground: React.FC = () => {
               height: block.h,
               backgroundColor: BLOCK_FILL,
               borderRadius: 4,
-              opacity: dimOpacity,
               border: `1px solid ${EDGE_COLOR}`,
+              opacity: codebaseOpacity,
             }}
           />
         );
@@ -82,43 +90,51 @@ export const CodebaseBackground: React.FC = () => {
       <div
         style={{
           position: 'absolute',
-          left: MODULE_POS.x,
-          top: MODULE_POS.y,
-          width: MODULE_SIZE.w,
-          height: MODULE_SIZE.h,
+          left: MODULE_X,
+          top: MODULE_Y,
+          width: MODULE_W,
+          height: MODULE_H,
           backgroundColor: BLOCK_FILL,
           borderRadius: 4,
-          border: `2px solid rgba(74, 144, 217, ${borderOpacity})`,
-          boxShadow: `0 0 20px rgba(74, 144, 217, ${glowOpacity}), inset 0 0 10px rgba(74, 144, 217, 0.05)`,
+          border: `2px solid ${BLUE_ACCENT}`,
+          borderColor: `rgba(74, 144, 217, 0.4)`,
+          boxShadow: `0 0 20px rgba(74, 144, 217, ${glowIntensity}), inset 0 0 15px rgba(74, 144, 217, 0.15)`,
         }}
       >
-        {/* Inner selection highlight */}
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            borderRadius: 3,
-            backgroundColor: SELECTION_BLUE,
-            opacity: 0.15,
-          }}
-        />
-        {/* Fake code lines inside the block */}
+        {/* Simulated code lines inside the module block */}
         <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {[0.7, 0.5, 0.85, 0.6, 0.4].map((w, i) => (
+          {[0.7, 0.5, 0.8, 0.4, 0.6].map((width, i) => (
             <div
               key={i}
               style={{
+                width: `${width * 100}%`,
                 height: 3,
-                width: `${w * 100}%`,
-                backgroundColor: '#64748B',
-                opacity: 0.4,
+                backgroundColor: BLUE_ACCENT,
+                opacity: 0.25,
                 borderRadius: 1,
               }}
             />
           ))}
         </div>
       </div>
-    </div>
+
+      {/* Module label: auth_handler.py */}
+      <div
+        style={{
+          position: 'absolute',
+          left: MODULE_X + MODULE_W / 2,
+          top: MODULE_Y + MODULE_H + 8,
+          transform: 'translateX(-50%)',
+          fontFamily: '"JetBrains Mono", monospace',
+          fontSize: 11,
+          color: TEXT_LIGHT,
+          opacity: labelOpacity,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        auth_handler.py
+      </div>
+    </>
   );
 };
 

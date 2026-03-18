@@ -1,21 +1,9 @@
 import React from 'react';
-import {
-  AbsoluteFill,
-  useCurrentFrame,
-  interpolate,
-  Easing,
-  Sequence,
-} from 'remotion';
+import { AbsoluteFill, Sequence, useCurrentFrame, interpolate, Easing } from 'remotion';
+import { BG_START, BG_END, DURATION_FRAMES } from './constants';
 import { GhostTriangle } from './GhostTriangle';
 import { SingleParticle } from './SingleParticle';
-import { Vignette } from './Vignette';
-import {
-  BG_START,
-  BG_END,
-  BG_DARKEN_DURATION,
-  PARTICLE_START_FRAME,
-  PARTICLE_DRIFT_DURATION,
-} from './constants';
+import { RadialVignette } from './RadialVignette';
 
 export const defaultClosing07TheBeatProps = {};
 
@@ -23,44 +11,53 @@ export const defaultClosing07TheBeatProps = {};
  * Section 7.7: The Beat — Dramatic Silence
  *
  * A deliberate dramatic pause. The luminous triangle fades to a ghost state,
- * the background darkens to near-black, and a single particle drifts upward
- * through the triangle center with a brief glint. No narration, no text —
- * the emptiness creates anticipatory weight before the final thesis.
+ * a single particle drifts upward through the center, and the background
+ * deepens to near-black. No narration, no text — the emptiness is the point.
  *
  * Duration: 120 frames (4s @ 30fps)
  */
+const parseHex = (hex: string): [number, number, number] => [
+  parseInt(hex.slice(1, 3), 16),
+  parseInt(hex.slice(3, 5), 16),
+  parseInt(hex.slice(5, 7), 16),
+];
+
 export const Closing07TheBeat: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Background darkening: #080E1A → #060A12 over 30 frames with easeInOut(sine)
-  const bgProgress = interpolate(frame, [0, BG_DARKEN_DURATION], [0, 1], {
+  // Background darkens from BG_START to BG_END over 30 frames
+  const bgProgress = interpolate(frame, [0, 30], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.inOut(Easing.sin),
   });
 
-  // Interpolate RGB channels between start and end background colors
-  // #080E1A = rgb(8, 14, 26)
-  // #060A12 = rgb(6, 10, 18)
-  const r = Math.round(interpolate(bgProgress, [0, 1], [8, 6]));
-  const g = Math.round(interpolate(bgProgress, [0, 1], [14, 10]));
-  const b = Math.round(interpolate(bgProgress, [0, 1], [26, 18]));
-  const bgColor = `rgb(${r}, ${g}, ${b})`;
+  const [sR, sG, sB] = parseHex(BG_START);
+  const [eR, eG, eB] = parseHex(BG_END);
+  const bgR = Math.round(interpolate(bgProgress, [0, 1], [sR, eR]));
+  const bgG = Math.round(interpolate(bgProgress, [0, 1], [sG, eG]));
+  const bgB = Math.round(interpolate(bgProgress, [0, 1], [sB, eB]));
+  const bgColor = `rgb(${bgR}, ${bgG}, ${bgB})`;
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: bgColor,
+        overflow: 'hidden',
       }}
     >
-      {/* Ghost triangle — fading from luminous to barely visible */}
-      <GhostTriangle />
+      {/* Ghost triangle — visible from frame 0, fading to ghost state */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+        <GhostTriangle />
+      </Sequence>
 
-      {/* Vignette overlay — darkens edges for tunnel-vision effect */}
-      <Vignette />
+      {/* Vignette overlay — starts fading in at frame 20 */}
+      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+        <RadialVignette />
+      </Sequence>
 
-      {/* Single drifting particle — starts at frame 30 */}
-      <Sequence from={PARTICLE_START_FRAME} durationInFrames={PARTICLE_DRIFT_DURATION + 10}>
+      {/* Single drifting particle — starts at frame 30, lasts 90 frames */}
+      <Sequence from={30} durationInFrames={90}>
         <SingleParticle />
       </Sequence>
     </AbsoluteFill>

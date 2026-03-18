@@ -1,101 +1,68 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { COLORS, FONTS, TIMING } from './constants';
+import { COLORS, FONT, TIMING } from './constants';
 
 export const VisualEquation: React.FC = () => {
   const frame = useCurrentFrame();
-  const startFrame = TIMING.equationStart;
-  const localFrame = frame - startFrame;
+  const localFrame = frame - TIMING.equationStart;
 
   if (localFrame < 0) return null;
 
-  // Left side fades in (red)
-  const leftOpacity = interpolate(localFrame, [0, TIMING.equationLeftDur], [0, 0.6], {
+  // Left side (red) fades in
+  const leftOpacity = interpolate(localFrame, [0, 20], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
-  const leftTranslate = interpolate(localFrame, [0, TIMING.equationLeftDur], [15, 0], {
+  const leftTranslateY = interpolate(localFrame, [0, 20], [12, 0], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
   // "vs." appears
-  const vsOpacity = interpolate(
-    localFrame,
-    [TIMING.equationVsDelay, TIMING.equationVsDelay + 15],
-    [0, 0.3],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  const vsLocalFrame = localFrame - 30;
+  const vsOpacity = interpolate(vsLocalFrame, [0, 12], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  // Right side fades in (green)
-  const rightOpacity = interpolate(
-    localFrame,
-    [TIMING.equationRightDelay, TIMING.equationRightDelay + TIMING.equationLeftDur],
-    [0, 0.6],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
-  const rightTranslate = interpolate(
-    localFrame,
-    [TIMING.equationRightDelay, TIMING.equationRightDelay + TIMING.equationLeftDur],
-    [15, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // Right side (green) fades in
+  const rightLocalFrame = localFrame - 50;
+  const rightOpacity = interpolate(rightLocalFrame, [0, 20], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
+  const rightTranslateY = interpolate(rightLocalFrame, [0, 20], [12, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  // Bracket / differentiator
-  const bracketOpacity = interpolate(
-    localFrame,
-    [TIMING.equationBracketDelay, TIMING.equationBracketDelay + 20],
-    [0, 0.5],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
-  const bracketScale = interpolate(
-    localFrame,
-    [TIMING.equationBracketDelay, TIMING.equationBracketDelay + 20],
-    [0.9, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // Bracket / differentiator label
+  const bracketLocalFrame = localFrame - 80;
+  const bracketOpacity = interpolate(bracketLocalFrame, [0, 20], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  const y = 850;
-  const textStyle: React.CSSProperties = {
-    fontFamily: FONTS.family,
-    fontSize: 14,
-    fontWeight: 500,
-    whiteSpace: 'nowrap' as const,
-  };
+  const yBase = 850;
 
   return (
     <div
       style={{
         position: 'absolute',
-        top: y,
+        top: yBase,
         left: 0,
         width: 1920,
+        height: 120,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 12,
+        gap: 8,
       }}
     >
       {/* Equation row */}
@@ -104,73 +71,94 @@ export const VisualEquation: React.FC = () => {
           display: 'flex',
           alignItems: 'center',
           gap: 24,
+          justifyContent: 'center',
+          width: '100%',
         }}
       >
-        {/* Left: red side */}
+        {/* LEFT side — red */}
         <div
           style={{
-            ...textStyle,
+            fontFamily: FONT.family,
+            fontSize: 14,
             color: COLORS.red,
-            opacity: leftOpacity,
-            transform: `translateY(${leftTranslate}px)`,
+            opacity: leftOpacity * 0.6,
+            transform: `translateY(${leftTranslateY}px)`,
+            textAlign: 'right',
+            minWidth: 340,
           }}
         >
-          [AI code] + [No tests] = 1.7× issues
+          <span style={{ opacity: 0.5 }}>[</span>AI code
+          <span style={{ opacity: 0.5 }}>]</span>
+          {' + '}
+          <span style={{ opacity: 0.5 }}>[</span>No tests
+          <span style={{ opacity: 0.5 }}>]</span>
+          {' = '}
+          <span style={{ fontWeight: 700 }}>1.7× issues</span>
         </div>
 
-        {/* Divider */}
+        {/* vs. */}
         <div
           style={{
-            ...textStyle,
-            color: COLORS.label,
-            opacity: vsOpacity,
+            fontFamily: FONT.family,
             fontSize: 14,
+            color: COLORS.muted,
+            opacity: vsOpacity * 0.3,
+            fontWeight: 600,
           }}
         >
           vs.
         </div>
 
-        {/* Right: green side */}
+        {/* RIGHT side — green */}
         <div
           style={{
-            ...textStyle,
+            fontFamily: FONT.family,
+            fontSize: 14,
             color: COLORS.green,
-            opacity: rightOpacity,
-            transform: `translateY(${rightTranslate}px)`,
+            opacity: rightOpacity * 0.6,
+            transform: `translateY(${rightTranslateY}px)`,
+            textAlign: 'left',
+            minWidth: 380,
           }}
         >
-          [AI code] + [Strong tests] = Amplified delivery
+          <span style={{ opacity: 0.5 }}>[</span>AI code
+          <span style={{ opacity: 0.5 }}>]</span>
+          {' + '}
+          <span style={{ opacity: 0.5 }}>[</span>Strong tests
+          <span style={{ opacity: 0.5 }}>]</span>
+          {' = '}
+          <span style={{ fontWeight: 700 }}>Amplified delivery</span>
         </div>
       </div>
 
-      {/* Differentiator bracket */}
+      {/* Differentiator bracket pointing to mold walls */}
       <div
         style={{
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          opacity: bracketOpacity,
-          transform: `scale(${bracketScale})`,
+          opacity: bracketOpacity * 0.5,
+          marginTop: 6,
         }}
       >
-        {/* Bracket SVG pointing upward */}
+        {/* Upward-pointing bracket */}
         <svg width={120} height={20} viewBox="0 0 120 20">
           <path
-            d="M10,18 L60,4 L110,18"
+            d="M 10 18 L 60 4 L 110 18"
             fill="none"
             stroke={COLORS.amber}
             strokeWidth={1.5}
-            opacity={0.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
         </svg>
         <div
           style={{
-            fontFamily: FONTS.family,
+            fontFamily: FONT.family,
             fontSize: 12,
-            fontWeight: 600,
             color: COLORS.amber,
-            opacity: 0.5,
-            marginTop: 2,
+            fontWeight: 600,
+            letterSpacing: 1,
           }}
         >
           The walls

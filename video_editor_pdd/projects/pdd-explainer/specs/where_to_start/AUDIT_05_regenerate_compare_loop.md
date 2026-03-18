@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+At frame 172/180 (95.8% progress, hold phase), the pipeline steps, labels, sublabels, connecting arrows, and progress bar are all present and recognizable. However, two significant issues exist: (1) The loop arrow from step 4 back to step 2 is largely invisible — only a tiny amber fragment appears near the 'Add tests' step rather than the full large curved dashed arc that should span above the pipeline. At this frame in the hold phase (165-180), the loop arrow should be fully drawn and clearly visible. (2) The 'iterate' label at the apex of the loop arrow is completely absent. These are critical visual elements for this composition since the loop arrow and its label convey the core message of iterative refinement. The progress bar correctly shows approximately 80% fill (matching the post-reset state). The pipeline layout is also shifted noticeably to the left rather than being centered on the canvas.

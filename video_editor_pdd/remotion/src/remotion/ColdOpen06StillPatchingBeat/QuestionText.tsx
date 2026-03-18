@@ -1,56 +1,68 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
   TEXT_FADE_START,
   TEXT_FADE_END,
   TEXT_COLOR,
-  ACCENT_COLOR,
   TEXT_OPACITY,
+  ACCENT_COLOR,
+  ACCENT_OPACITY,
   TEXT_SIZE,
   TEXT_WEIGHT,
   LETTER_SPACING,
-} from "./constants";
+} from './constants';
 
 /**
- * The question "So why are we still patching?" — fades in at frame 30-60.
- * "patching?" rendered in warm amber accent color.
+ * The central question: "So why are we still patching?"
+ * Fades in over 30 frames (frame 30–60).
+ * "patching?" is rendered in a warm amber accent color.
  */
 export const QuestionText: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(
+  const textOpacity = interpolate(
     frame,
     [TEXT_FADE_START, TEXT_FADE_END],
-    [0, TEXT_OPACITY],
+    [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
   return (
-    <AbsoluteFill
+    <div
       style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        opacity,
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: 1920,
+        height: 1080,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: textOpacity,
       }}
     >
-      <div
+      <span
         style={{
+          fontFamily: '"Inter", "Helvetica Neue", Arial, sans-serif',
           fontSize: TEXT_SIZE,
-          fontFamily: '"Inter", system-ui, sans-serif',
           fontWeight: TEXT_WEIGHT,
           letterSpacing: LETTER_SPACING,
-          textAlign: "center",
           lineHeight: 1.4,
         }}
       >
-        <span style={{ color: TEXT_COLOR }}>So why are we still </span>
-        <span style={{ color: ACCENT_COLOR }}>patching?</span>
-      </div>
-    </AbsoluteFill>
+        <span style={{ color: TEXT_COLOR, opacity: TEXT_OPACITY }}>
+          So why are we still{' '}
+        </span>
+        <span style={{ color: ACCENT_COLOR, opacity: ACCENT_OPACITY }}>
+          patching?
+        </span>
+      </span>
+    </div>
   );
 };
+
+export default QuestionText;

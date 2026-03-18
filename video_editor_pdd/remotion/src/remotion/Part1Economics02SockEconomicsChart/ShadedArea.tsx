@@ -1,6 +1,7 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, Easing, interpolate } from 'remotion';
 import {
+  DataPoint,
   MARGIN_LEFT,
   MARGIN_TOP,
   CHART_WIDTH,
@@ -9,35 +10,38 @@ import {
   X_MAX,
   Y_MIN,
   Y_MAX,
-  BLUE,
-  LABEL_COLOR,
-  ANNOTATION_LABEL_SIZE,
+  CROSSING_POINT,
   LABOR_COST_DATA,
   SOCK_COST_DATA,
-  CROSSING_X,
-  SHADED_AREA_START,
-  SHADED_AREA_END,
-  ANNOTATION_FADE_START,
-  ANNOTATION_FADE_END,
-} from "./constants";
+  SHADING_START,
+  SHADING_FADE_DURATION,
+  LINES_START,
+  LINES_DRAW_DURATION,
+  IRRATIONAL_LABEL_START,
+  IRRATIONAL_LABEL_FADE,
+  BLUE,
+  SHADED_AREA_OPACITY,
+  LABEL_COLOR,
+  ANNOTATION_OPACITY,
+  FONT_FAMILY,
+} from './constants';
 
 const xToPixel = (x: number): number =>
   MARGIN_LEFT + ((x - X_MIN) / (X_MAX - X_MIN)) * CHART_WIDTH;
 
 const yToPixel = (y: number): number =>
-  MARGIN_TOP + CHART_HEIGHT - ((y - Y_MIN) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
+  MARGIN_TOP + ((Y_MAX - y) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
 
-/** Linearly interpolate a data series */
-const lerpData = (
-  data: { x: number; y: number }[],
-  targetX: number
-): number => {
-  if (targetX <= data[0].x) return data[0].y;
-  if (targetX >= data[data.length - 1].x) return data[data.length - 1].y;
+/** Linearly interpolate between data points at a given x */
+const interpolateData = (data: DataPoint[], x: number): number => {
+  if (x <= data[0].x) return data[0].y;
+  if (x >= data[data.length - 1].x) return data[data.length - 1].y;
   for (let i = 0; i < data.length - 1; i++) {
-    if (targetX >= data[i].x && targetX <= data[i + 1].x) {
-      const t = (targetX - data[i].x) / (data[i + 1].x - data[i].x);
-      return data[i].y + t * (data[i + 1].y - data[i].y);
+    const a = data[i];
+    const b = data[i + 1];
+    if (x >= a.x && x <= b.x) {
+      const t = (x - a.x) / (b.x - a.x);
+      return a.y + t * (b.y - a.y);
     }
   }
   return data[data.length - 1].y;
@@ -46,75 +50,86 @@ const lerpData = (
 export const ShadedArea: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const areaOpacity = interpolate(
+  // Shading opacity fade in
+  const shadeFade = interpolate(
     frame,
-    [SHADED_AREA_START, SHADED_AREA_END],
-    [0, 0.06],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    [SHADING_START, SHADING_START + SHADING_FADE_DURATION],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) },
   );
 
-  const annotationOpacity = interpolate(
+  // How far the lines have drawn (determines right edge of shading)
+  const drawProgress = interpolate(
     frame,
-    [ANNOTATION_FADE_START, ANNOTATION_FADE_END],
-    [0, 0.3],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    [LINES_START, LINES_START + LINES_DRAW_DURATION],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+  );
+  const currentX = X_MIN + (X_MAX - X_MIN) * drawProgress;
+  const shadeRight = Math.min(currentX, X_MAX);
+
+  // "Darning is irrational" label
+  const irrationalOpacity = interpolate(
+    frame,
+    [IRRATIONAL_LABEL_START, IRRATIONAL_LABEL_START + IRRATIONAL_LABEL_FADE],
+    [0, ANNOTATION_OPACITY],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) },
   );
 
-  if (frame < SHADED_AREA_START) return null;
+  if (shadeFade <= 0 || shadeRight <= CROSSING_POINT.x) return null;
 
-  // Build the shaded polygon between the two lines, from crossing to X_MAX
-  // Upper line = labor cost (higher y value after crossing), lower = sock cost
+  // Build polygon: upper boundary = labor cost, lower boundary = sock cost
+  // After crossing, labor cost > sock cost, so labor is on top (higher y-value)
+  // But in pixel space, higher y-value = lower on screen
   const step = 0.5;
-  const upperPoints: string[] = [];
-  const lowerPoints: string[] = [];
+  const upperPoints: string[] = []; // labor cost (higher value = top of shaded region)
+  const lowerPoints: string[] = []; // sock cost (lower value = bottom of shaded region)
 
-  for (let x = CROSSING_X; x <= X_MAX; x += step) {
-    const laborY = lerpData(LABOR_COST_DATA, x);
-    const sockY = lerpData(SOCK_COST_DATA, x);
+  for (let x = CROSSING_POINT.x; x <= shadeRight; x += step) {
+    const laborY = interpolateData(LABOR_COST_DATA, x);
+    const sockY = interpolateData(SOCK_COST_DATA, x);
     upperPoints.push(`${xToPixel(x)},${yToPixel(laborY)}`);
     lowerPoints.push(`${xToPixel(x)},${yToPixel(sockY)}`);
   }
-  // Final point at X_MAX
-  upperPoints.push(`${xToPixel(X_MAX)},${yToPixel(lerpData(LABOR_COST_DATA, X_MAX))}`);
-  lowerPoints.push(`${xToPixel(X_MAX)},${yToPixel(lerpData(SOCK_COST_DATA, X_MAX))}`);
+  // Include exact endpoint
+  {
+    const laborY = interpolateData(LABOR_COST_DATA, shadeRight);
+    const sockY = interpolateData(SOCK_COST_DATA, shadeRight);
+    upperPoints.push(`${xToPixel(shadeRight)},${yToPixel(laborY)}`);
+    lowerPoints.push(`${xToPixel(shadeRight)},${yToPixel(sockY)}`);
+  }
 
-  // Polygon: upper points left-to-right, then lower points right-to-left
-  const polygonPoints = [
-    ...upperPoints,
-    ...lowerPoints.reverse(),
-  ].join(" ");
+  // Polygon: upper left → upper right → lower right → lower left
+  const polygonPoints = [...upperPoints, ...lowerPoints.reverse()].join(' ');
 
-  // Center of shaded area for annotation placement
-  const midX = (CROSSING_X + X_MAX) / 2;
-  const midLaborY = lerpData(LABOR_COST_DATA, midX);
-  const midSockY = lerpData(SOCK_COST_DATA, midX);
-  const centerPx = xToPixel(midX);
-  const centerPy = (yToPixel(midLaborY) + yToPixel(midSockY)) / 2;
+  // Label center: midpoint between the two lines around x ≈ 1969
+  const labelX = CROSSING_POINT.x + (shadeRight - CROSSING_POINT.x) * 0.55;
+  const laborAtLabel = interpolateData(LABOR_COST_DATA, labelX);
+  const sockAtLabel = interpolateData(SOCK_COST_DATA, labelX);
+  const labelDataY = (laborAtLabel + sockAtLabel) / 2;
 
   return (
     <svg
       width={1920}
       height={1080}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      {/* Shaded area between lines */}
       <polygon
         points={polygonPoints}
         fill={BLUE}
-        fillOpacity={areaOpacity}
+        fillOpacity={SHADED_AREA_OPACITY * shadeFade}
       />
 
-      {/* "Darning is irrational" annotation */}
-      {annotationOpacity > 0 && (
+      {irrationalOpacity > 0.01 && (
         <text
-          x={centerPx}
-          y={centerPy}
+          x={xToPixel(labelX)}
+          y={yToPixel(labelDataY)}
           textAnchor="middle"
           fill={LABEL_COLOR}
-          fillOpacity={annotationOpacity}
-          fontSize={ANNOTATION_LABEL_SIZE}
+          fillOpacity={irrationalOpacity}
+          fontFamily={FONT_FAMILY}
+          fontSize={11}
           fontStyle="italic"
-          fontFamily="'Inter', sans-serif"
         >
           Darning is irrational
         </text>

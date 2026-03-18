@@ -1,150 +1,152 @@
-// ─── Colors ───
-export const BG_COLOR = '#0A1225';
-export const RADIAL_GLOW_COLOR = '#1E293B';
-export const RADIAL_GLOW_OPACITY = 0.04;
+// constants.ts — Dissolve-Regenerate Loop visual constants
 
-export const EDGE_COLOR = '#475569';
-export const EDGE_OPACITY = 0.6;
-export const EDGE_GLOW_BLUR = 4;
-export const EDGE_GLOW_OPACITY = 0.06;
+export const CANVAS = {
+  width: 1920,
+  height: 1080,
+  backgroundColor: '#0A1225',
+} as const;
 
-export const NODE_BLUE = '#4A90D9';
-export const NODE_ORANGE = '#D9944A';
-export const NODE_GREEN = '#5AAA6E';
+export const RADIAL_GLOW = {
+  cx: 960,
+  cy: 520,
+  radius: 600,
+  color: '#1E293B',
+  opacity: 0.04,
+} as const;
 
-export const CODE_LINE_COLOR = '#94A3B8';
-export const CODE_LINE_OPACITY = 0.15;
+// Equilateral triangle centered at (960, 520), side ~500px
+export const TRIANGLE = {
+  vertices: [
+    [960, 280],
+    [710, 713],
+    [1210, 713],
+  ] as [number, number][],
+  center: [960, 520] as [number, number],
+  edgeColor: '#475569',
+  edgeOpacity: 0.6,
+  edgeWidth: 2,
+  glowBlur: 4,
+  glowOpacity: 0.06,
+} as const;
 
-export const TERMINAL_COLOR = '#4A90D9';
-export const TERMINAL_OPACITY = 0.2;
-
-// ─── Geometry ───
-export const CENTER_X = 960;
-export const CENTER_Y = 520;
-export const TRIANGLE_SIDE = 500;
-
-export const VERTICES: [number, number][] = [
-  [960, 280],  // top
-  [710, 713],  // bottom-left
-  [1210, 713], // bottom-right
-];
+export const NODES = [
+  { center: [960, 280] as [number, number], fill: '#4A90D9', label: 'Prompt' },
+  { center: [710, 713] as [number, number], fill: '#D9944A', label: 'Design' },
+  { center: [1210, 713] as [number, number], fill: '#5AAA6E', label: 'Deliver' },
+] as const;
 
 export const NODE_RADIUS = 20;
 export const NODE_PULSE_MIN = 20;
 export const NODE_PULSE_MAX = 22;
 export const NODE_PULSE_PERIOD = 60;
 
-// ─── Labels ───
-export const NODE_LABELS: { text: string; pos: [number, number]; color: string }[] = [
-  { text: 'Prompt', pos: [960, 250], color: NODE_BLUE },
-  { text: 'Diff', pos: [670, 743], color: NODE_ORANGE },
-  { text: 'Drift', pos: [1250, 743], color: NODE_GREEN },
-];
+export const CODE_COLOR = '#94A3B8';
+export const CODE_OPACITY = 0.15;
 
-// ─── Code Patterns (different line sets for each cycle) ───
-export interface CodeLineData {
-  width: number;
-  offsetX: number;
-  offsetY: number;
-}
+// Each code pattern is an array of { width, offsetX, offsetY } for horizontal lines
+export const CODE_PATTERNS = [
+  // Pattern 1 — initial code
+  [
+    { width: 140, offsetX: -30, offsetY: -60 },
+    { width: 100, offsetX: 10, offsetY: -42 },
+    { width: 170, offsetX: -20, offsetY: -24 },
+    { width: 80, offsetX: 30, offsetY: -6 },
+    { width: 130, offsetX: -10, offsetY: 12 },
+    { width: 60, offsetX: 20, offsetY: 30 },
+    { width: 150, offsetX: -25, offsetY: 48 },
+    { width: 110, offsetX: 5, offsetY: 66 },
+  ],
+  // Pattern 2
+  [
+    { width: 90, offsetX: 15, offsetY: -54 },
+    { width: 160, offsetX: -35, offsetY: -36 },
+    { width: 70, offsetX: 25, offsetY: -18 },
+    { width: 180, offsetX: -15, offsetY: 0 },
+    { width: 120, offsetX: 5, offsetY: 18 },
+    { width: 60, offsetX: -20, offsetY: 36 },
+    { width: 140, offsetX: 10, offsetY: 54 },
+    { width: 100, offsetX: -5, offsetY: 72 },
+    { width: 80, offsetX: 30, offsetY: 90 },
+  ],
+  // Pattern 3
+  [
+    { width: 120, offsetX: -10, offsetY: -48 },
+    { width: 80, offsetX: 20, offsetY: -30 },
+    { width: 150, offsetX: -25, offsetY: -12 },
+    { width: 60, offsetX: 35, offsetY: 6 },
+    { width: 170, offsetX: -30, offsetY: 24 },
+    { width: 100, offsetX: 0, offsetY: 42 },
+    { width: 90, offsetX: 15, offsetY: 60 },
+  ],
+  // Pattern 4 — final
+  [
+    { width: 110, offsetX: -5, offsetY: -56 },
+    { width: 160, offsetX: -20, offsetY: -38 },
+    { width: 70, offsetX: 30, offsetY: -20 },
+    { width: 130, offsetX: -15, offsetY: -2 },
+    { width: 90, offsetX: 10, offsetY: 16 },
+    { width: 180, offsetX: -30, offsetY: 34 },
+    { width: 60, offsetX: 25, offsetY: 52 },
+    { width: 140, offsetX: -10, offsetY: 70 },
+    { width: 100, offsetX: 5, offsetY: 88 },
+    { width: 80, offsetX: 20, offsetY: 106 },
+  ],
+] as const;
 
-export const CODE_PATTERN_1: CodeLineData[] = [
-  { width: 160, offsetX: -40, offsetY: -35 },
-  { width: 120, offsetX: 10, offsetY: -25 },
-  { width: 180, offsetX: -20, offsetY: -15 },
-  { width: 80, offsetX: 30, offsetY: -5 },
-  { width: 140, offsetX: -10, offsetY: 5 },
-  { width: 100, offsetX: 20, offsetY: 15 },
-  { width: 170, offsetX: -30, offsetY: 25 },
-  { width: 60, offsetX: 40, offsetY: 35 },
-];
-
-export const CODE_PATTERN_2: CodeLineData[] = [
-  { width: 100, offsetX: 20, offsetY: -40 },
-  { width: 150, offsetX: -30, offsetY: -28 },
-  { width: 70, offsetX: 45, offsetY: -16 },
-  { width: 180, offsetX: -10, offsetY: -4 },
-  { width: 90, offsetX: 35, offsetY: 8 },
-  { width: 130, offsetX: -25, offsetY: 20 },
-  { width: 160, offsetX: 5, offsetY: 32 },
-  { width: 110, offsetX: -15, offsetY: 44 },
-  { width: 60, offsetX: 50, offsetY: 56 },
-];
-
-export const CODE_PATTERN_3: CodeLineData[] = [
-  { width: 140, offsetX: -15, offsetY: -30 },
-  { width: 80, offsetX: 40, offsetY: -20 },
-  { width: 170, offsetX: -35, offsetY: -10 },
-  { width: 110, offsetX: 15, offsetY: 0 },
-  { width: 60, offsetX: -45, offsetY: 10 },
-  { width: 150, offsetX: 25, offsetY: 20 },
-  { width: 90, offsetX: -5, offsetY: 30 },
-];
-
-export const CODE_PATTERN_4: CodeLineData[] = [
-  { width: 120, offsetX: 10, offsetY: -38 },
-  { width: 170, offsetX: -25, offsetY: -26 },
-  { width: 60, offsetX: 35, offsetY: -14 },
-  { width: 140, offsetX: -40, offsetY: -2 },
-  { width: 100, offsetX: 20, offsetY: 10 },
-  { width: 80, offsetX: -10, offsetY: 22 },
-  { width: 160, offsetX: 5, offsetY: 34 },
-  { width: 130, offsetX: -20, offsetY: 46 },
-];
-
-// ─── Cycle Timing ───
-export interface CycleConfig {
-  startFrame: number;
-  dissolveFrames: number;
-  regenerateFrames: number;
-  particlesPerLine: number;
-  driftRadius: number;
-  fadeDuration: number;
-  staggerFrames: number;
-  sourcePattern: CodeLineData[];
-  targetPattern: CodeLineData[];
-}
-
-export const CYCLES: CycleConfig[] = [
+// Dissolve-regenerate cycle timings
+export const CYCLES = [
   {
-    startFrame: 10,
-    dissolveFrames: 30,
-    regenerateFrames: 30,
+    // Cycle 1 — slow
+    dissolveStart: 10,
+    dissolveDuration: 30,
+    regenerateStart: 40,
+    regenerateDuration: 30,
+    patternFrom: 0, // dissolves pattern 0
+    patternTo: 1,   // regenerates pattern 1
     particlesPerLine: 6,
     driftRadius: 120,
     fadeDuration: 15,
-    staggerFrames: 6,
-    sourcePattern: CODE_PATTERN_1,
-    targetPattern: CODE_PATTERN_2,
+    stagger: 6,
   },
   {
-    startFrame: 70,
-    dissolveFrames: 25,
-    regenerateFrames: 25,
+    // Cycle 2 — medium
+    dissolveStart: 70,
+    dissolveDuration: 25,
+    regenerateStart: 95,
+    regenerateDuration: 25,
+    patternFrom: 1,
+    patternTo: 2,
     particlesPerLine: 5,
     driftRadius: 100,
     fadeDuration: 12,
-    staggerFrames: 4,
-    sourcePattern: CODE_PATTERN_2,
-    targetPattern: CODE_PATTERN_3,
+    stagger: 4,
   },
   {
-    startFrame: 120,
-    dissolveFrames: 20,
-    regenerateFrames: 20,
+    // Cycle 3 — fast
+    dissolveStart: 120,
+    dissolveDuration: 20,
+    regenerateStart: 140,
+    regenerateDuration: 20,
+    patternFrom: 2,
+    patternTo: 3,
     particlesPerLine: 4,
     driftRadius: 80,
     fadeDuration: 10,
-    staggerFrames: 2,
-    sourcePattern: CODE_PATTERN_3,
-    targetPattern: CODE_PATTERN_4,
+    stagger: 2,
   },
-];
+] as const;
 
-// ─── Terminal ───
-export const TERMINAL_X = 1640;
-export const TERMINAL_Y = 980;
-export const TERMINAL_FONT_SIZE = 10;
+// Terminal heartbeat
+export const TERMINAL = {
+  x: 1640,
+  y: 980,
+  command: 'pdd generate',
+  successMark: '\u2713',
+  fontSize: 10,
+  color: '#4A90D9',
+  opacity: 0.2,
+  // Frames at which terminal shows checkmark
+  checkFrames: [40, 95, 140] as number[],
+} as const;
 
-// Terminal cycle times: when each "✓" appears
-export const TERMINAL_CHECK_FRAMES = [40, 95, 140];
+export const TOTAL_FRAMES = 240;

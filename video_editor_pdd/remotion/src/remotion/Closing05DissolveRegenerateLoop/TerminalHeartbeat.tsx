@@ -1,75 +1,53 @@
+// TerminalHeartbeat.tsx — Corner terminal cycling "pdd generate -> checkmark"
 import React from 'react';
 import { useCurrentFrame } from 'remotion';
-import {
-  TERMINAL_X,
-  TERMINAL_Y,
-  TERMINAL_FONT_SIZE,
-  TERMINAL_COLOR,
-  TERMINAL_OPACITY,
-  TERMINAL_CHECK_FRAMES,
-  CYCLES,
-} from './constants';
+import { TERMINAL, CYCLES } from './constants';
 
 export const TerminalHeartbeat: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Determine which text to show based on cycle timing
-  // Before first dissolve starts: idle
-  // During dissolve: "pdd generate"
-  // After regenerate starts (check frame): "pdd generate → ✓"
-  // Between cycles: show last completed state
+  // Determine terminal text based on current frame within cycles
+  // Between dissolve start and regenerate start: show "pdd generate"
+  // After regenerate start: show "pdd generate -> checkmark"
+  let text = `${TERMINAL.command}`;
 
-  let text = 'pdd generate';
-
-  // Check if we're past any check frames to show ✓
-  const lastCheckIdx = TERMINAL_CHECK_FRAMES.reduce(
-    (acc, checkFrame, idx) => (frame >= checkFrame ? idx : acc),
-    -1
-  );
-
-  // Determine if we're in a dissolve phase (show "pdd generate")
-  const inDissolve = CYCLES.some((cycle) => {
-    const dissolveStart = cycle.startFrame;
-    const dissolveEnd = dissolveStart + cycle.dissolveFrames;
-    return frame >= dissolveStart && frame < dissolveEnd;
-  });
-
-  // Determine if we're in a regenerate phase or past a check (show "✓")
-  const inRegenerate = CYCLES.some((cycle, idx) => {
-    const regenStart = cycle.startFrame + cycle.dissolveFrames;
-    const regenEnd = regenStart + cycle.regenerateFrames;
-    return frame >= regenStart && frame < regenEnd;
-  });
-
-  if (frame < CYCLES[0].startFrame) {
-    // Before any cycles, show command
-    text = 'pdd generate';
-  } else if (inDissolve) {
-    text = 'pdd generate';
-  } else if (inRegenerate || lastCheckIdx >= 0) {
-    text = 'pdd generate → ✓';
+  for (const cycle of CYCLES) {
+    if (frame >= cycle.dissolveStart && frame < cycle.regenerateStart) {
+      text = `$ ${TERMINAL.command}`;
+      break;
+    }
+    if (
+      frame >= cycle.regenerateStart &&
+      frame < cycle.regenerateStart + cycle.regenerateDuration
+    ) {
+      text = `$ ${TERMINAL.command} \u2192 ${TERMINAL.successMark}`;
+      break;
+    }
+    // After all cycles in hold phase, show final success
+    if (frame >= 160) {
+      text = `$ ${TERMINAL.command} \u2192 ${TERMINAL.successMark}`;
+    }
   }
 
-  // After all cycles complete, hold last state
-  if (frame >= 160) {
-    text = 'pdd generate → ✓';
-  }
+  // Blinking cursor
+  const showCursor = Math.floor(frame / 15) % 2 === 0;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: TERMINAL_X,
-        top: TERMINAL_Y,
+        left: TERMINAL.x,
+        top: TERMINAL.y,
         fontFamily: 'JetBrains Mono, monospace',
-        fontSize: TERMINAL_FONT_SIZE,
-        color: TERMINAL_COLOR,
-        opacity: TERMINAL_OPACITY,
+        fontSize: TERMINAL.fontSize,
+        color: TERMINAL.color,
+        opacity: TERMINAL.opacity,
         whiteSpace: 'nowrap',
         letterSpacing: 0.5,
       }}
     >
       {text}
+      <span style={{ opacity: showCursor ? 1 : 0 }}>{'\u2588'}</span>
     </div>
   );
 };

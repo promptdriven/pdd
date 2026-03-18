@@ -1,65 +1,78 @@
-// constants.ts — Component-level constants for Research Annotations AI Quality
-
-export const CANVAS = {
-  WIDTH: 1920,
-  HEIGHT: 1080,
-  BG: '#0A0F1A',
-} as const;
-
+// === Colors ===
 export const COLORS = {
+  background: '#0A0F1A',
   cardBg: '#1E293B',
   red: '#EF4444',
   green: '#5AAA6E',
   amber: '#D9944A',
-  label: '#64748B',
+  muted: '#64748B',
   white: '#FFFFFF',
+  moldWall: '#D9944A',
+  moldCavity: '#1A1A2E',
 } as const;
 
-export const FONTS = {
-  family: 'Inter, system-ui, sans-serif',
+// === Dimensions ===
+export const CANVAS = {
+  width: 1920,
+  height: 1080,
 } as const;
 
-// Frame-based animation timing
+// === Card positions & sizes ===
+export const CARD1 = {
+  x: 200,
+  y: 200,
+  width: 400,
+  height: 220,
+} as const;
+
+export const CARD2 = {
+  x: 1320,
+  y: 200,
+  width: 400,
+  height: 180,
+} as const;
+
+// === Animation timing (in frames @ 30fps) ===
 export const TIMING = {
   // Phase 1: Mold dims
   moldDimStart: 0,
   moldDimEnd: 30,
+
   // Phase 2: Card 1 materializes
   card1Start: 30,
   card1BorderDraw: 20,
   card1BgFade: 15,
-  card1StatStart: 55,
-  card1SubStatStart: 75,
-  card1SubStatDelay: 15,
+  card1HeaderType: 15,
+  card1MainStatStart: 50,
+  card1SubStat1Start: 75,
+  card1SubStat2Start: 90,
+
   // Phase 3: Card 2 materializes
   card2Start: 120,
-  card2StatStart: 145,
+  card2MainStatStart: 150,
   card2ArrowStart: 180,
-  card2ArrowDraw: 25,
+  card2ArrowDuration: 25,
+
   // Phase 4: Visual equation
   equationStart: 210,
-  equationLeftDur: 20,
-  equationVsDelay: 25,
-  equationRightDelay: 50,
-  equationBracketDelay: 70,
-  // Phase 5: Wall pulse
+  equationLeftDuration: 20,
+  equationVsStart: 240,
+  equationRightStart: 260,
+  equationBracketStart: 290,
+
+  // Phase 5: Wall pulse intensify
   wallPulseStart: 330,
-  wallPulseDur: 60,
+  wallPulseEnd: 390,
+
   // Phase 6: Hold
   holdStart: 390,
   totalFrames: 450,
 } as const;
 
-// Mold cross-section geometry
-export const MOLD = {
-  centerX: 960,
-  centerY: 500,
-  outerWidth: 600,
-  outerHeight: 300,
-  wallThickness: 30,
-  innerWidth: 540,
-  innerHeight: 240,
-} as const;
+// === Mold wall pulse triggers ===
+export const WALL_PULSE_TRIGGERS = [30, 75, 90, 120, 210, 330] as const;
 
-// Wall pulse triggers (frames where mold walls pulse)
-export const WALL_PULSE_TRIGGERS = [55, 75, 90, 145, 330] as const;
+// === Typography ===
+export const FONT = {
+  family: 'Inter, sans-serif',
+} as const;

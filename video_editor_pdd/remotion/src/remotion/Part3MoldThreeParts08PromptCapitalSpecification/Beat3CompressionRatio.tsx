@@ -7,225 +7,384 @@ import {
   spring,
   useVideoConfig,
 } from 'remotion';
-import {
-  NOZZLE_BLUE,
-  MUTED_GRAY,
-  CODE_DIM,
-  PANEL_BG,
-  PANEL_BORDER,
-  TEXT_LIGHT,
-  PROMPT_LINES,
-  DENSE_CODE_LINES,
-} from './constants';
+import { COLORS, SHORT_PROMPT_LINES, MODULE_PROMPTS } from './constants';
 
-// ── Prompt panel (left) ──
-const PromptPanel: React.FC<{ opacity: number }> = ({ opacity }) => (
-  <div
-    style={{
-      position: 'absolute',
-      left: 100,
-      top: 180,
-      width: 300,
-      height: 300,
-      backgroundColor: PANEL_BG,
-      border: `1px solid ${PANEL_BORDER}`,
-      borderRadius: 6,
-      padding: '12px 14px',
-      opacity,
-      boxShadow: `0 0 30px ${NOZZLE_BLUE}1A`,
-    }}
-  >
-    <div
-      style={{
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 10,
-        lineHeight: '18px',
-        color: NOZZLE_BLUE,
-        opacity: 0.7,
-        whiteSpace: 'pre-wrap',
-      }}
-    >
-      {PROMPT_LINES.map((line, i) => (
-        <div key={i}>{line || '\u00A0'}</div>
-      ))}
-    </div>
-  </div>
-);
+/**
+ * Beat 3 — Compression Ratio (frames 0-240 relative, 360-600 absolute)
+ * Shows prompt vs code size comparison, then context window comparison.
+ */
 
-// ── Scrolling code panel (right of prompt) ──
-const CodeScrollPanel: React.FC<{ scrollOffset: number; opacity: number }> = ({
-  scrollOffset,
-  opacity,
-}) => (
-  <div
-    style={{
-      position: 'absolute',
-      left: 450,
-      top: 80,
-      width: 300,
-      height: 600,
-      backgroundColor: PANEL_BG,
-      border: `1px solid ${PANEL_BORDER}`,
-      borderRadius: 6,
-      overflow: 'hidden',
-      opacity,
-    }}
-  >
+// Generate fake dense code lines
+const generateCodeLines = (count: number): string[] => {
+  const patterns = [
+    '    if not isinstance(value, str):',
+    '        return ValidationError("invalid")',
+    '    result = self._cache.get(key)',
+    '    if result is not None:',
+    '        return result',
+    '    try:',
+    '        parsed = json.loads(raw_input)',
+    '    except JSONDecodeError as e:',
+    '        logger.warning(f"Parse fail: {e}")',
+    '        return None',
+    '    for item in batch:',
+    '        validated = self.validate(item)',
+    '        if validated:',
+    '            output.append(validated)',
+    '    connection = pool.acquire()',
+    '    cursor = connection.cursor()',
+    '    cursor.execute(query, params)',
+    '    rows = cursor.fetchall()',
+    '    return [Row(**r) for r in rows]',
+    '    def __init__(self, config):',
+    '        self._config = config',
+    '        self._initialized = False',
+    '    @property',
+    '    def is_valid(self) -> bool:',
+    '        return self._state == "valid"',
+    '    async def process(self, data):',
+    '        async with self._lock:',
+    '            await self._handle(data)',
+    '    class Config:',
+    '        max_retries: int = 3',
+    '        timeout: float = 30.0',
+    '        debug: bool = False',
+  ];
+  const lines: string[] = [];
+  for (let i = 0; i < count; i++) {
+    lines.push(patterns[i % patterns.length]);
+  }
+  return lines;
+};
+
+const DENSE_CODE_LINES = generateCodeLines(200);
+
+const PromptPanel: React.FC<{
+  opacity: number;
+  glowIntensity: number;
+}> = ({ opacity, glowIntensity }) => {
+  return (
     <div
       style={{
         position: 'absolute',
-        top: -scrollOffset,
-        left: 10,
-        right: 10,
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 8,
-        lineHeight: '12px',
-        color: CODE_DIM,
-        opacity: 0.3,
-        whiteSpace: 'pre',
+        left: 100,
+        top: 180,
+        width: 300,
+        height: 300,
+        backgroundColor: COLORS.codePanel,
+        border: `1px solid ${COLORS.codeBorder}`,
+        borderRadius: 6,
+        padding: 16,
+        opacity,
+        boxShadow: `0 0 ${20 * glowIntensity}px ${COLORS.nozzleBlue}33`,
+        overflow: 'hidden',
       }}
     >
-      {DENSE_CODE_LINES.map((line, i) => (
-        <div key={i}>{line}</div>
+      <div
+        style={{
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10,
+          color: COLORS.labelMuted,
+          marginBottom: 8,
+          borderBottom: `1px solid ${COLORS.codeBorder}`,
+          paddingBottom: 6,
+        }}
+      >
+        user_parser.prompt
+      </div>
+      {SHORT_PROMPT_LINES.map((line, i) => (
+        <div
+          key={i}
+          style={{
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 11,
+            color: line.startsWith('#')
+              ? COLORS.nozzleBlue
+              : COLORS.textLight,
+            opacity: line.startsWith('#') ? 0.8 : 0.7,
+            lineHeight: '16px',
+            minHeight: 16,
+          }}
+        >
+          {line || '\u00A0'}
+        </div>
       ))}
     </div>
-  </div>
-);
+  );
+};
 
-// ── Height comparison arrow ──
-const HeightArrow: React.FC<{ opacity: number }> = ({ opacity }) => (
-  <svg
-    width={40}
-    height={500}
-    style={{
-      position: 'absolute',
-      left: 415,
-      top: 130,
-      opacity,
-    }}
-  >
-    {/* Arrow line */}
-    <line
-      x1={20}
-      y1={50}
-      x2={20}
-      y2={450}
-      stroke={NOZZLE_BLUE}
-      strokeWidth={1.5}
-      opacity={0.5}
-    />
-    {/* Top arrow head */}
-    <path d="M 14 60 L 20 50 L 26 60" stroke={NOZZLE_BLUE} fill="none" strokeWidth={1.5} opacity={0.5} />
-    {/* Bottom arrow head */}
-    <path d="M 14 440 L 20 450 L 26 440" stroke={NOZZLE_BLUE} fill="none" strokeWidth={1.5} opacity={0.5} />
-    {/* Label */}
-    <text
-      x={20}
-      y={255}
-      textAnchor="middle"
-      fontFamily="Inter, sans-serif"
-      fontSize={14}
-      fontWeight={700}
-      fill={NOZZLE_BLUE}
-      opacity={0.7}
-    >
-      10×
-    </text>
-  </svg>
-);
-
-// ── Ratio badge ──
-const RatioBadge: React.FC<{ scale: number }> = ({ scale }) => (
-  <div
-    style={{
-      position: 'absolute',
-      left: 250,
-      top: 530,
-      transform: `translateX(-50%) scale(${scale})`,
-      backgroundColor: `${NOZZLE_BLUE}1A`,
-      border: `1px solid ${NOZZLE_BLUE}33`,
-      borderRadius: 20,
-      padding: '6px 18px',
-      fontFamily: 'Inter, sans-serif',
-      fontSize: 24,
-      fontWeight: 700,
-      color: NOZZLE_BLUE,
-      whiteSpace: 'nowrap',
-    }}
-  >
-    1:5 to 1:10
-  </div>
-);
-
-// ── Context window (single) ──
-const ContextWindow: React.FC<{
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  label: string;
-  labelColor: string;
-  fillColor: string;
-  fillOpacity: number;
-  style: 'dense' | 'clean_blocks';
+const CodeScrollPanel: React.FC<{
   opacity: number;
-  pulse?: number;
-}> = ({ x, y, width, height, label, labelColor, fillColor, fillOpacity, style, opacity, pulse = 0 }) => {
-  const blockCount = style === 'dense' ? 60 : 10;
-  const blockHeight = style === 'dense' ? 8 : 40;
-  const gap = style === 'dense' ? 2 : 12;
+  scrollOffset: number;
+}> = ({ opacity, scrollOffset }) => {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 450,
+        top: 80,
+        width: 300,
+        height: 600,
+        backgroundColor: COLORS.codePanel,
+        border: `1px solid ${COLORS.codeBorder}`,
+        borderRadius: 6,
+        padding: '8px 12px',
+        opacity: opacity * 0.6,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10,
+          color: COLORS.labelMuted,
+          marginBottom: 8,
+          borderBottom: `1px solid ${COLORS.codeBorder}`,
+          paddingBottom: 6,
+        }}
+      >
+        user_parser.py — 200+ lines
+      </div>
+      <div
+        style={{
+          transform: `translateY(${-scrollOffset}px)`,
+          transition: 'none',
+        }}
+      >
+        {DENSE_CODE_LINES.map((line, i) => (
+          <div
+            key={i}
+            style={{
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 9,
+              color: COLORS.codeText,
+              opacity: 0.3,
+              lineHeight: '13px',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+            }}
+          >
+            <span style={{ color: COLORS.labelMuted, opacity: 0.3, marginRight: 8, display: 'inline-block', width: 24, textAlign: 'right' }}>
+              {i + 1}
+            </span>
+            {line}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const HeightArrow: React.FC<{
+  opacity: number;
+}> = ({ opacity }) => {
+  return (
+    <svg
+      width={60}
+      height={400}
+      style={{
+        position: 'absolute',
+        left: 400,
+        top: 180,
+        opacity,
+      }}
+    >
+      {/* Vertical line */}
+      <line
+        x1={30}
+        y1={20}
+        x2={30}
+        y2={380}
+        stroke={COLORS.nozzleBlue}
+        strokeWidth={2}
+        opacity={0.5}
+      />
+      {/* Top arrow */}
+      <polygon
+        points="30,10 24,22 36,22"
+        fill={COLORS.nozzleBlue}
+        opacity={0.5}
+      />
+      {/* Bottom arrow */}
+      <polygon
+        points="30,390 24,378 36,378"
+        fill={COLORS.nozzleBlue}
+        opacity={0.5}
+      />
+      {/* Label */}
+      <text
+        x={30}
+        y={205}
+        textAnchor="middle"
+        fontFamily="Inter, sans-serif"
+        fontSize={16}
+        fontWeight={700}
+        fill={COLORS.nozzleBlue}
+      >
+        10×
+      </text>
+    </svg>
+  );
+};
+
+const ContextWindowComparison: React.FC<{
+  opacity: number;
+  slideProgress: number;
+  pulsePhase: number;
+  captionOpacity: number;
+}> = ({ opacity, slideProgress, pulsePhase, captionOpacity }) => {
+  const slideX = interpolate(slideProgress, [0, 1], [40, 0]);
 
   return (
-    <div style={{ position: 'absolute', left: x, top: y, opacity }}>
-      {/* Label above */}
-      <div
-        style={{
-          position: 'absolute',
-          top: -22,
-          left: 0,
-          width,
-          textAlign: 'center',
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 11,
-          color: labelColor,
-        }}
-      >
-        {label}
-      </div>
-
-      {/* Window */}
-      <div
-        style={{
-          width,
-          height,
-          backgroundColor: PANEL_BG,
-          border: `1px solid ${PANEL_BORDER}`,
-          borderRadius: 6,
-          overflow: 'hidden',
-          padding: style === 'dense' ? '6px 8px' : '12px 16px',
-          boxShadow: pulse > 0 ? `0 0 ${20 * pulse}px ${fillColor}33` : 'none',
-        }}
-      >
-        {Array.from({ length: blockCount }).map((_, i) => {
-          const lineWidth =
-            style === 'dense'
-              ? `${60 + Math.sin(i * 1.7) * 30}%`
-              : `${70 + Math.sin(i * 2.3) * 20}%`;
-
-          return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 820,
+        top: 0,
+        width: 1100,
+        height: 1080,
+        opacity,
+        transform: `translateX(${slideX}px)`,
+      }}
+    >
+      {/* LEFT window — dense code */}
+      <div style={{ position: 'absolute', left: 80, top: 160 }}>
+        <div
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 11,
+            color: COLORS.labelMuted,
+            marginBottom: 8,
+          }}
+        >
+          15,000 tokens of code
+        </div>
+        <div
+          style={{
+            width: 400,
+            height: 600,
+            backgroundColor: COLORS.codePanel,
+            borderRadius: 6,
+            border: `1px solid ${COLORS.codeBorder}`,
+            padding: 12,
+            overflow: 'hidden',
+          }}
+        >
+          {/* Dense overwhelming code representation */}
+          {Array.from({ length: 45 }).map((_, i) => (
             <div
               key={i}
               style={{
-                height: blockHeight,
-                width: lineWidth,
-                backgroundColor: fillColor,
-                opacity: fillOpacity,
-                borderRadius: style === 'dense' ? 1 : 4,
-                marginBottom: gap,
+                height: 11,
+                marginBottom: 2,
+                display: 'flex',
+                gap: 3,
               }}
-            />
-          );
-        })}
+            >
+              {/* Variable-width "code" blocks */}
+              {Array.from({ length: 4 + (i % 3) }).map((_, j) => (
+                <div
+                  key={j}
+                  style={{
+                    height: '100%',
+                    width: 20 + ((i * 7 + j * 13) % 60),
+                    backgroundColor: COLORS.codeText,
+                    opacity: 0.15,
+                    borderRadius: 2,
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* RIGHT window — clean prompts */}
+      <div style={{ position: 'absolute', left: 530, top: 160 }}>
+        <div
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 11,
+            color: COLORS.nozzleBlue,
+            marginBottom: 8,
+          }}
+        >
+          Prompts for 10 modules
+        </div>
+        <div
+          style={{
+            width: 400,
+            height: 600,
+            backgroundColor: COLORS.codePanel,
+            borderRadius: 6,
+            border: `1px solid ${COLORS.codeBorder}`,
+            padding: 16,
+            overflow: 'hidden',
+            boxShadow:
+              pulsePhase > 0
+                ? `0 0 ${12 + 6 * Math.sin(pulsePhase)}px ${COLORS.nozzleBlue}22`
+                : 'none',
+          }}
+        >
+          {/* Clean prompt blocks */}
+          {MODULE_PROMPTS.map((name, i) => (
+            <div
+              key={i}
+              style={{
+                backgroundColor: `${COLORS.nozzleBlue}26`,
+                borderRadius: 4,
+                padding: '8px 12px',
+                marginBottom: 8,
+                border: `1px solid ${COLORS.nozzleBlue}33`,
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: 'JetBrains Mono, monospace',
+                  fontSize: 9,
+                  color: COLORS.nozzleBlue,
+                  opacity: 0.7,
+                  marginBottom: 3,
+                }}
+              >
+                {name}
+              </div>
+              {/* Fake prompt lines */}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {Array.from({ length: 2 + (i % 2) }).map((_, j) => (
+                  <div
+                    key={j}
+                    style={{
+                      height: 6,
+                      width: 40 + ((i * 11 + j * 17) % 80),
+                      backgroundColor: COLORS.nozzleBlue,
+                      opacity: 0.15,
+                      borderRadius: 2,
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Caption below both */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 80,
+          top: 800,
+          width: 850,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          color: COLORS.textLight,
+          opacity: captionOpacity * 0.7,
+          lineHeight: '22px',
+        }}
+      >
+        Same context window. <span style={{ fontWeight: 700, color: COLORS.nozzleBlue }}>10×</span> more system knowledge.
       </div>
     </div>
   );
@@ -235,130 +394,111 @@ export const Beat3CompressionRatio: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
 
-  // Panel fade-in (frames 0-30 of this beat)
-  const panelFade = interpolate(frame, [0, 30], [0, 1], {
+  // Panels appear (frame 0-30 relative)
+  const panelFadeIn = interpolate(frame, [0, 30], [0, 1], {
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
   // Code scroll (continuous from frame 30)
-  const scrollOffset = Math.max(0, (frame - 30) * 0.5);
+  const scrollOffset = frame > 30 ? (frame - 30) * 0.5 : 0;
 
-  // Height arrow (frame 30-60)
-  const arrowOpacity = interpolate(frame, [30, 60], [0, 1], {
+  // Height arrow appears
+  const arrowOpacity = interpolate(frame, [30, 50], [0, 1], {
+    extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
-  // Ratio badge spring (frame 30)
-  const badgeFrame = frame - 30;
+  // Ratio badge spring animation at frame 30
   const badgeScale =
-    badgeFrame >= 0
+    frame >= 30
       ? spring({
-          frame: badgeFrame,
+          frame: frame - 30,
           fps,
           config: { stiffness: 150, damping: 12 },
           from: 0.8,
           to: 1,
         })
       : 0;
-
-  // Context windows slide in (frame 90)
-  const ctxFrame = frame - 90;
-  const ctxProgress =
-    ctxFrame >= 0
-      ? interpolate(ctxFrame, [0, 25], [0, 1], {
-          extrapolateRight: 'clamp',
-          easing: Easing.out(Easing.cubic),
-        })
-      : 0;
-  const ctxSlideX = interpolate(ctxProgress, [0, 1], [40, 0]);
-  const ctxOpacity = ctxProgress;
-
-  // Caption (frame 150, absolute 510)
-  const captionOpacity = interpolate(frame, [150, 170], [0, 1], {
+  const badgeOpacity = interpolate(frame, [30, 45], [0, 1], {
+    extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
-  // Blue pulse on right window (frames 180-240, 40-frame cycle)
-  const pulseActive = frame >= 180;
-  const pulseCycle = pulseActive
-    ? interpolate(
-        Math.sin(((frame - 180) / 40) * Math.PI * 2),
-        [-1, 1],
-        [0, 0.4]
-      )
-    : 0;
+  // Glow pulse on prompt panel
+  const glowIntensity =
+    frame > 20
+      ? 0.5 + 0.5 * Math.sin(((frame - 20) / 40) * Math.PI * 2)
+      : 0;
+
+  // Context window slides in at frame 90
+  const contextOpacity = interpolate(frame, [90, 115], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const contextSlide = interpolate(frame, [90, 115], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.poly(3)),
+  });
+
+  // Caption at frame 150
+  const captionOpacity = interpolate(frame, [150, 170], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+
+  // Blue pulse on right window (frames 180+)
+  const pulsePhase =
+    frame > 180
+      ? ((frame - 180) / 40) * Math.PI * 2
+      : 0;
 
   return (
     <AbsoluteFill>
       {/* Prompt panel */}
-      <PromptPanel opacity={panelFade} />
+      <PromptPanel opacity={panelFadeIn} glowIntensity={glowIntensity} />
 
-      {/* Scrolling code panel */}
-      <CodeScrollPanel scrollOffset={scrollOffset} opacity={panelFade} />
+      {/* Code scroll panel */}
+      <CodeScrollPanel opacity={panelFadeIn} scrollOffset={scrollOffset} />
 
-      {/* Height arrow */}
-      <HeightArrow opacity={arrowOpacity * panelFade} />
+      {/* Height comparison arrow */}
+      <HeightArrow opacity={arrowOpacity} />
 
       {/* Ratio badge */}
-      {badgeFrame >= 0 && <RatioBadge scale={badgeScale} />}
+      <div
+        style={{
+          position: 'absolute',
+          left: 180,
+          top: 520,
+          transform: `scale(${badgeScale})`,
+          opacity: badgeOpacity,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 24,
+            fontWeight: 700,
+            color: COLORS.nozzleBlue,
+            backgroundColor: `${COLORS.nozzleBlue}1A`,
+            padding: '8px 24px',
+            borderRadius: 24,
+            border: `1px solid ${COLORS.nozzleBlue}33`,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          1:5 to 1:10
+        </div>
+      </div>
 
       {/* Context window comparison */}
-      <div
-        style={{
-          position: 'absolute',
-          left: ctxSlideX,
-          top: 0,
-          opacity: ctxOpacity,
-        }}
-      >
-        {/* LEFT: dense code */}
-        <ContextWindow
-          x={900}
-          y={200}
-          width={380}
-          height={500}
-          label="15,000 tokens of code"
-          labelColor={MUTED_GRAY}
-          fillColor={CODE_DIM}
-          fillOpacity={0.15}
-          style="dense"
-          opacity={1}
-        />
-
-        {/* RIGHT: clean prompts */}
-        <ContextWindow
-          x={1320}
-          y={200}
-          width={380}
-          height={500}
-          label="Prompts for 10 modules"
-          labelColor={NOZZLE_BLUE}
-          fillColor={NOZZLE_BLUE}
-          fillOpacity={0.15}
-          style="clean_blocks"
-          opacity={1}
-          pulse={pulseCycle}
-        />
-      </div>
-
-      {/* Caption below context windows */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 900,
-          top: 730,
-          width: 800,
-          textAlign: 'center',
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 14,
-          color: TEXT_LIGHT,
-          opacity: captionOpacity * 0.7,
-          lineHeight: '22px',
-        }}
-      >
-        Same context window. <strong>10× more system knowledge.</strong>
-      </div>
+      <ContextWindowComparison
+        opacity={contextOpacity}
+        slideProgress={contextSlide}
+        pulsePhase={frame > 180 ? pulsePhase : 0}
+        captionOpacity={captionOpacity}
+      />
     </AbsoluteFill>
   );
 };

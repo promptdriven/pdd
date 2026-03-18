@@ -1,6 +1,7 @@
-import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate } from 'remotion';
 import {
+  DataPoint,
   MARGIN_LEFT,
   MARGIN_TOP,
   CHART_WIDTH,
@@ -9,116 +10,123 @@ import {
   X_MAX,
   Y_MIN,
   Y_MAX,
-  LINE_STROKE_WIDTH,
-  LINE_LABEL_SIZE,
-  LINES_DRAW_START,
-  LINES_DRAW_END,
-  LINE_LABELS_FADE_START,
-  LINE_LABELS_FADE_END,
-} from "./constants";
+  LINES_START,
+  LINES_DRAW_DURATION,
+  LINE_LABEL_OPACITY,
+  FONT_FAMILY,
+} from './constants';
 
-/** Map data x to pixel x */
+/** Map data‑space X → pixel X */
 const xToPixel = (x: number): number =>
   MARGIN_LEFT + ((x - X_MIN) / (X_MAX - X_MIN)) * CHART_WIDTH;
 
-/** Map data y to pixel y */
+/** Map data‑space Y → pixel Y */
 const yToPixel = (y: number): number =>
-  MARGIN_TOP + CHART_HEIGHT - ((y - Y_MIN) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
+  MARGIN_TOP + ((Y_MAX - y) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
 
-/** Linearly interpolate between two data points */
-const lerpData = (
-  data: { x: number; y: number }[],
-  targetX: number
-): number => {
-  if (targetX <= data[0].x) return data[0].y;
-  if (targetX >= data[data.length - 1].x) return data[data.length - 1].y;
+/** Linearly interpolate between data points at a given x */
+const interpolateData = (data: DataPoint[], x: number): number => {
+  if (x <= data[0].x) return data[0].y;
+  if (x >= data[data.length - 1].x) return data[data.length - 1].y;
   for (let i = 0; i < data.length - 1; i++) {
-    if (targetX >= data[i].x && targetX <= data[i + 1].x) {
-      const t = (targetX - data[i].x) / (data[i + 1].x - data[i].x);
-      return data[i].y + t * (data[i + 1].y - data[i].y);
+    const a = data[i];
+    const b = data[i + 1];
+    if (x >= a.x && x <= b.x) {
+      const t = (x - a.x) / (b.x - a.x);
+      return a.y + t * (b.y - a.y);
     }
   }
   return data[data.length - 1].y;
 };
 
 interface AnimatedLineProps {
-  data: { x: number; y: number }[];
+  data: DataPoint[];
   color: string;
+  strokeWidth?: number;
   label: string;
 }
 
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   data,
   color,
+  strokeWidth = 3,
   label,
 }) => {
   const frame = useCurrentFrame();
 
-  // Current X position based on animation progress (linear draw)
+  // Line draw progress: linear over LINES_DRAW_DURATION starting at LINES_START
   const drawProgress = interpolate(
     frame,
-    [LINES_DRAW_START, LINES_DRAW_END],
+    [LINES_START, LINES_START + LINES_DRAW_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
-  const currentMaxX = X_MIN + (X_MAX - X_MIN) * drawProgress;
+  if (drawProgress <= 0) return null;
 
-  // Label fade in at end of draw
-  const labelOpacity = interpolate(
-    frame,
-    [LINE_LABELS_FADE_START, LINE_LABELS_FADE_END],
-    [0, 0.7],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  // Current x value the line has reached
+  const currentX = X_MIN + (X_MAX - X_MIN) * drawProgress;
 
-  // Build visible path points — sample every 0.5 years for smoothness
-  const pathPoints: { px: number; py: number }[] = [];
+  // Build the SVG path by sampling every 0.5 year
   const step = 0.5;
-  for (let x = X_MIN; x <= Math.min(currentMaxX, X_MAX); x += step) {
-    const y = lerpData(data, x);
-    pathPoints.push({ px: xToPixel(x), py: yToPixel(y) });
+  const points: string[] = [];
+  for (let x = X_MIN; x <= currentX; x += step) {
+    const y = interpolateData(data, x);
+    const px = xToPixel(x);
+    const py = yToPixel(y);
+    points.push(`${px},${py}`);
   }
-  // Ensure we include the exact currentMaxX endpoint
-  if (currentMaxX <= X_MAX) {
-    const y = lerpData(data, currentMaxX);
-    pathPoints.push({ px: xToPixel(currentMaxX), py: yToPixel(y) });
+  // Always include the exact end point
+  {
+    const y = interpolateData(data, currentX);
+    const px = xToPixel(currentX);
+    const py = yToPixel(y);
+    points.push(`${px},${py}`);
   }
 
-  if (pathPoints.length < 2) return null;
+  if (points.length < 2) return null;
 
-  // Build SVG path
-  const d = pathPoints
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.px} ${p.py}`)
-    .join(" ");
+  const pathD = `M ${points[0]} ` + points.slice(1).map((p) => `L ${p}`).join(' ');
 
-  // Last visible point for label positioning
-  const lastPoint = pathPoints[pathPoints.length - 1];
+  // End‑of‑line label (appears when line is 80% drawn)
+  const labelOpacity = interpolate(
+    drawProgress,
+    [0.8, 0.95],
+    [0, LINE_LABEL_OPACITY],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+  );
+
+  const endY = interpolateData(data, currentX);
+  const endPx = xToPixel(currentX);
+  const endPy = yToPixel(endY);
 
   return (
     <svg
       width={1920}
       height={1080}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
       <path
-        d={d}
+        d={pathD}
         fill="none"
         stroke={color}
-        strokeWidth={LINE_STROKE_WIDTH}
+        strokeWidth={strokeWidth}
         strokeLinecap="round"
         strokeLinejoin="round"
       />
 
-      {/* Line label at the end */}
-      {labelOpacity > 0 && (
+      {/* Small dot at the current tip */}
+      <circle cx={endPx} cy={endPy} r={4} fill={color} />
+
+      {/* Label at line end */}
+      {labelOpacity > 0.01 && (
         <text
-          x={lastPoint.px + 10}
-          y={lastPoint.py - 10}
+          x={endPx + 12}
+          y={endPy + 4}
           fill={color}
           fillOpacity={labelOpacity}
-          fontSize={LINE_LABEL_SIZE}
-          fontFamily="'Inter', sans-serif"
+          fontFamily={FONT_FAMILY}
+          fontSize={12}
         >
           {label}
         </text>
@@ -126,5 +134,8 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
     </svg>
   );
 };
+
+/** Export helper for other sub‑components to sample line data */
+export { interpolateData };
 
 export default AnimatedLine;

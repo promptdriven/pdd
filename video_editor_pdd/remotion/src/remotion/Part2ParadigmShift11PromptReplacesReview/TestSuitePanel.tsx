@@ -1,153 +1,116 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  TEST_SUITE_START,
-  CHECKMARK_INTERVAL,
-  TEST_PANEL_X,
-  TEST_PANEL_Y,
-  TEST_PANEL_WIDTH,
-  TEST_PANEL_HEIGHT,
-  PANEL_BG,
-  GREEN_ACCENT,
-  TEST_ITEMS,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing, spring, useVideoConfig } from 'remotion';
+import { COLORS, TEST_ITEMS } from './constants';
 
-const CHECKMARK_POP_DURATION = 8;
-
-interface TestLineProps {
-  name: string;
-  index: number;
-}
-
-const TestLine: React.FC<TestLineProps> = ({ name, index }) => {
+export const TestSuitePanel: React.FC<{
+  appearStart: number;
+  checkInterval: number;
+}> = ({ appearStart, checkInterval }) => {
   const frame = useCurrentFrame();
-  const checkStartFrame = TEST_SUITE_START + index * CHECKMARK_INTERVAL;
+  const { fps } = useVideoConfig();
 
-  if (frame < checkStartFrame) {
-    // Show the test name but no checkmark yet
-    return (
-      <div
-        style={{
-          fontFamily: "JetBrains Mono, monospace",
-          fontSize: 11,
-          lineHeight: "22px",
-          color: GREEN_ACCENT,
-          opacity: 0.2,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}
-      >
-        <span style={{ width: 16, display: "inline-block" }}>{"\u00A0"}</span>
-        <span>{name}</span>
-      </div>
-    );
-  }
-
-  // Checkmark pop animation using easeOut(back(1.3)) approximation
-  const localFrame = frame - checkStartFrame;
-  const scaleRaw = interpolate(
-    localFrame,
-    [0, CHECKMARK_POP_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.back(1.3)),
-    }
-  );
-
-  const checkOpacity = interpolate(
-    localFrame,
-    [0, CHECKMARK_POP_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  return (
-    <div
-      style={{
-        fontFamily: "JetBrains Mono, monospace",
-        fontSize: 11,
-        lineHeight: "22px",
-        color: GREEN_ACCENT,
-        opacity: 0.5,
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-      }}
-    >
-      <span
-        style={{
-          width: 16,
-          display: "inline-block",
-          transform: `scale(${scaleRaw})`,
-          opacity: checkOpacity,
-          color: GREEN_ACCENT,
-          fontWeight: 700,
-        }}
-      >
-        ✓
-      </span>
-      <span>{name}</span>
-    </div>
-  );
-};
-
-export const TestSuitePanel: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  // Panel fades in at TEST_SUITE_START
   const panelOpacity = interpolate(
     frame,
-    [TEST_SUITE_START, TEST_SUITE_START + 15],
+    [appearStart, appearStart + 15],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  if (frame < TEST_SUITE_START) return null;
-
   return (
     <div
       style={{
-        position: "absolute",
-        left: TEST_PANEL_X - TEST_PANEL_WIDTH / 2,
-        top: TEST_PANEL_Y - TEST_PANEL_HEIGHT / 2,
-        width: TEST_PANEL_WIDTH,
-        height: TEST_PANEL_HEIGHT,
-        backgroundColor: PANEL_BG,
-        opacity: panelOpacity * 0.2 + 0.8 * panelOpacity,
+        position: 'absolute',
+        left: 280,
+        top: 525,
+        width: 400,
+        height: 250,
+        backgroundColor: 'rgba(30, 41, 59, 0.2)',
         borderRadius: 4,
-        padding: 16,
-        boxSizing: "border-box",
-        overflow: "hidden",
+        opacity: panelOpacity,
+        overflow: 'hidden',
       }}
     >
       {/* Header */}
       <div
         style={{
-          fontFamily: "JetBrains Mono, monospace",
+          fontFamily: 'JetBrains Mono, monospace',
           fontSize: 10,
-          color: GREEN_ACCENT,
+          color: COLORS.green,
           opacity: 0.4,
-          marginBottom: 10,
+          padding: '8px 12px 4px',
+          borderBottom: '1px solid rgba(30, 41, 59, 0.3)',
         }}
       >
         test_suite.py
       </div>
 
-      {/* Test lines */}
-      {TEST_ITEMS.map((name, i) => (
-        <TestLine key={name} name={name} index={i} />
-      ))}
+      {/* Test items */}
+      <div style={{ padding: '8px 12px' }}>
+        {TEST_ITEMS.map((test, i) => {
+          const checkFrame = appearStart + i * checkInterval;
+          const isVisible = frame >= checkFrame;
+
+          // Use spring for the checkmark pop with back easing feel
+          const checkScale = isVisible
+            ? spring({
+                frame: frame - checkFrame,
+                fps,
+                config: {
+                  damping: 12,
+                  stiffness: 200,
+                  mass: 0.5,
+                },
+              })
+            : 0;
+
+          const textOpacity = isVisible
+            ? interpolate(
+                frame,
+                [checkFrame, checkFrame + 8],
+                [0, 0.5],
+                {
+                  extrapolateLeft: 'clamp',
+                  extrapolateRight: 'clamp',
+                }
+              )
+            : 0;
+
+          return (
+            <div
+              key={i}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontFamily: 'JetBrains Mono, monospace',
+                fontSize: 11,
+                lineHeight: '22px',
+                color: COLORS.green,
+                opacity: textOpacity,
+              }}
+            >
+              <span
+                style={{
+                  display: 'inline-block',
+                  transform: `scale(${checkScale})`,
+                  color: COLORS.green,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  width: 16,
+                  textAlign: 'center',
+                }}
+              >
+                {'\u2713'}
+              </span>
+              <span>{test}</span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };

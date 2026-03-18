@@ -1,176 +1,131 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
+  GRID_AREA_SIZE,
+  GAP,
   GRID_CENTER_X,
   GRID_CENTER_Y,
-  GRID_MAX_SIZE,
-  CONTEXT_WINDOW_W,
-  CONTEXT_WINDOW_H,
-  RED_HIGHLIGHT,
-  GREEN_HIGHLIGHT,
+  COLOR_RED,
+  COLOR_GREEN,
   RED_HIGHLIGHTS,
   GREEN_HIGHLIGHTS,
-  HIGHLIGHTS_START,
-  HIGHLIGHTS_STAGGER,
   HOLD_START,
-  PULSE_CYCLE,
-} from "./constants";
+  HIGHLIGHTS_START,
+} from './constants';
 
-/**
- * BlockHighlights — shows red blocks inside the context window
- * (irrelevant code grabbed by AI) and green blocks outside
- * (needed code that couldn't be seen).
- *
- * Green blocks pulse after the hold phase starts.
- */
-export const BlockHighlights: React.FC = () => {
-  const frame = useCurrentFrame();
+const GRID_SIZE_32 = 32;
+const BLOCK_SIZE_32 = (GRID_AREA_SIZE - (GRID_SIZE_32 - 1) * GAP) / GRID_SIZE_32;
+const TOTAL_GRID = GRID_SIZE_32 * BLOCK_SIZE_32 + (GRID_SIZE_32 - 1) * GAP;
+const GRID_LEFT = GRID_CENTER_X - TOTAL_GRID / 2;
+const GRID_TOP = GRID_CENTER_Y - TOTAL_GRID / 2;
 
-  // At this point the grid is 32x32
-  const gridSize = 32;
-  const gap = 2;
-  const totalGap = (gridSize - 1) * gap;
-  const blockSize = (GRID_MAX_SIZE - totalGap) / gridSize;
-  const gridLeft = GRID_CENTER_X - GRID_MAX_SIZE / 2;
-  const gridTop = GRID_CENTER_Y - GRID_MAX_SIZE / 2;
+interface HighlightBlockProps {
+  row: number;
+  col: number;
+  color: string;
+  icon: string;
+  delay: number;
+  isPulsing: boolean;
+  frame: number;
+}
 
-  // Context window bounds
-  const cwLeft = GRID_CENTER_X - CONTEXT_WINDOW_W / 2;
-  const cwTop = GRID_CENTER_Y - CONTEXT_WINDOW_H / 2;
-
-  const highlights: React.ReactNode[] = [];
-
-  // Red highlights (inside window — irrelevant code)
-  RED_HIGHLIGHTS.forEach((pos, i) => {
-    const appearFrame = HIGHLIGHTS_START + i * HIGHLIGHTS_STAGGER;
-    const opacity = interpolate(
-      frame,
-      [appearFrame, appearFrame + 15],
-      [0, 1],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.out(Easing.quad),
-      }
-    );
-
-    if (opacity <= 0) return;
-
-    // Position relative to context window, spread within window area
-    const x = cwLeft + (pos.col / 8) * (CONTEXT_WINDOW_W - blockSize * 2) + blockSize * 0.5;
-    const y = cwTop + (pos.row / 8) * (CONTEXT_WINDOW_H - blockSize * 2) + blockSize * 0.5;
-
-    highlights.push(
-      <div
-        key={`red-${i}`}
-        style={{
-          position: "absolute",
-          left: x,
-          top: y,
-          width: blockSize,
-          height: blockSize,
-          backgroundColor: `rgba(231, 76, 60, 0.15)`,
-          border: `1px solid rgba(231, 76, 60, 0.3)`,
-          borderRadius: 2,
-          opacity,
-        }}
-      >
-        <span
-          style={{
-            position: "absolute",
-            top: 1,
-            right: 3,
-            fontSize: 8,
-            color: RED_HIGHLIGHT,
-            fontWeight: 700,
-          }}
-        >
-          ✗
-        </span>
-      </div>
-    );
+const HighlightBlock: React.FC<HighlightBlockProps> = ({
+  row,
+  col,
+  color,
+  icon,
+  delay,
+  isPulsing,
+  frame,
+}) => {
+  const opacity = interpolate(frame - delay, [0, 10], [0, 1], {
+    easing: Easing.out(Easing.quad),
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
   });
 
-  // Green highlights (outside window — needed code)
-  GREEN_HIGHLIGHTS.forEach((pos, i) => {
-    const appearFrame =
-      HIGHLIGHTS_START +
-      RED_HIGHLIGHTS.length * HIGHLIGHTS_STAGGER +
-      i * HIGHLIGHTS_STAGGER;
-    const opacity = interpolate(
-      frame,
-      [appearFrame, appearFrame + 15],
-      [0, 1],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.out(Easing.quad),
-      }
-    );
-
-    if (opacity <= 0) return;
-
-    // Pulse effect during hold phase
-    let pulseGlow = 0.15;
-    if (frame >= HOLD_START) {
-      const pulsePhase =
-        ((frame - HOLD_START + i * 7) % PULSE_CYCLE) / PULSE_CYCLE;
-      pulseGlow = interpolate(
-        pulsePhase,
-        [0, 0.5, 1],
+  // Pulse for green blocks outside window
+  const pulseFrame = frame - delay;
+  const glowOpacity = isPulsing && pulseFrame > 10
+    ? interpolate(
+        pulseFrame % 45,
+        [0, 22, 45],
         [0.15, 0.25, 0.15],
         { easing: Easing.inOut(Easing.sin) }
-      );
-    }
+      )
+    : 0;
 
-    const x = gridLeft + pos.col * (blockSize + gap);
-    const y = gridTop + pos.row * (blockSize + gap);
-
-    highlights.push(
-      <div
-        key={`green-${i}`}
-        style={{
-          position: "absolute",
-          left: x,
-          top: y,
-          width: blockSize,
-          height: blockSize,
-          backgroundColor: `rgba(90, 170, 110, ${pulseGlow})`,
-          border: `1px solid rgba(90, 170, 110, 0.3)`,
-          borderRadius: 2,
-          opacity,
-          boxShadow: `0 0 6px rgba(90, 170, 110, ${pulseGlow})`,
-        }}
-      >
-        <span
-          style={{
-            position: "absolute",
-            top: 1,
-            right: 3,
-            fontSize: 8,
-            color: GREEN_HIGHLIGHT,
-            fontWeight: 700,
-          }}
-        >
-          ✓
-        </span>
-      </div>
-    );
-  });
+  const left = GRID_LEFT + col * (BLOCK_SIZE_32 + GAP);
+  const top = GRID_TOP + row * (BLOCK_SIZE_32 + GAP);
 
   return (
     <div
       style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: "100%",
-        height: "100%",
-        pointerEvents: "none" as const,
+        position: 'absolute',
+        left,
+        top,
+        width: BLOCK_SIZE_32,
+        height: BLOCK_SIZE_32,
+        backgroundColor: `${color}26`, // ~0.15 opacity
+        border: `1px solid ${color}4D`, // ~0.3 opacity
+        borderRadius: 2,
+        opacity,
+        boxShadow: isPulsing ? `0 0 6px ${color}${Math.round(glowOpacity * 255).toString(16).padStart(2, '0')}` : 'none',
+        zIndex: 20,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
     >
-      {highlights}
+      <span
+        style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: Math.max(6, BLOCK_SIZE_32 * 0.5),
+          color,
+          opacity: 0.7,
+        }}
+      >
+        {icon}
+      </span>
     </div>
+  );
+};
+
+export const BlockHighlights: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  const isInHoldPhase = frame + HIGHLIGHTS_START >= HOLD_START;
+
+  return (
+    <>
+      {/* Red highlights inside window — irrelevant code */}
+      {RED_HIGHLIGHTS.map((pos, i) => (
+        <HighlightBlock
+          key={`red-${i}`}
+          row={pos.row}
+          col={pos.col}
+          color={COLOR_RED}
+          icon="✗"
+          delay={i * 5}
+          isPulsing={false}
+          frame={frame}
+        />
+      ))}
+
+      {/* Green highlights outside window — needed code */}
+      {GREEN_HIGHLIGHTS.map((pos, i) => (
+        <HighlightBlock
+          key={`green-${i}`}
+          row={pos.row}
+          col={pos.col}
+          color={COLOR_GREEN}
+          icon="✓"
+          delay={RED_HIGHLIGHTS.length * 5 + i * 5}
+          isPulsing={isInHoldPhase}
+          frame={frame}
+        />
+      ))}
+    </>
   );
 };
 

@@ -1,283 +1,314 @@
 import React, { useMemo } from "react";
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  CODE_FONT,
-  CODE_FONT_SIZE,
-  DIFF_ADDED_COLOR,
-  DIFF_ADDED_BG_OPACITY,
-  DIFF_DELETED_COLOR,
-  DIFF_DELETED_BG_OPACITY,
-  DIFF_UNCHANGED_COLOR,
-  DIFF_UNCHANGED_OPACITY,
+  DIFF_COLORS,
   DIFF_BG_COLOR,
+  COUNTER_COLOR,
+  PHASE,
+  SCROLL_SPEED_INITIAL,
+  SCROLL_SPEED_MAX,
+  LINES_CHANGED,
   WIDTH,
-  HEIGHT,
-  seededRandom,
 } from "./constants";
 
-/**
- * A scrolling code diff display.
- * Generates realistic-looking diff lines and scrolls them upward.
- * scrollOffset controls the vertical pixel offset of the scroll.
- */
+// Seeded random for deterministic diff lines
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 127.1 + seed * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
 
 type DiffLineType = "added" | "deleted" | "unchanged";
 
 interface DiffLine {
   type: DiffLineType;
-  text: string;
+  content: string;
   lineNumber: number;
 }
 
-// Code snippets for realistic-looking diff content
-const CODE_FRAGMENTS = {
-  added: [
-    "  const result = await processChipLayout(gates);",
-    "  if (verifyNetlist(output)) {",
-    '    logger.info("Synthesis complete", { gateCount });',
-    "  return optimizeRouting(netlist, constraints);",
-    "  const placement = runPlacement(design);",
-    '  export function validateTiming(clock: number): boolean {',
-    "    yield* generateVerilog(module);",
-    "  const drc = checkDesignRules(layout);",
-    "    await synthesize(hdlSource, targetLib);",
-    "  function routeSignal(src: Pin, dst: Pin) {",
-    '    const buffer = insertBuffer(net, "high_drive");',
-    "  if (slackNs < 0) fixTimingViolation(path);",
-    "  const area = estimateArea(gateList);",
-    "    power += leakagePower(cell) + switchingPower(cell, activity);",
-    "  for (const net of criticalNets) {",
-    "    const fanout = computeFanout(driver, loads);",
-    '  assert(coverage > 0.95, "Insufficient coverage");',
-    "  const floorplan = partitionDesign(modules);",
-    "    registerMap.set(addr, defaultValue);",
-    "  if (congestion > threshold) reroute(region);",
-  ],
-  deleted: [
-    "  // TODO: manual review needed",
-    "  const result = legacyProcess(input);",
-    "  if (checkManually(output)) {",
-    '    console.log("Check completed");',
-    "  return oldRoutingAlgorithm(netlist);",
-    "  const placement = manualPlacement(design);",
-    "  // This function is deprecated",
-    "    throw new Error('Review timeout');",
-    "  const drc = manualDrcCheck(layout);",
-    "    await legacySynthesize(source);",
-    "  function routeByHand(src: Pin, dst: Pin) {",
-    "  // FIXME: timing violation in critical path",
-    "  const area = roughEstimate(gateList);",
-    "    power += estimatedPower(cell);",
-    "  for (const net of allNets) {",
-    "    const fanout = approximateFanout(driver);",
-  ],
-  unchanged: [
-    "import { ChipDesign } from './types';",
-    "import { NetlistParser } from './parser';",
-    "",
-    "interface SynthesisConfig {",
-    "  targetFrequency: number;",
-    "  maxArea: number;",
-    "  powerBudget: number;",
-    "}",
-    "",
-    "export class DesignCompiler {",
-    "  private netlist: Netlist;",
-    "  private constraints: TimingConstraints;",
-    "",
-    "  constructor(config: SynthesisConfig) {",
-    "    this.config = config;",
-    "  }",
-    "",
-    "  async compile(): Promise<Layout> {",
-    "    const parsed = this.parse();",
-    "    return this.optimize(parsed);",
-    "  }",
-    "}",
-  ],
-};
+// Generate realistic-looking code tokens
+function generateCodeLine(seed: number): string {
+  const keywords = [
+    "const", "let", "function", "return", "if", "else", "for",
+    "import", "export", "class", "async", "await", "try", "catch",
+    "switch", "case", "break", "while", "new", "this", "super",
+  ];
+  const names = [
+    "processData", "handleEvent", "validateInput", "transformOutput",
+    "parseConfig", "initModule", "renderComponent", "fetchResults",
+    "computeHash", "updateState", "dispatchAction", "resolvePromise",
+    "serializeData", "deserializePayload", "encryptBuffer", "decryptStream",
+    "allocateMemory", "releaseResources", "scheduleTask", "cancelTimer",
+  ];
+  const types = [
+    "string", "number", "boolean", "void", "Promise", "Array",
+    "Record", "Map", "Set", "Buffer", "ReadableStream", "Response",
+  ];
+  const operators = ["=", "===", "!==", "&&", "||", "??", "=>", "+=", "-="];
+  const values = [
+    "true", "false", "null", "undefined", "0", "1", "[]", "{}",
+    "'error'", "'success'", "'pending'", "0xFF", "1024", "new Map()",
+  ];
 
-function generateDiffLines(count: number): DiffLine[] {
-  const rng = seededRandom(123);
-  const lines: DiffLine[] = [];
-  let lineNum = 1;
+  const r1 = seededRandom(seed);
+  const r2 = seededRandom(seed + 1);
+  const r3 = seededRandom(seed + 2);
+  const r4 = seededRandom(seed + 3);
 
-  for (let i = 0; i < count; i++) {
-    const r = rng();
-    let type: DiffLineType;
-    if (r < 0.35) {
-      type = "added";
-    } else if (r < 0.55) {
-      type = "deleted";
-    } else {
-      type = "unchanged";
-    }
+  const indent = "  ".repeat(Math.floor(r1 * 4));
+  const kw = keywords[Math.floor(r2 * keywords.length)];
+  const name = names[Math.floor(r3 * names.length)];
 
-    const fragments = CODE_FRAGMENTS[type];
-    const idx = Math.floor(rng() * fragments.length);
-    const text = fragments[idx];
-
-    lines.push({ type, text, lineNumber: lineNum });
-    lineNum++;
+  if (r4 < 0.15) {
+    const type = types[Math.floor(seededRandom(seed + 4) * types.length)];
+    return `${indent}${kw} ${name}: ${type} ${operators[Math.floor(seededRandom(seed + 5) * operators.length)]} ${values[Math.floor(seededRandom(seed + 6) * values.length)]};`;
   }
+  if (r4 < 0.3) {
+    return `${indent}${kw} ${name}(${names[Math.floor(seededRandom(seed + 7) * names.length)]}) {`;
+  }
+  if (r4 < 0.4) {
+    return `${indent}}`;
+  }
+  if (r4 < 0.55) {
+    return `${indent}return ${name}(${values[Math.floor(seededRandom(seed + 8) * values.length)]});`;
+  }
+  if (r4 < 0.7) {
+    return `${indent}${kw} (${name} ${operators[Math.floor(seededRandom(seed + 9) * operators.length)]} ${values[Math.floor(seededRandom(seed + 10) * values.length)]}) {`;
+  }
+  if (r4 < 0.82) {
+    return `${indent}// ${name} — ${types[Math.floor(seededRandom(seed + 11) * types.length)]} handler`;
+  }
+  return `${indent}${name}.${names[Math.floor(seededRandom(seed + 12) * names.length)]}(${values[Math.floor(seededRandom(seed + 13) * values.length)]});`;
+}
 
+// Pre-generate enough diff lines
+function generateDiffLines(count: number): DiffLine[] {
+  const lines: DiffLine[] = [];
+  for (let i = 0; i < count; i++) {
+    const r = seededRandom(i * 7 + 42);
+    let type: DiffLineType;
+    if (r < 0.35) type = "added";
+    else if (r < 0.55) type = "deleted";
+    else type = "unchanged";
+
+    lines.push({
+      type,
+      content: generateCodeLine(i * 13 + 100),
+      lineNumber: i + 1,
+    });
+  }
   return lines;
 }
 
-const LINE_HEIGHT = 18;
-const PADDING_LEFT = 60;
-const PADDING_TOP = 20;
+const LINE_HEIGHT = 20;
+const VISIBLE_LINES = Math.ceil(1080 / LINE_HEIGHT) + 4;
+const TOTAL_GENERATED_LINES = 600;
 
-export const ScrollingCodeDiff: React.FC<{
-  scrollOffset: number;
-  opacity: number;
-}> = ({ scrollOffset, opacity }) => {
-  // Generate enough lines to fill the scroll range
-  // Max scroll: 30px/frame * 240 frames = 7200px, plus screen height
-  const totalLines = 600;
-  const lines = useMemo(() => generateDiffLines(totalLines), []);
+export const ScrollingCodeDiff: React.FC = () => {
+  const frame = useCurrentFrame();
 
-  const totalHeight = totalLines * LINE_HEIGHT;
+  const diffLines = useMemo(() => generateDiffLines(TOTAL_GENERATED_LINES), []);
 
-  // Calculate visible range
-  const visibleTop = scrollOffset;
-  const visibleBottom = scrollOffset + HEIGHT;
-  const startIdx = Math.max(0, Math.floor(visibleTop / LINE_HEIGHT) - 1);
-  const endIdx = Math.min(
-    totalLines,
-    Math.ceil(visibleBottom / LINE_HEIGHT) + 1
+  // Phase 2 starts at frame 240
+  const diffFrame = frame - PHASE.diffStart;
+  if (diffFrame < 0) return null;
+
+  // Morph-in opacity
+  const morphInOpacity = interpolate(
+    frame,
+    [PHASE.morphStart, PHASE.morphEnd],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  const visibleLines = lines.slice(startIdx, endIdx);
+  // Scroll speed ramp: accelerate then decelerate
+  // diffFrame 0-120: accelerate from 2 to 30
+  // diffFrame 120-180: hold at max speed 30
+  // diffFrame 180-240: decelerate from 30 to 0
+  const accelEnd = PHASE.diffAccelEnd - PHASE.diffStart; // 120
+  const maxEnd = PHASE.diffMaxSpeedEnd - PHASE.diffStart; // 180
+  const totalEnd = PHASE.diffEnd - PHASE.diffStart; // 240
+
+  let scrollSpeed: number;
+  if (diffFrame <= accelEnd) {
+    const t = Easing.in(Easing.quad)(diffFrame / accelEnd);
+    scrollSpeed = interpolate(t, [0, 1], [SCROLL_SPEED_INITIAL, SCROLL_SPEED_MAX]);
+  } else if (diffFrame <= maxEnd) {
+    scrollSpeed = SCROLL_SPEED_MAX;
+  } else {
+    const decelProgress = (diffFrame - maxEnd) / (totalEnd - maxEnd);
+    const t = Easing.out(Easing.cubic)(Math.min(decelProgress, 1));
+    scrollSpeed = interpolate(t, [0, 1], [SCROLL_SPEED_MAX, 0]);
+  }
+
+  // Compute cumulative scroll offset by integrating speed
+  // For simplicity, approximate with current frame position
+  let scrollOffset = 0;
+  for (let f = 0; f <= diffFrame; f++) {
+    let spd: number;
+    if (f <= accelEnd) {
+      const t = Easing.in(Easing.quad)(f / accelEnd);
+      spd = interpolate(t, [0, 1], [SCROLL_SPEED_INITIAL, SCROLL_SPEED_MAX]);
+    } else if (f <= maxEnd) {
+      spd = SCROLL_SPEED_MAX;
+    } else {
+      const dp = (f - maxEnd) / (totalEnd - maxEnd);
+      const t = Easing.out(Easing.cubic)(Math.min(dp, 1));
+      spd = interpolate(t, [0, 1], [SCROLL_SPEED_MAX, 0]);
+    }
+    scrollOffset += spd;
+  }
+
+  // Line counter animation
+  const counterProgress = interpolate(
+    diffFrame,
+    [0, maxEnd],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+  const easedCounter = Easing.out(Easing.quad)(counterProgress);
+  const currentCount = Math.round(easedCounter * LINES_CHANGED);
+  const formattedCount = currentCount.toLocaleString();
+
+  // Determine which lines are visible
+  const topLineIndex = Math.floor(scrollOffset / LINE_HEIGHT);
+  const offsetWithinLine = scrollOffset % LINE_HEIGHT;
 
   return (
-    <div
+    <AbsoluteFill
       style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: WIDTH,
-        height: HEIGHT,
-        overflow: "hidden",
         backgroundColor: DIFF_BG_COLOR,
-        opacity,
+        opacity: morphInOpacity,
+        overflow: "hidden",
       }}
     >
+      {/* Scrolling diff lines */}
       <div
         style={{
           position: "absolute",
-          top: -scrollOffset + PADDING_TOP,
-          left: 0,
-          width: WIDTH,
-          height: totalHeight,
+          left: 60,
+          top: -offsetWithinLine,
+          width: WIDTH - 120,
         }}
       >
-        {visibleLines.map((line, i) => {
-          const actualIdx = startIdx + i;
-          const y = actualIdx * LINE_HEIGHT;
+        {Array.from({ length: VISIBLE_LINES + 2 }).map((_, i) => {
+          const lineIdx = (topLineIndex + i) % TOTAL_GENERATED_LINES;
+          const line = diffLines[lineIdx];
+          const prefix = line.type === "added" ? "+" : line.type === "deleted" ? "-" : " ";
           const bgColor =
             line.type === "added"
-              ? DIFF_ADDED_COLOR
+              ? DIFF_COLORS.addedBg
               : line.type === "deleted"
-                ? DIFF_DELETED_COLOR
-                : "transparent";
-          const bgOpacity =
-            line.type === "added"
-              ? DIFF_ADDED_BG_OPACITY
-              : line.type === "deleted"
-                ? DIFF_DELETED_BG_OPACITY
-                : 0;
-          const prefix =
-            line.type === "added"
-              ? "+"
-              : line.type === "deleted"
-                ? "-"
-                : " ";
-          const prefixColor =
-            line.type === "added"
-              ? DIFF_ADDED_COLOR
-              : line.type === "deleted"
-                ? DIFF_DELETED_COLOR
-                : DIFF_UNCHANGED_COLOR;
+              ? DIFF_COLORS.deletedBg
+              : "transparent";
           const textColor =
-            line.type === "unchanged" ? DIFF_UNCHANGED_COLOR : "#E2E8F0";
-          const textOpacity =
-            line.type === "unchanged" ? DIFF_UNCHANGED_OPACITY : 0.8;
+            line.type === "added"
+              ? DIFF_COLORS.added
+              : line.type === "deleted"
+              ? DIFF_COLORS.deleted
+              : DIFF_COLORS.unchanged;
+          const textOpacity = line.type === "unchanged" ? 0.3 : 1;
 
           return (
             <div
-              key={actualIdx}
+              key={`${topLineIndex}-${i}`}
               style={{
-                position: "absolute",
-                top: y,
-                left: 0,
-                width: WIDTH,
                 height: LINE_HEIGHT,
-                display: "flex",
-                alignItems: "center",
+                lineHeight: `${LINE_HEIGHT}px`,
+                fontFamily: "JetBrains Mono, monospace",
+                fontSize: 12,
+                color: textColor,
+                opacity: textOpacity,
+                backgroundColor: bgColor,
+                paddingLeft: 8,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                borderLeft:
+                  line.type !== "unchanged"
+                    ? `3px solid ${textColor}`
+                    : "3px solid transparent",
               }}
             >
-              {/* Background highlight for added/deleted */}
-              {bgOpacity > 0 && (
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: WIDTH,
-                    height: LINE_HEIGHT,
-                    backgroundColor: bgColor,
-                    opacity: bgOpacity,
-                  }}
-                />
-              )}
-              {/* Line number */}
-              <span
-                style={{
-                  fontFamily: CODE_FONT,
-                  fontSize: CODE_FONT_SIZE,
-                  color: DIFF_UNCHANGED_COLOR,
-                  opacity: 0.2,
-                  width: 50,
-                  textAlign: "right",
-                  paddingRight: 8,
-                  userSelect: "none",
-                  position: "relative",
-                }}
-              >
-                {line.lineNumber}
+              <span style={{ display: "inline-block", width: 50, color: DIFF_COLORS.unchanged, opacity: 0.2 }}>
+                {(topLineIndex + i + 1).toString().padStart(4, " ")}
               </span>
-              {/* Prefix (+/-/space) */}
               <span
                 style={{
-                  fontFamily: CODE_FONT,
-                  fontSize: CODE_FONT_SIZE,
-                  color: prefixColor,
-                  opacity: 0.7,
+                  display: "inline-block",
                   width: 16,
-                  position: "relative",
+                  color: textColor,
+                  fontWeight: "bold",
                 }}
               >
                 {prefix}
               </span>
-              {/* Code text */}
-              <span
-                style={{
-                  fontFamily: CODE_FONT,
-                  fontSize: CODE_FONT_SIZE,
-                  color: textColor,
-                  opacity: textOpacity,
-                  paddingLeft: PADDING_LEFT - 66,
-                  whiteSpace: "pre",
-                  position: "relative",
-                }}
-              >
-                {line.text}
-              </span>
+              {line.content}
             </div>
           );
         })}
       </div>
-    </div>
+
+      {/* Line counter */}
+      <div
+        style={{
+          position: "absolute",
+          right: 170,
+          top: 50,
+          fontFamily: "JetBrains Mono, monospace",
+          fontSize: 16,
+          color: COUNTER_COLOR,
+          opacity: 0.7,
+          whiteSpace: "nowrap",
+          textAlign: "right",
+        }}
+      >
+        {formattedCount} lines changed
+      </div>
+
+      {/* Scroll speed indicator (subtle) */}
+      {scrollSpeed > 10 && (
+        <div
+          style={{
+            position: "absolute",
+            right: 170,
+            top: 80,
+            fontFamily: "JetBrains Mono, monospace",
+            fontSize: 11,
+            color: DIFF_COLORS.unchanged,
+            opacity: interpolate(scrollSpeed, [10, 30], [0, 0.3], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            }),
+            whiteSpace: "nowrap",
+          }}
+        >
+          {Math.round(scrollSpeed)}px/frame
+        </div>
+      )}
+
+      {/* Fade gradient at top and bottom edges */}
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 60,
+          background: `linear-gradient(to bottom, ${DIFF_BG_COLOR}, transparent)`,
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: 60,
+          background: `linear-gradient(to top, ${DIFF_BG_COLOR}, transparent)`,
+          pointerEvents: "none",
+        }}
+      />
+    </AbsoluteFill>
   );
 };
 

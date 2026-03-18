@@ -877,6 +877,66 @@ describe("audit executor factory", () => {
     );
   });
 
+  it("does not clamp late preview audit samples to frame 149 for long component timelines", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 8,
+        offsetSeconds: 0,
+        compositions: ["07_long_timeline_visual"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["07_long_timeline_visual.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
+    const specPath = pathMod.join(specDir, "07_long_timeline_visual.md");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === specPath) {
+        return [
+          "[Remotion]",
+          "",
+          "**Duration:** ~8s (240 frames @ 30fps)",
+          "",
+          "## Animation Sequence",
+          "1. Frame 0-40: Fade in.",
+          "2. Frame 40-120: Build the main layout.",
+          "3. Frame 120-210: Transition to the payoff state.",
+          "4. Frame 210-240: Hold on the final payoff frame.",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return candidate === specDir || candidate === specPath;
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "animation-section07-long-timeline-visual",
+      224,
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "animation_section",
+        "07_long_timeline_visual_frame.png"
+      )
+    );
+  });
+
   it("uses the rendered preview sample window when a preview composition spec timestamp is global to the full section timeline", async () => {
     const config = mockProjectConfig();
     config.sections = [

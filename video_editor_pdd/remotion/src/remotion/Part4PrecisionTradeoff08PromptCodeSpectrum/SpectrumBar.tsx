@@ -1,5 +1,5 @@
 import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   BAR_X,
   BAR_Y,
@@ -9,42 +9,44 @@ import {
   BLUE,
   GRAY,
   BORDER_COLOR,
-  ANIM,
+  TIMING,
 } from './constants';
 
 /**
- * The horizontal spectrum/gradient bar that draws from center outward.
- * Also renders endpoint labels ("Pure natural language" / "Pure code").
+ * The horizontal spectrum/gradient bar that draws from center outward,
+ * plus its endpoint labels ("Pure natural language" / "Pure code").
  */
 export const SpectrumBar: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Bar draws from center outward over barDrawDuration frames
+  // Bar draws from center outward over frames 0-30
   const drawProgress = interpolate(
     frame,
-    [ANIM.barDrawStart, ANIM.barDrawStart + ANIM.barDrawDuration],
+    [TIMING.barDrawStart, TIMING.barDrawStart + TIMING.barDrawDuration],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
 
-  // Endpoint labels fade in during the last half of bar draw
+  // Endpoint labels fade in during frames 15-30
   const labelOpacity = interpolate(
     frame,
-    [ANIM.barDrawStart + 15, ANIM.barDrawStart + ANIM.barDrawDuration],
+    [15, 30],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  const currentWidth = BAR_WIDTH * drawProgress;
-  const currentX = BAR_X + (BAR_WIDTH - currentWidth) / 2;
+  const centerX = BAR_X + BAR_WIDTH / 2;
+  const currentHalfWidth = (BAR_WIDTH / 2) * drawProgress;
+  const currentLeft = centerX - currentHalfWidth;
+  const currentWidth = currentHalfWidth * 2;
 
   return (
     <>
-      {/* Glow behind bar */}
+      {/* Spectrum bar glow */}
       <div
         style={{
           position: 'absolute',
-          left: currentX,
+          left: currentLeft,
           top: BAR_Y,
           width: currentWidth,
           height: BAR_HEIGHT,
@@ -55,11 +57,11 @@ export const SpectrumBar: React.FC = () => {
         }}
       />
 
-      {/* Main gradient bar */}
+      {/* Spectrum bar */}
       <div
         style={{
           position: 'absolute',
-          left: currentX,
+          left: currentLeft,
           top: BAR_Y,
           width: currentWidth,
           height: BAR_HEIGHT,

@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+At 95% progress (frame 569/600), the frame should display Beat 3 — Compression Ratio with the context window comparison fully visible: LEFT window with dense code, RIGHT window with clean prompts pulsing blue, caption text, ratio badge, and prompt/code panels. Instead, the frame is nearly entirely blank with only a barely-perceptible faint funnel/nozzle shape visible in the center at extremely low opacity. All three beats' content (nozzle labels, two code panels, compression ratio) appear to be missing or invisible. This suggests either: (1) the animation sequence is not properly transitioning between beats, (2) all elements have been faded out by frame 540+, or (3) the component is not rendering the Beat 3 content at all. The engineering grid is also not visible.

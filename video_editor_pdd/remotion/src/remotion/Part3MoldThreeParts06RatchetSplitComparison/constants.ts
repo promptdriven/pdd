@@ -1,75 +1,80 @@
-// constants.ts — Colors, dimensions, and data for Ratchet Split Comparison
-
-export const WIDTH = 1920;
-export const HEIGHT = 1080;
-export const FPS = 30;
-export const TOTAL_FRAMES = 480;
-
-// Layout
-export const SPLIT_X = 960;
-export const LEFT_PANEL_WIDTH = 958;
-export const RIGHT_PANEL_X = 962;
-export const RIGHT_PANEL_WIDTH = 958;
-
-// Colors
-export const BG_COLOR = '#000000';
-export const LEFT_BG = '#0F172A';
-export const RIGHT_BG = '#0A0F1A';
+// ── Colors ──
+export const BG_BLACK = '#000000';
+export const BG_LEFT_PANEL = '#0F172A';
+export const BG_RIGHT_PANEL = '#0A0F1A';
 export const SPLIT_LINE_COLOR = '#334155';
+
 export const RED = '#EF4444';
 export const GREEN = '#5AAA6E';
 export const AMBER = '#D9944A';
-export const TEXT_PRIMARY = '#94A3B8';
-export const TEXT_SECONDARY = '#64748B';
-export const TEXT_LIGHT = '#E2E8F0';
+export const TEXT_PRIMARY = '#E2E8F0';
+export const TEXT_SECONDARY = '#94A3B8';
+export const TEXT_MUTED = '#64748B';
 
-// Typography
-export const FONT_MONO = 'JetBrains Mono, monospace';
-export const FONT_SANS = 'Inter, sans-serif';
-
-// Row config
+// ── Dimensions ──
+export const WIDTH = 1920;
+export const HEIGHT = 1080;
+export const SPLIT_X = 960;
+export const PANEL_WIDTH = 958;
 export const ROW_HEIGHT = 60;
-export const ROW_START_Y = 80;
+export const HEADER_Y = 40;
 
-// Traditional panel rows
+// ── Timeline bar ──
+export const TIMELINE_Y = 820;
+export const TIMELINE_HEIGHT = 100;
+export const TIMELINE_MARGIN_X = 60;
+
+// ── Callout ──
+export const CALLOUT_Y = 970;
+
+// ── Traditional rows data ──
 export const TRADITIONAL_ROWS = [
-  { bug: 'Bug: null crash', fix: 'Patch: add null check', icon: 'x' as const },
-  { bug: 'Same bug: different module', fix: 'Patch: add null check', icon: 'x' as const },
-  { bug: 'New bug: unicode failure', fix: 'Patch: encode input', icon: 'x' as const },
-  { bug: 'Regression: null check broke edge', fix: 'Patch: add condition', icon: 'x' as const },
-  { bug: 'Performance bug: O(n²)', fix: 'Patch: optimize loop', icon: 'x' as const },
-  { bug: 'Another null crash', fix: 'Patch: add check again', icon: 'x' as const },
-  { bug: 'New module: same bug pattern', fix: 'Patch: copy fix over', icon: 'x' as const },
-  { bug: 'Race condition found', fix: 'Patch: add lock', icon: 'warn' as const },
-  { bug: 'Null crash in API layer', fix: 'Patch: validate input', icon: 'x' as const },
-  { bug: 'Edge case: empty string', fix: 'Patch: add guard', icon: 'x' as const },
+  { bug: 'Bug found: null crash', action: 'Patch: add null check' },
+  { bug: 'Same bug: different module', action: 'Patch: add null check' },
+  { bug: 'New bug: unicode failure', action: 'Patch: encode input' },
+  { bug: 'Regression: null check broke edge case', action: 'Patch: add condition' },
+  { bug: 'Performance bug: O(n²)', action: 'Patch: optimize loop' },
+  { bug: 'Another null crash: API layer', action: 'Patch: add null check' },
+  { bug: 'Encoding bug: API response', action: 'Patch: decode output' },
+  { bug: 'Null again: third module', action: 'Patch: add null check' },
+  { bug: 'Type coercion bug', action: 'Patch: add cast' },
+  { bug: 'Race condition found', action: 'Patch: add mutex' },
 ];
 
-// PDD panel rows
+// ── PDD rows data ──
 export const PDD_ROWS = [
-  { text: 'Bug found: null crash', icon: 'alert' as const, color: RED },
-  { text: 'pdd bug user_parser', icon: 'wall' as const, color: AMBER, isMono: true },
-  { text: 'pdd fix user_parser → All tests pass ✓', icon: 'check' as const, color: GREEN, isMono: true },
+  { text: 'Bug found: null crash', icon: 'alert' as const },
+  { text: 'pdd bug user_parser', icon: 'wall' as const },
+  { text: 'pdd fix user_parser → All tests pass ✓', icon: 'check' as const },
 ];
 
-// Animation frame markers
-export const FRAMES = {
-  splitDraw: { start: 0, end: 15 },
-  headersFade: { start: 0, end: 20 },
-  leftRow1: 20,
-  rightRow1: 20,
-  leftRow2: 60,
-  leftRow3: 80,
-  rightRow2: 60,
-  leftRow4: 120,
-  leftRow5: 140,
-  leftRow6: 160,
-  rightRow3: 120,
-  pddSubtitle: 130,
-  moldIcon: 200,
-  autoScrollStart: 200,
-  timelineStart: 280,
-  timelineDraw: 60,
-  calloutStart: 380,
-  calloutFade: 20,
-};
+// ── Animation frames ──
+export const FRAME = {
+  SPLIT_DRAW_START: 0,
+  SPLIT_DRAW_DUR: 15,
+  HEADERS_START: 0,
+  HEADERS_DUR: 20,
+  // Left row appearances: staggered from frame 20
+  LEFT_ROW_START: 20,
+  LEFT_ROW_STAGGER: 20,
+  // Right row appearances: staggered from frame 20
+  RIGHT_ROW_1_START: 20,
+  RIGHT_ROW_2_START: 60,
+  RIGHT_ROW_3_START: 120,
+  // PDD extras
+  PDD_SUBTITLE_START: 150,
+  PDD_MOLD_START: 200,
+  // Left auto-scroll starts
+  LEFT_SCROLL_START: 200,
+  // Timeline
+  TIMELINE_START: 280,
+  TIMELINE_DRAW_DUR: 60,
+  // Callout
+  CALLOUT_START: 380,
+  CALLOUT_DUR: 20,
+  // Total
+  TOTAL: 480,
+} as const;
+
+// ── Ratchet steps for the staircase ──
+export const RATCHET_STEPS = 6;

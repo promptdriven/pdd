@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+Two critical issues: (1) The curve direction is inverted — it rises from low-left to high-right instead of descending from high-left to low-right as specified. The spec requires a hyperbola showing that few tests require HIGH prompt precision and many tests require LOW prompt precision. The rendered curve shows the opposite relationship, fundamentally contradicting the visual argument. (2) Both annotation zones are completely missing at frame 419/450 (93.3% progress, animation phase 7). By this point, both the left zone (amber highlight, dense prompt icon, 'Detailed prompt required' label) and the right zone (green highlight, sparse prompt icon, wall icons, 'Intent is enough' label) should be fully visible and holding. Neither zone highlight, icon, wall icon cluster, nor label is rendered.

@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+At frame 334/360 (93.1% progress, final hold phase), three critical elements specified for visibility by this point are entirely absent: (1) The equivalence symbol '≡' that should pulse at center between the two rows (should have appeared at frames 220-260), (2) Vertical dashed connections between corresponding stages in the two rows (should have appeared at frames 170-220), and (3) Summary text 'Specification in → verified artifact out' at canvas center (should have appeared at frames 260-310). Additionally, the arrow between 'Software' and 'Tests pass' in the bottom row appears missing. The two flow rows are also shifted significantly to the left, leaving the right ~40% of the canvas empty, rather than being centered or more evenly distributed. The core visual thesis of the scene — the structural isomorphism between Synopsys and PDD pipelines — is severely undermined without the equivalence symbol and dashed connections.

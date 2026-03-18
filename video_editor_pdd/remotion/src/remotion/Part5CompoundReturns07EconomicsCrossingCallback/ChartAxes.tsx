@@ -1,136 +1,148 @@
-// ChartAxes.tsx — Grid lines, axis lines, and axis labels (morphable)
 import React from 'react';
-import { CHART, COLORS, OPACITIES, Y_RANGE } from './constants';
-
-interface ChartAxesProps {
-  /** X-axis labels to display */
-  xLabels: string[];
-  /** Opacity of the entire axes group */
-  opacity: number;
-}
+import {interpolate, useCurrentFrame, Easing} from 'remotion';
+import {
+  CHART_LEFT, CHART_RIGHT, CHART_TOP, CHART_BOTTOM,
+  CHART_WIDTH, CHART_HEIGHT,
+  GRID_COLOR, GRID_OPACITY,
+  AXIS_LABEL_COLOR,
+  Y_MAX, Y_STEP,
+  INITIAL_X_LABELS, FINAL_X_LABELS,
+  MORPH_START, MORPH_DURATION,
+} from './constants';
 
 /**
- * Renders the chart grid, axes, and labels.
- * Labels are provided externally so the parent can morph them.
+ * Chart axes, grid lines, and x-axis labels with morph support.
  */
-export const ChartAxes: React.FC<ChartAxesProps> = ({ xLabels, opacity }) => {
-  const { left, top, width, height } = CHART;
+export const ChartAxes: React.FC = () => {
+  const frame = useCurrentFrame();
 
-  // Horizontal grid lines at $5 intervals (0, 5, 10, 15, 20, 25, 30)
-  const yTicks = [0, 5, 10, 15, 20, 25, 30];
+  const morphProgress = interpolate(
+    frame,
+    [MORPH_START, MORPH_START + MORPH_DURATION],
+    [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.4, 0, 0.2, 1)},
+  );
+
+  // Horizontal grid lines at $10 intervals
+  const hLines: number[] = [];
+  for (let v = Y_STEP; v <= Y_MAX; v += Y_STEP) {
+    const y = CHART_BOTTOM - (v / Y_MAX) * CHART_HEIGHT;
+    hLines.push(y);
+  }
+
+  // Vertical grid at label positions (8 positions)
+  const vLineCount = 8;
+  const vLines: number[] = [];
+  for (let i = 0; i < vLineCount; i++) {
+    vLines.push(CHART_LEFT + (i / (vLineCount - 1)) * CHART_WIDTH);
+  }
+
+  // Interpolated X labels
+  const xLabels = INITIAL_X_LABELS.map((initLabel, i) => {
+    const finalLabel = FINAL_X_LABELS[i] || '';
+    if (morphProgress <= 0) return initLabel;
+    if (morphProgress >= 1) return finalLabel;
+    // During morph, fade out initial, fade in final
+    return morphProgress < 0.5 ? initLabel : finalLabel;
+  });
+
+  const xLabelOpacity = (i: number) => {
+    if (morphProgress <= 0 || morphProgress >= 1) return 0.5;
+    // Fade through transition
+    const dist = Math.abs(morphProgress - 0.5);
+    return 0.5 * (dist / 0.5); // fades to 0 at midpoint, back to 0.5
+  };
+
+  // Y-axis labels
+  const yLabels = [];
+  for (let v = 0; v <= Y_MAX; v += Y_STEP) {
+    yLabels.push({value: v, y: CHART_BOTTOM - (v / Y_MAX) * CHART_HEIGHT});
+  }
 
   return (
-    <div style={{ position: 'absolute', inset: 0, opacity }}>
-      {/* SVG for grid + axes */}
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: 'absolute', top: 0, left: 0 }}
-      >
-        {/* Horizontal grid lines */}
-        {yTicks.map((val) => {
-          const yPos = top + height - (val / Y_RANGE.max) * height;
-          return (
-            <line
-              key={`hgrid-${val}`}
-              x1={left}
-              y1={yPos}
-              x2={left + width}
-              y2={yPos}
-              stroke={COLORS.gridLine}
-              strokeOpacity={OPACITIES.gridLine}
-              strokeWidth={1}
-            />
-          );
-        })}
-
-        {/* Vertical grid lines for each label */}
-        {xLabels.map((_, i) => {
-          const xPos = left + (i / (xLabels.length - 1)) * width;
-          return (
-            <line
-              key={`vgrid-${i}`}
-              x1={xPos}
-              y1={top}
-              x2={xPos}
-              y2={top + height}
-              stroke={COLORS.gridLine}
-              strokeOpacity={OPACITIES.gridLine}
-              strokeWidth={1}
-            />
-          );
-        })}
-
-        {/* X-axis baseline */}
+    <svg
+      width={1920}
+      height={1080}
+      style={{position: 'absolute', top: 0, left: 0}}
+    >
+      {/* Horizontal grid lines */}
+      {hLines.map((y, i) => (
         <line
-          x1={left}
-          y1={top + height}
-          x2={left + width}
-          y2={top + height}
-          stroke={COLORS.axisLabel}
-          strokeOpacity={0.3}
+          key={`h-${i}`}
+          x1={CHART_LEFT} y1={y}
+          x2={CHART_RIGHT} y2={y}
+          stroke={GRID_COLOR}
+          strokeOpacity={GRID_OPACITY}
           strokeWidth={1}
         />
+      ))}
 
-        {/* Y-axis baseline */}
+      {/* Vertical grid lines */}
+      {vLines.map((x, i) => (
         <line
-          x1={left}
-          y1={top}
-          x2={left}
-          y2={top + height}
-          stroke={COLORS.axisLabel}
-          strokeOpacity={0.3}
+          key={`v-${i}`}
+          x1={x} y1={CHART_TOP}
+          x2={x} y2={CHART_BOTTOM}
+          stroke={GRID_COLOR}
+          strokeOpacity={GRID_OPACITY}
           strokeWidth={1}
         />
-      </svg>
+      ))}
 
-      {/* Y-axis labels */}
-      {yTicks.map((val) => {
-        const yPos = top + height - (val / Y_RANGE.max) * height;
-        return (
-          <div
-            key={`ylabel-${val}`}
-            style={{
-              position: 'absolute',
-              right: 1920 - left + 10,
-              top: yPos - 8,
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 12,
-              color: COLORS.axisLabel,
-              opacity: OPACITIES.axisLabel,
-              textAlign: 'right',
-              width: 40,
-            }}
-          >
-            ${val}
-          </div>
-        );
-      })}
+      {/* X-axis line */}
+      <line
+        x1={CHART_LEFT} y1={CHART_BOTTOM}
+        x2={CHART_RIGHT} y2={CHART_BOTTOM}
+        stroke={AXIS_LABEL_COLOR}
+        strokeOpacity={0.3}
+        strokeWidth={1}
+      />
+
+      {/* Y-axis line */}
+      <line
+        x1={CHART_LEFT} y1={CHART_TOP}
+        x2={CHART_LEFT} y2={CHART_BOTTOM}
+        stroke={AXIS_LABEL_COLOR}
+        strokeOpacity={0.3}
+        strokeWidth={1}
+      />
 
       {/* X-axis labels */}
       {xLabels.map((label, i) => {
-        const xPos = left + (i / (xLabels.length - 1)) * width;
+        if (!label) return null;
+        const x = CHART_LEFT + (i / (vLineCount - 1)) * CHART_WIDTH;
         return (
-          <div
-            key={`xlabel-${i}`}
-            style={{
-              position: 'absolute',
-              left: xPos,
-              top: top + height + 12,
-              transform: 'translateX(-50%)',
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 12,
-              color: COLORS.axisLabel,
-              opacity: OPACITIES.axisLabel,
-              whiteSpace: 'nowrap',
-            }}
+          <text
+            key={`xl-${i}`}
+            x={x}
+            y={CHART_BOTTOM + 30}
+            textAnchor="middle"
+            fill={AXIS_LABEL_COLOR}
+            fillOpacity={xLabelOpacity(i)}
+            fontSize={12}
+            fontFamily="Inter, sans-serif"
           >
             {label}
-          </div>
+          </text>
         );
       })}
-    </div>
+
+      {/* Y-axis labels */}
+      {yLabels.map(({value, y}) => (
+        <text
+          key={`yl-${value}`}
+          x={CHART_LEFT - 15}
+          y={y + 4}
+          textAnchor="end"
+          fill={AXIS_LABEL_COLOR}
+          fillOpacity={0.5}
+          fontSize={12}
+          fontFamily="Inter, sans-serif"
+        >
+          ${value}
+        </text>
+      ))}
+    </svg>
   );
 };
 

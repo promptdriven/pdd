@@ -1,256 +1,290 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import { NOZZLE_BLUE, MUTED_GRAY, PROMPT_TEXT } from './constants';
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from 'remotion';
+import { COLORS, PROMPT_TEXT, PROMPT_FILE } from './constants';
 
 /**
  * Beat 1 — Nozzle Labels (frames 0-150)
- * Mold diagram with nozzle highlighted, text flowing into it.
+ * Mold diagram with nozzle illuminating blue.
+ * Text flows into nozzle like liquid injection.
  */
 
-// ── Mold cross-section (simplified) ──
-const MoldCrossSection: React.FC<{ nozzleOpacity: number }> = ({ nozzleOpacity }) => {
+const MOLD_CENTER_X = 960;
+const MOLD_CENTER_Y = 500;
+
+// Break prompt text into individual words for flowing animation
+const PROMPT_WORDS = PROMPT_TEXT.split(' ');
+
+const MoldDiagram: React.FC<{ nozzleOpacity: number }> = ({
+  nozzleOpacity,
+}) => {
   return (
     <svg
-      width={500}
-      height={400}
-      viewBox="0 0 500 400"
-      style={{ position: 'absolute', left: 710, top: 300 }}
+      width={1920}
+      height={1080}
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      {/* Outer mold shell — dimmed */}
+      {/* Mold body (dimmed) */}
+      {/* Left mold half */}
       <rect
-        x={50}
-        y={120}
-        width={400}
-        height={230}
-        rx={16}
-        fill="none"
-        stroke="#334155"
-        strokeWidth={2}
+        x={MOLD_CENTER_X - 200}
+        y={MOLD_CENTER_Y - 80}
+        width={180}
+        height={250}
+        rx={8}
+        fill={COLORS.codePanel}
         opacity={0.15}
-      />
-      {/* Inner cavity — dimmed */}
-      <rect
-        x={100}
-        y={170}
-        width={300}
-        height={130}
-        rx={10}
-        fill="#1E293B"
-        opacity={0.15}
-        stroke="#475569"
+        stroke={COLORS.codeBorder}
         strokeWidth={1}
       />
-      {/* Ejector pins — dimmed */}
-      {[160, 250, 340].map((cx) => (
-        <rect
-          key={cx}
-          x={cx - 4}
-          y={300}
-          width={8}
-          height={40}
-          rx={2}
-          fill="#475569"
-          opacity={0.12}
-        />
-      ))}
-
-      {/* Nozzle — highlighted */}
-      <g opacity={nozzleOpacity}>
+      {/* Right mold half */}
+      <rect
+        x={MOLD_CENTER_X + 20}
+        y={MOLD_CENTER_Y - 80}
+        width={180}
+        height={250}
+        rx={8}
+        fill={COLORS.codePanel}
+        opacity={0.15}
+        stroke={COLORS.codeBorder}
+        strokeWidth={1}
+      />
+      {/* Cavity (center gap) */}
+      <rect
+        x={MOLD_CENTER_X - 15}
+        y={MOLD_CENTER_Y - 40}
+        width={30}
+        height={200}
+        rx={4}
+        fill={COLORS.background}
+        opacity={0.3}
+        stroke={COLORS.codeBorder}
+        strokeWidth={1}
+      />
+      {/* Nozzle (top, highlighted) */}
+      <g>
         {/* Nozzle glow */}
         <ellipse
-          cx={250}
-          cy={120}
-          rx={50}
-          ry={30}
-          fill={NOZZLE_BLUE}
-          opacity={0.12}
+          cx={MOLD_CENTER_X}
+          cy={MOLD_CENTER_Y - 100}
+          rx={60}
+          ry={35}
+          fill={COLORS.nozzleBlue}
+          opacity={nozzleOpacity * 0.2}
           filter="url(#nozzleGlow)"
         />
         {/* Nozzle body */}
         <path
-          d="M 220 40 L 220 120 Q 220 130 230 130 L 270 130 Q 280 130 280 120 L 280 40 Z"
-          fill="none"
-          stroke={NOZZLE_BLUE}
+          d={`M ${MOLD_CENTER_X - 40} ${MOLD_CENTER_Y - 130}
+              L ${MOLD_CENTER_X - 15} ${MOLD_CENTER_Y - 80}
+              L ${MOLD_CENTER_X + 15} ${MOLD_CENTER_Y - 80}
+              L ${MOLD_CENTER_X + 40} ${MOLD_CENTER_Y - 130}
+              Z`}
+          fill={COLORS.nozzleBlue}
+          opacity={nozzleOpacity * 0.6}
+          stroke={COLORS.nozzleBlue}
           strokeWidth={3}
-          opacity={0.6}
         />
-        {/* Nozzle tip / opening */}
-        <path
-          d="M 235 130 L 235 145 Q 235 155 245 155 L 255 155 Q 265 155 265 145 L 265 130"
-          fill="none"
-          stroke={NOZZLE_BLUE}
-          strokeWidth={2}
-          opacity={0.5}
-        />
-        {/* Runner channel into cavity */}
-        <line
-          x1={250}
-          y1={155}
-          x2={250}
-          y2={170}
-          stroke={NOZZLE_BLUE}
-          strokeWidth={2}
-          opacity={0.4}
+        {/* Nozzle opening */}
+        <rect
+          x={MOLD_CENTER_X - 15}
+          y={MOLD_CENTER_Y - 85}
+          width={30}
+          height={10}
+          rx={2}
+          fill={COLORS.nozzleBlue}
+          opacity={nozzleOpacity * 0.8}
         />
       </g>
 
+      {/* Runners (dimmed) */}
+      <line
+        x1={MOLD_CENTER_X}
+        y1={MOLD_CENTER_Y - 40}
+        x2={MOLD_CENTER_X - 100}
+        y2={MOLD_CENTER_Y + 60}
+        stroke={COLORS.codeBorder}
+        strokeWidth={2}
+        opacity={0.15}
+      />
+      <line
+        x1={MOLD_CENTER_X}
+        y1={MOLD_CENTER_Y - 40}
+        x2={MOLD_CENTER_X + 100}
+        y2={MOLD_CENTER_Y + 60}
+        stroke={COLORS.codeBorder}
+        strokeWidth={2}
+        opacity={0.15}
+      />
+
+      {/* SVG filters */}
       <defs>
         <filter id="nozzleGlow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="12" />
+          <feGaussianBlur stdDeviation="12" />
         </filter>
       </defs>
     </svg>
   );
 };
 
-// ── Flowing text particles ──
-const FlowingText: React.FC<{ frame: number }> = ({ frame }) => {
-  const words = PROMPT_TEXT.split(' ');
-  const startFrame = 30;
-  const adjustedFrame = frame - startFrame;
-  if (adjustedFrame < 0) return null;
+const FlowingTextParticle: React.FC<{
+  word: string;
+  index: number;
+  totalWords: number;
+  frame: number;
+  startFrame: number;
+}> = ({ word, index, totalWords, frame, startFrame }) => {
+  const wordDelay = startFrame + index * 4; // stagger each word by 4 frames
+  const elapsed = frame - wordDelay;
 
-  return (
-    <>
-      {words.map((word, i) => {
-        const wordDelay = i * 6;
-        const wordFrame = adjustedFrame - wordDelay;
-        if (wordFrame < 0) return null;
+  if (elapsed < 0) return null;
 
-        // Each word flows downward toward the nozzle
-        const targetY = 420; // nozzle entry point (relative to page)
-        const startY = 280 + i * 2;
-        const progress = interpolate(wordFrame, [0, 50], [0, 1], {
-          extrapolateRight: 'clamp',
-        });
+  // Each word flows from above (y: 100) down toward nozzle (y: ~370)
+  const targetY = MOLD_CENTER_Y - 130;
+  const startY = 60;
+  const travelFrames = 50;
 
-        const y = interpolate(progress, [0, 1], [startY, targetY]);
-        // Horizontal wobble
-        const wobbleX =
-          Math.sin(wordFrame * 0.15 + i * 1.2) * 8 * (1 - progress);
-        const x = 960 + wobbleX + (i % 3 === 0 ? -30 : i % 3 === 1 ? 0 : 30);
+  const progress = Math.min(elapsed / travelFrames, 1);
 
-        const opacity = interpolate(
-          progress,
-          [0, 0.1, 0.85, 1],
-          [0, 0.7, 0.7, 0],
+  const y = interpolate(progress, [0, 1], [startY, targetY], {
+    easing: Easing.out(Easing.quad),
+  });
+
+  // Horizontal wobble using sine
+  const wobbleX =
+    Math.sin(elapsed * 0.15 + index * 1.2) * 8 * (1 - progress);
+
+  // Words spread across a horizontal band
+  const spreadX =
+    MOLD_CENTER_X -
+    120 +
+    (index % 5) * 55 +
+    wobbleX;
+
+  // Fade in quickly, then settle
+  const opacity = interpolate(progress, [0, 0.1, 0.8, 1], [0, 0.7, 0.7, 0.5]);
+
+  // Scale down slightly as it settles
+  const scale = interpolate(progress, [0, 1], [1.1, 0.9]);
+
+  // Once settled, disappear into the nozzle
+  const settledOpacity =
+    elapsed > travelFrames + 20
+      ? interpolate(
+          elapsed - travelFrames - 20,
+          [0, 15],
+          [0.5, 0],
           { extrapolateRight: 'clamp' }
-        );
-
-        return (
-          <div
-            key={i}
-            style={{
-              position: 'absolute',
-              left: x,
-              top: y,
-              transform: 'translateX(-50%)',
-              fontFamily: 'JetBrains Mono, monospace',
-              fontSize: 11,
-              color: NOZZLE_BLUE,
-              opacity,
-              whiteSpace: 'nowrap',
-              pointerEvents: 'none',
-            }}
-          >
-            {word}
-          </div>
-        );
-      })}
-    </>
-  );
-};
-
-// ── File label ──
-const FileLabel: React.FC<{ opacity: number }> = ({ opacity }) => (
-  <div
-    style={{
-      position: 'absolute',
-      left: 960,
-      top: 365,
-      transform: 'translateX(-50%)',
-      fontFamily: 'JetBrains Mono, monospace',
-      fontSize: 10,
-      color: MUTED_GRAY,
-      opacity: opacity * 0.5,
-      whiteSpace: 'nowrap',
-    }}
-  >
-    user_parser.prompt
-  </div>
-);
-
-// ── Nozzle labels (intent / requirements / constraints) ──
-const NozzleLabels: React.FC<{ frame: number }> = ({ frame }) => {
-  const labels = ['intent', 'requirements', 'constraints'];
-  const startFrame = 90;
+        )
+      : opacity;
 
   return (
-    <>
-      {labels.map((label, i) => {
-        const delay = startFrame + i * 10;
-        const localFrame = frame - delay;
-        if (localFrame < 0) return null;
-
-        const opacity = interpolate(localFrame, [0, 15, 45, 60], [0, 0.5, 0.5, 0], {
-          extrapolateRight: 'clamp',
-        });
-
-        const xOffset = (i - 1) * 120;
-
-        return (
-          <div
-            key={label}
-            style={{
-              position: 'absolute',
-              left: 960 + xOffset,
-              top: 740,
-              transform: 'translateX(-50%)',
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 12,
-              color: NOZZLE_BLUE,
-              opacity,
-              letterSpacing: 1,
-              textTransform: 'uppercase',
-            }}
-          >
-            {label}
-          </div>
-        );
-      })}
-    </>
+    <div
+      style={{
+        position: 'absolute',
+        left: spreadX,
+        top: y,
+        fontFamily: 'JetBrains Mono, monospace',
+        fontSize: 11,
+        color: COLORS.nozzleBlue,
+        opacity: settledOpacity,
+        transform: `scale(${scale})`,
+        whiteSpace: 'nowrap',
+        pointerEvents: 'none',
+      }}
+    >
+      {word}
+    </div>
   );
 };
 
 export const Beat1Nozzle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Nozzle illumination: easeOut(quad) over first 20 frames
-  const nozzleOpacity = interpolate(frame, [0, 20], [0, 1], {
+  // Frame 0-30: Mold fades in, nozzle illuminates
+  const nozzleOpacity = interpolate(frame, [0, 30], [0, 1], {
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
   // Overall mold fade-in
-  const moldFade = interpolate(frame, [0, 25], [0, 1], {
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
-
-  // File label fade
-  const fileLabelOpacity = interpolate(frame, [30, 50], [0, 1], {
+  const moldOpacity = interpolate(frame, [0, 20], [0, 1], {
     extrapolateRight: 'clamp',
   });
 
-  // Nozzle pulse (frames 90-150)
-  const pulsePhase = frame > 90 ? Math.sin((frame - 90) * 0.12) * 0.15 : 0;
+  // File label appears at frame 30
+  const fileLabelOpacity = interpolate(frame, [30, 50], [0, 0.5], {
+    extrapolateRight: 'clamp',
+  });
+
+  // Nozzle pulse at frames 90-150
+  const pulsePhase = frame > 90 ? (frame - 90) / 40 : 0;
+  const pulse =
+    frame > 90
+      ? 0.85 + 0.15 * Math.sin(pulsePhase * Math.PI * 2)
+      : 1;
+
+  // Labels that briefly appear at frames 100-140
+  const labelsOpacity = interpolate(frame, [100, 110, 130, 140], [0, 0.5, 0.5, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
   return (
-    <AbsoluteFill style={{ opacity: moldFade }}>
-      <MoldCrossSection nozzleOpacity={nozzleOpacity + pulsePhase} />
-      <FlowingText frame={frame} />
-      <FileLabel opacity={fileLabelOpacity} />
-      <NozzleLabels frame={frame} />
+    <AbsoluteFill style={{ opacity: moldOpacity }}>
+      <MoldDiagram nozzleOpacity={nozzleOpacity * pulse} />
+
+      {/* Flowing text particles (frames 30-90) */}
+      {PROMPT_WORDS.map((word, i) => (
+        <FlowingTextParticle
+          key={i}
+          word={word}
+          index={i}
+          totalWords={PROMPT_WORDS.length}
+          frame={frame}
+          startFrame={30}
+        />
+      ))}
+
+      {/* File label */}
+      <div
+        style={{
+          position: 'absolute',
+          left: MOLD_CENTER_X - 70,
+          top: MOLD_CENTER_Y - 180,
+          fontFamily: 'JetBrains Mono, monospace',
+          fontSize: 10,
+          color: COLORS.labelMuted,
+          opacity: fileLabelOpacity,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {PROMPT_FILE}
+      </div>
+
+      {/* Brief labels: intent, requirements, constraints */}
+      {['intent', 'requirements', 'constraints'].map((label, i) => (
+        <div
+          key={label}
+          style={{
+            position: 'absolute',
+            left: MOLD_CENTER_X - 180 + i * 140,
+            top: MOLD_CENTER_Y - 210,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 11,
+            color: COLORS.nozzleBlue,
+            opacity: labelsOpacity,
+            textTransform: 'uppercase',
+            letterSpacing: 1,
+          }}
+        >
+          {label}
+        </div>
+      ))}
     </AbsoluteFill>
   );
 };

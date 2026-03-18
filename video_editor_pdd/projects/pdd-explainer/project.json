@@ -20,7 +20,7 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 0.149333,
+      "durationSeconds": 0.362667,
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_hook",
@@ -29,7 +29,7 @@
         "06_still_patching_beat",
         "07_pdd_title_card"
       ],
-      "timelineSource": "authored"
+      "timelineSource": "generated"
     },
     {
       "id": "part1_economics",
@@ -38,8 +38,8 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 0.213333,
-      "offsetSeconds": 0.149333,
+      "durationSeconds": 0.426667,
+      "offsetSeconds": 0.362667,
       "compositions": [
         "01_section_title_card",
         "02_sock_economics_chart",
@@ -60,8 +60,8 @@
       "specDir": "part2_paradigm_shift",
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
-      "durationSeconds": 228.053292,
-      "offsetSeconds": 0.362666,
+      "durationSeconds": 228.117333,
+      "offsetSeconds": 0.789334,
       "compositions": [
         "01_section_title_card",
         "04_defect_fix_the_mold",
@@ -81,8 +81,8 @@
       "specDir": "part3_mold_three_parts",
       "remotionDir": "S03-Part3MoldThreeParts",
       "compositionId": "Part3MoldThreePartsSection",
-      "durationSeconds": 344.396583,
-      "offsetSeconds": 228.415958,
+      "durationSeconds": 344.448,
+      "offsetSeconds": 228.906667,
       "compositions": [
         "01_section_title_card",
         "02_mold_cross_section",
@@ -102,8 +102,8 @@
       "specDir": "part4_precision_tradeoff",
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
-      "durationSeconds": 112.000667,
-      "offsetSeconds": 572.812541,
+      "durationSeconds": 112.085333,
+      "offsetSeconds": 573.354667,
       "compositions": [
         "01_section_title_card",
         "02_printer_vs_mold_split",
@@ -123,8 +123,8 @@
       "specDir": "part5_compound_returns",
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
-      "durationSeconds": 115.321625,
-      "offsetSeconds": 684.813208,
+      "durationSeconds": 115.392,
+      "offsetSeconds": 685.4399999999999,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -144,8 +144,8 @@
       "specDir": "where_to_start",
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
-      "durationSeconds": 32.569083,
-      "offsetSeconds": 800.1348330000001,
+      "durationSeconds": 32.661333,
+      "offsetSeconds": 800.8319999999999,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -164,8 +164,8 @@
       "specDir": "closing",
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 20.903208,
-      "offsetSeconds": 832.703916,
+      "durationSeconds": 20.992,
+      "offsetSeconds": 833.4933329999999,
       "compositions": [
         "01_sock_callback_split",
         "03_code_regenerate_workflow",
@@ -176,7 +176,7 @@
         "08_mold_is_what_matters",
         "09_final_title_card"
       ],
-      "timelineSource": "authored"
+      "timelineSource": "generated"
     }
   ],
   "audioSync": {

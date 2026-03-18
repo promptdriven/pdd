@@ -1,224 +1,203 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-import { FlowStageIcon, StageIconType } from "./FlowStageIcon";
-import { FlowArrow } from "./FlowArrow";
-import { DashedConnection } from "./DashedConnection";
-import { EquivalenceSymbol } from "./EquivalenceSymbol";
+import React from 'react';
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+  Sequence,
+} from 'remotion';
+import { FlowRow } from './FlowRow';
+import { DashedConnection } from './DashedConnection';
 import {
   BG_COLOR,
-  UI_FONT,
-  ROW_LABEL_SIZE,
-  SUMMARY_SIZE,
-  TEXT_COLOR,
   SYNOPSYS_COLOR,
-  SYNOPSYS_OPACITY,
   PDD_COLOR,
-  PDD_OPACITY,
-  NEUTRAL_COLOR,
-  NEUTRAL_OPACITY,
-  VERIFY_COLOR,
-  VERIFY_OPACITY,
-  SYNOPSYS_LABEL_OPACITY,
-  PDD_LABEL_OPACITY,
-  TOP_ROW_Y,
-  BOTTOM_ROW_Y,
-  STAGE_X,
-  ROW_LABEL_X,
-  LABEL_FADE_START,
-  LABEL_FADE_END,
-  TOP_ROW_START,
-  BOTTOM_ROW_START,
-  STAGE_FADE_DURATION,
-  STAGE_STAGGER,
-  ARROW_DRAW_DURATION,
-  DASHED_START,
-  DASHED_DRAW_DURATION,
-  DASHED_STAGGER,
-  SUMMARY_FADE_START,
-  SUMMARY_FADE_DURATION,
-  SUMMARY_Y,
-  CANVAS_WIDTH,
-} from "./constants";
+  TEXT_COLOR,
+  SYNOPSYS_STAGES,
+  PDD_STAGES,
+  SYNOPSYS_Y,
+  PDD_Y,
+  EQUIVALENCE_Y,
+  STAGE_X_POSITIONS,
+  TIMING,
+} from './constants';
 
 export const defaultPart2ParadigmShift08SynopsysPddEquivalenceProps = {};
-
-interface StageConfig {
-  label: string;
-  iconType: StageIconType;
-  x: number;
-  color: string;
-  opacity: number;
-}
-
-const synopsysStages: StageConfig[] = [
-  { label: "Verilog spec", iconType: "document_code", x: STAGE_X[0], color: SYNOPSYS_COLOR, opacity: SYNOPSYS_OPACITY },
-  { label: "Synthesis", iconType: "gear", x: STAGE_X[1], color: SYNOPSYS_COLOR, opacity: SYNOPSYS_OPACITY },
-  { label: "Hardware", iconType: "gate_cluster", x: STAGE_X[2], color: NEUTRAL_COLOR, opacity: NEUTRAL_OPACITY },
-  { label: "FEC verified", iconType: "shield_check", x: STAGE_X[3], color: VERIFY_COLOR, opacity: VERIFY_OPACITY },
-];
-
-const pddStages: StageConfig[] = [
-  { label: "Prompt spec", iconType: "document_text", x: STAGE_X[0], color: PDD_COLOR, opacity: PDD_OPACITY },
-  { label: "Generation", iconType: "neural_network", x: STAGE_X[1], color: PDD_COLOR, opacity: PDD_OPACITY },
-  { label: "Software", iconType: "code_brackets", x: STAGE_X[2], color: NEUTRAL_COLOR, opacity: NEUTRAL_OPACITY },
-  { label: "Tests pass", iconType: "shield_check", x: STAGE_X[3], color: VERIFY_COLOR, opacity: VERIFY_OPACITY },
-];
-
-// Arrow endpoints: between each pair of stages
-const arrowGaps = [
-  { from: STAGE_X[0] + 50, to: STAGE_X[1] - 40 },
-  { from: STAGE_X[1] + 40, to: STAGE_X[2] - 50 },
-  { from: STAGE_X[2] + 50, to: STAGE_X[3] - 35 },
-];
 
 export const Part2ParadigmShift08SynopsysPddEquivalence: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Row label fade-in
+  // === Row Labels (fade in from frame 0) ===
   const labelOpacity = interpolate(
     frame,
-    [LABEL_FADE_START, LABEL_FADE_END],
+    [TIMING.LABELS_START, TIMING.LABELS_START + TIMING.LABELS_FADE],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
   );
 
-  // Summary fade-in
+  // === Equivalence Symbol ===
+  const equivFadeIn = interpolate(
+    frame,
+    [TIMING.EQUIV_START, TIMING.EQUIV_START + TIMING.EQUIV_FADE],
+    [0, 1],
+    {
+      easing: Easing.out(Easing.cubic),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
+  );
+
+  // Pulsing: cycles opacity between 0.3 and 0.6
+  const pulsePhase = frame - TIMING.EQUIV_START;
+  const pulseValue = frame >= TIMING.EQUIV_START
+    ? interpolate(
+        pulsePhase % TIMING.EQUIV_PULSE_PERIOD,
+        [0, TIMING.EQUIV_PULSE_PERIOD / 2, TIMING.EQUIV_PULSE_PERIOD],
+        [0.3, 0.6, 0.3],
+        {
+          easing: Easing.inOut(Easing.sin),
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        }
+      )
+    : 0;
+
+  const equivOpacity = equivFadeIn * pulseValue;
+
+  // === Summary Text ===
   const summaryOpacity = interpolate(
     frame,
-    [SUMMARY_FADE_START, SUMMARY_FADE_START + SUMMARY_FADE_DURATION],
+    [TIMING.SUMMARY_START, TIMING.SUMMARY_START + TIMING.SUMMARY_FADE],
     [0, 0.6],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
-      {/* Row label: SYNOPSYS */}
+    <AbsoluteFill
+      style={{
+        backgroundColor: BG_COLOR,
+        fontFamily: 'Inter, sans-serif',
+      }}
+    >
+      {/* === Row Labels === */}
       <div
         style={{
-          position: "absolute",
-          left: ROW_LABEL_X,
-          top: TOP_ROW_Y - 8,
-          fontFamily: UI_FONT,
-          fontSize: ROW_LABEL_SIZE,
+          position: 'absolute',
+          left: 80,
+          top: SYNOPSYS_Y - 6,
+          fontSize: 12,
           fontWeight: 600,
           color: SYNOPSYS_COLOR,
-          opacity: labelOpacity * SYNOPSYS_LABEL_OPACITY,
+          opacity: labelOpacity * 0.4,
           letterSpacing: 2,
-          pointerEvents: "none",
         }}
       >
         SYNOPSYS
       </div>
 
-      {/* Row label: PDD */}
       <div
         style={{
-          position: "absolute",
-          left: ROW_LABEL_X,
-          top: BOTTOM_ROW_Y - 8,
-          fontFamily: UI_FONT,
-          fontSize: ROW_LABEL_SIZE,
+          position: 'absolute',
+          left: 80,
+          top: PDD_Y - 6,
+          fontSize: 12,
           fontWeight: 600,
           color: PDD_COLOR,
-          opacity: labelOpacity * PDD_LABEL_OPACITY,
+          opacity: labelOpacity * 0.4,
           letterSpacing: 2,
-          pointerEvents: "none",
         }}
       >
         PDD
       </div>
 
-      {/* Top row — Synopsys stages */}
-      {synopsysStages.map((stage, i) => (
-        <FlowStageIcon
-          key={`syn-${i}`}
-          x={stage.x}
-          y={TOP_ROW_Y}
-          iconType={stage.iconType}
-          color={stage.color}
-          opacity={stage.opacity}
-          label={stage.label}
-          fadeStart={TOP_ROW_START + i * STAGE_STAGGER}
-          fadeDuration={STAGE_FADE_DURATION}
+      {/* === Top Row: Synopsys Flow === */}
+      <Sequence from={TIMING.TOP_ROW_START}>
+        <FlowRow
+          stages={SYNOPSYS_STAGES}
+          y={SYNOPSYS_Y}
         />
-      ))}
+      </Sequence>
 
-      {/* Top row — Arrows */}
-      {arrowGaps.map((gap, i) => (
-        <FlowArrow
-          key={`syn-arrow-${i}`}
-          fromX={gap.from}
-          fromY={TOP_ROW_Y}
-          toX={gap.to}
-          toY={TOP_ROW_Y}
-          drawStart={TOP_ROW_START + (i + 1) * STAGE_STAGGER - 5}
-          drawDuration={ARROW_DRAW_DURATION}
+      {/* === Bottom Row: PDD Flow === */}
+      <Sequence from={TIMING.BOTTOM_ROW_START}>
+        <FlowRow
+          stages={PDD_STAGES}
+          y={PDD_Y}
         />
-      ))}
+      </Sequence>
 
-      {/* Bottom row — PDD stages */}
-      {pddStages.map((stage, i) => (
-        <FlowStageIcon
-          key={`pdd-${i}`}
-          x={stage.x}
-          y={BOTTOM_ROW_Y}
-          iconType={stage.iconType}
-          color={stage.color}
-          opacity={stage.opacity}
-          label={stage.label}
-          fadeStart={BOTTOM_ROW_START + i * STAGE_STAGGER}
-          fadeDuration={STAGE_FADE_DURATION}
-        />
-      ))}
+      {/* === Vertical Dashed Connections === */}
+      <Sequence from={TIMING.CONNECTIONS_START}>
+        {STAGE_X_POSITIONS.map((x, i) => (
+          <DashedConnection
+            key={x}
+            x={x}
+            delay={i * TIMING.CONNECTION_STAGGER}
+            drawDuration={TIMING.CONNECTION_DRAW}
+          />
+        ))}
+      </Sequence>
 
-      {/* Bottom row — Arrows */}
-      {arrowGaps.map((gap, i) => (
-        <FlowArrow
-          key={`pdd-arrow-${i}`}
-          fromX={gap.from}
-          fromY={BOTTOM_ROW_Y}
-          toX={gap.to}
-          toY={BOTTOM_ROW_Y}
-          drawStart={BOTTOM_ROW_START + (i + 1) * STAGE_STAGGER - 5}
-          drawDuration={ARROW_DRAW_DURATION}
-        />
-      ))}
-
-      {/* Vertical dashed connections between corresponding stages */}
-      {STAGE_X.map((x, i) => (
-        <DashedConnection
-          key={`dash-${i}`}
-          x={x}
-          fromY={TOP_ROW_Y + 55}
-          toY={BOTTOM_ROW_Y - 55}
-          drawStart={DASHED_START + i * DASHED_STAGGER}
-          drawDuration={DASHED_DRAW_DURATION}
-        />
-      ))}
-
-      {/* Equivalence symbol ≡ */}
-      <EquivalenceSymbol />
-
-      {/* Summary text */}
-      {frame >= SUMMARY_FADE_START && (
+      {/* === Equivalence Symbol === */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 960,
+          top: EQUIVALENCE_Y,
+          transform: 'translate(-50%, -50%)',
+          fontSize: 64,
+          fontWeight: 700,
+          color: TEXT_COLOR,
+          opacity: equivOpacity,
+          textAlign: 'center',
+          lineHeight: 1,
+        }}
+      >
+        {/* Glow layer */}
         <div
           style={{
-            position: "absolute",
-            left: 0,
-            top: SUMMARY_Y,
-            width: CANVAS_WIDTH,
-            textAlign: "center",
-            fontFamily: UI_FONT,
-            fontSize: SUMMARY_SIZE,
-            fontWeight: 600,
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            fontSize: 64,
+            fontWeight: 700,
             color: TEXT_COLOR,
-            opacity: summaryOpacity,
-            pointerEvents: "none",
+            opacity: 0.08,
+            filter: 'blur(20px)',
+            pointerEvents: 'none',
           }}
         >
-          Specification in → verified artifact out
+          ≡
         </div>
-      )}
+        ≡
+      </div>
+
+      {/* === Summary Text === */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 960,
+          top: 900,
+          transform: 'translateX(-50%)',
+          fontSize: 16,
+          fontWeight: 600,
+          color: TEXT_COLOR,
+          opacity: summaryOpacity,
+          whiteSpace: 'nowrap',
+          textAlign: 'center',
+        }}
+      >
+        Specification in → verified artifact out
+      </div>
     </AbsoluteFill>
   );
 };

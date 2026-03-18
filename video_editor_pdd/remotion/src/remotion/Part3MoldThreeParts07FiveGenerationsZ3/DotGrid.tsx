@@ -1,40 +1,42 @@
-import React from 'react';
-import { AbsoluteFill } from 'remotion';
+import React, { useMemo } from 'react';
+import { DOT_GRID_SPACING, DOT_GRID_COLOR, DOT_GRID_OPACITY, WIDTH, HEIGHT } from './constants';
 
-interface DotGridProps {
-  spacing?: number;
-  color?: string;
-  opacity?: number;
-}
-
-export const DotGrid: React.FC<DotGridProps> = ({
-  spacing = 30,
-  color = '#1E293B',
-  opacity = 0.03,
-}) => {
-  const dots: React.ReactNode[] = [];
-  const cols = Math.ceil(1920 / spacing);
-  const rows = Math.ceil(1080 / spacing);
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      dots.push(
-        <circle
-          key={`${r}-${c}`}
-          cx={c * spacing}
-          cy={r * spacing}
-          r={1}
-          fill={color}
-        />
-      );
+export const DotGrid: React.FC = () => {
+  const dots = useMemo(() => {
+    const cols = Math.ceil(WIDTH / DOT_GRID_SPACING);
+    const rows = Math.ceil(HEIGHT / DOT_GRID_SPACING);
+    const result: React.ReactNode[] = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        result.push(
+          <circle
+            key={`${r}-${c}`}
+            cx={c * DOT_GRID_SPACING}
+            cy={r * DOT_GRID_SPACING}
+            r={1}
+            fill={DOT_GRID_COLOR}
+          />
+        );
+      }
     }
-  }
+    return result;
+  }, []);
 
   return (
-    <AbsoluteFill style={{ opacity }}>
-      <svg width={1920} height={1080} viewBox="0 0 1920 1080">
-        {dots}
-      </svg>
-    </AbsoluteFill>
+    <svg
+      width={WIDTH}
+      height={HEIGHT}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        opacity: DOT_GRID_OPACITY,
+        pointerEvents: 'none',
+      }}
+    >
+      {dots}
+    </svg>
   );
 };
+
+export default DotGrid;

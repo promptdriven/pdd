@@ -1,6 +1,11 @@
-// AnimatedLine.tsx — SVG polyline for a data series with label
 import React from 'react';
-import { CHART, OPACITIES, Y_RANGE } from './constants';
+import {interpolate, useCurrentFrame, Easing} from 'remotion';
+import {
+  CHART_LEFT, CHART_RIGHT, CHART_TOP, CHART_BOTTOM,
+  CHART_WIDTH, CHART_HEIGHT,
+  Y_MAX,
+  MORPH_START, MORPH_DURATION,
+} from './constants';
 
 interface DataPoint {
   x: number;
@@ -8,85 +13,131 @@ interface DataPoint {
 }
 
 interface AnimatedLineProps {
-  /** Array of data points */
-  data: DataPoint[];
-  /** X-axis range [min, max] for mapping */
-  xRange: [number, number];
-  /** Line color */
+  initialData: [number, number][];
+  finalData: [number, number][];
+  initialXRange: [number, number];
+  finalXRange: [number, number];
   color: string;
-  /** Label text */
-  label: string;
-  /** Group opacity (for fade-in) */
-  opacity: number;
+  initialLabel: string;
+  finalLabel: string;
+  labelYOffset?: number;
 }
 
-/** Maps a data point to SVG pixel coords within the chart area. */
-const mapToPixel = (
-  pt: DataPoint,
+/**
+ * Converts data points to SVG coordinates, interpolating between
+ * initial and final datasets during the morph phase.
+ */
+function dataToSvg(
+  data: [number, number][],
   xRange: [number, number],
-): { px: number; py: number } => {
-  const { left, top, width, height } = CHART;
-  const xFrac = (pt.x - xRange[0]) / (xRange[1] - xRange[0]);
-  const yFrac = pt.y / Y_RANGE.max;
-  return {
-    px: left + xFrac * width,
-    py: top + height - yFrac * height,
-  };
-};
+): DataPoint[] {
+  return data.map(([x, y]) => ({
+    x: CHART_LEFT + ((x - xRange[0]) / (xRange[1] - xRange[0])) * CHART_WIDTH,
+    y: CHART_BOTTOM - (y / Y_MAX) * CHART_HEIGHT,
+  }));
+}
+
+function pointsToPath(points: DataPoint[]): string {
+  if (points.length === 0) return '';
+  return points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+    .join(' ');
+}
 
 /**
- * Renders an SVG polyline for a data series plus a label positioned
- * near the last data point.
+ * Interpolates between two sets of SVG points.
+ * Handles different-length arrays by resampling to the longer count.
  */
-export const AnimatedLine: React.FC<AnimatedLineProps> = ({
-  data,
-  xRange,
-  color,
-  label,
-  opacity,
-}) => {
-  const points = data.map((pt) => mapToPixel(pt, xRange));
-  const pathD = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.px} ${p.py}`)
-    .join(' ');
+function interpolatePoints(
+  a: DataPoint[],
+  b: DataPoint[],
+  t: number,
+): DataPoint[] {
+  const maxLen = Math.max(a.length, b.length);
+  const result: DataPoint[] = [];
 
-  const lastPt = points[points.length - 1];
-  // Label offset: position near end of line
-  const labelX = lastPt.px + 10;
-  const labelY = lastPt.py;
+  for (let i = 0; i < maxLen; i++) {
+    const aIdx = Math.min(Math.floor((i / maxLen) * a.length), a.length - 1);
+    const bIdx = Math.min(Math.floor((i / maxLen) * b.length), b.length - 1);
+    const pa = a[aIdx];
+    const pb = b[bIdx];
+    result.push({
+      x: pa.x + (pb.x - pa.x) * t,
+      y: pa.y + (pb.y - pa.y) * t,
+    });
+  }
+  return result;
+}
+
+export const AnimatedLine: React.FC<AnimatedLineProps> = ({
+  initialData,
+  finalData,
+  initialXRange,
+  finalXRange,
+  color,
+  initialLabel,
+  finalLabel,
+  labelYOffset = 0,
+}) => {
+  const frame = useCurrentFrame();
+
+  const morphProgress = interpolate(
+    frame,
+    [MORPH_START, MORPH_START + MORPH_DURATION],
+    [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.bezier(0.4, 0, 0.2, 1)},
+  );
+
+  const initialPoints = dataToSvg(initialData, initialXRange);
+  const finalPoints = dataToSvg(finalData, finalXRange);
+  const currentPoints = interpolatePoints(initialPoints, finalPoints, morphProgress);
+
+  const pathD = pointsToPath(currentPoints);
+
+  // Label position: at the end of the line
+  const lastPoint = currentPoints[currentPoints.length - 1];
+
+  // Label text morph
+  const labelOpacity = morphProgress < 0.4
+    ? 0.7
+    : morphProgress < 0.6
+      ? 0.7 * (1 - (morphProgress - 0.4) / 0.2)
+      : 0.7;
+
+  const currentLabel = morphProgress < 0.5 ? initialLabel : finalLabel;
 
   return (
-    <div style={{ position: 'absolute', inset: 0, opacity }}>
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: 'absolute', top: 0, left: 0 }}
-      >
-        <path
-          d={pathD}
-          fill="none"
-          stroke={color}
-          strokeWidth={2.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-      <div
-        style={{
-          position: 'absolute',
-          left: labelX,
-          top: labelY - 8,
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 13,
-          color,
-          opacity: OPACITIES.lineLabel,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </div>
-    </div>
+    <svg
+      width={1920}
+      height={1080}
+      style={{position: 'absolute', top: 0, left: 0}}
+    >
+      {/* The line */}
+      <path
+        d={pathD}
+        fill="none"
+        stroke={color}
+        strokeWidth={2.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeOpacity={0.85}
+      />
+
+      {/* Line label */}
+      {lastPoint && (
+        <text
+          x={Math.min(lastPoint.x + 12, CHART_RIGHT - 10)}
+          y={lastPoint.y + labelYOffset}
+          fill={color}
+          fillOpacity={labelOpacity}
+          fontSize={13}
+          fontFamily="Inter, sans-serif"
+          dominantBaseline="middle"
+        >
+          {currentLabel}
+        </text>
+      )}
+    </svg>
   );
 };
 

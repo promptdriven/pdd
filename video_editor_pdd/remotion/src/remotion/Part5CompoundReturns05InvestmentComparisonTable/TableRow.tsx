@@ -1,227 +1,228 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, TABLE } from './constants';
-import type { RowData } from './constants';
-
-// Simple SVG icons for each row type
-const BugIcon: React.FC = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={COLORS.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
-    <path d="M8 2l1.88 1.88M14.12 3.88L16 2M9 7.13v-1a3.003 3.003 0 116 0v1" />
-    <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 014-4h4a4 4 0 014 4v3c0 3.3-2.7 6-6 6z" />
-    <path d="M12 20v-9M6.53 9C4.6 8.8 3 7.1 3 5M6 13H2M6 17l-4 1M17.47 9c1.93-.2 3.53-1.9 3.53-4M18 13h4M18 17l4 1" />
-  </svg>
-);
-
-const CodeIcon: React.FC = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={COLORS.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
-    <polyline points="16 18 22 12 16 6" />
-    <polyline points="8 6 2 12 8 18" />
-    <line x1="14" y1="4" x2="10" y2="20" />
-  </svg>
-);
-
-const DocumentIcon: React.FC = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={COLORS.muted} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
-    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <line x1="16" y1="13" x2="8" y2="13" />
-    <line x1="16" y1="17" x2="8" y2="17" />
-    <polyline points="10 9 9 9 8 9" />
-  </svg>
-);
-
-const ICONS: Record<string, React.FC> = {
-  bug: BugIcon,
-  code: CodeIcon,
-  document: DocumentIcon,
-};
+import React from "react";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
+import { getIcon } from "./IconGlyphs";
+import {
+  COL_WIDTH,
+  ROW_HEIGHT,
+  CELL_PADDING,
+  TEXT_COLOR,
+  PATCHING_COLOR,
+  PDD_COLOR,
+  TABLE_BG,
+  ROW_SLIDE_DURATION,
+  CELL_STAGGER,
+  GLOW_DURATION,
+  PULSE_START,
+  PULSE_DURATION,
+} from "./constants";
 
 interface TableRowProps {
-  row: RowData;
-  /** Frame offset when this row starts appearing */
-  startFrame: number;
-  /** Whether the PDD pulse is active (frame 210-240) */
-  pulseProgress: number;
+  investment: string;
+  icon: string;
+  patching: string;
+  pdd: string;
+  pddGlow: number;
+  pddOpacity: number;
+  alternate: boolean;
+  /** The absolute frame at which this row starts appearing */
+  rowStart: number;
 }
 
-export const TableRow: React.FC<TableRowProps> = ({ row, startFrame, pulseProgress }) => {
+export const TableRow: React.FC<TableRowProps> = ({
+  investment,
+  icon,
+  patching,
+  pdd,
+  pddGlow,
+  pddOpacity,
+  alternate,
+  rowStart,
+}) => {
   const frame = useCurrentFrame();
-  const relativeFrame = frame - startFrame;
+  const relFrame = frame - rowStart;
 
-  // Row slide-in: easeOut(cubic) from y+15 over 20 frames
-  const slideY = interpolate(
-    relativeFrame,
-    [0, 20],
-    [15, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
-  );
+  // Row slide in from bottom
+  const slideY = interpolate(relFrame, [0, ROW_SLIDE_DURATION], [15, 0], {
+    easing: Easing.out(Easing.cubic),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
-  const rowOpacity = interpolate(
-    relativeFrame,
-    [0, 20],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  const rowOpacity = interpolate(relFrame, [0, ROW_SLIDE_DURATION], [0, 1], {
+    easing: Easing.out(Easing.quad),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
-  // Staggered cell reveals: investment at 0, patching at +10, pdd at +20
+  // Patching cell staggered appearance
   const patchingOpacity = interpolate(
-    relativeFrame,
-    [10, 25],
-    [0, 1],
+    relFrame,
+    [CELL_STAGGER, CELL_STAGGER + ROW_SLIDE_DURATION],
+    [0, 0.6],
     {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
 
-  const pddOpacity = interpolate(
-    relativeFrame,
-    [20, 35],
-    [0, 1],
+  // PDD cell staggered appearance
+  const pddCellOpacity = interpolate(
+    relFrame,
+    [CELL_STAGGER * 2, CELL_STAGGER * 2 + GLOW_DURATION],
+    [0, pddOpacity],
     {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
 
-  // PDD glow appear
-  const glowOpacity = interpolate(
-    relativeFrame,
-    [20, 35],
-    [0, row.pddGlow],
+  // PDD glow background
+  const pddGlowOpacity = interpolate(
+    relFrame,
+    [CELL_STAGGER * 2, CELL_STAGGER * 2 + GLOW_DURATION],
+    [0, pddGlow],
     {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
 
-  // PDD pulse effect (from parent timing)
-  const pulseExtra = pulseProgress > 0
-    ? interpolate(
-        pulseProgress,
-        [0, 0.5, 1],
-        [0, 0.1, 0],
-        {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.inOut(Easing.sin),
-        }
-      )
-    : 0;
+  // PDD pulse (all rows pulse together at PULSE_START)
+  const pulseRelFrame = frame - PULSE_START;
+  const pulseOpacityDelta =
+    pulseRelFrame >= 0 && pulseRelFrame <= PULSE_DURATION
+      ? interpolate(
+          pulseRelFrame,
+          [0, PULSE_DURATION / 2, PULSE_DURATION],
+          [0, 0.1, 0],
+          {
+            easing: Easing.inOut(Easing.sin),
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          }
+        )
+      : 0;
 
-  const IconComponent = ICONS[row.icon] || BugIcon;
+  // PDD glow pulse
+  const pulseGlowDelta =
+    pulseRelFrame >= 0 && pulseRelFrame <= PULSE_DURATION
+      ? interpolate(
+          pulseRelFrame,
+          [0, PULSE_DURATION / 2, PULSE_DURATION],
+          [0, 0.04, 0],
+          {
+            easing: Easing.inOut(Easing.sin),
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          }
+        )
+      : 0;
 
-  const bgColor = row.alternate
+  if (relFrame < 0) return null;
+
+  const bgColor = alternate
     ? `rgba(17, 24, 39, 0.3)`
-    : COLORS.background;
+    : TABLE_BG;
 
   return (
     <div
       style={{
-        display: 'flex',
-        width: TABLE.width,
-        height: TABLE.rowHeight,
+        display: "flex",
+        width: "100%",
+        height: ROW_HEIGHT,
+        background: bgColor,
+        borderBottom: `1px solid rgba(30, 41, 59, 0.3)`,
         transform: `translateY(${slideY}px)`,
         opacity: rowOpacity,
-        borderBottom: `1px solid rgba(30, 41, 59, 0.3)`,
-        backgroundColor: bgColor,
       }}
     >
       {/* Investment cell */}
       <div
         style={{
-          width: TABLE.colWidth,
-          height: TABLE.rowHeight,
-          display: 'flex',
-          alignItems: 'center',
-          paddingLeft: 24,
-          gap: 10,
+          width: COL_WIDTH,
+          height: ROW_HEIGHT,
+          display: "flex",
+          alignItems: "center",
+          paddingLeft: CELL_PADDING,
+          boxSizing: "border-box",
         }}
       >
-        <IconComponent />
+        {getIcon(icon)}
         <span
           style={{
-            fontFamily: 'Inter, sans-serif',
+            fontFamily: "Inter, sans-serif",
             fontSize: 16,
-            color: COLORS.text,
+            color: TEXT_COLOR,
+            fontWeight: 400,
           }}
         >
-          {row.investment}
+          {investment}
         </span>
       </div>
 
       {/* Patching cell */}
       <div
         style={{
-          width: TABLE.colWidth,
-          height: TABLE.rowHeight,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: patchingOpacity,
+          width: COL_WIDTH,
+          height: ROW_HEIGHT,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxSizing: "border-box",
         }}
       >
         <span
           style={{
-            fontFamily: 'Inter, sans-serif',
+            fontFamily: "Inter, sans-serif",
             fontSize: 15,
-            color: COLORS.patching,
-            opacity: 0.6,
+            color: PATCHING_COLOR,
+            opacity: patchingOpacity,
+            fontWeight: 400,
           }}
         >
-          {row.patching}
+          {patching}
         </span>
       </div>
 
       {/* PDD cell */}
       <div
         style={{
-          width: TABLE.colWidth,
-          height: TABLE.rowHeight,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: pddOpacity,
-          position: 'relative',
+          width: COL_WIDTH,
+          height: ROW_HEIGHT,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxSizing: "border-box",
+          position: "relative",
         }}
       >
         {/* Glow background */}
         <div
           style={{
-            position: 'absolute',
+            position: "absolute",
             inset: 4,
             borderRadius: 6,
-            backgroundColor: COLORS.pdd,
-            opacity: glowOpacity + pulseExtra,
+            backgroundColor: PDD_COLOR,
+            opacity: pddGlowOpacity + pulseGlowDelta,
           }}
         />
         <span
           style={{
-            fontFamily: 'Inter, sans-serif',
+            fontFamily: "Inter, sans-serif",
             fontSize: 15,
+            color: PDD_COLOR,
+            opacity: pddCellOpacity + pulseOpacityDelta,
             fontWeight: 600,
-            color: COLORS.pdd,
-            opacity: row.pddOpacity + pulseExtra,
-            position: 'relative',
+            position: "relative",
             zIndex: 1,
           }}
         >
-          {row.pdd}
+          {pdd}
         </span>
       </div>
     </div>
   );
 };
-
-export default TableRow;

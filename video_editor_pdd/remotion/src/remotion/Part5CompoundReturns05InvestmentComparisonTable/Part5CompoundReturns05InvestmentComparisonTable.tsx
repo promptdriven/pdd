@@ -1,148 +1,119 @@
-import React from 'react';
-import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from 'remotion';
-import { COLORS, TABLE, ROWS, ANIM } from './constants';
-import { TableRow } from './TableRow';
-import { SummaryLine } from './SummaryLine';
+import React from "react";
+import {
+  AbsoluteFill,
+  interpolate,
+  useCurrentFrame,
+  Easing,
+} from "remotion";
+import { TableRow } from "./TableRow";
+import { SummaryLine } from "./SummaryLine";
+import {
+  BG_COLOR,
+  LABEL_COLOR,
+  PATCHING_COLOR,
+  PDD_COLOR,
+  TABLE_WIDTH,
+  COL_WIDTH,
+  HEADER_HEIGHT,
+  TABLE_BORDER_RADIUS,
+  TABLE_X,
+  TABLE_Y,
+  TABLE_FADE_START,
+  TABLE_FADE_DURATION,
+  ROW1_START,
+  ROW2_START,
+  ROW3_START,
+  TABLE_ROWS,
+} from "./constants";
 
 export const defaultPart5CompoundReturns05InvestmentComparisonTableProps = {};
 
 export const Part5CompoundReturns05InvestmentComparisonTable: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Table container fade-in: easeOut(quad) over 20 frames
+  // Table container fade-in
   const containerOpacity = interpolate(
-    frame,
-    [ANIM.tableAppear.start, ANIM.tableAppear.start + ANIM.tableAppear.duration],
+    frame - TABLE_FADE_START,
+    [0, TABLE_FADE_DURATION],
     [0, 1],
     {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
 
-  // PDD pulse progress (0-1 during frames 210-240)
-  const pulseProgress =
-    frame >= ANIM.pddPulse.start && frame <= ANIM.pddPulse.start + ANIM.pddPulse.duration
-      ? (frame - ANIM.pddPulse.start) / ANIM.pddPulse.duration
-      : 0;
+  const headerLabelStyle = (
+    color: string,
+    align: "left" | "center"
+  ): React.CSSProperties => ({
+    width: COL_WIDTH,
+    height: HEADER_HEIGHT,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: align === "center" ? "center" : "flex-start",
+    paddingLeft: align === "left" ? 24 : 0,
+    boxSizing: "border-box",
+    fontFamily: "Inter, sans-serif",
+    fontSize: 12,
+    fontWeight: 600,
+    color,
+    opacity: 0.5,
+    letterSpacing: 2,
+    textTransform: "uppercase" as const,
+  });
 
-  // Row start frames
-  const rowStartFrames = [ANIM.row1.start, ANIM.row2.start, ANIM.row3.start];
-
-  // Calculate table total height for vertical centering
-  const tableContentHeight = TABLE.headerHeight + TABLE.rowHeight * ROWS.length;
+  const rowStarts = [ROW1_START, ROW2_START, ROW3_START];
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: COLORS.background,
-        fontFamily: 'Inter, sans-serif',
+        backgroundColor: BG_COLOR,
+        overflow: "hidden",
       }}
     >
-      {/* Table container — centered */}
+      {/* Table container */}
       <div
         style={{
-          position: 'absolute',
-          top: TABLE.centerY - tableContentHeight / 2,
-          left: TABLE.centerX - TABLE.width / 2,
-          width: TABLE.width,
+          position: "absolute",
+          left: TABLE_X,
+          top: TABLE_Y,
+          width: TABLE_WIDTH,
           opacity: containerOpacity,
           border: `1px solid rgba(51, 65, 85, 0.3)`,
-          borderRadius: TABLE.borderRadius,
-          overflow: 'hidden',
-          backgroundColor: COLORS.background,
+          borderRadius: TABLE_BORDER_RADIUS,
+          overflow: "hidden",
+          backgroundColor: BG_COLOR,
         }}
       >
         {/* Header row */}
         <div
           style={{
-            display: 'flex',
-            width: TABLE.width,
-            height: TABLE.headerHeight,
+            display: "flex",
+            width: "100%",
+            height: HEADER_HEIGHT,
             backgroundColor: `rgba(30, 41, 59, 0.4)`,
           }}
         >
-          {/* INVESTMENT header */}
-          <div
-            style={{
-              width: TABLE.colWidth,
-              height: TABLE.headerHeight,
-              display: 'flex',
-              alignItems: 'center',
-              paddingLeft: 24,
-            }}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: COLORS.muted,
-                opacity: 0.5,
-                letterSpacing: 2,
-              }}
-            >
-              INVESTMENT
-            </span>
+          <div style={headerLabelStyle(LABEL_COLOR, "left")}>INVESTMENT</div>
+          <div style={headerLabelStyle(PATCHING_COLOR, "center")}>
+            PATCHING
           </div>
-
-          {/* PATCHING header */}
-          <div
-            style={{
-              width: TABLE.colWidth,
-              height: TABLE.headerHeight,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: COLORS.patching,
-                opacity: 0.5,
-                letterSpacing: 2,
-              }}
-            >
-              PATCHING
-            </span>
-          </div>
-
-          {/* PDD header */}
-          <div
-            style={{
-              width: TABLE.colWidth,
-              height: TABLE.headerHeight,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: COLORS.pdd,
-                opacity: 0.5,
-                letterSpacing: 2,
-              }}
-            >
-              PDD
-            </span>
-          </div>
+          <div style={headerLabelStyle(PDD_COLOR, "center")}>PDD</div>
         </div>
 
         {/* Data rows */}
-        {ROWS.map((row, index) => (
+        {TABLE_ROWS.map((row, i) => (
           <TableRow
             key={row.investment}
-            row={row}
-            startFrame={rowStartFrames[index]}
-            pulseProgress={
-              // Only pass pulse progress once all rows have been revealed
-              frame >= ANIM.pddPulse.start ? pulseProgress : 0
-            }
+            investment={row.investment}
+            icon={row.icon}
+            patching={row.patching}
+            pdd={row.pdd}
+            pddGlow={row.pddGlow}
+            pddOpacity={row.pddOpacity}
+            alternate={row.alternate}
+            rowStart={rowStarts[i]}
           />
         ))}
       </div>

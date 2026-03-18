@@ -1,137 +1,114 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
-  SCHEMATIC_COLOR,
-  SCHEMATIC_OPACITY,
-  SCHEMATIC_X,
-  SCHEMATIC_Y,
-  SCHEMATIC_W,
-  SCHEMATIC_H,
-  SCHEMATIC_DISSOLVE_START,
-  SCHEMATIC_DISSOLVE_END,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { SCHEMATIC_COLOR, SCHEMATIC_END } from './constants';
 
-// Hand-drawn transistor/gate schematic paths (sketchy style)
-const SCHEMATIC_PATHS = [
-  // Transistor symbol left
-  "M -200 -80 L -200 80",
-  "M -200 -40 L -150 -40",
-  "M -200 0 L -150 0",
-  "M -200 40 L -150 40",
-  "M -150 -60 L -150 60",
-  "M -130 -50 L -130 50",
-  // Gate body left
-  "M -130 -50 Q -80 0 -130 50",
-  "M -80 0 L -40 0",
-  // Connecting wires
-  "M -40 0 L 0 0",
-  "M 0 -30 L 0 30",
-  // Transistor symbol right
-  "M 40 -80 L 40 80",
-  "M 40 -40 L 90 -40",
-  "M 40 0 L 90 0",
-  "M 40 40 L 90 40",
-  "M 90 -60 L 90 60",
-  "M 110 -50 L 110 50",
-  // Gate body right
-  "M 110 -50 Q 160 0 110 50",
-  "M 160 0 L 200 0",
-  // Horizontal wires top/bottom
-  "M -250 -100 L 250 -100",
-  "M -250 100 L 250 100",
-  // VDD/GND labels (vertical connectors)
-  "M 0 -100 L 0 -30",
-  "M 0 30 L 0 100",
-];
-
-// Generate dissolve particles from the schematic area
-const PARTICLE_COUNT = 80;
-const particles = Array.from({ length: PARTICLE_COUNT }, (_, i) => {
-  const seed = i * 137.508; // golden angle
-  return {
-    startX: ((seed * 7) % SCHEMATIC_W) - SCHEMATIC_W / 2,
-    startY: ((seed * 13) % SCHEMATIC_H) - SCHEMATIC_H / 2,
-    endX: ((seed * 7) % SCHEMATIC_W) - SCHEMATIC_W / 2 + (i % 3 === 0 ? 100 : -80) + Math.sin(seed) * 60,
-    endY: ((seed * 13) % SCHEMATIC_H) - SCHEMATIC_H / 2 + (i % 2 === 0 ? -120 : 80) + Math.cos(seed) * 40,
-    size: 2 + (i % 3),
-  };
-});
-
+/**
+ * A hand-drawn schematic that dissolves into particles.
+ * Positioned centered at (960, 300), 600x300px.
+ */
 export const HandDrawnSchematic: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const dissolveProgress = interpolate(
-    frame,
-    [SCHEMATIC_DISSOLVE_START, SCHEMATIC_DISSOLVE_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
-  );
+  // Dissolve over frames 0-40
+  const dissolveProgress = interpolate(frame, [0, SCHEMATIC_END], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.in(Easing.quad),
+  });
 
-  const schematicOpacity = 1 - dissolveProgress;
+  const opacity = 1 - dissolveProgress;
 
-  if (frame >= SCHEMATIC_DISSOLVE_END + 10) return null;
+  // Generate scattered particles for dissolve effect
+  const particles = React.useMemo(() => {
+    const pts: Array<{ x: number; y: number; dx: number; dy: number; size: number; delay: number }> = [];
+    for (let i = 0; i < 60; i++) {
+      pts.push({
+        x: (i % 10) * 60 + 30,
+        y: Math.floor(i / 10) * 50 + 25,
+        dx: (Math.sin(i * 1.7) * 80) + 40,
+        dy: (Math.cos(i * 2.3) * 60) + 30,
+        size: 2 + (i % 3),
+        delay: ((i % 10) + Math.floor(i / 10)) * 0.02,
+      });
+    }
+    return pts;
+  }, []);
+
+  if (frame >= SCHEMATIC_END + 10) return null;
 
   return (
-    <svg
-      width={CANVAS_WIDTH}
-      height={CANVAS_HEIGHT}
-      viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
-      style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
+    <div
+      style={{
+        position: 'absolute',
+        left: 960 - 300,
+        top: 300 - 150,
+        width: 600,
+        height: 300,
+      }}
     >
-      {/* Schematic lines */}
-      <g
-        transform={`translate(${SCHEMATIC_X}, ${SCHEMATIC_Y})`}
-        opacity={schematicOpacity * SCHEMATIC_OPACITY}
-      >
-        {SCHEMATIC_PATHS.map((d, i) => (
-          <path
-            key={`sch-${i}`}
-            d={d}
-            fill="none"
-            stroke={SCHEMATIC_COLOR}
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        ))}
-      </g>
+      <svg width={600} height={300} style={{ position: 'absolute', top: 0, left: 0 }}>
+        {/* Hand-drawn schematic lines — transistor-like symbols */}
+        <g opacity={opacity} stroke={SCHEMATIC_COLOR} strokeWidth={1.5} fill="none" strokeLinecap="round">
+          {/* Transistor 1 */}
+          <path d="M 80,80 L 80,220" strokeDasharray="4,2" />
+          <path d="M 80,120 L 140,120 L 140,100 L 180,120 L 140,140 L 140,120" />
+          <path d="M 180,120 L 240,120" />
+          <circle cx={80} cy={80} r={4} />
 
-      {/* Dissolve particles */}
-      {dissolveProgress > 0 && (
-        <g>
-          {particles.map((p, i) => {
-            const px = interpolate(dissolveProgress, [0, 1], [
-              SCHEMATIC_X + p.startX,
-              SCHEMATIC_X + p.endX,
-            ]);
-            const py = interpolate(dissolveProgress, [0, 1], [
-              SCHEMATIC_Y + p.startY,
-              SCHEMATIC_Y + p.endY,
-            ]);
-            const particleOpacity = interpolate(
+          {/* Transistor 2 */}
+          <path d="M 280,60 L 280,180" strokeDasharray="4,2" />
+          <path d="M 280,100 L 340,100 L 340,80 L 380,100 L 340,120 L 340,100" />
+          <path d="M 380,100 L 440,100" />
+
+          {/* Connecting wires */}
+          <path d="M 240,120 L 280,100" />
+          <path d="M 440,100 L 520,100 L 520,180" />
+          <path d="M 520,180 L 480,180 L 480,220 L 520,220" />
+
+          {/* Ground symbol */}
+          <path d="M 80,220 L 120,220" />
+          <path d="M 88,228 L 112,228" />
+          <path d="M 94,236 L 106,236" />
+
+          {/* VDD label */}
+          <text x={75} y={70} fontSize={10} fill={SCHEMATIC_COLOR} opacity={0.5} fontFamily="monospace">
+            VDD
+          </text>
+
+          {/* More connecting wires for complexity */}
+          <path d="M 440,100 L 440,200 L 380,200 L 380,240" />
+          <path d="M 180,180 L 240,180 L 240,240" />
+          <path d="M 140,200 L 200,200" />
+
+          {/* Additional gate symbols */}
+          <path d="M 350,200 C 350,185 380,185 380,200 C 380,215 350,215 350,200" />
+          <circle cx={348} cy={200} r={3} />
+        </g>
+
+        {/* Dissolving particles */}
+        {dissolveProgress > 0 &&
+          particles.map((p, i) => {
+            const particleDelay = p.delay;
+            const pProgress = interpolate(
               dissolveProgress,
-              [0, 0.3, 1],
-              [0, 0.6, 0],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+              [particleDelay, Math.min(particleDelay + 0.6, 1)],
+              [0, 1],
+              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
             );
             return (
               <rect
-                key={`p-${i}`}
-                x={px - p.size / 2}
-                y={py - p.size / 2}
+                key={i}
+                x={p.x + p.dx * pProgress}
+                y={p.y + p.dy * pProgress}
                 width={p.size}
                 height={p.size}
                 fill={SCHEMATIC_COLOR}
-                opacity={particleOpacity}
+                opacity={Math.max(0, 0.5 * (1 - pProgress))}
+                rx={1}
               />
             );
           })}
-        </g>
-      )}
-    </svg>
+      </svg>
+    </div>
   );
 };
-
-export default HandDrawnSchematic;

@@ -1,152 +1,144 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  WIDTH,
-  HEIGHT,
+  CHART_LEFT,
+  CHART_RIGHT,
   REGEN_COLOR,
-  SAWTOOTH_DRAW_START,
-  SAWTOOTH_DRAW_DURATION,
   SAWTOOTH_BASELINE_Y,
-  buildSawtoothPixels,
+  SAWTOOTH_PEAK_Y,
+  SAWTOOTH_TEETH,
+  SAWTOOTH_DURATION,
 } from './constants';
 
-function pointsToPath(points: { x: number; y: number }[]): string {
-  if (points.length === 0) return '';
-  let d = `M ${points[0].x} ${points[0].y}`;
-  for (let i = 1; i < points.length; i++) {
-    d += ` L ${points[i].x} ${points[i].y}`;
+/**
+ * Build sawtooth path: flat baseline with sharp triangular peaks.
+ * Each tooth: flat run → sharp rise (30px) → quick fall (10px) → back to baseline.
+ */
+function buildSawtoothPath(): { path: string; totalLength: number } {
+  const startX = CHART_LEFT;
+  const endX = CHART_RIGHT;
+  const totalWidth = endX - startX;
+  const toothWidth = totalWidth / SAWTOOTH_TEETH;
+  const flatRun = toothWidth - 40; // remaining width after peak shape
+  const riseWidth = 30;
+  const fallWidth = 10;
+
+  let d = `M ${startX} ${SAWTOOTH_BASELINE_Y}`;
+  let length = 0;
+
+  for (let i = 0; i < SAWTOOTH_TEETH; i++) {
+    const toothStart = startX + i * toothWidth;
+
+    // Flat segment
+    const flatEnd = toothStart + flatRun;
+    d += ` L ${flatEnd} ${SAWTOOTH_BASELINE_Y}`;
+    length += flatRun;
+
+    // Rise to peak
+    const peakX = flatEnd + riseWidth;
+    d += ` L ${peakX} ${SAWTOOTH_PEAK_Y}`;
+    length += Math.sqrt(riseWidth * riseWidth + (SAWTOOTH_BASELINE_Y - SAWTOOTH_PEAK_Y) ** 2);
+
+    // Fall back to baseline
+    const fallEndX = peakX + fallWidth;
+    d += ` L ${fallEndX} ${SAWTOOTH_BASELINE_Y}`;
+    length += Math.sqrt(fallWidth * fallWidth + (SAWTOOTH_BASELINE_Y - SAWTOOTH_PEAK_Y) ** 2);
   }
-  return d;
+
+  return { path: d, totalLength: length };
 }
 
-function computePathLength(points: { x: number; y: number }[]): number {
-  let total = 0;
-  for (let i = 1; i < points.length; i++) {
-    const dx = points[i].x - points[i - 1].x;
-    const dy = points[i].y - points[i - 1].y;
-    total += Math.sqrt(dx * dx + dy * dy);
-  }
-  return total;
-}
+/**
+ * Build dashed vertical lines at each sawtooth reset point.
+ */
+function getResetXPositions(): number[] {
+  const totalWidth = CHART_RIGHT - CHART_LEFT;
+  const toothWidth = totalWidth / SAWTOOTH_TEETH;
+  const positions: number[] = [];
 
-// Find x positions where the sawtooth resets (falls back to baseline)
-function getResetXPositions(points: { x: number; y: number }[]): number[] {
-  const resets: number[] = [];
-  for (let i = 2; i < points.length; i++) {
-    // A reset is where the y goes from peak back to baseline
-    if (
-      points[i].y === SAWTOOTH_BASELINE_Y &&
-      points[i - 1].y < SAWTOOTH_BASELINE_Y
-    ) {
-      resets.push(points[i].x);
-    }
+  for (let i = 1; i < SAWTOOTH_TEETH; i++) {
+    positions.push(CHART_LEFT + i * toothWidth);
   }
-  return resets;
+  return positions;
 }
 
 export const SawtoothLine: React.FC = () => {
   const frame = useCurrentFrame();
-  const sawtoothPoints = useMemo(() => buildSawtoothPixels(), []);
-  const pathD = useMemo(() => pointsToPath(sawtoothPoints), [sawtoothPoints]);
-  const totalLength = useMemo(
-    () => computePathLength(sawtoothPoints),
-    [sawtoothPoints],
-  );
-  const resetXPositions = useMemo(
-    () => getResetXPositions(sawtoothPoints),
-    [sawtoothPoints],
-  );
 
-  const drawProgress = interpolate(
-    frame,
-    [SAWTOOTH_DRAW_START, SAWTOOTH_DRAW_START + SAWTOOTH_DRAW_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
+  const drawProgress = interpolate(frame, [0, SAWTOOTH_DURATION], [0, 1], {
+    extrapolateRight: 'clamp',
+  });
 
+  const { path, totalLength } = buildSawtoothPath();
   const visibleLength = drawProgress * totalLength;
-  const hiddenLength = totalLength - visibleLength;
 
-  // Label fade in after sawtooth is mostly drawn
-  const labelOpacity = interpolate(
-    frame,
-    [
-      SAWTOOTH_DRAW_START + SAWTOOTH_DRAW_DURATION - 20,
-      SAWTOOTH_DRAW_START + SAWTOOTH_DRAW_DURATION + 10,
-    ],
-    [0, 0.5],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    },
-  );
+  const resetPositions = getResetXPositions();
 
-  // Dashed reset line opacity
-  const resetLineOpacity = interpolate(
-    frame,
-    [
-      SAWTOOTH_DRAW_START + SAWTOOTH_DRAW_DURATION * 0.3,
-      SAWTOOTH_DRAW_START + SAWTOOTH_DRAW_DURATION,
-    ],
-    [0, 0.08],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
+  // Label opacity — appears as line draws near end
+  const labelOpacity = interpolate(frame, [SAWTOOTH_DURATION - 30, SAWTOOTH_DURATION], [0, 0.5], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
 
-  if (drawProgress <= 0) return null;
+  // Reset line opacity
+  const resetLineOpacity = interpolate(frame, [0, SAWTOOTH_DURATION * 0.3], [0, 0.08], {
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
   return (
-    <svg
-      width={WIDTH}
-      height={HEIGHT}
-      style={{ position: 'absolute', top: 0, left: 0 }}
-    >
-      {/* Dashed vertical lines at reset points */}
-      {resetXPositions.map((x, i) => (
-        <line
-          key={`reset-${i}`}
-          x1={x}
-          y1={200}
-          x2={x}
-          y2={800}
+    <>
+      <svg
+        width={1920}
+        height={1080}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        {/* Dashed vertical reset lines */}
+        {resetPositions.map((x, i) => (
+          <line
+            key={`reset-${i}`}
+            x1={x}
+            y1={SAWTOOTH_PEAK_Y - 20}
+            x2={x}
+            y2={SAWTOOTH_BASELINE_Y + 20}
+            stroke={REGEN_COLOR}
+            strokeWidth={1}
+            strokeDasharray="4 4"
+            opacity={resetLineOpacity}
+          />
+        ))}
+
+        {/* Sawtooth line */}
+        <path
+          d={path}
+          fill="none"
           stroke={REGEN_COLOR}
-          strokeWidth={1}
-          strokeDasharray="6 4"
-          opacity={resetLineOpacity}
+          strokeWidth={2}
+          strokeDasharray={totalLength}
+          strokeDashoffset={totalLength - visibleLength}
+          strokeLinecap="round"
+          strokeLinejoin="round"
         />
-      ))}
+      </svg>
 
-      {/* Sawtooth line */}
-      <path
-        d={pathD}
-        fill="none"
-        stroke={REGEN_COLOR}
-        strokeWidth={2}
-        strokeDasharray={totalLength}
-        strokeDashoffset={hiddenLength}
-        strokeLinecap="round"
-      />
-
-      {/* Label at the end of the line */}
-      {labelOpacity > 0 && (
-        <text
-          x={1710}
-          y={SAWTOOTH_BASELINE_Y - 10}
-          fill={REGEN_COLOR}
-          opacity={labelOpacity}
-          fontFamily="Inter, sans-serif"
-          fontSize={12}
-          textAnchor="end"
-        >
-          Regeneration cost (resets each cycle)
-        </text>
-      )}
-    </svg>
+      {/* Label at endpoint */}
+      <div
+        style={{
+          position: 'absolute',
+          left: CHART_RIGHT + 15,
+          top: SAWTOOTH_BASELINE_Y - 20,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 12,
+          color: REGEN_COLOR,
+          opacity: labelOpacity,
+          maxWidth: 180,
+          lineHeight: 1.3,
+        }}
+      >
+        Regeneration cost
+        <br />
+        <span style={{ fontSize: 10, opacity: 0.7 }}>(resets each cycle)</span>
+      </div>
+    </>
   );
 };

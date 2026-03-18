@@ -1,6 +1,6 @@
 import React from 'react';
-import { AbsoluteFill, Sequence } from 'remotion';
-import { CANVAS, COLORS, TIMING } from './constants';
+import { AbsoluteFill, useVideoConfig } from 'remotion';
+import { COLORS, CARD1, CARD2, TIMING } from './constants';
 import { MoldCrossSection } from './MoldCrossSection';
 import { DataCard } from './DataCard';
 import { ConnectingArrow } from './ConnectingArrow';
@@ -8,75 +8,69 @@ import { VisualEquation } from './VisualEquation';
 
 export const defaultPart3MoldThreeParts04ResearchAnnotationsAiQualityProps = {};
 
-/**
- * Section 3.4: Research Annotations — AI Code Quality Data
- *
- * Research citation annotations materialize one by one overlaid on a dimmed
- * mold cross-section diagram. Two data cards (CodeRabbit and DORA) present
- * contrasting findings, connected by a visual equation showing that strong
- * tests (the "mold walls") are the differentiator.
- *
- * Duration: 450 frames @ 30fps (15s)
- */
 export const Part3MoldThreeParts04ResearchAnnotationsAiQuality: React.FC = () => {
+  const { fps } = useVideoConfig();
+
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: CANVAS.BG,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        backgroundColor: COLORS.background,
+        fontFamily: 'Inter, sans-serif',
       }}
     >
-      {/* Dimmed mold cross-section background — visible from frame 0 */}
+      {/* Layer 1: Dimmed mold cross-section background */}
       <MoldCrossSection />
 
-      {/* Card 1 — CodeRabbit: AI code quality deficit */}
-      <Sequence from={TIMING.card1Start} durationInFrames={TIMING.totalFrames - TIMING.card1Start}>
-        <DataCard
-          startFrame={TIMING.card1Start}
-          position={[200, 200]}
-          size={[400, 220]}
-          borderColor={COLORS.red}
-          header="AI CODE QUALITY"
-          mainStat="1.7× more issues"
-          mainStatColor={COLORS.red}
-          subStats={[
-            { text: '75% more logic errors', color: COLORS.red },
-            { text: '8× more performance problems', color: COLORS.red },
-          ]}
-          source="(CodeRabbit, 2025)"
-        />
-      </Sequence>
+      {/* Layer 2: Card 1 — CodeRabbit research (upper-left) */}
+      <DataCard
+        x={CARD1.x}
+        y={CARD1.y}
+        width={CARD1.width}
+        height={CARD1.height}
+        borderColor={COLORS.red}
+        headerText="AI CODE QUALITY"
+        mainStat="1.7× more issues"
+        mainColor={COLORS.red}
+        subStats={[
+          { text: '75% more logic errors', color: COLORS.red },
+          { text: '8× more performance problems', color: COLORS.red },
+        ]}
+        sourceText="(CodeRabbit, 2025)"
+        startFrame={TIMING.card1Start}
+        fps={fps}
+      />
 
-      {/* Card 2 — DORA: Tests amplify delivery */}
-      <Sequence from={TIMING.card2Start} durationInFrames={TIMING.totalFrames - TIMING.card2Start}>
-        <DataCard
-          startFrame={TIMING.card2Start}
-          position={[1320, 200]}
-          size={[400, 180]}
-          borderColor={COLORS.green}
-          header="WITH STRONG TESTS"
-          mainStat="Amplified delivery"
-          mainStatColor={COLORS.green}
-          subStats={[
-            { text: 'AI + strong tests = accelerated', color: COLORS.green },
-          ]}
-          source="(DORA, 2025)"
-        />
-      </Sequence>
+      {/* Layer 3: Card 2 — DORA research (upper-right) */}
+      <DataCard
+        x={CARD2.x}
+        y={CARD2.y}
+        width={CARD2.width}
+        height={CARD2.height}
+        borderColor={COLORS.green}
+        headerText="WITH STRONG TESTS"
+        mainStat="Amplified delivery"
+        mainColor={COLORS.green}
+        subStats={[
+          { text: 'AI + strong tests = accelerated', color: COLORS.green },
+        ]}
+        sourceText="(DORA, 2025)"
+        startFrame={TIMING.card2Start}
+        fps={fps}
+      />
 
-      {/* Connecting arrow from DORA card to mold walls */}
-      <Sequence from={TIMING.card2ArrowStart} durationInFrames={TIMING.totalFrames - TIMING.card2ArrowStart}>
-        <ConnectingArrow
-          startFrame={TIMING.card2ArrowStart}
-          from={[1520, 380]}
-          to={[1100, 500]}
-        />
-      </Sequence>
+      {/* Layer 4: Connecting arrow from DORA card to mold walls */}
+      <ConnectingArrow
+        fromX={CARD2.x + CARD2.width / 2}
+        fromY={CARD2.y + CARD2.height}
+        toX={1100}
+        toY={500}
+        startFrame={TIMING.card2ArrowStart}
+        drawDuration={TIMING.card2ArrowDuration}
+        label="Tests are the walls"
+      />
 
-      {/* Visual equation at bottom */}
-      <Sequence from={TIMING.equationStart} durationInFrames={TIMING.totalFrames - TIMING.equationStart}>
-        <VisualEquation />
-      </Sequence>
+      {/* Layer 5: Visual equation at bottom */}
+      <VisualEquation />
     </AbsoluteFill>
   );
 };

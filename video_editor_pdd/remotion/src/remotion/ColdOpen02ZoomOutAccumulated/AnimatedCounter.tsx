@@ -1,71 +1,75 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  COUNTER_START_FRAME,
-  COUNTER_DURATION,
-  COUNTER_FONT_SIZE,
-} from "./constants";
+import { interpolate, Easing, useCurrentFrame } from "remotion";
 
-export const AnimatedCounter: React.FC<{
+interface AnimatedCounterProps {
   startValue: number;
   endValue: number;
   prefix: string;
   fontFamily: string;
+  fontSize: number;
   color: string;
   opacity: number;
   x: number;
   y: number;
+  startFrame: number;
+  duration: number;
   align?: "left" | "right";
-}> = ({
+}
+
+export const AnimatedCounter: React.FC<AnimatedCounterProps> = ({
   startValue,
   endValue,
   prefix,
   fontFamily,
+  fontSize,
   color,
-  opacity,
+  opacity: targetOpacity,
   x,
   y,
+  startFrame,
+  duration,
   align = "left",
 }) => {
   const frame = useCurrentFrame();
 
-  // Counter visibility fade-in
-  const fadeIn = interpolate(
-    frame,
-    [COUNTER_START_FRAME, COUNTER_START_FRAME + 10],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  // Fade in the counter
+  const fadeIn = interpolate(frame, [startFrame, startFrame + 10], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   // Counter value with exponential easing (fast start, slows at end)
-  const counterProgress = interpolate(
+  const progress = interpolate(
     frame,
-    [COUNTER_START_FRAME, COUNTER_START_FRAME + COUNTER_DURATION],
+    [startFrame, startFrame + duration],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.exp),
+    }
   );
 
-  // Apply easeOut(expo) manually: 1 - (1-t)^4 approximation for expo feel
-  const easedProgress = 1 - Math.pow(1 - counterProgress, 4);
   const currentValue = Math.round(
-    startValue + (endValue - startValue) * easedProgress
+    startValue + (endValue - startValue) * progress
   );
 
-  const formattedValue = currentValue.toLocaleString();
+  const formattedValue = currentValue.toLocaleString("en-US");
 
   return (
     <div
       style={{
         position: "absolute",
         left: align === "left" ? x : undefined,
-        right: align === "right" ? 958 - x : undefined,
+        right: align === "right" ? 1920 - x : undefined,
         top: y,
-        fontFamily,
-        fontSize: COUNTER_FONT_SIZE,
+        fontFamily: `'${fontFamily}', monospace`,
+        fontSize,
         color,
-        opacity: opacity * fadeIn,
+        opacity: fadeIn * targetOpacity,
         whiteSpace: "nowrap",
-        letterSpacing: "0.05em",
+        fontWeight: 500,
+        letterSpacing: 0.5,
       }}
     >
       {prefix}

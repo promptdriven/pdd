@@ -1,194 +1,206 @@
 import React from 'react';
 import {
   AbsoluteFill,
-  Sequence,
   useCurrentFrame,
   interpolate,
   Easing,
+  Sequence,
 } from 'remotion';
-import { COLORS, LAYOUT, TIMING } from './constants';
 import { LedgerGrid } from './LedgerGrid';
 import { DivergingCurves } from './DivergingCurves';
+import {
+  BG_COLOR,
+  TITLE_COLOR,
+  LABEL_COLOR,
+  RULE_COLOR,
+  FONT_FAMILY,
+  TITLE_FONT_SIZE,
+  TITLE_FONT_WEIGHT,
+  LABEL_FONT_SIZE,
+  LABEL_FONT_WEIGHT,
+  LABEL_LETTER_SPACING,
+  LABEL_Y,
+  COMPOUND_Y,
+  RULE_Y,
+  RETURNS_Y,
+  RETURNS_X_OFFSET,
+  RULE_HALF_WIDTH,
+  WIDTH,
+  BG_FADE_END,
+  LABEL_START,
+  COMPOUND_START,
+  COMPOUND_CHAR_DELAY,
+  RULE_START,
+  RULE_DURATION,
+  RETURNS_START,
+  RETURNS_SLIDE_DURATION,
+  FADE_DURATION,
+  TOTAL_FRAMES,
+} from './constants';
 
+// ── Default props (required by export contract) ─────────────────────
 export const defaultPart5CompoundReturns01SectionTitleCardProps = {};
 
-/**
- * Section 5.1: Part 5 Title Card — Compound Returns
- * Duration: 120 frames (4s @ 30fps)
- */
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/** Typewriter reveal: returns the visible slice of `text` at the given frame. */
+function typewriterText(text: string, localFrame: number, charDelay: number): string {
+  if (localFrame < 0) return '';
+  const visibleChars = Math.min(
+    text.length,
+    Math.floor(localFrame / charDelay) + 1,
+  );
+  return text.slice(0, visibleChars);
+}
+
+// ── Main Component ──────────────────────────────────────────────────
+
 export const Part5CompoundReturns01SectionTitleCard: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // --- Background fade from black (frames 0-15) ---
-  const bgOpacity = interpolate(frame, [0, TIMING.bgFadeEnd], [0, 1], {
+  // ── Background fade (0 → 15) ────────────────────────────────────
+  const bgOpacity = interpolate(frame, [0, BG_FADE_END], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
   });
 
-  // --- "PART 5" fade-in (frames 15-35) ---
-  const part5Opacity = interpolate(
-    frame,
-    [TIMING.part5FadeStart, TIMING.part5FadeStart + TIMING.textFadeDuration],
-    [0, 0.5],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // ── "PART 5" label fade (15 → 35) ──────────────────────────────
+  const labelLocalFrame = frame - LABEL_START;
+  const labelOpacity = interpolate(labelLocalFrame, [0, FADE_DURATION], [0, 0.5], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.poly(2)), // easeOut(quad)
+  });
 
-  // --- "COMPOUND" typewriter (frames 40+, 3 frames per character) ---
-  const compoundText = 'COMPOUND';
-  const typewriterStart = TIMING.compoundTypeStart;
-  const visibleChars = Math.min(
-    compoundText.length,
-    Math.max(0, Math.floor((frame - typewriterStart) / TIMING.charDelay) + 1)
-  );
-  const displayedCompound = frame >= typewriterStart ? compoundText.slice(0, visibleChars) : '';
+  // ── "COMPOUND" typewriter (40 → ~64) ────────────────────────────
+  const compoundLocal = frame - COMPOUND_START;
+  const compoundText = typewriterText('COMPOUND', compoundLocal, COMPOUND_CHAR_DELAY);
 
-  // --- Horizontal rule draw from center (frames 60-70) ---
-  const ruleProgress = interpolate(
-    frame,
-    [TIMING.ruleDrawStart, TIMING.ruleDrawStart + TIMING.ruleDrawDuration],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.quad),
-    }
-  );
-  const ruleHalfWidth = LAYOUT.ruleHalfWidth * ruleProgress;
+  // ── Horizontal rule draw (60 → 70) ─────────────────────────────
+  const ruleLocal = frame - RULE_START;
+  const ruleProgress = interpolate(ruleLocal, [0, RULE_DURATION], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.inOut(Easing.poly(2)), // easeInOut(quad)
+  });
+  const ruleWidth = RULE_HALF_WIDTH * 2 * ruleProgress;
 
-  // --- "RETURNS" fade-in + slide-up (frames 70-90) ---
+  // ── "RETURNS" fade + slide-up (70 → 90) ────────────────────────
+  const returnsLocal = frame - RETURNS_START;
   const returnsOpacity = interpolate(
-    frame,
-    [TIMING.returnsFadeStart, TIMING.returnsFadeStart + TIMING.returnsFadeDuration],
+    returnsLocal,
+    [0, RETURNS_SLIDE_DURATION],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
+      easing: Easing.out(Easing.poly(2)), // easeOut(quad)
+    },
   );
   const returnsSlideY = interpolate(
-    frame,
-    [TIMING.returnsFadeStart, TIMING.returnsFadeStart + TIMING.returnsFadeDuration],
-    [TIMING.returnsSlideDistance, 0],
+    returnsLocal,
+    [0, RETURNS_SLIDE_DURATION],
+    [10, 0],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.cubic),
-    }
+      easing: Easing.out(Easing.poly(3)), // easeOut(cubic)
+    },
   );
 
   return (
-    <AbsoluteFill style={{ backgroundColor: '#000000' }}>
-      {/* Main content with background fade */}
-      <AbsoluteFill style={{ opacity: bgOpacity, backgroundColor: COLORS.background }}>
-        {/* Ledger grid */}
-        <LedgerGrid />
+    <AbsoluteFill
+      style={{
+        backgroundColor: BG_COLOR,
+        width: WIDTH,
+        height: 1080,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Layer 1 — Ledger grid */}
+      <LedgerGrid opacity={bgOpacity} />
 
-        {/* Ghost diverging curves — start at frame 15 */}
-        <Sequence from={TIMING.curvesDrawStart}>
-          <DivergingCurves />
-        </Sequence>
+      {/* Layer 2 — Diverging ghost curves */}
+      <DivergingCurves />
 
-        {/* "PART 5" section label */}
+      {/* Layer 3 — Section label: "PART 5" */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <div
           style={{
             position: 'absolute',
-            top: LAYOUT.sectionLabelY,
-            left: 0,
             width: '100%',
+            top: LABEL_Y,
             textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            fontWeight: 600,
-            color: COLORS.sectionLabel,
-            opacity: part5Opacity,
-            letterSpacing: 4,
+            fontFamily: FONT_FAMILY,
+            fontSize: LABEL_FONT_SIZE,
+            fontWeight: LABEL_FONT_WEIGHT,
+            color: LABEL_COLOR,
+            letterSpacing: LABEL_LETTER_SPACING,
+            opacity: labelOpacity,
             userSelect: 'none',
           }}
         >
           PART 5
         </div>
+      </Sequence>
 
-        {/* "COMPOUND" — typewriter effect */}
+      {/* Layer 4 — "COMPOUND" title (typewriter) */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <div
           style={{
             position: 'absolute',
-            top: LAYOUT.titleLine1Y,
-            left: 0,
             width: '100%',
+            top: COMPOUND_Y,
             textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 72,
-            fontWeight: 700,
-            color: COLORS.titleText,
-            userSelect: 'none',
+            fontFamily: FONT_FAMILY,
+            fontSize: TITLE_FONT_SIZE,
+            fontWeight: TITLE_FONT_WEIGHT,
+            color: TITLE_COLOR,
             lineHeight: 1,
+            userSelect: 'none',
           }}
         >
-          {/* Use invisible text to reserve space, overlay visible typed chars */}
-          <span style={{ visibility: 'hidden' }}>{compoundText}</span>
-          <span
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              textAlign: 'center',
-            }}
-          >
-            {displayedCompound}
-            {/* Blinking cursor during typing */}
-            {frame >= typewriterStart && visibleChars < compoundText.length && (
-              <span
-                style={{
-                  borderRight: `2px solid ${COLORS.titleText}`,
-                  opacity: frame % 10 < 5 ? 1 : 0,
-                  marginLeft: 2,
-                }}
-              />
-            )}
-          </span>
+          {compoundText}
         </div>
+      </Sequence>
 
-        {/* Horizontal rule — draws from center outward */}
-        {frame >= TIMING.ruleDrawStart && (
-          <div
-            style={{
-              position: 'absolute',
-              top: LAYOUT.ruleY,
-              left: LAYOUT.centerX - ruleHalfWidth,
-              width: ruleHalfWidth * 2,
-              height: 2,
-              backgroundColor: COLORS.rule,
-              opacity: 0.5,
-            }}
-          />
-        )}
-
-        {/* "RETURNS" — fade in + slide up */}
+      {/* Layer 5 — Horizontal rule */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <div
           style={{
             position: 'absolute',
-            top: LAYOUT.titleLine2Y + returnsSlideY,
-            left: LAYOUT.titleLine2OffsetX,
+            top: RULE_Y,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: ruleWidth,
+            height: 2,
+            backgroundColor: RULE_COLOR,
+            opacity: ruleLocal >= 0 ? 0.5 : 0,
+          }}
+        />
+      </Sequence>
+
+      {/* Layer 6 — "RETURNS" title (fade + slide-up) */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <div
+          style={{
+            position: 'absolute',
             width: '100%',
+            top: RETURNS_Y + returnsSlideY,
             textAlign: 'center',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 72,
-            fontWeight: 700,
-            color: COLORS.titleText,
+            fontFamily: FONT_FAMILY,
+            fontSize: TITLE_FONT_SIZE,
+            fontWeight: TITLE_FONT_WEIGHT,
+            color: TITLE_COLOR,
             opacity: returnsOpacity,
-            userSelect: 'none',
             lineHeight: 1,
+            paddingLeft: RETURNS_X_OFFSET,
+            userSelect: 'none',
           }}
         >
           RETURNS
         </div>
-      </AbsoluteFill>
+      </Sequence>
     </AbsoluteFill>
   );
 };
