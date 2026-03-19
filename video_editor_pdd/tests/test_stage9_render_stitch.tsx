@@ -439,9 +439,9 @@ describe("Preview modal", () => {
     expect(sourceCode).toMatch(/min-h-0 flex-1 overflow-y-auto px-4 py-3/);
   });
 
-  it("uses a fixed two-column grid so the script stays beside the video", () => {
+  it("uses a fixed two-column grid with the script on the left and video on the right", () => {
     expect(sourceCode).toMatch(/className="grid min-h-0 flex-1 min-w-0 gap-4"/);
-    expect(sourceCode).toMatch(/gridTemplateColumns:\s*'minmax\(0,\s*1fr\)\s*20rem'/);
+    expect(sourceCode).toMatch(/gridTemplateColumns:\s*'20rem\s+minmax\(0,\s*1fr\)'/);
   });
 
   it("keeps both panes from collapsing by using min-w-0 and overflow-hidden", () => {

@@ -507,17 +507,8 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
             </div>
             <div
               className="grid min-h-0 flex-1 min-w-0 gap-4"
-              style={{ gridTemplateColumns: 'minmax(0, 1fr) 20rem' }}
+              style={{ gridTemplateColumns: '20rem minmax(0, 1fr)' }}
             >
-              <div className="min-w-0">
-                <div className="flex h-full items-center justify-center rounded-md bg-slate-950/70 p-2">
-                  <video
-                    src={`/api/video/outputs/sections/${previewSectionId}.mp4`}
-                    controls
-                    className="max-h-full w-full max-w-full rounded bg-black object-contain"
-                  />
-                </div>
-              </div>
               <div className="min-h-0 min-w-0 overflow-hidden rounded-md border border-slate-700 bg-slate-950/70">
                 <div className="flex h-full min-h-0 flex-col">
                 <div className="border-b border-slate-800 px-4 py-3">
@@ -537,6 +528,15 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                     </pre>
                   )}
                 </div>
+                </div>
+              </div>
+              <div className="min-w-0">
+                <div className="flex h-full items-center justify-center rounded-md bg-slate-950/70 p-2">
+                  <video
+                    src={`/api/video/outputs/sections/${previewSectionId}.mp4`}
+                    controls
+                    className="max-h-full w-full max-w-full rounded bg-black object-contain"
+                  />
                 </div>
               </div>
             </div>
