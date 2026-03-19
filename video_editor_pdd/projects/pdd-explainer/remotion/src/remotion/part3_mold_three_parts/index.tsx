@@ -12,8 +12,8 @@ import { Part3MoldThreeParts10ThreeComponentsTable } from "../10_three_component
 
 export const Part3MoldThreePartsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 228.842626;
-  const durationSeconds = 344.396583;
+  const offsetSeconds = 228.906667;
+  const durationSeconds = 344.16;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>

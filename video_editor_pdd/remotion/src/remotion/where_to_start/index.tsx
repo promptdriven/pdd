@@ -21,6 +21,9 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "03_module_highlight_update": 240,
+  "04_source_of_truth_shift": 180,
+  "05_regenerate_compare_loop": 180,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -41,7 +44,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const WhereToStartSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 32.661333;
+  const durationSeconds = 32.08;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

@@ -23,6 +23,11 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "04_defect_fix_the_mold": 420,
+  "05_value_migration_split": 480,
+  "07_verilog_synthesis_triple": 540,
+  "09_abstraction_staircase": 480,
+  "11_prompt_replaces_review": 360,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -57,7 +62,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const Part2ParadigmShiftSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 228.117333;
+  const durationSeconds = 227.48;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

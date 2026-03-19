@@ -597,7 +597,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ColdOpenSection"
         component={ColdOpenSection}
-        durationInFrames={11}
+        durationInFrames={527}
         fps={30}
         width={1920}
         height={1080}
@@ -605,7 +605,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1EconomicsSection"
         component={Part1EconomicsSection}
-        durationInFrames={13}
+        durationInFrames={14427}
         fps={30}
         width={1920}
         height={1080}
@@ -613,7 +613,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part2ParadigmShiftSection"
         component={Part2ParadigmShiftSection}
-        durationInFrames={6844}
+        durationInFrames={6825}
         fps={30}
         width={1920}
         height={1080}
@@ -621,7 +621,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part3MoldThreePartsSection"
         component={Part3MoldThreePartsSection}
-        durationInFrames={10334}
+        durationInFrames={10325}
         fps={30}
         width={1920}
         height={1080}
@@ -629,7 +629,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part4PrecisionTradeoffSection"
         component={Part4PrecisionTradeoffSection}
-        durationInFrames={3363}
+        durationInFrames={3356}
         fps={30}
         width={1920}
         height={1080}
@@ -637,7 +637,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part5CompoundReturnsSection"
         component={Part5CompoundReturnsSection}
-        durationInFrames={3462}
+        durationInFrames={3453}
         fps={30}
         width={1920}
         height={1080}
@@ -645,7 +645,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="WhereToStartSection"
         component={WhereToStartSection}
-        durationInFrames={980}
+        durationInFrames={963}
         fps={30}
         width={1920}
         height={1080}
@@ -653,7 +653,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ClosingSection"
         component={ClosingSection}
-        durationInFrames={630}
+        durationInFrames={620}
         fps={30}
         width={1920}
         height={1080}

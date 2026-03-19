@@ -2625,8 +2625,8 @@
     }
   },
   {
-    "reason": "Orchestrates the 9-step agentic bug investigation workflow.",
-    "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, test planning, test generation, verification, and PR creation.",
+    "reason": "Orchestrates the 11-step agentic bug workflow with E2E gate and state persistence.",
+    "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation.",
     "dependencies": [
       "agentic_common_python.prompt",
       "load_prompt_template_python.prompt"

@@ -50,6 +50,98 @@ describe("shared generated media renderer", () => {
       expect(source).not.toMatch(/const\s+\w+Src\s*=\s*useVisualMediaSrc\(/);
     }
   });
+
+  it("keeps Part1 sock-chart tick interpolation input ranges strictly ascending", () => {
+    const source = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part1Economics02SockEconomicsChart/ChartAxes.tsx"
+      ),
+      "utf8"
+    );
+
+    expect(source).toContain("[py, py + 10]");
+    expect(source).not.toContain("[py + 10, py]");
+  });
+
+  it("keeps compiler icon animation props aligned with generated scene callers", () => {
+    const source = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift07VerilogSynthesisTriple/CompilerIcon.tsx"
+      ),
+      "utf8"
+    );
+    const constantsSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift07VerilogSynthesisTriple/constants.ts"
+      ),
+      "utf8"
+    );
+
+    expect(source).toMatch(/startFrame\?: number/);
+    expect(source).toMatch(/label\?: string/);
+    expect(source).toMatch(/const resolvedAppearStart = typeof startFrame === "number" \? startFrame : appearStart \?\? 0;/);
+    expect(source).toMatch(/const resolvedAppearEnd = typeof appearEnd === "number" \? appearEnd : resolvedAppearStart \+ 15;/);
+    expect(constantsSource).toContain("export const COMPILER_OPACITY =");
+    expect(constantsSource).toContain("export const COMPILER_LABEL_OPACITY =");
+    expect(constantsSource).toContain("export const COMPILER_LABEL_SIZE =");
+    expect(constantsSource).toContain("export const UI_FONT =");
+  });
+
+  it("keeps gate netlist animation props aligned with generated scene callers", () => {
+    const source = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift07VerilogSynthesisTriple/GateNetlist.tsx"
+      ),
+      "utf8"
+    );
+    const constantsSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift07VerilogSynthesisTriple/constants.ts"
+      ),
+      "utf8"
+    );
+
+    expect(source).toMatch(/layout\?: "horizontal" \| "horizontal_compact" \| "vertical_long" \| "mixed_optimized"/);
+    expect(source).toMatch(/startFrame\?: number/);
+    expect(source).toMatch(/const resolvedDrawStart = typeof startFrame === "number" \? startFrame : drawStart \?\? 0;/);
+    expect(source).toMatch(/const resolvedLayout = typeof layoutIndex === "number"/);
+    expect(constantsSource).toContain("export const GATE_OPACITY =");
+    expect(constantsSource).toContain("export const WIRE_OPACITY =");
+  });
+
+  it("keeps abstraction staircase helper exports aligned with scene imports", () => {
+    const sceneSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift09AbstractionStaircase/Part2ParadigmShift09AbstractionStaircase.tsx"
+      ),
+      "utf8"
+    );
+    const pulsingGlowSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift09AbstractionStaircase/PulsingGlow.tsx"
+      ),
+      "utf8"
+    );
+    const constantsSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part2ParadigmShift09AbstractionStaircase/constants.ts"
+      ),
+      "utf8"
+    );
+
+    expect(sceneSource).toContain("import PulsingGlow from './PulsingGlow';");
+    expect(pulsingGlowSource).toContain("export default PulsingGlow;");
+    expect(constantsSource).toContain("export const ACTIVE_COLOR =");
+    expect(constantsSource).toContain("export const PULSE_PERIOD =");
+  });
 });
 
 describe("reusable animation template defaults", () => {

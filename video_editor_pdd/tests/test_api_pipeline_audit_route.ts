@@ -987,7 +987,7 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledWith(
       "veo-section08-section-end-card",
-      17,
+      117,
       pathMod.join(
         "/project-root",
         "outputs",

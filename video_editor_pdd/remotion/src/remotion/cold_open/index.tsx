@@ -18,6 +18,7 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_split_screen_hook": 240,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -44,7 +45,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const ColdOpenSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 0.362667;
+  const durationSeconds = 17.54;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

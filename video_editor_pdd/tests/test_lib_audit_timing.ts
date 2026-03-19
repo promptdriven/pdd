@@ -465,4 +465,59 @@ describe("resolveRenderedAuditSampleWindow", () => {
     expect(result.endSeconds).toBeCloseTo(7.424, 3);
     expect(result.sampleSeconds).toBeGreaterThan(6.7);
   });
+
+  it("normalizes rendered audit timing from script headings instead of stale project offsets", () => {
+    const specDir = path.join(tmpDir, "specs", "part2_paradigm_shift");
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "part2_paradigm_shift");
+    const narrativeDir = path.join(tmpDir, "narrative");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.mkdirSync(narrativeDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(narrativeDir, "main_script.md"),
+      [
+        "## PART 2: THE PARADIGM SHIFT (8:30 - 13:00)",
+        "",
+        "Narrative body",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(wordsDir, "word_timestamps.json"),
+      JSON.stringify([
+        { word: "factory", start: 0, end: 227.48, segmentId: "part2_paradigm_shift_001" },
+      ])
+    );
+
+    const specPath = path.join(specDir, "02_factory_floor_intro.md");
+    fs.writeFileSync(
+      specPath,
+      "**Timestamp:** 8:30 - 8:34\n\n# Factory Floor Intro\n"
+    );
+
+    const result = resolveRenderedAuditSampleWindow(
+      fs.readFileSync(specPath, "utf-8"),
+      {
+        projectDir: tmpDir,
+        specPath,
+        section: {
+          id: "part2_paradigm_shift",
+          label: "Part 2: The Paradigm Shift",
+          specDir: "part2_paradigm_shift",
+          compositionId: "Part2ParadigmShiftSection",
+          durationSeconds: 0.789334,
+          offsetSeconds: 0.789334,
+          videoFile: "part2_paradigm_shift.mp4",
+          remotionDir: "part2_paradigm_shift",
+          compositions: [],
+        },
+        fps: 30,
+      }
+    );
+
+    expect(result.source).toBe("timestamp");
+    expect(result.startSeconds).toBeCloseTo(0);
+    expect(result.endSeconds).toBeCloseTo(4);
+    expect(result.sampleSeconds).toBeCloseTo(3);
+  });
 });

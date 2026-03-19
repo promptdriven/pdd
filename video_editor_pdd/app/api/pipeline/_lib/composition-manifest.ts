@@ -34,6 +34,9 @@ const COMPOSITION_GENERATOR_FINGERPRINT_VERSION = 1;
 function getCompositionGeneratorInputPaths(): string[] {
   return [
     path.join(getAppScriptsDir(), "generate_section_compositions.py"),
+    path.join(process.cwd(), "lib", "composition-timing.ts"),
+    path.join(process.cwd(), "lib", "spec-timestamp.ts"),
+    path.join(process.cwd(), "lib", "section-timing.ts"),
     path.join(
       process.cwd(),
       "app",

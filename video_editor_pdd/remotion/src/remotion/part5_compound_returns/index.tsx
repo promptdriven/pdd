@@ -24,6 +24,12 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_section_title_card": 120,
+  "02_maintenance_pie_chart": 420,
+  "04_diverging_cost_curves": 420,
+  "05_investment_comparison_table": 420,
+  "07_economics_crossing_callback": 300,
+  "08_contrarian_quote_card": 300,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -50,7 +56,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const Part5CompoundReturnsSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 115.392;
+  const durationSeconds = 115.08;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

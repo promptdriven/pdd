@@ -14,7 +14,7 @@ import { Part1Economics10DoubleMeterInsight } from "../10_double_meter_insight";
 export const Part1EconomicsSection: React.FC = () => {
   const fps = 30;
   const offsetSeconds = 0.362667;
-  const durationSeconds = 0.426667;
+  const durationSeconds = 480.9;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>

@@ -195,6 +195,7 @@ CRITICAL RENDERING REQUIREMENTS:
 - Use an <AbsoluteFill> with a non-black background color (e.g., "#0A1628" dark navy).
 - All animated elements must use bright, high-contrast colors (e.g., white, bright blue #3B82F6, green #22C55E).
 - Every visual element must have explicit width, height, and position.
+- Remotion interpolate() inputRange arrays must always be strictly increasing.
 - Use only supported Remotion easing APIs. For quartic easing, use Easing.poly(4), NOT Easing.quart.
 - Do NOT import external data files (e.g., JSON word timestamps) that may not exist.
   If subtitles are needed, embed word data inline or skip subtitles.
@@ -211,6 +212,7 @@ CRITICAL RENDERING REQUIREMENTS:
   instead of inventing per-shot filenames.
 - Only import from "remotion" — do not import from other local files in the component directory.
 - Break complex visuals into sub-components (e.g., AnimatedLine.tsx, ChartAxes.tsx) for maintainability.
+- Keep helper component contracts internally consistent: prop names used by callers must match helper prop interfaces, every imported constant must be declared, and default-vs-named exports must match the import style.
 
 Use the spec below to implement the component accurately.
 

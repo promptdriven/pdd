@@ -5,6 +5,7 @@ import {
   resolveSectionVisuals,
   resolveSectionVisualTimings,
 } from "./composition-timing";
+import { resolveSectionNarrativeTiming } from "./section-timing";
 import {
   normalizeSpecTimestampRangeToSection,
   parseSpecTimestampRange,
@@ -318,13 +319,20 @@ export function resolveRenderedAuditSampleWindow(
   specContent: string,
   options: RenderedResolveOptions,
 ): AuditSampleWindow {
+  const sectionNarrativeTiming = resolveSectionNarrativeTiming(
+    options.projectDir,
+    options.section
+  );
+  const rawTimelineDuration = getRawTimelineDuration(
+    resolveSpecDir(options.projectDir, options.section.specDir)
+  );
   const rawSample = resolveAuditSampleWindow(specContent, {
-    sectionDurationSeconds: Math.max(
-      getRawTimelineDuration(resolveSpecDir(options.projectDir, options.section.specDir)),
-      options.section.durationSeconds
-    ),
+    sectionDurationSeconds:
+      sectionNarrativeTiming.durationSeconds > 0
+        ? sectionNarrativeTiming.durationSeconds
+        : rawTimelineDuration,
     fps: options.fps,
-    sectionOffsetSeconds: options.section.offsetSeconds ?? 0,
+    sectionOffsetSeconds: sectionNarrativeTiming.offsetSeconds,
   });
   const configuredCompositionIds = toConfiguredCompositionIds(options.section);
   const matchedVisual = resolveSectionVisuals(

@@ -426,7 +426,8 @@ def e2e_fix_deps(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
          patch("pdd.agentic_e2e_fix_orchestrator._get_state_dir") as mock_state_dir, \
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
-         patch("pdd.agentic_e2e_fix_orchestrator.console"):
+         patch("pdd.agentic_e2e_fix_orchestrator.console"), \
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
 
         mock_state.return_value = (None, None)
         mock_save.return_value = None

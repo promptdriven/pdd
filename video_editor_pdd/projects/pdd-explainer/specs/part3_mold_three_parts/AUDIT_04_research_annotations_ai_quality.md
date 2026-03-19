@@ -1,4 +1,20 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at 93.3% progress (frame 419/450), which falls within the final hold phase (frames 390-450). The overall composition matches the spec well: both annotation cards are present in their correct positions (Card 1 upper-left with red '1.7× more issues', Card 2 upper-right with green 'Amplified delivery'), the visual equation is visible at the bottom with red left side and green right side separated by 'vs.', the connecting dashed arrow with 'Tests are the walls' label is drawn, and 'The walls' bracket text is centered below the equation. The background mold diagram is dimmed as expected. Two minor discrepancies: (1) The mold walls are not visibly glowing amber as specified for the hold phase — the mold diagram appears uniformly dim with no discernible amber glow pulse on the wall regions. The spec states 'mold walls glowing' during frames 390-450, and while this is listed as a decorative element that may vary slightly, the absence of any visible amber glow is noticeable. (2) The Card 1 border tint appears very subtle — the red border at 0.3 opacity is barely perceptible, though this is consistent with the specified low opacity. The visual equation bracket pointing to mold walls appears as a small decorative bracket with 'The walls' text below the equation line rather than pointing upward to the mold region, but the semantic intent of calling out the differentiator is preserved.
+The frame at 93.3% progress (frame 419/450, animation phase 390-450 'hold on complete picture') matches the spec requirements well. All critical elements are present and correctly positioned:
+
+1. **Card 1 (CodeRabbit, upper-left):** Visible with dark card background, red border hint, 'AI CODE QUALITY' header in muted gray with letter-spacing, '1.7× more issues' as main stat in red/bold, sub-stats '75% more logic errors' and '8× more performance problems' in lighter red, and '(CodeRabbit, 2025)' source citation at bottom. Position is in the upper-left region as specified.
+
+2. **Card 2 (DORA, upper-right):** Visible with dark card background, green border hint, 'WITH STRONG TESTS' header in muted gray with letter-spacing, 'Amplified delivery' as main stat in green/bold, sub-stat 'AI + strong tests = accelerated' in lighter green, and '(DORA, 2025)' source citation. Position is upper-right as specified.
+
+3. **Connecting Arrow:** Dashed green line runs from the DORA card area down toward the mold wall region with an arrowhead. The label 'Tests are the walls' is visible in amber/gold along the arrow path.
+
+4. **Visual Equation (bottom-center):** '[AI code] + [No tests] = 1.7× issues' in red on the left, 'vs.' divider in muted gray in the center, '[AI code] + [Strong tests] = Amplified delivery' in green on the right. Positioned in the lower portion of the frame.
+
+5. **Differentiator bracket:** 'The walls' label with a bracket/chevron pointing upward is visible below the equation, in amber/gold color.
+
+6. **Background mold diagram:** Dimmed mold cross-section visible in the center at low opacity, serving as contextual backdrop.
+
+7. **Animation phase:** At 93.3% progress within phase 6 (390-450, hold), all elements are fully visible and static, which matches the 'hold on complete picture' intent.
+
+Minor observations that do not warrant failure: The equation y-position appears slightly lower than the spec's y:850 but is still in the bottom-center region. The bracket for 'The walls' points downward from the equation rather than explicitly at the mold walls, but the visual intent of connecting the equation to the wall concept is preserved. Card border colors are subtle (at 0.3 opacity as specified). Overall the composition reads correctly.

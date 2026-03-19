@@ -567,15 +567,13 @@ const Closing09FinalTitleCardPreview: React.FC = () => (
   </VisualContractProvider>
 );
 
-const PREVIEW_DURATION = 150; // 5s at 30fps
-
 export const RemotionRoot: React.FC = () => {
   return (
     <>
       <Composition
         id="ColdOpenSection"
         component={ColdOpenSection}
-        durationInFrames={11}
+        durationInFrames={527}
         fps={30}
         width={1920}
         height={1080}
@@ -583,7 +581,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1EconomicsSection"
         component={Part1EconomicsSection}
-        durationInFrames={13}
+        durationInFrames={14427}
         fps={30}
         width={1920}
         height={1080}
@@ -591,7 +589,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part2ParadigmShiftSection"
         component={Part2ParadigmShiftSection}
-        durationInFrames={6842}
+        durationInFrames={6825}
         fps={30}
         width={1920}
         height={1080}
@@ -599,7 +597,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part3MoldThreePartsSection"
         component={Part3MoldThreePartsSection}
-        durationInFrames={10332}
+        durationInFrames={10325}
         fps={30}
         width={1920}
         height={1080}
@@ -607,7 +605,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part4PrecisionTradeoffSection"
         component={Part4PrecisionTradeoffSection}
-        durationInFrames={3361}
+        durationInFrames={3356}
         fps={30}
         width={1920}
         height={1080}
@@ -615,7 +613,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part5CompoundReturnsSection"
         component={Part5CompoundReturnsSection}
-        durationInFrames={3460}
+        durationInFrames={3453}
         fps={30}
         width={1920}
         height={1080}
@@ -623,7 +621,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="WhereToStartSection"
         component={WhereToStartSection}
-        durationInFrames={978}
+        durationInFrames={963}
         fps={30}
         width={1920}
         height={1080}
@@ -631,7 +629,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ClosingSection"
         component={ClosingSection}
-        durationInFrames={628}
+        durationInFrames={620}
         fps={30}
         width={1920}
         height={1080}
@@ -639,7 +637,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open01-split-screen-hook"
         component={ColdOpen01SplitScreenHookPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -647,7 +645,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open02-zoom-out-accumulated"
         component={ColdOpen02ZoomOutAccumulatedPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -655,7 +653,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open05-code-blink"
         component={ColdOpen05CodeBlinkPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -663,7 +661,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open06-still-patching-beat"
         component={ColdOpen06StillPatchingBeatPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -671,7 +669,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open07-pdd-title-card"
         component={ColdOpen07PddTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -679,7 +677,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics01-section-title-card"
         component={Part1Economics01SectionTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -687,7 +685,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics02-sock-economics-chart"
         component={Part1Economics02SockEconomicsChartPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -695,7 +693,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics03-code-cost-triple-line"
         component={Part1Economics03CodeCostTripleLinePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -703,7 +701,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics04-research-annotations"
         component={Part1Economics04ResearchAnnotationsPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -711,7 +709,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics05-context-window-shrink"
         component={Part1Economics05ContextWindowShrinkPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -719,7 +717,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics06-two-by-two-grid"
         component={Part1Economics06TwoByTwoGridPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -727,7 +725,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics07-split-context-comparison"
         component={Part1Economics07SplitContextComparisonPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -735,7 +733,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics09-crossing-lines-moment"
         component={Part1Economics09CrossingLinesMomentPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -743,7 +741,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics10-double-meter-insight"
         component={Part1Economics10DoubleMeterInsightPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -751,7 +749,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift01-section-title-card"
         component={Part2ParadigmShift01SectionTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -759,7 +757,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift04-defect-fix-the-mold"
         component={Part2ParadigmShift04DefectFixTheMoldPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -767,7 +765,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift05-value-migration-split"
         component={Part2ParadigmShift05ValueMigrationSplitPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -775,7 +773,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift07-verilog-synthesis-triple"
         component={Part2ParadigmShift07VerilogSynthesisTriplePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -783,7 +781,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift08-synopsys-pdd-equivalence"
         component={Part2ParadigmShift08SynopsysPddEquivalencePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -791,7 +789,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift09-abstraction-staircase"
         component={Part2ParadigmShift09AbstractionStaircasePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -799,7 +797,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift10-netlist-zoom-unreviewable"
         component={Part2ParadigmShift10NetlistZoomUnreviewablePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -807,7 +805,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift11-prompt-replaces-review"
         component={Part2ParadigmShift11PromptReplacesReviewPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -815,7 +813,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts01-section-title-card"
         component={Part3MoldThreeParts01SectionTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -823,7 +821,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts02-mold-cross-section"
         component={Part3MoldThreeParts02MoldCrossSectionPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -831,7 +829,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts03-test-walls-constraint"
         component={Part3MoldThreeParts03TestWallsConstraintPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -839,7 +837,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts04-research-annotations-ai-quality"
         component={Part3MoldThreeParts04ResearchAnnotationsAiQualityPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -847,7 +845,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts06-ratchet-split-comparison"
         component={Part3MoldThreeParts06RatchetSplitComparisonPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -855,7 +853,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts07-five-generations-z3"
         component={Part3MoldThreeParts07FiveGenerationsZ3Preview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -863,7 +861,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts08-prompt-capital-specification"
         component={Part3MoldThreeParts08PromptCapitalSpecificationPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -871,7 +869,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts10-three-components-table"
         component={Part3MoldThreeParts10ThreeComponentsTablePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -879,7 +877,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff01-section-title-card"
         component={Part4PrecisionTradeoff01SectionTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -887,7 +885,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff02-printer-vs-mold-split"
         component={Part4PrecisionTradeoff02PrinterVsMoldSplitPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -895,7 +893,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff03-precision-tradeoff-curve"
         component={Part4PrecisionTradeoff03PrecisionTradeoffCurvePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -903,7 +901,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff04-prompt-comparison-split"
         component={Part4PrecisionTradeoff04PromptComparisonSplitPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -911,7 +909,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff05-test-accumulation-insight"
         component={Part4PrecisionTradeoff05TestAccumulationInsightPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -919,7 +917,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff06-takeaway-callout"
         component={Part4PrecisionTradeoff06TakeawayCalloutPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -927,7 +925,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff07-embedded-code-document"
         component={Part4PrecisionTradeoff07EmbeddedCodeDocumentPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -935,7 +933,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff08-prompt-code-spectrum"
         component={Part4PrecisionTradeoff08PromptCodeSpectrumPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -943,7 +941,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns01-section-title-card"
         component={Part5CompoundReturns01SectionTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -951,7 +949,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns02-maintenance-pie-chart"
         component={Part5CompoundReturns02MaintenancePieChartPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -959,7 +957,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns03-compound-debt-curve"
         component={Part5CompoundReturns03CompoundDebtCurvePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -967,7 +965,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns04-diverging-cost-curves"
         component={Part5CompoundReturns04DivergingCostCurvesPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -975,7 +973,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns05-investment-comparison-table"
         component={Part5CompoundReturns05InvestmentComparisonTablePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -983,7 +981,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns06-sock-callback-split"
         component={Part5CompoundReturns06SockCallbackSplitPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -991,7 +989,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns07-economics-crossing-callback"
         component={Part5CompoundReturns07EconomicsCrossingCallbackPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -999,7 +997,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns08-contrarian-quote-card"
         component={Part5CompoundReturns08ContrarianQuoteCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1007,7 +1005,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start01-section-title-card"
         component={WhereToStart01SectionTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1015,7 +1013,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start02-legacy-codebase-reveal"
         component={WhereToStart02LegacyCodebaseRevealPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1023,7 +1021,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start03-module-highlight-update"
         component={WhereToStart03ModuleHighlightUpdatePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1031,7 +1029,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start04-source-of-truth-shift"
         component={WhereToStart04SourceOfTruthShiftPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1039,7 +1037,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start05-regenerate-compare-loop"
         component={WhereToStart05RegenerateCompareLoopPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1047,7 +1045,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start06-spreading-glow-migration"
         component={WhereToStart06SpreadingGlowMigrationPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1055,7 +1053,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start07-no-big-bang-callout"
         component={WhereToStart07NoBigBangCalloutPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1063,7 +1061,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing01-sock-callback-split"
         component={Closing01SockCallbackSplitPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1071,7 +1069,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing03-code-regenerate-workflow"
         component={Closing03CodeRegenerateWorkflowPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1079,7 +1077,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing04-pdd-triangle"
         component={Closing04PddTrianglePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1087,7 +1085,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing05-dissolve-regenerate-loop"
         component={Closing05DissolveRegenerateLoopPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1095,7 +1093,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing06-mold-glow-finale"
         component={Closing06MoldGlowFinalePreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1103,7 +1101,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing07-the-beat"
         component={Closing07TheBeatPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1111,7 +1109,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing08-mold-is-what-matters"
         component={Closing08MoldIsWhatMattersPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1119,7 +1117,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing09-final-title-card"
         component={Closing09FinalTitleCardPreview}
-        durationInFrames={PREVIEW_DURATION}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}

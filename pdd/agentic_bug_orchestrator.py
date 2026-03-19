@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
+from rich.markup import escape
 
 from .agentic_common import (
     run_agentic_task,
@@ -20,50 +20,28 @@ from .agentic_common import (
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from .pytest_output import run_pytest_and_capture_output
 
-# Initialize console
+# Initialize console for rich output
 console = Console()
 
-
-def _get_modified_and_untracked(cwd: Path) -> List[str]:
-    """Returns modified tracked files plus untracked files via git."""
-    files: List[str] = []
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
-        cwd=cwd, capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        files.extend(f for f in result.stdout.strip().split("\n") if f)
-    result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=cwd, capture_output=True, text=True
-    )
-    if result.returncode == 0:
-        files.extend(f for f in result.stdout.strip().split("\n") if f)
-    return files
-
-
-# Per-step timeouts for the 12-step agentic bug workflow (Issue #256, #538)
-# Complex steps (reproduce, root cause, prompt classification, generate, e2e) get more time.
-BUG_STEP_TIMEOUTS: Dict[int, float] = {
+# Per-Step Timeouts (Workflow specific)
+BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     1: 240.0,    # Duplicate Check
     2: 400.0,    # Docs Check
     3: 400.0,    # Triage
-    4: 500.0,    # API Research (NEW - Issue #538)
-    5: 600.0,    # Reproduce (Complex)
-    6: 600.0,    # Root Cause (Complex)
-    7: 600.0,    # Prompt Classification (may auto-fix prompts)
-    8: 340.0,    # Test Plan
-    9: 1000.0,   # Generate Unit Test (Most Complex)
-    10: 600.0,   # Verify Unit Test
-    11: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
-    12: 240.0,   # Create PR
+    4: 600.0,    # Reproduce (Complex)
+    5: 600.0,    # Root Cause (Complex)
+    5.5: 600.0,  # Prompt Classification (may auto-fix prompts)
+    6: 340.0,    # Test Plan
+    7: 1000.0,   # Generate Unit Test (Most Complex)
+    8: 600.0,    # Verify Unit Test
+    9: 2000.0,   # E2E Test (Complex - needs to discover env & run tests)
+    10: 240.0,   # Create PR
 }
 
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
-    """Get the root directory of the git repository."""
+    """Get repo root via git rev-parse."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -73,41 +51,38 @@ def _get_git_root(cwd: Path) -> Optional[Path]:
             check=True
         )
         return Path(result.stdout.strip())
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return None
 
 
-def _get_state_dir(cwd: Path) -> Path:
-    """Return path to state directory relative to git root."""
-    root = _get_git_root(cwd) or cwd
-    return root / ".pdd" / "bug-state"
-
-
 def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
-    """Check if a path is a registered git worktree."""
+    """Check if path is in git worktree list --porcelain output."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False
     try:
-        result = subprocess.run(
+        wt_list = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            cwd=cwd,
+            cwd=git_root,
             capture_output=True,
-            text=True,
-            check=True
-        )
-        # The porcelain output lists 'worktree /path/to/worktree'
-        # We check if our specific path appears in the output
-        return str(worktree_path.resolve()) in result.stdout
-    except subprocess.CalledProcessError:
+            text=True
+        ).stdout
+        return str(worktree_path) in wt_list
+    except Exception:
         return False
 
 
 def _branch_exists(cwd: Path, branch: str) -> bool:
-    """Check if a local git branch exists."""
+    """Check via git show-ref --verify refs/heads/{branch}."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False
     try:
         subprocess.run(
             ["git", "show-ref", "--verify", f"refs/heads/{branch}"],
-            cwd=cwd,
-            capture_output=True,
-            check=True
+            cwd=git_root,
+            check=True,
+            capture_output=True
         )
         return True
     except subprocess.CalledProcessError:
@@ -115,140 +90,159 @@ def _branch_exists(cwd: Path, branch: str) -> bool:
 
 
 def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
-    """Remove a git worktree."""
+    """Remove via git worktree remove --force."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False, "Not a git repository"
     try:
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree_path)],
-            cwd=cwd,
+            cwd=git_root,
             capture_output=True,
             check=True
         )
         return True, ""
     except subprocess.CalledProcessError as e:
-        return False, e.stderr.decode('utf-8')
+        return False, str(e)
 
 
 def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
-    """Force delete a git branch."""
+    """Delete via git branch -D."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False, "Not a git repository"
     try:
         subprocess.run(
             ["git", "branch", "-D", branch],
-            cwd=cwd,
+            cwd=git_root,
             capture_output=True,
             check=True
         )
         return True, ""
     except subprocess.CalledProcessError as e:
-        return False, e.stderr.decode('utf-8')
+        return False, str(e)
 
 
 def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
     """
-    Sets up an isolated git worktree for the issue fix.
-
-    Args:
-        cwd: Current working directory
-        issue_number: GitHub issue number
-        quiet: Suppress output
-        resume_existing: If True, keep existing branch with accumulated work
-
+    Create an isolated git worktree for the issue.
     Returns (worktree_path, error_message).
     """
     git_root = _get_git_root(cwd)
     if not git_root:
-        return None, "Current directory is not a git repository."
+        return None, "Not a git repository"
 
+    branch_name = f"fix/issue-{issue_number}"
     worktree_rel_path = Path(".pdd") / "worktrees" / f"fix-issue-{issue_number}"
     worktree_path = git_root / worktree_rel_path
-    branch_name = f"fix/issue-{issue_number}"
 
-    # 1. Clean up existing worktree at path (always needed to create fresh worktree)
+    # Clean up existing directory if it exists
     if worktree_path.exists():
-        if _worktree_exists(git_root, worktree_path):
-            if not quiet:
-                console.print(f"[yellow]Removing existing worktree at {worktree_path}[/yellow]")
-            success, err = _remove_worktree(git_root, worktree_path)
+        if _worktree_exists(cwd, worktree_path):
+            success, err = _remove_worktree(cwd, worktree_path)
             if not success:
                 # Fallback to rmtree if git command fails but dir exists
                 try:
                     shutil.rmtree(worktree_path)
-                    subprocess.run(
-                        ["git", "worktree", "prune"],
-                        cwd=git_root,
-                        capture_output=True,
-                    )
-                except OSError as e:
-                    if not quiet:
-                        console.print(f"[yellow]Warning: rmtree cleanup failed: {e}[/yellow]")
+                except Exception:
+                    pass
         else:
-            # It's just a directory, not a registered worktree
-            if not quiet:
-                console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
+            # Just a directory
             shutil.rmtree(worktree_path)
 
-    # 2. Handle existing branch
-    branch_exists = _branch_exists(git_root, branch_name)
+    # Clean up branch if it exists
     reset_after_attach = False
-
-    if branch_exists:
-        if resume_existing:
-            # Keep existing branch with our accumulated work
-            if not quiet:
-                console.print(f"[blue]Resuming with existing branch: {branch_name}[/blue]")
+    branch_exists = _branch_exists(cwd, branch_name)
+    if branch_exists and not resume_existing:
+        success, _err = _delete_branch(cwd, branch_name)
+        if success:
+            branch_exists = False
         else:
-            # Try to delete for fresh start; if it fails (e.g. branch is
-            # currently checked out), continue and use --force below.
-            if not quiet:
-                console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            success, _err = _delete_branch(git_root, branch_name)
-            if success:
-                branch_exists = False
-            else:
-                # Branch couldn't be deleted — will reuse with --force,
-                # then reset to HEAD so old commits don't pollute the PR.
-                reset_after_attach = True
+            # Branch couldn't be deleted — will reuse with --force,
+            # then reset to HEAD so old commits don't pollute the PR.
+            reset_after_attach = True
 
-    # 3. Create worktree
+    # Create worktree
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-
         if branch_exists:
-            # Branch couldn't be deleted (e.g. currently checked out) — use existing
-            # --force required: git refuses to checkout a branch already in use
-            subprocess.run(
-                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
-                cwd=git_root,
-                capture_output=True,
-                check=True,
-            )
-            if reset_after_attach:
-                # Fresh re-run: discard old commits so the branch starts
-                # clean from the main repo's current HEAD.
-                main_head = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=git_root,
-                    capture_output=True,
-                    check=True,
-                ).stdout.decode().strip()
-                if not quiet:
-                    console.print(f"[yellow]Resetting branch to {main_head[:8]} for clean re-run[/yellow]")
-                subprocess.run(
-                    ["git", "reset", "--hard", main_head],
-                    cwd=worktree_path,
-                    capture_output=True,
-                    check=True,
-                )
+            # Branch exists (resume or undeletable) — use --force
+            cmd = ["git", "worktree", "add", "--force", str(worktree_path), branch_name]
         else:
-            # Branch was deleted or didn't exist — create new
-            subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+            cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"]
+        subprocess.run(
+            cmd,
+            cwd=git_root,
+            capture_output=True,
+            check=True
+        )
+        # Reset branch to main HEAD if we reused an undeletable branch
+        if reset_after_attach:
+            main_head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
                 cwd=git_root,
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "reset", "--hard", main_head],
+                cwd=worktree_path,
                 capture_output=True,
                 check=True,
             )
+        if not quiet:
+            console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
         return worktree_path, None
     except subprocess.CalledProcessError as e:
-        return None, f"Failed to create worktree: {e.stderr.decode('utf-8')}"
+        return None, f"Git worktree creation failed: {e}"
+
+
+def _get_modified_and_untracked(cwd: Path) -> List[str]:
+    """Returns modified tracked files plus untracked files."""
+    files = []
+    # Modified tracked
+    result = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=cwd, capture_output=True, text=True)
+    files.extend([f for f in result.stdout.strip().split('\n') if f])
+    # Untracked
+    result = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=cwd, capture_output=True, text=True)
+    files.extend([f for f in result.stdout.strip().split('\n') if f])
+    return files
+
+
+def _parse_changed_files(output: str, marker: str) -> List[str]:
+    """Extract file paths from specific marker lines."""
+    files = []
+    match = re.search(rf"{marker}:\s*(.*)", output)
+    if match:
+        files.extend([f.strip() for f in match.group(1).split(",") if f.strip()])
+    return files
+
+
+def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: bool) -> Optional[str]:
+    """Check output for hard stop conditions."""
+    if step_num == 1 and "Duplicate of #" in output:
+        return "Issue is a duplicate"
+    if step_num == 2:
+        if "Feature Request (Not a Bug)" in output:
+            return "Feature Request (Not a Bug)"
+        if "User Error (Not a Bug)" in output:
+            return "User Error (Not a Bug)"
+    if step_num == 3 and "Needs More Info" in output:
+        return "Needs more info from author"
+    if step_num == 7 and "PROMPT_REVIEW:" in output:
+        return "Prompt defect needs human review"
+    if step_num == 9 and not files_extracted:
+        return "No test file generated"
+    if step_num == 10 and "FAIL: Test does not work as expected" in output:
+        return "Test doesn't fail correctly"
+    if step_num == 11 and "E2E_FAIL: Test does not catch bug correctly" in output:
+        return "E2E test doesn't catch bug"
+    return None
+
+
+def _get_state_dir(cwd: Path) -> Path:
+    """Get the state directory relative to git root."""
+    root = _get_git_root(cwd) or cwd
+    return root / ".pdd" / "bug-state"
 
 
 def run_agentic_bug_orchestrator(
@@ -267,8 +261,8 @@ def run_agentic_bug_orchestrator(
     use_github_state: bool = True
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 12-step agentic bug investigation workflow.
-
+    Orchestrates the 11-step agentic bug investigation workflow.
+    
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
     """
@@ -277,200 +271,183 @@ def run_agentic_bug_orchestrator(
     clear_agentic_progress()
 
     if not quiet:
-        console.print(f"🔍 Investigating issue #{issue_number}: \"{issue_title}\"")
+        console.print(f"[bold]🔍 Investigating issue #{issue_number}: \"{escape(issue_title)}\"[/bold]")
 
-    # Context accumulation
-    context: Dict[str, Any] = {
+    state_dir = _get_state_dir(cwd)
+
+    # Load state
+    state, loaded_gh_id = load_workflow_state(
+        cwd, issue_number, "bug", state_dir, repo_owner, repo_name, use_github_state
+    )
+
+    # Initialize variables from state or defaults
+    if state is not None:
+        last_completed_step = state.get("last_completed_step", 0)
+        step_outputs = state.get("step_outputs", {})
+        total_cost = state.get("total_cost", 0.0)
+        model_used = state.get("model_used", "unknown")
+        github_comment_id = loaded_gh_id
+        worktree_path_str = state.get("worktree_path")
+        worktree_path = Path(worktree_path_str) if worktree_path_str else None
+    else:
+        state = {"step_outputs": {}}
+        last_completed_step = 0
+        step_outputs = state["step_outputs"]
+        total_cost = 0.0
+        model_used = "unknown"
+        github_comment_id = None
+        worktree_path = None
+
+    context = {
         "issue_url": issue_url,
         "issue_content": issue_content,
         "repo_owner": repo_owner,
         "repo_name": repo_name,
-        "issue_number": issue_number,
+        "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
     }
+    
+    # Populate context with previous step outputs
+    for s_key, s_out in step_outputs.items():
+        context[f"step{s_key}_output"] = s_out
 
-    total_cost = 0.0
-    last_model_used = "unknown"
+    # Re-extract files from step 5.5/7/9 outputs if available
     changed_files: List[str] = []
-    current_cwd = cwd
-    worktree_path: Optional[Path] = None
-    github_comment_id: Optional[int] = None
+    
+    # Step 5.5
+    if "step5.5_output" in context:
+        s55_out = context["step5.5_output"]
+        prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
+        changed_files.extend(prompt_fixed)
 
-    # Resume: Load existing state if available
-    state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(
-        cwd=cwd,
-        issue_number=issue_number,
-        workflow_type="bug",
-        state_dir=state_dir,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        use_github_state=use_github_state
-    )
+    # Step 7
+    if "step7_output" in context:
+        s7_out = context["step7_output"]
+        created = _parse_changed_files(s7_out, "FILES_CREATED")
+        modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
+        changed_files.extend(created + modified)
+    
+    # Step 9
+    if "step9_output" in context:
+        s9_out = context["step9_output"]
+        e2e_created = _parse_changed_files(s9_out, "E2E_FILES_CREATED")
+        changed_files.extend(e2e_created)
 
-    step_outputs: Dict[str, str] = {}
-    last_completed_step = 0
+    changed_files = list(set(changed_files))  # Deduplicate
+    if changed_files:
+        context["files_to_stage"] = ", ".join(changed_files)
 
-    if state is not None:
-        last_completed_step = state.get("last_completed_step", 0)
-        cached_outputs = state.get("step_outputs", {})
-
-        # State migration: map old step numbers (including "5.5") to new 12-step numbering
-        # This handles in-progress workflows saved with the old 11-step scheme.
-        OLD_TO_NEW_STEP = {
-            "1": "1", "2": "2", "3": "3",
-            "4": "5", "5": "6", "5.5": "7",
-            "6": "8", "7": "9", "8": "10", "9": "11", "10": "12",
-        }
-        OLD_TO_NEW_LAST = {
-            1: 1, 2: 2, 3: 3,
-            4: 5, 5: 6, 5.5: 7,
-            6: 8, 7: 9, 8: 10, 9: 11, 10: 12,
-        }
-        # Detect old-format state: presence of key "5.5" or last_completed_step being a float
-        is_old_format = ("5.5" in cached_outputs) or isinstance(last_completed_step, float)
-        if is_old_format:
-            migrated_outputs: Dict[str, str] = {}
-            for old_key, val in cached_outputs.items():
-                new_key = OLD_TO_NEW_STEP.get(old_key, old_key)
-                migrated_outputs[new_key] = val
-            cached_outputs = migrated_outputs
-            last_completed_step = OLD_TO_NEW_LAST.get(last_completed_step, last_completed_step)
-            if not quiet:
-                console.print(f"[yellow]Migrated saved state from old 11-step to new 12-step numbering[/yellow]")
-
-        # Issue #467: Validate cached state — find actual last successful step
-        # by scanning step_outputs for entries without "FAILED:" prefix.
-        # This prevents resuming past failed steps when the state was corrupted
-        # by the ratchet effect (now fixed) or by other state corruption.
-        if cached_outputs:
-            # Step order for validation
-            step_order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-            actual_last_success: int = 0
-            for sn in step_order:
-                output_val = cached_outputs.get(str(sn), "")
-                # Stop at the first missing/empty entry to avoid skipping gaps
-                if not output_val:
-                    break
-                # Stop at the first explicitly failed step
-                if output_val.startswith("FAILED:"):
-                    break
-                # Otherwise, count this step as successfully completed
-                actual_last_success = sn
-            if actual_last_success < last_completed_step:
-                if not quiet:
-                    console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last_success} (found FAILED steps in cache)[/yellow]")
-                last_completed_step = actual_last_success
-
-        resume_start_step: int = last_completed_step + 1
+    # State validation: find actual last successful step
+    ordered_steps: List[Union[int, float]] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    actual_last: Union[int, float] = 0
+    for s in ordered_steps:
+        key = str(s)
+        if key in step_outputs and not step_outputs[key].startswith("FAILED:"):
+            actual_last = s
+        else:
+            break
+    if actual_last < last_completed_step:
         if not quiet:
-            console.print(f"[yellow]Resuming from step {resume_start_step} (steps 1-{last_completed_step} cached)[/yellow]")
+            console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last}[/yellow]")
+        last_completed_step = actual_last
 
-        total_cost = state.get("total_cost", 0.0)
-        last_model_used = state.get("model_used", "unknown")
-        step_outputs = state.get("step_outputs", {})
-        changed_files = state.get("changed_files", [])
-        github_comment_id = loaded_gh_id  # Use the ID returned by load_workflow_state
-
-        # Restore worktree path
-        wt_path_str = state.get("worktree_path")
-        if wt_path_str:
-            worktree_path = Path(wt_path_str)
-            if worktree_path.exists():
-                current_cwd = worktree_path
+    # Determine start step
+    start_step: Union[int, float] = ordered_steps[0]
+    if last_completed_step > 0:
+        try:
+            idx = ordered_steps.index(last_completed_step)
+            if idx + 1 < len(ordered_steps):
+                start_step = ordered_steps[idx + 1]
             else:
-                # Recreate worktree with existing branch
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
-                if err:
-                    return False, f"Failed to recreate worktree on resume: {err}", total_cost, last_model_used, []
-                worktree_path = wt_path
-                current_cwd = worktree_path
-            context["worktree_path"] = str(worktree_path)
+                start_step = 999  # All done
+        except ValueError:
+            start_step = 1
 
-        # Restore context from step outputs
-        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
-        for step_key, output in step_outputs.items():
-            context[f"step{step_key}_output"] = output
+    if last_completed_step > 0 and start_step <= 10 and not quiet:
+        console.print(f"Resuming bug investigation for issue #{issue_number}")
+        console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
+        console.print(f"   Starting from Step {start_step}")
 
-        # Restore files_to_stage if available
-        if changed_files:
-            context["files_to_stage"] = ", ".join(changed_files)
-
-    # Step Definitions (12 steps — Issue #538 added step 4: API Research)
-    steps: List[Tuple[int, str, str]] = [
-        (1, "duplicate", "Searching for duplicate issues"),
-        (2, "docs", "Checking documentation for user error"),
-        (3, "triage", "Assessing information completeness"),
+    steps_config = [
+        (1, "duplicate", "Search for duplicate issues"),
+        (2, "docs", "Check documentation for user error"),
+        (3, "triage", "Assess if enough info to proceed"),
         (4, "api_research", "Researching external API dependencies and constraints"),
-        (5, "reproduce", "Attempting to reproduce the bug"),
-        (6, "root_cause", "Analyzing root cause"),
+        (5, "reproduce", "Attempt to reproduce the bug"),
+        (6, "root_cause", "Analyze root cause"),
         (7, "prompt_classification", "Classifying defect: code bug vs prompt defect"),
-        (8, "test_plan", "Designing test strategy"),
-        (9, "generate", "Generating failing unit test"),
-        (10, "verify", "Verifying test catches the bug"),
-        (11, "e2e_test", "Generating and running E2E tests"),
-        (12, "pr", "Creating draft PR"),
+        (8, "test_plan", "Design test strategy"),
+        (9, "generate", "Generate failing unit test"),
+        (10, "verify", "Verify test catches the bug"),
+        (11, "e2e_test", "Generate and run E2E tests"),
+        (12, "pr", "Create draft PR and link to issue"),
     ]
 
-    start_step: int = last_completed_step + 1
+    total_steps = len(steps_config)  # 12
 
-    # Track the actual last successfully completed step for state saving.
-    # Issue #467: This prevents the "ratchet effect" where consecutive failures
-    # advance last_completed_step via the step_num - 1 formula.
-    last_completed_step_to_save: int = last_completed_step
-    consecutive_provider_failures = 0
+    current_work_dir = cwd
+    consecutive_failures = 0
+    skip_e2e = False
 
-    for step_num, name, description in steps:
+    # Worktree restoration for resume
+    if start_step >= 5.5 and start_step <= 10:
+        if worktree_path and worktree_path.exists():
+            if not quiet:
+                console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
+            current_work_dir = worktree_path
+            context["worktree_path"] = str(worktree_path)
+        else:
+            wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
+            if not wt_path:
+                return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
+            worktree_path = wt_path
+            current_work_dir = worktree_path
+            state["worktree_path"] = str(worktree_path)
+            context["worktree_path"] = str(worktree_path)
 
-        # Skip already completed steps (resume support)
+    for step_index, (step_num, name, description) in enumerate(steps_config, 1):
         if step_num < start_step:
             continue
 
-        # --- Pre-Step Logic: Worktree Creation ---
-        # Issue #352: Create worktree before Step 7 (prompt classification) so prompt fixes are isolated
+        # Worktree setup before Step 7 (prompt classification)
         if step_num == 7:
-            # Only create worktree if not already set (from resume)
-            if worktree_path is None:
-                # Check current branch before creating worktree
+            if worktree_path and worktree_path.exists():
+                current_work_dir = worktree_path
+                if not quiet:
+                    console.print(f"[blue]Using existing worktree: {worktree_path}[/blue]")
+            else:
                 try:
-                    branch_res = subprocess.run(
+                    current_branch = subprocess.run(
                         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                         cwd=cwd,
                         capture_output=True,
                         text=True,
                         check=True
-                    )
-                    current_branch = branch_res.stdout.strip()
+                    ).stdout.strip()
                     if current_branch not in ["main", "master"] and not quiet:
                         console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
-                except subprocess.CalledProcessError:
-                    # If we can't determine branch, proceed anyway (might be detached HEAD)
+                except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
 
                 wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
                 if not wt_path:
-                    return False, f"Failed to create worktree: {err}", total_cost, last_model_used, changed_files
-
+                    return False, f"Failed to create worktree: {err}", total_cost, model_used, []
                 worktree_path = wt_path
-                current_cwd = worktree_path
+                current_work_dir = worktree_path
+                state["worktree_path"] = str(worktree_path)
                 context["worktree_path"] = str(worktree_path)
 
-                if not quiet:
-                    console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
-
-        # --- Step Execution ---
-        step_suffix = str(step_num)
-
-        # Snapshot filesystem before Step 9 (generate) for fallback detection
-        pre_step9_files = None
-        if step_num == 9:
-            pre_step9_files = set(_get_modified_and_untracked(current_cwd))
+        # Skip E2E if flagged
+        if step_num == 11 and skip_e2e:
+            if not quiet:
+                console.print("Skipping Step 9 (E2E): unit tests provide sufficient coverage")
+            continue
 
         # Record progress so KeyboardInterrupt can report how far we got.
         completed_list = (
-            list(range(1, last_completed_step_to_save + 1))
-            if last_completed_step_to_save
+            list(range(1, int(last_completed_step) + 1))
+            if last_completed_step
             else []
         )
         set_agentic_progress(
@@ -481,325 +458,162 @@ def run_agentic_bug_orchestrator(
             completed_steps=completed_list,
         )
 
+        # Display step progress
         if not quiet:
-            console.print(f"[bold][Step {step_num}/12][/bold] {description}...")
+            console.print(f"[bold][Step {step_index}/{total_steps}][/bold] {description}...")
 
-        template_name = f"agentic_bug_step{step_suffix}_{name}_LLM"
-        prompt_template = load_prompt_template(template_name)
+        # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
+        pre_step7_files: List[str] = []
+        if step_num == 9:
+            pre_step7_files = _get_modified_and_untracked(current_work_dir)
+
+        # Load and preprocess template
+        step_str = str(step_num).replace(".", "_")
+        template_name = f"agentic_bug_step{step_str}_{name}_LLM"
         
+        prompt_template = load_prompt_template(template_name)
         if not prompt_template:
-            return False, f"Missing prompt template: {template_name}", total_cost, last_model_used, changed_files
+            return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
 
-        # Preprocess to expand <include> tags and escape curly braces
-        # Exclude context keys from escaping so they can be substituted
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))
 
-        # Format prompt using safe str.replace() (Issue #549): un-double template literal
-        # braces from preprocess() first, then substitute context keys. This preserves JSON
-        # curly braces in context values (nested JSON etc.) without corruption.
         prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
         formatted_prompt = prompt_template
         for key, value in context.items():
-            formatted_prompt = formatted_prompt.replace(f'{{{key}}}', str(value))
+            formatted_prompt = formatted_prompt.replace(f"{{{key}}}", str(value))
 
-        # Run the task
-        success, output, cost, model = run_agentic_task(
+        timeout = BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
+        
+        # Run task
+        step_label = f"step{step_str}"
+        
+        step_success, step_output, step_cost, step_model = run_agentic_task(
             instruction=formatted_prompt,
-            cwd=current_cwd,
+            cwd=current_work_dir,
             verbose=verbose,
             quiet=quiet,
-            label=f"step{step_suffix}",
-            timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder,
+            timeout=timeout,
+            label=step_label,
             max_retries=DEFAULT_MAX_RETRIES,
         )
 
-        # Update tracking
-        total_cost += cost
-        last_model_used = model
-        # No brace escaping needed: safe str.replace() substitution preserves JSON braces (Issue #549)
-        context[f"step{step_suffix}_output"] = output
+        total_cost += step_cost
+        model_used = step_model
+        state["total_cost"] = total_cost
+        state["model_used"] = model_used
 
-        # --- Post-Step Logic: Hard Stops & Parsing ---
+        # Consecutive provider failure check (only when the step actually failed)
+        if not step_success and "All agent providers failed" in step_output:
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                state["last_completed_step"] = last_completed_step
+                state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+                save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                return False, "Aborting: 3 consecutive steps failed — agent providers unavailable", total_cost, model_used, changed_files
+        else:
+            consecutive_failures = 0
 
-        # Universal STOP_CONDITION check (before step-specific hard stops)
-        stop_match = re.search(r'STOP_CONDITION:\s*(.+)', output or '', re.IGNORECASE)
-        if stop_match:
-            reason = stop_match.group(1).strip()
-            msg = f"Stopped at Step {step_num}: {reason}"
-            if not quiet:
-                console.print(f"\u23f9\ufe0f  {msg}")
-            # Clarification step (step 3): save as not-completed so re-run
-            # re-evaluates after new comments are added (Issue #769)
-            if step_num == 3:
-                step_outputs[str(step_num)] = output
-                save_state = {
-                    "workflow": "bug",
-                    "issue_number": issue_number,
-                    "issue_url": issue_url,
-                    "last_completed_step": step_num - 1,
-                    "step_outputs": step_outputs.copy(),
-                    "total_cost": total_cost,
-                    "model_used": last_model_used,
-                    "changed_files": changed_files.copy(),
-                    "worktree_path": str(worktree_path) if worktree_path else None,
-                    "github_comment_id": github_comment_id,
-                }
-                save_workflow_state(
-                    cwd=cwd, issue_number=issue_number, workflow_type="bug",
-                    state=save_state, state_dir=state_dir,
-                    repo_owner=repo_owner, repo_name=repo_name,
-                    use_github_state=use_github_state, github_comment_id=github_comment_id,
-                )
-            return False, msg, total_cost, last_model_used, changed_files
+        # Store output in context
+        context[f"step{str(step_num)}_output"] = step_output
 
-        # Step 1: Duplicate Check
-        if step_num == 1 and "Duplicate of #" in output:
-            msg = f"Stopped at Step 1: Issue is a duplicate. {output.strip()}"
-            if not quiet:
-                console.print(f"⏹️  {msg}")
-            return False, msg, total_cost, last_model_used, changed_files
+        files_extracted = False
 
-        # Step 2: User Error / Feature Request
-        if step_num == 2:
-            if "Feature Request (Not a Bug)" in output:
-                msg = "Stopped at Step 2: Identified as Feature Request."
-                if not quiet: console.print(f"⏹️  {msg}")
-                return False, msg, total_cost, last_model_used, changed_files
-            if "User Error (Not a Bug)" in output:
-                msg = "Stopped at Step 2: Identified as User Error."
-                if not quiet: console.print(f"⏹️  {msg}")
-                return False, msg, total_cost, last_model_used, changed_files
-
-        # Step 3: Needs Info — requires STOP_CONDITION tag (caught by universal check above)
-        # No substring fallback — clarification steps use STOP_CONDITION only to avoid
-        # false positives from casual LLM mentions (Issue #769)
-
-        # Step 7: Prompt Classification - Hard stop if needs human review
-        if step_num == 7 and "PROMPT_REVIEW:" in output:
-            # Extract reason if available
-            for line in output.splitlines():
-                if line.startswith("PROMPT_REVIEW:"):
-                    reason = line.split(":", 1)[1].strip()
-                    break
-            else:
-                reason = "Prompt defect needs human review"
-            msg = f"Stopped at Step 7: {reason}"
-            if not quiet: console.print(f"⏹️  {msg}")
-            return False, msg, total_cost, last_model_used, changed_files
-
-        # Step 7: Parse PROMPT_FIXED to track changed prompt files
+        # Step-specific handling
         if step_num == 7:
-            for line in output.splitlines():
-                if line.startswith("PROMPT_FIXED:"):
-                    fixed_file = line.split(":", 1)[1].strip()
-                    if fixed_file and fixed_file not in changed_files:
-                        changed_files.append(fixed_file)
+            defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
+            if defect_type_match:
+                defect_type = defect_type_match.group(1)
+                if defect_type == "prompt":
+                    prompt_fixed = _parse_changed_files(step_output, "PROMPT_FIXED")
+                    if prompt_fixed:
+                        changed_files.extend(prompt_fixed)
                         context["files_to_stage"] = ", ".join(changed_files)
-                    break
+                        files_extracted = True
 
-        # Step 9: File Extraction
         if step_num == 9:
-            # Parse output for FILES_CREATED or FILES_MODIFIED
-            extracted_files = []
-            for line in output.splitlines():
-                if line.startswith("FILES_CREATED:") or line.startswith("FILES_MODIFIED:"):
-                    file_list = line.split(":", 1)[1].strip()
-                    extracted_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
+            created = _parse_changed_files(step_output, "FILES_CREATED")
+            modified = _parse_changed_files(step_output, "FILES_MODIFIED")
+            extracted = created + modified
+            if not extracted:
+                # Filesystem fallback: diff against pre-snapshot
+                post_files = _get_modified_and_untracked(current_work_dir)
+                new_files = [f for f in post_files if f not in pre_step7_files]
+                extracted = new_files
+            if extracted:
+                files_extracted = True
+                changed_files.extend(extracted)
+                changed_files = list(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
 
-            # Filesystem fallback: if no markers found, detect files created on disk
-            # (some providers like Codex write files without emitting markers)
-            if not extracted_files and pre_step9_files is not None:
-                post_files = set(_get_modified_and_untracked(current_cwd))
-                new_files = sorted(post_files - pre_step9_files)
-                if new_files:
-                    extracted_files = new_files
-                    if not quiet:
-                        console.print(
-                            f"  → No FILES_CREATED markers; detected "
-                            f"{len(new_files)} new or modified file(s) on disk: "
-                            f"{', '.join(new_files)}"
-                        )
-
-            changed_files.extend(extracted_files)
-            # Deduplicate while preserving insertion order for consistent git staging
-            changed_files = list(dict.fromkeys(changed_files))
-            # Pass explicit file list to Step 11 and 12 for precise git staging
-            context["files_to_stage"] = ", ".join(changed_files)
-
-            if not changed_files:
-                msg = "Stopped at Step 9: No test file generated."
-                if not quiet: console.print(f"⏹️  {msg}")
-                return False, msg, total_cost, last_model_used, changed_files
-
-        # Step 10: Verification Failure
-        if step_num == 10 and "FAIL: Test does not work as expected" in output:
-            msg = "Stopped at Step 10: Generated test does not fail correctly (verification failed)."
-            if not quiet: console.print(f"⏹️  {msg}")
-            return False, msg, total_cost, last_model_used, changed_files
-
-        # Step 10: Independent pytest verification — catch anti-TDD tests
-        # that pass on buggy code (the LLM may claim "PASS" but the test
-        # should actually FAIL on current buggy code for TDD correctness).
-        if step_num == 10 and changed_files:
-            test_files_to_verify = [
-                f for f in changed_files
-                if Path(f).name.startswith("test_") and f.endswith(".py")
-            ]
-            for tf in test_files_to_verify:
-                abs_path = str(current_cwd / tf)
-                result = run_pytest_and_capture_output(abs_path)
-                if not result or not result.get("test_results"):
-                    # Cannot verify test — file missing or pytest error.
-                    # Treat as anti-TDD since we can't confirm the test fails.
-                    msg = (
-                        f"Stopped at Step 10: Cannot verify test {tf} fails on buggy code "
-                        "(file not found or pytest error). TDD requires independent verification."
-                    )
-                    if not quiet:
-                        console.print(f"⏹️  {msg}")
-                    return False, msg, total_cost, last_model_used, changed_files
-                tr = result["test_results"][0]
-                failures = tr.get("failures", 0) + tr.get("errors", 0)
-                if failures == 0:
-                    # Test passes on buggy code — anti-TDD pattern detected
-                    msg = (
-                        f"Stopped at Step 10: Test {tf} passes on current (buggy) code. "
-                        "TDD requires the test to FAIL before fix. This is an anti-TDD test "
-                        "that asserts buggy behavior as correct."
-                    )
-                    if not quiet:
-                        console.print(f"⏹️  {msg}")
-                    return False, msg, total_cost, last_model_used, changed_files
-
-        # Step 11: E2E Test — handle skip, failure, and file extraction
-        if step_num == 11:
-            if "E2E_SKIP:" in output:
+        if step_num == 10:
+            # Check for E2E classification marker in step output.
+            # Safe default: if marker is missing, E2E runs (backward compatible).
+            if "E2E_NEEDED: no" in step_output:
+                skip_e2e = True
                 if not quiet:
-                    for line in output.splitlines():
-                        if line.strip().startswith("E2E_SKIP:"):
-                            reason = line.split(":", 1)[1].strip()
-                            console.print(f"  → E2E test skipped: {reason}")
-                            break
-                # Fall through to file parsing (don't skip)
-            elif "E2E_FAIL: Test does not catch bug correctly" in output:
-                msg = "Stopped at Step 11: E2E test does not catch bug correctly."
-                if not quiet: console.print(f"⏹️  {msg}")
-                return False, msg, total_cost, last_model_used, changed_files
+                    console.print("   (E2E skipped: E2E_NEEDED: no)")
 
-            # Always parse E2E_FILES_CREATED (even on E2E_SKIP — test may have
-            # been written but not verified due to missing runtime deps)
-            if "E2E_FAIL:" not in output:
-                e2e_files = []
-                for line in output.splitlines():
-                    if line.startswith("E2E_FILES_CREATED:"):
-                        file_list = line.split(":", 1)[1].strip()
-                        e2e_files.extend([f.strip() for f in file_list.split(",") if f.strip()])
+        if step_num == 11:
+            if "E2E_SKIP:" in step_output:
+                # E2E skipped, continue normally
+                pass
+            else:
+                e2e_created = _parse_changed_files(step_output, "E2E_FILES_CREATED")
+                changed_files.extend(e2e_created)
+                changed_files = list(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
 
-                if e2e_files:
-                    changed_files.extend(e2e_files)
-                    # Deduplicate while preserving insertion order
-                    changed_files = list(dict.fromkeys(changed_files))
-                    # Update files_to_stage so Step 12 (PR) includes E2E files
-                    context["files_to_stage"] = ", ".join(changed_files)
+        # Check for hard stops
+        stop_reason = _check_hard_stop(step_num, step_output, files_extracted)
+        if stop_reason:
+            if not quiet:
+                console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
+            state["last_completed_step"] = step_num
+            state["step_outputs"][str(step_num)] = step_output
+            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
-        # Soft Failure Logging (if not a hard stop)
-        if not success and not quiet:
-            console.print(f"[yellow]Warning: Step {step_num} reported failure, but proceeding as no hard stop condition met.[/yellow]")
-        elif not quiet:
-            # Extract a brief result for display if possible, otherwise generic
+        if not step_success:
+            if not quiet:
+                console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
+
+        # Update state
+        if step_success:
+            state["step_outputs"][str(step_num)] = step_output
+            state["last_completed_step"] = step_num
+            last_completed_step = step_num
+        else:
+            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+
+        save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+        if save_result:
+            github_comment_id = save_result
+
+        # Print step completion marker (required for credential waterfall detection)
+        if not quiet:
             console.print(f"  → Step {step_num} complete.")
 
-        # Save state after each step (for resume support)
-        # Only mark step completed if it succeeded; failed steps get "FAILED:" prefix
-        # and last_completed_step_to_save stays unchanged (ensures resume re-runs failed step)
-        # Issue #467: On failure, keep last_completed_step_to_save at its current value
-        # instead of setting to step_num - 1, which caused a "ratchet effect" where
-        # consecutive failures advanced the cursor through failed steps.
-        if success:
-            step_outputs[str(step_num)] = output
-            last_completed_step_to_save = step_num
-            consecutive_provider_failures = 0
-        else:
-            step_outputs[str(step_num)] = f"FAILED: {output}"
-            # last_completed_step_to_save remains unchanged (no ratchet)
-            # Track consecutive provider failures for early abort
-            if "All agent providers failed" in output:
-                consecutive_provider_failures += 1
-                if consecutive_provider_failures >= 3:
-                    new_state = {
-                        "workflow": "bug",
-                        "issue_number": issue_number,
-                        "issue_url": issue_url,
-                        "last_completed_step": last_completed_step_to_save,
-                        "step_outputs": step_outputs.copy(),
-                        "total_cost": total_cost,
-                        "model_used": last_model_used,
-                        "changed_files": changed_files.copy(),
-                        "worktree_path": str(worktree_path) if worktree_path else None,
-                        "github_comment_id": github_comment_id
-                    }
-                    save_workflow_state(
-                        cwd=cwd, issue_number=issue_number, workflow_type="bug",
-                        state=new_state, state_dir=state_dir,
-                        repo_owner=repo_owner, repo_name=repo_name,
-                        use_github_state=use_github_state, github_comment_id=github_comment_id
-                    )
-                    return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, last_model_used, changed_files
-            else:
-                consecutive_provider_failures = 0
+    # Final Summary
+    pr_url = "Unknown"
+    if "step12_output" in context:
+        s10_out = context["step12_output"]
+        url_match = re.search(r"https://github.com/\S+/pull/\d+", s10_out)
+        if url_match:
+            pr_url = url_match.group(0)
 
-        new_state = {
-            "workflow": "bug",
-            "issue_number": issue_number,
-            "issue_url": issue_url,
-            "last_completed_step": last_completed_step_to_save,
-            "step_outputs": step_outputs.copy(),  # Copy to avoid shared reference
-            "total_cost": total_cost,
-            "model_used": last_model_used,
-            "changed_files": changed_files.copy(),  # Copy to avoid shared reference
-            "worktree_path": str(worktree_path) if worktree_path else None,
-            "github_comment_id": github_comment_id
-        }
-        
-        # Save to GitHub (primary) and local (cache)
-        # The function returns the comment ID (new or updated) to track for future updates
-        github_comment_id = save_workflow_state(
-            cwd=cwd,
-            issue_number=issue_number,
-            workflow_type="bug",
-            state=new_state,
-            state_dir=state_dir,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            use_github_state=use_github_state,
-            github_comment_id=github_comment_id
-        )
-
-    # --- Final Summary ---
-    # Clear state file on successful completion
-    clear_workflow_state(
-        cwd=cwd,
-        issue_number=issue_number,
-        workflow_type="bug",
-        state_dir=state_dir,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        use_github_state=use_github_state
-    )
-
-    final_msg = "Investigation complete"
     if not quiet:
-        console.print(f"✅ {final_msg}")
+        console.print("\n[green]✅ Investigation complete[/green]")
         console.print(f"   Total cost: ${total_cost:.4f}")
-        console.print(f"   Files changed: {', '.join(changed_files)}")
+        console.print(f"   Files changed: {', '.join(changed_files) if changed_files else 'none'}")
         if worktree_path:
             console.print(f"   Worktree: {worktree_path}")
+        console.print(f"   PR created: {pr_url}")
 
     # Clear progress on successful completion so future runs start clean.
     clear_agentic_progress()
 
-    return True, final_msg, total_cost, last_model_used, changed_files
+    final_msg = f"Investigation complete — PR: {pr_url}"
+    return True, final_msg, total_cost, model_used, changed_files
 
 if __name__ == "__main__":
     # Example usage logic could go here if needed for testing

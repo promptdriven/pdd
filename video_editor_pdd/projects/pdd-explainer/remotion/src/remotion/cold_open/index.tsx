@@ -10,7 +10,7 @@ import { ColdOpen07PddTitleCard } from "../07_pdd_title_card";
 export const ColdOpenSection: React.FC = () => {
   const fps = 30;
   const offsetSeconds = 0;
-  const durationSeconds = 0.362667;
+  const durationSeconds = 17.54;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>

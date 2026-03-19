@@ -12,8 +12,8 @@ import { Closing09FinalTitleCard } from "../09_final_title_card";
 
 export const ClosingSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 833.1305840000001;
-  const durationSeconds = 20.903208;
+  const offsetSeconds = 833.4933329999999;
+  const durationSeconds = 20.66;
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>

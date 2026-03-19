@@ -2289,6 +2289,16 @@ describe("app/api/pipeline/compositions/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/copyFileSync/);
   });
 
+  it("instructs generated Remotion scenes to keep interpolate input ranges strictly increasing", () => {
+    expect(sourceCode).toMatch(/inputRange arrays must always be strictly increasing/i);
+  });
+
+  it("instructs generated Remotion scenes to keep helper props, constants, and exports consistent", () => {
+    expect(sourceCode).toMatch(/helper component contracts internally consistent/i);
+    expect(sourceCode).toMatch(/imported constant must be declared|imported constants must be declared/i);
+    expect(sourceCode).toMatch(/default-vs-named exports must match the import style/i);
+  });
+
   it("references outputs and veo directories", () => {
     expect(sourceCode).toMatch(/outputs.*veo/);
   });

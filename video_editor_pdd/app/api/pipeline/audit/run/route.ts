@@ -20,6 +20,7 @@ import {
   resolveRenderedAuditSampleWindow,
 } from "@/lib/audit-timing";
 import { evaluateDeterministicGeometryAudit } from "@/lib/audit-geometry";
+import { resolveSectionNarrativeTiming } from "@/lib/section-timing";
 import {
   resolveSectionSpecDir,
   resolveSectionSpecFile,
@@ -460,10 +461,11 @@ async function auditSection(
       specContent,
       project.outputResolution
     );
+    const narrativeTiming = resolveSectionNarrativeTiming(getProjectDir(), section);
     const rawSampleWindow = resolveAuditSampleWindow(specContent, {
-      sectionDurationSeconds: section.durationSeconds,
+      sectionDurationSeconds: narrativeTiming.durationSeconds,
       fps,
-      sectionOffsetSeconds: section.offsetSeconds ?? 0,
+      sectionOffsetSeconds: narrativeTiming.offsetSeconds,
     });
     const renderedSampleWindow =
       Array.isArray(section.compositions) && section.compositions.length > 0

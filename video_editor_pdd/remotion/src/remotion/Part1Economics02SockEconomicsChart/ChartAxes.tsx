@@ -186,8 +186,8 @@ export const ChartAxes: React.FC = () => {
         if (py < yAxisTop) return null;
         const tickOpacity = interpolate(
           yAxisTop,
-          [py + 10, py],
-          [0, 1],
+          [py, py + 10],
+          [1, 0],
           { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
         );
         return (

@@ -1,4 +1,4 @@
-<pdd-reason>Generates E2E tests that verify the bug at a system level.</pdd-reason>
+<pdd-reason>Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to generate and run end-to-end (E2E) tests that verify the bug at a system level.
 
@@ -10,6 +10,8 @@ You are working on step 11 of 12 in an agentic bug investigation workflow. Previ
 - Verified the unit test correctly catches the bug (Step 10)
 
 Now you need to create E2E tests that verify the bug at a higher level of integration.
+
+**Note:** This step is only invoked when Step 10 classified the bug as `E2E_NEEDED: yes` (or when the marker is missing for backward compatibility). If you are running, it means the orchestrator determined that E2E coverage is warranted beyond unit tests.
 
 % Inputs
 
@@ -314,11 +316,11 @@ After writing files, output this line exactly (for automated tracking):
 E2E_FILES_CREATED: <comma-separated list of file paths you created>
 ```
 Examples by language:
-- Python: `E2E_FILES_CREATED: tests/e2e/test_e2e_issue_123.py`
-- JavaScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.test.js`
-- TypeScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.spec.ts`
-- Go: `E2E_FILES_CREATED: tests/e2e/issue_123_test.go`
-- Rust: `E2E_FILES_CREATED: tests/e2e_issue_123.rs`
+- Python: `E2E_FILES_CREATED: tests/e2e/test_e2e_user_validation.py`
+- JavaScript: `E2E_FILES_CREATED: tests/e2e/auth-flow.e2e.test.js`
+- TypeScript: `E2E_FILES_CREATED: tests/e2e/data-export.e2e.spec.ts`
+- Go: `E2E_FILES_CREATED: tests/e2e/config_parsing_test.go`
+- Rust: `E2E_FILES_CREATED: tests/e2e_session_lifecycle.rs`
 
 If you modified existing files instead of creating new ones:
 ```

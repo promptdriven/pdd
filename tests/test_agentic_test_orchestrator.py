@@ -795,3 +795,35 @@ def test_no_false_positive_casual_needs_more_info(mock_deps, default_args):
     assert "Stopped at step 3" not in msg, (
         "Bug #784: Casual 'Needs More Info' mention should not trigger hard stop"
     )
+
+
+# ============================================================================
+# Issue #865: Test orchestrator uses shared detect_control_token
+# ============================================================================
+
+
+class TestTestOrchestratorSharedDetection:
+    """Test orchestrator should use shared detect_control_token from agentic_common."""
+
+    def test_step3_semantic_needs_more_info(self):
+        """Step 3 paraphrased 'needs more info' should be detected via STOP_CONDITION
+        semantic patterns when using the shared detect_control_token."""
+        from pdd.agentic_common import detect_control_token
+        output = "I need clarification from the author before I can proceed."
+        result = detect_control_token(output, "STOP_CONDITION")
+        assert result is not None, (
+            "Shared detect_control_token should catch 'need clarification from' "
+            "as a STOP_CONDITION semantic pattern."
+        )
+
+    def test_check_hard_stop_step1_case_insensitive(self):
+        """Step 1 duplicate check should be case-insensitive."""
+        from pdd.agentic_test_orchestrator import _check_hard_stop
+        result = _check_hard_stop(1, "this is a Duplicate Of #42")
+        assert result is not None, "Duplicate check should be case-insensitive"
+
+    def test_check_hard_stop_step5_case_insensitive(self):
+        """Step 5 plan_blocked check should be case-insensitive."""
+        from pdd.agentic_test_orchestrator import _check_hard_stop
+        result = _check_hard_stop(5, "PLAN_BLOCKED: insufficient coverage data")
+        assert result is not None, "plan_blocked check should be case-insensitive"

@@ -65,13 +65,21 @@ export function normalizeSpecTimestampRangeToSection(
     return range;
   }
 
-  const fitsSectionWindow =
-    range.startSeconds >= 0 &&
-    range.endSeconds <= sectionDurationSeconds + minSectionGuardSeconds;
   const shifted = {
     startSeconds: range.startSeconds - sectionOffsetSeconds,
     endSeconds: range.endSeconds - sectionOffsetSeconds,
   };
+  const absoluteFitsNarrativeWindow =
+    range.startSeconds >= sectionOffsetSeconds - minSectionGuardSeconds &&
+    range.endSeconds <=
+      sectionOffsetSeconds + sectionDurationSeconds + minSectionGuardSeconds;
+  if (absoluteFitsNarrativeWindow) {
+    return shifted;
+  }
+
+  const fitsSectionWindow =
+    range.startSeconds >= 0 &&
+    range.endSeconds <= sectionDurationSeconds + minSectionGuardSeconds;
   const shiftedFitsSectionWindow =
     shifted.endSeconds > 0 &&
     shifted.startSeconds < sectionDurationSeconds + minSectionGuardSeconds;

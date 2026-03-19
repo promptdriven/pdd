@@ -115,6 +115,54 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("prefers script heading offsets and synced audio duration over stale project timing", () => {
+    const specDir = path.join(tmpDir, "specs", "part2_paradigm_shift");
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "part2_paradigm_shift");
+    const narrativeDir = path.join(tmpDir, "narrative");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.mkdirSync(narrativeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(narrativeDir, "main_script.md"),
+      [
+        "## PART 2: THE PARADIGM SHIFT (8:30 - 13:00)",
+        "",
+        "Narrative body",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(wordsDir, "word_timestamps.json"),
+      JSON.stringify([
+        { word: "factory", start: 0, end: 227.48, segmentId: "part2_paradigm_shift_001" },
+      ])
+    );
+    fs.writeFileSync(
+      path.join(specDir, "01_section_title_card.md"),
+      "**Timestamp:** 8:30 - 8:34\n\n# Title"
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "part2_paradigm_shift",
+        label: "Part 2: The Paradigm Shift",
+        specDir: "part2_paradigm_shift",
+        durationSeconds: 0.789334,
+        offsetSeconds: 0.789334,
+      },
+      ["01_section_title_card"]
+    );
+
+    expect(timings).toEqual([
+      expect.objectContaining({
+        id: "01_section_title_card",
+        startSeconds: 0,
+        endSeconds: 227.48,
+        source: "spec",
+      }),
+    ]);
+  });
+
   it("falls back to audio sync word timestamps when a spec timestamp is missing", () => {
     const specDir = path.join(tmpDir, "specs", "part1_economics");
     const wordsDir = path.join(tmpDir, "outputs", "tts", "part1_economics");
@@ -128,6 +176,7 @@ describe("lib/composition-timing", () => {
       path.join(wordsDir, "word_timestamps.json"),
       JSON.stringify([
         { word: "GitClear", start: 12.5, end: 13.0, segmentId: "part1_economics_001" },
+        { word: "done", start: 19.5, end: 20.0, segmentId: "part1_economics_002" },
       ])
     );
 
@@ -164,6 +213,7 @@ describe("lib/composition-timing", () => {
       path.join(wordsDir, "word_timestamps.json"),
       JSON.stringify([
         { word: "comparison", start: 4.25, end: 4.5, segmentId: "animation_section_001" },
+        { word: "done", start: 8.75, end: 9.0, segmentId: "animation_section_002" },
       ])
     );
 

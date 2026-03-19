@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { resolveSectionVisualContract } from "@/app/api/pipeline/_lib/visual-contract-manifest";
+import { resolveSectionNarrativeTiming } from "./section-timing";
 
 import {
   normalizeSpecTimestampRangeToSection,
@@ -41,6 +42,7 @@ export type ResolvedVisualTiming = {
 };
 
 type SectionTimingTarget = Pick<Section, "id" | "specDir" | "durationSeconds" | "compositionId"> & {
+  label?: Section["label"];
   offsetSeconds?: Section["offsetSeconds"];
   compositions?: Section["compositions"];
 };
@@ -689,7 +691,8 @@ function resolveProjectCompositionTiming(
 function resolveAudioTimingCandidate(
   words: WordTimestamp[],
   section: SectionTimingTarget,
-  componentId: string
+  componentId: string,
+  sectionDurationSeconds: number
 ): TimingCandidate | null {
   const { keyword, type } = extractKeyword(componentId, section.id);
 
@@ -705,7 +708,7 @@ function resolveAudioTimingCandidate(
   if (type === "main") {
     return {
       startSeconds: 0,
-      endSeconds: section.durationSeconds,
+      endSeconds: sectionDurationSeconds,
       source: "audio-sync",
       desc: titleFromId(componentId),
     };
@@ -732,7 +735,8 @@ function resolveAudioTimingCandidate(
 function buildTimingCandidates(
   projectDir: string,
   section: SectionTimingTarget,
-  componentIds: string[]
+  componentIds: string[],
+  sectionNarrativeTiming: { durationSeconds: number; offsetSeconds: number }
 ): Array<TimingCandidate | null> {
   const words = loadWordTimestamps(projectDir, section.id);
 
@@ -748,8 +752,8 @@ function buildTimingCandidates(
       if (range) {
         const normalizedRange = normalizeSpecTimestampRangeToSection(
           range,
-          section.durationSeconds,
-          section.offsetSeconds ?? 0
+          sectionNarrativeTiming.durationSeconds,
+          sectionNarrativeTiming.offsetSeconds
         );
         return {
           startSeconds: normalizedRange.startSeconds,
@@ -761,7 +765,12 @@ function buildTimingCandidates(
       }
     }
 
-    return resolveAudioTimingCandidate(words, section, componentId);
+    return resolveAudioTimingCandidate(
+      words,
+      section,
+      componentId,
+      sectionNarrativeTiming.durationSeconds
+    );
   });
 }
 
@@ -987,12 +996,13 @@ export function resolveSectionVisualTimings(
   componentIds: string[]
 ): ResolvedVisualTiming[] {
   const visualIds = listSectionVisualIds(projectDir, section, componentIds);
+  const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
   const candidates = scaleSpecCandidatesToSectionDuration(
-    buildTimingCandidates(projectDir, section, visualIds),
-    section.durationSeconds
+    buildTimingCandidates(projectDir, section, visualIds, sectionNarrativeTiming),
+    sectionNarrativeTiming.durationSeconds
   );
   const durationSeconds = effectiveSectionDuration(
-    section.durationSeconds,
+    sectionNarrativeTiming.durationSeconds,
     candidates,
     visualIds.length
   );
@@ -1011,9 +1021,13 @@ export function buildSectionConstantsSource(
   fps = DEFAULT_FPS
 ): string {
   const timings = resolveSectionVisualTimings(projectDir, section, componentIds);
+  const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
   const durationSeconds =
     timings[timings.length - 1]?.endSeconds ??
-    Math.max(section.durationSeconds || 0, componentIds.length * MIN_VISUAL_DURATION_SECONDS);
+    Math.max(
+      sectionNarrativeTiming.durationSeconds,
+      componentIds.length * MIN_VISUAL_DURATION_SECONDS
+    );
   const exportName = section.compositionId
     ? section.compositionId
         .split(/[_-]+/)

@@ -2910,3 +2910,74 @@ def test_get_architecture_entry_for_prompt_basename_fallback_issue617():
         )
         assert entry is not None
         assert entry["filename"] == "app/page_TypeScriptReact.prompt"
+
+
+# --- Tests for cross-contamination guard in _merge_function_signature ---
+
+from pdd.architecture_sync import _merge_function_signature
+
+
+def test_merge_rejects_completely_incompatible_signatures():
+    """
+    When the LLM writes SyncApp.__init__ into ConfirmDialog's entry,
+    the merge should detect the signatures are incompatible (no shared
+    params beyond 'self') and keep the old signature instead of
+    concatenating two unrelated classes' params.
+    """
+    old_sig = "(self, message: str, title: str = 'Confirmation Required')"
+    # SyncApp's signature — completely different params
+    new_sig = (
+        "(self, basename: str, budget: Optional[float], "
+        "worker_func: Callable[[], Any], function_name_ref: List[str])"
+    )
+
+    merged, warnings = _merge_function_signature(old_sig, new_sig, "__init__")
+
+    # The merged signature should NOT contain SyncApp's params
+    assert "basename" not in merged, (
+        f"Cross-contamination: SyncApp param 'basename' leaked into "
+        f"ConfirmDialog.__init__: {merged}"
+    )
+    assert "worker_func" not in merged, (
+        f"Cross-contamination: SyncApp param 'worker_func' leaked into "
+        f"ConfirmDialog.__init__: {merged}"
+    )
+    # Should keep the old signature
+    assert "message" in merged
+    assert "title" in merged
+    # Should have a warning about the incompatible merge
+    assert len(warnings) > 0
+
+
+def test_merge_accepts_compatible_signature_evolution():
+    """
+    Normal case: same function with an added parameter should merge fine.
+    """
+    old_sig = "(self, host: str, port: int, debug: bool = False)"
+    new_sig = "(self, host: str, port: int, ssl: bool = False)"
+
+    merged, warnings = _merge_function_signature(old_sig, new_sig, "serve")
+
+    # debug was dropped, should be preserved by merge
+    assert "debug" in merged
+    assert "ssl" in merged
+    assert "host" in merged
+
+
+def test_merge_rejects_when_only_self_overlaps():
+    """
+    When the only shared parameter is 'self', signatures are from
+    different classes and should not be merged.
+    """
+    old_sig = "(self, app_ref: List[Optional['SyncApp']])"
+    new_sig = (
+        "(self, basename: str, budget: Optional[float], "
+        "worker_func: Callable[[], Any])"
+    )
+
+    merged, warnings = _merge_function_signature(old_sig, new_sig, "__init__")
+
+    # Should keep old, not merge
+    assert "app_ref" in merged
+    assert "basename" not in merged
+    assert len(warnings) > 0

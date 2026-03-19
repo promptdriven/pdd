@@ -4,7 +4,7 @@
 Write the `pdd/agentic_sync.py` module.
 
 % Role & Scope
-Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches issue content, uses an LLM to identify which modules need syncing and validate architecture.json dependencies, then dispatches to the AsyncSyncRunner for parallel execution with dependency-aware scheduling. Before dispatch, validates each module via dry-run with per-module cwd resolution and LLM fallback, then filters already-synced modules via fingerprint check.
+Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches issue content, identifies which modules need syncing (preferring deterministic branch-diff detection, falling back to LLM), validates architecture.json dependencies, then dispatches to the AsyncSyncRunner for parallel execution with dependency-aware scheduling. Before dispatch, validates each module via dry-run with per-module cwd resolution and LLM fallback, filters hallucinated basenames, then filters already-synced modules via fingerprint check.
 
 % Requirements
 1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False) -> Tuple[bool, str, float, str]`
@@ -13,10 +13,12 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
 5. Escape curly braces in issue content for safe `.format()` calls (reuse `_escape_format_braces`)
 6. Load architecture via `find_architecture_for_project` (from `architecture_registry`): discovers multiple architecture.json files (root + subdirs), combines all entries into one list. Return None if none found or all invalid.
-7. Build LLM prompt using `load_prompt_template("agentic_sync_identify_modules_LLM")` with `{issue_content}` and `{architecture_json}` placeholders
-8. Call `run_agentic_task()` to identify modules and validate dependencies
-9. Parse LLM response for `MODULES_TO_SYNC: [...]`, `DEPS_VALID: true|false`, and optional `DEPS_CORRECTIONS: [...]`. Deduplicate modules in the list preserving first-occurrence order.
-10. Strip language suffixes from LLM-returned basenames using `extract_module_from_include(m + ".prompt")` — LLM returns architecture.json filenames (e.g. "crm_models_Python") but pdd sync expects bare basenames (e.g. "crm_models"). After stripping, deduplicate again (LLM may return both "recruiting_config_Python" and "recruiting_config" which converge after stripping).
+7. **Module identification (two strategies, try in order):**
+   a. `_detect_modules_from_branch_diff(project_root)`: deterministic, free — diff current branch against main, extract basenames from changed `.prompt` files (excluding `_LLM.prompt`). Uses `extract_module_from_include` for basename extraction, preserves subdirectory prefixes. Returns empty list on main/master/HEAD or on error.
+   b. LLM fallback (only if branch diff returns empty): build LLM prompt using `load_prompt_template("agentic_sync_identify_modules_LLM")` with `{issue_content}` and `{architecture_json}` placeholders. Call `run_agentic_task()` to identify modules and validate dependencies.
+8. Parse LLM response for `MODULES_TO_SYNC: [...]`, `DEPS_VALID: true|false`, and optional `DEPS_CORRECTIONS: [...]`. Deduplicate modules in the list preserving first-occurrence order.
+9. Strip language suffixes from basenames using `extract_module_from_include(m + ".prompt")` — LLM returns architecture.json filenames (e.g. "crm_models_Python") but pdd sync expects bare basenames (e.g. "crm_models"). After stripping, deduplicate again.
+10. Filter hallucinated basenames via `_filter_invalid_basenames(modules, architecture)`: validate each basename exists in architecture.json (using `extract_module_from_include` for standard filenames, fallback stripping for `_LLM.prompt` and other non-standard suffixes). Fail if all basenames are invalid.
 11. If LLM flags dependency corrections: update architecture.json in-place before building the graph
 12. Build dependency subgraph from architecture.json (via `build_dep_graph_from_architecture`)
 13. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py`
@@ -43,6 +45,8 @@ After dry-run validation, check which modules are already fully synced:
 
 % Helper Functions
 - `_is_github_issue_url(s: str) -> bool`: regex check for `github\.com/.+/issues/\d+`
+- `_detect_modules_from_branch_diff(project_root: Path) -> List[str]`: detect modules from git diff against main (changed .prompt files, excluding _LLM.prompt)
+- `_filter_invalid_basenames(modules: List[str], architecture: Optional[List]) -> Tuple[List[str], List[str]]`: validate basenames against architecture.json entries, return (valid, invalid)
 - `_find_project_root(start: Path) -> Path`: walk up to find `.pddrc` or `.git`
 - `_load_architecture_json(project_root: Path, issue_number: Optional[int] = None) -> Tuple[Optional[List], Path]`: discover and combine architecture files via `find_architecture_for_project`
 - `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules (deduplicated), deps validity, corrections
@@ -62,7 +66,7 @@ After dry-run validation, check which modules are already fully synced:
 <pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
 Also imports from `construct_paths`: `_detect_context_from_basename`, `_load_pddrc_config`, `_find_pddrc_file`
 Also imports from `agentic_sync_runner`: `_find_pdd_executable`
-Also imports from `sync_order`: `extract_module_from_include`
+Also imports from `sync_order`: `extract_module_from_include`, `topological_sort`
 Also imports from `architecture_registry`: `find_architecture_for_project` (function-scope import inside `_load_architecture_json`)
 Also imports from `sync_determine_operation`: `sync_determine_operation`
 Also imports from `sync_main`: `_detect_languages_with_context`
@@ -72,9 +76,10 @@ Also imports from `sync_main`: `_detect_languages_with_context`
 - Return `(False, "Invalid GitHub issue URL: {url}", 0.0, "")` if URL parsing fails
 - Return `(False, "Failed to fetch issue: {error}", 0.0, "")` if GitHub API fails
 - Return `(False, "LLM identified no modules to sync", cost, provider)` if LLM returns empty list
+- Return `(False, "No valid modules to sync (all basenames were invalid: ...)", cost, provider)` if all basenames fail validation
 - Return `(False, "Dry-run validation failed:\n{details}", cost, provider)` if dry-run validation fails
 - Return `(True, "All modules are already synced — nothing to do.", cost, provider)` if fingerprint check filters all modules
-- Post error comment on GitHub issue when LLM fails or dry-run fails (if `use_github_state` is True)
+- Post error comment on GitHub issue when LLM fails, basenames invalid, or dry-run fails (if `use_github_state` is True)
 
 % Deliverables
 - Code: `pdd/agentic_sync.py`

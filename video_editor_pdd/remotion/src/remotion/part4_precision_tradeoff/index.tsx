@@ -24,6 +24,10 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "02_printer_vs_mold_split": 600,
+  "03_precision_tradeoff_curve": 450,
+  "04_prompt_comparison_split": 420,
+  "08_prompt_code_spectrum": 360,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -46,7 +50,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const Part4PrecisionTradeoffSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 112.085333;
+  const durationSeconds = 111.84;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
 

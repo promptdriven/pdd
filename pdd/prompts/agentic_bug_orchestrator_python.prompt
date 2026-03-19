@@ -1,5 +1,21 @@
 <include>context/python_preamble.prompt</include>
 
+<pdd-reason>Orchestrates the 11-step agentic bug workflow with E2E gate and state persistence.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_bug_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+
 % Goal
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
@@ -78,6 +94,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 5.5 | Prompt defect needs human review | Output contains "PROMPT_REVIEW:" marker |
 | 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output AND no new files detected on disk (filesystem fallback) |
 | 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 8 | E2E not needed (skip Step 9) | Output contains "E2E_NEEDED: no" — skip Step 9 entirely, continue to Step 10 |
 | 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
 | 9 | E2E test skipped (non-failure) | Output contains "E2E_SKIP:" — continue to Step 10 normally |
 
@@ -87,6 +104,12 @@ After Step 5.5, parse output for:
 - `DEFECT_TYPE: prompt` - Prompt was defective, check for PROMPT_FIXED marker
 - `PROMPT_FIXED: path/to/file.prompt` - The prompt was auto-fixed; add to changed_files list
 - `PROMPT_REVIEW: reason` - Hard stop, prompt defect needs human review (ambiguous case)
+
+**E2E gate (Step 8 → Step 9):**
+- After Step 8 (verify), parse output for `E2E_NEEDED: no`
+- If found, skip Step 9 (E2E test) entirely — do not invoke the LLM, do not wait for timeout
+- If `E2E_NEEDED: yes` or the marker is missing (backward compatibility), run Step 9 as normal
+- Log a message when skipping: `"Skipping Step 9 (E2E): unit tests provide sufficient coverage"`
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
@@ -146,6 +169,7 @@ Import from `preprocess`: `preprocess` (used to expand `<include>` tags and esca
 Note: `BUG_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
 
 % Deliverables
 - Code: `pdd/agentic_bug_orchestrator.py`

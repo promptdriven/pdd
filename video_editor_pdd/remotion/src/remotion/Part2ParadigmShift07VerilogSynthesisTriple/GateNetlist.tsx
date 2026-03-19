@@ -106,6 +106,12 @@ const NETLIST_C: GateLayout = {
 };
 
 const LAYOUTS = [NETLIST_A, NETLIST_B, NETLIST_C];
+const LAYOUT_BY_NAME = {
+  horizontal: NETLIST_A,
+  horizontal_compact: NETLIST_A,
+  vertical_long: NETLIST_B,
+  mixed_optimized: NETLIST_C,
+} as const;
 
 const GATE_PATHS: Record<string, string> = {
   and: AND_GATE,
@@ -118,8 +124,11 @@ interface GateNetlistProps {
   y: number;
   width: number;
   height: number;
-  layoutIndex: number; // 0, 1, or 2
-  drawStart: number;
+  gateCount?: number;
+  layout?: "horizontal" | "horizontal_compact" | "vertical_long" | "mixed_optimized";
+  layoutIndex?: number;
+  startFrame?: number;
+  drawStart?: number;
   drawDuration: number;
 }
 
@@ -128,24 +137,31 @@ export const GateNetlist: React.FC<GateNetlistProps> = ({
   y,
   width,
   height,
+  gateCount: _gateCount,
+  layout,
   layoutIndex,
+  startFrame,
   drawStart,
   drawDuration,
 }) => {
   const frame = useCurrentFrame();
-  const layout = LAYOUTS[layoutIndex % LAYOUTS.length];
+  const resolvedLayout = typeof layoutIndex === "number"
+    ? LAYOUTS[((layoutIndex % LAYOUTS.length) + LAYOUTS.length) % LAYOUTS.length]
+    : layout
+      ? LAYOUT_BY_NAME[layout]
+      : NETLIST_A;
+  const resolvedDrawStart = typeof startFrame === "number" ? startFrame : drawStart ?? 0;
 
   const drawProgress = interpolate(
     frame,
-    [drawStart, drawStart + drawDuration],
+    [resolvedDrawStart, resolvedDrawStart + drawDuration],
     [0, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  if (frame < drawStart) return null;
+  if (frame < resolvedDrawStart) return null;
 
-  const totalElements = layout.gates.length + layout.wires.length;
-  const gateScale = Math.min(width / 400, height / 250);
+  const totalElements = resolvedLayout.gates.length + resolvedLayout.wires.length;
 
   return (
     <svg
@@ -161,8 +177,8 @@ export const GateNetlist: React.FC<GateNetlistProps> = ({
       }}
     >
       {/* Wires (draw first, behind gates) */}
-      {layout.wires.map((wire, i) => {
-        const wireIdx = layout.gates.length + i;
+      {resolvedLayout.wires.map((wire, i) => {
+        const wireIdx = resolvedLayout.gates.length + i;
         const wireProgress = interpolate(
           drawProgress,
           [wireIdx / totalElements, Math.min((wireIdx + 1) / totalElements, 1)],
@@ -189,7 +205,7 @@ export const GateNetlist: React.FC<GateNetlistProps> = ({
       })}
 
       {/* Gates */}
-      {layout.gates.map((gate, i) => {
+      {resolvedLayout.gates.map((gate, i) => {
         const gateProgress = interpolate(
           drawProgress,
           [i / totalElements, Math.min((i + 1) / totalElements, 1)],

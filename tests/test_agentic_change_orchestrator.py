@@ -3214,3 +3214,176 @@ def test_fetch_issue_updated_at_called_on_clarification(mock_dependencies, temp_
         assert saved_state["issue_updated_at"] == "2026-03-08T12:00:00Z", (
             "Bug #784: issue_updated_at should be refreshed after clarification"
         )
+
+
+# -----------------------------------------------------------------------------
+# Review loop: case-insensitive / semantic "No Issues Found" detection
+# (Same class of bug as #868 / #865: LLMs don't reliably emit exact tokens)
+# -----------------------------------------------------------------------------
+
+def test_review_loop_exits_on_lowercase_no_issues(mock_dependencies, temp_cwd):
+    """
+    The LLM may return 'no issues found' (lowercase) instead of the
+    exact 'No Issues Found'. The loop should still exit.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+        elif label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        elif label.startswith("step11"):
+            # LLM returns lowercase variant
+            return (True, "**Status:** no issues found\n\nAll checks passed.", 0.1, "gpt-4")
+        elif label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, _, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=900,
+        issue_author="me",
+        issue_title="Case insensitive exit",
+        cwd=temp_cwd
+    )
+
+    assert success is True
+    step11_calls = [c for c in mock_run.call_args_list if c.kwargs.get('label', '').startswith('step11')]
+    assert len(step11_calls) == 1, (
+        f"Expected 1 step11 call (early exit), got {len(step11_calls)}"
+    )
+    step12_calls = [c for c in mock_run.call_args_list if c.kwargs.get('label', '').startswith('step12')]
+    assert len(step12_calls) == 0, (
+        f"Step 12 should not run when Step 11 found no issues, got {len(step12_calls)} calls"
+    )
+
+
+def test_review_loop_exits_on_status_no_issues_variant(mock_dependencies, temp_cwd):
+    """
+    LLM may embed the status in markdown like '**Status:** No Issues Found'
+    but the raw output might only contain 'Status: No Issues Found'.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.1, "gpt-4")
+        elif label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        elif label.startswith("step11"):
+            return (True, "Review complete. Status: no issues found. All files validated.", 0.1, "gpt-4")
+        elif label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, _, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=901,
+        issue_author="me",
+        issue_title="Status variant exit",
+        cwd=temp_cwd
+    )
+
+    assert success is True
+    step11_calls = [c for c in mock_run.call_args_list if c.kwargs.get('label', '').startswith('step11')]
+    assert len(step11_calls) == 1
+    step12_calls = [c for c in mock_run.call_args_list if c.kwargs.get('label', '').startswith('step12')]
+    assert len(step12_calls) == 0
+
+
+# -----------------------------------------------------------------------------
+# Impacted tests listed in PR body (#377 Bug B)
+# -----------------------------------------------------------------------------
+
+def test_orchestrator_populates_impacted_tests_context(mock_dependencies, temp_cwd):
+    """
+    After Step 10, the orchestrator should identify test files for
+    affected modules and pass them to Step 13 via context['impacted_tests'].
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    # Create a .pddrc so the orchestrator can find test dir
+    pddrc = temp_cwd / ".pddrc"
+    pddrc.write_text(
+        "source_dir: pdd\ntest_dir: tests\nprompts_dir: prompts\n"
+        "example_dir: context\nlanguage: python\n"
+    )
+
+    # Create test files that correspond to modified modules
+    tests_dir = temp_cwd / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_agentic_bug_orchestrator.py").write_text("# test")
+    (tests_dir / "test_agentic_bug_step10_prompt.py").write_text("# test")
+
+    # Create architecture.json with dependency info
+    arch = temp_cwd / "architecture.json"
+    arch.write_text(json.dumps([
+        {
+            "filename": "agentic_bug_orchestrator_python.prompt",
+            "filepath": "pdd/agentic_bug_orchestrator.py",
+            "reason": "Orchestrator",
+            "description": "Bug orchestrator",
+            "dependencies": ["agentic_common_python.prompt"],
+            "priority": 1,
+            "tags": ["module"],
+        }
+    ]))
+
+    # Use a template with {impacted_tests} placeholder so substitution works
+    def template_loader(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "Create PR. Impacted tests: {impacted_tests}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_loader
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: pdd/prompts/agentic_bug_orchestrator_python.prompt", 0.1, "gpt-4")
+        elif label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        elif label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        elif label == "step13":
+            return (True, "PR Created", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, _, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=902,
+        issue_author="me",
+        issue_title="Impacted tests",
+        cwd=temp_cwd
+    )
+
+    assert success is True
+
+    # Find the step13 call and check its prompt contains impacted test info
+    step13_call = [c for c in mock_run.call_args_list if c.kwargs.get('label', '') == 'step13']
+    assert len(step13_call) == 1
+    step13_prompt = step13_call[0].kwargs.get('instruction', '')
+    assert "test_agentic_bug_orchestrator" in step13_prompt, (
+        f"Step 13 prompt should contain impacted test file paths. Got: {step13_prompt}"
+    )

@@ -130,3 +130,5 @@ export const ParticleDrift: React.FC<ParticleDriftProps> = ({
 
   return <>{particles}</>;
 };
+
+export default PulsingGlow;

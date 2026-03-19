@@ -38,7 +38,8 @@ def e2e_797_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
          patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest {file}") as mock_get_cmd, \
-         patch("subprocess.run", return_value=mock_proc) as mock_subproc:
+         patch("subprocess.run", return_value=mock_proc) as mock_subproc, \
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
 
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
         mock_load.return_value = "Prompt for {issue_number}"
@@ -254,7 +255,8 @@ class TestE2EIssue797TypeScriptVerification:
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
              patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
              patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest {file}"), \
-             patch("subprocess.run", return_value=mock_proc):
+             patch("subprocess.run", return_value=mock_proc), \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
 
             mock_run.side_effect = side_effect
             mock_load.return_value = "Prompt for {issue_number}"

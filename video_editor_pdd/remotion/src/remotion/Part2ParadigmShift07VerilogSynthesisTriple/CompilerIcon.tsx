@@ -12,8 +12,10 @@ interface CompilerIconProps {
   x: number;
   y: number;
   size: number;
-  appearStart: number;
-  appearEnd: number;
+  startFrame?: number;
+  appearStart?: number;
+  appearEnd?: number;
+  label?: string;
   pulse?: boolean;
 }
 
@@ -21,24 +23,28 @@ export const CompilerIcon: React.FC<CompilerIconProps> = ({
   x,
   y,
   size,
+  startFrame,
   appearStart,
   appearEnd,
+  label = "Synthesis",
   pulse = false,
 }) => {
   const frame = useCurrentFrame();
+  const resolvedAppearStart = typeof startFrame === "number" ? startFrame : appearStart ?? 0;
+  const resolvedAppearEnd = typeof appearEnd === "number" ? appearEnd : resolvedAppearStart + 15;
 
   const opacity = interpolate(
     frame,
-    [appearStart, appearEnd],
+    [resolvedAppearStart, resolvedAppearEnd],
     [0, COMPILER_OPACITY],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
   );
 
-  if (frame < appearStart) return null;
+  if (frame < resolvedAppearStart) return null;
 
   // Pulse effect
   const pulseScale = pulse
-    ? 1 + 0.05 * Math.sin(((frame - appearStart) / 15) * Math.PI * 2)
+    ? 1 + 0.05 * Math.sin(((frame - resolvedAppearStart) / 15) * Math.PI * 2)
     : 1;
 
   const half = size / 2;
@@ -77,23 +83,24 @@ export const CompilerIcon: React.FC<CompilerIconProps> = ({
         <circle cx={30} cy={27} r={8} fill="none" stroke={COMPILER_COLOR} strokeWidth={1.5} />
       </svg>
 
-      {/* Label */}
-      <div
-        style={{
-          position: "absolute",
-          left: x - 40,
-          top: y + half + 4,
-          width: 80,
-          textAlign: "center",
-          fontFamily: UI_FONT,
-          fontSize: COMPILER_LABEL_SIZE,
-          color: COMPILER_COLOR,
-          opacity: opacity * (COMPILER_LABEL_OPACITY / COMPILER_OPACITY),
-          pointerEvents: "none",
-        }}
-      >
-        Synthesis
-      </div>
+      {label ? (
+        <div
+          style={{
+            position: "absolute",
+            left: x - 40,
+            top: y + half + 4,
+            width: 80,
+            textAlign: "center",
+            fontFamily: UI_FONT,
+            fontSize: COMPILER_LABEL_SIZE,
+            color: COMPILER_COLOR,
+            opacity: opacity * (COMPILER_LABEL_OPACITY / COMPILER_OPACITY),
+            pointerEvents: "none",
+          }}
+        >
+          {label}
+        </div>
+      ) : null}
     </>
   );
 };

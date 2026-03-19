@@ -1,3 +1,35 @@
+## v0.0.180 (2026-03-17)
+
+### Feat
+
+- Add new Remotion components, refine existing video scenes, and introduce audit documentation across multiple sections.
+- Add new Remotion scenes and components across multiple video sections and update the main composition.
+- Add new Remotion components and specifications for Cold Open and Part 1 Economics sections, refactor existing Remotion scenes, and update related test files.
+
+### Fix
+
+- guard EXAMPLE_OUTPUT_PATH against None/empty and strip trailing slashes
+- remove fragile PDDRC fallback from generate_prompt template (#687)
+- resolved_config overrides front-matter default + pddrc fallback in template
+- add code-level default fallback and strengthen tests for #687
+- use deterministic EXAMPLE_OUTPUT_PATH variable instead of LLM .pddrc parsing (#687)
+- harden stage8 and stage9 remotion media flows
+- add .local_pkgs/ to .gitignore (#883)
+- add cross-endpoint integration test type to Step 11 E2E prompt (#878)
+- align stage8 previews with registered compositions
+- retry cloud batch tasks on all transient VM failures
+- isolate stage8 claude generations
+- smooth stage8 refresh and log handling
+- retry zero-write composition generations
+
+### Refactor
+
+- reimplement Stage9RenderStitch render mode selection as a dropdown menu and adjust various Remotion section timings.
+
+### Perf
+
+- add --max-turns 15 to gemini CLI invocations
+
 ## v0.0.179 (2026-03-16)
 
 ### Feat

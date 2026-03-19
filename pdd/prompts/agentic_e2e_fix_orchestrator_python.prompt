@@ -48,7 +48,8 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 10. After successful commit/push (step 9 exit), run CI validation (step 10): poll external CI via `run_ci_validation_loop()`, iterate on failures up to `ci_retries` attempts, post PR comment on max retries exhausted.
 
 % Helper Functions
-- `_check_e2e_environment(cwd: Path) -> Tuple[bool, str]`: Check for `npx` and `playwright.config.*`.
+- `_classify_step_output(output: str, step_num: int) -> Optional[str]`: Step-aware control token classification using shared `detect_control_token` (tiers 1-3) with fail-before-pass priority and `VERIFICATION_FAILED` override. Returns token string or None.
+- `_check_e2e_environment(cwd: Path) -> Tuple[bool, str]`: Check for `npx` and `playwright.config.*`. Persists across cycles.
 - `_is_test_file(filename: str) -> bool`: Identify Python (`test_*.py`) and TS/JS (`*.test.ts`, `*.spec.ts`) test files.
 - `_extract_test_files(...) -> List[str]`: Find relevant test files from issue content and changed files.
 - `_verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]`: Run `pytest` and capture output.
@@ -61,12 +62,19 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 - **Pre-flight (Step 2)**: Skip if `_check_e2e_environment` returns False. Store as `E2E_SKIP` in `skipped_steps` and `step_outputs`.
 - **Bug Analysis Reuse**: Check `_bug_state_candidates` (e.g., `.pdd/bug-state/bug_state_{issue_number}.json`) for successful Step 2/3 outputs to skip redundant diagnosis in Cycle 1.
 - **Resumption**: Load state via `load_workflow_state`. Use `validate_cached_state` to find the last *successful* step. Check staleness via `_check_staleness`.
+- **Loop Control Token Detection** (4-tier, via `_classify_step_output` → shared `detect_control_token` + `classify_step_output`):
+  - **Tier 1**: Exact substring match (e.g., `ALL_TESTS_PASS` in output). Also checks `LOCAL_TESTS_PASS`.
+  - **Tier 2**: Case-insensitive match (e.g., `all_tests_pass`).
+  - **Tier 3**: Semantic regex patterns from shared `SEMANTIC_PATTERNS` dict in `agentic_common`. Only scans the last 30 lines (tail) to prevent false positives. Includes patterns like "all N tests pass", "not a bug", "already fixed", "tests still failing".
+  - **Tier 4**: LLM classification via `classify_step_output()` — cheap API call with structured JSON output. Called only when tiers 1-3 all fail. Returns `None` on ambiguity (safe fallback).
+  - **Fail-before-pass priority**: `_FAIL_PATTERNS` are checked before pass patterns to avoid classifying "18 passed, 3 failed" as ALL_TESTS_PASS.
+  - **`VERIFICATION_FAILED` override**: Always takes priority over any classification.
 - **Loop Control Tokens**:
-  - `ALL_TESTS_PASS`: Break loop (success). Checked in Step 2 and Step 9.
-  - `NOT_A_BUG`: Step 3 determined it's not a bug, break workflow early.
+  - `ALL_TESTS_PASS` / `LOCAL_TESTS_PASS`: Break loop (success). Checked in Step 2 and Step 9 via `_classify_step_output`.
+  - `NOT_A_BUG`: Step 3 determined it's not a bug, break workflow early. Blocked if `dev_unit_states` has fixed units (prior-cycle fixes applied).
   - `CONTINUE_CYCLE`: Increment cycle and continue (Step 9).
   - `MAX_CYCLES_REACHED`: Informational, loop exits naturally (Step 9).
-  - **Missing Token**: Treat as terminal error — log warning and `break` (Step 9).
+  - **Missing Token**: Try tier-4 LLM classification first; if still None, treat as terminal error — log warning and `break` (Step 9).
 
 % Environment Safety: _check_e2e_environment
 Before running any E2E workflow, the orchestrator must explicitly call or conceptually perform `_check_e2e_environment`.

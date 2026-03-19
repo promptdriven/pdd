@@ -11,11 +11,17 @@ export const CODE_COMMENT = '#546E7A';
 export const CODE_STRING = '#C3E88D';
 
 export const COMPILER_COLOR = '#4A90D9';
+export const COMPILER_OPACITY = 0.95;
+export const COMPILER_LABEL_OPACITY = 0.6;
+export const COMPILER_LABEL_SIZE = 11;
 export const GATE_COLOR = '#94A3B8';
+export const GATE_OPACITY = 0.95;
 export const WIRE_COLOR = '#475569';
+export const WIRE_OPACITY = 0.85;
 export const CHECKMARK_COLOR = '#5AAA6E';
 export const LABEL_COLOR = '#64748B';
 export const SCHEMATIC_COLOR = '#64748B';
+export const UI_FONT = "'Inter', sans-serif";
 
 // Dimensions
 export const WIDTH = 1920;

@@ -555,7 +555,8 @@ class TestE2eFixOrchestratorIssue467:
              patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
              patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")), \
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
-             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit:
+             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
             mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
             mock_load.return_value = (None, None)
             mock_save.return_value = None

@@ -363,6 +363,27 @@ class TestGenerateRootTsx:
         root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
         assert "durationInFrames={150}" in root  # 5 * 30 = 150
 
+    def test_duration_in_frames_prefers_word_timestamps_over_stale_project_duration(self, tmp_path):
+        remotion_dir = tmp_path / "remotion"
+        timestamps_dir = tmp_path / "outputs" / "tts" / "intro"
+        (remotion_dir / "src" / "remotion").mkdir(parents=True)
+        timestamps_dir.mkdir(parents=True)
+        (timestamps_dir / "word_timestamps.json").write_text(
+            json.dumps([
+                {"word": "hello", "start": 0.0, "end": 17.54},
+            ])
+        )
+
+        sections = [{"id": "intro", "durationSeconds": 0.363}]
+        root = generate_root_tsx(
+            sections,
+            fps=30,
+            remotion_dir=str(remotion_dir),
+            project_dir=str(tmp_path),
+        )
+
+        assert "durationInFrames={527}" in root
+
     def test_fps_in_composition(self):
         sections = [{"id": "intro", "durationSeconds": 5}]
         root = generate_root_tsx(sections, fps=30, remotion_dir="remotion/")
@@ -1574,7 +1595,8 @@ class TestGeneratedTimelineWrapper:
             'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "01_title_card", desc: "Intro" }];'
         )
         (remotion_src / "ColdOpenSection.tsx").write_text(
-            "export const ColdOpenSection = () => null;\n"
+            'import { Audio, staticFile } from "remotion";\n'
+            'export const ColdOpenSection = () => <Audio src={staticFile("cold_open/narration.wav")} />;\n'
             "export default ColdOpenSection;\n"
         )
         (component_dir / "index.ts").write_text(
@@ -1606,7 +1628,52 @@ class TestGeneratedTimelineWrapper:
         assert 'import { VISUAL_SEQUENCE } from "./constants";' in tsx
         assert 'import { ColdOpen01TitleCard } from "../ColdOpen01TitleCard";' in tsx
         assert "ColdOpenSectionBase" not in tsx
+        assert 'staticFile("cold_open/narration.wav")' in tsx
         assert "<VisualComponent />" in tsx
+
+    def test_generated_timeline_prefers_section_constants_duration_when_project_duration_is_stale(self, tmp_path):
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        project_dir = tmp_path
+        section_dir = remotion_src / "part2_paradigm_shift"
+        component_dir = remotion_src / "Part2ParadigmShift01SectionTitleCard"
+        section_dir.mkdir()
+        component_dir.mkdir()
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const SECTION_DURATION_SECONDS = 227.480;",
+                    'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "01_section_title_card", desc: "Intro" }];',
+                ]
+            )
+        )
+        (component_dir / "index.ts").write_text(
+            'export const Part2ParadigmShift01SectionTitleCard = () => null;\n'
+            'export default Part2ParadigmShift01SectionTitleCard;'
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "part2_paradigm_shift.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "part2_paradigm_shift" / "narration.wav").parent.mkdir(parents=True)
+        (remotion_public / "part2_paradigm_shift" / "narration.wav").write_bytes(b"RIFF" + b"\x00" * 32)
+
+        section = {
+            "id": "part2_paradigm_shift",
+            "compositionId": "Part2ParadigmShiftSection",
+            "durationSeconds": 0.789334,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "compositions": ["01_section_title_card"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert "const durationSeconds = 227.48;" in tsx
 
     def test_generated_timeline_uses_constants_and_exact_component_imports(self, tmp_path):
         remotion_src = tmp_path

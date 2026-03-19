@@ -1,22 +1,20 @@
 ## Verdict
 pass
 ## Summary
-The frame at 91.7% progress (frame 329/360) correctly represents the final hold phase (Frame 300-360). Key observations:
+The frame at 91.7% progress (Frame 329/360, animation phase 6: 'Final shape solidifies. Walls glow softly. The constrained output is clean, precise. Hold.') matches the spec well. Key observations:
 
-1. **Mold Structure:** Centered mold cavity is clearly visible with amber/gold walls (#D9944A range) forming the constraint boundaries. The mold is roughly centered around (960, 400) which is close to spec's (960, 500) — within acceptable layout drift.
+1. **Mold structure**: Centered mold cavity with amber/gold walls (#D9944A range) is clearly visible and correctly positioned near center (960, 500 area). Wall strokes are visible with appropriate amber coloring.
 
-2. **Wall Labels:** All expected wall labels are visible and dimmed as specified — 'null → None' (left), 'int → str' (left-lower), 'empty list' (bottom-left), 'import check' (top), 'type hints' (top-right), 'max_length' (right), 'utf-8 edge' (right-middle), 'KeyError' (right-lower), 'return type' (bottom). These appear in a monospace font at low opacity, consistent with the spec's JetBrains Mono, 9px, dimmed state.
+2. **Wall labels**: Labels are present and correctly placed outside the walls — 'null → None' (left), 'import check' (top-left), 'type hints' (top-right), 'max_length' (right), 'int → str' (left-mid), 'utf-8 edge' (right-mid), 'empty list' (bottom-left), 'KeyError' (bottom-right), 'return type' (bottom). These appear in a muted amber tone consistent with the spec's JetBrains Mono, 9px, #D9944A at 0.3.
 
-3. **Liquid Fill:** The cavity is mostly filled with blue liquid (#4A90D9 range). The liquid has taken the shape defined by the walls. There's a turbulent/particle surface visible at the top of the fill, with some residual particle effects showing the fluid dynamics. The fill reads as 'nearly complete' appropriate for the final phase.
+3. **Liquid fill**: The cavity is almost entirely filled with blue liquid (#4A90D9 range). The liquid has taken the shape of the mold walls, consistent with phase 6 where the cavity should be fully filled and the shape solidified. Some turbulent particle effects visible at the top surface where the liquid level sits.
 
-4. **Injection Nozzle:** Visible at top-center, a small brown/amber nozzle element with a vertical pipe leading into the mold — matches the spec's 'top-down from nozzle' flow direction.
+4. **Injection nozzle**: Visible at top-center, correctly positioned.
 
-5. **Terminal Overlay:** Present in the bottom-right corner as specified (~320×140px region). Shows '$ pdd generate user_parser', 'Generating...', green checkmark lines including 'Parser skeleton created', 'Running test suite...', and 'All 12 tests passing' — all in green (#5AAA6E). The terminal has a dark background with rounded corners and a colored dot trio (red/yellow/green) at top — consistent with spec.
+5. **Background**: Deep navy-black (#0A0F1A range), matching spec.
 
-6. **Background:** Deep navy-black (#0A0F1A) as specified.
+6. **Terminal overlay**: Present in the bottom-right corner with dark background, showing '$ pdd generate user_parser', 'Generating...', green check lines ('Parser skeleton created', 'Running test suite...', 'All 12 tests passing'). The green output lines match the spec's green checkmark requirement for this phase. Terminal has rounded corners, appropriate border, and correct positioning.
 
-7. **Walls Glow:** The walls have a soft amber glow consistent with the 'walls glow softly' description for this final phase. The wall strokes appear as amber outlines defining the mold shape.
+7. **Walls glow softly**: The amber wall outlines are visible and have a soft glow quality, consistent with the hold phase description.
 
-8. **Animation Phase:** The frame correctly depicts the 'hold' state — shape solidified, walls glowing, terminal showing completion. This matches the spec's Frame 300-360 phase perfectly.
-
-The frame is marked as decorative for this phase (300-360), and all critical elements from earlier phases have resolved into their correct final states.
+8. **Animation phase alignment**: At 91.7% (frame 329), we are solidly in the 300-360 frame range (phase 6), which is decorative/hold. The visual correctly shows the final solidified state with all elements in place.

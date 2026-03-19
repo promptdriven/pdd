@@ -4,7 +4,7 @@
 Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
 
 % Requirements
-1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
@@ -15,15 +15,20 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 7c. For Step 6: Parse agent output for "Direct Edit Candidates" table. Extract file paths and store in `context["direct_edit_candidates"]` list. These are frontend/code files with no corresponding prompt that need scoped edits (uncomment, remove placeholder). Pass this list to Step 9.
 8. **State Persistence**: Save step outputs to state file after each step completes
 9. **Step Resumption**: On start, load saved state and skip steps that have already completed
-10. **Review Loop**: Steps 11-12 repeat until step 11 outputs "No Issues Found" (max 5 iterations)
+10. **Review Loop**: Steps 11-12 repeat until step 11 output contains "no issues found" (case-insensitive, max 5 iterations)
 11. **Sync Order Generation**: After review loop completes (before Step 13):
-    - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script
+    - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script, extract_module_from_include
     - Build dependency graph from prompts_dir = worktree_path / "prompts"
-    - Extract modified modules from files_to_stage (parse module names from prompt filenames like "prompts/foo_python.prompt" -> "foo")
+    - Extract modified modules from files_to_stage using `extract_module_from_include()` on files matching `prompts/*.prompt`
     - Get affected modules (modified + transitive dependents)
-    - If affected modules exist, generate sync_order.sh in worktree root
+    - If affected modules exist, generate sync_order.sh in both user's CWD and worktree root
+    - Generate clean `pdd sync X` command list for sync_order_list (NOT the full bash script with shebang/set -e)
     - Add to context: sync_order_script (path or ""), sync_order_list (newline-separated commands or "No modules to sync")
+    - Ensure sync_order.sh is added to changed_files for Step 13 to commit
     - Print warning if circular dependencies detected
+12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
+13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
+14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -45,17 +50,23 @@ CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
 }
 ```
 
+% Prompt Preprocessing
+Before formatting each step's prompt template, apply a two-step process:
+1. Call `preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))` to expand `<include>` tags and escape curly braces in included content
+2. Call `substitute_template_variables(processed_template, context)` to replace `{key}` placeholders
+
+This prevents curly braces in included prompt content from being treated as format variables.
+
 % Step Execution
 For steps 1-10 and 13:
 1. **Check if step already completed** (from saved state) - if so, skip and use cached output
-2. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
-3. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
-4. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES)`
-   - Use step-specific timeout plus optional timeout_adder to allow caller to extend timeouts
-   - Use DEFAULT_MAX_RETRIES for consistent retry behavior across all orchestrators
-5. Store the output for use by subsequent steps
-6. **Save state to file** after step completes (for resumption)
-7. Accumulate cost: `total_cost += step_cost`
+2. **Track progress**: Call `set_agentic_progress(workflow="change", current_step=step_num, total_steps=13, step_name=description, completed_steps=[1..step_num-1])`
+3. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
+4. Preprocess and format template (see Prompt Preprocessing section)
+5. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, label=f"step{step_num}", max_retries=DEFAULT_MAX_RETRIES)`
+6. Store the output for use by subsequent steps
+7. **Save state to file** after step completes (for resumption)
+8. Accumulate cost: `total_cost += step_cost`
 
 % Review Loop (Steps 11-12)
 Steps 11 and 12 form a review loop that repeats until no issues are found:
@@ -71,7 +82,7 @@ while review_iteration < MAX_REVIEW_ITERATIONS:
     # Step 11: Identify Issues
     step11_output = run_step_11(review_iteration, previous_fixes)
 
-    if "No Issues Found" in step11_output:
+    if _review_loop_no_issues(step11_output):
         break  # Exit loop, proceed to step 13
 
     # Step 12: Fix Issues
@@ -82,6 +93,8 @@ if review_iteration >= MAX_REVIEW_ITERATIONS:
     # Warn but continue to PR creation
     print("Warning: Maximum review iterations reached")
 ```
+
+Helper: `_review_loop_no_issues(output: str) -> bool` — case-insensitive check for "no issues found" in output. LLMs don't reliably emit exact magic tokens, so this is intentionally loose.
 
 Context for review loop:
 - Step 11 receives: files_to_stage, worktree_path, step9_output, review_iteration, previous_fixes
@@ -143,19 +156,30 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
 - Step 3 receives: issue_content, step1_output, step2_output
 - Step 4 receives: issue_content, step1_output, step2_output, step3_output, issue_author
 - Step 5 receives: issue_content, step1_output through step4_output
-- Step 6 receives: issue_content, step1_output through step5_output
+- Step 6 receives: issue_content, step1_output through step5_output, dependency_context
 - Step 7 receives: issue_content, step1_output through step6_output, issue_author
 - Step 8 receives: issue_content, step1_output through step7_output
 - Step 9 receives: issue_content, step7_output, step8_output, worktree_path, direct_edit_candidates (from Step 6)
 - Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits
 - Step 11 receives: issue_content, step9_output, worktree_path, files_to_stage, review_iteration, previous_fixes
 - Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
-- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests
+
+% Dependency Context (Before Step 6)
+Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
+
+Helper: `_build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str`:
+- Build dependency graph using `build_dependency_graph(prompts_dir)`
+- Compute reverse dependencies (module → modules that depend on it)
+- Format as "## Module Dependency Graph" with sections showing modules sorted by number of dependents (limit top 30, max 10 dependents shown per module)
+- Add to `context["dependency_context"]`
+- Return empty string if prompts_dir doesn't exist or on any error
 
 % Files to Stage
 After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracted file list to subsequent steps:
 - `context["files_to_stage"] = ", ".join(changed_files)` (includes all three types)
 - Also extract `context["files_created"]`, `context["files_modified"]`, and `context["direct_edits"]` separately for Step 10
+- Step 9 fallback: if no FILES markers found in output but worktree has changes, use `_detect_worktree_changes()` to discover them
 - Step 10 updates prompts and may add files via ARCHITECTURE_FILES_MODIFIED - append these to files_to_stage
 - Step 11 uses files_to_stage to know which files to review
 - Step 13 uses files_to_stage to know which files to commit
@@ -175,33 +199,51 @@ Helper function: `_parse_direct_edit_candidates(step6_output: str) -> List[str]`
 
 % Early Exit Conditions (Hard Stops)
 
-The orchestrator must parse step output to detect stop conditions:
+The orchestrator must parse step output to detect stop conditions. Use `_check_hard_stop(step_num, output)`:
 
 | Step | Stop Condition | Detection |
 |------|----------------|-----------|
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | Already implemented | Output contains "Already Implemented" |
 | 3 | Research complete | (no stop condition - continues to step 4) |
-| 4 | Clarification needed | Output contains "Clarification Needed" |
+| 4 | Clarification needed | Requires explicit `STOP_CONDITION:` tag with "clarification" |
 | 5 | Docs analysis complete | (no stop condition - continues to step 6) |
 | 6 | No dev units found | Output contains "No Dev Units Found" |
-| 7 | Architectural decision needed | Output contains "Architectural Decision Needed" |
+| 7 | Architectural decision needed | Requires explicit `STOP_CONDITION:` tag with "architectural" |
 | 8 | No changes needed | Output contains "No Changes Required" |
-| 9 | Implementation failed | No FILES_CREATED, FILES_MODIFIED, or DIRECT_EDITS line, or output contains "FAIL:" |
+| 9 | Implementation failed | Output contains "FAIL:" |
 | 10 | Architecture update complete | (no stop condition - continues to step 11) |
-| 11 | Issues found | (not a hard stop - loops to step 12) |
 | 11 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 13) |
-| 12 | Fixes applied | (not a hard stop - loops back to step 11) |
-| 13 | PR created | (workflow complete) |
+
+**STOP_CONDITION tag**: A universal `STOP_CONDITION: <reason>` tag is recognized on any step as a fallback. Steps 4 and 7 (clarification steps) ONLY stop via this tag (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose.
 
 **Hard stop behavior:**
+- Call `post_step_comment()` to post findings to GitHub
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
-- The step has already posted its findings to GitHub before returning
 - Do NOT continue to subsequent steps
+
+**Clarification steps (4, 7) special behavior:**
+- Save `last_completed_step = step_num - 1` (so the step re-runs on resume after user responds)
+- After saving state, call `_fetch_issue_updated_at()` to refresh the timestamp (bot's own comment changes it) and store the refreshed value in state
 
 **Soft failures (continue):**
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
-- Steps should post their findings to GitHub even on partial failure
+
+% Consecutive Provider Failure Tracking
+
+Track consecutive steps where output contains "All agent providers failed":
+- Increment counter on provider failure, reset to 0 on any success or non-provider failure
+- If 3+ consecutive provider failures: post step comment, save state, return `(False, "Aborting: N consecutive steps failed — agent providers unavailable", ...)`
+
+% Architecture Sanitization (After Step 10)
+
+After Step 10 completes, sanitize architecture.json in the worktree:
+
+1. **Snapshot before Step 10**: Before running Step 10, read `architecture.json` into `previous_architecture` for later comparison.
+
+2. **`_sanitize_architecture_dependencies(worktree_path)`**: Remove corrupted dependency values from architecture.json — keep only strings that end with `.prompt`, contain no newlines, and are ≤100 chars.
+
+3. **`_sanitize_architecture_interfaces(worktree_path, previous_architecture)`**: Compare current architecture.json against `previous_architecture`. For each entry that exists in both, call `_merge_interface_signatures(old_interface, new_interface)` to preserve existing interface parameters that Step 10's LLM may have dropped. Append any merge warnings to step output under `ORCHESTRATOR_POSTCHECK_WARNINGS:`.
 
 % Git Worktree Isolation
 
@@ -233,63 +275,27 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
    - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
    - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
-   - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain`. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits).
+   - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain`. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits). Skip temp files matching `.agentic_prompt_*`.
    - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
+   - `_check_existing_pr(repo_owner, repo_name, issue_number) -> Optional[str]` - Use `gh pr list` to check for open PR with `head:change/issue-{issue_number}`. Return PR URL if found.
+   - `_fetch_issue_updated_at(repo_owner, repo_name, issue_number) -> str` - Fetch current `updated_at` timestamp for the GitHub issue via `gh api`. Used after clarification stops to capture the timestamp AFTER the bot's own comment.
 
 % Console Output
 
-The orchestrator must provide real-time feedback to the user via rich console output:
-
-1. **Header** (at start):
-   ```
-   Implementing change for issue #{issue_number}: "{issue_title}"
-   ```
-
-2. **Step progress** (before each step):
-   ```
-   [Step N/13] {step_description}...
-   ```
-   For review loop iterations:
-   ```
-   [Step 11/13] Identifying issues (iteration 2/5)...
-   [Step 12/13] Fixing issues (iteration 2/5)...
-   ```
-
-3. **Agentic output** (during each step):
-   - Stream or display the output from `run_agentic_task()` so the user can see what the agent is doing
-   - Use `verbose` flag to control detail level
-
-4. **Step result** (after each step):
-   ```
-     -> {brief_result}
-   ```
-   Examples: "No duplicates found", "3 dev units identified", "Changes applied"
-
-5. **Step completion marker** (after each successful step):
-   ```
-     → Step {step_num} complete.
-   ```
-   This marker is required for the executor's credential waterfall to detect successful runs. Must be printed after every successful step.
-
-6. **Hard stop message** (if workflow terminates early):
-   ```
-   Investigation stopped at Step N: {reason}
-   ```
-
-7. **Final summary** (at end):
-   ```
-   Change workflow complete
-      Total cost: ${total_cost:.4f}
-      Files changed: {comma_separated_list}
-      PR: {pr_url}
-      Review iterations: {N}
-
-   Next steps:
-      1. Review and merge the PR
-      2. Run `./sync_order.sh` after merge (or see PR for manual commands)
-   ```
+Use rich console output (unless `quiet`). Key markers:
+- Header: `Implementing change for issue #{issue_number}: "{issue_title}"`
+- Step progress: `[Step N/13] {description}...` (with iteration count for review loop steps)
+- Step result: `  -> {brief_result}` (last line of output, truncated to 80 chars)
+- Step completion: `  → Step {step_num} complete.` (REQUIRED — executor's credential waterfall depends on this)
+- Hard stop: `Investigation stopped at Step N: {reason}`
+- Final summary: total cost, files changed, PR URL, review iterations, and next steps (run sync_order.sh)
 
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
+
+% Progress Tracking
+
+Call `clear_agentic_progress()` at start (clear stale progress) and on successful completion.
+Call `set_agentic_progress(workflow="change", current_step=N, total_steps=13, ...)` before each step so KeyboardInterrupt can report how far the workflow got.
 
 % State Persistence (GitHub + Local)
 
@@ -297,25 +303,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 
 1. **State file location**: `.pdd/change-state/issue-{issue_number}.json` (local cache)
 
-2. **State file structure**:
-   ```json
-   {
-     "workflow": "change",
-     "issue_url": "https://github.com/owner/repo/issues/123",
-     "issue_number": 123,
-     "last_completed_step": 4,
-     "step_outputs": {
-       "1": "Step 1 output...",
-       "2": "Step 2 output...",
-       "3": "Step 3 output...",
-       "4": "Step 4 output..."
-     },
-     "total_cost": 0.0234,
-     "model_used": "anthropic",
-     "worktree_path": null,
-     "github_comment_id": 12345678
-   }
-   ```
+2. **State file structure**: JSON with keys: `workflow`, `issue_url`, `issue_number`, `last_completed_step`, `step_outputs` (dict keyed by step number string), `total_cost`, `model_used`, `worktree_path`, `github_comment_id`, `issue_updated_at`, `review_iteration`, `previous_fixes`
 
 3. **Use shared functions from agentic_common**:
    - `load_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
@@ -332,16 +320,11 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
    - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
      - On success: Store output in step_outputs, set `last_completed_step = step_num`
      - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
-   - On successful completion (step 13 completes): Call `clear_workflow_state()`
+   - On successful completion (step 13 completes AND no failed steps): Call `clear_workflow_state()`
    - On hard stop (e.g., clarification needed): State remains for next run
-   - Review loop state: Store current iteration count in state
+   - Review loop state: Store current iteration count and previous_fixes in state
 
-5. **Console output for resumption**:
-   ```
-   Resuming change workflow for issue #123
-      Steps 1-4 already complete (cached)
-      Starting from Step 5: Documentation Changes
-   ```
+5. **Console output for resumption**: Print which steps are cached and which step is starting.
 
 % Error Handling
 - Return `(False, "Failed to create worktree: {error}", cost, model, [])` if worktree setup fails
@@ -350,13 +333,17 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`
+Import from `pdd.preprocess`: `preprocess`
+Import from `pdd.architecture_sync`: `_merge_interface_signatures`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
 <pdd.construct_paths><include>context/construct_paths_example.py</include></pdd.construct_paths>
 <pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
+<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.architecture_sync><include>context/architecture_sync_example.py</include></pdd.architecture_sync>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`

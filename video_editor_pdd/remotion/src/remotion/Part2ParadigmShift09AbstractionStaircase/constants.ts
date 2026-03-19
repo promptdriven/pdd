@@ -48,6 +48,8 @@ export interface StepData {
 
 export const STEP_WIDTH = 280;
 export const STEP_HEIGHT = 120;
+export const ACTIVE_COLOR = COLORS.amber;
+export const PULSE_PERIOD = 40;
 
 export const STEPS: StepData[] = [
   {

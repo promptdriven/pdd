@@ -987,6 +987,99 @@ def resolve_component_intrinsic_duration_frames(
     return None
 
 
+def _read_section_duration_from_constants(
+    section_id: str,
+    remotion_src: str,
+) -> Optional[float]:
+    """Read SECTION_DURATION_SECONDS from a generated section constants file."""
+    if not remotion_src:
+        return None
+
+    constants_path = os.path.join(remotion_src, section_id, 'constants.ts')
+    content = _read_text_if_exists(constants_path)
+    if not content:
+        return None
+
+    match = re.search(
+        r'\bSECTION_DURATION_SECONDS\s*=\s*([0-9]+(?:\.[0-9]+)?)\b',
+        content,
+    )
+    if not match:
+        return None
+
+    try:
+        value = float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+    return value if value > 0 else None
+
+
+def _read_section_duration_from_word_timestamps(
+    section_id: str,
+    project_dir: str,
+) -> Optional[float]:
+    """Read the section-local duration from Stage 5 word timestamps."""
+    if not project_dir:
+        return None
+
+    timestamps_path = os.path.join(
+        project_dir,
+        'outputs',
+        'tts',
+        section_id,
+        'word_timestamps.json',
+    )
+    content = _read_text_if_exists(timestamps_path)
+    if not content:
+        return None
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+
+    words = parsed if isinstance(parsed, list) else parsed.get('words', [])
+    max_end = 0.0
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        end = word.get('end')
+        if isinstance(end, (int, float)):
+            max_end = max(max_end, float(end))
+
+    return max_end if max_end > 0 else None
+
+
+def resolve_section_duration_seconds(
+    section: Dict[str, Any],
+    remotion_src: str = '',
+    project_dir: str = '',
+) -> float:
+    """Resolve stable section duration without trusting render-mutated project.json.
+
+    Priority:
+      1. Generated section constants.ts
+      2. Stage 5 word_timestamps.json
+      3. section.durationSeconds from project.json
+    """
+    section_id = str(section.get('id') or '')
+    if section_id:
+        constants_duration = _read_section_duration_from_constants(section_id, remotion_src)
+        if constants_duration is not None:
+            return constants_duration
+
+        audio_duration = _read_section_duration_from_word_timestamps(section_id, project_dir)
+        if audio_duration is not None:
+            return audio_duration
+
+    raw_duration = section.get('durationSeconds', 0)
+    try:
+        return max(0.0, float(raw_duration))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def ensure_section_asset_aliases(section_id: str, remotion_public: str) -> None:
     """Create compatibility aliases for common Claude-generated staticFile paths.
 
@@ -1292,7 +1385,11 @@ def generate_generated_timeline_wrapper(
 
     pascal_name = to_pascal_case(section_id)
     component_name = f'{pascal_name}Section'
-    duration_seconds = section.get('durationSeconds', 0)
+    duration_seconds = resolve_section_duration_seconds(
+        section,
+        remotion_src=remotion_src,
+        project_dir=project_dir,
+    )
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
     visual_media_manifest = build_visual_media_manifest(
         section,
@@ -1466,7 +1563,11 @@ def generate_section_component(
     section_id = section['id']
     pascal_name = to_pascal_case(section_id)
     component_name = f'{pascal_name}Section'
-    duration_seconds = section.get('durationSeconds', 0)
+    duration_seconds = resolve_section_duration_seconds(
+        section,
+        remotion_src=remotion_src,
+        project_dir=project_dir,
+    )
     offset_seconds = section.get('offsetSeconds', 0)
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
 
@@ -1489,10 +1590,21 @@ def generate_section_component(
     direct_audio_src = resolve_direct_audio_src(section_id, remotion_public)
     direct_video_src = resolve_direct_video_src(section_id, remotion_public)
     has_veo_intent = resolve_section_has_veo_intent(section, project_dir)
-    needs_direct_audio = bool(direct_audio_src) and (not has_base_component or not component_has_audio)
+    generated_timeline_available = bool(remotion_src) and os.path.isfile(
+        os.path.join(remotion_src, section_id, 'constants.ts')
+    )
+    needs_direct_audio = bool(direct_audio_src) and (
+        generated_timeline_available
+        or not has_base_component
+        or not component_has_audio
+    )
     needs_direct_video = (
         bool(direct_video_src)
-        and (not has_base_component or not component_has_video)
+        and (
+            generated_timeline_available
+            or not has_base_component
+            or not component_has_video
+        )
         and has_veo_intent is not False
     )
 
@@ -1729,7 +1841,11 @@ def generate_root_tsx(
         pascal_name = to_pascal_case(section_id)
         component_name = f'{pascal_name}Section'
         composition_id = section.get('compositionId', pascal_name + 'Section')
-        duration_seconds = section.get('durationSeconds', 0)
+        duration_seconds = resolve_section_duration_seconds(
+            section,
+            remotion_src=remotion_src,
+            project_dir=project_dir,
+        )
         duration_frames = max(1, math.ceil(duration_seconds * fps))
         width = section.get('width', default_width)
         height = section.get('height', default_height)
@@ -1820,6 +1936,7 @@ def _merge_root_tsx(
     sections: List[Dict[str, Any]],
     fps: int,
     remotion_dir: str = '',
+    project_dir: str = '',
 ) -> str:
     """Merge section compositions into an existing Root.tsx file.
 
@@ -1838,7 +1955,11 @@ def _merge_root_tsx(
         pascal_name = to_pascal_case(section_id)
         component_name = f'{pascal_name}Section'
         composition_id = section.get('compositionId', pascal_name + 'Section')
-        duration_seconds = section.get('durationSeconds', 0)
+        duration_seconds = resolve_section_duration_seconds(
+            section,
+            remotion_src=remotion_src,
+            project_dir=project_dir,
+        )
         duration_frames = max(1, math.ceil(duration_seconds * fps))
         width = section.get('width', 1920)
         height = section.get('height', 1080)
