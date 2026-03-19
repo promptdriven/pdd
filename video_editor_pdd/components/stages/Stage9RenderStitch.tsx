@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 
 interface SectionRenderStatus {
@@ -523,9 +524,25 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                   ) : previewScriptError ? (
                     <div className="text-sm text-red-300">{previewScriptError}</div>
                   ) : (
-                    <pre className="whitespace-pre-wrap text-xs leading-6 text-slate-200">
-                      {previewScriptContent || 'Script content not available.'}
-                    </pre>
+                    <div className="text-xs text-slate-200">
+                      <ReactMarkdown
+                        components={{
+                          h1: ({ children }) => <h1 className="text-base font-bold text-slate-100 mt-4 mb-2">{children}</h1>,
+                          h2: ({ children }) => <h2 className="text-sm font-bold text-slate-100 mt-4 mb-2">{children}</h2>,
+                          h3: ({ children }) => <h3 className="text-xs font-bold text-slate-100 mt-3 mb-1">{children}</h3>,
+                          p: ({ children }) => <p className="mb-3 leading-6">{children}</p>,
+                          strong: ({ children }) => <strong className="font-bold text-slate-100">{children}</strong>,
+                          em: ({ children }) => <em className="italic text-slate-300">{children}</em>,
+                          ul: ({ children }) => <ul className="list-disc pl-4 mb-3">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal pl-4 mb-3">{children}</ol>,
+                          li: ({ children }) => <li className="mb-1">{children}</li>,
+                          blockquote: ({ children }) => <blockquote className="border-l-2 border-slate-600 pl-3 italic text-slate-400 mb-3">{children}</blockquote>,
+                          hr: () => <hr className="border-slate-700 my-4" />,
+                        }}
+                      >
+                        {previewScriptContent || 'Script content not available.'}
+                      </ReactMarkdown>
+                    </div>
                   )}
                 </div>
                 </div>

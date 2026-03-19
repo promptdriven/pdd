@@ -425,7 +425,11 @@ describe("Preview modal", () => {
 
   it("renders an Original Script panel beside the preview", () => {
     expect(sourceCode).toContain("Original Script");
-    expect(sourceCode).toMatch(/whitespace-pre-wrap/);
+  });
+
+  it("renders script content as formatted markdown using ReactMarkdown", () => {
+    expect(sourceCode).toMatch(/import\s+ReactMarkdown\s+from\s+['"]react-markdown['"]/);
+    expect(sourceCode).toMatch(/<ReactMarkdown/);
   });
 
   it("keeps the video contained within the viewport", () => {
