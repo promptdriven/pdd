@@ -242,6 +242,10 @@ def _parse_attrs(attr_str: str) -> dict:
     # Simple attribute parser: key="value" or key='value'
     for match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']*)["\']', attr_str):
         attrs[match.group(1)] = match.group(2)
+    # Boolean attributes (e.g., <include optional>path</include>)
+    # This keeps the include tag syntax ergonomic without requiring key="true".
+    if "optional" not in attrs and re.search(r'(?<![A-Za-z0-9_])optional(?![A-Za-z0-9_])', attr_str):
+        attrs["optional"] = "true"
     return attrs
 
 def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
@@ -401,18 +405,17 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
             _dbg(f"Missing XML include: {file_path}")
             # First pass (recursive=True): leave the tag so a later env expansion can resolve it.
             # Second pass (recursive=False): replace with a visible placeholder, except for
-            # conventional optional project context files which should be treated as empty.
+            # optional includes which should be treated as empty.
             if recursive:
                 return match.group(0)
 
-            # Optional project context includes: missing should behave as "no extra content".
-            # Strip only the literal "./" prefix so paths like "../context/example.prompt" are not
-            # incorrectly treated as optional; then normalize for consistent comparison.
-            normalized = Path(file_path.removeprefix("./")).as_posix()
-            if normalized in ("context/example.prompt", "context/test.prompt"):
-                # Keep the console warning but do not leak a "[File not found: ...]" marker
-                # into the LLM-facing prompt.
-                return ""
+            optional_val = attrs.get("optional")
+            if optional_val is not None:
+                truthy = str(optional_val).strip().lower() not in {"", "0", "false", "no", "off"}
+                if truthy:
+                    # Keep the console warning but do not leak a "[File not found: ...]" marker
+                    # into the LLM-facing prompt.
+                    return ""
 
             return f"[File not found: {file_path}]"
         except ValueError as e:
