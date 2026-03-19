@@ -26,8 +26,10 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_section_title_card": 120,
   "02_maintenance_pie_chart": 420,
+  "03_compound_debt_curve": 360,
   "04_diverging_cost_curves": 420,
   "05_investment_comparison_table": 420,
+  "06_sock_callback_split": 360,
   "07_economics_crossing_callback": 300,
   "08_contrarian_quote_card": 300,
 };

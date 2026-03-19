@@ -21,6 +21,7 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "02_legacy_codebase_reveal": 150,
   "03_module_highlight_update": 240,
   "04_source_of_truth_shift": 180,
   "05_regenerate_compare_loop": 180,

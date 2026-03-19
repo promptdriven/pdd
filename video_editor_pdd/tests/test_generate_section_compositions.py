@@ -541,6 +541,56 @@ class TestUpdateRootTsx:
         assert 'id="part2-paradigm-shift07-verilog-synthesis-triple"' in content
         assert 'durationInFrames={540}' in content
 
+    def test_uses_duration_frames_constant_for_preview_compositions(self, tmp_path):
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        component_dir = remotion_src / "ColdOpen02ZoomOutAccumulated"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "constants.ts").write_text(
+            'export const DURATION_FRAMES = 210;\n',
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "cold_open",
+                "durationSeconds": 12,
+                "compositions": ["02_zoom_out_accumulated"],
+            }
+        ]
+
+        update_root_tsx(sections, fps=30, remotion_dir=str(remotion_dir))
+
+        root_path = remotion_src / "Root.tsx"
+        content = root_path.read_text(encoding="utf-8")
+        assert 'id="cold-open02-zoom-out-accumulated"' in content
+        assert 'durationInFrames={210}' in content
+
+    def test_uses_nested_canvas_duration_frames_for_preview_compositions(self, tmp_path):
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        component_dir = remotion_src / "Closing01SockCallbackSplit"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "constants.ts").write_text(
+            'export const CANVAS = { DURATION_FRAMES: 240, FPS: 30 } as const;\n',
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "closing",
+                "durationSeconds": 12,
+                "compositions": ["01_sock_callback_split"],
+            }
+        ]
+
+        update_root_tsx(sections, fps=30, remotion_dir=str(remotion_dir))
+
+        root_path = remotion_src / "Root.tsx"
+        content = root_path.read_text(encoding="utf-8")
+        assert 'id="closing01-sock-callback-split"' in content
+        assert 'durationInFrames={240}' in content
+
 
 class TestMergeRootTsx:
     """Test _merge_root_tsx for regex-based merging."""
@@ -629,6 +679,72 @@ class TestMergeRootTsx:
         result = _merge_root_tsx(existing, sections, fps=30, remotion_dir=remotion_dir)
         assert 'id="part2-paradigm-shift07-verilog-synthesis-triple"' in result
         assert 'durationInFrames={540}' in result
+
+    def test_uses_duration_frames_constant_for_preview_compositions(self, tmp_path):
+        existing = (
+            'import React from "react";\n'
+            'import { Composition } from "remotion";\n'
+            '\n'
+            'export const RemotionRoot: React.FC = () => {\n'
+            '  return (\n'
+            '    <>\n'
+            '    </>\n'
+            '  );\n'
+            '};\n'
+        )
+        remotion_dir = str(tmp_path / "remotion")
+        remotion_src = Path(remotion_dir) / "src" / "remotion"
+        component_dir = remotion_src / "ColdOpen02ZoomOutAccumulated"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "constants.ts").write_text(
+            'export const DURATION_FRAMES = 210;\n',
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "cold_open",
+                "durationSeconds": 12,
+                "compositions": ["02_zoom_out_accumulated"],
+            }
+        ]
+
+        result = _merge_root_tsx(existing, sections, fps=30, remotion_dir=remotion_dir)
+        assert 'id="cold-open02-zoom-out-accumulated"' in result
+        assert 'durationInFrames={210}' in result
+
+    def test_uses_nested_canvas_duration_frames_for_preview_compositions(self, tmp_path):
+        existing = (
+            'import React from "react";\n'
+            'import { Composition } from "remotion";\n'
+            '\n'
+            'export const RemotionRoot: React.FC = () => {\n'
+            '  return (\n'
+            '    <>\n'
+            '    </>\n'
+            '  );\n'
+            '};\n'
+        )
+        remotion_dir = str(tmp_path / "remotion")
+        remotion_src = Path(remotion_dir) / "src" / "remotion"
+        component_dir = remotion_src / "Closing01SockCallbackSplit"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        (component_dir / "constants.ts").write_text(
+            'export const CANVAS = { DURATION_FRAMES: 240, FPS: 30 } as const;\n',
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "closing",
+                "durationSeconds": 12,
+                "compositions": ["01_sock_callback_split"],
+            }
+        ]
+
+        result = _merge_root_tsx(existing, sections, fps=30, remotion_dir=remotion_dir)
+        assert 'id="closing01-sock-callback-split"' in result
+        assert 'durationInFrames={240}' in result
 
 
 # ===========================================================================

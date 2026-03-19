@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence, useCurrentFrame, OffthreadVideo, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
@@ -19,6 +19,10 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_split_screen_hook": 240,
+  "02_zoom_out_accumulated": 210,
+  "05_code_blink": 240,
+  "06_still_patching_beat": 150,
+  "07_pdd_title_card": 150,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -51,6 +55,7 @@ export const ColdOpenSection: React.FC = () => {
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
+      <Audio src={staticFile("cold_open/narration.wav")} />
       {activeVisuals.map((visual) => {
         const VisualComponent = COMPONENT_MAP[visual.id] ?? null;
         const visualDuration = Math.max(1, visual.end - visual.start);

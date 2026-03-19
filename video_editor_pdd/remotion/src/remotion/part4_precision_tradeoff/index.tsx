@@ -24,9 +24,11 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_section_title_card": 120,
   "02_printer_vs_mold_split": 600,
   "03_precision_tradeoff_curve": 450,
   "04_prompt_comparison_split": 420,
+  "07_embedded_code_document": 480,
   "08_prompt_code_spectrum": 360,
 };
 

@@ -27,6 +27,7 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "02_mold_cross_section": 300,
   "03_test_walls_constraint": 360,
   "04_research_annotations_ai_quality": 450,
+  "07_five_generations_z3": 540,
   "08_prompt_capital_specification": 600,
   "10_three_components_table": 480,
 };

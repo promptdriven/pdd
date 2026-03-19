@@ -157,6 +157,17 @@ function writeAuditReport(
   fs.writeFileSync(auditPath, auditReport, "utf-8");
 }
 
+function clearStaleAuditStill(outputStill: string): void {
+  if (!fs.existsSync(outputStill)) {
+    return;
+  }
+  try {
+    fs.unlinkSync(outputStill);
+  } catch {
+    // Best-effort cleanup; stale PNG removal should not abort the audit run.
+  }
+}
+
 function shouldSaveAuditTraces(): boolean {
   return process.env.VIDEO_EDITOR_SAVE_AUDIT_TRACES === "1";
 }
@@ -515,46 +526,67 @@ async function auditSection(
       `AUDIT_${specName}.md`
     );
 
-    if (renderSource.kind === "preview-composition") {
-      const sampleFrame = Math.max(0, sampleWindow.intrinsicSampleFrame);
-      onLog(
-        `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
-      );
-      await renderStill(renderSource.compositionId, sampleFrame, outputStill);
-    } else if (renderSource.kind === "media-clip") {
-      onLog(
-        `[audit] Extracting standalone media frame for ${section.id} (${specName}) at ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s`
-      );
-      await extractFrameAtTime(
-        renderSource.mediaPath,
-        sampleWindow.intrinsicSampleSeconds,
-        outputStill
-      );
-    } else if (renderSource.kind === "section-composition") {
-      const sectionFrameCount = Math.max(1, Math.floor(section.durationSeconds * fps));
-      const sampleFrame = Math.min(
-        sectionFrameCount - 1,
-        Math.max(0, Math.floor(sampleWindow.sampleSeconds * fps))
-      );
-      onLog(
-        `[audit] Rendering fresh still for ${section.id} (${specName}) at frame ${sampleFrame} (${sampleWindow.source})`
-      );
-      await renderStill(renderSource.compositionId, sampleFrame, outputStill);
-    } else if (renderSource.kind === "section-video") {
-      onLog(
-        `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleWindow.sampleSeconds.toFixed(3)}s from rendered video`
-      );
-      await extractFrameAtTime(
-        renderSource.mediaPath,
-        sampleWindow.sampleSeconds,
-        outputStill
-      );
-    } else if (renderSource.kind === "skip") {
+    if (renderSource.kind === "skip") {
       onLog(`[audit] Skipping standalone audit for ${section.id} (${specName}): ${renderSource.reason}`);
       writeAuditReport(auditPath, "skip", renderSource.reason);
       continue;
-    } else {
+    }
+
+    if (
+      renderSource.kind !== "preview-composition" &&
+      renderSource.kind !== "media-clip" &&
+      renderSource.kind !== "section-composition" &&
+      renderSource.kind !== "section-video"
+    ) {
       throw new Error(`Unsupported audit render source: ${JSON.stringify(renderSource)}`);
+    }
+
+    try {
+      clearStaleAuditStill(outputStill);
+
+      if (renderSource.kind === "preview-composition") {
+        const sampleFrame = Math.max(0, sampleWindow.intrinsicSampleFrame);
+        onLog(
+          `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
+        );
+        await renderStill(renderSource.compositionId, sampleFrame, outputStill);
+      } else if (renderSource.kind === "media-clip") {
+        onLog(
+          `[audit] Extracting standalone media frame for ${section.id} (${specName}) at ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s`
+        );
+        await extractFrameAtTime(
+          renderSource.mediaPath,
+          sampleWindow.intrinsicSampleSeconds,
+          outputStill
+        );
+      } else if (renderSource.kind === "section-composition") {
+        const sectionFrameCount = Math.max(1, Math.floor(section.durationSeconds * fps));
+        const sampleFrame = Math.min(
+          sectionFrameCount - 1,
+          Math.max(0, Math.floor(sampleWindow.sampleSeconds * fps))
+        );
+        onLog(
+          `[audit] Rendering fresh still for ${section.id} (${specName}) at frame ${sampleFrame} (${sampleWindow.source})`
+        );
+        await renderStill(renderSource.compositionId, sampleFrame, outputStill);
+      } else {
+        onLog(
+          `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleWindow.sampleSeconds.toFixed(3)}s from rendered video`
+        );
+        await extractFrameAtTime(
+          renderSource.mediaPath,
+          sampleWindow.sampleSeconds,
+          outputStill
+        );
+      }
+    } catch (err) {
+      clearStaleAuditStill(outputStill);
+      const message =
+        err instanceof Error ? err.message : "Unknown audit render failure";
+      const summary = `Infrastructure error: Failed to render audit frame for ${specName}. ${message}`;
+      onLog(`[audit] ${summary}`);
+      writeAuditReport(auditPath, "skip", summary);
+      continue;
     }
 
     // Claude analysis prompt

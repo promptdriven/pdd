@@ -94,6 +94,7 @@ const mockReadFileSync = jest.fn();
 const mockWriteFileSync = jest.fn();
 const mockMkdirSync = jest.fn();
 const mockExistsSync = jest.fn();
+const mockUnlinkSync = jest.fn();
 
 jest.mock("fs", () => ({
   readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
@@ -101,6 +102,7 @@ jest.mock("fs", () => ({
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
 }));
 
 // Import after mocking
@@ -259,6 +261,7 @@ beforeEach(() => {
   mockWriteFileSync.mockReset();
   mockMkdirSync.mockReset();
   mockExistsSync.mockReset();
+  mockUnlinkSync.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-audit-001");
   mockRenderStill.mockResolvedValue(undefined);
@@ -303,6 +306,7 @@ beforeEach(() => {
   mockExistsSync.mockReturnValue(true);
   mockMkdirSync.mockReturnValue(undefined);
   mockWriteFileSync.mockReturnValue(undefined);
+  mockUnlinkSync.mockReturnValue(undefined);
   delete process.env.VIDEO_EDITOR_SAVE_AUDIT_TRACES;
 });
 
@@ -1243,6 +1247,39 @@ describe("audit executor factory", () => {
     expect(mockRenderStill.mock.calls[0][2]).toBe(
       pathMod.join("/project-root", "outputs", "audit", "intro", "visual_frame.png")
     );
+  });
+
+  it("writes a fresh infrastructure error report and continues when preview still rendering fails", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md", "overlay.md"]);
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "intro");
+    mockExistsSync.mockImplementation((candidate: string) => candidate === specDir);
+    mockRenderStill
+      .mockRejectedValueOnce(
+        new Error(
+          'Still render for "IntroComposition" frame 194 exited with code 1: Cannot use frame 194'
+        )
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(1);
+    expect(mockRunClaudeAudit.mock.calls[0][0]).toContain("overlay.md");
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+    expect(String(mockWriteFileSync.mock.calls[0][0])).toContain("AUDIT_visual.md");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain("## Verdict\nskip");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain(
+      "Infrastructure error:"
+    );
+    expect(String(mockWriteFileSync.mock.calls[1][0])).toContain("AUDIT_overlay.md");
   });
 
   it("calls runClaudeAnalysis for each spec file", async () => {

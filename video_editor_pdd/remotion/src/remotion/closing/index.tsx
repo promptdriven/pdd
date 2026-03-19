@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence, useCurrentFrame, OffthreadVideo, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
@@ -24,7 +24,10 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_sock_callback_split": 240,
   "05_dissolve_regenerate_loop": 240,
+  "06_mold_glow_finale": 240,
+  "07_the_beat": 120,
   "08_mold_is_what_matters": 180,
   "09_final_title_card": 240,
 };
@@ -65,6 +68,7 @@ export const ClosingSection: React.FC = () => {
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
+      <Audio src={staticFile("closing/narration.wav")} />
       {activeVisuals.map((visual) => {
         const VisualComponent = COMPONENT_MAP[visual.id] ?? null;
         const visualDuration = Math.max(1, visual.end - visual.start);

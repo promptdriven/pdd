@@ -24,10 +24,12 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_section_title_card": 120,
   "04_defect_fix_the_mold": 420,
   "05_value_migration_split": 480,
   "07_verilog_synthesis_triple": 540,
   "09_abstraction_staircase": 480,
+  "10_netlist_zoom_unreviewable": 480,
   "11_prompt_replaces_review": 360,
 };
 

@@ -1052,6 +1052,8 @@ def resolve_component_intrinsic_duration_frames(
 
     duration_patterns = (
         re.compile(r'\bTOTAL_FRAMES\s*[:=]\s*(\d+)\b'),
+        re.compile(r'\bDURATION_FRAMES\s*[:=]\s*(\d+)\b'),
+        re.compile(r'\bDURATION_IN_FRAMES\s*[:=]\s*(\d+)\b'),
         re.compile(r'\btotalFrames\s*[:=]\s*(\d+)\b'),
         re.compile(r'\bTOTAL_DURATION_FRAMES\s*[:=]\s*(\d+)\b'),
         re.compile(r'\btotalDuration\s*[:=]\s*(\d+)\b', re.IGNORECASE),
