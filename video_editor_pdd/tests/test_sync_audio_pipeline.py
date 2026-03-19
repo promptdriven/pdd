@@ -45,6 +45,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from sync_audio_pipeline import (
     build_segment_validation_report,
+    evaluate_validation_gate,
     normalize_transcript_text,
     load_project,
     get_segment_wav_path,
@@ -1091,6 +1092,29 @@ class TestSegmentValidation:
         assert report["segments"][0]["status"] in {"pass", "warn"}
         assert report["segments"][0]["matchRatio"] >= 0.8
 
+    def test_evaluate_validation_gate_allows_warns_when_warn_ratio_is_low(self):
+        validation_report = {
+            "summary": {
+                "passCount": 24,
+                "warnCount": 9,
+                "failCount": 0,
+                "skipCount": 0,
+            },
+            "segments": [],
+        }
+
+        error = evaluate_validation_gate(
+            validation_report,
+            {
+                "maxFailCount": 2,
+                "maxFailRatio": 0.15,
+                "maxWarnCount": 6,
+                "maxWarnRatio": 0.35,
+            },
+        )
+
+        assert error is None
+
 
 # ===========================================================================
 # Tests: main() CLI and integration
@@ -1248,6 +1272,7 @@ class TestMainExitCodes:
             "maxFailCount": 2,
             "maxFailRatio": 0.25,
             "maxWarnCount": 4,
+            "maxWarnRatio": 0.35,
         }
 
 

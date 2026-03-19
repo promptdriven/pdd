@@ -11,7 +11,7 @@ import { WhereToStart07NoBigBangCallout } from "../07_no_big_bang_callout";
 
 export const WhereToStartSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 800.8319999999999;
+  const offsetSeconds = 818.090666;
   const durationSeconds = 32.08;
 
   return (

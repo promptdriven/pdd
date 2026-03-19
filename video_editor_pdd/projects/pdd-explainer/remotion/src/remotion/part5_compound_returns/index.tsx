@@ -12,7 +12,7 @@ import { Part5CompoundReturns08ContrarianQuoteCard } from "../08_contrarian_quot
 
 export const Part5CompoundReturnsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 685.4399999999999;
+  const offsetSeconds = 702.698666;
   const durationSeconds = 115.08;
 
   return (

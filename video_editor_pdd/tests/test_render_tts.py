@@ -62,6 +62,7 @@ from render_tts import (
     concatenate_pcm,
     generate_silence,
     generate_silence_wav_bytes,
+    load_tts_runtime_config,
     parse_tts_script,
     render_segment,
     write_wav,
@@ -1081,6 +1082,33 @@ class TestMain:
             },
         )
 
+    def test_runtime_config_reads_edge_voice_from_project(self, tmp_project):
+        project_json = {
+            "tts": {
+                "speaker": "Ada",
+                "edgeVoice": "en-US-JennyNeural",
+            }
+        }
+        (tmp_project / "project.json").write_text(json.dumps(project_json), encoding="utf-8")
+
+        config = load_tts_runtime_config(str(tmp_project), DEFAULT_MODEL)
+
+        assert config["speaker"] == "Ada"
+        assert config["edge_voice"] == "en-US-JennyNeural"
+
+    def test_runtime_config_prefers_edge_voice_env_override(self, tmp_project, monkeypatch):
+        project_json = {
+            "tts": {
+                "edgeVoice": "en-US-AndrewMultilingualNeural",
+            }
+        }
+        (tmp_project / "project.json").write_text(json.dumps(project_json), encoding="utf-8")
+        monkeypatch.setenv("RENDER_TTS_EDGE_VOICE", "en-US-SteffanNeural")
+
+        config = load_tts_runtime_config(str(tmp_project), DEFAULT_MODEL)
+
+        assert config["edge_voice"] == "en-US-SteffanNeural"
+
     def test_model_and_edge_failures_use_deterministic_fallback_when_allowed(
         self, tmp_project, capsys
     ):
@@ -1106,6 +1134,40 @@ class TestMain:
         assert all(line["status"] == "done" for line in lines)
         assert (output_dir / "seg_001.wav").exists()
         assert (output_dir / "seg_002.wav").exists()
+
+    def test_edge_fallback_uses_configured_edge_voice(self, tmp_project):
+        output_dir = tmp_project / "outputs" / "tts"
+        project_json = {
+            "tts": {
+                "edgeVoice": "en-US-JennyNeural",
+            }
+        }
+        (tmp_project / "project.json").write_text(json.dumps(project_json), encoding="utf-8")
+
+        with mock.patch("render_tts.TTSEngine", side_effect=RuntimeError("Model not found")):
+            with mock.patch("render_tts.EdgeTTSEngine") as MockEdge:
+                edge_instance = MockEdge.return_value
+                edge_instance.sample_rate = SAMPLE_RATE
+                num_samples = int(SAMPLE_RATE * 0.5)
+                edge_instance.synthesize.return_value = struct.pack(
+                    f"<{num_samples}h", *([100] * num_samples)
+                )
+                with mock.patch.dict(os.environ, {"RENDER_TTS_ALLOW_EDGE_FALLBACK": "1"}, clear=False):
+                    with mock.patch(
+                        "sys.argv",
+                        ["render_tts.py",
+                         "--project-dir", str(tmp_project),
+                         "--output-dir", str(output_dir)],
+                    ):
+                        from render_tts import main
+                        with pytest.raises(SystemExit) as exc_info:
+                            main()
+                        assert exc_info.value.code == 0
+
+        MockEdge.assert_called_once_with(
+            voice="en-US-JennyNeural",
+            speaking_rate=1.0,
+        )
 
     def test_generates_wav_files(self, tmp_project):
         """Spec: Generates one WAV file per NARRATOR: segment."""

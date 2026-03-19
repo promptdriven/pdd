@@ -12,7 +12,7 @@ import { Part3MoldThreeParts10ThreeComponentsTable } from "../10_three_component
 
 export const Part3MoldThreePartsSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 228.906667;
+  const offsetSeconds = 246.165333;
   const durationSeconds = 344.16;
 
   return (

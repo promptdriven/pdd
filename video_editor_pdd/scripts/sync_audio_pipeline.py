@@ -30,6 +30,7 @@ DEFAULT_MLX_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 DEFAULT_VALIDATION_MAX_FAIL_COUNT = 2
 DEFAULT_VALIDATION_MAX_FAIL_RATIO = 0.15
 DEFAULT_VALIDATION_MAX_WARN_COUNT = 6
+DEFAULT_VALIDATION_MAX_WARN_RATIO = 0.35
 NUMBER_NORMALIZATION_PATTERN = re.compile(
     r"\b(?:"
     r"zero|one|two|three|four|five|six|seven|eight|nine|ten|"
@@ -617,6 +618,19 @@ def resolve_validation_policy(project: Dict[str, Any]) -> Dict[str, Any]:
                 DEFAULT_VALIDATION_MAX_WARN_COUNT,
             ),
         ),
+        "maxWarnRatio": max(
+            0.0,
+            _coerce_float(
+                config.get(
+                    "validationMaxWarnRatio",
+                    os.environ.get(
+                        "SYNC_AUDIO_VALIDATION_MAX_WARN_RATIO",
+                        DEFAULT_VALIDATION_MAX_WARN_RATIO,
+                    ),
+                ),
+                DEFAULT_VALIDATION_MAX_WARN_RATIO,
+            ),
+        ),
     }
 
 
@@ -641,6 +655,7 @@ def evaluate_validation_gate(
         return None
 
     fail_ratio = fail_count / compared_count
+    warn_ratio = warn_count / compared_count
     max_fail_count = _coerce_int(
         validation_policy.get("maxFailCount"),
         DEFAULT_VALIDATION_MAX_FAIL_COUNT,
@@ -653,14 +668,21 @@ def evaluate_validation_gate(
         validation_policy.get("maxWarnCount"),
         DEFAULT_VALIDATION_MAX_WARN_COUNT,
     )
+    max_warn_ratio = _coerce_float(
+        validation_policy.get("maxWarnRatio"),
+        DEFAULT_VALIDATION_MAX_WARN_RATIO,
+    )
 
     reasons: List[str] = []
     if fail_count > max_fail_count:
         reasons.append(f"failCount {fail_count} > {max_fail_count}")
     if fail_ratio > max_fail_ratio:
         reasons.append(f"failRatio {fail_ratio:.3f} > {max_fail_ratio:.3f}")
-    if warn_count > max_warn_count:
-        reasons.append(f"warnCount {warn_count} > {max_warn_count}")
+    if warn_count > max_warn_count and warn_ratio > max_warn_ratio:
+        reasons.append(
+            f"warnCount {warn_count} > {max_warn_count} "
+            f"and warnRatio {warn_ratio:.3f} > {max_warn_ratio:.3f}"
+        )
 
     if not reasons:
         return None

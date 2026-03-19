@@ -12,7 +12,7 @@ import { Part2ParadigmShift11PromptReplacesReview } from "../11_prompt_replaces_
 
 export const Part2ParadigmShiftSection: React.FC = () => {
   const fps = 30;
-  const offsetSeconds = 0.789334;
+  const offsetSeconds = 18.048;
   const durationSeconds = 227.48;
 
   return (

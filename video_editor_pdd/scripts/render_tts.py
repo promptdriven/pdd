@@ -518,6 +518,7 @@ def load_tts_runtime_config(project_dir: str, cli_model: str) -> Dict[str, Any]:
     config: Dict[str, Any] = {
         "model_id": cli_model,
         "speaker": "Aiden",
+        "edge_voice": os.environ.get("RENDER_TTS_EDGE_VOICE", "en-US-AndrewMultilingualNeural"),
         "language": "English",
         "speaking_rate": 1.0,
         "generation_kwargs": {},
@@ -537,6 +538,14 @@ def load_tts_runtime_config(project_dir: str, cli_model: str) -> Dict[str, Any]:
     speaker = tts_config.get("speaker")
     if isinstance(speaker, str) and speaker.strip():
         config["speaker"] = speaker.strip()
+
+    edge_voice = os.environ.get("RENDER_TTS_EDGE_VOICE")
+    if isinstance(edge_voice, str) and edge_voice.strip():
+        config["edge_voice"] = edge_voice.strip()
+    else:
+        project_edge_voice = tts_config.get("edgeVoice")
+        if isinstance(project_edge_voice, str) and project_edge_voice.strip():
+            config["edge_voice"] = project_edge_voice.strip()
 
     language = tts_config.get("language")
     if isinstance(language, str) and language.strip():
@@ -1114,7 +1123,10 @@ def main() -> None:
             flush=True,
         )
         try:
-            engine = EdgeTTSEngine(speaking_rate=runtime_config["speaking_rate"])
+            engine = EdgeTTSEngine(
+                voice=runtime_config["edge_voice"],
+                speaking_rate=runtime_config["speaking_rate"],
+            )
             print("Using EdgeTTS engine", file=sys.stderr, flush=True)
         except Exception as e2:
             print(

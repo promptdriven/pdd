@@ -884,6 +884,29 @@ describe("app/api/pipeline/render/run/route.ts source structure", () => {
 // ---------------------------------------------------------------------------
 
 describe("rebuildBundle — cache clearing", () => {
+  it("passes project and app remotion dirs to wrapper generation", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const spawnCall = mockSpawn.mock.calls.find((call: unknown[]) =>
+      String(call[0]) === "python3" &&
+      Array.isArray(call[1]) &&
+      (call[1] as string[]).some((arg) =>
+        String(arg).includes("generate_section_compositions.py")
+      )
+    );
+
+    expect(spawnCall).toBeDefined();
+    expect(spawnCall?.[1]).toEqual([
+      path.join(process.cwd(), "scripts", "generate_section_compositions.py"),
+      "--project-dir",
+      process.cwd(),
+      "--remotion-dir",
+      path.join(process.cwd(), "remotion"),
+      "--force",
+    ]);
+  });
+
   it("removes remotion/build/ before running npx remotion bundle", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     await executor(jest.fn());

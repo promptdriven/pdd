@@ -192,12 +192,21 @@ async function rebuildBundle(
   onLog("Refreshing section timing artifacts...");
   await refreshSectionTimelineArtifacts(sectionIds, onLog);
 
+  const remotionDir = getAppRemotionDir();
+
   // Regenerate section wrappers and Root.tsx from project.json
   onLog("Regenerating Root.tsx...");
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(
       "python3",
-      [path.join(getAppScriptsDir(), "generate_section_compositions.py"), "--force"],
+      [
+        path.join(getAppScriptsDir(), "generate_section_compositions.py"),
+        "--project-dir",
+        projectDir,
+        "--remotion-dir",
+        remotionDir,
+        "--force",
+      ],
       { cwd: projectDir, stdio: ["ignore", "pipe", "pipe"] }
     );
     proc.stdout.on("data", (d) => onLog(d.toString()));
@@ -208,7 +217,6 @@ async function rebuildBundle(
     });
   });
 
-  const remotionDir = getAppRemotionDir();
   const buildDir = path.join(remotionDir, "build");
   const webpackCacheDir = path.join(
     remotionDir, "node_modules", ".cache", "webpack"
