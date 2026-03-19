@@ -805,7 +805,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift08-synopsys-pdd-equivalence"
         component={Part2ParadigmShift08SynopsysPddEquivalencePreview}
-        durationInFrames={150}
+        durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
@@ -869,7 +869,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-three-parts06-ratchet-split-comparison"
         component={Part3MoldThreeParts06RatchetSplitComparisonPreview}
-        durationInFrames={150}
+        durationInFrames={480}
         fps={30}
         width={1920}
         height={1080}
@@ -933,7 +933,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff05-test-accumulation-insight"
         component={Part4PrecisionTradeoff05TestAccumulationInsightPreview}
-        durationInFrames={150}
+        durationInFrames={300}
         fps={30}
         width={1920}
         height={1080}
@@ -941,7 +941,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff06-takeaway-callout"
         component={Part4PrecisionTradeoff06TakeawayCalloutPreview}
-        durationInFrames={150}
+        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
@@ -1029,7 +1029,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start01-section-title-card"
         component={WhereToStart01SectionTitleCardPreview}
-        durationInFrames={150}
+        durationInFrames={120}
         fps={30}
         width={1920}
         height={1080}
@@ -1069,7 +1069,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start06-spreading-glow-migration"
         component={WhereToStart06SpreadingGlowMigrationPreview}
-        durationInFrames={150}
+        durationInFrames={240}
         fps={30}
         width={1920}
         height={1080}
@@ -1093,7 +1093,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing03-code-regenerate-workflow"
         component={Closing03CodeRegenerateWorkflowPreview}
-        durationInFrames={150}
+        durationInFrames={300}
         fps={30}
         width={1920}
         height={1080}
@@ -1101,7 +1101,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing04-pdd-triangle"
         component={Closing04PddTrianglePreview}
-        durationInFrames={150}
+        durationInFrames={300}
         fps={30}
         width={1920}
         height={1080}

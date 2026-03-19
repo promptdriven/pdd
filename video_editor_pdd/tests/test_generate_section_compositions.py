@@ -591,6 +591,40 @@ class TestUpdateRootTsx:
         assert 'id="closing01-sock-callback-split"' in content
         assert 'durationInFrames={240}' in content
 
+    def test_falls_back_to_spec_duration_for_preview_compositions(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        component_dir = remotion_src / "Closing03CodeRegenerateWorkflow"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        specs_dir = project_dir / "specs" / "closing"
+        specs_dir.mkdir(parents=True, exist_ok=True)
+        (specs_dir / "03_code_regenerate_workflow.md").write_text(
+            "[Remotion]\n\n**Duration:** ~10s (300 frames @ 30fps)\n",
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "closing",
+                "durationSeconds": 12,
+                "specDir": "closing",
+                "compositions": ["03_code_regenerate_workflow"],
+            }
+        ]
+
+        update_root_tsx(
+            sections,
+            fps=30,
+            remotion_dir=str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        root_path = remotion_src / "Root.tsx"
+        content = root_path.read_text(encoding="utf-8")
+        assert 'id="closing03-code-regenerate-workflow"' in content
+        assert 'durationInFrames={300}' in content
+
 
 class TestMergeRootTsx:
     """Test _merge_root_tsx for regex-based merging."""
@@ -745,6 +779,49 @@ class TestMergeRootTsx:
         result = _merge_root_tsx(existing, sections, fps=30, remotion_dir=remotion_dir)
         assert 'id="closing01-sock-callback-split"' in result
         assert 'durationInFrames={240}' in result
+
+    def test_falls_back_to_spec_duration_for_preview_compositions(self, tmp_path):
+        existing = (
+            'import React from "react";\n'
+            'import { Composition } from "remotion";\n'
+            '\n'
+            'export const RemotionRoot: React.FC = () => {\n'
+            '  return (\n'
+            '    <>\n'
+            '    </>\n'
+            '  );\n'
+            '};\n'
+        )
+        project_dir = tmp_path
+        remotion_dir = str(tmp_path / "remotion")
+        remotion_src = Path(remotion_dir) / "src" / "remotion"
+        component_dir = remotion_src / "Closing03CodeRegenerateWorkflow"
+        component_dir.mkdir(parents=True, exist_ok=True)
+        specs_dir = project_dir / "specs" / "closing"
+        specs_dir.mkdir(parents=True, exist_ok=True)
+        (specs_dir / "03_code_regenerate_workflow.md").write_text(
+            "[Remotion]\n\n**Duration:** ~10s (300 frames @ 30fps)\n",
+            encoding="utf-8",
+        )
+
+        sections = [
+            {
+                "id": "closing",
+                "durationSeconds": 12,
+                "specDir": "closing",
+                "compositions": ["03_code_regenerate_workflow"],
+            }
+        ]
+
+        result = _merge_root_tsx(
+            existing,
+            sections,
+            fps=30,
+            remotion_dir=remotion_dir,
+            project_dir=str(project_dir),
+        )
+        assert 'id="closing03-code-regenerate-workflow"' in result
+        assert 'durationInFrames={300}' in result
 
 
 # ===========================================================================

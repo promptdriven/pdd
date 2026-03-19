@@ -1039,10 +1039,12 @@ def resolve_component_intrinsic_duration_frames(
     comp_id: str,
     section_id: str,
     remotion_src: str,
+    project_dir: str = '',
+    spec_dir: str = '',
 ) -> Optional[int]:
     """Best-effort duration discovery from generated component constants.ts."""
     if not remotion_src:
-        return None
+        remotion_src = ''
 
     _, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
     constants_candidates = [
@@ -1073,6 +1075,32 @@ def resolve_component_intrinsic_duration_frames(
                 continue
             if duration > 0:
                 return duration
+
+    if project_dir:
+        resolved_spec_dir = spec_dir or section_id
+        if not os.path.isabs(resolved_spec_dir):
+            resolved_spec_dir = os.path.join(
+                project_dir,
+                'specs',
+                str(resolved_spec_dir).replace('\\', '/').replace('specs/', '').strip('/'),
+            )
+
+        spec_base = component_base_name(comp_id, section_id)
+        spec_path = os.path.join(resolved_spec_dir, f'{spec_base}.md')
+        spec_content = _read_text_if_exists(spec_path)
+        if spec_content:
+            duration_match = re.search(
+                r'^\s*[*#>\-\s]*\**Duration:?\**[^\n]*?\b(\d+)\s*frames?\b',
+                spec_content,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            if duration_match:
+                try:
+                    duration = int(duration_match.group(1))
+                except ValueError:
+                    duration = 0
+                if duration > 0:
+                    return duration
 
     return None
 
@@ -1509,6 +1537,8 @@ def generate_generated_timeline_wrapper(
             comp_id,
             section_id,
             remotion_src,
+            project_dir=project_dir,
+            spec_dir=section.get('specDir', ''),
         )
         if intrinsic_duration is not None:
             component_durations[comp_id] = intrinsic_duration
@@ -1970,6 +2000,8 @@ def generate_root_tsx(
                         comp_id,
                         section_id,
                         remotion_src,
+                        project_dir=project_dir,
+                        spec_dir=section.get('specDir', ''),
                     )
                     or 150
                 )
@@ -2091,6 +2123,8 @@ def _merge_root_tsx(
                         comp_id,
                         section_id,
                         remotion_src,
+                        project_dir=project_dir,
+                        spec_dir=section.get('specDir', ''),
                     )
                     or 150
                 )

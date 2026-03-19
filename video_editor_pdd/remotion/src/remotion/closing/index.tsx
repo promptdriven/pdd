@@ -25,6 +25,8 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_sock_callback_split": 240,
+  "03_code_regenerate_workflow": 300,
+  "04_pdd_triangle": 300,
   "05_dissolve_regenerate_loop": 240,
   "06_mold_glow_finale": 240,
   "07_the_beat": 120,

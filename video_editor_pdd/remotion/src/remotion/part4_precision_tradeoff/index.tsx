@@ -28,6 +28,8 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "02_printer_vs_mold_split": 600,
   "03_precision_tradeoff_curve": 450,
   "04_prompt_comparison_split": 420,
+  "05_test_accumulation_insight": 300,
+  "06_takeaway_callout": 180,
   "07_embedded_code_document": 480,
   "08_prompt_code_spectrum": 360,
 };

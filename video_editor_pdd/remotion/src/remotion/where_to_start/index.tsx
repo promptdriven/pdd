@@ -21,10 +21,13 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_section_title_card": 120,
   "02_legacy_codebase_reveal": 150,
   "03_module_highlight_update": 240,
   "04_source_of_truth_shift": 180,
   "05_regenerate_compare_loop": 180,
+  "06_spreading_glow_migration": 240,
+  "07_no_big_bang_callout": 150,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
