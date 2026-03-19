@@ -27,6 +27,19 @@ DEFAULT_FASTER_WHISPER_MODEL = "base"
 DEFAULT_FASTER_WHISPER_DEVICE = "cpu"
 DEFAULT_FASTER_WHISPER_COMPUTE_TYPE = "int8"
 DEFAULT_MLX_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_VALIDATION_MAX_FAIL_COUNT = 2
+DEFAULT_VALIDATION_MAX_FAIL_RATIO = 0.15
+DEFAULT_VALIDATION_MAX_WARN_COUNT = 6
+NUMBER_NORMALIZATION_PATTERN = re.compile(
+    r"\b(?:"
+    r"zero|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|"
+    r"twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|"
+    r"hundred|thousand|million|billion|percent|"
+    r"\d+(?:\.\d+)?"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _expand_segment_range(
@@ -422,9 +435,32 @@ def generate_word_timestamps(
 
 def normalize_transcript_text(text: str) -> str:
     """Normalize transcript/script text for mismatch comparison."""
-    collapsed = re.sub(r"[\u2018\u2019']", "", text.lower())
+    collapsed = text.lower()
+    collapsed = re.sub(r"\b\d+(?:\.\d+)?\s*%", " num ", collapsed)
+    collapsed = collapsed.replace("%", " percent ")
+    collapsed = re.sub(r"[\u2018\u2019']", "", collapsed)
+    collapsed = NUMBER_NORMALIZATION_PATTERN.sub(" num ", collapsed)
     collapsed = re.sub(r"[^a-z0-9\s]", " ", collapsed)
     return re.sub(r"\s+", " ", collapsed).strip()
+
+
+def compute_transcript_match_ratio(expected_text: str, actual_text: str) -> float:
+    """Compare expected vs actual transcript using token-level similarity."""
+    normalized_expected = normalize_transcript_text(expected_text)
+    normalized_actual = normalize_transcript_text(actual_text)
+
+    expected_tokens = normalized_expected.split()
+    actual_tokens = normalized_actual.split()
+
+    if not expected_tokens and not actual_tokens:
+        return 1.0
+    if not expected_tokens or not actual_tokens:
+        return 0.0
+
+    return round(
+        SequenceMatcher(None, expected_tokens, actual_tokens).ratio(),
+        3,
+    )
 
 
 def load_segment_script_manifest(output_dir: str) -> Dict[str, str]:
@@ -496,10 +532,7 @@ def build_segment_validation_report(
             status = "skip"
             match_ratio: Optional[float] = None
         else:
-            match_ratio = round(
-                SequenceMatcher(None, normalized_expected, normalized_actual).ratio(),
-                3,
-            )
+            match_ratio = compute_transcript_match_ratio(expected_text, actual_text)
             if match_ratio >= 0.94:
                 status = "pass"
             elif match_ratio >= 0.8:
@@ -525,11 +558,138 @@ def build_segment_validation_report(
     return {"segments": rows, "summary": summary}
 
 
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def resolve_validation_policy(project: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve transcript validation thresholds from project config or env."""
+    audio_sync = project.get("audioSync")
+    config = audio_sync if isinstance(audio_sync, dict) else {}
+
+    return {
+        "maxFailCount": max(
+            0,
+            _coerce_int(
+                config.get(
+                    "validationMaxFailCount",
+                    os.environ.get(
+                        "SYNC_AUDIO_VALIDATION_MAX_FAIL_COUNT",
+                        DEFAULT_VALIDATION_MAX_FAIL_COUNT,
+                    ),
+                ),
+                DEFAULT_VALIDATION_MAX_FAIL_COUNT,
+            ),
+        ),
+        "maxFailRatio": max(
+            0.0,
+            _coerce_float(
+                config.get(
+                    "validationMaxFailRatio",
+                    os.environ.get(
+                        "SYNC_AUDIO_VALIDATION_MAX_FAIL_RATIO",
+                        DEFAULT_VALIDATION_MAX_FAIL_RATIO,
+                    ),
+                ),
+                DEFAULT_VALIDATION_MAX_FAIL_RATIO,
+            ),
+        ),
+        "maxWarnCount": max(
+            0,
+            _coerce_int(
+                config.get(
+                    "validationMaxWarnCount",
+                    os.environ.get(
+                        "SYNC_AUDIO_VALIDATION_MAX_WARN_COUNT",
+                        DEFAULT_VALIDATION_MAX_WARN_COUNT,
+                    ),
+                ),
+                DEFAULT_VALIDATION_MAX_WARN_COUNT,
+            ),
+        ),
+    }
+
+
+def evaluate_validation_gate(
+    validation_report: Dict[str, Any],
+    validation_policy: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Return an error message when transcript validation exceeds allowed thresholds."""
+    if not validation_policy:
+        return None
+
+    summary = validation_report.get("summary")
+    if not isinstance(summary, dict):
+        return None
+
+    pass_count = _coerce_int(summary.get("passCount"), 0)
+    warn_count = _coerce_int(summary.get("warnCount"), 0)
+    fail_count = _coerce_int(summary.get("failCount"), 0)
+    compared_count = pass_count + warn_count + fail_count
+
+    if compared_count <= 0:
+        return None
+
+    fail_ratio = fail_count / compared_count
+    max_fail_count = _coerce_int(
+        validation_policy.get("maxFailCount"),
+        DEFAULT_VALIDATION_MAX_FAIL_COUNT,
+    )
+    max_fail_ratio = _coerce_float(
+        validation_policy.get("maxFailRatio"),
+        DEFAULT_VALIDATION_MAX_FAIL_RATIO,
+    )
+    max_warn_count = _coerce_int(
+        validation_policy.get("maxWarnCount"),
+        DEFAULT_VALIDATION_MAX_WARN_COUNT,
+    )
+
+    reasons: List[str] = []
+    if fail_count > max_fail_count:
+        reasons.append(f"failCount {fail_count} > {max_fail_count}")
+    if fail_ratio > max_fail_ratio:
+        reasons.append(f"failRatio {fail_ratio:.3f} > {max_fail_ratio:.3f}")
+    if warn_count > max_warn_count:
+        reasons.append(f"warnCount {warn_count} > {max_warn_count}")
+
+    if not reasons:
+        return None
+
+    failing_segments: List[str] = []
+    for row in validation_report.get("segments") or []:
+        if isinstance(row, dict) and row.get("status") == "fail":
+            segment_id = row.get("segmentId")
+            if isinstance(segment_id, str):
+                failing_segments.append(segment_id)
+
+    segment_suffix = (
+        f" Failing segments: {', '.join(failing_segments[:5])}."
+        if failing_segments
+        else ""
+    )
+    return (
+        "Transcript validation failed: "
+        f"{'; '.join(reasons)}."
+        f"{segment_suffix}"
+    )
+
+
 def process_section(
     section_id: str,
     segment_ids: List[str],
     output_dir: str,
     remotion_public: str,
+    validation_policy: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Process a single section: concatenate, copy, transcribe.
 
@@ -582,16 +742,6 @@ def process_section(
             "error": f"Failed to concatenate WAV files: {e}",
         }
 
-    # Copy to Remotion public directory
-    try:
-        copy_to_remotion(concatenated_path, remotion_public, section_id)
-    except Exception as e:
-        return {
-            "sectionId": section_id,
-            "status": "error",
-            "error": f"Failed to copy to Remotion public directory: {e}",
-        }
-
     # Get individual segment durations for word-to-segment mapping
     segment_durations: List[float] = []
     actual_segment_ids: List[str] = []
@@ -619,7 +769,40 @@ def process_section(
             "error": f"Failed to generate word timestamps: {e}",
         }
 
-    # Write word_timestamps.json
+    timestamps_path = section_output_dir / "word_timestamps.json"
+    validation_path = section_output_dir / "segment_validation.json"
+    failed_timestamps_path = section_output_dir / "word_timestamps.failed.json"
+    failed_validation_path = section_output_dir / "segment_validation.failed.json"
+
+    validation_report = build_segment_validation_report(
+        actual_segment_ids,
+        output_dir,
+        word_timestamps,
+    )
+    validation_error = evaluate_validation_gate(validation_report, validation_policy)
+
+    if validation_error:
+        try:
+            with open(failed_timestamps_path, "w", encoding="utf-8") as f:
+                json.dump(word_timestamps, f, indent=2, ensure_ascii=False)
+            with open(failed_validation_path, "w", encoding="utf-8") as f:
+                json.dump(validation_report, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return {
+                "sectionId": section_id,
+                "status": "error",
+                "error": f"Failed to write validation failure artifacts: {e}",
+                "validationSummary": validation_report["summary"],
+            }
+
+        return {
+            "sectionId": section_id,
+            "status": "error",
+            "error": validation_error,
+            "validationSummary": validation_report["summary"],
+        }
+
+    # Write accepted artifacts only after validation passes.
     timestamps_path = section_output_dir / "word_timestamps.json"
     try:
         with open(timestamps_path, "w", encoding="utf-8") as f:
@@ -631,12 +814,6 @@ def process_section(
             "error": f"Failed to write word_timestamps.json: {e}",
         }
 
-    validation_report = build_segment_validation_report(
-        actual_segment_ids,
-        output_dir,
-        word_timestamps,
-    )
-    validation_path = section_output_dir / "segment_validation.json"
     try:
         with open(validation_path, "w", encoding="utf-8") as f:
             json.dump(validation_report, f, indent=2, ensure_ascii=False)
@@ -645,6 +822,23 @@ def process_section(
             "sectionId": section_id,
             "status": "error",
             "error": f"Failed to write segment_validation.json: {e}",
+        }
+
+    for failed_path in (failed_timestamps_path, failed_validation_path):
+        try:
+            if failed_path.exists():
+                failed_path.unlink()
+        except OSError:
+            pass
+
+    # Copy to Remotion public directory after validation passes.
+    try:
+        copy_to_remotion(concatenated_path, remotion_public, section_id)
+    except Exception as e:
+        return {
+            "sectionId": section_id,
+            "status": "error",
+            "error": f"Failed to copy to Remotion public directory: {e}",
         }
 
     return {
@@ -709,6 +903,7 @@ def main() -> None:
         sys.exit(1)
 
     any_failed = False
+    validation_policy = resolve_validation_policy(project)
 
     for section_id, segment_ids in section_groups.items():
         result = process_section(
@@ -716,6 +911,7 @@ def main() -> None:
             segment_ids=segment_ids,
             output_dir=args.output_dir,
             remotion_public=args.remotion_public,
+            validation_policy=validation_policy,
         )
 
         # Print JSON progress line to stdout

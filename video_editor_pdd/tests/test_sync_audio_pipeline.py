@@ -897,12 +897,75 @@ class TestProcessSection:
         assert result["validationSummary"]["failCount"] == 1
         assert result["validationSummary"]["passCount"] == 0
 
+    def test_returns_error_when_validation_gate_rejects_section(self, tmp_project):
+        """Validation gating should fail the section without promoting bad artifacts."""
+        output_dir = str(tmp_project / "outputs" / "tts")
+        remotion_public = str(tmp_project / "remotion" / "public")
+
+        manifest = {
+            "segments": [
+                {"id": "seg_001", "cleanText": "Correct words."},
+            ]
+        }
+        with open(os.path.join(output_dir, "segments.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+        section_output_dir = Path(output_dir) / "intro"
+        section_output_dir.mkdir(parents=True, exist_ok=True)
+        accepted_timestamps = [
+            {"word": "accepted", "start": 0.0, "end": 0.2, "segmentId": "seg_001"},
+        ]
+        (section_output_dir / "word_timestamps.json").write_text(
+            json.dumps(accepted_timestamps),
+            encoding="utf-8",
+        )
+
+        remotion_section_dir = Path(remotion_public) / "intro"
+        remotion_section_dir.mkdir(parents=True, exist_ok=True)
+        accepted_narration_path = remotion_section_dir / "narration.wav"
+        _create_dummy_wav(str(accepted_narration_path), duration_ms=250)
+        accepted_narration_bytes = accepted_narration_path.read_bytes()
+
+        mock_model = make_mock_whisper_model([
+            {"word": "Totally", "start": 0.1, "end": 0.3},
+            {"word": "different", "start": 0.4, "end": 0.7},
+        ])
+
+        def fake_concat(segment_paths, output_path):
+            _create_dummy_wav(str(output_path), duration_ms=1000)
+
+        with mock.patch("sync_audio_pipeline.concatenate_wavs_ffmpeg", side_effect=fake_concat):
+            with mock.patch("faster_whisper.WhisperModel", return_value=mock_model):
+                with mock.patch("sync_audio_pipeline.get_wav_duration", return_value=1.0):
+                    result = process_section(
+                        "intro",
+                        ["seg_001"],
+                        output_dir,
+                        remotion_public,
+                        validation_policy={
+                            "maxFailCount": 0,
+                            "maxFailRatio": 0.0,
+                            "maxWarnCount": 0,
+                        },
+                    )
+
+        assert result["status"] == "error"
+        assert "Transcript validation failed" in result["error"]
+        assert result["validationSummary"]["failCount"] == 1
+        assert json.loads((section_output_dir / "word_timestamps.json").read_text(encoding="utf-8")) == accepted_timestamps
+        assert accepted_narration_path.read_bytes() == accepted_narration_bytes
+        assert (section_output_dir / "word_timestamps.failed.json").exists()
+        assert (section_output_dir / "segment_validation.failed.json").exists()
+
 
 class TestSegmentValidation:
     """Verify transcript-vs-script validation helpers."""
 
     def test_normalize_transcript_text_collapses_case_and_punctuation(self):
         assert normalize_transcript_text("Hello,  WORLD!!") == "hello world"
+
+    def test_normalize_transcript_text_normalizes_numeric_variants(self):
+        assert normalize_transcript_text("Fifteen lines, 200 bugs, 55%!") == "num lines num bugs num"
 
     def test_build_segment_validation_report_marks_random_speech_as_fail(self, tmp_path):
         output_dir = tmp_path / "outputs" / "tts"
@@ -950,6 +1013,83 @@ class TestSegmentValidation:
 
         assert report["segments"][0]["status"] == "skip"
         assert report["summary"]["skipCount"] == 1
+
+    def test_build_segment_validation_report_treats_numeric_variants_as_match(self, tmp_path):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        manifest = {
+            "segments": [
+                {"id": "intro_001", "cleanText": "Fifteen lines of prompt. Two hundred lines of generated code."},
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["intro_001"],
+            str(output_dir),
+            [
+                {"word": "15", "start": 0.0, "end": 0.2, "segmentId": "intro_001"},
+                {"word": "lines", "start": 0.2, "end": 0.3, "segmentId": "intro_001"},
+                {"word": "of", "start": 0.3, "end": 0.4, "segmentId": "intro_001"},
+                {"word": "prompt", "start": 0.4, "end": 0.5, "segmentId": "intro_001"},
+                {"word": "200", "start": 0.5, "end": 0.7, "segmentId": "intro_001"},
+                {"word": "lines", "start": 0.7, "end": 0.8, "segmentId": "intro_001"},
+                {"word": "of", "start": 0.8, "end": 0.9, "segmentId": "intro_001"},
+                {"word": "generated", "start": 0.9, "end": 1.0, "segmentId": "intro_001"},
+                {"word": "code", "start": 1.0, "end": 1.1, "segmentId": "intro_001"},
+            ],
+        )
+
+        assert report["segments"][0]["status"] == "pass"
+        assert report["summary"]["failCount"] == 0
+
+    def test_build_segment_validation_report_uses_token_level_similarity(self, tmp_path):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        manifest = {
+            "segments": [
+                {
+                    "id": "intro_001",
+                    "cleanText": (
+                        "When Uplevel tracked almost eight hundred developers across real enterprise "
+                        "work for a full year no change in throughput forty one percent more bugs."
+                    ),
+                },
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["intro_001"],
+            str(output_dir),
+            [
+                {"word": "up", "start": 0.0, "end": 0.1, "segmentId": "intro_001"},
+                {"word": "level", "start": 0.1, "end": 0.2, "segmentId": "intro_001"},
+                {"word": "tracked", "start": 0.2, "end": 0.3, "segmentId": "intro_001"},
+                {"word": "almost", "start": 0.3, "end": 0.4, "segmentId": "intro_001"},
+                {"word": "800", "start": 0.4, "end": 0.5, "segmentId": "intro_001"},
+                {"word": "developers", "start": 0.5, "end": 0.6, "segmentId": "intro_001"},
+                {"word": "across", "start": 0.6, "end": 0.7, "segmentId": "intro_001"},
+                {"word": "real", "start": 0.7, "end": 0.8, "segmentId": "intro_001"},
+                {"word": "enterprise", "start": 0.8, "end": 0.9, "segmentId": "intro_001"},
+                {"word": "work", "start": 0.9, "end": 1.0, "segmentId": "intro_001"},
+                {"word": "for", "start": 1.0, "end": 1.1, "segmentId": "intro_001"},
+                {"word": "a", "start": 1.1, "end": 1.2, "segmentId": "intro_001"},
+                {"word": "full", "start": 1.2, "end": 1.3, "segmentId": "intro_001"},
+                {"word": "year", "start": 1.3, "end": 1.4, "segmentId": "intro_001"},
+                {"word": "no", "start": 1.4, "end": 1.5, "segmentId": "intro_001"},
+                {"word": "change", "start": 1.5, "end": 1.6, "segmentId": "intro_001"},
+                {"word": "in", "start": 1.6, "end": 1.7, "segmentId": "intro_001"},
+                {"word": "throughput", "start": 1.7, "end": 1.8, "segmentId": "intro_001"},
+                {"word": "41", "start": 1.8, "end": 1.9, "segmentId": "intro_001"},
+                {"word": "percent", "start": 1.9, "end": 2.0, "segmentId": "intro_001"},
+                {"word": "more", "start": 2.0, "end": 2.1, "segmentId": "intro_001"},
+                {"word": "bugs", "start": 2.1, "end": 2.2, "segmentId": "intro_001"},
+            ],
+        )
+
+        assert report["segments"][0]["status"] in {"pass", "warn"}
+        assert report["segments"][0]["matchRatio"] >= 0.8
 
 
 # ===========================================================================
@@ -1085,6 +1225,30 @@ class TestMainExitCodes:
                 with pytest.raises(SystemExit) as exc_info:
                     main()
                 assert exc_info.value.code == 1
+
+    def test_main_passes_validation_policy_from_audio_sync_config(self):
+        with mock.patch("sys.argv", ["sync_audio_pipeline.py"]):
+            with mock.patch("sync_audio_pipeline.load_project") as mock_load:
+                mock_load.return_value = {
+                    "sectionGroups": {"intro": ["seg_001"]},
+                    "audioSync": {
+                        "validationMaxFailCount": 2,
+                        "validationMaxFailRatio": 0.25,
+                        "validationMaxWarnCount": 4,
+                    },
+                }
+                with mock.patch("sync_audio_pipeline.process_section") as mock_proc:
+                    mock_proc.return_value = {"sectionId": "intro", "status": "done", "wordCount": 5}
+                    with pytest.raises(SystemExit) as exc_info:
+                        main()
+                    assert exc_info.value.code == 0
+
+        call_kwargs = mock_proc.call_args[1]
+        assert call_kwargs["validation_policy"] == {
+            "maxFailCount": 2,
+            "maxFailRatio": 0.25,
+            "maxWarnCount": 4,
+        }
 
 
 class TestMainJsonOutput:
