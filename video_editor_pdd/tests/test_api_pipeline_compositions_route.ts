@@ -3029,6 +3029,12 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
     expect(compositionsSourceCode).toContain("do not wrap it in staticFile() again");
   });
 
+  it("instructs Claude to keep overlays readable with explicit visibility minimums", () => {
+    expect(compositionsSourceCode).toContain("minimum text opacity");
+    expect(compositionsSourceCode).toContain("minimum font size");
+    expect(compositionsSourceCode).toContain("divider");
+  });
+
   it("buildComponentPrompt derives dirName from baseName, not scoped outputName", () => {
     // The prompt must accept a baseName parameter for NN-prefix directory naming
     // so that "10_split_perception_reality" → "10-SplitPerceptionReality" directory

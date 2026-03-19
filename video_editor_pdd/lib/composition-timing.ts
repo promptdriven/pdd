@@ -342,6 +342,7 @@ function resolveSpecMediaInfo(
   const contractMediaReferences = Array.from(
     new Set(Object.values(visualContract?.mediaAliases ?? {}))
   );
+  const contractRenderMode = visualContract?.renderMode;
   const contractPrimaryMedia = contractMediaReferences[0];
   const contractStagedAssetPath = contractPrimaryMedia
     ? path.join(projectDir, "remotion", "public", contractPrimaryMedia)
@@ -351,7 +352,9 @@ function resolveSpecMediaInfo(
     return {
       hasExplicitMedia: contractMediaReferences.length > 0,
       hasSpecReferencedMedia: false,
-      requiresCompositedAudit: Boolean(visualContract?.overlayConfig),
+      requiresCompositedAudit:
+        contractRenderMode === "generated-media" ||
+        Boolean(visualContract?.overlayConfig),
       mediaReferences: contractMediaReferences,
       stagedAssetPath:
         contractStagedAssetPath && fs.existsSync(contractStagedAssetPath)
@@ -375,7 +378,9 @@ function resolveSpecMediaInfo(
       specPath: undefined,
       hasExplicitMedia: hasStagedAsset || contractMediaReferences.length > 0,
       hasSpecReferencedMedia: false,
-      requiresCompositedAudit: Boolean(visualContract?.overlayConfig),
+      requiresCompositedAudit:
+        contractRenderMode === "generated-media" ||
+        Boolean(visualContract?.overlayConfig),
       mediaReferences:
         contractMediaReferences.length > 0
           ? contractMediaReferences
@@ -406,7 +411,9 @@ function resolveSpecMediaInfo(
       contractMediaReferences.length > 0,
     hasSpecReferencedMedia,
     requiresCompositedAudit:
-      requiresCompositedAudit || Boolean(visualContract?.overlayConfig),
+      requiresCompositedAudit ||
+      contractRenderMode === "generated-media" ||
+      Boolean(visualContract?.overlayConfig),
     mediaReferences: Array.from(
       new Set(
         [

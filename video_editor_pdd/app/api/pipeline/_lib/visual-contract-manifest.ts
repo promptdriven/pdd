@@ -10,6 +10,7 @@ export type GeneratedVisualContract = {
   dataPoints?: unknown;
   mediaAliases?: Record<string, string>;
   overlayConfig?: Record<string, unknown> | null;
+  renderMode?: "raw-media" | "generated-media" | "component";
 };
 
 type GeneratedVisualContractSection = {

@@ -61,6 +61,16 @@ jest.mock("@/lib/audit-geometry", () => ({
     mockEvaluateDeterministicGeometryAudit(...args),
 }));
 
+const mockCollectAuditImageEvidence = jest.fn();
+const mockEvaluateDeterministicTextAudit = jest.fn();
+
+jest.mock("@/lib/audit-evidence", () => ({
+  collectAuditImageEvidence: (...args: unknown[]) =>
+    mockCollectAuditImageEvidence(...args),
+  evaluateDeterministicTextAudit: (...args: unknown[]) =>
+    mockEvaluateDeterministicTextAudit(...args),
+}));
+
 const mockLoadProject = jest.fn();
 const mockResolveSectionCompositionIds = jest.fn();
 
@@ -279,6 +289,8 @@ beforeEach(() => {
   });
   mockLoadProject.mockReturnValue(mockProjectConfig());
   mockEvaluateDeterministicGeometryAudit.mockReturnValue(null);
+  mockCollectAuditImageEvidence.mockResolvedValue(null);
+  mockEvaluateDeterministicTextAudit.mockReturnValue(null);
   mockResolveSectionCompositionIds.mockImplementation(
     (section: { compositions?: Array<string | { id: string }> }) =>
       (section.compositions ?? []).map((composition) =>
@@ -1589,6 +1601,56 @@ Technical assessment: Previous review claimed it was at y≈410.
     const content = mockWriteFileSync.mock.calls[0][1];
     expect(content).toContain("## Verdict\npass");
     expect(content).toContain("infographic nodes are distributed");
+  });
+
+  it("writes 'warn' verdict when deterministic OCR evidence confirms visible critical text despite a Claude fail", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:02",
+          "",
+          "### Chart/Visual Elements",
+          "- Summary line: concise payoff sentence",
+          "- Prompt label: lower callout label",
+        ].join("\n");
+      }
+      return "";
+    });
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "major",
+      fixType: "remotion",
+      technicalAssessment:
+        "The summary line and prompt label are missing from the sampled frame.",
+      suggestedFixes: ["Restore the missing text."],
+      confidence: 0.79,
+    });
+    mockCollectAuditImageEvidence.mockResolvedValue({
+      normalizedText: "summary line prompt label concise payoff sentence",
+      textTokenCount: 8,
+      contrastScore: 21,
+      ocrText: "Summary line Prompt label concise payoff sentence",
+    });
+    mockEvaluateDeterministicTextAudit.mockReturnValue({
+      verdict: "warn",
+      summary:
+        "OCR confirmed multiple critical text labels in the rendered frame despite the initial Claude miss.",
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\nwarn");
+    expect(content).toContain("OCR confirmed multiple critical text labels");
   });
 
   it("creates output directory with recursive flag", async () => {

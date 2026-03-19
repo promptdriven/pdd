@@ -16,6 +16,10 @@ import {
   normalizeSpecForAudit,
 } from "@/lib/audit-spec-normalization";
 import {
+  collectAuditImageEvidence,
+  evaluateDeterministicTextAudit,
+} from "@/lib/audit-evidence";
+import {
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
 } from "@/lib/audit-timing";
@@ -606,6 +610,7 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
     let summary = analysis.technicalAssessment;
     let deterministicGeometry: ReturnType<typeof evaluateDeterministicGeometryAudit> =
       null;
+    let deterministicText = null;
 
     if (verdict !== "pass" && shouldTrustDeterministicGeometry(analysis)) {
       deterministicGeometry = evaluateDeterministicGeometryAudit(
@@ -615,6 +620,19 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
       if (deterministicGeometry?.verdict === "pass") {
         verdict = "pass";
         summary = deterministicGeometry.summary;
+      }
+    }
+
+    if (verdict !== "pass") {
+      const imageEvidence = await collectAuditImageEvidence(outputStill);
+      deterministicText = evaluateDeterministicTextAudit(
+        analysis,
+        auditHints,
+        imageEvidence
+      );
+      if (deterministicText) {
+        verdict = deterministicText.verdict;
+        summary = deterministicText.summary;
       }
     }
 
@@ -638,6 +656,7 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
         verdict,
         summary,
         deterministicGeometry,
+        deterministicText,
         trace: traceResult.trace,
         prompt,
       });

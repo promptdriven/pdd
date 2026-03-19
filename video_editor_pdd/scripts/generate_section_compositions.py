@@ -106,7 +106,7 @@ GENERIC_VIDEO_REF_RE = re.compile(
     re.IGNORECASE,
 )
 DATA_POINTS_JSON_RE = re.compile(
-    r'##\s*Data Points\s*```json\s*([\s\S]+?)\s*```',
+    r'(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```',
     re.IGNORECASE,
 )
 NARRATION_SYNC_RE = re.compile(
@@ -153,6 +153,7 @@ SOURCE_FIELD_KEYS = {
     'videosource',
     'videosrc',
     'video',
+    'content',
     'file',
     'asset',
     'assetfile',
@@ -191,6 +192,61 @@ def _extract_data_points_json(spec_content: str) -> Optional[Any]:
         return json.loads(match.group(1))
     except json.JSONDecodeError:
         return None
+
+
+def _normalize_clip_identifier(raw_value: str) -> str:
+    """Normalize a logical clip identifier for staged asset lookup."""
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    basename = normalized.split('/')[-1]
+    stem = Path(basename).stem if Path(basename).suffix else basename
+    if stem.endswith('_veo'):
+        stem = stem[:-4]
+    return stem.strip()
+
+
+def _extract_embedded_veo_clip_ids(data_points: Any) -> List[str]:
+    """Return normalized embedded Veo clip ids declared in structured data."""
+    if not isinstance(data_points, dict):
+        return []
+
+    embedded = data_points.get('embeddedVeoClips')
+    if not isinstance(embedded, list):
+        return []
+
+    clip_ids: List[str] = []
+    for clip_id in embedded:
+        if isinstance(clip_id, str) and clip_id.strip():
+            normalized = _normalize_clip_identifier(clip_id)
+            if normalized and normalized not in clip_ids:
+                clip_ids.append(normalized)
+
+    return clip_ids
+
+
+def _iter_structured_media_candidates(
+    raw_value: str,
+    embedded_clip_ids: List[str],
+) -> List[str]:
+    """Return deterministic staged-media lookup candidates for structured refs."""
+    candidates: List[str] = []
+
+    def _add(candidate: str) -> None:
+        trimmed = candidate.strip()
+        if trimmed and trimmed not in candidates:
+            candidates.append(trimmed)
+
+    normalized = raw_value.replace('\\', '/').lstrip('/')
+    _add(normalized)
+
+    normalized_clip_id = _normalize_clip_identifier(raw_value)
+    _add(normalized_clip_id)
+
+    for clip_id in embedded_clip_ids:
+        if clip_id == normalized_clip_id:
+            _add(clip_id)
+            _add(f'{clip_id}.mp4')
+
+    return candidates
 
 
 def _is_video_reference(value: str) -> bool:
@@ -262,13 +318,18 @@ def _extract_data_point_media_aliases(
 ) -> Dict[str, str]:
     """Resolve structured media aliases from Data Points JSON."""
     aliases: Dict[str, str] = {}
+    embedded_clip_ids = _extract_embedded_veo_clip_ids(data_points)
 
     def _assign(alias_name: Optional[str], raw_value: str) -> None:
-        resolved = _resolve_video_reference_static_path(
-            remotion_public,
-            raw_value,
-            reference_aliases,
-        )
+        resolved = None
+        for candidate in _iter_structured_media_candidates(raw_value, embedded_clip_ids):
+            resolved = _resolve_video_reference_static_path(
+                remotion_public,
+                candidate,
+                reference_aliases,
+            )
+            if resolved is not None:
+                break
         if resolved is None:
             return
         if alias_name:
@@ -758,6 +819,10 @@ def build_visual_contract_manifest(
                 'dataPoints': data_points,
                 'mediaAliases': media_manifest.get(visual_id, {}),
                 'overlayConfig': overlay_manifest.get(visual_id),
+                'renderMode': _resolve_visual_render_mode(
+                    media_manifest.get(visual_id, {}),
+                    overlay_manifest.get(visual_id),
+                ),
             })
 
         manifest_sections.append({
@@ -803,6 +868,7 @@ def build_section_visual_contract_map(
             'specBaseName': visual.get('specBaseName'),
             'dataPoints': visual.get('dataPoints'),
             'overlayConfig': visual.get('overlayConfig'),
+            'renderMode': visual.get('renderMode'),
         }
     return contracts
 
@@ -913,7 +979,29 @@ def _extract_visual_overlay_config(spec_content: str) -> Optional[Dict[str, Any]
         if narration_text:
             config['lowerThirdText'] = narration_text
 
+    data_points = _extract_data_points_json(spec_content)
+    overlay = data_points.get('overlay') if isinstance(data_points, dict) else None
+    counter = overlay.get('counter') if isinstance(overlay, dict) else None
+    if isinstance(counter, dict):
+        values = counter.get('values')
+        if isinstance(values, list) and any(isinstance(value, (int, float)) for value in values):
+            config['counterOverlay'] = True
+            position = counter.get('position')
+            if isinstance(position, str) and position.strip():
+                config['counterPosition'] = position.strip()
+
     return config or None
+
+
+def _resolve_visual_render_mode(
+    media_aliases: Dict[str, str],
+    overlay_config: Optional[Dict[str, Any]],
+) -> str:
+    if overlay_config or media_aliases.get('leftSrc') or media_aliases.get('rightSrc'):
+        return 'generated-media'
+    if media_aliases:
+        return 'raw-media'
+    return 'component'
 
 
 def build_visual_overlay_manifest(
@@ -1732,6 +1820,7 @@ def generate_root_tsx(
                     'specBaseName': visual.get('specBaseName'),
                     'dataPoints': visual.get('dataPoints'),
                     'overlayConfig': visual.get('overlayConfig'),
+                    'renderMode': visual.get('renderMode'),
                 }
                 for visual in section_entry.get('visuals', [])
             }

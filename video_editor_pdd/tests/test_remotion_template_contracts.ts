@@ -14,11 +14,11 @@ describe("shared generated media renderer", () => {
   it("supports split media layouts from shared visual aliases instead of only a single defaultSrc", () => {
     const source = fs.readFileSync(generatedMediaVisualPath, "utf8");
 
-    expect(source).toMatch(/const\s+leftSrc\s*=\s*useVisualMediaSrc\(\s*["']leftSrc["']/);
-    expect(source).toMatch(/const\s+rightSrc\s*=\s*useVisualMediaSrc\(\s*["']rightSrc["']/);
+    expect(source).toMatch(/const\s+leftSrc\s*=\s*useVisualMediaAssetSrc\(\s*["']leftSrc["']/);
+    expect(source).toMatch(/const\s+rightSrc\s*=\s*useVisualMediaAssetSrc\(\s*["']rightSrc["']/);
     expect(source).toMatch(/leftSrc\s*&&\s*rightSrc/);
     expect(source).toMatch(/borderRadius/);
-    expect(source).toMatch(/Ocean · Sunset|resolvePanelLabel|leftLabel/);
+    expect(source).toMatch(/resolvePanelMetadata|leftPanel|rightPanel/);
   });
 
   it("routes split media visuals through GeneratedMediaVisual when left/right aliases exist", () => {
@@ -26,6 +26,15 @@ describe("shared generated media renderer", () => {
 
     expect(source).toMatch(/visualOverlayConfig\s*\|\|\s*visualMedia\?\.leftSrc\s*\|\|\s*visualMedia\?\.rightSrc/);
     expect(source).toMatch(/<GeneratedMediaVisual config=\{visualOverlayConfig\} \/>/);
+  });
+
+  it("supports generic generated-media overlays for counters and readable split metadata from the structured contract", () => {
+    const source = fs.readFileSync(generatedMediaVisualPath, "utf8");
+
+    expect(source).toMatch(/counterOverlay|counterPosition/);
+    expect(source).toMatch(/terminalSnippet|costLabel|costSubLabel|caption/);
+    expect(source).toMatch(/crossedOutIcon/);
+    expect(source).toMatch(/Math\.max\(\s*18|Math\.max\(\s*20/);
   });
 
   it("uses asset-resolved media hooks in generated components that pass Veo sources directly to video elements", () => {

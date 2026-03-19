@@ -19,6 +19,7 @@ export type VisualContract = {
   specBaseName?: string;
   dataPoints?: Record<string, unknown> | null;
   overlayConfig?: Record<string, unknown> | null;
+  renderMode?: "raw-media" | "generated-media" | "component";
 };
 
 const VisualMediaContext = createContext<VisualMedia | null>(null);

@@ -48,6 +48,7 @@ from generate_section_compositions import (
     resolve_section_visual_ids,
     resolve_section_base_component,
     build_visual_media_manifest,
+    build_visual_overlay_manifest,
     build_visual_contract_manifest,
     write_visual_contract_manifest,
     load_project_json,
@@ -2572,6 +2573,99 @@ class TestGeneratedTimelineWrapper:
         )
         saved = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         assert saved["sections"][0]["visuals"][0]["mediaAliases"]["leftSrc"] == "veo/02_veo_ocean_broll.mp4"
+
+    def test_writes_visual_contract_manifest_from_data_points_json_heading_and_embedded_clip_ids(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "cold_open"
+
+        specs_dir.mkdir(parents=True)
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "grandmother_darning_hook.mp4").write_bytes(b"\x00" * 32)
+
+        (specs_dir / "01_split_screen_hook.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    "{",
+                    '  "leftPanel": {',
+                    '    "content": "developer_cursor_edit_veo",',
+                    '    "label": "2025"',
+                    "  },",
+                    '  "rightPanel": {',
+                    '    "content": "grandmother_darning_hook_veo",',
+                    '    "label": "1955"',
+                    "  },",
+                    '  "embeddedVeoClips": ["developer_cursor_edit", "grandmother_darning_hook"]',
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 3,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": ["01_split_screen_hook"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        visual = manifest["sections"][0]["visuals"][0]
+        assert visual["dataPoints"]["leftPanel"]["content"] == "developer_cursor_edit_veo"
+        assert visual["mediaAliases"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
+        assert visual["mediaAliases"]["rightSrc"] == "veo/grandmother_darning_hook.mp4"
+
+    def test_builds_counter_overlay_config_from_data_points_json(self, tmp_path):
+        project_dir = tmp_path
+        specs_dir = project_dir / "specs" / "part2_paradigm_shift"
+        specs_dir.mkdir(parents=True)
+
+        (specs_dir / "03_injection_molding_process.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    "{",
+                    '  "clipId": "injection_molding_process",',
+                    '  "overlay": {',
+                    '    "counter": {',
+                    '      "values": [1, 10, 100, 1000, 10000],',
+                    '      "position": "lower_right"',
+                    "    }",
+                    "  }",
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "part2_paradigm_shift",
+            "specDir": "part2_paradigm_shift",
+            "compositions": ["03_injection_molding_process"],
+        }
+
+        overlay_manifest = build_visual_overlay_manifest(section, str(project_dir))
+
+        assert overlay_manifest["03_injection_molding_process"]["counterOverlay"] is True
+        assert overlay_manifest["03_injection_molding_process"]["counterPosition"] == "lower_right"
 
     def test_media_aliases_prefer_current_staged_clip_over_prior_split_placeholder_refs(self, tmp_path):
         project_dir = tmp_path
