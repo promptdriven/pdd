@@ -226,6 +226,39 @@ describe("GET /api/project/script", () => {
     expect(body.sectionContent).not.toContain("The Economics of Darning");
   });
 
+  it("matches section IDs that are compact abbreviations of verbose headings", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(
+      [
+        "# Main Script",
+        "",
+        "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+        "",
+        "**NARRATOR:**",
+        "Hook the audience.",
+        "",
+        "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+        "",
+        "**NARRATOR:**",
+        "Watch my grandmother darn this sock.",
+        "",
+        "## PART 2: THE PARADIGM SHIFT (8:30 - 13:00)",
+        "",
+        "**NARRATOR:**",
+        "Everything changed.",
+      ].join("\n")
+    );
+
+    const response = await GET(makeGetSectionRequest("part1_economics"));
+    const { status, body } = await parseResponse(response);
+
+    expect(status).toBe(200);
+    expect(body.sectionHeading).toBe("PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)");
+    expect(body.sectionContent).toContain("Watch my grandmother darn this sock.");
+    expect(body.sectionContent).not.toContain("Hook the audience.");
+    expect(body.sectionContent).not.toContain("Everything changed.");
+  });
+
   it("falls back to full content when section match is not found", async () => {
     const content = [
       "# Main Script",

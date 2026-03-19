@@ -22,8 +22,17 @@ function tokenOverlapScore(left: string, right: string): number {
   }
 
   const rightSet = new Set(rightTokens);
-  const overlap = leftTokens.filter((token) => rightSet.has(token)).length;
-  return overlap / Math.max(leftTokens.length, rightTokens.length);
+  const leftSet = new Set(leftTokens);
+  const overlapLR = leftTokens.filter((token) => rightSet.has(token)).length;
+  const overlapRL = rightTokens.filter((token) => leftSet.has(token)).length;
+
+  // Use the best of two perspectives: what fraction of left tokens appear in
+  // right, and vice-versa. This ensures compact section IDs (e.g. "part1_economics")
+  // still score highly against verbose headings (e.g. "PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)").
+  return Math.max(
+    overlapLR / leftTokens.length,
+    overlapRL / rightTokens.length,
+  );
 }
 
 function extractSectionScriptContent(
