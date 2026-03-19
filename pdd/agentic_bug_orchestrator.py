@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,8 +19,10 @@ from .agentic_common import (
     clear_agentic_progress,
     DEFAULT_MAX_RETRIES,
 )
+from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
+from .pytest_output import run_pytest_and_capture_output
 
 # Initialize console for rich output
 console = Console()
@@ -206,6 +209,74 @@ def _get_modified_and_untracked(cwd: Path) -> List[str]:
     result = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=cwd, capture_output=True, text=True)
     files.extend([f for f in result.stdout.strip().split('\n') if f])
     return files
+
+
+def _verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]:
+    """Run E2E test files independently to verify they execute correctly.
+
+    Dispatches the correct runner based on file extension:
+    - .py → pytest via run_pytest_and_capture_output
+    - Non-Python → resolved via get_test_command_for_file (e.g. npx jest, npx playwright)
+
+    Returns (all_passed, output). For E2E tests in the bug workflow, "passed"
+    means the tests executed without setup errors. Tests are expected to FAIL
+    (detecting the bug) — a clean failure is still a successful verification.
+    """
+    all_outputs: List[str] = []
+    any_setup_error = False
+
+    for test_file in e2e_files:
+        abs_path = str(cwd / test_file)
+
+        if test_file.endswith(".py"):
+            result = run_pytest_and_capture_output(abs_path)
+            if not result or not result.get("test_results"):
+                any_setup_error = True
+                all_outputs.append(f"{test_file}: no results (setup error)")
+                continue
+
+            tr = result["test_results"][0]
+            failures = tr.get("failures", 0) + tr.get("errors", 0)
+            passed = tr.get("passed", 0)
+            stdout = tr.get("standard_output", "")
+
+            if failures > 0:
+                # Failures are expected — E2E tests should fail on buggy code
+                all_outputs.append(f"{test_file}: {failures} failure(s) (bug detected)\n{stdout}")
+            else:
+                all_outputs.append(f"{test_file}: {passed} passed")
+        else:
+            test_cmd = get_test_command_for_file(abs_path)
+            if not test_cmd:
+                any_setup_error = True
+                all_outputs.append(f"{test_file}: FAILED (no test runner available)")
+                continue
+
+            try:
+                proc = subprocess.run(
+                    shlex.split(test_cmd),
+                    shell=False,
+                    cwd=str(cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if proc.returncode != 0:
+                    # Non-zero exit is expected — E2E tests should fail on buggy code
+                    output = proc.stdout + proc.stderr
+                    all_outputs.append(
+                        f"{test_file}: test failed (exit code {proc.returncode}, bug detected)\n{output}"
+                    )
+                else:
+                    all_outputs.append(f"{test_file}: passed")
+            except subprocess.TimeoutExpired:
+                any_setup_error = True
+                all_outputs.append(f"{test_file}: FAILED (timeout)")
+            except Exception as e:
+                any_setup_error = True
+                all_outputs.append(f"{test_file}: FAILED ({e})")
+
+    return not any_setup_error, "\n".join(all_outputs)
 
 
 def _parse_changed_files(output: str, marker: str) -> List[str]:
@@ -554,11 +625,22 @@ def run_agentic_bug_orchestrator(
                     console.print("   (E2E skipped: E2E_NEEDED: no)")
 
         if step_num == 11:
-            if "E2E_SKIP:" in step_output:
+            e2e_skipped = "E2E_SKIP:" in step_output
+            if e2e_skipped:
                 # E2E skipped, continue normally
                 pass
             else:
                 e2e_created = _parse_changed_files(step_output, "E2E_FILES_CREATED")
+
+                # Independent E2E verification (unless E2E_SKIP was emitted)
+                if e2e_created and not e2e_skipped:
+                    verify_ok, verify_output = _verify_e2e_tests(e2e_created, current_work_dir)
+                    if not quiet:
+                        if verify_ok:
+                            console.print(f"  → E2E verification passed: {verify_output}")
+                        else:
+                            console.print(f"[yellow]  → E2E verification issue: {verify_output}[/yellow]")
+
                 changed_files.extend(e2e_created)
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
