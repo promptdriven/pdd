@@ -50,6 +50,13 @@ function makeGetRequest(): Request {
   return new Request("http://localhost/api/project/script", { method: "GET" });
 }
 
+function makeGetSectionRequest(section: string): Request {
+  return new Request(
+    `http://localhost/api/project/script?section=${encodeURIComponent(section)}`,
+    { method: "GET" }
+  );
+}
+
 /** Creates a Request object for PUT with a JSON body. */
 function makePutRequest(body: unknown): Request {
   return new Request("http://localhost/api/project/script", {
@@ -112,7 +119,11 @@ describe("GET /api/project/script", () => {
     const { status, body } = await parseResponse(response);
 
     expect(status).toBe(200);
-    expect(body).toEqual({ content: "# My Script\n\nHello world" });
+    expect(body).toEqual({
+      content: "# My Script\n\nHello world",
+      sectionContent: null,
+      sectionHeading: null,
+    });
   });
 
   it("returns 404 with { error: 'Script file not found' } when file does not exist", async () => {
@@ -171,7 +182,11 @@ describe("GET /api/project/script", () => {
     const { status, body } = await parseResponse(response);
 
     expect(status).toBe(200);
-    expect(body).toEqual({ content: "" });
+    expect(body).toEqual({
+      content: "",
+      sectionContent: null,
+      sectionHeading: null,
+    });
   });
 
   it("returns JSON content type via NextResponse.json()", async () => {
@@ -181,6 +196,55 @@ describe("GET /api/project/script", () => {
     const response = await GET(makeGetRequest());
 
     expect(response.headers.get("content-type")).toMatch(/application\/json/);
+  });
+
+  it("returns sectionContent for a matching section request", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(
+      [
+        "# Main Script",
+        "",
+        "## Cold Open (00:00 - 00:17)",
+        "",
+        "**NARRATOR:**",
+        "Open beat.",
+        "",
+        "## Part 1: The Economics of Darning (00:17 - 07:58)",
+        "",
+        "**NARRATOR:**",
+        "Watch my grandmother darn this sock.",
+      ].join("\n")
+    );
+
+    const response = await GET(makeGetSectionRequest("cold_open"));
+    const { status, body } = await parseResponse(response);
+
+    expect(status).toBe(200);
+    expect(body.sectionHeading).toBe("Cold Open (00:00 - 00:17)");
+    expect(body.sectionContent).toContain("## Cold Open (00:00 - 00:17)");
+    expect(body.sectionContent).toContain("Open beat.");
+    expect(body.sectionContent).not.toContain("The Economics of Darning");
+  });
+
+  it("falls back to full content when section match is not found", async () => {
+    const content = [
+      "# Main Script",
+      "",
+      "## Cold Open (00:00 - 00:17)",
+      "",
+      "**NARRATOR:**",
+      "Open beat.",
+    ].join("\n");
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockReturnValue(content);
+
+    const response = await GET(makeGetSectionRequest("unknown_section"));
+    const { status, body } = await parseResponse(response);
+
+    expect(status).toBe(200);
+    expect(body.content).toBe(content);
+    expect(body.sectionContent).toBeNull();
+    expect(body.sectionHeading).toBeNull();
   });
 });
 

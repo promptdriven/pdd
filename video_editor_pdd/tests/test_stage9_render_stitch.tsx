@@ -97,6 +97,10 @@ describe("API endpoints", () => {
   it("uses SSE stream endpoint for render progress", () => {
     expect(sourceCode).toMatch(/\/api\/pipeline\/render\/stream/);
   });
+
+  it("fetches the main script excerpt for the previewed section", () => {
+    expect(sourceCode).toMatch(/\/api\/project\/script\?file=main&section=\$\{encodeURIComponent\(previewSectionId\)\}/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -397,6 +401,10 @@ describe("Preview modal", () => {
     expect(sourceCode).toMatch(/bg-black\/50/);
   });
 
+  it("modal overlay supports vertical scrolling for tall preview content", () => {
+    expect(sourceCode).toMatch(/overflow-y-auto/);
+  });
+
   it("modal can be closed by clicking overlay", () => {
     expect(sourceCode).toMatch(/onClick=\{.*\(\)\s*=>\s*setPreviewSectionId\(null\)/);
   });
@@ -407,6 +415,31 @@ describe("Preview modal", () => {
 
   it("modal stops propagation on inner click", () => {
     expect(sourceCode).toMatch(/e\.stopPropagation\(\)/);
+  });
+
+  it("renders an Original Script panel beside the preview", () => {
+    expect(sourceCode).toContain("Original Script");
+    expect(sourceCode).toMatch(/whitespace-pre-wrap/);
+  });
+
+  it("keeps the video contained within the viewport", () => {
+    expect(sourceCode).toMatch(/object-contain/);
+    expect(sourceCode).toMatch(/max-h-\[70vh\]/);
+  });
+
+  it("makes the script pane independently scrollable", () => {
+    expect(sourceCode).toMatch(/overflow-y-auto px-4 py-3/);
+  });
+
+  it("uses a fixed side-column layout for the script on medium screens and up", () => {
+    expect(sourceCode).toMatch(/md:grid-cols-\[minmax\(0,1fr\)_22rem\]/);
+    expect(sourceCode).toMatch(/lg:grid-cols-\[minmax\(0,1\.1fr\)_24rem\]/);
+  });
+
+  it("tracks preview script loading and error state", () => {
+    expect(sourceCode).toMatch(/previewScriptLoading/);
+    expect(sourceCode).toMatch(/previewScriptError/);
+    expect(sourceCode).toMatch(/previewScriptContent/);
   });
 });
 

@@ -1,3 +1,19 @@
+## v0.0.181 (2026-03-18)
+
+### Feat
+
+- Implement a enhance audio sync validation with improved gating, numeric variant handling, and token-level similarity checks.
+- Add new video segment specifications and refine existing audit reports and Remotion compositions.
+- E2E gate, append-first bias, orchestrator regen, 4 bug fixes (#863)
+
+### Fix
+
+- harden audio sync and render timing
+- restore spec-based preview durations
+- harden audit preview duration handling
+- address 3 agentic workflow weaknesses from #600 assessment (#890)
+- harden audit evidence and media contracts
+
 ## v0.0.180 (2026-03-17)
 
 ### Feat

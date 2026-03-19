@@ -38,6 +38,10 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
   const [stitching, setStitching] = useState(false);
 
   const [previewSectionId, setPreviewSectionId] = useState<string | null>(null);
+  const [previewScriptContent, setPreviewScriptContent] = useState<string | null>(null);
+  const [previewScriptHeading, setPreviewScriptHeading] = useState<string | null>(null);
+  const [previewScriptLoading, setPreviewScriptLoading] = useState(false);
+  const [previewScriptError, setPreviewScriptError] = useState<string | null>(null);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const renderMenuRef = useRef<HTMLDivElement | null>(null);
@@ -127,6 +131,50 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
     document.addEventListener('mousedown', handlePointerDown);
     return () => document.removeEventListener('mousedown', handlePointerDown);
   }, [renderMenuOpen]);
+
+  useEffect(() => {
+    if (!previewSectionId) {
+      setPreviewScriptContent(null);
+      setPreviewScriptHeading(null);
+      setPreviewScriptLoading(false);
+      setPreviewScriptError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setPreviewScriptLoading(true);
+    setPreviewScriptError(null);
+
+    const loadPreviewScript = async () => {
+      try {
+        const res = await fetch(
+          `/api/project/script?file=main&section=${encodeURIComponent(previewSectionId)}`
+        );
+        if (!res.ok) {
+          throw new Error('Failed to load section script.');
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setPreviewScriptHeading(data.sectionHeading ?? null);
+        setPreviewScriptContent(data.sectionContent ?? data.content ?? '');
+      } catch (err: any) {
+        if (cancelled) return;
+        setPreviewScriptHeading(null);
+        setPreviewScriptContent(null);
+        setPreviewScriptError(err?.message || 'Failed to load section script.');
+      } finally {
+        if (!cancelled) {
+          setPreviewScriptLoading(false);
+        }
+      }
+    };
+
+    void loadPreviewScript();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewSectionId]);
 
   const activeRenders = useMemo(
     () => sections.filter((s) => s.progress > 0 && s.progress < 100).slice(0, 3),
@@ -438,11 +486,11 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
       {/* Preview Modal */}
       {previewSectionId && (
         <div
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4"
           onClick={() => setPreviewSectionId(null)}
         >
           <div
-            className="bg-slate-900 rounded-lg p-4 max-w-3xl w-full"
+            className="my-6 w-full max-w-7xl overflow-hidden rounded-lg bg-slate-900 p-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -456,11 +504,34 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                 ✕
               </button>
             </div>
-            <video
-              src={`/api/video/outputs/sections/${previewSectionId}.mp4`}
-              controls
-              className="max-w-full w-full rounded"
-            />
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_22rem] lg:grid-cols-[minmax(0,1.1fr)_24rem]">
+              <div className="min-w-0 rounded-md bg-slate-950/70 p-2">
+                <video
+                  src={`/api/video/outputs/sections/${previewSectionId}.mp4`}
+                  controls
+                  className="max-h-[70vh] w-full max-w-full rounded bg-black object-contain"
+                />
+              </div>
+              <div className="rounded-md border border-slate-700 bg-slate-950/70">
+                <div className="border-b border-slate-800 px-4 py-3">
+                  <div className="text-sm font-semibold text-slate-100">Original Script</div>
+                  <div className="text-xs text-slate-400">
+                    {previewScriptHeading ?? previewSectionId}
+                  </div>
+                </div>
+                <div className="max-h-[70vh] overflow-y-auto px-4 py-3">
+                  {previewScriptLoading ? (
+                    <div className="text-sm text-slate-400">Loading script...</div>
+                  ) : previewScriptError ? (
+                    <div className="text-sm text-red-300">{previewScriptError}</div>
+                  ) : (
+                    <pre className="whitespace-pre-wrap text-xs leading-6 text-slate-200">
+                      {previewScriptContent || 'Script content not available.'}
+                    </pre>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
