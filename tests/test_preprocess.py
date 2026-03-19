@@ -318,7 +318,7 @@ def test_file_not_found() -> None:
 
 def test_optional_context_example_missing_is_silent() -> None:
     """Optional context/example.prompt should not leak a [File not found: ...] marker into prompts."""
-    prompt = "<include>./context/example.prompt</include>"
+    prompt = "<include optional>./context/example.prompt</include>"
 
     # Simulate missing file; include should resolve to empty string (but still warn on console).
     with patch('builtins.open', side_effect=FileNotFoundError):
