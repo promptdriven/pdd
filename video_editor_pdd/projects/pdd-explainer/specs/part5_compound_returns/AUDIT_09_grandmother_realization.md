@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-Frame at 86.1% progress (phase 5: 'hands rest on package, hold') matches the spec accurately. Elderly weathered hands rest on a wrapped package on a wooden table. The darning egg with half-finished sock is visible in the left-background in soft focus. Warm amber lamplight from a practical table lamp is positioned upper-left. Shallow depth of field with sepia color grade. Static camera framing. All key elements of the final hold phase are present and correctly composed.
+Frame at 86.1% progress (Phase 5, Frame ~154/180) correctly shows the 'hands rest on package, hold' state. Elderly weathered hands rest on a small package on a wooden table. The darning egg with half-finished sock is visible in soft-focus background left. Warm amber lamplight from practical lamp upper-left matches spec. Deep sepia color grade with dark shadows on right side. Static camera, shallow depth of field with hands sharp and background soft. No typography present (correct). All key visual elements — hands, package, abandoned darning egg, amber lamplight, sepia grade, static framing — match the spec requirements for this animation phase.

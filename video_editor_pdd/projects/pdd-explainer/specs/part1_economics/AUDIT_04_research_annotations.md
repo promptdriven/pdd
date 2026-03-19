@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-Two significant issues found: (1) Unicode characters are rendering as literal escape sequences throughout all three annotation callouts. The minus sign (U+2212, −) in 'Individual task: −55%' renders as '\u221255%', and the bullet separator (U+2022, •) in all subtext lines renders as '\u2022' instead of '•'. This is a text-encoding/rendering bug in the component. (2) Connection lines from callouts to chart data points are either missing or too faint to be visible. The spec calls for 1px lines at 0.25 opacity from each callout to its respective chart element. (3) Annotation 1 title text color appears orange/amber rather than the specified blue (#4A90D9). The border is correctly blue but the text inside uses the wrong color. All three annotations are present and correctly positioned on the right side. The debt decomposition into 'Code Complexity' and 'Context Rot' layers is correctly rendered. The animation phase (hold at frame 779) is correct.
+OCR confirmed visible text tokens in the rendered frame (code, more, bugs, churn, refactoring), so the frame does not support a hard missing-text failure.
