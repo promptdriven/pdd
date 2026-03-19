@@ -306,7 +306,20 @@ describe('@layer utilities — SSE log panel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. No tailwind.config.js (CSS-first approach)
+// 8. @source directive — ensure Tailwind v4 scans all component directories
+// ---------------------------------------------------------------------------
+
+describe('@source directive for component scanning', () => {
+  it('includes @source directive for the components directory', () => {
+    // Tailwind v4 auto-detection can miss files outside the app/ directory.
+    // Without an explicit @source, classes unique to components/stages/ etc.
+    // may not get CSS generated (e.g. h-[90vh], min-h-0, max-w-7xl).
+    expect(css).toMatch(/@source\s+["']\.\.\/components["']/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. No tailwind.config.js (CSS-first approach)
 // ---------------------------------------------------------------------------
 
 describe('CSS-first configuration (no tailwind.config.js)', () => {

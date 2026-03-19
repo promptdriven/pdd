@@ -486,11 +486,12 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
       {/* Preview Modal */}
       {previewSectionId && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/50 p-4"
           onClick={() => setPreviewSectionId(null)}
         >
           <div
-            className="my-6 w-full max-w-7xl overflow-hidden rounded-lg bg-slate-900 p-4"
+            className="flex w-full min-h-0 flex-col overflow-hidden rounded-lg bg-slate-900 p-4"
+            style={{ height: '90vh', maxWidth: '80rem' }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -504,22 +505,28 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                 ✕
               </button>
             </div>
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_22rem] lg:grid-cols-[minmax(0,1.1fr)_24rem]">
-              <div className="min-w-0 rounded-md bg-slate-950/70 p-2">
-                <video
-                  src={`/api/video/outputs/sections/${previewSectionId}.mp4`}
-                  controls
-                  className="max-h-[70vh] w-full max-w-full rounded bg-black object-contain"
-                />
+            <div
+              className="grid min-h-0 flex-1 min-w-0 gap-4"
+              style={{ gridTemplateColumns: 'minmax(0, 1fr) 20rem' }}
+            >
+              <div className="min-w-0">
+                <div className="flex h-full items-center justify-center rounded-md bg-slate-950/70 p-2">
+                  <video
+                    src={`/api/video/outputs/sections/${previewSectionId}.mp4`}
+                    controls
+                    className="max-h-full w-full max-w-full rounded bg-black object-contain"
+                  />
+                </div>
               </div>
-              <div className="rounded-md border border-slate-700 bg-slate-950/70">
+              <div className="min-h-0 min-w-0 overflow-hidden rounded-md border border-slate-700 bg-slate-950/70">
+                <div className="flex h-full min-h-0 flex-col">
                 <div className="border-b border-slate-800 px-4 py-3">
                   <div className="text-sm font-semibold text-slate-100">Original Script</div>
                   <div className="text-xs text-slate-400">
                     {previewScriptHeading ?? previewSectionId}
                   </div>
                 </div>
-                <div className="max-h-[70vh] overflow-y-auto px-4 py-3">
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
                   {previewScriptLoading ? (
                     <div className="text-sm text-slate-400">Loading script...</div>
                   ) : previewScriptError ? (
@@ -529,6 +536,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                       {previewScriptContent || 'Script content not available.'}
                     </pre>
                   )}
+                </div>
                 </div>
               </div>
             </div>

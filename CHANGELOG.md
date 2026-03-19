@@ -2,17 +2,23 @@
 
 ### Feat
 
-- Implement a enhance audio sync validation with improved gating, numeric variant handling, and token-level similarity checks.
-- Add new video segment specifications and refine existing audit reports and Remotion compositions.
-- E2E gate, append-first bias, orchestrator regen, 4 bug fixes (#863)
+- **3-tier control token detection**: new `detect_control_token()` in `agentic_common` with exact → case-insensitive → semantic-regex fallback (tail-only scoping prevents false positives when LLMs quote a status mid-analysis). Tier-4 LLM classification via `classify_step_output()` as final fallback. Shared `SEMANTIC_PATTERNS` dict covers ALL_TESTS_PASS, NOT_A_BUG, CONTINUE_CYCLE, MAX_CYCLES_REACHED, STOP_CONDITION
+- **E2E gate (bug orchestrator)**: Step 10 (verify) now emits `E2E_NEEDED: yes|no`; when `no`, Step 9 (E2E test) is skipped entirely — saves cost and time for internal-only bugs
+- **Append-first test location bias**: Step 8 test plan prompt defaults to appending tests to existing files; discourages issue-specific filenames like `test_issue_123.py`
+- **Vacuous waitFor guard**: Step 9 generate prompt now blocks `waitFor(() => expect(...).not.…)` patterns that pass immediately and test nothing
+- **Hallucinated basename filtering** (`agentic_sync`): new `_filter_invalid_basenames()` validates LLM-suggested module names against architecture.json before dispatch, preventing hallucinated names from blocking the sync
+- **Cross-class signature guard** (`architecture_sync`): rejects signature merges when old and new parameter sets share no names beyond `self`/`cls`, preventing cross-class contamination
+- **Change orchestrator improvements**: impacted test file identification before Step 13, stale state detection via `issue_updated_at`, existing PR guard to skip re-runs
 
 ### Fix
 
-- harden audio sync and render timing
-- restore spec-based preview durations
-- harden audit preview duration handling
-- address 3 agentic workflow weaknesses from #600 assessment (#890)
-- harden audit evidence and media contracts
+- remove unsupported `--max-turns` flag from Gemini CLI invocation
+- review loop `"No Issues Found"` detection now case-insensitive (`_review_loop_no_issues`)
+
+### Refactor
+
+- centralize semantic token detection patterns from `agentic_e2e_fix_orchestrator` into shared `agentic_common` module (`SEMANTIC_PATTERNS`, `detect_control_token`)
+- bug orchestrator step renumbering (12 → 10 steps; API Research merged, Prompt Classification becomes Step 5.5)
 
 ## v0.0.180 (2026-03-17)
 

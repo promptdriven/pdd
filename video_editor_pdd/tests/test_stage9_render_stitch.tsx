@@ -401,8 +401,14 @@ describe("Preview modal", () => {
     expect(sourceCode).toMatch(/bg-black\/50/);
   });
 
-  it("modal overlay supports vertical scrolling for tall preview content", () => {
-    expect(sourceCode).toMatch(/overflow-y-auto/);
+  it("modal overlay does not scroll and keeps the preview fixed in the viewport", () => {
+    expect(sourceCode).toMatch(/fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black\/50 p-4/);
+    expect(sourceCode).toMatch(/flex w-full min-h-0 flex-col overflow-hidden/);
+  });
+
+  it("modal container uses inline styles for height and maxWidth (Tailwind v4 does not generate h-[90vh] or max-w-7xl)", () => {
+    expect(sourceCode).toMatch(/style=\{\{[^}]*height:\s*['"]90vh['"]/);
+    expect(sourceCode).toMatch(/style=\{\{[^}]*maxWidth:\s*['"]80rem['"]/);
   });
 
   it("modal can be closed by clicking overlay", () => {
@@ -424,16 +430,29 @@ describe("Preview modal", () => {
 
   it("keeps the video contained within the viewport", () => {
     expect(sourceCode).toMatch(/object-contain/);
-    expect(sourceCode).toMatch(/max-h-\[70vh\]/);
+    expect(sourceCode).toMatch(/flex-1/);
+    expect(sourceCode).toMatch(/max-h-full/);
   });
 
   it("makes the script pane independently scrollable", () => {
-    expect(sourceCode).toMatch(/overflow-y-auto px-4 py-3/);
+    expect(sourceCode).toMatch(/flex h-full min-h-0 flex-col/);
+    expect(sourceCode).toMatch(/min-h-0 flex-1 overflow-y-auto px-4 py-3/);
   });
 
-  it("uses a fixed side-column layout for the script on medium screens and up", () => {
-    expect(sourceCode).toMatch(/md:grid-cols-\[minmax\(0,1fr\)_22rem\]/);
-    expect(sourceCode).toMatch(/lg:grid-cols-\[minmax\(0,1\.1fr\)_24rem\]/);
+  it("uses a fixed two-column grid so the script stays beside the video", () => {
+    expect(sourceCode).toMatch(/className="grid min-h-0 flex-1 min-w-0 gap-4"/);
+    expect(sourceCode).toMatch(/gridTemplateColumns:\s*'minmax\(0,\s*1fr\)\s*20rem'/);
+  });
+
+  it("keeps both panes from collapsing by using min-w-0 and overflow-hidden", () => {
+    expect(sourceCode).toMatch(/<div className="min-w-0">/);
+    expect(sourceCode).toMatch(/min-w-0\s+overflow-hidden\s+rounded-md/);
+  });
+
+  it("constrains the script pane height with min-h-0 so it does not outgrow the video", () => {
+    // Without min-h-0 on the script column, CSS grid uses min-height:auto,
+    // which lets the script content expand the grid row taller than the video.
+    expect(sourceCode).toMatch(/min-h-0\s+min-w-0\s+overflow-hidden\s+rounded-md/);
   });
 
   it("tracks preview script loading and error state", () => {

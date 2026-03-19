@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@source "../components";
 
 /* ============================================================================
    Video Production Pipeline Editor — Global Stylesheet
