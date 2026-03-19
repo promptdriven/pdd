@@ -269,7 +269,8 @@ def test_orchestrator_runs_ci_validation_after_local_success(_mock_extract, _moc
          patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]), \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push", return_value=(True, "Committed and pushed 1 file(s)")), \
          patch("pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop", return_value=(True, "Required CI checks passed", 0.3)) as mock_ci, \
-         patch("pdd.agentic_e2e_fix_orchestrator.console"):
+         patch("pdd.agentic_e2e_fix_orchestrator.console"), \
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
         success, message, cost, _model, _files = run_agentic_e2e_fix_orchestrator(
             issue_url="https://github.com/test/repo/issues/1",
             issue_content="Bug description",
@@ -315,7 +316,8 @@ def test_orchestrator_skip_ci_bypasses_ci_validation(_mock_extract, _mock_verify
          patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]), \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push", return_value=(True, "Committed and pushed 1 file(s)")), \
          patch("pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop") as mock_ci, \
-         patch("pdd.agentic_e2e_fix_orchestrator.console"):
+         patch("pdd.agentic_e2e_fix_orchestrator.console"), \
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
         success, message, cost, _model, _files = run_agentic_e2e_fix_orchestrator(
             issue_url="https://github.com/test/repo/issues/1",
             issue_content="Bug description",

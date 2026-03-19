@@ -86,7 +86,8 @@ class TestIssue791_EnvironmentPreflightCheck:
         """
         mock_fn, call_log = _make_mock_run_agentic_task(timeout_steps={2})
 
-        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_fn):
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_fn), \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
             success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
                 issue_url="https://github.com/test/repo/issues/1",
                 issue_content="Test issue with E2E tests",
@@ -130,7 +131,8 @@ class TestIssue791_CrossCycleLearning:
         """
         mock_fn, call_log = _make_mock_run_agentic_task(timeout_steps={2})
 
-        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_fn):
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_fn), \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
             success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
                 issue_url="https://github.com/test/repo/issues/1",
                 issue_content="Test issue with E2E tests",
@@ -184,7 +186,8 @@ class TestIssue791_CrossCycleLearning:
 
         mock_fn, call_log = _make_mock_run_agentic_task(timeout_steps={2})
 
-        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_fn):
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", side_effect=mock_fn), \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
             with patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state", side_effect=capture_save):
                 run_agentic_e2e_fix_orchestrator(
                     issue_url="https://github.com/test/repo/issues/1",

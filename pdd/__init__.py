@@ -55,3 +55,4 @@ from .architecture_sync_helper import filepath_to_prompt_filename
 from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 from .ci_validation import detect_ci_system, post_ci_failure_comment, run_ci_validation_loop
 from .agentic_e2e_fix import run_agentic_e2e_fix
+from .agentic_bug_orchestrator import run_agentic_bug_orchestrator

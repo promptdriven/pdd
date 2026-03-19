@@ -237,8 +237,10 @@ class TestIssue357Step9KeyErrorE2E:
             """Mock state clearing."""
             pass
 
-        # Patch the LLM task runner and state management
+        # Patch the LLM task runner, state management, and classify_step_output
+        # (classify_step_output would make real API calls without mocking)
         with patch('pdd.agentic_e2e_fix_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task), \
+             patch('pdd.agentic_e2e_fix_orchestrator.classify_step_output', return_value=None), \
              patch('pdd.agentic_e2e_fix_orchestrator.save_workflow_state', side_effect=mock_save_state), \
              patch('pdd.agentic_e2e_fix_orchestrator.load_workflow_state', side_effect=mock_load_state), \
              patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state', side_effect=mock_clear_state), \

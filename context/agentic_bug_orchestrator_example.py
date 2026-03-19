@@ -1,20 +1,8 @@
-"""
-Example usage of the agentic_bug_orchestrator module.
-
-This script demonstrates how to invoke the `run_agentic_bug_orchestrator` function.
-Since the orchestrator relies on internal modules like `run_agentic_task` and `load_prompt_template`,
-this example mocks those dependencies to simulate a successful bug investigation workflow
-without making actual LLM calls or requiring a real GitHub issue.
-
-Scenario:
-    We simulate an issue where a user reports a "ZeroDivisionError" in a calculator app.
-    The orchestrator will step through the 11-step process (including step 5.5 for prompt
-    classification), finding the bug, generating a test, and creating a fix.
-"""
-
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+import subprocess
+import shutil
 
 # Ensure the project root is in sys.path so we can import the module
 # Adjust this path based on your actual project structure relative to this script
@@ -96,6 +84,14 @@ def main():
         "verbose": True,
         "quiet": False
     }
+
+    # Fix: Create the temp_workspace directory and initialize a git repo to avoid FileNotFoundError and downstream git failures
+    temp_dir = issue_data["cwd"]
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=temp_dir, capture_output=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-m", "Initial commit"], cwd=temp_dir, capture_output=True)
 
     print("Starting Agentic Bug Orchestrator Simulation...")
     print("-" * 60)

@@ -1,4 +1,4 @@
-<pdd-reason>Generates E2E tests that verify the bug at a system level.</pdd-reason>
+<pdd-reason>Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to generate and run end-to-end (E2E) tests that verify the bug at a system level.
 
@@ -10,6 +10,8 @@ You are working on step 11 of 12 in an agentic bug investigation workflow. Previ
 - Verified the unit test correctly catches the bug (Step 10)
 
 Now you need to create E2E tests that verify the bug at a higher level of integration.
+
+**Note:** This step is only invoked when Step 10 classified the bug as `E2E_NEEDED: yes` (or when the marker is missing for backward compatibility). If you are running, it means the orchestrator determined that E2E coverage is warranted beyond unit tests.
 
 % Inputs
 
@@ -186,6 +188,30 @@ Before writing any E2E test, you MUST understand the existing test infrastructur
        - Playwright, Cypress, Selenium (cross-language)
        - Puppeteer (JavaScript)
      - **Integration tests**: If the bug affects data flow between components
+     - **Cross-endpoint integration tests**: If the bug involves data written by one endpoint and read by another (e.g., a form submission endpoint writes data that a status endpoint reads back):
+       - Call endpoint A with real logic (only mock the persistence layer, e.g. Firestore/database)
+       - Capture what endpoint A writes via a mock side_effect on the write function (e.g., set_document)
+       - Feed that exact captured data into endpoint B as its read return value (e.g., get_document)
+       - Assert endpoint B produces a usable response from endpoint A's real output
+       - Do NOT hand-craft the intermediate data dict — the whole point is to verify that what A writes is parseable by B
+       - This catches: serialization mismatches, leaked internal fields, format incompatibilities, missing data migrations between endpoints
+       - Example pattern (Python/Firebase):
+         ```python
+         from unittest.mock import patch
+
+         # Step 1: Call endpoint A, capture what it writes
+         captured = {}
+         def capture_write(collection, doc_id, data):
+             captured['data'] = data
+         with patch('module_a.set_document', side_effect=capture_write):
+             response_a, status_a = endpoint_a(request, user, token)
+         assert status_a == 200
+
+         # Step 2: Feed A's real output into endpoint B
+         with patch('module_b.get_document', side_effect=[None, captured['data']]):
+             response_b, status_b = endpoint_b(request, user, token)
+         assert status_b == 200  # B can parse what A wrote
+         ```
    - Reuse existing E2E test patterns, fixtures, and utilities from the repository
    - Use the same test runner and framework as existing E2E tests
 
@@ -290,11 +316,11 @@ After writing files, output this line exactly (for automated tracking):
 E2E_FILES_CREATED: <comma-separated list of file paths you created>
 ```
 Examples by language:
-- Python: `E2E_FILES_CREATED: tests/e2e/test_e2e_issue_123.py`
-- JavaScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.test.js`
-- TypeScript: `E2E_FILES_CREATED: tests/e2e/issue-123.e2e.spec.ts`
-- Go: `E2E_FILES_CREATED: tests/e2e/issue_123_test.go`
-- Rust: `E2E_FILES_CREATED: tests/e2e_issue_123.rs`
+- Python: `E2E_FILES_CREATED: tests/e2e/test_e2e_user_validation.py`
+- JavaScript: `E2E_FILES_CREATED: tests/e2e/auth-flow.e2e.test.js`
+- TypeScript: `E2E_FILES_CREATED: tests/e2e/data-export.e2e.spec.ts`
+- Go: `E2E_FILES_CREATED: tests/e2e/config_parsing_test.go`
+- Rust: `E2E_FILES_CREATED: tests/e2e_session_lifecycle.rs`
 
 If you modified existing files instead of creating new ones:
 ```

@@ -216,8 +216,9 @@ class TestIssue469DuplicateUnresolvedE2E:
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
              patch("pdd.agentic_bug_orchestrator.console"), \
              patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
-             patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output",
-                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda p, **kw: p), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
             success, message, cost, model, files = run_agentic_bug_orchestrator(
                 issue_url="https://github.com/test/repo/issues/469",
@@ -304,7 +305,7 @@ class TestIssue469DuplicateUnresolvedE2E:
 
         # Workflow should stop at Step 1 — this is correct behavior for resolved dups
         assert success is False, "Workflow should stop for resolved duplicates"
-        assert "Stopped at Step 1" in message
+        assert "Stopped at step 1" in message
         assert "duplicate" in message.lower()
         assert len(steps_executed) == 1, (
             f"Only Step 1 should execute for a resolved duplicate. "

@@ -46,6 +46,11 @@ You are working on step 1 of 11 in an agentic bug investigation workflow. Your f
    - Note the relationship to the original issue but DO NOT close this issue
    - Report that the original was not resolved and this issue should proceed
    - Treat as a new issue for investigation purposes
+   - **Check for existing artifacts to reuse** from the unresolved duplicate:
+     - Run `gh pr list --search "<issue_number>" --state all` to find any draft or open PRs with existing work (test files, code fixes, branch changes)
+     - Check for existing branches: `git branch -a | grep <issue_number>`
+     - If existing PRs, branches, or test files are found, list them in your report so downstream steps can reuse the prior work instead of redoing it from scratch
+     - This avoids duplicate effort when the same bug has been investigated before but never merged
 
    If no duplicates:
    - Report that this appears to be a new issue

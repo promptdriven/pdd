@@ -1,3 +1,5 @@
+<pdd-reason>Verifies unit test correctness and classifies whether E2E testing is needed.</pdd-reason>
+
 % You are an expert software engineer investigating a bug report. Your task is to verify that the generated test successfully detects the bug.
 
 % Context
@@ -70,7 +72,13 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    - If any mock assumes behavior that contradicts the investigation findings, report: FAIL: Test does not work as expected — mock assumptions contradict investigation findings
    - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
 
-4. **Summarize the investigation**
+4. **Classify E2E test necessity**
+   Determine whether an E2E test (Step 11) is needed beyond the unit test:
+   - Output `E2E_NEEDED: yes` if the bug affects cross-component integration, user-facing workflows, or external interfaces (CLI, API, UI)
+   - Output `E2E_NEEDED: no` if the bug is purely internal (logic error, off-by-one, state management) and the unit test already provides full behavioral coverage
+   - When in doubt, default to `E2E_NEEDED: yes`
+
+5. **Summarize the investigation**
    - Recap the bug, root cause, and test created
    - Provide next steps for fixing the bug
    - Note any additional observations
@@ -116,6 +124,10 @@ Your comment should follow this format:
 - **Root Cause:** {{one_line_summary}}
 - **Test File:** `{{test_file_path}}`
 
+### E2E Classification
+E2E_NEEDED: [yes|no]
+**Reason:** [Brief explanation of why E2E is or isn't needed]
+
 ### Next Steps
 1. Fix the bug at the identified location
 2. Run the test to confirm the fix
@@ -123,13 +135,17 @@ Your comment should follow this format:
 4. Submit PR with fix and test
 
 ---
-*Proceeding to Step 11: E2E Tests*
+*{{If E2E_NEEDED: yes → "Proceeding to Step 11: E2E Tests" | If E2E_NEEDED: no → "E2E skipped — proceeding to Step 12: Create Draft PR"}}*
 ```
 
-% Important
+% Important — MANDATORY
 
 - Provide a complete summary of the investigation so far
 - The test must actually fail when run (verify this)
 - If the test doesn't fail, go back and fix the test
 - The comment should serve as documentation for anyone fixing the bug
 - Always post your findings as a GitHub comment before completing
+- **MANDATORY E2E CLASSIFICATION:** Your GitHub comment MUST include the "### E2E Classification" section with exactly one of:
+  - `E2E_NEEDED: yes` — if the bug crosses module boundaries, affects CLI/API/UI, or involves integration paths
+  - `E2E_NEEDED: no` — if the bug is purely internal (logic error, off-by-one, state management in a single function) and unit tests already cover the behavior
+  The orchestrator parses this marker to decide whether to run Step 11. If you omit it, Step 11 runs unconditionally (wasting time and cost). This line MUST appear exactly as shown — on its own line, starting with `E2E_NEEDED:`.

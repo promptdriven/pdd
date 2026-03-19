@@ -61,16 +61,16 @@ def bug_mock_dependencies(tmp_path):
          patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
          patch("pdd.agentic_bug_orchestrator.console") as mock_console, \
          patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
-         patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output") as mock_pytest:
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
 
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
         mock_load.return_value = "Prompt for {issue_number}"
         mock_worktree.return_value = (mock_worktree_path, None)
-        # Default behavior: test fails on buggy code (TDD-correct — test should
-        # fail before fix). Step 10 independent verification expects failures > 0.
-        mock_pytest.return_value = {
-            "test_results": [{"tests": 1, "failures": 1, "errors": 0}]
-        }
 
         yield mock_run, mock_load, mock_console
 
@@ -190,7 +190,7 @@ def test_bug_orchestrator_resolved_duplicate_stops(
     success, msg, cost, _, _ = run_agentic_bug_orchestrator(**bug_default_args)
 
     assert success is False
-    assert "Stopped at Step 1" in msg
+    assert "Stopped at step 1" in msg
     assert "duplicate" in msg.lower()
     assert mock_run.call_count == 1
     assert cost == 0.05

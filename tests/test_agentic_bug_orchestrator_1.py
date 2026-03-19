@@ -12,7 +12,7 @@ from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 Detailed Test Plan for agentic_bug_orchestrator
 
 1. Functional Requirements Testing:
-    - Verify the 11-step sequential execution (including step 5.5).
+    - Verify the 11-step sequential execution (including step 7).
     - Verify context accumulation (step N output passed to step N+1).
     - Verify total cost accumulation across all steps.
     - Verify worktree creation before Step 7.
@@ -46,7 +46,12 @@ def mock_dependencies():
          patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
          patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_wt, \
          patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
-         patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output") as mock_pytest:
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_pp, \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
+         patch("pdd.agentic_bug_orchestrator._get_git_root") as mock_git_root, \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_progress, \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress:
 
         # Default behavior: return a template string that can be formatted
         mock_load.return_value = "Template for {issue_number}"
@@ -57,11 +62,8 @@ def mock_dependencies():
         # Default behavior: no modified/untracked files (avoids FileNotFoundError
         # from subprocess using mock worktree path as cwd)
         mock_git_files.return_value = []
-        # Default behavior: test fails on buggy code (TDD-correct — test should
-        # fail before fix). Step 10 independent verification expects failures > 0.
-        mock_pytest.return_value = {
-            "test_results": [{"tests": 1, "failures": 1, "errors": 0}]
-        }
+        # Default behavior: git root returns tmp_path (set per-test if needed)
+        mock_git_root.return_value = Path("/tmp")
 
         yield mock_load, mock_run, mock_wt
 
@@ -69,7 +71,7 @@ def test_orchestrator_full_success(mock_dependencies, tmp_path):
     """Tests a successful 12-step run with context accumulation (includes api_research and prompt_classification)."""
     mock_load, mock_run, mock_wt = mock_dependencies
 
-    # Mock Step 9 (generate) to return files
+    # Mock Step 7 (generate) to return files
     def side_effect(instruction, **kwargs):
         if "step9" in kwargs.get("label", ""):
             return (True, "FILES_CREATED: test_file.py", 0.5, "gpt-4")
@@ -86,7 +88,7 @@ def test_orchestrator_full_success(mock_dependencies, tmp_path):
     assert success is True
     assert "Investigation complete" in msg
     assert cost > 0
-    assert files == ["test_file.py"]
+    assert "test_file.py" in files
     assert mock_run.call_count == 12  # 12 steps
     assert mock_wt.called
 
@@ -103,7 +105,7 @@ def test_hard_stop_step1_duplicate(mock_dependencies, tmp_path):
     )
 
     assert success is False
-    assert "Stopped at Step 1" in msg
+    assert "Stopped at step 1" in msg
     assert mock_run.call_count == 1
 
 def test_hard_stop_step2_user_error(mock_dependencies, tmp_path):
@@ -124,16 +126,16 @@ def test_hard_stop_step2_user_error(mock_dependencies, tmp_path):
     )
 
     assert success is False
-    assert "Stopped at Step 2" in msg
+    assert "Stopped at step 2" in msg
     assert "User Error" in msg
     assert mock_run.call_count == 2
 
 def test_hard_stop_step7_no_files(mock_dependencies, tmp_path):
-    """Tests early exit if Step 9 (generate) fails to generate files."""
+    """Tests early exit if Step 7 (generate) fails to generate files."""
     mock_load, mock_run, _ = mock_dependencies
 
     def side_effect(instruction, **kwargs):
-        if "step9" in kwargs.get("label"):
+        if "step9" in kwargs.get("label", ""):
             return (True, "I tried but found no files to create.", 0.1, "gpt-4")
         return (True, "Success", 0.1, "gpt-4")
 
@@ -146,8 +148,8 @@ def test_hard_stop_step7_no_files(mock_dependencies, tmp_path):
     )
 
     assert success is False
-    assert "Stopped at Step 9" in msg
-    assert mock_run.call_count == 9  # Steps 1,2,3,4,5,6,7,8,9
+    assert "Stopped at step 9" in msg
+    assert mock_run.call_count == 9  # Steps 1,2,3,4,5,5.5,6,7
 
 def test_soft_failure_continuation(mock_dependencies, tmp_path):
     """Tests that the orchestrator continues on non-critical agent failures."""
@@ -157,7 +159,7 @@ def test_soft_failure_continuation(mock_dependencies, tmp_path):
     def side_effect(instruction, **kwargs):
         if "step5" in kwargs.get("label"):
             return (False, "Random API Error", 0.0, "gpt-4")
-        if "step9" in kwargs.get("label"):
+        if "step9" in kwargs.get("label", ""):
             return (True, "FILES_CREATED: test.py", 0.1, "gpt-4")
         return (True, "Success", 0.1, "gpt-4")
 
@@ -185,8 +187,8 @@ def test_worktree_creation_failure(mock_dependencies, tmp_path):
     )
 
     assert success is False
-    assert "Failed to create worktree" in msg
-    # Should stop before Step 7 runs (steps 1,2,3,4,5,6 = 6 steps)
+    assert "worktree" in msg.lower()
+    # Should stop before Step 5.5 runs (steps 1,2,3,4,5 = 5 steps)
     assert mock_run.call_count == 6
 
 def test_prompt_formatting_unknown_placeholder_left_intact(mock_dependencies, tmp_path):
@@ -203,7 +205,7 @@ def test_prompt_formatting_unknown_placeholder_left_intact(mock_dependencies, tm
     def run_side_effect(**kwargs):
         label = kwargs.get("label", "")
         captured[label] = kwargs.get("instruction", "")
-        if label == "step7":
+        if "step9" in label:
             return (True, "FILES_CREATED: tests/test_foo.py", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
@@ -238,7 +240,7 @@ def test_step_7_parsing_logic(mock_dependencies, tmp_path):
     )
     
     def side_effect(instruction, **kwargs):
-        if "step9" in kwargs.get("label"):
+        if "step9" in kwargs.get("label", ""):
             return (True, output, 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 

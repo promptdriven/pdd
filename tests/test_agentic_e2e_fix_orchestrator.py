@@ -472,7 +472,8 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
-         patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e:
+         patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e, \
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify:
 
         # Default: successful run, generic output
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
@@ -3104,7 +3105,8 @@ class TestClassifyStepOutput:
 
     def test_exact_token_all_tests_pass(self):
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
-        assert _classify_step_output("**Status:** ALL_TESTS_PASS", step_num=9) == "ALL_TESTS_PASS"
+        # Step 9 normalizes ALL_TESTS_PASS to LOCAL_TESTS_PASS
+        assert _classify_step_output("**Status:** ALL_TESTS_PASS", step_num=9) == "LOCAL_TESTS_PASS"
 
     def test_exact_token_continue_cycle(self):
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
@@ -3360,4 +3362,242 @@ class TestIssue673NotABugAfterFixesApplied:
         assert "not a bug" not in msg.lower(), (
             f"NOT_A_BUG should be blocked after fixes were applied in Cycle 1. "
             f"Got: {msg}"
+        )
+
+
+class TestDetectControlTokenUnit:
+    """Unit tests for detect_control_token from shared agentic_common."""
+
+    def test_exact_match(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("Status: ALL_TESTS_PASS", "ALL_TESTS_PASS")
+
+    def test_case_insensitive_match(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("Status: all_tests_pass", "ALL_TESTS_PASS")
+        assert detect_control_token("Status: Not_A_Bug", "NOT_A_BUG")
+
+    def test_empty_output(self):
+        from pdd.agentic_common import detect_control_token
+        assert not detect_control_token("", "ALL_TESTS_PASS")
+        assert not detect_control_token(None, "ALL_TESTS_PASS")
+
+    def test_semantic_all_tests_pass_patterns(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("all 18 tests pass", "ALL_TESTS_PASS")
+        assert detect_control_token("18/18 passing", "ALL_TESTS_PASS")
+        assert detect_control_token("both passed", "ALL_TESTS_PASS")
+        assert detect_control_token("all tests are green", "ALL_TESTS_PASS")
+        assert detect_control_token("All tests passed successfully", "ALL_TESTS_PASS")
+        assert detect_control_token("100% passing", "ALL_TESTS_PASS")
+
+    def test_semantic_not_a_bug_patterns(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("this is not a bug", "NOT_A_BUG")
+        assert detect_control_token("it is already fixed", "NOT_A_BUG")
+        assert detect_control_token("expected behavior", "NOT_A_BUG")
+        assert detect_control_token("working correctly", "NOT_A_BUG")
+        assert detect_control_token("working as designed", "NOT_A_BUG")
+        assert detect_control_token("not actually a code issue", "NOT_A_BUG")
+
+    def test_semantic_continue_cycle_patterns(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("tests still failing", "CONTINUE_CYCLE")
+        assert detect_control_token("more work needed", "CONTINUE_CYCLE")
+        assert detect_control_token("not yet fixed", "CONTINUE_CYCLE")
+
+    def test_semantic_max_cycles_patterns(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("max cycles reached", "MAX_CYCLES_REACHED")
+        assert detect_control_token("maximum cycle limit exceeded", "MAX_CYCLES_REACHED")
+
+    def test_no_false_positive_on_unrelated_text(self):
+        from pdd.agentic_common import detect_control_token
+        assert not detect_control_token("I'm investigating the test failures", "ALL_TESTS_PASS")
+        assert not detect_control_token("The bug is in the authentication module", "NOT_A_BUG")
+        assert not detect_control_token("I'll fix this in the next step", "CONTINUE_CYCLE")
+
+    def test_unknown_token_only_uses_exact_and_case_insensitive(self):
+        from pdd.agentic_common import detect_control_token
+        assert detect_control_token("CUSTOM_TOKEN", "CUSTOM_TOKEN")
+        assert detect_control_token("custom_token", "CUSTOM_TOKEN")
+        assert not detect_control_token("something else", "CUSTOM_TOKEN")
+
+
+class TestClassifyStepOutputWiring:
+    """Item 1: classify_step_output must be called as tier-4 fallback in the orchestrator."""
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output")
+    def test_step9_calls_classify_when_tiers123_fail(
+        self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """When Step 9 output has no token detectable by tiers 1-3,
+        the orchestrator should call classify_step_output as tier 4."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+        from pdd.agentic_common import TokenMatch
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Return None for Step 3 classify (not a bug), TokenMatch for Step 9
+        def classify_side_effect(output, tokens, **kwargs):
+            if "ALL_TESTS_PASS" in tokens:
+                return TokenMatch(tier="llm_classification")
+            return None
+
+        mock_classify.side_effect = classify_side_effect
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                # Output with no token and no semantic match
+                return (True, "I ran the tests. Here are the results.", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Should have been called for Step 9 (and possibly Step 3)
+        step9_calls = [
+            c for c in mock_classify.call_args_list
+            if "ALL_TESTS_PASS" in c[0][1]
+        ]
+        assert len(step9_calls) >= 1, (
+            f"Expected classify_step_output to be called with ALL_TESTS_PASS for Step 9. "
+            f"Calls: {mock_classify.call_args_list}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output")
+    def test_step9_classify_prevents_safety_stop(
+        self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """If classify_step_output returns a match, orchestrator should continue
+        cycling instead of triggering the safety stop."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+        from pdd.agentic_common import TokenMatch
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        cycle = [0]
+
+        def classify_side_effect(output, tokens, **kwargs):
+            if "ALL_TESTS_PASS" in tokens:
+                return TokenMatch(tier="llm_classification")
+            return None
+
+        mock_classify.side_effect = classify_side_effect
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                cycle[0] += 1
+                if cycle[0] >= 2:
+                    return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, "I verified everything looks good.", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Classify prevented safety stop on cycle 1, exact match succeeded on cycle 2
+        assert mock_run.call_count > 9, (
+            f"Expected >9 calls (classify should prevent safety stop and allow cycle 2) "
+            f"but got {mock_run.call_count}. msg={msg}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output")
+    def test_step9_classify_not_called_when_tier1_matches(
+        self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """classify_step_output should NOT be called when exact match succeeds at Step 9."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # classify may be called for Step 3 (no exact token), but NOT for Step 9
+        step9_calls = [
+            c for c in mock_classify.call_args_list
+            if "ALL_TESTS_PASS" in c[0][1]
+        ]
+        assert len(step9_calls) == 0, (
+            f"classify_step_output should not be called for Step 9 when exact match succeeds. "
+            f"Step 9 calls: {step9_calls}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output")
+    def test_step3_calls_classify_when_tiers123_fail(
+        self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """When Step 3 output has no NOT_A_BUG detectable by tiers 1-3,
+        classify_step_output should be called."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+        from pdd.agentic_common import TokenMatch
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_classify.return_value = TokenMatch(tier="llm_classification")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step3' in label:
+                return (True, "The issue has already been addressed upstream.", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        mock_classify.assert_called_once()
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output")
+    def test_step9_classify_failure_falls_through_to_safety_stop(
+        self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """If classify_step_output returns None, safety stop should still trigger."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_classify.return_value = None
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "Ambiguous results.", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert "no loop control token" in msg.lower() or "stopped" in msg.lower()
+
+
+class TestSemanticTierConsoleLogging:
+    """Item 6: Console should log when semantic tier (tier 3) fires."""
+
+    def test_semantic_match_logs_to_console(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When semantic fallback detects a token, console should print a notice."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step3' in label:
+                # Triggers semantic match, no exact token
+                return (True, "After investigation, this is not a bug.", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        console_output = " ".join(str(c) for c in mock_console.print.call_args_list)
+        assert "semantic" in console_output.lower(), (
+            f"Expected console log about semantic detection but got: {console_output}"
         )

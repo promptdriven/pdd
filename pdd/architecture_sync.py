@@ -494,6 +494,19 @@ def _merge_function_signature(
     old_by_name = {param['name']: param for param in old_params}
     new_by_name = {param['name']: param for param in new_params}
 
+    # Guard: reject merge when signatures are from completely different classes.
+    # If the only shared parameter names are common ones like 'self'/'cls',
+    # the new signature is likely from a different class entirely (LLM error).
+    trivial_params = {'self', 'cls'}
+    old_names = {p['name'] for p in old_params} - trivial_params
+    new_names = {p['name'] for p in new_params} - trivial_params
+    if old_names and new_names and not (old_names & new_names):
+        return old_signature, [
+            f"Rejected incompatible signature for function '{function_name}': "
+            f"old params {sorted(old_names)} share no names with new params {sorted(new_names)}. "
+            f"Keeping existing signature to prevent cross-class contamination."
+        ]
+
     dropped = [param['name'] for param in old_params if param['name'] not in new_by_name]
     if not dropped:
         return new_signature, []

@@ -1,17 +1,72 @@
+## v0.0.181 (2026-03-18)
+
+### Feat
+
+- Implement a enhance audio sync validation with improved gating, numeric variant handling, and token-level similarity checks.
+- Add new video segment specifications and refine existing audit reports and Remotion compositions.
+- E2E gate, append-first bias, orchestrator regen, 4 bug fixes (#863)
+
+### Fix
+
+- harden audio sync and render timing
+- restore spec-based preview durations
+- harden audit preview duration handling
+- address 3 agentic workflow weaknesses from #600 assessment (#890)
+- harden audit evidence and media contracts
+
+## v0.0.180 (2026-03-17)
+
+### Feat
+
+- Add new Remotion components, refine existing video scenes, and introduce audit documentation across multiple sections.
+- Add new Remotion scenes and components across multiple video sections and update the main composition.
+- Add new Remotion components and specifications for Cold Open and Part 1 Economics sections, refactor existing Remotion scenes, and update related test files.
+
+### Fix
+
+- guard EXAMPLE_OUTPUT_PATH against None/empty and strip trailing slashes
+- remove fragile PDDRC fallback from generate_prompt template (#687)
+- resolved_config overrides front-matter default + pddrc fallback in template
+- add code-level default fallback and strengthen tests for #687
+- use deterministic EXAMPLE_OUTPUT_PATH variable instead of LLM .pddrc parsing (#687)
+- harden stage8 and stage9 remotion media flows
+- add .local_pkgs/ to .gitignore (#883)
+- add cross-endpoint integration test type to Step 11 E2E prompt (#878)
+- align stage8 previews with registered compositions
+- retry cloud batch tasks on all transient VM failures
+- isolate stage8 claude generations
+- smooth stage8 refresh and log handling
+- retry zero-write composition generations
+
+### Refactor
+
+- reimplement Stage9RenderStitch render mode selection as a dropdown menu and adjust various Remotion section timings.
+
+### Perf
+
+- add --max-turns 15 to gemini CLI invocations
+
 ## v0.0.179 (2026-03-16)
 
 ### Feat
 
-- infer spec visual types from script intent
-- Implement markdown formatting, preview, and editor word wrapping in the spec generation stage.
+- **selective includes & automatic dependency targeting**: `<include>` tags now support `select=` and `query=` attributes for precise content extraction. `select=` uses deterministic structural selectors (`def:name`, `class:Name.method`, `section:Heading`, `path:key.nested`, `lines:N-M`); `query=` uses LLM-based semantic extraction with persistent caching in `.pdd/extracts/`. New modules: `content_selector.py`, `include_query_extractor.py`. Thank you Niti Goyal!
+- **auto-include returns structured output**: `auto_include` now returns `AutoIncludeResult` with typed `new_includes` and `existing_include_annotations` (each with optional `select`/`query` fields) instead of raw include strings. The rewritten `auto_include_LLM.prompt` emits JSON with a selector reference so the LLM can choose full-file, structural, or semantic extraction per dependency.
+- **insert_includes applies changes deterministically**: dependency insertion now uses regex-based `<update>`/`<new>` block application instead of a second LLM call, eliminating the `extract_auto_include_LLM.prompt` entirely.
+- **directory summaries now export key_exports and dependencies**: `summarize_directory` extracts structured metadata (key exports, import dependencies) per file and flushes CSV incrementally so partial progress survives interruption. `.prompt` files are excluded from summaries.
+- **extracts cache management CLI** (`pdd extracts`): new `extracts_prune.py` module with commands to list, inspect freshness, and prune the `.pdd/extracts/` LLM extraction cache.
+- **extracts REST API and web UI**: new `/extracts` server routes for browsing/pruning the cache, and `ExtractsPanel.tsx` frontend component in the connect web UI.
+- **AST-based behavioral test validator**: new `validate_behavioral_test.py` with two-layer detection — Python AST analysis verifying tests call the function under test, plus cross-language import/reflection module detection. Replaces the prior grep-based blocklist.
+- **Ctrl+C UX for agentic workflows**: new `set_agentic_progress()`/`clear_agentic_progress()` in `agentic_common.py` tracks step-level progress so `KeyboardInterrupt` reports exactly which step was interrupted and which steps completed. All four orchestrators (bug, test, fix, change) now report progress. Thanks Vishal Ramvelu!
+- **core dump on intentional failure exit**: `cli.py` now writes a core dump when a command exits via `sys.exit(1)`, not just on unhandled exceptions. Thanks Vishal Ramvelu!
+- **multi-language bug regression tests**: `cloud_regression.sh` gains ~400 lines of Python/Go/JavaScript behavioral test validation using the two-layer validator.
 
 ### Fix
 
 - restore README and prompting guide content overwritten by PR #552 cherry-pick
 - update test to expect exit code 1 on agentic fix failure
-- limit spec file reruns to owning section
-- harden stage6 veo reference sync and timeouts
-- agentic bug/test/fix exit with code 1 on failure (#593)
+- agentic bug/test/fix exit with code 1 on failure (#593). Thanks Vishal Ramvelu!
+- write agentic test content to output path for non-Python languages (#688). Thanks Vishal Ramvelu!
 - add mock assertion patterns to behavioral test validator
 - review fixes for PR #839 — grep compat, false positives, Java runtime validation
 - resolve VALIDATOR_SCRIPT path before cd changes working directory
@@ -19,14 +74,19 @@
 - address PR review feedback on test assertions
 - pdd bug generates structural tests (param existence checks) instead of behavioral tests
 - E2E skip cascade — subdirectory config, early exit, NOT_A_BUG guard (#673)
-- improve stage6 timeout scaling and log timestamps
 - resolve command name in KeyboardInterrupt from 'unknown' to actual subcommand
-- resolve veo prompts from markdown sections
-- harden stage6 spec generation retries
+- fix basename fallback injecting surrounding markup into prompt — update block application now uses the extracted `<include>` tag instead of `strip()`ed block content
+- fix UTF-8 encoding for `write_text` in agentic test output. Thanks Vishal Ramvelu!
+- fix circular import: `include_query_extractor` uses lazy imports for `llm_invoke` to avoid no-op stub when loaded during `auto_include` initialization
 
 ### Refactor
 
-- Reorganize and update video explainer project specifications, adjusting pipeline route and tests.
+- rework `auto_include.py` from string-based output to structured `AutoIncludeResult` Pydantic model with `NewInclude`/`IncludeAnnotation` types
+- rework `insert_includes.py` to apply `<update>`/`<new>` blocks deterministically instead of calling `llm_invoke`
+- extend `preprocess.py` include tag parsing to support `<include path="..." select="..." query="..."/>` self-closing syntax with attribute extraction
+- remove `extract_auto_include_LLM.prompt` (superseded by structured auto-include output)
+- remove obsolete `test_e2e_issue_585_export_metadata.py`
+- preprocess debug flags evaluated at call time instead of module-level constants
 - remove duplicated test files per PR review
 - make structural test blocking prompts language-agnostic
 - replace copy-paste E2E tests with shared _render_prompt helper

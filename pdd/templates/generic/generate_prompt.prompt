@@ -73,6 +73,12 @@ variables:
     description: File extension for dependency examples (for non-Python stacks).
     examples: [py, ts, tsx, go, java]
     default: py
+  EXAMPLE_OUTPUT_PATH:
+    required: false
+    type: string
+    description: Directory where dependency example files are located. Resolved from .pddrc example_output_path or defaults to context.
+    examples: [examples/shared, context, examples]
+    default: context
   PDDRC_FILE:
     required: false
     type: path
@@ -145,12 +151,12 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 - The prompt body should contain ONLY implementation logic, dependency signatures, and behavior that is NOT in the context YAMLs.
 
 % Dependencies format and conventions:
-- Read the `example_output_path` from the PDDRC_FILE (`.pddrc`) to determine where example files are located. This path is defined under each context's `defaults.example_output_path` setting.
-- Represent each dependency using an XML tag with the dependency name, and put the file path inside an &lt;include&gt; tag. Use the example_output_path from .pddrc, e.g. if .pddrc says `example_output_path: "examples/shared/"`:
+- The example files directory is: ${EXAMPLE_OUTPUT_PATH}
+- Represent each dependency using an XML tag with the dependency name, and put the file path inside an &lt;include&gt; tag. Use ${EXAMPLE_OUTPUT_PATH} as the base directory, e.g.:
   &lt;orders_service&gt;
-    &lt;include&gt;examples/shared/orders_service_example.${DEP_EXAMPLE_EXT}&lt;/include&gt;
+    &lt;include&gt;${EXAMPLE_OUTPUT_PATH}/orders_service_example.${DEP_EXAMPLE_EXT}&lt;/include&gt;
   &lt;/orders_service&gt;
-- Prefer real example files available in the provided context (use &lt;include-many&gt; when listing multiple). If examples are not provided, use the example_output_path from .pddrc with the pattern [example_output_path]/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
+- Prefer real example files available in the provided context (use &lt;include-many&gt; when listing multiple). If examples are not provided, use the pattern ${EXAMPLE_OUTPUT_PATH}/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
 - Include all necessary dependencies for the module/component (based on the provided context and references).
 - The ARCHITECTURE_FILE lists `dependencies` referencing other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
 - If the matched architecture entry has a `context_urls` array, emit a &lt;web&gt; tag for each URL in the Dependencies section. Derive the XML tag name from the `purpose` field (lowercased, non-alphanumeric characters replaced with underscores). Example:

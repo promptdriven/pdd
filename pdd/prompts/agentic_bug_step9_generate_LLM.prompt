@@ -85,6 +85,28 @@ Your generated tests must verify **observable behavior**, not code structure.
 
 **Self-check:** Before writing each test, ask: "Could this test pass if someone just changed the function signature or added an empty stub without implementing any actual logic?" If yes, the test is structural — rewrite it to verify observable behavior.
 
+% Critical: No Vacuous waitFor Negative Assertions
+
+**BLOCKED:** Using negative assertions (`.not`) inside `waitFor`, `waitForEffect`, or any async retry utility. These are vacuous — they pass immediately and test nothing.
+
+`waitFor` works by retrying the callback until it stops throwing. A negative assertion like `.not.toHaveBeenCalledWith()` never throws, so `waitFor` returns instantly without actually waiting for a potential violation. The test passes regardless of whether the code is correct.
+
+**BAD test (vacuous — NEVER generate this):**
+```javascript
+await waitFor(() => expect(mockRouterPush).not.toHaveBeenCalledWith('/interest'));
+// ❌ Passes immediately — waitFor sees no throw and returns. Never actually waits.
+```
+
+**GOOD test (use positive assertion inside waitFor, then check absence separately):**
+```javascript
+// First, wait for the component to finish async work with a positive assertion:
+await waitFor(() => expect(screen.getByText('Dashboard')).toBeInTheDocument());
+// Then check absence directly (no waitFor needed for negative checks):
+expect(mockRouterPush).not.toHaveBeenCalledWith('/interest');
+```
+
+Alternative: use `jest.advanceTimersByTime()` or `act()` to advance time deterministically, then assert directly without `waitFor`.
+
 % Critical: Mock Accuracy Validation
 
 Before writing any mock or stub, verify it against the investigation findings:

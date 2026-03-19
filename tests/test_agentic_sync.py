@@ -1057,3 +1057,80 @@ class TestBranchDiffSkipsLlm:
             )
 
         mock_llm.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _filter_invalid_basenames — pre-validation against architecture.json
+# (Prevents LLM-hallucinated basenames from blocking the entire sync)
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_sync import _filter_invalid_basenames
+
+
+class TestFilterInvalidBasenames:
+    def test_filters_out_hallucinated_basenames(self):
+        """Basenames not in architecture.json should be removed."""
+        architecture = [
+            {"filename": "agentic_e2e_fix_step1_unit_tests_LLM.prompt"},
+            {"filename": "agentic_bug_orchestrator_python.prompt"},
+        ]
+        modules = [
+            "agentic_bug_orchestrator",
+            "agentic_e2e_fix_step1_understand",  # hallucinated
+            "agentic_e2e_fix_step8_review",      # hallucinated
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "agentic_bug_orchestrator" in valid
+        assert "agentic_e2e_fix_step1_understand" in invalid
+        assert "agentic_e2e_fix_step8_review" in invalid
+        assert len(valid) == 1
+        assert len(invalid) == 2
+
+    def test_keeps_all_valid_basenames(self):
+        """All basenames that exist in architecture.json should be kept."""
+        architecture = [
+            {"filename": "mod_a_python.prompt"},
+            {"filename": "mod_b_python.prompt"},
+        ]
+        modules = ["mod_a", "mod_b"]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert valid == ["mod_a", "mod_b"]
+        assert invalid == []
+
+    def test_matches_llm_prompt_basenames(self):
+        """LLM prompts (ending in _LLM) should also match."""
+        architecture = [
+            {"filename": "agentic_bug_step10_verify_LLM.prompt"},
+        ]
+        modules = ["agentic_bug_step10_verify"]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert valid == ["agentic_bug_step10_verify"]
+        assert invalid == []
+
+    def test_returns_all_when_no_architecture(self):
+        """If architecture is None, can't validate — keep all modules."""
+        modules = ["mod_a", "hallucinated_mod"]
+
+        valid, invalid = _filter_invalid_basenames(modules, None)
+
+        assert valid == ["mod_a", "hallucinated_mod"]
+        assert invalid == []
+
+    def test_preserves_order(self):
+        """Valid basenames should maintain their original order."""
+        architecture = [
+            {"filename": "mod_c_python.prompt"},
+            {"filename": "mod_a_python.prompt"},
+            {"filename": "mod_b_python.prompt"},
+        ]
+        modules = ["mod_b", "mod_a", "mod_c"]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert valid == ["mod_b", "mod_a", "mod_c"]
