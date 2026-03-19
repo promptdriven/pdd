@@ -98,6 +98,51 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return []
 
 
+def _filter_invalid_basenames(
+    modules: List[str],
+    architecture: Optional[List[Dict[str, Any]]],
+) -> Tuple[List[str], List[str]]:
+    """Filter out basenames that don't exist in architecture.json.
+
+    LLMs sometimes hallucinate plausible-sounding basenames (e.g.,
+    'agentic_e2e_fix_step1_understand' instead of the real
+    'agentic_e2e_fix_step1_unit_tests'). This pre-validation prevents
+    hallucinated names from failing dry-run and blocking the entire sync.
+
+    Returns:
+        (valid_basenames, invalid_basenames)
+    """
+    if architecture is None:
+        return modules, []
+
+    # Build set of known basenames from architecture.json filenames
+    known_basenames: set[str] = set()
+    for entry in architecture:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename", "")
+        if not filename:
+            continue
+        # Try standard extraction (handles _python.prompt, _typescript.prompt, etc.)
+        basename = extract_module_from_include(filename)
+        if basename:
+            known_basenames.add(basename)
+        else:
+            # Fallback for LLM prompts (_LLM.prompt) and other non-standard suffixes:
+            # strip .prompt extension, then remove trailing _LLM if present
+            stem = filename.rsplit(".prompt", 1)[0] if filename.endswith(".prompt") else filename
+            for suffix in ("_LLM",):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            if stem:
+                known_basenames.add(stem)
+
+    valid = [m for m in modules if m in known_basenames]
+    invalid = [m for m in modules if m not in known_basenames]
+    return valid, invalid
+
+
 def _find_project_root(start: Path) -> Path:
     """Walk up from start to find project root (directory containing .pddrc or .git)."""
     current = start.resolve()
@@ -796,6 +841,17 @@ def run_agentic_sync(
         stripped = extract_module_from_include(m + ".prompt")
         stripped_modules.append(stripped if stripped else m)
     modules_to_sync = list(dict.fromkeys(stripped_modules))
+
+    # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
+    modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)
+    if invalid_basenames:
+        if not quiet:
+            console.print(f"[yellow]Warning: Skipping {len(invalid_basenames)} basenames not found in architecture.json: {invalid_basenames}[/yellow]")
+    if not modules_to_sync:
+        msg = f"No valid modules to sync (all basenames were invalid: {invalid_basenames})"
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, msg)
+        return False, msg, llm_cost, provider
 
     if not quiet:
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")

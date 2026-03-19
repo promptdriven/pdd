@@ -26,6 +26,178 @@ except ImportError:
 # Constants
 _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
 
+# Default number of tail lines to scan for semantic regex patterns.
+# Semantic matching is restricted to the tail to prevent false positives
+# when LLMs quote/discuss a status without declaring it (Issue #865).
+_SEMANTIC_TAIL_LINES = 30
+
+# Semantic fallback patterns for when LLMs paraphrase instead of emitting exact tokens.
+# Each token maps to a list of regex patterns that capture common paraphrases.
+# Patterns are checked only after exact and case-insensitive matching fail,
+# and only in the tail of the output.
+SEMANTIC_PATTERNS: Dict[str, List[str]] = {
+    "ALL_TESTS_PASS": [
+        r"\ball\b.*\btests?\b.*\bpass",         # "all tests pass", "all 18 tests pass"
+        r"\d+/\d+\s+pass",                     # "18/18 passing"
+        r"both\s+passed",                       # "both passed"
+        r"all\s+tests?\s+(are\s+)?green",       # "all tests are green"
+        r"all\s+tests?\s+passed\s+successfully", # "all tests passed successfully"
+        r"tests?\s+suite\s+passed",             # "test suite passed"
+        r"100%\s+pass",                         # "100% passing"
+        r"\b\d+\s+passed\b(?!.*\b\d+\s+failed\b)", # "788 passed" (no failures mentioned)
+        r"\bfix\b.*\bcomplete\b",               # "fix is complete"
+        r"\bverif(?:ied|ication)\b.*\bcleanly\b", # "verification completed cleanly"
+    ],
+    "NOT_A_BUG": [
+        r"\bnot\s+(?:actually\s+)?(?:a\s+)?(?:real\s+)?bug\b", # "not a bug", "not a real bug", "not actually a bug"
+        r"(it\s+is\s+|already\s+)fixed",        # "it is already fixed", "already fixed"
+        r"expected\s+behavio[u]?r",             # "expected behavior"
+        r"working\s+(as\s+)?(designed|intended|correctly|expected)", # "working correctly"
+        r"not\s+(actually\s+)?a\s+(code\s+)?issue", # "not actually an issue"
+    ],
+    "CONTINUE_CYCLE": [
+        r"tests?\s+still\s+fail",              # "tests still failing"
+        r"more\s+work\s+needed",                # "more work needed"
+        r"not\s+yet\s+(fixed|resolved|passing)", # "not yet fixed"
+        r"continue\s+(to\s+)?(next\s+)?cycle",  # "continue to next cycle"
+    ],
+    "MAX_CYCLES_REACHED": [
+        r"max(imum)?\s+cycles?\s+(reached|exceeded|limit)", # "max cycles reached"
+        r"cycle\s+limit\s+(reached|exceeded)",  # "cycle limit reached"
+    ],
+    "STOP_CONDITION": [
+        r"awaiting\s+(architectural\s+)?decisions", # "awaiting decisions"
+        r"clarification\s+(is\s+)?needed",      # "clarification is needed"
+        r"need[s]?\s+clarification\s+(from|before)", # "needs clarification from/before"
+        r"need[s]?\s+more\s+info(rmation)?\s+(from|before)", # "needs more info from"
+    ],
+}
+
+
+@dataclass
+class TokenMatch:
+    """Result of control token detection with tier and pattern info."""
+    tier: str  # "exact", "case_insensitive", "semantic", "llm_classification"
+    token: Optional[str] = None  # The classified token (e.g., "NOT_A_BUG", "ALL_TESTS_PASS")
+    pattern: Optional[str] = None
+    cost: Optional[float] = None
+
+    def __bool__(self) -> bool:
+        return True
+
+
+def detect_control_token(
+    output: Optional[str],
+    token: str,
+    tail_lines: int = _SEMANTIC_TAIL_LINES,
+) -> Optional[TokenMatch]:
+    """Detect a control token in LLM output with three-tier fallback.
+
+    Tier 1: Exact substring match (fastest, most reliable) — full output.
+    Tier 2: Case-insensitive substring match — full output.
+    Tier 3: Semantic regex patterns for common LLM paraphrases — tail only.
+
+    Restricting tier 3 to the tail prevents false positives when LLMs
+    quote or discuss a status in the middle of analysis without declaring it.
+
+    Args:
+        output: The raw LLM step output text.
+        token: The control token to detect (e.g., 'ALL_TESTS_PASS').
+        tail_lines: Number of lines from the end to scan for semantic patterns.
+
+    Returns:
+        TokenMatch if detected (truthy), None if not (falsy).
+    """
+    if not output:
+        return None
+
+    # Tier 1: exact match (full output)
+    if token in output:
+        return TokenMatch(tier="exact", token=token)
+
+    # Tier 2: case-insensitive (full output)
+    output_upper = output.upper()
+    if token.upper() in output_upper:
+        return TokenMatch(tier="case_insensitive", token=token)
+
+    # Tier 3: semantic regex fallback (tail only for long outputs)
+    patterns = SEMANTIC_PATTERNS.get(token, [])
+    if patterns:
+        lines = output.split('\n')
+        if len(lines) > tail_lines:
+            tail_text = '\n'.join(lines[-tail_lines:])
+        else:
+            tail_text = output
+        for pattern in patterns:
+            if re.search(pattern, tail_text, re.IGNORECASE):
+                return TokenMatch(tier="semantic", token=token, pattern=pattern)
+
+    return None
+
+
+def classify_step_output(
+    output: str,
+    expected_tokens: List[str],
+    model: str = "gemini/gemini-3-flash",
+) -> Optional[TokenMatch]:
+    """Classify step output via LLM when regex-based detection fails.
+
+    Makes a single cheap API call with structured output to classify
+    the step output into one of the expected control tokens.
+    Only call this as a tier-4 fallback after detect_control_token returns None.
+
+    Args:
+        output: The raw step output text.
+        expected_tokens: List of valid tokens (e.g., ["ALL_TESTS_PASS", "CONTINUE_CYCLE"]).
+        model: LiteLLM model identifier for classification.
+
+    Returns:
+        TokenMatch if classified, None if classification fails or returns NONE.
+    """
+    try:
+        from pdd.llm_invoke import llm_invoke
+    except ImportError:
+        return None
+
+    token_list = ", ".join(expected_tokens)
+    prompt = (
+        "Classify the following step output into exactly one of these statuses: "
+        "{token_list}, or NONE if none apply.\n\n"
+        "Step output (last 3000 chars):\n{step_output}\n\n"
+        "Return a JSON object with status, confidence (0-1 float), and reasoning (brief string)."
+    )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "enum": expected_tokens + ["NONE"]},
+            "confidence": {"type": "number"},
+            "reasoning": {"type": "string"},
+        },
+        "required": ["status", "confidence", "reasoning"],
+    }
+
+    try:
+        result = llm_invoke(
+            prompt=prompt,
+            input_json={"token_list": token_list, "step_output": output[-3000:]},
+            output_schema=schema,
+            strength=0.0,
+            temperature=0.0,
+        )
+        # llm_invoke returns content in "result" key, not "output"
+        raw = result.get("result") or result.get("output", "")
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        if not parsed:
+            return None
+        status = parsed.get("status", "NONE")
+        if status == "NONE" or status not in expected_tokens:
+            return None
+        cost = result.get("cost")
+        return TokenMatch(tier="llm_classification", token=status, cost=cost)
+    except Exception:
+        return None
+
 
 def substitute_template_variables(
     template: Any,
@@ -836,17 +1008,10 @@ def _run_with_provider(
         # so passing a file path gives Gemini the path string instead of content.
         # Instead, pass a short instruction as positional argument telling Gemini
         # to read the prompt file (matches old _run_google_variants pattern).
-        #
-        # --max-turns 15: Gemini's agentic loop explores exhaustively without a
-        # cap (30-50+ tool calls per step), inflating step times to 3-5 min vs
-        # Claude's 15-40s.  15 turns is enough for any well-defined step (read
-        # prompt, search/read files, write output) while preventing runaway
-        # exploration.  Claude already finishes in 3-8 turns per step.
         cmd = [
             cli_path,
             f"Read the file {prompt_path.name} for your full instructions and execute them.",
             "--yolo",
-            "--max-turns", "25",
             "--output-format", "json"
         ]
         # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)

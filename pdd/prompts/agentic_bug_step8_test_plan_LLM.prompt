@@ -1,4 +1,4 @@
-<pdd-reason>Guides LLM to design observable-behavior test plans during pdd bug step 6.</pdd-reason>
+<pdd-reason>Guides LLM to design append-first, observable-behavior test plans during pdd bug step 8.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to design a test plan that will detect this bug.
 
@@ -67,10 +67,11 @@ You are working on step 8 of 12 in an agentic bug investigation workflow. Previo
    - **Configuration bugs**: Don't just test one config source. Check env vars, config files, CLI flags, defaults, and their interaction.
    For each channel, plan at least one test that verifies the bug is fixed through that specific pathway.
 
-4. **Plan test location**
-   - Which test file should contain the new test?
-   - Should it be added to an existing file or create a new one?
-   - Follow the project's testing conventions
+4. **Plan test location (append to existing file by default)**
+   - Search for existing test files covering the affected module (e.g., `test_<module>.py`, `test_<module>_bug.py`)
+   - **Default: append to an existing test file** — only create a new file when no relevant test file exists for the affected module
+   - **Never use issue-specific filenames** like `test_issue_123.py`, `test_bug_456.py`, or `test_e2e_issue_789.py` — these create file bloat and duplicate assertions
+   - Follow the project's testing conventions for naming and organization
 
 5. **Define test cases**
    - Primary test: reproduces the exact bug (always required)
@@ -107,7 +108,7 @@ Your comment should follow this format:
 - **Expected:** [Correct behavior]
 
 ### Test Location
-- **File:** `tests/test_module.py` (append) or `tests/test_module_bug_123.py` (new)
+- **File:** `tests/test_module.py` (append — preferred) or `tests/test_new_module.py` (new — only if no existing file covers this module)
 - **Framework:** [pytest/unittest/etc.]
 
 ### Notes

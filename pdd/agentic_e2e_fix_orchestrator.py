@@ -24,6 +24,8 @@ from .agentic_common import (
     validate_cached_state,
     post_final_comment,
     DEFAULT_MAX_RETRIES,
+    detect_control_token,
+    classify_step_output,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -72,73 +74,62 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 
 console = Console()
 
-# Patterns for semantic fallback when LLMs don't emit exact control tokens (Issue #865)
-_PASS_PATTERNS = [
-    _re.compile(r"\ball\b.*\btests?\b.*\bpass", _re.IGNORECASE),
-    _re.compile(r"\b\d+\s+passed\b(?!.*\b\d+\s+failed\b)", _re.IGNORECASE),
-    _re.compile(r"\bfix\b.*\bcomplete\b", _re.IGNORECASE),
-    _re.compile(r"\bverif(?:ied|ication)\b.*\bcleanly\b", _re.IGNORECASE),
-]
+# Re-export for backward compatibility with tests that import from this module
+_detect_control_token = detect_control_token
+
+# Additional fail patterns not in the shared SEMANTIC_PATTERNS (step-specific)
 _FAIL_PATTERNS = [
     _re.compile(r"\b[1-9]\d*\s+(?:tests?\s+)?(?:still\s+)?fail", _re.IGNORECASE),
     _re.compile(r"\bneed(?:s)?\s+(?:another|more)\s+cycle", _re.IGNORECASE),
     _re.compile(r"\bstill\s+failing\b", _re.IGNORECASE),
 ]
-_NOT_A_BUG_PATTERNS = [
-    _re.compile(r"\bnot\s+a\s+bug\b", _re.IGNORECASE),
-    _re.compile(r"\balready\s+fixed\b", _re.IGNORECASE),
-    _re.compile(r"\bworking\s+as\s+intended\b", _re.IGNORECASE),
-    _re.compile(r"\bnot\s+(?:actually\s+)?(?:a\s+)?(?:real\s+)?bug\b", _re.IGNORECASE),
-]
 
 
 def _classify_step_output(output: str, step_num: int) -> Optional[str]:
-    """Classify step output into a control token, with semantic fallback.
+    """Classify step output into a control token using shared 3-tier detection.
 
-    First checks for exact token matches (the reliable path). If none found,
-    falls back to regex pattern matching on common LLM paraphrases.
+    Uses detect_control_token (exact → case-insensitive → semantic regex with
+    tail-only scoping) from agentic_common, plus step-specific logic for
+    VERIFICATION_FAILED priority and fail-before-pass ordering.
 
     Returns the token string or None if the output is ambiguous.
     """
-    # Layer 1: Exact token match (existing behavior)
+    # Priority: VERIFICATION_FAILED overrides everything
     if "VERIFICATION_FAILED" in output:
         return "VERIFICATION_FAILED"
 
     if step_num == 3:
-        if "NOT_A_BUG" in output:
+        match = detect_control_token(output, "NOT_A_BUG")
+        if match:
+            if match.tier == "semantic":
+                console.print(f"[yellow]NOT_A_BUG detected via semantic fallback (pattern: {match.pattern})[/yellow]")
             return "NOT_A_BUG"
 
     if step_num in (1, 2, 9):
+        # Exact match for LOCAL_TESTS_PASS (not in shared SEMANTIC_PATTERNS)
         if "LOCAL_TESTS_PASS" in output:
             return "LOCAL_TESTS_PASS"
-        if "ALL_TESTS_PASS" in output:
-            return "ALL_TESTS_PASS"
 
-    if step_num == 9:
-        if "MAX_CYCLES_REACHED" in output:
-            return "MAX_CYCLES_REACHED"
-        if "CONTINUE_CYCLE" in output:
-            return "CONTINUE_CYCLE"
-
-    # Layer 2: Semantic fallback via regex
-    if step_num == 3:
-        for pat in _NOT_A_BUG_PATTERNS:
-            if pat.search(output):
-                return "NOT_A_BUG"
-
-    if step_num in (1, 2, 9):
-        # Check for failure indicators first — they take priority
+        # Check for failure indicators first — they take priority over pass
         for pat in _FAIL_PATTERNS:
             if pat.search(output):
                 if step_num == 9:
                     return "CONTINUE_CYCLE"
                 return None
 
-        for pat in _PASS_PATTERNS:
-            if pat.search(output):
-                if step_num == 9:
-                    return "LOCAL_TESTS_PASS"
-                return "ALL_TESTS_PASS"
+        match = detect_control_token(output, "ALL_TESTS_PASS")
+        if match:
+            if match.tier == "semantic":
+                console.print(f"[yellow]ALL_TESTS_PASS detected via semantic fallback (pattern: {match.pattern})[/yellow]")
+            if step_num == 9:
+                return "LOCAL_TESTS_PASS"
+            return "ALL_TESTS_PASS"
+
+    if step_num == 9:
+        if detect_control_token(output, "MAX_CYCLES_REACHED"):
+            return "MAX_CYCLES_REACHED"
+        if detect_control_token(output, "CONTINUE_CYCLE"):
+            return "CONTINUE_CYCLE"
 
     return None
 
@@ -1217,6 +1208,13 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Early Exit (Step 3): NOT_A_BUG
                 _step3_token = _classify_step_output(step_output, step_num=3) if step_num == 3 else None
+                if not _step3_token and step_num == 3:
+                    # Tier 4: LLM classification fallback — only ask about NOT_A_BUG
+                    # to avoid false positives (e.g., CODE_BUG being misclassified)
+                    tier4 = classify_step_output(step_output, ["NOT_A_BUG"])
+                    if tier4:
+                        console.print("[yellow]NOT_A_BUG detected via LLM classification (tier 4)[/yellow]")
+                        _step3_token = "NOT_A_BUG"
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
@@ -1231,6 +1229,14 @@ def run_agentic_e2e_fix_orchestrator(
                 # Check Loop Control (Step 9)
                 if step_num == 9:
                     _step9_token = _classify_step_output(step_output, step_num=9)
+                    if not _step9_token:
+                        # Tier 4: LLM classification fallback
+                        tier4 = classify_step_output(
+                            step_output, ["ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"]
+                        )
+                        if tier4:
+                            console.print("[yellow]Loop control token detected via LLM classification (tier 4)[/yellow]")
+                            _step9_token = "CONTINUE_CYCLE"  # Safe default: keep cycling
                     if _step9_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                         # Independent verification: don't trust LLM output alone
                         test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)

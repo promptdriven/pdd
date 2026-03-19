@@ -595,6 +595,7 @@ def code_generator_main(
     # Merge -e vars with front-matter defaults; validate required
     if env_vars is None:
         env_vars = {}
+    explicit_env_keys = set(env_vars.keys())  # Track which vars came from explicit -e
     if fm_meta and isinstance(fm_meta.get("variables"), dict):
         for k, spec in (fm_meta["variables"].items()):
             if isinstance(spec, dict):
@@ -676,6 +677,18 @@ def code_generator_main(
         for k, v in discovered.items():
             if k not in env_vars:
                 env_vars[k] = v
+
+    # Inject resolved_config path values into env_vars.
+    # Fix for promptdriven/pdd#687: example_output_path must be available as a template
+    # variable so the LLM can construct correct _example.py include paths instead of raw
+    # source code paths.
+    # Priority: explicit -e > resolved_config (.pddrc) > front-matter default (from template)
+    if (
+        "EXAMPLE_OUTPUT_PATH" not in explicit_env_keys
+        and resolved_config
+        and resolved_config.get("example_output_path")
+    ):
+        env_vars["EXAMPLE_OUTPUT_PATH"] = str(resolved_config["example_output_path"]).rstrip("/\\")
 
     # Expand variables in output path if provided
     if output_path:

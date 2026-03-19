@@ -200,8 +200,10 @@ class TestIssue579OrchestratorRerunE2E:
             with patch('pdd.agentic_bug_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_bug_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_bug_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        with patch('pdd.agentic_bug_orchestrator.run_pytest_and_capture_output',
-                                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
+                        with patch('pdd.agentic_bug_orchestrator.preprocess', side_effect=lambda p, **kw: p), \
+                             patch('pdd.agentic_bug_orchestrator._get_git_root', return_value=main_repo), \
+                             patch('pdd.agentic_bug_orchestrator.set_agentic_progress'), \
+                             patch('pdd.agentic_bug_orchestrator.clear_agentic_progress'):
                             success, message, cost, model, files = run_agentic_bug_orchestrator(
                                 issue_url="https://github.com/test/repo/issues/579",
                                 issue_content="Bug: re-run crashes with worktree conflict",
@@ -314,8 +316,10 @@ class TestIssue579OrchestratorRerunE2E:
             with patch('pdd.agentic_bug_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_bug_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_bug_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        with patch('pdd.agentic_bug_orchestrator.run_pytest_and_capture_output',
-                                   return_value={"test_results": [{"tests": 1, "failures": 1, "errors": 0}]}):
+                        with patch('pdd.agentic_bug_orchestrator.preprocess', side_effect=lambda p, **kw: p), \
+                             patch('pdd.agentic_bug_orchestrator._get_git_root', return_value=main_repo), \
+                             patch('pdd.agentic_bug_orchestrator.set_agentic_progress'), \
+                             patch('pdd.agentic_bug_orchestrator.clear_agentic_progress'):
                             success, message, cost, model, files = run_agentic_bug_orchestrator(
                                 issue_url="https://github.com/test/repo/issues/579",
                                 issue_content="Bug: re-run crashes with worktree conflict",

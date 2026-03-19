@@ -64,6 +64,16 @@ CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
 MAX_REVIEW_ITERATIONS = 5
 
 
+def _review_loop_no_issues(output: str) -> bool:
+    """Detect 'no issues found' in step 11 output, case-insensitively.
+
+    LLMs don't reliably emit exact magic tokens (see #865, #868).
+    This checks for the canonical string and common semantic variants.
+    """
+    lower = output.lower()
+    return "no issues found" in lower
+
+
 def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
     """Remove corrupted dependency values from architecture.json after step 10."""
     arch_path = worktree_path / "architecture.json"
@@ -1009,7 +1019,7 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
-            if "No Issues Found" in s11_output:
+            if _review_loop_no_issues(s11_output):
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
             if not quiet: console.print("   -> Issues found. Proceeding to fix.")
@@ -1079,6 +1089,33 @@ def run_agentic_change_orchestrator(
                 if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
 
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
+
+    # Identify test files for affected modules (#377 Bug B)
+    impacted_tests: List[str] = []
+    test_dir_name = pddrc_context.get("test_dir", "tests/").rstrip("/")
+    test_base = cwd / test_dir_name
+    if test_base.exists():
+        for f in changed_files:
+            # Extract module basename from prompt or source filenames
+            basename = Path(f).stem
+            # Strip common suffixes to get the module name
+            for suffix in ("_python", "_typescript", "_go", "_rust", "_java"):
+                if basename.endswith(suffix):
+                    basename = basename[: -len(suffix)]
+                    break
+            # Look for matching test files
+            for test_file in test_base.glob(f"test_{basename}*"):
+                rel = str(test_file.relative_to(cwd))
+                if rel not in impacted_tests:
+                    impacted_tests.append(rel)
+    if impacted_tests:
+        context["impacted_tests"] = "\n".join(impacted_tests)
+        if not quiet:
+            console.print(f"\n[bold]Impacted test files ({len(impacted_tests)}):[/bold]")
+            for tf in impacted_tests:
+                console.print(f"  {tf}")
+    else:
+        context["impacted_tests"] = "No impacted test files identified"
 
     if last_completed_step < 13:
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
