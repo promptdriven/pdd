@@ -97,7 +97,6 @@ export const Part1Economics03CodeCostTripleLine: React.FC = () => {
         color={BLUE_LINE}
         strokeWidth={3}
         label="Cost to generate"
-        labelOpacity={0.7}
         startFrame={BLUE_LINE_START}
         drawDuration={BLUE_LINE_DUR}
       />
@@ -108,7 +107,6 @@ export const Part1Economics03CodeCostTripleLine: React.FC = () => {
         color={AMBER_LINE}
         strokeWidth={3}
         label="Immediate patch cost"
-        labelOpacity={0.7}
         startFrame={AMBER_SOLID_START}
         drawDuration={AMBER_SOLID_DUR}
       />
@@ -119,7 +117,6 @@ export const Part1Economics03CodeCostTripleLine: React.FC = () => {
         color={AMBER_LINE}
         strokeWidth={2}
         label="Total cost (with debt)"
-        labelOpacity={0.5}
         startFrame={AMBER_DASH_START}
         drawDuration={AMBER_DASH_DUR}
         dashArray="8 4"

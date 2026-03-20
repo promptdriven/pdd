@@ -15,7 +15,6 @@ interface AnimatedLineProps {
   color: string;
   strokeWidth: number;
   label: string;
-  labelOpacity?: number;
   startFrame: number;
   drawDuration: number;
   dashArray?: string;
@@ -26,7 +25,6 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   color,
   strokeWidth,
   label,
-  labelOpacity = 0.7,
   startFrame,
   drawDuration,
   dashArray,
@@ -54,20 +52,7 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Label fade-in near end of draw
-  const labelFade = interpolate(
-    frame,
-    [startFrame + drawDuration - 20, startFrame + drawDuration],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
-
   const hiddenLength = totalLength * (1 - progress);
-
-  // Position label at the last data point
-  const lastPt = data[data.length - 1];
-  const labelX = xToPixel(lastPt.x) + 12;
-  const labelY = yToPixel(lastPt.y) + 4;
 
   // Unique clip ID for this line
   const clipId = `clip-${label.replace(/[\s/()]+/g, "-")}`;
@@ -127,17 +112,6 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
           />
         )}
 
-        {/* Line label */}
-        <text
-          x={labelX}
-          y={labelY}
-          fill={color}
-          fillOpacity={labelOpacity * labelFade}
-          fontFamily="Inter, sans-serif"
-          fontSize={12}
-        >
-          {label}
-        </text>
       </svg>
     </div>
   );
