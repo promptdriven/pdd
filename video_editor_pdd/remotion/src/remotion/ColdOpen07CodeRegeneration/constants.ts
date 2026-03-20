@@ -58,7 +58,7 @@ export const EMPTY_BEAT_END = 105;
 
 export const REGEN_START = 105;
 export const REGEN_END = 210;
-export const CHARS_PER_SECOND = 60;
+export const CHARS_PER_SECOND = 130;
 
 export const TERMINAL_START = 210;
 export const TERMINAL_END = 270;

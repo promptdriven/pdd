@@ -146,7 +146,7 @@ describe("Code regeneration typewriter speed", () => {
   let REGEN_START: number;
   let REGEN_END: number;
   let FPS: number;
-  let NEW_CODE_LINES: string[];
+  let CODE_LINES: string[];
 
   beforeAll(() => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -156,7 +156,7 @@ describe("Code regeneration typewriter speed", () => {
     REGEN_START = mod.REGEN_START;
     REGEN_END = mod.REGEN_END;
     FPS = mod.FPS;
-    NEW_CODE_LINES = mod.NEW_CODE_LINES;
+    CODE_LINES = mod.CLEAN_CODE_LINES || mod.NEW_CODE_LINES;
   });
 
   it("can type all code lines within the regeneration frame window", () => {
@@ -165,7 +165,7 @@ describe("Code regeneration typewriter speed", () => {
     const maxChars = regenFrames * charsPerFrame;
 
     // Total characters needed (each line + newline)
-    const totalChars = NEW_CODE_LINES.reduce(
+    const totalChars = CODE_LINES.reduce(
       (sum, line) => sum + Math.max(line.length, 1) + 1,
       0
     );

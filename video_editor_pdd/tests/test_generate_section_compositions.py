@@ -3522,3 +3522,54 @@ class TestResolveVisualRenderMode:
             has_component=False,
         )
         assert result == "generated-media"
+
+
+class TestBuildVisualMediaManifestComponentFiltering:
+    """build_visual_media_manifest must not assign fallback video to
+    component-mode visuals. Only media-mode visuals should receive fallback."""
+
+    def _import_fn(self):
+        import importlib, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        mod = importlib.import_module("generate_section_compositions")
+        return mod.build_visual_media_manifest
+
+    def test_accepts_component_visual_ids_parameter(self):
+        """build_visual_media_manifest should accept component_visual_ids."""
+        import inspect
+        fn = self._import_fn()
+        sig = inspect.signature(fn)
+        assert 'component_visual_ids' in sig.parameters
+
+
+class TestWrapperTemplateComponentMediaFiltering:
+    """The generated section wrapper must NOT pass Veo media to
+    component-mode visuals via VisualMediaProvider. When renderMode
+    is 'component', media should be null to prevent Veo clips from
+    overriding the component's own rendered background."""
+
+    def _get_source(self):
+        script_path = os.path.join(
+            os.path.dirname(__file__),
+            "..", "scripts", "generate_section_compositions.py"
+        )
+        with open(script_path, "r") as f:
+            return f.read()
+
+    def test_wrapper_template_conditionally_nullifies_media_for_component_mode(self):
+        source = self._get_source()
+        lines = source.split('\n')
+        # Find the line that writes <VisualMediaProvider> right before <VisualComponent>
+        for i, line in enumerate(lines):
+            if 'VisualMediaProvider media=' in line and i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if 'VisualComponent' in next_line:
+                    # This is the component-wrapping media provider.
+                    # It must NOT unconditionally pass visualMedia — it must
+                    # check renderMode and pass null for component-mode visuals.
+                    assert 'renderMode' in line, (
+                        f"Line {i+1} wraps VisualComponent with VisualMediaProvider "
+                        f"but does not check renderMode to nullify media for component-mode visuals: {line.strip()}"
+                    )
+                    return
+        assert False, "Could not find VisualMediaProvider wrapping VisualComponent in template"

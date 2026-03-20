@@ -1,24 +1,22 @@
 ## Verdict
 pass
 ## Summary
-The frame at 93.7% progress (frame 449/480, animation phase 8: 'Floating annotation fades in below document. Hold.') matches the spec well across all critical elements:
+The frame at 93.7% progress (Frame 449, animation phase 420-480) matches the spec well. All critical elements are present and correctly rendered:
 
-1. **Editor window**: Centered on canvas with title bar showing 'ad_latency_optimizer.prompt' in monospace blue-tinted text on a dark title bar with traffic-light dots. Correct.
+1. **Editor window**: Centered on canvas with dark background (#0A0F1A range), title bar showing 'ad_latency_optimizer.prompt' in blue-tinted monospace font with traffic light dots — matches spec.
 
-2. **Natural language lines 1-8**: All 8 lines visible — '# Ad Latency Optimizer', 'Optimize bid calculation...', 'Accept bid request...', 'Score each candidate...', 'Return top-k candidates...', 'Latency budget: 800μs...', 'Must handle variable candidate counts...', 'Fall back to pre-computed rankings...'. Light blue-white text with subtle ambient glow. Matches spec.
+2. **Natural language lines 1-8**: All visible with correct content (# Ad Latency Optimizer, optimize bid calculation, accept bid request, score each candidate, return top-k, latency budget, handle variable counts, fall back). Light blue-white text with subtle ambient glow present — matches spec.
 
-3. **Embedded code block (lines 9-18)**: Visually distinct background (darker/gray-tinted region). Contains '```python', 'def score_candidates(candidates, ctr_scores):', vectorized scoring comment, np.multiply, np.argpartition, return statement, fallback logic, and closing '```'. Monospace font, no glow, sharp and precise. Left border visible. Material transition from natural language is clear. Matches spec.
+3. **Embedded code block (lines 9-18)**: Visually distinct with darker/different background material, monospace font. Contains ```python, def score_candidates, vectorized scoring comment, np.multiply, np.argpartition, return candidates, fallback logic, len check, sorted return, closing ```. Left border visible. No ambient glow on code — correct stark/precise contrast with natural language sections.
 
-4. **Natural language lines 19-24**: Six lines of constraints visible — edge case handling, type info, metadata preservation, latency monitoring, alert threshold, caching. Blue-white flowing text with ambient glow returns. Matches spec.
+4. **Natural language lines 19-24**: Back to flowing text — handle edge case, Type: List[AdCandidate], preserve metadata, log latency, alert if p99, cache model weights. Blue-white text with glow returns — matches spec.
 
-5. **Section labels**: Three labels visible on the right side with bracket indicators — 'Intent (natural language)' (blue, spanning top section), 'Critical algorithm (code)' (gray, spanning code block), 'Constraints (natural language)' (blue, spanning bottom section). All present and correctly positioned.
+5. **Section labels**: All three present on right side with brackets — 'Intent (natural language)' spanning lines 1-8 in blue, 'Critical algorithm (code)' spanning lines 9-18 in gray, 'Constraints (natural language)' spanning lines 19-24 in blue. Correctly positioned.
 
-6. **Floating annotation**: Below the document, text reads 'Stay in prompt space as long as possible. Dip into code when you must.' with 'prompt space' in blue and 'code' in gray. Matches spec exactly.
+6. **Floating annotation**: Visible below document reading 'Stay in prompt space as long as possible. Dip into code when you must.' with 'prompt space' in blue and 'code' in gray — matches spec exactly.
 
-7. **Background**: Deep navy-black. Correct.
+7. **Animation phase**: At 93.7% progress we are deep into phase 8 (420-480, hold with annotation visible). The annotation is fully faded in and the complete document with all labels is on display — correct for this sample time.
 
-8. **Line numbers**: Visible in left gutter, subtle gray. Correct.
+8. **Line numbers**: Visible in the left gutter in muted styling — matches spec.
 
-9. **Animation phase**: At 93.7%, we're in the final hold phase (420-480). All content is fully typed, all labels visible, annotation visible. Consistent with spec.
-
-The overall composition faithfully represents the spec's intent of showing the fluid boundary between prompt and code within a single document.
+The material boundary between natural language and code is clearly visible. Layout is centered. All typography, colors, and structural elements align with the spec. Minor variations in exact glow intensity and spacing are within acceptable tolerances.

@@ -61,7 +61,7 @@
       "specDir": "part2_paradigm_shift",
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
-      "durationSeconds": 228.117333,
+      "durationSeconds": 227.562667,
       "offsetSeconds": 473.130666,
       "compositions": [
         "01_section_title_card",
@@ -82,8 +82,8 @@
       "specDir": "part3_mold_three_parts",
       "remotionDir": "S03-Part3MoldThreeParts",
       "compositionId": "Part3MoldThreePartsSection",
-      "durationSeconds": 344.448,
-      "offsetSeconds": 701.247999,
+      "durationSeconds": 344.213333,
+      "offsetSeconds": 700.693333,
       "compositions": [
         "01_section_title_card",
         "02_mold_cross_section",
@@ -104,7 +104,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 111.914667,
-      "offsetSeconds": 1045.695999,
+      "offsetSeconds": 1044.906666,
       "compositions": [
         "01_section_title_card",
         "02_printer_vs_mold_split",
@@ -124,8 +124,8 @@
       "specDir": "part5_compound_returns",
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
-      "durationSeconds": 115.392,
-      "offsetSeconds": 1157.610666,
+      "durationSeconds": 115.157333,
+      "offsetSeconds": 1156.821333,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -145,8 +145,8 @@
       "specDir": "where_to_start",
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
-      "durationSeconds": 32.661333,
-      "offsetSeconds": 1273.002666,
+      "durationSeconds": 32.149333,
+      "offsetSeconds": 1271.978666,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -166,7 +166,7 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 20.714667,
-      "offsetSeconds": 1305.663999,
+      "offsetSeconds": 1304.127999,
       "compositions": [
         "01_sock_callback_split",
         "03_code_regenerate_workflow",

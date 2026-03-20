@@ -3035,6 +3035,12 @@ describe("compositions executor — buildComponentPrompt multi-file output", () 
     expect(compositionsSourceCode).toContain("divider");
   });
 
+  it("specifies minimum opacity for dividers and horizontal rules", () => {
+    // Without a minimum opacity, Claude generates rules at 0.2-0.5 opacity
+    // which are invisible on dark backgrounds. The prompt must specify a floor.
+    expect(compositionsSourceCode).toMatch(/divider.*opacity.*0\.[67]/is);
+  });
+
   it("buildComponentPrompt derives dirName from baseName, not scoped outputName", () => {
     // The prompt must accept a baseName parameter for NN-prefix directory naming
     // so that "10_split_perception_reality" → "10-SplitPerceptionReality" directory

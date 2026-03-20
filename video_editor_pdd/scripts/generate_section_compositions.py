@@ -800,16 +800,17 @@ def build_visual_contract_manifest(
                 str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'),
             )
 
-        media_manifest = build_visual_media_manifest(
-            section,
-            project_dir,
-            remotion_public,
-        )
-        overlay_manifest = build_visual_overlay_manifest(section, project_dir)
         composition_ids = {
             (c if isinstance(c, str) else c.get('id', ''))
             for c in section.get('compositions', [])
         }
+        media_manifest = build_visual_media_manifest(
+            section,
+            project_dir,
+            remotion_public,
+            component_visual_ids=composition_ids,
+        )
+        overlay_manifest = build_visual_overlay_manifest(section, project_dir)
         visuals: List[Dict[str, Any]] = []
         for visual_id in visual_ids:
             spec_base = component_base_name(visual_id, section['id'])
@@ -884,6 +885,7 @@ def build_visual_media_manifest(
     project_dir: str,
     remotion_public: str,
     fallback_video_src: Optional[str] = None,
+    component_visual_ids: Optional[set] = None,
 ) -> Dict[str, Dict[str, str]]:
     """Build per-visual media aliases for the section wrapper."""
     visual_ids = resolve_section_visual_ids(section, project_dir, remotion_public)
@@ -907,6 +909,7 @@ def build_visual_media_manifest(
     for visual_id in visual_ids:
         spec_base = component_base_name(visual_id, section['id'])
         spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+        is_component = component_visual_ids and spec_base in component_visual_ids
         aliases: Dict[str, str] = {}
 
         if os.path.isfile(spec_path):
@@ -921,7 +924,7 @@ def build_visual_media_manifest(
                 saw_explicit_source = True
             if next_default is not None:
                 inherited_default = next_default
-        elif inherited_default is not None:
+        elif inherited_default is not None and not is_component:
             aliases = {
                 'defaultSrc': inherited_default,
                 'backgroundSrc': inherited_default,
@@ -929,7 +932,7 @@ def build_visual_media_manifest(
                 'baseSrc': inherited_default,
             }
 
-        if not aliases and not saw_explicit_source and fallback_video_src is not None:
+        if not aliases and not saw_explicit_source and fallback_video_src is not None and not is_component:
             aliases = {
                 'defaultSrc': fallback_video_src,
                 'backgroundSrc': fallback_video_src,
@@ -1634,7 +1637,7 @@ def generate_generated_timeline_wrapper(
     lines.append('            {VisualComponent ? (')
     lines.append('              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
     lines.append('                <VisualContractProvider contract={visualContract}>')
-    lines.append('                  <VisualMediaProvider media={visualMedia}>')
+    lines.append('                  <VisualMediaProvider media={visualContract?.renderMode === "component" ? null : visualMedia}>')
     lines.append('                    <VisualComponent />')
     lines.append('                  </VisualMediaProvider>')
     lines.append('                </VisualContractProvider>')

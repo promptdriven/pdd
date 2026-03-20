@@ -80,7 +80,7 @@ export const Part3MoldThreePartsSection: React.FC = () => {
             {VisualComponent ? (
               <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
                 <VisualContractProvider contract={visualContract}>
-                  <VisualMediaProvider media={visualMedia}>
+                  <VisualMediaProvider media={visualContract?.renderMode === "component" ? null : visualMedia}>
                     <VisualComponent />
                   </VisualMediaProvider>
                 </VisualContractProvider>

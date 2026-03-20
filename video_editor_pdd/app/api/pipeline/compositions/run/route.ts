@@ -214,7 +214,8 @@ CRITICAL RENDERING REQUIREMENTS:
   instead of inventing per-shot filenames.
 - Overlay readability is a hard contract: minimum text opacity 0.78 for primary labels,
   minimum text opacity 0.62 for supporting labels, minimum font size 18px for overlay text,
-  and dividers/rules must be clearly visible with a minimum 2px thickness.
+  and dividers/rules must be clearly visible with a minimum 2px thickness and a minimum
+  divider opacity of 0.7 — do not use opacity below 0.7 for horizontal rules or dividers.
 - Only import from "remotion" — do not import from other local files in the component directory.
 - Break complex visuals into sub-components (e.g., AnimatedLine.tsx, ChartAxes.tsx) for maintainability.
 - Keep helper component contracts internally consistent: prop names used by callers must match helper prop interfaces, every imported constant must be declared, and default-vs-named exports must match the import style.

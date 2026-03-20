@@ -1,4 +1,4 @@
 ## Verdict
-pass
+warn
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (threshold, cost, darn, labor, sock), so the frame does not support a hard missing-text failure.
+The chart is correctly rendered in the hold phase with all major elements present: both lines (amber labor cost, blue new sock cost), crossing point with 'The Threshold' label and glow, post-crossing shaded area, and 'Darning is irrational' annotation. Background, axes, tick marks, and axis labels all match spec. However, both line-end labels are clipped at the right edge of the frame — 'Cost to darn (time)' appears as 'Cost to darn (ti...' and 'Cost of new socks' appears as 'Cost of new so...'. The right margin (spec calls for 100px) is not providing enough room for the labels, or the labels are positioned outside the safe area. An un-specced chart title ('Labor Cost vs. New Sock Cost') is present at the top, which is additive but not a failure. The blue line starting value (~80%) and amber line flatness (~35%) match spec data points. Crossing occurs near 1961-1962, consistent with the spec's '~1962' target.
