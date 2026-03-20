@@ -126,7 +126,8 @@ const HorizontalRule: React.FC = () => {
 				width: currentWidth,
 				height: RULE_HEIGHT,
 				backgroundColor: RULE_COLOR,
-				opacity: 0.5,
+				opacity: 0.8,
+				zIndex: 5,
 			}}
 		/>
 	);

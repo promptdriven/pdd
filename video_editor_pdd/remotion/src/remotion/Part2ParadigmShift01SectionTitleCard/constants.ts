@@ -36,7 +36,7 @@ export const RULE_Y = 505;
 export const TITLE_LINE2_Y = 545;
 export const TITLE_LINE2_OFFSET_X = 15;
 export const RULE_WIDTH = 200;
-export const RULE_HEIGHT = 2;
+export const RULE_HEIGHT = 3;
 
 // Ghost shape positions
 export const MOLD_POS = { x: 700, y: 480 };
