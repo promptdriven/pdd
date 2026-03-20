@@ -4820,6 +4820,211 @@ class TestReasoningParameters:
 
 
 # ============================================================================
+# TESTS: Vertex AI Claude temperature fix (GitHub issue: 62K failed API calls)
+# ============================================================================
+
+class TestVertexAIClaudeTemperatureFix:
+    """Bug: provider.lower() == 'anthropic' misses Vertex AI Claude models
+    whose CSV provider is 'Google'.  Also, litellm_kwargs contains
+    'reasoning_effort' (not 'thinking') for effort-type models — the check
+    for 'thinking' in litellm_kwargs misses this case.
+
+    These tests cover both the pre-flight temperature fix and the error-retry
+    handler.
+    """
+
+    def _make_csv(self, tmp_path, provider, model_name, reasoning_type, max_reasoning=16000):
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            f"structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            f"max_reasoning_tokens\n"
+            f"{provider},{model_name},1,2,1200,TEST_KEY,True,{reasoning_type},4096,4096,{max_reasoning}\n"
+        )
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(content)
+        return csv_path
+
+    def _make_mock_response(self):
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+        return mock_response
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Vertex AI Claude with reasoning_effort (effort type)
+    # ------------------------------------------------------------------
+    def test_vertex_ai_claude_effort_forces_temperature_1(self, llm_mod, tmp_path, monkeypatch):
+        """Vertex AI Claude with reasoning_effort must have temperature=1.
+
+        The CSV provider is 'Google' and reasoning_type is 'effort',
+        so litellm_kwargs gets 'reasoning_effort' (not 'thinking').
+        The pre-flight check must still detect this and force temperature=1.
+        """
+        csv_path = self._make_csv(tmp_path, "Google", "vertex_ai/claude-opus-4-6", "effort")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/claude-opus-4-6")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,  # > 0.7 -> effort="high" -> reasoning_effort
+                use_cloud=False,
+            )
+
+        # reasoning_effort should be set (effort type)
+        assert "reasoning_effort" in captured_kwargs
+        # Temperature must be forced to 1 for Claude with reasoning
+        assert captured_kwargs["temperature"] == 1, (
+            f"Expected temperature=1 for Vertex AI Claude with reasoning_effort, "
+            f"got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Vertex AI Claude with thinking (budget type)
+    # ------------------------------------------------------------------
+    def test_vertex_ai_claude_budget_forces_temperature_1(self, llm_mod, tmp_path, monkeypatch):
+        """Vertex AI Claude with thinking (budget type, provider='Google') must
+        have temperature=1.
+
+        The budget code path at line ~2189 checks provider=='anthropic' to
+        inject the 'thinking' param. With provider='Google', the budget path
+        skips thinking injection. However, if a future fix corrects that path
+        too, the temperature enforcement must still work. This test uses
+        provider='anthropic' so that 'thinking' actually gets set, serving as
+        a regression test for the Anthropic budget path.
+        """
+        # provider='anthropic' so the budget path injects 'thinking' into kwargs.
+        # This is a regression test — the old code also passed this case.
+        csv_path = self._make_csv(tmp_path, "anthropic", "vertex_ai/claude-sonnet-4-6", "budget")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/claude-sonnet-4-6")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        # thinking should be set (budget type with anthropic provider)
+        assert "thinking" in captured_kwargs
+        # Temperature must be forced to 1
+        assert captured_kwargs["temperature"] == 1
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Direct Anthropic Claude still works (regression)
+    # ------------------------------------------------------------------
+    def test_direct_anthropic_claude_effort_forces_temperature_1(self, llm_mod, tmp_path, monkeypatch):
+        """Direct anthropic/claude models with reasoning_effort must still
+        have temperature=1 (regression test for existing behavior).
+        """
+        csv_path = self._make_csv(tmp_path, "anthropic", "claude-sonnet-4-6", "effort")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-sonnet-4-6")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+
+        assert "reasoning_effort" in captured_kwargs
+        assert captured_kwargs["temperature"] == 1, (
+            f"Expected temperature=1 for direct Anthropic Claude with reasoning_effort, "
+            f"got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Error-retry: Vertex AI Claude thinking conflict uses temp=1
+    # ------------------------------------------------------------------
+    def test_vertex_ai_claude_error_retry_uses_temperature_1(self, llm_mod, tmp_path, monkeypatch):
+        """When litellm raises a BadRequestError about temperature+thinking
+        for a Vertex AI Claude model, the retry handler should detect the
+        thinking/reasoning conflict and retry with temperature=1 (not 0.99).
+        """
+        csv_path = self._make_csv(tmp_path, "Google", "vertex_ai/claude-opus-4-6", "effort")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/claude-opus-4-6")
+
+        call_count = 0
+        captured_kwargs_list = []
+
+        def failing_then_success(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            captured_kwargs_list.append(dict(kwargs))
+            if call_count == 1:
+                # Simulate the Anthropic error about temperature+thinking conflict
+                mock_request = MagicMock(spec=httpx.Request)
+                mock_request.url = "https://api.anthropic.com/v1/messages"
+                mock_resp = MagicMock(spec=httpx.Response)
+                mock_resp.request = mock_request
+                mock_resp.status_code = 400
+                mock_resp.headers = {"content-type": "application/json"}
+                raise openai.BadRequestError(
+                    message="temperature must be 1 when thinking is enabled",
+                    response=mock_resp,
+                    body={"error": "temperature must be 1 when thinking is enabled"},
+                )
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=failing_then_success):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+
+        # Should have retried
+        assert call_count == 2, f"Expected 2 calls (1 failure + 1 retry), got {call_count}"
+        # The retry should use temperature=1 (not 0.99) because reasoning was sent
+        assert captured_kwargs_list[1]["temperature"] == 1, (
+            f"Expected retry temperature=1 for Vertex AI Claude with reasoning_effort, "
+            f"got {captured_kwargs_list[1].get('temperature')}"
+        )
+
+
+# ============================================================================
 # TESTS: Time parameter None handling
 # ============================================================================
 
