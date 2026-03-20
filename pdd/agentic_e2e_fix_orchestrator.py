@@ -1219,6 +1219,7 @@ def run_agentic_e2e_fix_orchestrator(
                             break
                         else:
                             console.print("[bold red]LLM claimed ALL_TESTS_PASS but independent verification FAILED.[/bold red]")
+                            console.print(f"[red]Verification output:\n{verify_output}[/red]")
                             step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
                             step_outputs[str(step_num)] = f"FAILED: {step_output}"
                             last_completed_step = step_num - 1
@@ -1256,6 +1257,7 @@ def run_agentic_e2e_fix_orchestrator(
                                 break
                             else:
                                 console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
+                                console.print(f"[red]Verification output:\n{verify_output}[/red]")
                                 step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
                                 step_outputs[str(step_num)] = f"FAILED: {step_output}"
                                 last_completed_step = step_num - 1
