@@ -82,6 +82,7 @@ export const ColdOpen01SplitScreenHook: React.FC = () => {
             left: 0,
             width: LEFT_PANEL_WIDTH,
             height: COMP_HEIGHT,
+            zIndex: 1,
           }}
         >
           <SplitPanel
@@ -119,6 +120,7 @@ export const ColdOpen01SplitScreenHook: React.FC = () => {
             left: RIGHT_PANEL_LEFT,
             width: RIGHT_PANEL_WIDTH,
             height: COMP_HEIGHT,
+            zIndex: 1,
           }}
         >
           <SplitPanel
@@ -138,7 +140,7 @@ export const ColdOpen01SplitScreenHook: React.FC = () => {
         </div>
 
         {/* ── Divider Glow Pulse (frames 180-240) ────────────────────────── */}
-        <Sequence from={GLOW_START} durationInFrames={GLOW_DURATION}>
+        <Sequence from={GLOW_START} durationInFrames={GLOW_DURATION} style={{ zIndex: 6 }}>
           <DividerGlow />
         </Sequence>
       </AbsoluteFill>

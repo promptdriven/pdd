@@ -81,6 +81,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({
           backgroundColor: tintColor,
           opacity: tintOpacity,
           pointerEvents: 'none',
+          zIndex: 1,
         }}
       />
 
@@ -95,6 +96,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({
           background: `radial-gradient(ellipse at center, transparent 40%, ${vignetteColor} 100%)`,
           opacity: vignetteOpacity,
           pointerEvents: 'none',
+          zIndex: 2,
         }}
       />
 

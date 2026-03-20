@@ -33,7 +33,7 @@ export const RIGHT_TINT_OPACITY = 0.04;
 export const RIGHT_VIGNETTE_COLOR = '#0A0500';
 export const RIGHT_VIGNETTE_OPACITY = 0.2;
 export const RIGHT_LABEL = '1955';
-export const RIGHT_LABEL_X = 24; // relative to panel
+export const RIGHT_LABEL_X = 25; // relative to panel (986 absolute - 961 panel left)
 export const RIGHT_LABEL_Y = 20;
 
 // ─── Film Grain ───────────────────────────────────────────────────────────────

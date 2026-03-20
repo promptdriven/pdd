@@ -29,6 +29,7 @@ export const FilmGrain: React.FC<{
       opacity,
       pointerEvents: 'none' as const,
       mixBlendMode: 'overlay' as const,
+      zIndex: 3,
     };
   }, [grainFrame, width, height, opacity]);
 
