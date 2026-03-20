@@ -121,8 +121,9 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
       {/* Label at line end */}
       {labelOpacity > 0.01 && (
         <text
-          x={endPx + 12}
-          y={endPy + 4}
+          x={endPx - 12}
+          y={endPy - 10}
+          textAnchor="end"
           fill={color}
           fillOpacity={labelOpacity}
           fontFamily={FONT_FAMILY}

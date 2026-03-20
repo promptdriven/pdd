@@ -24,24 +24,6 @@ export const Part1Economics02SockEconomicsChart: React.FC = () => {
         height: 1080,
       }}
     >
-      {/* Chart title — visible from frame 0 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 40,
-          left: 0,
-          right: 0,
-          textAlign: 'center',
-          fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-          fontSize: 24,
-          fontWeight: 600,
-          color: '#E2E8F0',
-          opacity: 0.85,
-        }}
-      >
-        Labor Cost vs. New Sock Cost
-      </div>
-
       {/* Axes — draw from frame 0 */}
       <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <ChartAxes />
