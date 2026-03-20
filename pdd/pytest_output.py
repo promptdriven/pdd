@@ -187,11 +187,33 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
         # PDD project detected - set up proper environment
         subprocess_kwargs["cwd"] = str(project_root)
 
-        # Build PYTHONPATH with both project root and src/ if it exists
+        # Build PYTHONPATH with project root and common source directories.
+        # Monorepo layouts often nest Python packages under backend/, src/,
+        # or similar directories. The test file's parent chain tells us which
+        # subdirectory contains the importable packages.
         paths_to_add = [str(project_root)]
         src_dir = project_root / "src"
         if src_dir.is_dir():
             paths_to_add.insert(0, str(src_dir))  # src/ takes priority
+
+        # Add common monorepo source roots (backend/, server/, api/, lib/)
+        for subdir_name in ("backend", "server", "api", "lib"):
+            subdir = project_root / subdir_name
+            if subdir.is_dir():
+                paths_to_add.insert(0, str(subdir))
+
+        # Also add the test file's nearest source root: walk up from the test
+        # file until we reach the project root, adding directories that contain
+        # Python packages (directories with __init__.py or importable modules).
+        test_parent = test_path.resolve().parent
+        while test_parent != project_root and test_parent != test_parent.parent:
+            # If this directory's parent contains a conftest.py or pyproject.toml,
+            # it's likely a source root
+            parent_of = test_parent.parent
+            if (parent_of / "conftest.py").exists() or (parent_of / "pyproject.toml").exists():
+                if str(parent_of) not in paths_to_add:
+                    paths_to_add.insert(0, str(parent_of))
+            test_parent = parent_of
 
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH", "")
