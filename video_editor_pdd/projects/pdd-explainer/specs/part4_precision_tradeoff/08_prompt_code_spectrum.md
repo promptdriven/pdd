@@ -229,3 +229,11 @@ Segment: `part4_precision_tradeoff_010`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: fa25d5f9-e866-4d6f-aba7-ccf0d93903ea -->
+## Annotation Update
+Requested change: The frame is sampled at 87.5% progress (frame 104/120), within the hold phase (frames 90-120). All critical text elements are present and correctly rendered: 'PART 4' section label is visible and centered above the title, 'THE PRECISION' and 'TRADEOFF' are displayed in large bold white text, and both ghost shapes are visible — the dot grid on the left and the rectangular mold outline on the right. The background is deep navy-black as specified. However, there are two notable discrepancies: (1) T
+Technical assessment: Frame sampled at 87.5% (frame 104/120) during the hold phase. All major text elements (PART 4, THE PRECISION, TRADEOFF) and both ghost shapes (dot grid left, mold outline right) are present and correctly rendered against the deep navy-black background. Two discrepancies found: (1) The horizontal rule specified as 200px wide, 2px height, #334155 at 0.5 opacity, centered at y:505 between the two title words, is not visible — likely either not rendered or rendered at too low an opacity/wrong position. (2) The TRADEOFF text should be offset 15px right of center (x:975 per the Remotion code) but appears visually centered, matching THE PRECISION alignment. Both are cosmetic layout details that don't affect comprehension of the title card.
+- Verify the DrawLine component renders the horizontal rule at y:505 from x:860 to x:1060 with color #334155 at 0.5 opacity and 2px stroke width; ensure it is not clipped or hidden behind other layers
+- Confirm TRADEOFF text x-position is set to 975 (15px right of center at 960) per spec, ensuring the offset-right visual distinction from THE PRECISION is perceptible
+<!-- ANNOTATION_UPDATE_END: fa25d5f9-e866-4d6f-aba7-ccf0d93903ea -->
