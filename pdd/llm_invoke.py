@@ -8,9 +8,16 @@ import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
+import json as _json
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
+
+# Optional lightweight trace for core dumps (best-effort).
+try:
+    from .core.llm_trace import record_llm_pair as _record_llm_pair
+except Exception:  # pragma: no cover
+    _record_llm_pair = None  # type: ignore
 
 # Environment variable to control log level
 PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
@@ -412,6 +419,20 @@ def _llm_invoke_cloud(
         if response.status_code == 200:
             data = response.json()
             result = data.get("result")
+            # Best-effort trace: store the final prompt/messages and raw cloud "result".
+            if _record_llm_pair is not None:
+                try:
+                    trace_prompt = payload.get("messages") if payload.get("messages") is not None else {
+                        "prompt": payload.get("prompt"),
+                        "inputJson": payload.get("inputJson"),
+                    }
+                    _record_llm_pair(
+                        prompt=trace_prompt,
+                        response=result,
+                        model=str(data.get("modelName", "cloud_model")),
+                    )
+                except Exception:
+                    pass
 
             # Validate with Pydantic if specified
             if output_pydantic and result:
@@ -1885,6 +1906,18 @@ def llm_invoke(
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
 
+    # Best-effort: precompute a compact representation of the final messages.
+    # We'll record (messages, raw_response) after we receive the response.
+    trace_prompt_repr: Any = None
+    try:
+        if not use_batch_mode:
+            trace_prompt_repr = formatted_messages
+        else:
+            # Avoid huge traces for batch requests.
+            trace_prompt_repr = None
+    except Exception:
+        trace_prompt_repr = None
+
     # Handle None time (means "no reasoning requested")
     if time is None:
         time = 0.0
@@ -2547,6 +2580,16 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
+                        # Record the last (prompt, raw response) pair for the current operation.
+                        if _record_llm_pair is not None and trace_prompt_repr is not None:
+                            try:
+                                _record_llm_pair(
+                                    prompt=trace_prompt_repr,
+                                    response=raw_result,
+                                    model=str(model_name_litellm),
+                                )
+                            except Exception:
+                                pass
                         
                         # Check if raw_result is None (likely cached corrupted data)
                         if raw_result is None:
@@ -2582,6 +2625,15 @@ def llm_invoke(
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    if _record_llm_pair is not None and trace_prompt_repr is not None:
+                                        try:
+                                            _record_llm_pair(
+                                                prompt=trace_prompt_repr,
+                                                response=retry_raw_result,
+                                                model=str(model_name_litellm),
+                                            )
+                                        except Exception:
+                                            pass
                                     if retry_raw_result is not None:
                                         logger.info(f"[SUCCESS] Cache bypass retry succeeded for item {i}")
                                         raw_result = retry_raw_result
