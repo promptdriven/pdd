@@ -114,6 +114,8 @@ export const HorizontalRule: React.FC = () => {
         style={{
           position: 'absolute',
           top: 505,
+          left: '50%',
+          transform: 'translateX(-50%)',
           width: halfWidth * 2,
           height: 2,
           backgroundColor: COLORS.RULE,
