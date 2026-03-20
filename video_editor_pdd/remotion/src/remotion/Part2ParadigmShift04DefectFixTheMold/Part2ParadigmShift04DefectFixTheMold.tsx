@@ -3,10 +3,7 @@ import {
   AbsoluteFill,
   useCurrentFrame,
   Sequence,
-  Video,
-  interpolate,
 } from "remotion";
-import { useVisualMediaAssetSrc } from "../_shared/visual-runtime";
 import {
   BG_COLOR,
   TOTAL_FRAMES,
@@ -37,19 +34,12 @@ export const defaultPart2ParadigmShift04DefectFixTheMoldProps = {};
  */
 export const Part2ParadigmShift04DefectFixTheMold: React.FC = () => {
   const frame = useCurrentFrame();
-  const backgroundSrc = useVisualMediaAssetSrc("backgroundSrc");
 
   // Positions for the defective ejected part
   const partFromY = 650;
   const partToY = 780;
   const defectEdgeX = MOLD_CENTER_X + PART_W / 2 - 12; // right edge where defect is
   const defectEdgeY = partToY;
-
-  // Background video opacity — subtle, underlays the diagram
-  const bgOpacity = interpolate(frame, [0, 30], [0, 0.15], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
 
   return (
     <AbsoluteFill
@@ -58,23 +48,7 @@ export const Part2ParadigmShift04DefectFixTheMold: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Optional Veo background video */}
-      {backgroundSrc && (
-        <AbsoluteFill style={{ opacity: bgOpacity }}>
-          <Video
-            src={backgroundSrc}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
-            startFrom={0}
-            muted
-          />
-        </AbsoluteFill>
-      )}
-
-      {/* Drafting grid */}
+      {/* Drafting grid — clean engineering-diagram aesthetic */}
       <DraftGrid />
 
       {/* Mold diagram — draws from frame 0 */}

@@ -82,7 +82,7 @@ export const FixedParts: React.FC = () => {
         const partOpacity = interpolate(
           partLocalFrame,
           [0, 5],
-          [0, 0.5],
+          [0, 0.85],
           { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
         );
 
@@ -129,16 +129,16 @@ export const FixedParts: React.FC = () => {
                   cy={12}
                   r={10}
                   fill={FIXED_GREEN}
-                  fillOpacity={0.3}
+                  fillOpacity={0.5}
                 />
                 <polyline
                   points="7,12 10,16 17,9"
                   fill="none"
-                  stroke={FIXED_GREEN}
-                  strokeWidth={2}
+                  stroke="#FFFFFF"
+                  strokeWidth={2.5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeOpacity={0.8}
+                  strokeOpacity={1}
                 />
               </svg>
             )}
@@ -157,7 +157,7 @@ export const FixedParts: React.FC = () => {
 const CounterLabel: React.FC<{ frame: number }> = ({ frame }) => {
   const localFrame = frame - COUNTER_START;
 
-  const opacity = interpolate(localFrame, [0, 20], [0, 0.6], {
+  const opacity = interpolate(localFrame, [0, 20], [0, 0.85], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
