@@ -1,3 +1,24 @@
+## v0.0.182 (2026-03-19)
+
+### Feat
+
+- Refine pdd-explainer video content specifications and update composition generation logic.
+- update various Remotion scenes, refactor cold open components, and introduce new elements like floating comments and split panels.
+- Refine video explainer audit specifications, update Remotion components, and add audit composition tests.
+- Reimplement and restructure the cold open Remotion sequence, replacing old audit files and components with new scene-specific implementations.
+- Improve section ID matching logic to support compact abbreviations and add a corresponding test.
+- Display script content as formatted markdown in Stage9RenderStitch using ReactMarkdown and Tailwind Typography.
+- refactor Stage9RenderStitch modal layout for fixed viewport and independent pane scrolling, and add Tailwind v4 `@source` directive for component scanning.
+
+### Fix
+
+- address PR review — rename variable, update log messages, clarify test
+- force temperature=1 for Vertex AI Claude when thinking/reasoning is enabled
+
+### Refactor
+
+- Reverse Stage 9 layout to place the script on the left and video on the right.
+
 ## v0.0.181 (2026-03-18)
 
 ### Feat
