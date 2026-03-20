@@ -24,7 +24,7 @@ def main() -> None:
     # Example flow:
     #   Configured models:
     #     1. anthropic/claude-haiku-4-5-20251001  ANTHROPIC_API_KEY
-    #     2. gpt-5-nano                           OPENAI_API_KEY
+    #     2. gpt-5.4-nano                         OPENAI_API_KEY
     #     3. lm_studio/openai-gpt-oss-120b-mlx-6  (local)
     #
     #   Test which model? 1

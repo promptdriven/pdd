@@ -2485,12 +2485,17 @@ def llm_invoke(
 
 
                 else:
-                    # Anthropic requirement: when 'thinking' is enabled, temperature must be 1
+                    # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
+                    # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
+                    # Check both 'thinking' and 'reasoning_effort' because litellm translates
+                    # reasoning_effort to thinking internally during transform_request.
                     try:
-                        if provider.lower() == 'anthropic' and 'thinking' in litellm_kwargs:
+                        is_claude_model = 'claude' in model_name_litellm.lower()
+                        has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
+                        if is_claude_model and has_thinking_or_reasoning:
                             if litellm_kwargs.get('temperature') != 1:
                                 if verbose:
-                                    logger.info("[INFO] Anthropic thinking enabled: forcing temperature=1 for compliance.")
+                                    logger.info("[INFO] Claude with thinking/reasoning enabled: forcing temperature=1 for compliance.")
                                 litellm_kwargs['temperature'] = 1
                                 current_temperature = 1
                     except Exception:
@@ -3011,19 +3016,20 @@ def llm_invoke(
                 error_type = type(e).__name__
                 error_str = str(e)
 
-                # Provider-specific handling for Anthropic temperature + thinking rules.
+                # Claude-specific handling for temperature + thinking/reasoning rules.
+                # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
                 # Two scenarios we auto-correct:
                 # 1) temperature==1 without thinking -> retry with 0.99
                 # 2) thinking enabled but temperature!=1 -> retry with 1
                 lower_err = error_str.lower()
                 if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
-                    anthropic_thinking_sent = ('thinking' in litellm_kwargs) and (provider.lower() == 'anthropic')
+                    claude_thinking_sent = ('thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs) and 'claude' in model_name_litellm.lower()
                     # Decide direction of adjustment based on whether thinking was enabled in the call
-                    if anthropic_thinking_sent:
+                    if claude_thinking_sent:
                         # thinking enabled -> force temperature=1
                         adjusted_temp = 1
                         logger.warning(
-                            f"[WARN] {model_name_litellm}: Anthropic with thinking requires temperature=1. "
+                            f"[WARN] {model_name_litellm}: Claude with thinking requires temperature=1. "
                             f"Retrying with temperature={adjusted_temp}."
                         )
                     else:
