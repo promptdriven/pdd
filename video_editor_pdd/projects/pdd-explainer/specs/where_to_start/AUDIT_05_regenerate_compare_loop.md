@@ -1,14 +1,20 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at frame 172/180 (phase 7: hold, pipeline complete with loop visible). The overall composition is correct: four pipeline steps ('Generate prompt', 'Add tests', 'Regenerate', 'Compare') are arranged horizontally with connecting arrows, the loop arrow arcs from step 4 back to step 2 with the 'iterate' label visible above, and a progress bar sits below. However, there are a few discrepancies:
+The frame is sampled at 95.8% of the intrinsic visual (frame 172/180), which falls within the final hold phase (Frame 165-180: 'Hold. Pipeline complete with loop visible.'). All required elements are present and correctly rendered:
 
-1. **Pipeline not centered horizontally**: The spec calls for the pipeline to be centered on the canvas. The four steps appear shifted left — 'Generate prompt' starts around x:110 and 'Compare' ends around x:960, leaving substantial empty space on the right. The pipeline group is not horizontally centered on the 1920px canvas.
+1. **Four pipeline steps** — 'Generate prompt' (document icon with horizontal lines), 'Add tests' (three amber/gold wall rectangles), 'Regenerate' (terminal window with 'pdd generate' text), and 'Compare' (split diff view with green checkmarks) are all visible in a horizontal arrangement, centered vertically around the expected y position.
 
-2. **Progress bar fill level**: At frame 172 (phase 7 hold), the spec says the progress bar should have reset to ~80% at frame 140-165 and then continued filling. The visible fill appears to be around 50-55% of the track width (blue-to-green gradient fills roughly half the bar), which is noticeably less than the expected ~80-90%+ fill at 95.8% through the animation.
+2. **Step labels and sublabels** — Each step shows its primary label ('Generate prompt', 'Add tests', 'Regenerate', 'Compare') and its sublabel ('pdd update', 'pdd bug', 'pdd fix', 'pdd test') in the expected fonts and muted colors.
 
-3. **Compare step icon**: The spec calls for a 'split diff view' with green checkmarks over each half. The rendered icon shows what appears to be a document with checkmarks/lines rather than a clear split diff with two distinct halves (original vs regenerated). This is a subtle icon design difference.
+3. **Connecting arrows** — Blue curved arrows connect steps 1→2→3→4, all illuminated as expected for the completed pipeline state.
 
-4. **Loop arrow dashing**: The spec calls for a dashed line (4px dash, 4px gap) on the loop arrow. The rendered loop arrow appears to be a solid line rather than dashed.
+4. **Loop arrow** — The amber/gold dashed curved arrow arcs from step 4 back to step 2, with the 'iterate' label visible at the apex in amber text. This matches the spec's description of the loop arrow drawing from step 4 to step 2.
 
-5. **Step icons enclosed in circles**: Each step icon is rendered inside a circular container/badge, which isn't explicitly specified but doesn't conflict with the spec's intent. This is acceptable stylistic treatment.
+5. **Progress bar** — A horizontal progress bar is visible below the pipeline, filled with a blue-to-green gradient to approximately 80%, matching the spec's description that after the loop arrow appears, the bar resets to 80%.
+
+6. **Background** — Deep navy-black background consistent with #0A0F1A.
+
+7. **Layout** — The pipeline is horizontally centered and the overall composition matches the centered layout intent. The icons are enclosed in circular containers rather than raw icons, which is a stylistic interpretation but doesn't break the visual intent. The step spacing and positioning preserve the intended horizontal pipeline composition.
+
+All critical elements (Add tests, Regenerate, Compare, iterate label, progress bar state) are correctly present for this animation phase.

@@ -1,20 +1,22 @@
 ## Verdict
 pass
 ## Summary
-The frame at 89.3% progress (frame 374/420, animation phase 330-420 'hold on complete layout') matches the spec well. All required elements are present and correctly rendered:
+The frame at ~89% progress through the intrinsic visual (frame 374/420, animation phase 330-420: hold on complete layout) matches the spec well. All required elements are present and correctly rendered:
 
-1. **Donut chart**: Visible with correct proportions — a small blue (#4A90D9) segment for 'Initial Development' and a dominant amber (#D9944A) segment for 'Maintenance'. The donut hole is present with 'SOFTWARE' and 'COST' center text in muted gray with letter-spacing.
+1. **Donut Chart**: Centered left-of-center on the canvas with a clear donut hole. The inner hole shows 'SOFTWARE' and 'COST' stacked text in muted gray with letter-spacing, matching spec.
 
-2. **Segment labels and values**: 'Initial Development' label with '10-20%' value in blue, positioned near the blue segment with a leader line. 'Maintenance' label with '80-90%' value in amber, positioned below the chart. Both use appropriate font weights and colors matching the spec.
+2. **Blue Segment (Initial Development)**: Small slice visible at the top-right of the donut in a cool blue (#4A90D9-range), starting from approximately 12 o'clock. The label 'Initial Development' and value '10-20%' appear above the segment in the correct blue color.
 
-3. **McKinsey callout card**: Present to the right of the chart with dark semi-transparent background, bar chart icon in amber, '+40% maintenance cost' main text, 'with high technical debt' subtext, and 'McKinsey Digital, 2024' source citation at reduced opacity.
+3. **Amber Segment (Maintenance)**: Fills the overwhelming majority of the donut in warm amber (#D9944A-range). The label 'Maintenance' and value '80-90%' appear below the chart in amber. The visual disproportion is visceral as intended.
 
-4. **Stripe callout card**: Present below the McKinsey card with clock icon, '33% of work week' main text, 'spent on technical debt' subtext, and 'Stripe Developer Coefficient, 2018' source citation at reduced opacity.
+4. **McKinsey Callout Card**: Positioned to the right of the chart as a semi-transparent dark card with rounded corners. Contains a bar chart icon glyph, '+40% maintenance cost' as main text, 'with high technical debt' as subtext, and 'McKinsey Digital, 2024' as source citation at reduced opacity. All match spec.
 
-5. **Background**: Dark navy (#0F172A) as specified.
+5. **Stripe Callout Card**: Positioned below the McKinsey card. Contains a clock glyph icon, '33% of work week' as main text, 'spent on technical debt' as subtext, and 'Stripe Developer Coefficient, 2018' as source at reduced opacity. All match spec.
 
-6. **Layout**: The donut chart is positioned left-of-center with callout cards to the right, creating a balanced composition. The overall layout intent of center-weighted presentation is preserved.
+6. **Background**: Dark navy (#0F172A-range), clean with no grid lines.
 
-7. **Animation phase**: At frame 374 (phase 330-420), this is the final hold state with all elements visible and static, which matches the spec's 'Hold on complete layout. Both callouts and chart visible.'
+7. **Animation Phase**: At frame 374 (phase 330-420), all elements should be fully visible in the hold state. This is confirmed — the donut is complete, both callout cards are fully visible and stationary.
 
-Minor observations that do not constitute failures: The callout cards appear slightly larger than the spec's 320x100px, and the Stripe card text reads '33% of work week' rather than '33% of work week' (matching spec). Leader lines are thin and subtle. All within acceptable variance.
+8. **Layout**: The donut is slightly left of true center with callout cards to the right, which is a reasonable compositional choice that preserves the intended centered layout intent while accommodating the callout cards. The overall composition reads correctly.
+
+Minor observations that do not warrant failure: The segment labels appear directly adjacent to the chart rather than using explicit leader lines, but this is a subtle styling difference that does not affect readability or the intended visual communication. The callout card borders are very subtle (as specified at 0.2 opacity). Colors are within acceptable range of the spec hex values.

@@ -1,17 +1,24 @@
 ## Verdict
 pass
 ## Summary
-The frame at 94% progress (frame 394/420, animation phase 7: 'Hold') matches the spec's intended final composition. All critical elements are present and correctly positioned:
+The frame at 94% progress (frame 394/420, animation phase 7: Hold) matches the spec's intended final composition. All critical elements are present and correctly positioned:
 
-1. **Split layout**: Vertical split with two panels — left and right — separated by a subtle divider near the horizontal center. Correct.
-2. **Panel headers**: LEFT shows 'FEW TESTS' in amber/orange tint, RIGHT shows 'MANY TESTS' in green tint, both centered above their respective panels with appropriate letter-spacing. Correct.
-3. **File header bars**: LEFT shows 'parser_v1.prompt' in blue text on a dark bar, RIGHT shows 'parser_v2.prompt' similarly. Correct.
-4. **Left panel — Dense prompt**: Line numbers visible in the left gutter (1-50 range visible), with dense prompt content organized into sections (Null Handling, ID Format, Unicode Edge Cases, Error Conditions, Performance Constraints, Return Contract). The '50 lines' badge appears bottom-right in amber/orange. Correct.
-5. **Right panel — Minimal prompt + Tests**: Only ~10 lines of concise intent-based prompt (Parser v2 – Intent Only, parse from untrusted input, return None on failure, handle unicode, latency constraint). '10 lines' badge in green. Terminal window below with 'pdd test parser' header, scrolling green checkmarks for test names, and '47 passed ✓' at the bottom. Correct.
-6. **Code output blocks**: Both panels show identical Python code at the bottom (def parse_user_id function). Correct.
-7. **Center label**: 'Same output. Different specification strategy.' appears centered at the bottom spanning both panels. Correct.
-8. **Color scheme**: Left panel has the darker blue-slate background (#0F172A range), right panel slightly different shade (#0A0F1A range). Terminal has appropriate dark background with green test output. All consistent with spec.
-9. **Typography**: Monospace font for code/prompts, sans-serif for headers/labels/badges. Sizes and weights appear appropriate.
-10. **Animation phase**: At 94% progress in the hold phase (370-420), all elements are fully visible and stationary, which is the correct state for this animation phase.
+1. **Split layout**: Vertical split is visible with left and right panels divided near the horizontal center, consistent with the spec's 958/962 split.
 
-The composition clearly communicates the intended message: dense 50-line prompt on left vs. minimal 10-line prompt + 47 passing tests on right, both producing the same code output.
+2. **Panel headers**: LEFT shows 'FEW TESTS' in an amber/orange tone, RIGHT shows 'MANY TESTS' in green — both centered above their respective panels with appropriate letter-spacing. Colors match spec intent (#D9944A amber and #5AAA6E green).
+
+3. **File header bars**: LEFT shows 'parser_v1.prompt' and RIGHT shows 'parser_v2.prompt', both in a blue tone consistent with #4A90D9, on dark header bars.
+
+4. **Left panel — Dense prompt**: Line numbers visible in the left gutter (1-50+), monospaced prompt content covers null handling, ID format, unicode edge cases, error conditions, performance constraints, and return contract sections. '50 lines' badge visible at bottom-right in amber/orange.
+
+5. **Right panel — Minimal prompt + Tests**: Only ~10 lines of concise prompt text visible (parse user IDs, return None on failure, handle unicode, latency constraint). '10 lines' badge visible below prompt in green. Terminal window present below with 'pdd test parser' command, multiple green checkmark test results scrolling (test_error_msg_truncation, test_no_raise_network_input, test_batch_10k_under_100ms, etc.), and '47 passed ✓' at the bottom in green bold.
+
+6. **Code output blocks**: Both panels show identical Python code at the bottom (def parse_user_id function), faded/low opacity consistent with spec's #94A3B8 at 0.3.
+
+7. **Center label**: 'Same output. Different specification strategy.' centered at the bottom, matching the spec's intended text and placement.
+
+8. **Background and color scheme**: Dark backgrounds consistent with spec (#0F172A left, #0A0F1A right). The overall tonal contrast — amber/effort on left, green/confidence on right — is clearly conveyed.
+
+9. **Typography**: Monospaced font used for code/prompt content, sans-serif for headers and labels. All text is legible and appropriately sized.
+
+10. **Animation phase**: At 94% progress in the hold phase (370-420), all elements are fully visible and stationary, which is correct for this sample point.

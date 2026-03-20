@@ -1,18 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame at 92.9% progress (frame 389/420, animation phase 7: 'Hold') matches the spec well. All critical elements are present and correctly rendered:
-
-1. **Background**: Dark navy (#0F172A region) — correct.
-2. **Axes**: X-axis with 'Year 0' through 'Year 10' labels visible; Y-axis with rotated 'Cumulative Cost' label — correct.
-3. **Shared Origin**: White circle at Year 0 with 'Today' label — correct.
-4. **Patching Curve (amber/orange)**: Exponential curve rising steeply from shared origin to upper-right, with 'PATCHING' endpoint label in amber — correct color (#D9944A range), correct trajectory.
-5. **PDD Curve (blue)**: Flat/gently declining curve from shared origin staying near the bottom, with 'PDD' endpoint label in blue — correct color (#4A90D9 range), correct trajectory.
-6. **Gap Fill**: Visible gradient fill between the two curves with subtle opacity — present and correct.
-7. **Upper Annotation**: '↑ Each patch adds debt' in amber/italic with dotted leader line to patching curve — correct.
-8. **Lower Annotation**: '✓ Each test constrains all future generations' in blue/italic near PDD curve — correct.
-9. **Gap Label**: 'The compounding gap' centered in the gap area with white/light text — correct. Vertical double-arrow connecting curves is visible.
-10. **Typography**: All labels use appropriate sizing and styling consistent with spec.
-11. **Animation Phase**: At 92.9% (frame 389), this is in the 'Hold' phase (360-420), and all elements are fully revealed and static — correct.
-
-The gap label lacks a visible background pill, but this is a very subtle decorative element at low opacity (spec says #1E293B at 0.3) and does not materially affect the visual. The composition is centered and reads exactly as intended — 'the screenshot moment.'
+The frame is in the final hold phase (frame 389/420) and all major elements are present and correctly composed. Both curves are drawn completely — the amber patching curve sweeps exponentially upward, the blue PDD curve stays flat with a gentle decline. The 'Today' origin point with its circle and label is visible at the left. Axes with 'Cumulative Cost' (rotated -90°) and year labels (Year 0 through Year 10) are present. Endpoint labels 'PATCHING' (amber, upper right) and 'PDD' (blue, lower right) are correctly positioned. Both annotations are visible: 'Each patch adds debt' (amber, with upward arrow glyph and leader line to the patching curve) and 'Each test constrains all future generations' (blue, with checkmark glyph and leader line to the PDD curve). The gap label 'The compounding gap' is centered in the gap between curves with a vertical double-arrow connecting them. The gap fill gradient between the curves is visible as a subtle shading. The dark navy background (#0F172A) is correct. One minor issue: the spec calls for the gap label to have a background pill (#1E293B at 0.3, rounded 10px, padding 14px), but in the rendered frame, the 'The compounding gap' text does not appear to have a visible background pill behind it — it renders directly over the gap fill without a distinct rounded rectangle backing. This is a subtle styling omission but is noticeable on careful inspection.

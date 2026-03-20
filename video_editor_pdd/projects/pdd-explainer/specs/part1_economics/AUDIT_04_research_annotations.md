@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (code, coding, more), so the frame does not support a hard missing-text failure.
+The frame at 86.7% progress (frame 779/900, within the 660-900 hold phase) correctly displays all critical elements. All three research annotation callout boxes are fully visible and stacked vertically on the right side: (1) GitHub study with 'Individual task: −55%' in blue with subtext, (2) Uplevel study with 'Overall throughput: ~0%' in orange with '+41% more bugs' in red, (3) GitClear data with 'Code churn: +44%' and 'Refactoring: −60%' in red with subtext. The debt area is correctly decomposed into two layers with 'Code Complexity' label in the upper region and 'Context Rot' label in the lower region. The underlying triple-line chart continues from the previous spec with the appropriate shaded debt area between lines. Connection lines are present at subtle opacity. The dark background, annotation box styling (dark fill with colored borders), typography, and layout all match the spec's intent.

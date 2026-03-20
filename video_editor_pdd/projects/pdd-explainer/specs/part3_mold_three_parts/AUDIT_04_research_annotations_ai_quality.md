@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-Frame at 93.3% progress (phase 6: hold on complete picture) shows all required elements present and correctly composed. Card 1 (CodeRabbit) in upper-left with red border, '1.7× more issues' main stat, sub-stats, and source citation — all correct. Card 2 (DORA) in upper-right with green border, 'Amplified delivery' main stat, sub-stat, and source citation — all correct. Connecting dashed green arrow from DORA card to mold region with 'Tests are the walls' label in amber — present. Visual equation at bottom with red left side, 'vs.' divider, green right side, and 'The walls' bracket — all present and correctly colored. Background mold diagram dimmed at low opacity as expected. Mold wall glow is subtle but present. Minor positional shifts (Card 2 slightly more leftward than spec, equation slightly higher than spec y:850) are within acceptable layout drift and preserve the intended composition.
+OCR confirmed visible text tokens in the rendered frame (code, issues, strong, tests, amplified), so the frame does not support a hard missing-text failure.
