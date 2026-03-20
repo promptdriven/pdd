@@ -1,14 +1,4 @@
 ## Verdict
 warn
 ## Summary
-The frame is sampled at frame 104/120 (87.5% progress), which falls in the hold phase (frames 90-120). Most elements are correctly present and positioned:
-
-1. **Background**: Deep navy-black background is correct. A subtle blueprint grid pattern is faintly visible — matches spec.
-2. **"PART 4"**: Visible, centered, small uppercase text with letter-spacing — matches spec.
-3. **"THE PRECISION"**: Large bold white text, centered — matches spec.
-4. **"TRADEOFF"**: Large bold white text below, centered — matches spec. However, the spec calls for a 15px offset-right on "TRADEOFF", and in the frame it appears roughly centered or only very slightly offset. This is borderline but the visual composition reads correctly.
-5. **Ghost dot grid (left)**: Visible as a cluster of small dots to the left of the title text — matches spec intent (coordinate grid representing exhaustive specification).
-6. **Ghost mold outline (right)**: Visible as a rectangular outline with thick wall segments to the right of the title — matches spec intent (constraint-based mold shape).
-7. **Horizontal rule**: The spec calls for a 200px horizontal rule centered between "THE PRECISION" and "TRADEOFF" at y:505. In the rendered frame, no visible horizontal rule can be seen between the two title lines. At the spec's opacity of 0.5 with color #334155, it should be at least subtly visible against the dark background, but it appears to be missing or fully transparent.
-8. **Ghost labels ("EVERY POINT" / "WALLS ONLY")**: These are specified at 0.03 opacity and 8px size — they are not visibly discernible in the frame, but at that opacity and size they would be essentially invisible, so this is acceptable.
-9. **Ghost element colors**: The dot grid appears gray/slate (correct), and the mold outline appears to have a slightly warm/amber tone (correct per spec).
+The frame is sampled at ~87.5% progress (frame 104/120), which falls in the hold phase (frames 90-120). All major elements are present and correctly composed: 'PART 4' section label is visible and centered above the title, 'THE PRECISION' and 'TRADEOFF' are rendered in large bold white text and centered. The left ghost dot grid and the right mold rectangle outline are both visible at very low opacity as intended. The background is the correct deep navy-black. However, there are two minor discrepancies: (1) The horizontal rule between 'THE PRECISION' and 'TRADEOFF' is not visible in the frame — the spec calls for a 200px wide, 2px horizontal rule at ~0.5 opacity centered between the two title lines at y:505. It should have been fully drawn by frame 70 and visible during the hold phase. (2) The 'TRADEOFF' text does not appear to have the specified 15px offset-right relative to center — it appears centered in line with 'THE PRECISION' rather than shifted right. The ghost labels ('EVERY POINT' and 'WALLS ONLY') are not visible, but given their spec opacity of 0.03 they would be virtually invisible and this is acceptable.

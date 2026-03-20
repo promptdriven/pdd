@@ -1,22 +1,22 @@
 ## Verdict
 pass
 ## Summary
-The frame at 93.7% progress (Frame 449, animation phase 420-480) matches the spec well. All critical elements are present and correctly rendered:
+The frame at 93.7% progress (Frame 449, animation phase 420-480) matches the spec requirements well. All critical elements are present and correctly rendered:
 
-1. **Editor window**: Centered on canvas with dark background (#0A0F1A range), title bar showing 'ad_latency_optimizer.prompt' in blue-tinted monospace font with traffic light dots — matches spec.
+1. **Editor window:** Centered on canvas with dark background (#0A0F1A range). Title bar shows 'ad_latency_optimizer.prompt' in blue-tinted monospace font with traffic light dots — matches spec.
 
-2. **Natural language lines 1-8**: All visible with correct content (# Ad Latency Optimizer, optimize bid calculation, accept bid request, score each candidate, return top-k, latency budget, handle variable counts, fall back). Light blue-white text with subtle ambient glow present — matches spec.
+2. **Natural language lines 1-8 (Intent section):** All 8 lines visible with flowing text in light blue-white (#CBD5E1 range). Content matches spec: '# Ad Latency Optimizer', 'Optimize bid calculation...', 'Accept bid request...', 'Score each candidate...', 'Return top-k candidates...', plus constraint lines 6-8. Subtle blue ambient glow is present on these lines.
 
-3. **Embedded code block (lines 9-18)**: Visually distinct with darker/different background material, monospace font. Contains ```python, def score_candidates, vectorized scoring comment, np.multiply, np.argpartition, return candidates, fallback logic, len check, sorted return, closing ```. Left border visible. No ambient glow on code — correct stark/precise contrast with natural language sections.
+3. **Embedded code block lines 9-18:** Distinct gray background (#1A1F2E range) clearly visible, creating the 'material transition' the spec requires. Monospace font with code content matching spec: ```python, def score_candidates, vectorized scoring comment, np.multiply, np.argpartition, return statement, fallback logic. Left border is visible. No ambient glow — stark and precise as specified.
 
-4. **Natural language lines 19-24**: Back to flowing text — handle edge case, Type: List[AdCandidate], preserve metadata, log latency, alert if p99, cache model weights. Blue-white text with glow returns — matches spec.
+4. **Natural language lines 19-24 (Constraints section):** All lines visible with content about edge cases, types, metadata, latency monitoring, alerting, and caching. Blue-white text with ambient glow returning as specified.
 
-5. **Section labels**: All three present on right side with brackets — 'Intent (natural language)' spanning lines 1-8 in blue, 'Critical algorithm (code)' spanning lines 9-18 in gray, 'Constraints (natural language)' spanning lines 19-24 in blue. Correctly positioned.
+5. **Section labels (right side):** Three labels with brackets are visible: 'Intent (natural language)' in blue spanning lines 1-8, 'Critical algorithm (code)' in gray spanning the code block, 'Constraints (natural language)' in blue spanning lines 19-24. All correctly positioned on the right side of the document.
 
-6. **Floating annotation**: Visible below document reading 'Stay in prompt space as long as possible. Dip into code when you must.' with 'prompt space' in blue and 'code' in gray — matches spec exactly.
+6. **Floating annotation (below document):** 'Stay in prompt space as long as possible. Dip into code when you must.' is visible at the bottom. 'prompt space' appears in blue (#4A90D9) and 'code' appears in gray (#94A3B8) — matching the spec's color differentiation.
 
-7. **Animation phase**: At 93.7% progress we are deep into phase 8 (420-480, hold with annotation visible). The annotation is fully faded in and the complete document with all labels is on display — correct for this sample time.
+7. **Animation phase:** At frame 449 (phase 420-480), all content should be fully typed, labels visible, and annotation faded in with hold. This matches exactly — everything is static and fully rendered.
 
-8. **Line numbers**: Visible in the left gutter in muted styling — matches spec.
+8. **Line numbering:** Visible in the left gutter in subdued color, matching spec's 40px gutter with JetBrains Mono styling.
 
-The material boundary between natural language and code is clearly visible. Layout is centered. All typography, colors, and structural elements align with the spec. Minor variations in exact glow intensity and spacing are within acceptable tolerances.
+The boundary between natural language and code is clearly visible as a material transition — the core visual intent of this composition. Layout is centered as specified. All critical narration sync points up to 83.58s are satisfied.

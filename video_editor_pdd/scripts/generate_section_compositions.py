@@ -1521,11 +1521,16 @@ def generate_generated_timeline_wrapper(
         project_dir=project_dir,
     )
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
+    composition_ids = {
+        (c if isinstance(c, str) else c.get('id', ''))
+        for c in compositions
+    }
     visual_media_manifest = build_visual_media_manifest(
         section,
         project_dir,
         remotion_public,
         direct_video_src if needs_direct_video else None,
+        component_visual_ids=composition_ids,
     )
     visual_overlay_manifest = build_visual_overlay_manifest(
         section,
@@ -1874,14 +1879,18 @@ def generate_root_tsx(
             continue
 
         fallback_video_src = resolve_direct_video_src(section['id'], remotion_public)
+        compositions = section.get('compositions', [])
+        comp_ids = {
+            (c if isinstance(c, str) else c.get('id', ''))
+            for c in compositions
+        }
         visual_media_manifest = build_visual_media_manifest(
             section,
             project_dir,
             remotion_public,
             fallback_video_src=fallback_video_src,
+            component_visual_ids=comp_ids,
         )
-
-        compositions = section.get('compositions', [])
         for comp in compositions:
             comp_id = comp if isinstance(comp, str) else comp.get('id', '')
             if not comp_id:

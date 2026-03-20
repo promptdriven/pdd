@@ -1,16 +1,4 @@
 ## Verdict
 warn
 ## Summary
-The frame is sampled at frame 104/120 (87.5% progress), which falls in the hold phase (frames 90-120). The overall composition is largely correct: deep navy-black background is present, 'PART 3' label is visible above the title in small caps with letter-spacing, 'THE MOLD HAS' and 'THREE PARTS' are displayed in large bold white text centered on the canvas, and ghost shapes are faintly visible on the left (rectangular wall segment) and right (circular/nozzle shape). However, there are a few discrepancies:
-
-1. **Missing horizontal rule**: The spec calls for a 200px wide, 2px horizontal rule at ~y:505 centered between 'THE MOLD HAS' and 'THREE PARTS'. No visible rule is present in the frame. This is a clear omission.
-
-2. **'THREE PARTS' alignment**: The spec calls for 'THREE PARTS' to be offset-right by 15px from center. In the frame, 'THREE PARTS' appears roughly centered (possibly slightly right), which is close to spec but the offset is not distinctly visible.
-
-3. **Ghost shape count**: The spec describes three ghost shapes (wall/left in amber, nozzle/center in blue, material/right in green). Only two ghost shapes are faintly visible — one on the left (rectangular blocks) and one on the right (circular/nozzle-like). The center nozzle shape and the third shape are not clearly distinguishable. Given these are at 0.04 opacity, the center one may be obscured by the title text, which is acceptable.
-
-4. **Ghost labels missing**: The spec calls for faint labels ('WALLS', 'NOZZLE', 'MATERIAL') beneath each ghost shape at 0.03 opacity. These are not visible. At 0.03 opacity (nearly invisible), this is borderline — they may be present but imperceptible at this compression/resolution.
-
-5. **Blueprint grid**: Not clearly visible, though at 0.05 opacity it would be extremely subtle and may be present but imperceptible in the compressed frame.
-
-The missing horizontal rule is the most notable discrepancy — it is a specified critical element for the frames 60-70 phase and should remain visible during the hold phase.
+The frame is sampled at frame 104/120 (87.5% progress), which falls in the hold phase (frames 90-120). The core composition is largely correct: 'PART 3' label is visible and centered above the title, 'THE MOLD HAS' and 'THREE PARTS' are rendered in bold white text centered on the canvas, and the deep navy-black background is present. Ghost shapes are faintly visible on the left (wall/rectangular blocks) and right (nozzle/circular shape), and a third shape appears behind the center text area — all at appropriately low opacity. However, there are several minor discrepancies: (1) The horizontal rule between 'THE MOLD HAS' and 'THREE PARTS' is not visible — the spec calls for a 200px wide, 2px rule at #334155/0.5 opacity centered at y:505. (2) 'THREE PARTS' does not appear to have a 15px right offset relative to 'THE MOLD HAS' — both lines appear roughly center-aligned. (3) The ghost shape labels ('WALLS', 'NOZZLE', 'MATERIAL') are not discernible, though at 0.03 opacity and 8px font they would be extremely faint. (4) The blueprint grid pattern is not clearly visible, though at 0.05 opacity it would be near-imperceptible. The missing horizontal rule is the most notable discrepancy as it is a specified structural element that should be visible even at low opacity.
