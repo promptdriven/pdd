@@ -29,6 +29,7 @@ from .architecture_include_validation import print_architecture_include_validati
 from .sync_orchestration import sync_orchestration
 from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
+from .core.errors import record_core_dump_error
 
 # Blocklist of characters that are dangerous in shell contexts or malformed as paths.
 # Everything else is allowed — frameworks use [], (), +, @, dots, unicode, etc.
@@ -753,6 +754,17 @@ def sync_main(
                 rprint(f"[yellow]Budget exhausted. Skipping sync for '{lang}'.[/yellow]")
             overall_success = False
             aggregated_results["results_by_language"][lang] = {"success": False, "error": "Budget exhausted"}
+            record_core_dump_error(
+                command="sync",
+                type="BudgetExhausted",
+                message="Budget exhausted. Skipping remaining languages.",
+                details={
+                    "basename": basename,
+                    "language": lang,
+                    "remaining_budget": remaining_budget,
+                    "total_cost_so_far": total_cost,
+                },
+            )
             continue
 
         try:

@@ -26,9 +26,12 @@ from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after
 
 def _strip_ansi_codes(text: str) -> str:
     """Remove ANSI escape codes from text for clean log output."""
-    # Pattern matches ANSI escape sequences
-    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
-    return ansi_escape.sub('', text)
+    # Covers common CSI sequences (\x1b[...m, \x1b[...K, cursor moves),
+    # plus OSC sequences (\x1b]...BEL or \x1b]...\x1b\\) used by some terminals.
+    csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+    osc = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)")
+    text = osc.sub("", text)
+    return csi.sub("", text)
 
 
 class OutputCapture:

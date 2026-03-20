@@ -66,6 +66,16 @@ from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
+from .core.errors import record_core_dump_error
+from .core.llm_trace import set_current_operation, pop_last_pair
+
+
+def _truncate_text(text: str, limit_chars: int) -> str:
+    if text is None:
+        return ""
+    if len(text) <= limit_chars:
+        return text
+    return text[:limit_chars] + f"\n... (truncated, {len(text)} total chars)"
 
 
 # --- Helper Functions ---
@@ -1684,7 +1694,7 @@ def sync_orchestration(
         skipped_operations: List[str] = []
         errors: List[str] = []
         start_time = time.time()
-        last_model_name: str = ""
+        last_model_name: str = "unknown"
         operation_history: List[str] = []
         MAX_CYCLE_REPEATS = 2
         try:
@@ -1829,7 +1839,22 @@ def sync_orchestration(
                             else:
                                 break
                         if consecutive_fixes >= 5:
-                            errors.append(f"Detected {consecutive_fixes} consecutive fix operations. Breaking infinite fix loop.")
+                            msg = f"Detected {consecutive_fixes} consecutive fix operations. Breaking infinite fix loop."
+                            errors.append(msg)
+                            record_core_dump_error(
+                                command="sync",
+                                type="LogicalFailure",
+                                message=msg,
+                                details={
+                                    "basename": basename,
+                                    "language": language,
+                                    "reason": "consecutive_fix_limit",
+                                    "consecutive": consecutive_fixes,
+                                    "operations_completed": operations_completed,
+                                    "skipped_operations": skipped_operations,
+                                    "total_cost": current_cost_ref[0],
+                                },
+                            )
                             break
 
                     if operation == 'test':
@@ -1840,7 +1865,22 @@ def sync_orchestration(
                             else:
                                 break
                         if consecutive_tests >= MAX_CONSECUTIVE_TESTS:
-                            errors.append(f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop.")
+                            msg = f"Detected {consecutive_tests} consecutive test operations. Breaking infinite test loop."
+                            errors.append(msg)
+                            record_core_dump_error(
+                                command="sync",
+                                type="LogicalFailure",
+                                message=msg,
+                                details={
+                                    "basename": basename,
+                                    "language": language,
+                                    "reason": "consecutive_test_limit",
+                                    "consecutive": consecutive_tests,
+                                    "operations_completed": operations_completed,
+                                    "skipped_operations": skipped_operations,
+                                    "total_cost": current_cost_ref[0],
+                                },
+                            )
                             break
 
                     # Bug #157 fix: Prevent infinite crash retry loops
@@ -1852,7 +1892,22 @@ def sync_orchestration(
                             else:
                                 break
                         if consecutive_crashes >= MAX_CONSECUTIVE_CRASHES:
-                            errors.append(f"Detected {consecutive_crashes} consecutive crash operations. Breaking infinite crash loop.")
+                            msg = f"Detected {consecutive_crashes} consecutive crash operations. Breaking infinite crash loop."
+                            errors.append(msg)
+                            record_core_dump_error(
+                                command="sync",
+                                type="LogicalFailure",
+                                message=msg,
+                                details={
+                                    "basename": basename,
+                                    "language": language,
+                                    "reason": "consecutive_crash_limit",
+                                    "consecutive": consecutive_crashes,
+                                    "operations_completed": operations_completed,
+                                    "skipped_operations": skipped_operations,
+                                    "total_cost": current_cost_ref[0],
+                                },
+                            )
                             break
 
                     if operation == 'test_extend':
@@ -1901,10 +1956,40 @@ def sync_orchestration(
                         success = operation in ['all_synced', 'nothing']
                         error_msg = None
                         if operation == 'fail_and_request_manual_merge':
-                            errors.append(f"Manual merge required: {decision.reason}")
+                            msg = f"Manual merge required: {decision.reason}"
+                            errors.append(msg)
+                            record_core_dump_error(
+                                command="sync",
+                                type="ManualMergeRequired",
+                                message=msg,
+                                details={
+                                    "basename": basename,
+                                    "language": language,
+                                    "operation": operation,
+                                    "reason": decision.reason,
+                                    "operations_completed": operations_completed,
+                                    "skipped_operations": skipped_operations,
+                                    "total_cost": current_cost_ref[0],
+                                },
+                            )
                             error_msg = decision.reason
                         elif operation == 'error':
-                            errors.append(f"Error determining operation: {decision.reason}")
+                            msg = f"Error determining operation: {decision.reason}"
+                            errors.append(msg)
+                            record_core_dump_error(
+                                command="sync",
+                                type="DecisionError",
+                                message=msg,
+                                details={
+                                    "basename": basename,
+                                    "language": language,
+                                    "operation": operation,
+                                    "reason": decision.reason,
+                                    "operations_completed": operations_completed,
+                                    "skipped_operations": skipped_operations,
+                                    "total_cost": current_cost_ref[0],
+                                },
+                            )
                             error_msg = decision.reason
                         
                         update_log_entry(log_entry, success=success, cost=0.0, model='none', duration=0.0, error=error_msg)
@@ -1967,8 +2052,10 @@ def sync_orchestration(
                     success = False
                     op_start_time = time.time()
                     include_deps_override = None  # Issue #522: Captured before auto-deps strips tags
+                    test_output_excerpt: Optional[str] = None
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
+                    set_current_operation(operation)
                     with AtomicStateUpdate(basename, language) as atomic_state:
 
                         # --- Execute Operation ---
@@ -2317,11 +2404,16 @@ def sync_orchestration(
                                                 start_new_session=True
                                             )
                                         error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
+                                        if getattr(test_result, "returncode", 0) != 0:
+                                            # Capture for core dump / sync step records
+                                            test_output_excerpt = _truncate_text(error_content, 5 * 1024)
                                     else:
                                         # No test command available - trigger agentic fallback with context
                                         error_content = f"No test command available for {language}. Please run tests manually and provide error output."
+                                        test_output_excerpt = _truncate_text(error_content, 5 * 1024)
                                 except Exception as e:
                                     error_content = f"Test execution error: {e}"
+                                    test_output_excerpt = _truncate_text(error_content, 5 * 1024)
                                 error_file_path.write_text(error_content)
 
                                 # Bug #156 fix: Parse pytest output to find actual failing files
@@ -2433,6 +2525,13 @@ def sync_orchestration(
                             _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
 
                         update_log_entry(log_entry, success=success, cost=actual_cost, model=model_name, duration=duration, error=errors[-1] if errors and not success else None)
+                        if not success:
+                            if test_output_excerpt:
+                                log_entry.setdefault("details", {})["test_output_excerpt"] = test_output_excerpt
+                            # Attach last LLM prompt/response pair (best-effort) for failed operations.
+                            pair = pop_last_pair(operation)
+                            if pair:
+                                log_entry.setdefault("details", {})["llm_trace"] = pair
                         append_log_entry(basename, language, log_entry)
 
                         # Post-operation checks (simplified)
@@ -2525,7 +2624,21 @@ def sync_orchestration(
                     
                         if not success:
                             if not errors:
-                                errors.append(f"Operation '{operation}' failed.")
+                                msg = f"Operation '{operation}' failed."
+                                errors.append(msg)
+                                record_core_dump_error(
+                                    command="sync",
+                                    type="OperationFailed",
+                                    message=msg,
+                                    details={
+                                        "basename": basename,
+                                        "language": language,
+                                        "operation": operation,
+                                        "operations_completed": operations_completed,
+                                        "skipped_operations": skipped_operations,
+                                        "total_cost": current_cost_ref[0],
+                                    },
+                                )
                             break
 
         except BaseException as e:
@@ -2539,6 +2652,21 @@ def sync_orchestration(
             except: pass
             
         # Return result dict
+        if errors:
+            record_core_dump_error(
+                command="sync",
+                type="SyncFailed",
+                message="Sync terminated with errors (non-exception failure).",
+                details={
+                    "basename": basename,
+                    "language": language,
+                    "errors": errors,
+                    "operations_completed": operations_completed,
+                    "skipped_operations": skipped_operations,
+                    "total_cost": current_cost_ref[0],
+                    "model_name": last_model_name,
+                },
+            )
         return {
             'success': not errors,
             'operations_completed': operations_completed,
