@@ -115,7 +115,6 @@ export const ColdOpen09PddTitleCard: React.FC = () => {
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        opacity: globalOpacity,
       }}
     >
       {/* Background constellation dots */}
@@ -131,6 +130,7 @@ export const ColdOpen09PddTitleCard: React.FC = () => {
             width: ruleCurrentWidth,
             height: RULE_HEIGHT,
             background: `linear-gradient(90deg, transparent, ${ACCENT_BLUE} 30%, ${ACCENT_BLUE} 70%, transparent)`,
+            opacity: globalOpacity,
           }}
         >
           {/* Glow beneath the line */}
@@ -159,7 +159,7 @@ export const ColdOpen09PddTitleCard: React.FC = () => {
           width: CANVAS_WIDTH,
           display: 'flex',
           justifyContent: 'center',
-          opacity: titleOpacity,
+          opacity: titleOpacity * globalOpacity,
         }}
       >
         <span
@@ -185,7 +185,7 @@ export const ColdOpen09PddTitleCard: React.FC = () => {
           width: CANVAS_WIDTH,
           display: 'flex',
           justifyContent: 'center',
-          opacity: subtitleOpacity,
+          opacity: subtitleOpacity * globalOpacity,
         }}
       >
         <span
