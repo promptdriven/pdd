@@ -4898,15 +4898,18 @@ class TestVertexAIClaudeTemperatureFix:
     # Pre-flight: Vertex AI Claude with thinking (budget type)
     # ------------------------------------------------------------------
     def test_vertex_ai_claude_budget_forces_temperature_1(self, llm_mod, tmp_path, monkeypatch):
-        """Vertex AI Claude with thinking (budget type) must have temperature=1.
+        """Vertex AI Claude with thinking (budget type, provider='Google') must
+        have temperature=1.
 
-        When provider='anthropic' in CSV, the budget path sets 'thinking' in kwargs.
-        But if the model is vertex_ai/claude-* with provider='Google' and budget type,
-        the code goes through the anthropic provider check for thinking param injection.
-        This test covers budget type on a model identified as Claude by name.
+        The budget code path at line ~2189 checks provider=='anthropic' to
+        inject the 'thinking' param. With provider='Google', the budget path
+        skips thinking injection. However, if a future fix corrects that path
+        too, the temperature enforcement must still work. This test uses
+        provider='anthropic' so that 'thinking' actually gets set, serving as
+        a regression test for the Anthropic budget path.
         """
-        # Use provider='anthropic' but with vertex_ai/ prefix model to test
-        # that model-name-based detection works for budget reasoning too
+        # provider='anthropic' so the budget path injects 'thinking' into kwargs.
+        # This is a regression test — the old code also passed this case.
         csv_path = self._make_csv(tmp_path, "anthropic", "vertex_ai/claude-sonnet-4-6", "budget")
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
