@@ -21,10 +21,10 @@ export const SHADED_AREA_OPACITY = 0.06;
 export const WIDTH = 1920;
 export const HEIGHT = 1080;
 export const MARGIN_LEFT = 280;
-export const MARGIN_RIGHT = 100;
+export const MARGIN_RIGHT = 160;
 export const MARGIN_TOP = 140;
 export const MARGIN_BOTTOM = 120;
-export const CHART_WIDTH = WIDTH - MARGIN_LEFT - MARGIN_RIGHT;   // 1540
+export const CHART_WIDTH = WIDTH - MARGIN_LEFT - MARGIN_RIGHT;   // 1480
 export const CHART_HEIGHT = HEIGHT - MARGIN_TOP - MARGIN_BOTTOM; // 820
 
 // ─── Axis ranges ───────────────────────────────────────────────────────────

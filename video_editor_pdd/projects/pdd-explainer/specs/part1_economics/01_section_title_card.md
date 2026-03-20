@@ -124,3 +124,14 @@ Segment: `part1_economics_001`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: 78dc6e4a-d689-46e8-b379-874a962a5075 -->
+## Annotation Update
+Requested change: The frame is at 83.3% progress (hold phase, frame 449/540), so the chart should be fully complete with all labels visible. Overall the composition matches the spec well: dark background, two lines (amber/orange for labor cost, blue for new sock cost), crossing point with white circle and 'The Threshold' label, post-crossing shaded area with 'Darning is irrational' text, axes with year labels and percentage ticks. However, there are two notable issues:
+
+1. **Line labels clipped at right edge**: B
+Technical assessment: The chart composition largely matches the spec: dark #0D1117 background, amber labor-cost line flat at ~35%, blue new-sock-cost line declining from ~80% to ~15%, white crossing-point circle with 'The Threshold' label, post-crossing blue shaded area with 'Darning is irrational' italic text, and correct axis labels and ticks. However, the line-end labels ('Cost to darn (time)' and 'Cost of new socks') are positioned at the extreme right edge of the canvas where they risk clipping. The spec calls for 100px right margin, but the labels extend very close to or touching the right boundary. At the hold phase (frame 449/540), all elements are present and visible, so this is cosmetic rather than functional. The labels are still readable in the current frame but have no breathing room.
+- Increase the right margin from 100px to ~160px to give line-end labels adequate clearance, or reposition labels slightly inward from the line endpoints
+- Alternatively, anchor the line labels to a position slightly left of the 1975 endpoint (e.g., at x=1972) so text doesn't crowd the right edge
+- Consider placing line labels inline along the line body (near 1970) rather than at the terminal endpoint to avoid edge-clipping entirely
+<!-- ANNOTATION_UPDATE_END: 78dc6e4a-d689-46e8-b379-874a962a5075 -->

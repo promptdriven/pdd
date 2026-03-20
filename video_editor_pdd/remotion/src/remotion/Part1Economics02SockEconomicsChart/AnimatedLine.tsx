@@ -100,6 +100,12 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   const endPx = xToPixel(currentX);
   const endPy = yToPixel(endY);
 
+  // Position label at 1970 in data-space so it doesn't crowd the right edge
+  const labelX = Math.min(currentX, 1970);
+  const labelY = interpolateData(data, labelX);
+  const labelPx = xToPixel(labelX);
+  const labelPy = yToPixel(labelY);
+
   return (
     <svg
       width={1920}
@@ -118,11 +124,11 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
       {/* Small dot at the current tip */}
       <circle cx={endPx} cy={endPy} r={4} fill={color} />
 
-      {/* Label at line end */}
+      {/* Label positioned inward from the right edge */}
       {labelOpacity > 0.01 && (
         <text
-          x={endPx - 12}
-          y={endPy - 10}
+          x={labelPx}
+          y={labelPy - 14}
           textAnchor="end"
           fill={color}
           fillOpacity={labelOpacity}
