@@ -134,3 +134,14 @@ Timing: 22:04 - 22:10 (embedded in right panel of 06_sock_callback_split)
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: ecd8e598-d788-4378-a634-298d1cb049e4 -->
+## Annotation Update
+Requested change: The frame is at 87.5% progress (frame 104/120, hold phase). Core layout reads correctly: 'PART 5' label is visible and centered above, 'COMPOUND' is large bold centered text, 'RETURNS' is large bold below it. Background is deep navy-black as specified. Ghost curves are faintly visible in the upper-right area behind the text, consistent with the very low opacity (0.04) spec. Two issues noted:
+
+1. **Missing horizontal rule**: The spec calls for a 200px wide, 2px horizontal rule at ~0.5 opacity (#3
+Technical assessment: At frame 104/120 (hold phase), the core title layout is correct: 'PART 5' label centered above, 'COMPOUND' and 'RETURNS' in large bold white text on deep navy-black background. Ghost diverging curves are faintly visible in upper-right area at very low opacity, consistent with spec. However, the 200px wide horizontal rule specified at y:505 between 'COMPOUND' and 'RETURNS' (#334155 at 0.5 opacity) is completely absent — this element should have drawn in at frames 60-70 and be fully visible during the hold phase. The rule is a defined compositional element at 50% opacity and should be clearly visible. The 'RETURNS' 15px right-offset is not discernible but is within tolerance for such a subtle shift. The ledger grid lines (0.04-0.06 opacity) are imperceptible at viewing resolution, which is borderline acceptable given their extremely low specified opacity.
+- Add the missing horizontal rule element: 200px wide, 2px height, #334155 at 0.5 opacity, centered horizontally at y:505 between the two title words. Ensure the DrawLine or equivalent component is rendering with the fromCenter draw animation completing by frame 70.
+- Verify the horizontal rule component exists in the Remotion composition and is not being clipped, hidden by z-order, or failing to render due to a missing import or incorrect props.
+- Optionally increase ledger grid opacity slightly (e.g., 0.06-0.08 for horizontals, 0.08-0.10 for verticals) if the grid is meant to be a visible texture element rather than purely subliminal.
+<!-- ANNOTATION_UPDATE_END: ecd8e598-d788-4378-a634-298d1cb049e4 -->

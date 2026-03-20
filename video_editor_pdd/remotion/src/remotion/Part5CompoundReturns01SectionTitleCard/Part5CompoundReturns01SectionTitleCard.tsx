@@ -164,20 +164,27 @@ export const Part5CompoundReturns01SectionTitleCard: React.FC = () => {
         </div>
       </Sequence>
 
-      {/* Layer 5 — Horizontal rule */}
+      {/* Layer 5 — Horizontal rule (SVG for reliable sub-pixel rendering) */}
       <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <div
+        <svg
+          width={WIDTH}
+          height={1080}
           style={{
             position: 'absolute',
-            top: RULE_Y,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: ruleWidth,
-            height: 2,
-            backgroundColor: RULE_COLOR,
-            opacity: ruleLocal >= 0 ? 0.5 : 0,
+            top: 0,
+            left: 0,
+            pointerEvents: 'none',
           }}
-        />
+        >
+          <rect
+            x={(WIDTH - ruleWidth) / 2}
+            y={RULE_Y}
+            width={ruleWidth}
+            height={2}
+            fill={RULE_COLOR}
+            opacity={ruleLocal >= 0 ? 0.5 : 0}
+          />
+        </svg>
       </Sequence>
 
       {/* Layer 6 — "RETURNS" title (fade + slide-up) */}
