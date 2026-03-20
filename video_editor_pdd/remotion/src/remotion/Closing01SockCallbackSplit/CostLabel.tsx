@@ -30,7 +30,7 @@ export const CostLabel: React.FC<CostLabelProps> = ({
   const costOpacity = interpolate(
     frame,
     [TIMING.COST_LABEL_START, TIMING.COST_LABEL_START + TIMING.COST_LABEL_DURATION],
-    [0, 0.7],
+    [0, 0.9],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -42,7 +42,7 @@ export const CostLabel: React.FC<CostLabelProps> = ({
   const subOpacity = interpolate(
     frame,
     [subStart, subStart + TIMING.SUB_LABEL_DURATION],
-    [0, 0.4],
+    [0, 0.6],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',

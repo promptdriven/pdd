@@ -83,6 +83,32 @@ export const VeoPanel: React.FC<VeoPanelProps> = ({
           pointerEvents: 'none',
         }}
       />
+
+      {/* Top gradient strip — contrast for panel headers */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: panelWidth,
+          height: 80,
+          background: 'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 100%)',
+          pointerEvents: 'none',
+        }}
+      />
+
+      {/* Bottom gradient strip — contrast for cost labels */}
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          bottom: 0,
+          width: panelWidth,
+          height: 160,
+          background: 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)',
+          pointerEvents: 'none',
+        }}
+      />
     </div>
   );
 };

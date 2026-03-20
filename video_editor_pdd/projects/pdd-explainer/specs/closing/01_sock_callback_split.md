@@ -161,3 +161,17 @@ Segment: `closing_001`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: cc1a488b-a02f-4ea4-92f9-ed94f61f8b75 -->
+## Annotation Update
+Requested change: The frame is sampled at 91.7% progress (frame 219/240), which falls in animation phase 6 (frame 200-240: 'Hold on complete split'). At this point the spec requires the complete split view with cost labels, sub-labels, and panel headers all fully visible. Assessment of visible elements:
+
+1. **Split layout**: PASS — Vertical split is present with left and right panels roughly divided at center. The divider line between panels is visible.
+2. **Left panel content**: PASS — Shows hands holding a pack
+Technical assessment: Frame 219/240 is in phase 6 (hold on complete split) where all text overlays should be at their final hold opacity and clearly legible. The split layout and Veo clip content are correct — left panel shows warm amber sock scene, right panel shows cool blue developer/keyboard scene. However, multiple required Remotion text overlays are missing or illegible: (1) 'DISCARD' panel header on the left is not visible at all (spec: Inter 12px, #D9944A at 0.3, y:36). (2) 'REGENERATE' panel header on the right is barely discernible. (3) '$2' cost label on the left is missing (spec: Inter 28px bold, #D9944A at 0.7, y:960). (4) '~30s' cost label on the right is barely visible (spec: Inter 28px bold, #4A90D9 at 0.7, y:960). (5) Sub-labels 'new pair' and 'regenerated' are not visible. (6) Terminal snippet 'pdd bug → pdd fix → ✓' is not visible. These are Remotion-layer text overlays that should have fully faded in by frame 178 (cost labels) and frame 172 (headers), so at frame 219 they should all be at full hold opacity. The underlying Veo footage is fine.
+- Increase panel header opacity from 0.3 to at least 0.5-0.6 for both 'DISCARD' and 'REGENERATE' headers, or verify that the FadeIn sequence for headers is completing correctly
+- Verify cost label positioning — '$2' at y:960 and '~30s' at y:960 may be rendering off-screen or behind the Veo clip layers; ensure text layers render above the VeoClip and ColorGrade layers in the z-order
+- Ensure the FadeIn components for cost labels (from frame 160, duration 18) and sub-labels (from frame 166, duration 12) are not being clipped or masked by panel overflow:hidden styles
+- Increase cost label opacity from 0.7 to 0.85-0.9 to ensure legibility against the Veo footage backgrounds, particularly the amber tones on the left
+- Add a subtle dark gradient strip behind the text overlay regions (bottom 15% of each panel and top header bar) to improve contrast without obscuring the Veo footage
+<!-- ANNOTATION_UPDATE_END: cc1a488b-a02f-4ea4-92f9-ed94f61f8b75 -->

@@ -30,7 +30,7 @@ export const PanelHeader: React.FC<PanelHeaderProps> = ({
   const opacity = interpolate(
     frame,
     [TIMING.HEADER_FADE_START, TIMING.HEADER_FADE_START + TIMING.HEADER_FADE_DURATION],
-    [0, 0.3],
+    [0, 0.6],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
