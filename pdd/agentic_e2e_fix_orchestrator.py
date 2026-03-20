@@ -1295,6 +1295,17 @@ def run_agentic_e2e_fix_orchestrator(
             current_cycle += 1
             last_completed_step = 0
             step_outputs = {} # Clear outputs for next cycle
+
+            # Reset working tree to discard changes from the failed cycle.
+            # Without this, the next cycle sees the (rejected) fixes still applied,
+            # runs tests that now pass, and incorrectly concludes NOT_A_BUG.
+            try:
+                import subprocess as _sp
+                _sp.run(["git", "checkout", "."], cwd=str(cwd), capture_output=True)
+                _sp.run(["git", "clean", "-fd"], cwd=str(cwd), capture_output=True)
+                console.print("[dim]Reset working tree for next cycle.[/dim]")
+            except Exception as _e:
+                console.print(f"[dim]Warning: Could not reset working tree: {_e}[/dim]")
             
             state_data["current_cycle"] = current_cycle
             state_data["last_completed_step"] = 0
