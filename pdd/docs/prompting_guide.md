@@ -174,7 +174,7 @@ These patterns are used across prompts in this repo:
 
 - Preamble and role: start with a concise, authoritative description of the task and audience (e.g., “You are an expert Python engineer…”).
 - Includes for context: bring only what the model needs.
-  - Single include: `<include>path/to/file</include>`. **Note:** This is a PDD directive, not standard XML. The PDD tool replaces this tag with the actual file content *before* the LLM sees it. (Handles both text and images).
+  - Single include: `<include>path/to/file</include>`. **Note:** This is a PDD directive, not standard XML. The PDD tool replaces this tag with the actual file content *before* the LLM sees it. (Handles both text and images). Use `<include optional>path/to/file</include>` to treat missing files as empty string (while still logging a warning).
   - Multiple: `<include-many>path1, path2, …</include-many>`
   - Grouping: wrap includes in a semantic tag to name the dependency or file they represent, for example:
     ```xml

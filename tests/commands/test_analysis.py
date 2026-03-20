@@ -154,6 +154,7 @@ def test_bug_agentic_failure_exit_code_1(runner, mock_context_obj):
     """Test 'bug' agentic mode exits with code 1 when workflow fails (issue #593).
 
     pdd bug must not exit 0 on failure so CI and 'pdd bug && pdd fix' can detect failure.
+    The command signals failure via click.exceptions.Exit(1); CliRunner captures that as result.exit_code.
     """
     with patch('pdd.commands.analysis.run_agentic_bug') as mock_agentic:
         mock_agentic.return_value = (
@@ -368,13 +369,6 @@ def test_bug_agentic_mode_failure(mock_agentic, runner, mock_context_obj):
     result = runner.invoke(bug, ["https://github.com/user/repo/issues/593"], obj=mock_context_obj)
     assert result.exit_code == 1
 
-
-@patch("pdd.commands.analysis.run_agentic_bug")
-def test_bug_agentic_mode_failure_exit_code_1_v2(mock_agentic, runner, mock_context_obj):
-    """Test bug agentic mode exits with 1 on failure, consistent with pdd change (issue #593)."""
-    mock_agentic.return_value = (False, "Workflow failed", 0.0, "", [])
-    result = runner.invoke(bug, ["https://github.com/user/repo/issues/593"], obj=mock_context_obj)
-    assert result.exit_code == 1
 
 def test_bug_agentic_mode_missing_arg_v2(runner, mock_context_obj):
     """Test bug command fails in agentic mode without URL."""
@@ -706,15 +700,3 @@ def test_trace_success(runner):
             kwargs = mock_main.call_args[1]
             assert kwargs["prompt_file"] == "prompt.txt"
             assert kwargs["code_line"] == 42
-
-def test_bug_agentic_mode_failure_exit_code(runner):
-    """Test 'bug' agentic mode exit code on failure (issue #593).
-    When the command raises Exit(1), CliRunner leaves result.output empty, so we only assert exit_code.
-    """
-    from pdd.commands.analysis import bug
-    with patch("pdd.commands.analysis.run_agentic_bug") as mock_agentic:
-        mock_agentic.return_value = (False, "Workflow failed", 0.0, "gpt-4", [])
-
-        result = runner.invoke(bug, ["https://github.com/user/repo/issues/1"])
-
-        assert result.exit_code == 1

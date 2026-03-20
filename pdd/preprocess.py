@@ -242,6 +242,10 @@ def _parse_attrs(attr_str: str) -> dict:
     # Simple attribute parser: key="value" or key='value'
     for match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']*)["\']', attr_str):
         attrs[match.group(1)] = match.group(2)
+    # Boolean attributes (e.g., <include optional>path</include>)
+    # This keeps the include tag syntax ergonomic without requiring key="true".
+    if "optional" not in attrs and re.search(r'(?<![A-Za-z0-9_])optional(?![A-Za-z0-9_])', attr_str):
+        attrs["optional"] = "true"
     return attrs
 
 def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
@@ -399,9 +403,21 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
         except FileNotFoundError:
             console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing XML include: {file_path}")
-            # First pass (recursive=True): leave the tag so a later env expansion can resolve it
-            # Second pass (recursive=False): replace with a visible placeholder
-            return match.group(0) if recursive else f"[File not found: {file_path}]"
+            # First pass (recursive=True): leave the tag so a later env expansion can resolve it.
+            # Second pass (recursive=False): replace with a visible placeholder, except for
+            # optional includes which should be treated as empty.
+            if recursive:
+                return match.group(0)
+
+            optional_val = attrs.get("optional")
+            if optional_val is not None:
+                truthy = str(optional_val).strip().lower() not in {"", "0", "false", "no", "off"}
+                if truthy:
+                    # Keep the console warning but do not leak a "[File not found: ...]" marker
+                    # into the LLM-facing prompt.
+                    return ""
+
+            return f"[File not found: {file_path}]"
         except ValueError as e:
             if "Circular include" in str(e):
                 raise
