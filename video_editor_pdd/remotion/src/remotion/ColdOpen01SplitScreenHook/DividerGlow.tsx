@@ -31,7 +31,7 @@ export const DividerGlow: React.FC<{
     easing: Easing.out(Easing.cubic),
   });
 
-  const glowWidth = 20;
+  const glowWidth = 30;
 
   return (
     <div
@@ -45,6 +45,7 @@ export const DividerGlow: React.FC<{
         opacity: GLOW_MAX_OPACITY * fadeIn,
         filter: `blur(8px)`,
         pointerEvents: 'none',
+        zIndex: 6,
         // Shift the gradient position with the sine cycle to create the pulse
         transform: `scaleX(${0.6 + 0.4 * mix})`,
       }}

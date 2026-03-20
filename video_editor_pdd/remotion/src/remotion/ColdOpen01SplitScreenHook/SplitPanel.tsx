@@ -121,7 +121,8 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({
           opacity: HEADER_TEXT_OPACITY,
           letterSpacing: '0.05em',
           userSelect: 'none',
-          zIndex: 10,
+          zIndex: 20,
+          textShadow: '0 0 8px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.7)',
         }}
       >
         {label}
