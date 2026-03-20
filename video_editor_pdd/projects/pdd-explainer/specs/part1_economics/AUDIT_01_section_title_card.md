@@ -1,14 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame at 87.5% progress (frame 104/120, within the 'hold' phase 90-120) matches the spec accurately. All required elements are present and correctly composed:
-
-1. **Background:** Dark `#0D1117` background, clean with no code underlay — correct.
-2. **Part Label:** "PART 1" is visible, uppercase, centered, with wide letter-spacing, in a muted gray tone consistent with `#94A3B8` at reduced opacity — correct.
-3. **Title:** "The Economics of Darning" is displayed in warm amber (`#D9944A`), bold, large size (~52px), horizontally centered — correct.
-4. **Horizontal Rule:** A thin horizontal rule is visible between the title and subtitle, centered, in amber at low opacity — correct. It appears fully drawn, consistent with this being well past the rule-draw phase (frame 60-70).
-5. **Subtitle:** "Why patching was rational — and when it stopped." is visible below the rule in italics, lighter weight, muted gray — correct.
-6. **Layout:** All elements are horizontally centered with appropriate vertical spacing. The vertical positioning places the composition slightly above center, which is consistent with the spec's y-values (420-585 in a 1080 canvas). Minor vertical positioning drift is within acceptable tolerance.
-7. **Animation Phase:** At frame 104, all elements should be fully visible in the hold phase — confirmed, all elements are at full opacity with no animation artifacts.
-
-The composition reads with the intended "grounded, explanatory authority" mood described in the spec.
+The frame is sampled at frame 104/120 (87.5% progress), which falls in the hold phase (frames 90-120). All key elements are present and visible: 'PART 1' label in uppercase with letter-spacing, centered; 'The Economics of Darning' title in warm amber (#D9944A) color, centered; subtitle 'Why patching was rational — and when it stopped.' in light italic, muted gray, centered. Background is dark (#0D1117). The horizontal rule specified at y:555 between the title and subtitle is not clearly visible. The spec calls for a 120px wide, 2px rule in #D9944A at 0.2 opacity centered at y:555. Looking closely at the frame, there may be a very faint line but it is not distinctly rendered. The horizontal rule is listed as a decorative element that 'may vary slightly without failing,' but its near-invisibility is a noticeable omission when comparing carefully. All text elements have correct content, color, weight, and centering. The vertical spacing between PART 1 → title → subtitle looks slightly compressed compared to spec positions (420, 500, 585), but within semantic tolerance for the intended centered composition.

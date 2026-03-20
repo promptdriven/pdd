@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (printing, injection, molding, points, specified), so the frame does not support a hard missing-text failure.
+Frame at 85% progress (frame 509, hold phase 480-540) correctly shows both panels in their completed hold state. Left panel: fully populated ~20×20 blue dot grid with 'Points specified: 400' counter and 'Every point must be specified' annotation. Right panel: mold cross-section with amber walls, 'WALL' labels, top-center nozzle, and fully filled blue liquid with organic fluid simulation. 'Walls defined: 4' counter and 'Precision comes from the walls' annotation are present. Vertical split divider is visible. Panel headers '3D PRINTING' (gray) and 'INJECTION MOLDING' (amber) are correctly placed. Bottom callout is correctly absent (fades in at frames 540-600). The visual contrast between exhaustive specification (400 points) and economical constraint (4 walls) reads clearly.
