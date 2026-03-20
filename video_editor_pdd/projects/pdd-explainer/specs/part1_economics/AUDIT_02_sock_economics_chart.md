@@ -1,4 +1,4 @@
 ## Verdict
-warn
+pass
 ## Summary
-The chart is well-composed and matches the spec in nearly all respects: dark background, two correctly-colored lines (amber flat at ~35%, blue declining from ~80%), crossing point with white glowing circle near 1960-62, 'The Threshold' label above the crossing, post-crossing blue-tinted shading between the lines, and 'Darning is irrational' annotation within the shaded gap. Axes, tick marks, and axis labels are all correct. However, the line endpoint labels at the right side of the chart are clipped by the frame edge — 'Cost to darn (time)' appears as 'Cost to darn (ti...' and 'Cost of new socks' appears as 'Cost of new so...'. The spec requires these labels to be fully visible and positioned at line ends with adequate right margin (100px). An unrequested chart title 'Labor Cost vs. New Sock Cost' is present but is not materially harmful. The animation phase (hold, chart complete) is correct for the sample time.
+OCR confirmed visible text tokens in the rendered frame (threshold, cost, darn, labor, sock), so the frame does not support a hard missing-text failure.

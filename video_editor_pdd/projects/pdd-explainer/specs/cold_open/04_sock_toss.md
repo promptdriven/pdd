@@ -1,127 +1,82 @@
 [veo:]
 
-# Section 0.4: Sock Toss — Economics in Action
+# Section 0.4: Sock Toss — When Socks Got Cheap Enough
 
-**Tool:** Veo
-**Duration:** ~5s (150 frames @ 30fps)
-**Timestamp:** 0:15 - 0:20
+**Tool:** Veo (cinematic B-roll)
+**Duration:** ~6s (180 frames @ 30fps)
+**Timestamp:** 0:15 - 0:21
 
 ## Visual Description
 
-Hard cut to modern day. A person in a bright, clean apartment notices a hole in their sock. No ceremony — they shrug, toss it casually into a trash can, and grab a fresh pair from a cellophane-wrapped multi-pack on a nearby shelf. The price sticker "$4.99" is briefly visible on the packaging.
-
-The lighting is flat and modern — overhead LEDs, neutral white. The apartment is clean, contemporary, unremarkable. This isn't cinematic drama — it's Tuesday morning. The gesture is completely reflexive. The person doesn't consider darning for even a fraction of a second. The sock is garbage the instant the hole appears.
-
-The camera is static and observational — locked-off, no movement, no style. Documentary feel. The banality is the point: this is what rational economic behavior looks like when materials get cheap enough.
+Hard cut from the split screen. A modern-day person in casual clothes (jeans, t-shirt) sits on the edge of a bed in a clean, minimalist apartment. They hold up a sock with a visible hole in the toe. Brief beat — they shrug with a half-smile, toss the sock in a nearby wastebasket in one fluid motion. They reach to a bedside shelf and grab a fresh pair from a $4.99 multi-pack (visible price sticker). The camera follows the arc of the toss, then racks focus to the fresh pair. The mood is unbothered, practical — no sentimentality. Modern natural lighting: cool daylight from a window, clean white walls.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Modern apartment interior, neutral daylight
-- Grid lines: N/A (live-action footage)
+- Aspect ratio: 16:9 native
+- Color temperature: 5600K daylight
 
 ### Chart/Visual Elements
-
-**Camera**
-- Framing: Medium shot (waist up), person seated on couch or bed edge
-- Movement: static, locked-off tripod — observational, no drift
-- Depth of field: moderate, f/4.0 — subject sharp, background recognizable but soft
-- Angle: eye level, straight on
-
-**Lighting**
-- Key light: neutral white overhead LED `#F0ECE4`, diffused
-- Fill: window ambient from the side, cool daylight `#D4E0EC`
-- No dramatic shadows — flat, modern, everyday
-- Overall tone: clean, slightly cool, naturalistic
-
-**Subject**
-- Person seated, casual clothing (t-shirt, shorts/sweats)
-- Sock with a visible hole in the toe — simple cotton ankle sock, white or gray
-- Small waste bin nearby
-- Multi-pack of socks on a shelf or nightstand — cellophane-wrapped, "$4.99" sticker visible
-- The person's expression: brief glance at hole, shrug, toss — zero hesitation
-
-**Key Moments**
-- 0-1s: Person pulls on sock, notices hole. Thumb pokes through.
-- 1-2.5s: Shrug. Sock tossed casually toward trash can. Lands softly.
-- 2.5-4s: Hand reaches to shelf, grabs multi-pack, tears open cellophane, pulls out fresh pair.
-- 4-5s: Fresh socks held briefly. Already moving on. The old sock is forgotten.
+- **Subject:** Person in their 30s, casual modern clothing
+- **Lighting:** Natural window light (key from camera-right), soft bounce fill
+- **Depth of field:** Medium — f/4 equivalent, subject and immediate surroundings sharp
+- **Camera:** Single shot, starts medium on the person, slight pan to follow sock arc, rack focus to fresh pair
+- **Palette:** Cool neutrals — white `#F0F0F0`, light gray `#D1D5DB`, denim blue `#4B6A8A`
+- **Key prop:** Multi-pack of socks with visible `$4.99` price tag, warm packaging colors
 
 ### Animation Sequence
-1. **Frame 0-5 (0-0.17s):** Hard cut in — no fade. Immediate presence. Modern apartment.
-2. **Frame 5-30 (0.17-1s):** Person holds sock, notices hole, thumb pushes through.
-3. **Frame 30-75 (1-2.5s):** Shrug. Sock tossed toward trash. Lands. Zero ceremony.
-4. **Frame 75-120 (2.5-4s):** Hand reaches for multi-pack. Cellophane tears. Fresh pair pulled out. "$4.99" visible.
-5. **Frame 120-150 (4-5s):** Fresh socks in hand. Hold. Person already moving on to next thing.
+1. **Frame 0-30 (0-1s):** Hard cut in. Person holds up holey sock, examines it briefly.
+2. **Frame 30-60 (1-2s):** Shrug. The expression is "oh well" — no drama. Tosses sock toward wastebasket.
+3. **Frame 60-100 (2-3.3s):** Camera follows the sock's arc. It lands in the wastebasket cleanly. Satisfying.
+4. **Frame 100-150 (3.3-5s):** Person reaches to shelf, grabs fresh pair from multi-pack. Price tag `$4.99` is visible for at least 1 second.
+5. **Frame 150-180 (5-6s):** Holds up the fresh pair with a casual "good enough" expression. The contrast with grandmother's careful repair is implicit.
 
 ### Typography
-- None (pure B-roll footage)
+- None — pure cinematic footage
 
 ### Easing
-- Hard cut in (no fade)
-- Fade-out: `easeIn(quad)`, 0.33s
+- Camera pan: `easeInOut(sine)` — smooth follow
+- Focus rack: `easeOut(quad)` — natural lens behavior
 
 ### Veo Prompt
-
 ```
-Medium shot of a person in casual clothes sitting on the edge of a modern bed or couch. They pull on a white cotton ankle sock, notice a hole in the toe, poke their thumb through it. They shrug casually, toss the sock into a small trash can nearby. Hand reaches to a shelf and grabs a cellophane-wrapped multi-pack of socks with a visible $4.99 price sticker. They tear open the packaging and pull out a fresh pair. Modern apartment interior, neutral white overhead LED lighting, clean and contemporary. Static locked-off camera at eye level, no movement. Moderate depth of field. Naturalistic, everyday, documentary feel. No drama. Cinematic, 24fps, neutral color grade.
+Modern-day person sitting on the edge of a bed in a clean minimalist apartment. They hold up a sock with a visible hole in the toe, shrug casually with a half-smile, and toss it into a nearby wastebasket. They reach to a shelf and grab a fresh pair from a multi-pack of socks with a visible $4.99 price sticker. Natural daylight from a window, clean white walls, casual contemporary clothing. Camera follows the sock toss with a slight pan, then racks focus to the fresh pair. Medium shot, documentary style, 16:9, cinematic shallow depth of field. Unbothered, practical mood.
 ```
 
 ## Narration Sync
-
 > "When socks got cheap enough... she stopped."
 
-Segment: `cold_open_003`
-Timing: 0:15 - 0:20
-
-- **0:15** ("When socks got"): Person notices hole, thumb pokes through
-- **0:17** ("cheap enough"): Sock tossed in trash, "$4.99" multi-pack visible
-- **0:19** ("she stopped"): Fresh pair in hand, old sock forgotten
+| Segment ID | Text | Sync Point |
+|---|---|---|
+| `cold_open_005` | "When socks got cheap enough..." | Frame 30 — as the sock is tossed |
+| `cold_open_006` | "...she stopped." | Frame 120 — as fresh pair is grabbed |
 
 ## Code Structure (Remotion)
-
 ```typescript
-<Sequence from={0} durationInFrames={150}>
+<Sequence from={0} durationInFrames={180}>
   <VeoClip
-    clipId="modern_sock_toss"
-    src="/clips/modern_sock_toss.mp4"
-    fit="cover"
+    clipId="sock_toss_modern"
+    src="/assets/veo/sock_toss_modern.mp4"
+    startFrom={0}
+    playbackRate={1}
   />
-  {/* Hard cut in — no fade */}
-  {/* Fade out */}
-  <Sequence from={140} durationInFrames={10}>
-    <FadeOut />
-  </Sequence>
 </Sequence>
 ```
 
 ## Data Points JSON
-
 ```json
 {
   "type": "veo_clip",
-  "clipId": "modern_sock_toss",
-  "camera": {
-    "framing": "medium_shot",
-    "movement": "static",
-    "dof": "moderate",
-    "angle": "eye_level",
-    "drift": false
-  },
-  "lighting": {
-    "key": { "color": "#F0ECE4", "position": "overhead", "type": "LED" },
-    "fill": { "color": "#D4E0EC", "position": "side_window", "type": "daylight" },
-    "grade": "neutral_cool"
-  },
-  "props": {
-    "sock": "white cotton ankle sock with hole in toe",
-    "multiPack": "cellophane-wrapped, $4.99 sticker visible",
-    "trashCan": "small modern waste bin"
-  },
-  "narrationSegments": ["cold_open_003"],
-  "narrationTimingSeconds": { "start": 15.0, "end": 20.0 }
+  "clipId": "sock_toss_modern",
+  "duration": 6,
+  "frames": 180,
+  "camera": "medium_tracking_rack_focus",
+  "colorTemperature": "5600K",
+  "era": "modern",
+  "setting": "minimalist_apartment_bedroom",
+  "props": ["holey_sock", "wastebasket", "sock_multipack", "price_tag_4_99"],
+  "keyAction": "toss_and_replace",
+  "narrationSegments": ["cold_open_005", "cold_open_006"]
 }
 ```
-
----

@@ -44,9 +44,9 @@ export const Part1Economics04ResearchAnnotations: React.FC = () => {
         {/* Annotation 1: GitHub Study — "Individual task: -55%" */}
         <AnnotationCallout
           startFrame={ANNOTATION_1_START}
-          title="Individual task: \u221255%"
+          title="Individual task: −55%"
           titleColor={BLUE}
-          subtitle="GitHub, 2022 \u2022 95 devs, one greenfield task"
+          subtitle="GitHub, 2022 • 95 devs, one greenfield task"
           borderColor={BLUE}
           x={ANNOTATION_X}
           y={200}
@@ -59,7 +59,7 @@ export const Part1Economics04ResearchAnnotations: React.FC = () => {
           startFrame={ANNOTATION_2_START}
           title="Overall throughput: ~0%"
           titleColor={AMBER}
-          subtitle="Uplevel, 2024 \u2022 785 devs, one year"
+          subtitle="Uplevel, 2024 • 785 devs, one year"
           extra="+41% more bugs"
           extraColor={RED}
           borderColor={AMBER}
@@ -72,9 +72,9 @@ export const Part1Economics04ResearchAnnotations: React.FC = () => {
         {/* Annotation 3: GitClear — churn + refactoring */}
         <AnnotationCallout
           startFrame={ANNOTATION_3_START}
-          title={['Code churn: +44%', 'Refactoring: \u221260%']}
+          title={['Code churn: +44%', 'Refactoring: −60%']}
           titleColor={RED}
-          subtitle="GitClear, 2025 \u2022 211M lines analyzed"
+          subtitle="GitClear, 2025 • 211M lines analyzed"
           borderColor={RED}
           x={ANNOTATION_X}
           y={500}

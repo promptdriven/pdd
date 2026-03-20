@@ -9,7 +9,7 @@ export const CANVAS = {
 } as const;
 
 export const COLORS = {
-  BACKGROUND: '#0D1117',
+  BACKGROUND: '#0A0F1A',
   TITLE: '#4A90D9',
   SUBTITLE: '#94A3B8',
   QUESTION_TEXT: '#E2E8F0',

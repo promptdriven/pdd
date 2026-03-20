@@ -3458,3 +3458,67 @@ class TestDigitPrefixedIdentifiers:
         with open(script_path, "r") as f:
             source = f.read()
         assert "isdigit" in source
+
+
+# ---------------------------------------------------------------------------
+# renderMode assignment — must prefer "component" when a Remotion component exists
+# ---------------------------------------------------------------------------
+
+
+class TestResolveVisualRenderMode:
+    """_resolve_visual_render_mode must return 'component' when a Remotion
+    component exists for the visual, even if media aliases are present.
+    Title cards and Remotion specs that get fallback video should not be
+    overridden to 'raw-media'."""
+
+    def _import_fn(self):
+        import importlib, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        mod = importlib.import_module("generate_section_compositions")
+        return mod._resolve_visual_render_mode
+
+    def test_returns_component_when_component_exists_and_media_present(self):
+        fn = self._import_fn()
+        result = fn(
+            media_aliases={"defaultSrc": "veo/some_clip.mp4"},
+            overlay_config=None,
+            has_component=True,
+        )
+        assert result == "component"
+
+    def test_returns_raw_media_when_no_component_and_media_present(self):
+        fn = self._import_fn()
+        result = fn(
+            media_aliases={"defaultSrc": "veo/some_clip.mp4"},
+            overlay_config=None,
+            has_component=False,
+        )
+        assert result == "raw-media"
+
+    def test_returns_component_when_no_media_and_component_exists(self):
+        fn = self._import_fn()
+        result = fn(
+            media_aliases={},
+            overlay_config=None,
+            has_component=True,
+        )
+        assert result == "component"
+
+    def test_returns_generated_media_with_overlay_and_no_component(self):
+        fn = self._import_fn()
+        result = fn(
+            media_aliases={"defaultSrc": "veo/clip.mp4"},
+            overlay_config={"gradientOverlay": "bottom"},
+            has_component=False,
+        )
+        assert result == "generated-media"
+
+    def test_returns_generated_media_with_overlay_even_with_component(self):
+        """Overlay visuals need generated-media to composite the overlay."""
+        fn = self._import_fn()
+        result = fn(
+            media_aliases={"defaultSrc": "veo/clip.mp4"},
+            overlay_config={"gradientOverlay": "bottom"},
+            has_component=False,
+        )
+        assert result == "generated-media"

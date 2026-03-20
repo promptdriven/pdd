@@ -47,11 +47,19 @@ export const VisualContractProvider: React.FC<{
   );
 };
 
+const SPLIT_ONLY_KEYS: ReadonlySet<keyof VisualMedia> = new Set([
+  "leftSrc",
+  "rightSrc",
+]);
+
 export const useVisualMediaSrc = (
   key: keyof VisualMedia = "defaultSrc",
   fallback?: string
 ): string | null => {
   const media = useContext(VisualMediaContext);
+  if (SPLIT_ONLY_KEYS.has(key)) {
+    return media?.[key] ?? fallback ?? null;
+  }
   return media?.[key] ?? media?.defaultSrc ?? fallback ?? null;
 };
 

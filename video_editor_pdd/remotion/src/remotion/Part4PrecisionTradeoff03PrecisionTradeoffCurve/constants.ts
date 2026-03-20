@@ -50,14 +50,17 @@ export const X_TICKS = [0, 10, 20, 30, 40, 50] as const;
 export const Y_TICK_LABELS = ['Low', 'Medium', 'High'] as const;
 
 // Curve function: maps testCount (0-50) to pixel Y
+// Inverse hyperbola: HIGH precision (low y) at few tests → LOW precision (high y) at many tests
 export function curveY(testCount: number): number {
-  return CHART.topY + (CHART.height - (CHART.topY - CHART.topY)) * (1 / (1 + 0.08 * testCount));
+  const range = CHART.originY - CHART.topY; // 640
+  return CHART.originY - range * (1 / (1 + 0.08 * testCount));
 }
 
 // More precise: maps testCount to pixel coords
 export function curvePoint(testCount: number): { x: number; y: number } {
   const t = testCount / 50; // normalize 0..1
   const x = CHART.originX + t * CHART.width;
-  const y = 180 + 580 * (1 / (1 + 0.08 * testCount));
+  const range = CHART.originY - CHART.topY; // 640
+  const y = CHART.originY - range * (1 / (1 + 0.08 * testCount));
   return { x, y };
 }

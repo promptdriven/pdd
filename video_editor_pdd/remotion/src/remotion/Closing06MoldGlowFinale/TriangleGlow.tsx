@@ -53,7 +53,7 @@ export const TriangleGlow: React.FC = () => {
     >
       <defs>
         {GLOW_LAYERS.map((layer, i) => (
-          <filter key={i} id={`edgeGlow${i}`}>
+          <filter key={i} id={`edgeGlow${i}`} x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation={layer.blur / 2} />
           </filter>
         ))}

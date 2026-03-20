@@ -24,10 +24,11 @@
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_hook",
-        "02_zoom_out_accumulated",
-        "05_code_blink",
-        "06_still_patching_beat",
-        "07_pdd_title_card"
+        "03_zoom_out_accumulated",
+        "06_code_blink_patched",
+        "07_code_regeneration",
+        "08_still_patching_beat",
+        "09_pdd_title_card"
       ],
       "timelineSource": "generated"
     },
@@ -102,7 +103,7 @@
       "specDir": "part4_precision_tradeoff",
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
-      "durationSeconds": 112.085333,
+      "durationSeconds": 111.914667,
       "offsetSeconds": 1045.695999,
       "compositions": [
         "01_section_title_card",
@@ -124,7 +125,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 115.392,
-      "offsetSeconds": 1157.781332,
+      "offsetSeconds": 1157.610666,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -145,7 +146,7 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 32.661333,
-      "offsetSeconds": 1273.173332,
+      "offsetSeconds": 1273.002666,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -164,8 +165,8 @@
       "specDir": "closing",
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 20.992,
-      "offsetSeconds": 1305.834665,
+      "durationSeconds": 20.714667,
+      "offsetSeconds": 1305.663999,
       "compositions": [
         "01_sock_callback_split",
         "03_code_regenerate_workflow",

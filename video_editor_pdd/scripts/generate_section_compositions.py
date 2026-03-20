@@ -806,12 +806,17 @@ def build_visual_contract_manifest(
             remotion_public,
         )
         overlay_manifest = build_visual_overlay_manifest(section, project_dir)
+        composition_ids = {
+            (c if isinstance(c, str) else c.get('id', ''))
+            for c in section.get('compositions', [])
+        }
         visuals: List[Dict[str, Any]] = []
         for visual_id in visual_ids:
             spec_base = component_base_name(visual_id, section['id'])
             spec_path = os.path.join(spec_dir, f'{spec_base}.md')
             spec_content = _read_text_if_exists(spec_path)
             data_points = _extract_data_points_json(spec_content) if spec_content else None
+            has_component = spec_base in composition_ids
             visuals.append({
                 'id': visual_id,
                 'specBaseName': spec_base,
@@ -822,6 +827,7 @@ def build_visual_contract_manifest(
                 'renderMode': _resolve_visual_render_mode(
                     media_manifest.get(visual_id, {}),
                     overlay_manifest.get(visual_id),
+                    has_component=has_component,
                 ),
             })
 
@@ -996,7 +1002,10 @@ def _extract_visual_overlay_config(spec_content: str) -> Optional[Dict[str, Any]
 def _resolve_visual_render_mode(
     media_aliases: Dict[str, str],
     overlay_config: Optional[Dict[str, Any]],
+    has_component: bool = False,
 ) -> str:
+    if has_component:
+        return 'component'
     if overlay_config or media_aliases.get('leftSrc') or media_aliases.get('rightSrc'):
         return 'generated-media'
     if media_aliases:

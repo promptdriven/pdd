@@ -2,49 +2,56 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
-import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { ColdOpen01SplitScreenHook } from "../ColdOpen01SplitScreenHook";
-import { ColdOpen02ZoomOutAccumulated } from "../ColdOpen02ZoomOutAccumulated";
-import { ColdOpen05CodeBlink } from "../ColdOpen05CodeBlink";
-import { ColdOpen06StillPatchingBeat } from "../ColdOpen06StillPatchingBeat";
-import { ColdOpen07PddTitleCard } from "../ColdOpen07PddTitleCard";
+import { ColdOpen03ZoomOutAccumulated } from "../ColdOpen03ZoomOutAccumulated";
+import { ColdOpen06CodeBlinkPatched } from "../ColdOpen06CodeBlinkPatched";
+import { ColdOpen07CodeRegeneration } from "../ColdOpen07CodeRegeneration";
+import { ColdOpen08StillPatchingBeat } from "../ColdOpen08StillPatchingBeat";
+import { ColdOpen09PddTitleCard } from "../ColdOpen09PddTitleCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "01_split_screen_hook": ColdOpen01SplitScreenHook,
-  "02_zoom_out_accumulated": ColdOpen02ZoomOutAccumulated,
-  "05_code_blink": ColdOpen05CodeBlink,
-  "06_still_patching_beat": ColdOpen06StillPatchingBeat,
-  "07_pdd_title_card": ColdOpen07PddTitleCard,
+  "03_zoom_out_accumulated": ColdOpen03ZoomOutAccumulated,
+  "06_code_blink_patched": ColdOpen06CodeBlinkPatched,
+  "07_code_regeneration": ColdOpen07CodeRegeneration,
+  "08_still_patching_beat": ColdOpen08StillPatchingBeat,
+  "09_pdd_title_card": ColdOpen09PddTitleCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_split_screen_hook": 240,
-  "02_zoom_out_accumulated": 210,
-  "05_code_blink": 240,
-  "06_still_patching_beat": 150,
-  "07_pdd_title_card": 150,
+  "03_zoom_out_accumulated": 210,
+  "06_code_blink_patched": 150,
+  "07_code_regeneration": 270,
+  "08_still_patching_beat": 120,
+  "09_pdd_title_card": 180,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "03_grandmother_lamplight": { defaultSrc: "veo/grandmother_darning_lamplight.mp4", backgroundSrc: "veo/grandmother_darning_lamplight.mp4", outputSrc: "veo/grandmother_darning_lamplight.mp4", baseSrc: "veo/grandmother_darning_lamplight.mp4" },
-  "04_sock_toss": { defaultSrc: "veo/modern_sock_toss.mp4", backgroundSrc: "veo/modern_sock_toss.mp4", outputSrc: "veo/modern_sock_toss.mp4", baseSrc: "veo/modern_sock_toss.mp4" },
-  "05_code_blink": { defaultSrc: "veo/modern_sock_toss.mp4", backgroundSrc: "veo/modern_sock_toss.mp4", outputSrc: "veo/modern_sock_toss.mp4", baseSrc: "veo/modern_sock_toss.mp4" },
-  "06_still_patching_beat": { defaultSrc: "veo/modern_sock_toss.mp4", backgroundSrc: "veo/modern_sock_toss.mp4", outputSrc: "veo/modern_sock_toss.mp4", baseSrc: "veo/modern_sock_toss.mp4" },
-  "07_pdd_title_card": { defaultSrc: "veo/modern_sock_toss.mp4", backgroundSrc: "veo/modern_sock_toss.mp4", outputSrc: "veo/modern_sock_toss.mp4", baseSrc: "veo/modern_sock_toss.mp4" },
+  "01_split_screen_hook": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
+  "02_grandmother_lamplight": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
+  "03_zoom_out_accumulated": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
+  "04_sock_toss": { defaultSrc: "veo/sock_toss_modern.mp4", backgroundSrc: "veo/sock_toss_modern.mp4", outputSrc: "veo/sock_toss_modern.mp4", baseSrc: "veo/sock_toss_modern.mp4" },
+  "05_developer_cursor_broll": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "06_code_blink_patched": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "07_code_regeneration": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "08_still_patching_beat": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "09_pdd_title_card": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
-  "01_split_screen_hook": { gradientOverlay: "bottom" },
 };
 
 const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "01_split_screen_hook": {"specBaseName": "01_split_screen_hook", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"label": "2025", "content": "developer_cursor_edit_veo", "colorGrade": {"color": "#4A90D9", "opacity": 0.02}, "background": "#000000"}, "rightPanel": {"label": "1955", "content": "grandmother_darning_hook_veo", "colorGrade": {"color": "#D4A043", "opacity": 0.04}, "background": "#000000"}, "embeddedVeoClips": ["developer_cursor_edit", "grandmother_darning_hook"], "backgroundColor": "#000000", "narrationSegments": ["cold_open_001"]}, "overlayConfig": {"gradientOverlay": "bottom"}, "renderMode": "generated-media"},
-  "02_zoom_out_accumulated": {"specBaseName": "02_zoom_out_accumulated", "dataPoints": {"type": "animated_zoom_split", "chartId": "accumulated_weight_reveal", "leftPanel": {"label": "Codebase", "gridSize": [8, 8], "tileSize": [110, 90], "diffMarkerPercent": 0.6, "counter": {"label": "patches", "finalValue": 1247}, "inlineComments": ["// fixed null case", "// workaround for #412", "// TODO: refactor", "// temporary fix (2019)", "// don't touch this", "// legacy"]}, "rightPanel": {"label": "Mended garments", "itemCount": 47, "counter": {"label": "mended", "finalValue": 47}, "itemTypes": ["socks", "shirts", "trousers"]}, "zoomConfig": {"startScale": 1.0, "endScale": 0.15, "startFrame": 15, "duration": 105}, "backgroundColor": "#000000", "narrationSegments": ["cold_open_002"]}, "overlayConfig": null, "renderMode": "component"},
-  "03_grandmother_lamplight": {"specBaseName": "03_grandmother_lamplight", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_lamplight", "camera": {"framing": "medium_closeup_to_extreme_closeup", "movement": "push_in", "travelPercent": 12, "dof": "shallow", "angle": "slightly_overhead"}, "lighting": {"key": {"color": "#E8A040", "position": "upper_left", "type": "practical_lamp"}, "fill": "minimal", "rim": "warm_edge", "grade": "rembrandt_warm"}, "characters": [{"id": "grandmother", "label": "Great-Grandmother", "referencePrompt": "Elderly woman, 70s-80s, weathered hands with visible age spots, wearing a dark cardigan. Warm domestic setting, 1950s era. Skilled and practiced with needle and thread."}], "intercutWith": "02_zoom_out_accumulated", "panel": "right", "narrationSegments": ["cold_open_002"], "narrationTimingSeconds": {"start": 8.0, "end": 13.0}}, "overlayConfig": null, "renderMode": "raw-media"},
-  "04_sock_toss": {"specBaseName": "04_sock_toss", "dataPoints": {"type": "veo_clip", "clipId": "modern_sock_toss", "camera": {"framing": "medium_shot", "movement": "static", "dof": "moderate", "angle": "eye_level", "drift": false}, "lighting": {"key": {"color": "#F0ECE4", "position": "overhead", "type": "LED"}, "fill": {"color": "#D4E0EC", "position": "side_window", "type": "daylight"}, "grade": "neutral_cool"}, "props": {"sock": "white cotton ankle sock with hole in toe", "multiPack": "cellophane-wrapped, $4.99 sticker visible", "trashCan": "small modern waste bin"}, "narrationSegments": ["cold_open_003"], "narrationTimingSeconds": {"start": 15.0, "end": 20.0}}, "overlayConfig": null, "renderMode": "raw-media"},
-  "05_code_blink": {"specBaseName": "05_code_blink", "dataPoints": {"type": "code_animation", "chartId": "code_blink_regenerate", "ide": {"theme": "github-dark", "background": "#0D1117", "font": "JetBrains Mono", "fontSize": 14}, "oldCode": {"lineCount": 18, "filename": "user_parser.py", "maintenanceComments": [{"line": 3, "text": "# fixed null case"}, {"line": 7, "text": "# workaround for #412"}, {"line": 10, "text": "# TODO: refactor this"}, {"line": 13, "text": "# temporary fix (2019)"}, {"line": 16, "text": "# don't remove — breaks prod"}]}, "newCode": {"lineCount": 14, "commentCount": 0, "revealBlocks": [[1, 5], [6, 10], [11, 14]]}, "dissolution": {"particleCount": 200, "gravity": 0.3, "fadeDuration": 45}, "terminalCommand": "pdd generate ✓", "narrationSegments": ["cold_open_004"]}, "overlayConfig": null, "renderMode": "raw-media"},
-  "06_still_patching_beat": {"specBaseName": "06_still_patching_beat", "dataPoints": {"type": "text_beat", "chartId": "still_patching_question", "questionText": "So why are we still patching?", "accentWord": "patching?", "accentColor": "#D9944A", "textColor": "#E2E8F0", "backgroundColor": "#0D1117", "codeUnderlayOpacity": 0.08, "holdDuration": 60, "narrationSegments": ["cold_open_005"]}, "overlayConfig": null, "renderMode": "raw-media"},
-  "07_pdd_title_card": {"specBaseName": "07_pdd_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 0, "sectionLabel": null, "titleLine1": "Prompt-Driven", "titleLine2": "Development", "titleColor": "#4A90D9", "subtitle": "Writing the mold, not the plastic.", "subtitleColor": "#94A3B8", "backgroundColor": "#0D1117", "codeUnderlayOpacity": 0.04, "glow": {"blur": 12, "color": "#4A90D9", "opacity": 0.08}, "terminalBreadcrumb": "pdd generate", "narrationSegments": ["cold_open_006"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "01_split_screen_hook": {"specBaseName": "01_split_screen_hook", "dataPoints": {"type": "split_screen", "layout": "vertical", "divider": {"x": 960, "color": "#334155", "opacity": 0.4, "width": 2}, "panels": {"left": {"label": "2025", "veoClipId": "developer_cursor_edit", "colorGrade": {"tint": "#4A90D9", "opacity": 0.02}, "vignette": {"color": "#000000", "opacity": 0.15}}, "right": {"label": "1955", "veoClipId": "grandmother_darning", "colorGrade": {"tint": "#D4A043", "opacity": 0.04}, "filmGrain": {"opacity": 0.06, "fps": 12}}}, "embeddedVeoClips": ["developer_cursor_edit", "grandmother_darning"], "narrationSegments": ["cold_open_001", "cold_open_002"]}, "overlayConfig": null, "renderMode": "generated-media"},
+  "02_grandmother_lamplight": {"specBaseName": "02_grandmother_lamplight", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning", "duration": 10, "frames": 300, "camera": "static_close_up", "colorTemperature": "3200K", "era": "1950s", "characters": [{"id": "grandmother", "label": "Great-Grandmother", "referencePrompt": "Elderly woman in her 70s, silver hair in a low bun, wire-rimmed reading glasses, cotton floral housedress, simple gold wedding band, gentle weathered hands. Warm and practiced demeanor."}], "setting": "1950s_living_room", "props": ["darning_egg", "wool_sock", "ceramic_lamp", "sewing_basket"], "narrationSegments": ["cold_open_001", "cold_open_002"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "03_zoom_out_accumulated": {"specBaseName": "03_zoom_out_accumulated", "dataPoints": {"type": "animated_infographic", "layout": "split_screen", "left": {"label": "Codebase Patches", "blockCount": 80, "diffMarkerPercent": 60, "floatingComments": ["// TODO: refactor", "// HACK", "// fixed null case", "// workaround for #412", "// legacy — do not touch", "// temporary fix 2023-04"], "counter": {"from": 0, "to": 1247, "suffix": " patches", "color": "#F85149"}}, "right": {"label": "Mended Garments", "garmentCount": 47, "garmentTypes": ["sock", "shirt", "trouser", "sock", "sweater"], "counter": {"from": 0, "to": 47, "suffix": " mended garments", "color": "#D9944A"}}, "zoom": {"from": 1.0, "to": 0.15, "startFrame": 10, "durationFrames": 80}, "narrationSegments": ["cold_open_003", "cold_open_004"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "04_sock_toss": {"specBaseName": "04_sock_toss", "dataPoints": {"type": "veo_clip", "clipId": "sock_toss_modern", "duration": 6, "frames": 180, "camera": "medium_tracking_rack_focus", "colorTemperature": "5600K", "era": "modern", "setting": "minimalist_apartment_bedroom", "props": ["holey_sock", "wastebasket", "sock_multipack", "price_tag_4_99"], "keyAction": "toss_and_replace", "narrationSegments": ["cold_open_005", "cold_open_006"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "05_developer_cursor_broll": {"specBaseName": "05_developer_cursor_broll", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_edit", "duration": 10, "frames": 300, "camera": "over_the_shoulder_static", "colorTemperature": "mixed_6500K_3500K", "era": "modern", "setting": "modern_tech_workspace", "props": ["mechanical_keyboard", "widescreen_monitor", "code_editor", "desk_lamp", "coffee_mug"], "keyAction": "accept_ai_suggestion", "narrationSegments": ["cold_open_001", "cold_open_002"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "06_code_blink_patched": {"specBaseName": "06_code_blink_patched", "dataPoints": {"type": "code_editor", "function": {"name": "processUserInput", "lineCount": 18, "language": "typescript", "code": ["function processUserInput(raw: string): ProcessedInput {", "  const sanitized = raw.trim().toLowerCase();", "  let result: ProcessedInput;", "", "  // fixed null case", "  if (!sanitized || sanitized === 'undefined') {", "    return { valid: false, value: '', error: 'empty input' };", "  }", "", "  // workaround for #412", "  const cleaned = sanitized.replace(/[^\\w@.\\-]/g, '');", "  if (cleaned !== sanitized) {", "    result = { valid: true, value: cleaned, warning: 'chars stripped' };", "  // TODO: refactor this", "  } else if (cleaned.length > MAX_INPUT_LENGTH) {", "    result = { valid: true, value: cleaned.slice(0, MAX_INPUT_LENGTH) };", "  // legacy — do not touch", "  } else { result = { valid: true, value: cleaned }; }", "  return result;", "}"]}, "patchScars": [{"line": 5, "text": "// fixed null case", "highlightColor": "#F85149", "opacity": 0.5}, {"line": 9, "text": "// workaround for #412", "highlightColor": "#F85149", "opacity": 0.5}, {"line": 13, "text": "// TODO: refactor this", "highlightColor": "#D29922", "opacity": 0.4}, {"line": 16, "text": "// legacy — do not touch", "highlightColor": "#F85149", "opacity": 0.5}], "cursor": {"line": 1, "column": 0, "color": "#58A6FF", "blinkMs": 530}, "narrationSegments": ["cold_open_007"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "07_code_regeneration": {"specBaseName": "07_code_regeneration", "dataPoints": {"type": "code_editor_animation", "phases": [{"name": "selection", "frames": [0, 20], "lineRange": [1, 18], "highlightColor": "#388BFD", "highlightOpacity": 0.15}, {"name": "dissolution", "frames": [20, 75], "effect": "particle_scatter", "direction": "bottom_to_top", "staggerFramesPerLine": 3, "particleSize": 2}, {"name": "empty_beat", "frames": [75, 105], "description": "Empty editor with blinking cursor"}, {"name": "regeneration", "frames": [105, 210], "effect": "typewriter", "charsPerSecond": 60, "lineCount": 14}, {"name": "terminal_confirm", "frames": [210, 270], "command": "pdd generate processUserInput", "result": "✓"}], "oldCode": {"functionName": "processUserInput", "lineCount": 18, "patchComments": 4}, "newCode": {"functionName": "processUserInput", "lineCount": 14, "patchComments": 0, "code": ["function processUserInput(raw: string): ProcessedInput {", "  const sanitized = raw.trim().toLowerCase();", "", "  if (!sanitized) {", "    return { valid: false, value: '', error: 'empty input' };", "  }", "", "  const cleaned = sanitized.replace(/[^\\w@.\\-]/g, '');", "  const truncated = cleaned.slice(0, MAX_INPUT_LENGTH);", "", "  return {", "    valid: true,", "    value: truncated,", "    ...(cleaned !== sanitized && { warning: 'chars stripped' }),", "  };", "}"]}, "narrationSegments": ["cold_open_008"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "08_still_patching_beat": {"specBaseName": "08_still_patching_beat", "dataPoints": {"type": "title_card", "text": "So why are we still patching?", "font": {"family": "Inter", "weight": 600, "size": 52}, "color": "#C9D1D9", "opacity": 0.92, "position": {"x": 960, "y": 520}, "background": "#0D1117", "ambientGlow": {"color": "#4A90D9", "opacity": 0.03, "radius": 400}, "timing": {"fadeInFrames": 20, "holdFrames": 60, "fadeOutFrames": 40}, "narrationSegments": ["cold_open_009"]}, "overlayConfig": null, "renderMode": "raw-media"},
+  "09_pdd_title_card": {"specBaseName": "09_pdd_title_card", "dataPoints": {"type": "title_card", "title": {"text": "Prompt-Driven Development", "font": {"family": "Inter", "weight": 700, "size": 64}, "color": "#E6EDF3", "opacity": 0.95, "position": {"x": 960, "y": 460}, "letterSpacing": -1}, "subtitle": {"text": "WHY YOU'RE STILL DARNING SOCKS", "font": {"family": "Inter", "weight": 400, "size": 24}, "color": "#8B949E", "opacity": 0.7, "position": {"x": 960, "y": 568}, "letterSpacing": 2}, "rule": {"y": 510, "xRange": [460, 1460], "color": "#4A90D9", "glow": {"opacity": 0.12, "blur": 4}}, "background": {"color": "#0A0F1A", "dots": {"count": 50, "color": "#4A90D9", "opacity": 0.06, "speed": 0.3}}, "timing": {"ruleDrawFrames": [0, 30], "titleRiseFrames": [30, 60], "subtitleFadeFrames": [50, 80], "holdFrames": [80, 150], "fadeOutFrames": [150, 180]}, "narrationSegments": ["cold_open_010"]}, "overlayConfig": null, "renderMode": "raw-media"},
 };
 
 export const ColdOpenSection: React.FC = () => {
@@ -77,11 +84,7 @@ export const ColdOpenSection: React.FC = () => {
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
-                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (
-                  <GeneratedMediaVisual config={visualOverlayConfig} />
-                ) : (
-                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
-                )}
+                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

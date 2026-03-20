@@ -855,6 +855,14 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/import.*NextRequest.*from\s+["']next\/server["']/);
   });
 
+  it("prompt instructs to generate companion [veo:] specs for composition specs that embed Veo clips", () => {
+    // [split:] and other composition specs may reference embedded Veo clips.
+    // Without companion [veo:] specs, the Veo generation pipeline (Stage 7)
+    // will never discover or generate those clips, causing missing assets.
+    expect(sourceCode).toMatch(/\[split:\].*companion.*\[veo:\]/is);
+    expect(sourceCode).toMatch(/separate.*\[veo:\].*spec.*embedded|embedded.*\[veo:\].*separate/is);
+  });
+
   it("prompt explicitly forbids creating a single monolithic spec.md", () => {
     expect(sourceCode).toMatch(/DO NOT create a single spec\.md/);
   });

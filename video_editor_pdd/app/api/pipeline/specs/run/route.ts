@@ -338,6 +338,11 @@ Instructions:
 - For [veo:] specs, use **Tool:** Veo (cinematic B-roll) or **Tool:** Veo.
 - For [title:] specs, use **Tool:** Title.
 - For [split:] specs, use **Tool:** Split.
+- IMPORTANT: If a [split:] or other composition spec embeds Veo video clips (e.g., a split-screen
+  showing live-action footage in each panel), you MUST also generate separate companion [veo:] spec
+  files for EACH embedded clip. The Veo generation pipeline only discovers standalone [veo:] specs —
+  clips referenced inside [split:] or [Remotion] specs will NOT be generated unless they have their
+  own dedicated [veo:] spec file. Name companions like {NN}_{clip_id}.md with a [veo:] marker.
 - For EVERY [veo:] spec, use this exact canonical structure:
   - first line must be exactly: [veo:]
   - include a dedicated heading: ### Veo Prompt
