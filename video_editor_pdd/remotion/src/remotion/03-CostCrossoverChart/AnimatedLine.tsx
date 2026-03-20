@@ -114,9 +114,9 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
     },
   );
 
-  // Label position: right end of line
+  // Label position: left of line endpoint (inside chart area to avoid clipping)
   const lastPoint = points[points.length - 1];
-  const labelX = CHART_X + lastPoint.x * CHART_W + 12;
+  const labelX = CHART_X + lastPoint.x * CHART_W - 12;
   const labelY = CHART_Y + CHART_H * (1 - lastPoint.y);
 
   const glowFilterId = `${gradientId}Glow`;
@@ -182,6 +182,7 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
           fontSize={22}
           fontFamily={FONT_FAMILY}
           fontWeight={600}
+          textAnchor="end"
           opacity={labelOpacity}
         >
           {label}

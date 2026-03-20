@@ -135,3 +135,12 @@ Technical assessment: The chart composition largely matches the spec: dark #0D11
 - Alternatively, anchor the line labels to a position slightly left of the 1975 endpoint (e.g., at x=1972) so text doesn't crowd the right edge
 - Consider placing line labels inline along the line body (near 1970) rather than at the terminal endpoint to avoid edge-clipping entirely
 <!-- ANNOTATION_UPDATE_END: 78dc6e4a-d689-46e8-b379-874a962a5075 -->
+
+<!-- ANNOTATION_UPDATE_START: d82251b1-6d93-4253-9382-06a342e96421 -->
+## Annotation Update
+Requested change: The frame is at 84.3% progress (frame 884/1050), well within animation phase 720-1050 ('Chart holds for narration'). All three lines, the debt shaded area, milestone markers, axes, legend, and labels are correctly rendered. The chart data and shapes match the spec closely. The one visible issue is that the right-side line endpoint labels ('Cost to generat...', 'Immediate patc...', 'Total cost (with...') are being clipped/truncated at the right edge of the frame. This appears to be a margin issue
+Technical assessment: The chart correctly renders all three lines, shaded debt area, milestone markers, axes, and legend per spec. The reported issue concerns right-side endpoint labels at line termini being truncated/clipped at the right edge of the frame. The spec defines a 100px right margin for the chart area, which is insufficient for full-length endpoint labels like 'Cost to generate', 'Immediate patch cost', and 'Total cost (with debt)'. The legend in the top-right corner renders these labels correctly, making this a cosmetic redundancy issue. All other elements — line shapes, data values, animation phase (hold at frame 884/1050), colors, and the expanding debt shaded area — match the spec closely. The 'Technical Debt' label inside the shaded area is additive but consistent with the visual intent.
+- Increase the right margin from 100px to 160-180px to provide space for unclipped endpoint labels, or reposition endpoint labels to sit inside the chart area (left of the line endpoint) rather than to the right of it
+- Alternatively, remove the endpoint labels entirely since the legend already provides the same information — this avoids redundancy and the clipping issue
+- If endpoint labels are retained, use abbreviated forms at the endpoints (e.g., 'Generate', 'Patch', 'Total') while keeping full labels in the legend
+<!-- ANNOTATION_UPDATE_END: d82251b1-6d93-4253-9382-06a342e96421 -->
