@@ -499,6 +499,16 @@ def test_strip_ansi_codes_removes_complex_sequences():
     text = "\x1b[1;31;42mComplex\x1b[0m"
     assert _strip_ansi_codes(text) == "Complex"
 
+def test_strip_ansi_codes_removes_osc_sequences():
+    # OSC title set + BEL terminator
+    text = "pre\x1b]0;mytitle\x07post"
+    assert _strip_ansi_codes(text) == "prepost"
+
+def test_strip_ansi_codes_removes_cursor_sequences():
+    # CSI cursor movement and erase-in-line
+    text = "a\x1b[2Kb\x1b[1Dc"
+    assert _strip_ansi_codes(text) == "abc"
+
 def test_strip_ansi_codes_leaves_plain_text():
     text = "Just plain text"
     assert _strip_ansi_codes(text) == text
