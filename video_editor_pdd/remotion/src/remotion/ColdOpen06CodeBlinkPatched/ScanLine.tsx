@@ -1,44 +1,40 @@
-import React from 'react';
-import { useCurrentFrame, interpolate } from 'remotion';
-import {
-  SCAN_LINE_COLOR,
-  CANVAS_HEIGHT,
-  SCAN_LINE_START_FRAME,
-  SCAN_LINE_DURATION,
-} from './constants';
+import React from "react";
+import { useCurrentFrame, useVideoConfig, interpolate } from "remotion";
+import { CANVAS_HEIGHT, SCAN_LINE_COLOR } from "./constants";
 
 /**
- * A subtle 1px horizontal scan line that scrolls vertically
- * across the screen to reinforce the "screen" feeling.
- * Active from frame 60 to 150.
+ * A subtle 1px horizontal scan line that scrolls from top to bottom,
+ * reinforcing the "screen" feeling. Linear easing, very low opacity.
  */
-export const ScanLine: React.FC = () => {
+export const ScanLine: React.FC<{ startFrame: number; durationFrames: number }> = ({
+  startFrame,
+  durationFrames,
+}) => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
-  // Only render during scan line window
-  if (frame < SCAN_LINE_START_FRAME) {
-    return null;
-  }
+  const localFrame = frame - startFrame;
+  if (localFrame < 0 || localFrame >= durationFrames) return null;
 
-  const localFrame = frame - SCAN_LINE_START_FRAME;
-
-  // Linear scroll from top to bottom
-  const y = interpolate(localFrame, [0, SCAN_LINE_DURATION], [0, CANVAS_HEIGHT], {
-    extrapolateRight: 'clamp',
+  const y = interpolate(localFrame, [0, durationFrames - 1], [0, CANVAS_HEIGHT], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
   });
 
   return (
     <div
       style={{
-        position: 'absolute',
+        position: "absolute",
         left: 0,
         top: y,
-        width: '100%',
+        width: "100%",
         height: 1,
         backgroundColor: SCAN_LINE_COLOR,
         opacity: 0.02,
-        pointerEvents: 'none',
+        pointerEvents: "none",
       }}
     />
   );
 };
+
+export default ScanLine;

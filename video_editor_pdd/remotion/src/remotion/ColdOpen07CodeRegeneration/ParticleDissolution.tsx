@@ -1,167 +1,151 @@
 import React, { useMemo } from 'react';
 import { interpolate, Easing } from 'remotion';
-import { tokenizeLine } from './SyntaxHighlighter';
 import {
+  PATCHED_CODE_LINES,
+  LINE_HEIGHT,
   CODE_LEFT_PADDING,
   CODE_TOP_PADDING,
-  GUTTER_WIDTH,
-  LINE_HEIGHT,
   CODE_FONT_SIZE,
-  DISSOLUTION_STAGGER_FRAMES,
-  DISSOLUTION_FADE_DURATION,
-  DISSOLUTION_PARTICLE_SIZE,
+  DISSOLUTION_STAGGER_PER_LINE,
+  PARTICLE_FADE_DURATION,
+  CODE_TEXT_COLOR,
+  SYN_COMMENT,
   DISSOLUTION_GLOW_COLOR,
   DISSOLUTION_GLOW_OPACITY,
 } from './constants';
 
-/** A single particle derived from a character in the code */
+// ── Particle seed generation ────────────────────────────────────────────────
+
 interface Particle {
-  /** Original x position (px) */
   x: number;
-  /** Original y position (px) */
   y: number;
-  /** Color of the character */
   color: string;
-  /** Random x velocity (px/frame) */
+  // random drift velocities (per frame, scaled)
   vx: number;
-  /** Random y velocity (px/frame, negative = upward) */
   vy: number;
-  /** Frame offset when this particle starts dissolving (stagger) */
-  startFrame: number;
+  /** Frame offset from dissolution start for this particle's line */
+  lineDelay: number;
 }
 
-// Deterministic pseudo-random from seed
-function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 9301 + 49297) * 49271;
-  return x - Math.floor(x);
+/** Simple deterministic pseudo-random from seed */
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 16807 + 0) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
 }
+
+function buildParticles(lines: string[]): Particle[] {
+  const particles: Particle[] = [];
+  const rand = seededRandom(42);
+  const charWidth = CODE_FONT_SIZE * 0.6; // approx monospace char width at 18px
+
+  const totalLines = lines.length;
+
+  for (let lineIdx = 0; lineIdx < totalLines; lineIdx++) {
+    const line = lines[lineIdx];
+    // Bottom-to-top stagger: bottom line starts first
+    const lineDelay = (totalLines - 1 - lineIdx) * DISSOLUTION_STAGGER_PER_LINE;
+    const isComment = line.trimStart().startsWith('//');
+    const baseColor = isComment ? SYN_COMMENT : CODE_TEXT_COLOR;
+
+    for (let charIdx = 0; charIdx < line.length; charIdx++) {
+      if (line[charIdx] === ' ') continue; // skip spaces
+
+      const x = CODE_LEFT_PADDING + charIdx * charWidth;
+      const y = CODE_TOP_PADDING + lineIdx * LINE_HEIGHT;
+
+      // Random drift: y velocity -40 to -80 px/s → per frame at 30fps: -1.33 to -2.67
+      const vy = -(40 + rand() * 40) / 30;
+      // x velocity: -20 to +20 px/s → per frame: -0.67 to +0.67
+      const vx = (-20 + rand() * 40) / 30;
+
+      particles.push({
+        x,
+        y,
+        color: baseColor,
+        vx,
+        vy,
+        lineDelay,
+      });
+    }
+  }
+
+  return particles;
+}
+
+// ── Component ───────────────────────────────────────────────────────────────
 
 interface ParticleDissolutionProps {
-  /** Lines of code to dissolve */
-  codeLines: string[];
-  /** Relative frame within the dissolution phase (0 = start of dissolution) */
+  /** Frame offset within dissolution phase (0 = dissolution start) */
   phaseFrame: number;
-  /** Total frames for the dissolution phase */
-  phaseDuration: number;
 }
 
-export const ParticleDissolution: React.FC<ParticleDissolutionProps> = ({
-  codeLines,
-  phaseFrame,
-  phaseDuration,
-}) => {
-  // Pre-compute all particles from the code lines
-  const particles = useMemo(() => {
-    const result: Particle[] = [];
-    const totalLines = codeLines.length;
-    // Approximate character width for monospace at 18px
-    const charWidth = CODE_FONT_SIZE * 0.6;
+const ParticleDissolution: React.FC<ParticleDissolutionProps> = ({ phaseFrame }) => {
+  const particles = useMemo(() => buildParticles(PATCHED_CODE_LINES), []);
 
-    for (let lineIdx = 0; lineIdx < totalLines; lineIdx++) {
-      const line = codeLines[lineIdx];
-      if (!line) continue;
-
-      const tokens = tokenizeLine(line);
-      let charOffset = 0;
-
-      for (const token of tokens) {
-        for (let c = 0; c < token.text.length; c++) {
-          if (token.text[c] === ' ') {
-            charOffset++;
-            continue;
-          }
-
-          const x = GUTTER_WIDTH + CODE_LEFT_PADDING + charOffset * charWidth;
-          const y = CODE_TOP_PADDING + lineIdx * LINE_HEIGHT;
-
-          // Bottom-to-top: last line dissolves first
-          const reverseLineIdx = totalLines - 1 - lineIdx;
-          const startFrame = reverseLineIdx * DISSOLUTION_STAGGER_FRAMES;
-
-          const seed = lineIdx * 1000 + charOffset;
-          const vx = (seededRandom(seed) - 0.5) * (40 / 30); // -20 to +20 px/s → per-frame
-          const vy = -(seededRandom(seed + 1) * (40 / 30) + (40 / 30)); // -40 to -80 px/s → per-frame
-
-          result.push({
-            x,
-            y,
-            color: token.color,
-            vx,
-            vy,
-            startFrame,
-          });
-
-          charOffset++;
-        }
-      }
-    }
-    return result;
-  }, [codeLines]);
-
-  // Glow pulse progress (0→1 over the phase)
+  // Radial glow pulse
   const glowOpacity = interpolate(
     phaseFrame,
-    [0, phaseDuration * 0.3, phaseDuration * 0.6, phaseDuration],
+    [0, 15, 30, 55],
     [0, DISSOLUTION_GLOW_OPACITY, DISSOLUTION_GLOW_OPACITY * 0.5, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+    { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' },
   );
 
   return (
-    <div style={{ position: 'absolute', inset: 0 }}>
-      {/* Radial glow behind dissolution */}
+    <>
+      {/* Background radial glow */}
       <div
         style={{
           position: 'absolute',
-          inset: 0,
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
           background: `radial-gradient(ellipse at 50% 40%, ${DISSOLUTION_GLOW_COLOR} 0%, transparent 70%)`,
           opacity: glowOpacity,
           pointerEvents: 'none',
         }}
       />
-
       {/* Particles */}
       <svg
-        width="1920"
-        height="1080"
-        viewBox="0 0 1920 1080"
-        style={{ position: 'absolute', inset: 0 }}
+        width="100%"
+        height="100%"
+        style={{ position: 'absolute', top: 0, left: 0, overflow: 'visible' }}
       >
         {particles.map((p, i) => {
-          const localFrame = phaseFrame - p.startFrame;
+          const localFrame = phaseFrame - p.lineDelay;
           if (localFrame < 0) {
-            // Not yet dissolved — render in original position as a static rect
+            // Not yet started dissolving — render as static 2x2 square
             return (
               <rect
                 key={i}
                 x={p.x}
                 y={p.y}
-                width={DISSOLUTION_PARTICLE_SIZE}
-                height={DISSOLUTION_PARTICLE_SIZE}
+                width={2}
+                height={2}
                 fill={p.color}
               />
             );
           }
 
-          // Particle has started dissolving
-          const driftProgress = Math.min(localFrame / DISSOLUTION_FADE_DURATION, 1);
-
-          // Easing for drift: easeOut cubic
-          const easedDrift = interpolate(
-            driftProgress,
+          // Particle has begun dissolving
+          const driftEased = interpolate(
+            localFrame,
+            [0, PARTICLE_FADE_DURATION],
             [0, 1],
-            [0, 1],
-            { easing: Easing.out(Easing.cubic) }
+            { extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) },
           );
 
-          const dx = p.vx * localFrame * easedDrift;
-          const dy = p.vy * localFrame * easedDrift;
+          const dx = p.vx * localFrame;
+          const dy = p.vy * localFrame * (1 + driftEased * 0.5);
 
-          // Fade: linear over fadeDuration
           const opacity = interpolate(
             localFrame,
-            [0, DISSOLUTION_FADE_DURATION],
+            [0, PARTICLE_FADE_DURATION],
             [1, 0],
-            { extrapolateRight: 'clamp' }
+            { extrapolateRight: 'clamp' },
           );
 
           if (opacity <= 0) return null;
@@ -171,14 +155,16 @@ export const ParticleDissolution: React.FC<ParticleDissolutionProps> = ({
               key={i}
               x={p.x + dx}
               y={p.y + dy}
-              width={DISSOLUTION_PARTICLE_SIZE}
-              height={DISSOLUTION_PARTICLE_SIZE}
+              width={2}
+              height={2}
               fill={p.color}
               opacity={opacity}
             />
           );
         })}
       </svg>
-    </div>
+    </>
   );
 };
+
+export default ParticleDissolution;

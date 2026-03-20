@@ -1,71 +1,61 @@
-import React, { useMemo } from "react";
-import { useCurrentFrame } from "remotion";
-
-interface FilmGrainProps {
-  opacity: number;
-  grainFps: number;
-  width: number;
-  height: number;
-}
+import React, { useMemo } from 'react';
+import { useCurrentFrame } from 'remotion';
+import { FILM_GRAIN_FPS, FILM_GRAIN_OPACITY } from './constants';
 
 /**
- * Animated monochrome film grain overlay rendered via a canvas-based
- * SVG noise pattern. Updates at a reduced frame-rate (e.g. 12 fps)
- * to mimic real film grain cadence.
+ * Animated monochrome film grain overlay.
+ * Re-seeds at FILM_GRAIN_FPS to mimic analog noise cadence.
  */
-const FilmGrain: React.FC<FilmGrainProps> = ({
-  opacity,
-  grainFps,
-  width,
-  height,
-}) => {
+export const FilmGrain: React.FC<{
+  width: number;
+  height: number;
+  opacity?: number;
+  fps?: number;
+}> = ({ width, height, opacity = FILM_GRAIN_OPACITY, fps = FILM_GRAIN_FPS }) => {
   const frame = useCurrentFrame();
 
-  // Quantise the frame to the grain cadence so the pattern only
-  // changes at `grainFps` updates per second.
-  const grainFrame = Math.floor(frame / (30 / grainFps));
+  // Only change the grain pattern at the specified fps
+  const grainFrame = Math.floor(frame / (30 / fps));
 
-  // Deterministic pseudo-random noise based on the grain frame.
-  const grainSvg = useMemo(() => {
-    const seed = grainFrame * 17 + 31;
-    const rects: string[] = [];
-    const step = 4; // pixel granularity
-    for (let y = 0; y < height; y += step) {
-      for (let x = 0; x < width; x += step) {
-        // Simple LCG hash
-        const hash =
-          ((x * 374761 + y * 668265 + seed * 982451) % 2147483647) /
-          2147483647;
-        const brightness = Math.floor(hash * 255);
-        rects.push(
-          `<rect x="${x}" y="${y}" width="${step}" height="${step}" fill="rgb(${brightness},${brightness},${brightness})" />`
-        );
-      }
-    }
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${rects.join("")}</svg>`;
-  }, [grainFrame, width, height]);
+  const grainStyle = useMemo(() => {
+    // Generate a pseudo-random SVG noise pattern keyed to grainFrame
+    const seed = grainFrame;
+    return {
+      position: 'absolute' as const,
+      top: 0,
+      left: 0,
+      width,
+      height,
+      opacity,
+      pointerEvents: 'none' as const,
+      mixBlendMode: 'overlay' as const,
+    };
+  }, [grainFrame, width, height, opacity]);
 
-  const dataUri = useMemo(
-    () =>
-      `data:image/svg+xml;base64,${typeof btoa !== "undefined" ? btoa(grainSvg) : Buffer.from(grainSvg).toString("base64")}`,
-    [grainSvg]
-  );
+  // Use SVG feTurbulence for performant noise
+  const filterId = `grain-${grainFrame}`;
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width,
-        height,
-        opacity,
-        mixBlendMode: "overlay",
-        backgroundImage: `url("${dataUri}")`,
-        backgroundSize: `${width}px ${height}px`,
-        pointerEvents: "none",
-      }}
-    />
+    <div style={grainStyle}>
+      <svg width={width} height={height} style={{ display: 'block' }}>
+        <filter id={filterId}>
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.65"
+            numOctaves={3}
+            seed={grainFrame}
+            stitchTiles="stitch"
+          />
+          <feColorMatrix type="saturate" values="0" />
+        </filter>
+        <rect
+          width={width}
+          height={height}
+          filter={`url(#${filterId})`}
+          opacity={1}
+        />
+      </svg>
+    </div>
   );
 };
 

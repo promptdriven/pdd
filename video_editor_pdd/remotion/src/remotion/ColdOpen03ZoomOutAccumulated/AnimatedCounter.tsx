@@ -1,88 +1,90 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  FONT_FAMILY,
   COUNTER_FONT_SIZE,
-  SUFFIX_FONT_SIZE,
-  COUNTER_OPACITY,
-  SUFFIX_OPACITY,
+  COUNTER_SUFFIX_FONT_SIZE,
+  COUNTER_SUFFIX_OPACITY,
   COUNTER_START,
   COUNTER_DURATION,
-} from "./constants";
+} from './constants';
 
 interface AnimatedCounterProps {
-  targetValue: number;
+  from: number;
+  to: number;
   suffix: string;
   color: string;
-  /** "left" positions bottom-left, "right" positions bottom-right */
-  align: "left" | "right";
+  counterOpacity: number;
+  align: 'left' | 'right';
+  x: number;
+  y: number;
 }
 
 export const AnimatedCounter: React.FC<AnimatedCounterProps> = ({
-  targetValue,
+  from,
+  to,
   suffix,
   color,
+  counterOpacity,
   align,
+  x,
+  y,
 }) => {
   const frame = useCurrentFrame();
 
-  // Counter animates from 0 to target with expo ease-out
-  const counterProgress = interpolate(
+  const progress = interpolate(
     frame,
     [COUNTER_START, COUNTER_START + COUNTER_DURATION],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.poly(4)),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.exp),
     }
   );
 
-  // Fade in the counter
-  const counterOpacity = interpolate(
+  const fadeIn = interpolate(
     frame,
-    [COUNTER_START, COUNTER_START + 8],
-    [0, COUNTER_OPACITY],
+    [COUNTER_START, COUNTER_START + 10],
+    [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
     }
   );
 
-  const currentValue = Math.round(counterProgress * targetValue);
+  const currentValue = Math.round(from + (to - from) * progress);
   const formattedValue = currentValue.toLocaleString();
 
   return (
     <div
       style={{
-        position: "absolute",
-        bottom: 40,
-        ...(align === "left" ? { left: 24 } : { right: 24 }),
-        display: "flex",
-        alignItems: "baseline",
-        gap: 8,
-        opacity: counterOpacity,
+        position: 'absolute',
+        left: x,
+        top: y,
+        opacity: fadeIn,
+        textAlign: align,
+        whiteSpace: 'nowrap',
       }}
     >
       <span
         style={{
-          fontFamily: FONT_FAMILY,
-          fontSize: COUNTER_FONT_SIZE,
+          fontFamily: 'Inter, sans-serif',
           fontWeight: 700,
+          fontSize: COUNTER_FONT_SIZE,
           color,
-          lineHeight: 1,
+          opacity: counterOpacity,
         }}
       >
         {formattedValue}
       </span>
       <span
         style={{
-          fontFamily: FONT_FAMILY,
-          fontSize: SUFFIX_FONT_SIZE,
+          fontFamily: 'Inter, sans-serif',
           fontWeight: 400,
+          fontSize: COUNTER_SUFFIX_FONT_SIZE,
           color,
-          opacity: SUFFIX_OPACITY / COUNTER_OPACITY, // relative to parent opacity
-          lineHeight: 1,
+          opacity: COUNTER_SUFFIX_OPACITY,
+          marginLeft: 4,
         }}
       >
         {suffix}

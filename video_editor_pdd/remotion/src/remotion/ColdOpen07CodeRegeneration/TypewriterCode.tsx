@@ -1,118 +1,115 @@
 import React from 'react';
-import { interpolate, Easing } from 'remotion';
-import { SyntaxLine } from './SyntaxHighlighter';
+import { interpolate } from 'remotion';
+import SyntaxLine from './SyntaxLine';
 import {
-  GUTTER_WIDTH,
-  CODE_LEFT_PADDING,
-  CODE_TOP_PADDING,
-  LINE_HEIGHT,
-  CODE_FONT_SIZE,
-  CODE_TEXT_COLOR,
-  CHARS_PER_SECOND,
+  CLEAN_CODE_LINES,
   FPS,
+  CHARS_PER_SECOND,
   ENTRANCE_GLOW_COLOR,
   ENTRANCE_GLOW_OPACITY,
-  ENTRANCE_GLOW_FADE_FRAMES,
+  CODE_TOP_PADDING,
 } from './constants';
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * For each line, compute { charOffset, lineLength }.
+ * charOffset = total chars before this line (including newlines).
+ */
+interface LineInfo {
+  charOffset: number;
+  lineLength: number;
+}
+
+function buildLineInfo(lines: string[]): LineInfo[] {
+  const result: LineInfo[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    result.push({ charOffset: offset, lineLength: line.length });
+    offset += line.length + 1; // +1 for the implied newline
+  }
+  return result;
+}
+
+// ── Component ───────────────────────────────────────────────────────────────
+
 interface TypewriterCodeProps {
-  /** Lines of code to type in */
-  codeLines: string[];
-  /** Relative frame within the regeneration phase (0 = first char appears) */
+  /** Frame offset within the regeneration phase (0 = regen start) */
   phaseFrame: number;
 }
 
-export const TypewriterCode: React.FC<TypewriterCodeProps> = ({
-  codeLines,
+const TypewriterCode: React.FC<TypewriterCodeProps> = ({
   phaseFrame,
 }) => {
-  const charsPerFrame = CHARS_PER_SECOND / FPS; // 60/30 = 2 chars per frame
+  const lineInfos = buildLineInfo(CLEAN_CODE_LINES);
 
-  // Pre-compute the cumulative char offset where each line starts typing
-  const lineStartChars: number[] = [];
-  let cumChars = 0;
-  for (const line of codeLines) {
-    lineStartChars.push(cumChars);
-    // Each line costs its length + 1 (for the "enter" beat at the end)
-    cumChars += Math.max(line.length, 1) + 1;
-  }
-
-  const totalCharsTyped = phaseFrame * charsPerFrame;
+  // Total chars typed so far (linear, 60 chars/sec at 30fps = 2 chars/frame)
+  const charsPerFrame = CHARS_PER_SECOND / FPS;
+  const totalTyped = Math.floor(phaseFrame * charsPerFrame);
 
   return (
-    <div style={{ position: 'absolute', inset: 0 }}>
-      {codeLines.map((line, lineIdx) => {
-        const lineStart = lineStartChars[lineIdx];
+    <div style={{ position: 'absolute', top: CODE_TOP_PADDING, left: 0, width: '100%' }}>
+      {CLEAN_CODE_LINES.map((line, lineIdx) => {
+        const info = lineInfos[lineIdx];
+        const lineStart = info.charOffset;
+        const lineEnd = lineStart + info.lineLength;
 
-        // How many chars into this line have been typed
-        const charsIntoLine = totalCharsTyped - lineStart;
-        if (charsIntoLine < 0) return null; // not yet reached
+        // How many chars of this line are visible
+        if (totalTyped < lineStart) return null; // line not started yet
 
-        const visibleChars = Math.min(Math.floor(charsIntoLine), line.length);
+        // For empty lines, show immediately (undefined = all chars visible)
+        const visibleChars = info.lineLength === 0
+          ? undefined
+          : Math.min(totalTyped - lineStart, info.lineLength);
 
-        // Frame when this line started appearing
-        const lineStartFrame = lineStart / charsPerFrame;
-        const lineAge = phaseFrame - lineStartFrame;
+        // Has the full line been typed?
+        const lineFullyTyped = totalTyped >= lineEnd;
 
-        // Entrance glow: brief green background that fades
-        const glowOpacity = interpolate(
-          lineAge,
-          [0, ENTRANCE_GLOW_FADE_FRAMES],
-          [ENTRANCE_GLOW_OPACITY, 0],
-          {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.out(Easing.quad),
+        // Frame when this line first appeared
+        const lineAppearFrame = lineStart / charsPerFrame;
+        // Frame when this line was fully typed
+        const lineCompleteFrame = lineEnd / charsPerFrame;
+
+        // Entrance glow: holds while typing, then fades over 10 frames after line completes
+        const glowFadeStart = lineFullyTyped ? lineCompleteFrame : phaseFrame;
+        const glowFadeEnd = glowFadeStart + 10;
+
+        let glowOpacity = 0;
+        if (phaseFrame >= lineAppearFrame) {
+          if (!lineFullyTyped) {
+            // Still typing this line — full glow
+            glowOpacity = ENTRANCE_GLOW_OPACITY;
+          } else {
+            // Line complete — fade out over 10 frames
+            glowOpacity = interpolate(
+              phaseFrame,
+              [glowFadeStart, glowFadeEnd],
+              [ENTRANCE_GLOW_OPACITY, 0],
+              { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' },
+            );
           }
-        );
+        }
 
-        const y = CODE_TOP_PADDING + lineIdx * LINE_HEIGHT;
+        const bgColor =
+          glowOpacity > 0
+            ? `${ENTRANCE_GLOW_COLOR}${Math.round(glowOpacity * 255)
+                .toString(16)
+                .padStart(2, '0')}`
+            : undefined;
 
         return (
-          <div
+          <SyntaxLine
             key={lineIdx}
-            style={{
-              position: 'absolute',
-              top: y,
-              left: 0,
-              right: 0,
-              height: LINE_HEIGHT,
-              display: 'flex',
-              alignItems: 'center',
-            }}
-          >
-            {/* Entrance glow background */}
-            {glowOpacity > 0 && (
-              <div
-                style={{
-                  position: 'absolute',
-                  left: GUTTER_WIDTH,
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                  backgroundColor: ENTRANCE_GLOW_COLOR,
-                  opacity: glowOpacity,
-                  pointerEvents: 'none',
-                }}
-              />
-            )}
-
-            {/* Code text */}
-            <span
-              style={{
-                position: 'absolute',
-                left: GUTTER_WIDTH + CODE_LEFT_PADDING,
-                fontFamily: 'JetBrains Mono, monospace',
-                fontSize: CODE_FONT_SIZE,
-                color: CODE_TEXT_COLOR,
-                whiteSpace: 'pre',
-              }}
-            >
-              <SyntaxLine line={line} visibleChars={visibleChars} />
-            </span>
-          </div>
+            line={line}
+            lineIndex={lineIdx}
+            visibleChars={visibleChars}
+            bgColor={bgColor}
+            lineNumber={lineIdx + 1}
+          />
         );
       })}
     </div>
   );
 };
+
+export default TypewriterCode;

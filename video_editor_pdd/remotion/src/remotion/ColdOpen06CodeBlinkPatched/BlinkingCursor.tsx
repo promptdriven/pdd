@@ -1,75 +1,51 @@
-import React from 'react';
-import { useCurrentFrame } from 'remotion';
+import React from "react";
+import { useCurrentFrame, useVideoConfig } from "remotion";
 import {
   CURSOR_COLOR,
   CURSOR_WIDTH,
   CURSOR_HEIGHT,
-  CODE_X_START,
-  CODE_Y_START,
-  CODE_LINE_HEIGHT,
   CURSOR_ON_MS,
   CURSOR_OFF_MS,
-  FPS,
-  DELIBERATE_BLINK_START_FRAME,
-  TOTAL_FRAMES,
-} from './constants';
+  CODE_X_START,
+  CODE_Y_START,
+} from "./constants";
 
 /**
- * A blinking cursor positioned at line 1, column 0.
- *
- * Normal blink: 530ms on / 530ms off.
- * After frame 120: two deliberate blinks, with the final one held longer (800ms).
+ * A blinking editor cursor. At frames 120-150 the final blink is
+ * held longer (800ms on) to create the "deliberate pause" effect.
  */
 export const BlinkingCursor: React.FC = () => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
 
-  const cycleMs = CURSOR_ON_MS + CURSOR_OFF_MS; // 1060ms
-  const currentTimeMs = (frame / FPS) * 1000;
+  const msPerFrame = 1000 / fps;
+  const currentMs = frame * msPerFrame;
 
-  let visible: boolean;
+  // After frame 120 the cursor holds ON for 800ms then OFF for 530ms
+  const isDeliberatePhase = frame >= 120;
+  const onMs = isDeliberatePhase ? 800 : CURSOR_ON_MS;
+  const offMs = isDeliberatePhase ? CURSOR_OFF_MS : CURSOR_OFF_MS;
+  const cycleMs = onMs + offMs;
 
-  if (frame >= DELIBERATE_BLINK_START_FRAME) {
-    // Deliberate blink section (frames 120-150, 1 second)
-    // Two deliberate blinks, final one held longer
-    const deliberateTimeMs =
-      ((frame - DELIBERATE_BLINK_START_FRAME) / FPS) * 1000;
-    const totalDeliberateMs =
-      ((TOTAL_FRAMES - DELIBERATE_BLINK_START_FRAME) / FPS) * 1000; // 1000ms
-
-    // Blink 1: off 0-200ms, on 200-530ms
-    // Blink 2: off 530-600ms, on 600-1000ms (held for 800ms — the long pause)
-    if (deliberateTimeMs < 200) {
-      visible = false;
-    } else if (deliberateTimeMs < 530) {
-      visible = true;
-    } else if (deliberateTimeMs < 600) {
-      visible = false;
-    } else if (deliberateTimeMs < totalDeliberateMs) {
-      // Final long hold — 400ms visible
-      visible = true;
-    } else {
-      visible = true;
-    }
-  } else {
-    // Normal blink cycle
-    const posInCycle = currentTimeMs % cycleMs;
-    visible = posInCycle < CURSOR_ON_MS;
-  }
-
-  const x = CODE_X_START;
-  const y = CODE_Y_START + (CODE_LINE_HEIGHT - CURSOR_HEIGHT) / 2;
+  // Calculate phase-relative time
+  const phaseStartMs = isDeliberatePhase ? 120 * msPerFrame : 0;
+  const elapsed = currentMs - phaseStartMs;
+  const withinCycle = ((elapsed % cycleMs) + cycleMs) % cycleMs;
+  const isVisible = withinCycle < onMs;
 
   return (
     <div
       style={{
-        position: 'absolute',
-        left: x,
-        top: y,
+        position: "absolute",
+        left: CODE_X_START,
+        top: CODE_Y_START + 3, // slight vertical offset to center in line
         width: CURSOR_WIDTH,
         height: CURSOR_HEIGHT,
         backgroundColor: CURSOR_COLOR,
-        opacity: visible ? 1 : 0,
+        opacity: isVisible ? 1 : 0,
       }}
     />
   );
 };
+
+export default BlinkingCursor;

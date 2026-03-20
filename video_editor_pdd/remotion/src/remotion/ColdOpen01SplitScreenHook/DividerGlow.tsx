@@ -1,50 +1,52 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-
-interface DividerGlowProps {
-  x: number;
-  colorTop: string;
-  colorBottom: string;
-  opacity: number;
-  cycleFrames: number;
-  canvasHeight: number;
-}
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import {
+  COMP_HEIGHT,
+  DIVIDER_X,
+  GLOW_COLOR_LEFT,
+  GLOW_COLOR_RIGHT,
+  GLOW_MAX_OPACITY,
+  GLOW_CYCLE_FRAMES,
+} from './constants';
 
 /**
- * A pulsing gradient glow on the vertical divider that oscillates
- * between two colors using a sine ease.
+ * A pulsing gradient glow on the vertical divider line.
+ * Uses a sine oscillation to smoothly cycle between the two panel colours.
  */
-const DividerGlow: React.FC<DividerGlowProps> = ({
-  x,
-  colorTop,
-  colorBottom,
-  opacity,
-  cycleFrames,
-  canvasHeight,
-}) => {
+export const DividerGlow: React.FC<{
+  /** Frames elapsed since this Sequence started */
+  localFrame?: number;
+}> = () => {
   const frame = useCurrentFrame();
 
-  // Sine oscillation: 0 → 1 → 0 per cycle
-  const pulse = interpolate(frame % cycleFrames, [0, cycleFrames], [0, 1], {
-    easing: (t) => Math.sin(t * Math.PI),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  // Sine oscillation: 0 → 1 → 0 over GLOW_CYCLE_FRAMES
+  const cycle = Math.sin((frame / GLOW_CYCLE_FRAMES) * Math.PI * 2);
+  // Map -1…1 → 0…1 for gradient mixing
+  const mix = (cycle + 1) / 2;
+
+  // Fade glow in over first 10 frames of the sequence
+  const fadeIn = interpolate(frame, [0, 10], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.cubic),
   });
 
-  const glowWidth = 12 + pulse * 8; // 12-20px spread
+  const glowWidth = 20;
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         top: 0,
-        left: x - glowWidth / 2,
+        left: DIVIDER_X - glowWidth / 2,
         width: glowWidth,
-        height: canvasHeight,
-        opacity: opacity * (0.5 + pulse * 0.5),
-        background: `linear-gradient(to bottom, ${colorTop}, ${colorBottom})`,
-        filter: `blur(${4 + pulse * 4}px)`,
-        pointerEvents: "none",
+        height: COMP_HEIGHT,
+        background: `linear-gradient(to bottom, ${GLOW_COLOR_LEFT}, ${GLOW_COLOR_RIGHT})`,
+        opacity: GLOW_MAX_OPACITY * fadeIn,
+        filter: `blur(8px)`,
+        pointerEvents: 'none',
+        // Shift the gradient position with the sine cycle to create the pulse
+        transform: `scaleX(${0.6 + 0.4 * mix})`,
       }}
     />
   );
