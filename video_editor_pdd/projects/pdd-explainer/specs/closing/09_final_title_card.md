@@ -176,3 +176,16 @@ Segment: `closing_008`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: 627b0945-b7bd-4ef2-a0d2-ab5494a30f97 -->
+## Annotation Update
+Requested change: The frame is sampled at 91.7% progress (frame 219/240), which falls in animation phase 6 (frame 200-240: 'Hold on complete split'). At this point the spec requires the complete split view with cost labels, sub-labels, and panel headers all fully visible. Assessment of visible elements:
+
+1. **Split layout**: PASS — Vertical split is present with left and right panels roughly divided at center. The divider line between panels is visible.
+2. **Left panel content**: PASS — Shows hands holding a pack
+Technical assessment: Frame 219/240 (phase 6: 'Hold on complete split') is missing panel headers and sub-labels, and cost labels are undersized. The spec requires: (1) 'DISCARD' and 'REGENERATE' headers at y:36 in Inter 12px semi-bold with letter-spacing 3px — these are completely absent; (2) cost labels '$2' and '~30s' at Inter 28px bold at opacity 0.7 — these are present but appear significantly undersized, likely rendered at a smaller font size than the specified 28px; (3) sub-labels 'new pair' and 'regenerated' at y:990 in Inter 11px — these are not visible. The Veo clip content, split layout, color grading, vignettes, and background are all correct. All missing/undersized elements are Remotion text overlays.
+- Add PanelHeader components for 'DISCARD' (color #D9944A, opacity 0.3, y:36) and 'REGENERATE' (color #4A90D9, opacity 0.3, y:36) with Inter 12px semi-bold and letter-spacing 3px
+- Increase cost label font size to the specified 28px bold (Inter) at opacity 0.7 — '$2' centered in left panel at y:960, '~30s' centered in right panel at y:960
+- Add sub-label text overlays: 'new pair' (left, y:990) and 'regenerated' (right, y:990) in Inter 11px, color #94A3B8 at opacity 0.4
+- Verify the terminal snippet 'pdd bug → pdd fix → ✓' is rendering at position (1780, 1020) in JetBrains Mono 10px
+<!-- ANNOTATION_UPDATE_END: 627b0945-b7bd-4ef2-a0d2-ab5494a30f97 -->

@@ -2,6 +2,16 @@ import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
 import { TIMING, COLORS } from './constants';
 
+/**
+ * Converts a hex color string (#RRGGBB) to an rgba() string at the given alpha.
+ */
+const hexToRgba = (hex: string, alpha: number): string => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+};
+
 interface CostLabelProps {
   cost: string;
   subLabel: string;
@@ -52,8 +62,8 @@ export const CostLabel: React.FC<CostLabelProps> = ({
           fontFamily: 'Inter, sans-serif',
           fontSize: 28,
           fontWeight: 700,
-          color,
-          opacity: costOpacity,
+          color: hexToRgba(color, costOpacity),
+          textShadow: `0 0 12px ${hexToRgba(color, costOpacity * 0.4)}, 0 2px 6px rgba(0,0,0,${Math.min(costOpacity * 1.2, 0.85)})`,
           zIndex: 10,
         }}
       >
@@ -68,8 +78,8 @@ export const CostLabel: React.FC<CostLabelProps> = ({
           textAlign: 'center',
           fontFamily: 'Inter, sans-serif',
           fontSize: 11,
-          color: COLORS.SUBTITLE,
-          opacity: subOpacity,
+          color: hexToRgba(COLORS.SUBTITLE, subOpacity),
+          textShadow: `0 1px 4px rgba(0,0,0,${Math.min(subOpacity * 2, 0.9)})`,
           zIndex: 10,
         }}
       >
