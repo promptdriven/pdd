@@ -135,3 +135,14 @@ Segment: `part5_001`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: 8243ec21-e3d8-4749-ba68-d01209fdf60f -->
+## Annotation Update
+Requested change: The frame is at 87.5% progress (frame 104/120, hold phase). Core layout reads correctly: 'PART 5' label is visible and centered above, 'COMPOUND' is large bold centered text, 'RETURNS' is large bold below it. Background is deep navy-black as specified. Ghost curves are faintly visible in the upper-right area behind the text, consistent with the very low opacity (0.04) spec. Two issues noted:
+
+1. **Missing horizontal rule**: The spec calls for a 200px wide, 2px horizontal rule at ~0.5 opacity (#3
+Technical assessment: Frame is at 87.5% progress (frame 104/120, hold phase). All animated elements should be fully rendered. The core layout is correct: deep navy-black background (#0A0F1A), 'PART 5' label centered above, 'COMPOUND' and 'RETURNS' in large bold white text stacked and centered, ghost curves faintly visible at 0.04 opacity. However, the horizontal rule specified as 200px wide, 2px height, #334155 at 0.5 opacity, centered at y:505 between the two title words, is not rendered. The spec's DrawLine component (frames 60-70) should produce a visible thin separator line between 'COMPOUND' and 'RETURNS'. At 0.5 opacity with color #334155 on the #0A0F1A background, this rule would be subtle but perceptible as a dark slate-gray line. The rule is either not being drawn, has incorrect opacity/color making it invisible, or is positioned off-screen.
+- Verify the DrawLine component is rendering between frames 60-70 with the correct props: from={[860, 505]} to={[1060, 505]}, color='#334155', opacity=0.5, width=2
+- Check if the horizontal rule's opacity or color value is being overridden or set to 0 — increase opacity to 0.5 as specified or temporarily boost to 1.0 to confirm it renders at all
+- Ensure the DrawLine fromCenter animation completes by frame 70 and the line persists through the hold phase (frames 90-120)
+<!-- ANNOTATION_UPDATE_END: 8243ec21-e3d8-4749-ba68-d01209fdf60f -->
