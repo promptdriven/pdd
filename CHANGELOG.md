@@ -1,19 +1,13 @@
 ## v0.0.182 (2026-03-19)
 
-### Feat
-
-- Refine pdd-explainer video content specifications and update composition generation logic.
-- update various Remotion scenes, refactor cold open components, and introduce new elements like floating comments and split panels.
-- Refine video explainer audit specifications, update Remotion components, and add audit composition tests.
-- Reimplement and restructure the cold open Remotion sequence, replacing old audit files and components with new scene-specific implementations.
-- Improve section ID matching logic to support compact abbreviations and add a corresponding test.
-- Display script content as formatted markdown in Stage9RenderStitch using ReactMarkdown and Tailwind Typography.
-- refactor Stage9RenderStitch modal layout for fixed viewport and independent pane scrolling, and add Tailwind v4 `@source` directive for component scanning.
-
 ### Fix
 
 - address PR review — rename variable, update log messages, clarify test
-- force temperature=1 for Vertex AI Claude when thinking/reasoning is enabled
+- force temperature=1 for Vertex AI Claude when thinking/reasoning is enabled; check model name (`claude` in ID) instead of provider so Vertex AI Claude is covered, and detect both `thinking` and `reasoning_effort` kwargs
+
+### Build
+
+- **LLM model catalog update**: add GPT-5.4, GPT-5.3-codex, GPT-5.4-mini, GPT-5.4-nano; remove deprecated GPT-5, GPT-5.2, GPT-5.2-codex, GPT-5-nano, GPT-4.1-mini, GPT-5.1-codex-mini across OpenAI, Azure, GitHub Copilot, and Vercel AI Gateway providers
 
 ### Refactor
 

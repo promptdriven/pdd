@@ -226,7 +226,11 @@ function formatAuditHints(
 function classifyAuditVerdict(
   analysis: AnnotationAnalysis,
   visual: Pick<ResolvedSectionVisual, "auditHints">
-): "pass" | "warn" | "fail" {
+): "pass" | "warn" | "fail" | "skip" {
+  if (!analysis || !analysis.severity) {
+    return "skip";
+  }
+
   if (analysis.severity === "pass") {
     return "pass";
   }

@@ -28,6 +28,38 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Concurrency control for batch resolve jobs.
+ * Configurable via RESOLVE_CONCURRENCY env var (default: 1).
+ * Prevents server overload from multiple concurrent resolve jobs
+ * that each run Claude fixes + Remotion builds + section renders.
+ */
+const RESOLVE_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.RESOLVE_CONCURRENCY ?? "1", 10) || 1
+);
+let activeResolveCount = 0;
+const resolveQueue: Array<() => void> = [];
+
+function acquireResolveSlot(): Promise<void> {
+  if (activeResolveCount < RESOLVE_CONCURRENCY) {
+    activeResolveCount++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    resolveQueue.push(resolve);
+  });
+}
+
+function releaseResolveSlot(): void {
+  const next = resolveQueue.shift();
+  if (next) {
+    next();
+  } else {
+    activeResolveCount = Math.max(0, activeResolveCount - 1);
+  }
+}
+
 const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -173,8 +205,9 @@ export async function POST(_request: Request, { params }: RouteParams) {
       updateStmt.run(jobId, ann.id);
     }
 
-    // 5. Fire-and-forget execution
+    // 5. Fire-and-forget execution (respects RESOLVE_CONCURRENCY limit)
     void runJob(jobId, async (onLog) => {
+      await acquireResolveSlot();
       const projectDir = getProjectDir();
       const project = loadProject();
       const resolvedAnnotationIds = new Set<string>();
@@ -445,6 +478,8 @@ export async function POST(_request: Request, { params }: RouteParams) {
       }
     }).catch((err) => {
       console.error(`[resolve-batch] runJob ${jobId} failed unexpectedly:`, err);
+    }).finally(() => {
+      releaseResolveSlot();
     });
 
     // 6. Return immediately (non-blocking)

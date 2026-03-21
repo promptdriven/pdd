@@ -199,3 +199,77 @@ describe("Visual media src fallback for split keys", () => {
     expect(source).toMatch(/SPLIT_ONLY_KEYS\.has\(key\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 7. Audit annotation sectionId must not be overridden by video playhead
+// ---------------------------------------------------------------------------
+
+describe("Audit annotation sectionId preservation", () => {
+  const filePath = path.join(__dirname, "..", "app", "page.tsx");
+  let source: string;
+
+  beforeAll(() => {
+    source = fs.readFileSync(filePath, "utf-8");
+  });
+
+  it("preserves explicitly provided sectionId from audit instead of overriding with playhead position", () => {
+    // When options.sectionId is explicitly provided (e.g. from audit page),
+    // effectiveSectionId must use captureSectionId directly instead of
+    // recalculating from the video playhead via resolveSectionIdForGlobalTime.
+    const fnBody = source.slice(
+      source.indexOf("effectiveSectionId"),
+      source.indexOf("effectiveSectionId") + 300
+    );
+    expect(fnBody).toMatch(/options\?\.sectionId/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Spec file fallback uses first file, not last
+// ---------------------------------------------------------------------------
+
+describe("Remotion spec fix fallback", () => {
+  const filePath = path.join(
+    __dirname,
+    "..",
+    "lib",
+    "remotion-spec-fix.ts"
+  );
+  let source: string;
+
+  beforeAll(() => {
+    source = fs.readFileSync(filePath, "utf-8");
+  });
+
+  it("falls back to the first spec file when no timestamp match is found", () => {
+    // The fallback should use specFiles[0] (first/title card), not
+    // specFiles[specFiles.length - 1] (last), to avoid polluting
+    // unrelated spec files with annotation notes.
+    expect(source).toMatch(/specFiles\[0\]/);
+    expect(source).not.toMatch(/specFiles\[specFiles\.length\s*-\s*1\]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Batch resolve must limit concurrent jobs
+// ---------------------------------------------------------------------------
+
+describe("Batch resolve concurrency control", () => {
+  it("resolve-batch route has a concurrency guard to prevent server overload", () => {
+    const routePath = path.join(
+      REMOTION_SRC,
+      "..",
+      "..",
+      "..",
+      "app",
+      "api",
+      "sections",
+      "[id]",
+      "resolve-batch",
+      "route.ts"
+    );
+    const source = fs.readFileSync(routePath, "utf-8");
+    // Must have some form of concurrency control
+    expect(source).toMatch(/maxParallelResolves|activeResolveCount|resolveSemaphore|RESOLVE_CONCURRENCY/);
+  });
+});

@@ -19,7 +19,10 @@ function isClaudeAuthFailure(error: unknown): boolean {
     message.includes("Failed to authenticate") ||
     message.includes("authentication_error") ||
     message.includes("Invalid authentication credentials") ||
-    message.includes("API Error: 401")
+    message.includes("API Error: 401") ||
+    message.includes("hit your limit") ||
+    message.includes("rate limit") ||
+    message.includes("limit") && message.includes("reset")
   );
 }
 

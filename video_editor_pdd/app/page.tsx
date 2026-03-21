@@ -757,9 +757,11 @@ export default function Page() {
         ? reviewCurrentTime ?? data.timestamp
         : undefined;
       const effectiveSectionId =
-        reviewUsesFreshFullVideo && globalTimestamp != null
-          ? resolveSectionIdForGlobalTime(projectConfig, globalTimestamp) ?? captureSectionId
-          : captureSectionId;
+        options?.sectionId
+          ? captureSectionId
+          : reviewUsesFreshFullVideo && globalTimestamp != null
+            ? resolveSectionIdForGlobalTime(projectConfig, globalTimestamp) ?? captureSectionId
+            : captureSectionId;
       const effectiveSection =
         projectConfig?.sections?.find((section) => section.id === effectiveSectionId) ?? null;
       const sectionTimestamp =

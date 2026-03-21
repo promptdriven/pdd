@@ -2880,3 +2880,32 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/runClaudeAudit/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// classifyAuditVerdict must not default to "fail" for empty/unparseable analysis
+// ---------------------------------------------------------------------------
+
+describe("classifyAuditVerdict empty analysis handling", () => {
+  let sourceCode: string;
+
+  beforeAll(() => {
+    const realFs = jest.requireActual<typeof import("fs")>("fs");
+    const path = require("path");
+    sourceCode = realFs.readFileSync(
+      path.join(__dirname, "..", "app", "api", "pipeline", "audit", "run", "route.ts"),
+      "utf-8"
+    );
+  });
+
+  it("guards against undefined/null severity before classifying as fail", () => {
+    // When Claude's analysis can't be parsed, analysis.severity is undefined.
+    // classifyAuditVerdict must check for this and NOT default to "fail".
+    const fnBody = sourceCode.slice(
+      sourceCode.indexOf("function classifyAuditVerdict"),
+      sourceCode.indexOf("function classifyAuditVerdict") + 500
+    );
+    // Must check for undefined/null/missing severity before the fail path
+    expect(fnBody).toMatch(/!analysis/);
+    expect(fnBody).toMatch(/skip/);
+  });
+});

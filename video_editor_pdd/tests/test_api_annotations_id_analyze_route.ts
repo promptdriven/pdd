@@ -855,3 +855,31 @@ describe("app/api/annotations/[id]/analyze/route.ts source structure", () => {
     expect(sourceCode).toMatch(/Claude returned invalid AnnotationAnalysis payload/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Claude CLI failure fallback — must handle rate limits, not just auth errors
+// ---------------------------------------------------------------------------
+
+describe("Claude CLI failure fallback resilience", () => {
+  let sourceCode: string;
+
+  beforeAll(() => {
+    const fs = require("fs");
+    const path = require("path");
+    sourceCode = fs.readFileSync(
+      path.join(__dirname, "..", "app", "api", "annotations", "[id]", "analyze", "route.ts"),
+      "utf-8"
+    );
+  });
+
+  it("treats Claude rate limit errors as recoverable and uses fallback analysis", () => {
+    // The isClaudeAuthFailure check must also match rate limit errors like
+    // "You've hit your limit" so that buildFallbackAnalysis is used instead
+    // of throwing a 500 error.
+    const fnBody = sourceCode.slice(
+      sourceCode.indexOf("isClaudeAuthFailure"),
+      sourceCode.indexOf("isClaudeAuthFailure") + 500
+    );
+    expect(fnBody).toMatch(/hit.*limit|rate.*limit|limit.*reset/i);
+  });
+});
