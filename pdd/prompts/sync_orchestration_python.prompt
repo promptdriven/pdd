@@ -110,6 +110,18 @@ Returns a dictionary containing:
     <get_test_command_example>
         <include>context/get_test_command_example.py</include>
     </get_test_command_example>
+    <get_extension>
+        <include>context/get_extension_example.py</include>
+    </get_extension>
+    <python_env_detector>
+        <include>context/python_env_detector_example.py</include>
+    </python_env_detector>
+    <get_run_command>
+        <include>context/get_run_command_example.py</include>
+    </get_run_command>
+    <pytest_output>
+        <include>context/pytest_output_example.py</include>
+    </pytest_output>
 </examples>
 
 ### Module-Level Imports
@@ -365,14 +377,13 @@ For non-Python languages (or when `agentic_mode=True` for Python), set `max_atte
 
 ### Agentic Test Generation Success Handling
 
-For the **test** operation: when `agentic_success is True`, create a synthetic RunReport using `_create_synthetic_run_report_for_agentic_success()` instead of executing tests. This applies regardless of language.
-
-For the **test_extend** operation: only use synthetic reports for languages other than Python and TypeScript (`lang_lower not in ('python', 'typescript')`). Python and TypeScript test_extend results are always verified by running tests locally.
+For both the **test** and **test_extend** operations: after `cmd_test_main` completes, always execute tests locally via `_execute_tests_and_create_run_report()` to capture real results (tests_passed, tests_failed, coverage). This applies to all languages. Never use synthetic RunReports for test/test_extend operations — `sync_determine_operation` requires accurate `tests_failed` counts to recommend the `fix` operation when tests fail.
 
 Implement `_create_synthetic_run_report_for_agentic_success(test_file, basename, language, *, atomic_state=None)` that:
 - Creates a RunReport with exit_code=0, tests_passed=1, tests_failed=0
 - Uses actual file hash if test_file exists, otherwise uses sentinel value "agentic_test_success"
 - Saves the report using AtomicStateUpdate if provided
+- **Note**: In the current implementation, post-crash and post-fix synthetic reports for non-Python languages inline-construct `RunReport` objects and do not call this helper. `_create_synthetic_run_report_for_agentic_success()` is provided as a utility for those synthetic-report paths if they are refactored to use it, and it MUST NOT be used for test/test_extend operations.
 
 ## Constants
 
