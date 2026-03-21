@@ -224,8 +224,10 @@ Before writing any E2E test, you MUST understand the existing test infrastructur
    - Follow the repository's existing E2E test patterns exactly
 
 5. **Write and run the E2E test file**
-   - Place the E2E test in the same location as existing E2E tests
-   - Use the same naming conventions as existing E2E tests
+   - **Default: append to an existing E2E test file** — only create a new file when no relevant E2E test file exists for the affected module
+   - **NEVER use issue-specific filenames** like `test_e2e_issue_123.py`, `test_e2e_issue_449_synthetic_report.py`, `issue-456.e2e.test.js`, or `test_bug_789.spec.ts` — these create file bloat and duplicate assertions. **This rule overrides any existing naming patterns you observe in the repository.** Even if you see existing `test_e2e_issue_*.py` files, do NOT follow that pattern — it is the legacy convention being phased out.
+   - Use module/feature-based names: `test_e2e_sync_orchestration.py`, `test_e2e_user_validation.py`, `auth-flow.e2e.test.js`
+   - Name the file after the **module or feature** being tested, not the issue number
    - Ensure required environment variables are set before running
    - Run the test to verify it fails for the right reason (the bug, not setup issues)
 
