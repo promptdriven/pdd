@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (mold, fixed, parts), so the frame does not support a hard missing-text failure.
+The frame is at 90.5% progress (frame 379/420), within animation phase 8 (Frame 340-420: Hold). The core composition is correct: the mold diagram is centered with amber walls, five ejected parts with green checkmarks are visible below, 'Fix the mold' label appears in amber to the right of the mold, and 'All future parts: fixed' is shown in green in the lower-right with accumulating checkmark icons. The background is the correct deep navy-black. However, the 'Defect detected' red label and faint magnifying glass circle remnants are still visible near the parts area at low opacity. Per the spec, the defective part and its associated callouts (defect label, magnifying glass) should have fully dissolved by frame 340 (phase 7: opacity → 0). Their persistence at frame 379 is a minor animation cleanup issue — the elements are nearly transparent but still perceptible upon close inspection.
