@@ -38,7 +38,7 @@
       - NEVER mock: The function under test, pure computation, data validation, business logic
       - Mock return values MUST match the real return type from the source code — do not invent response shapes
     - The goal: test as much of YOUR code as possible while isolating external services that need credentials.
-<include>./context/test.prompt</include>
+<include optional>./context/test.prompt</include>
 
 <instructions>
     1. FIRST: Carefully analyze the EXAMPLE to understand:

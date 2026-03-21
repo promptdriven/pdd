@@ -455,6 +455,216 @@ class TestIssue579BugWorktreeRerunE2E:
         subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
                        cwd=main_repo, check=False, capture_output=True)
 
+    def test_fresh_rerun_from_non_main_resets_to_main_not_feature_head(self, tmp_path):
+        """
+        Bug #897: When the user is on a feature branch and re-runs
+        pdd bug on an issue where the branch can't be deleted, reset_after_attach
+        should reset to main, not the feature branch's HEAD.
+
+        Without this fix, `git rev-parse HEAD` resolves to the feature branch,
+        and the reset brings in unrelated feature commits.
+        """
+        from pdd.agentic_bug_orchestrator import _setup_worktree
+
+        main_repo = tmp_path / "main_repo"
+        main_repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=main_repo, check=True)
+
+        # Initial commit on main
+        (main_repo / "README.md").write_text("# Test\n")
+        subprocess.run(["git", "add", "."], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=main_repo, check=True, capture_output=True)
+
+        main_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Create fix/issue-999 in a separate worktree (simulating first pdd bug run)
+        old_worktree = tmp_path / "old_worktree"
+        subprocess.run(
+            ["git", "worktree", "add", "-b", "fix/issue-999", str(old_worktree), "HEAD"],
+            cwd=main_repo, check=True, capture_output=True,
+        )
+
+        # Add stale commits on the fix branch
+        (old_worktree / "old_fix.py").write_text("# Stale fix\n")
+        subprocess.run(["git", "add", "old_fix.py"], cwd=old_worktree, check=True)
+        subprocess.run(["git", "commit", "-m", "Stale work"], cwd=old_worktree, check=True, capture_output=True)
+
+        # Remove the old worktree dir (but don't prune — branch undeletable)
+        import shutil
+        shutil.rmtree(old_worktree)
+
+        # Now switch to a feature branch with unrelated commits
+        subprocess.run(["git", "checkout", "-b", "feature/unrelated"], cwd=main_repo, check=True, capture_output=True)
+        (main_repo / "feature.py").write_text("# Unrelated feature\n")
+        subprocess.run(["git", "add", "feature.py"], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Unrelated feature"], cwd=main_repo, check=True, capture_output=True)
+
+        feature_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Preconditions
+        assert feature_head != main_head
+        current = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert current == "feature/unrelated"
+
+        # Re-run: branch exists, can't be deleted → reset_after_attach path
+        worktree_path, error = _setup_worktree(main_repo, 999, quiet=True, resume_existing=False)
+
+        assert worktree_path is not None, f"Should succeed, got: {error!r}"
+
+        worktree_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Should reset to main, NOT to feature branch HEAD
+        assert worktree_head == main_head, (
+            f"Re-run reset should use main, not feature branch HEAD.\n"
+            f"  Main HEAD:    {main_head}\n"
+            f"  Feature HEAD: {feature_head}\n"
+            f"  Worktree HEAD: {worktree_head}\n"
+        )
+
+        assert not (worktree_path / "feature.py").exists(), (
+            "Unrelated feature.py should not be in worktree"
+        )
+        assert not (worktree_path / "old_fix.py").exists(), (
+            "Stale old_fix.py from prior run should not be in worktree"
+        )
+
+        subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
+                       cwd=main_repo, check=False, capture_output=True)
+
+    def test_fresh_run_from_non_main_branch_uses_main_as_base(self, tmp_path):
+        """
+        Bug #897: When the user runs `pdd bug` from a non-main branch
+        (e.g., a feature branch), the worktree should be based on main, not HEAD.
+
+        Without this fix, `git worktree add -b fix/issue-X ... HEAD` creates the
+        branch from the feature branch's HEAD, and ALL commits from that feature
+        branch leak into the PR diff.
+        """
+        from pdd.agentic_bug_orchestrator import _setup_worktree
+
+        main_repo = tmp_path / "main_repo"
+        main_repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=main_repo, check=True)
+
+        # Initial commit on main
+        (main_repo / "README.md").write_text("# Test\n")
+        subprocess.run(["git", "add", "."], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=main_repo, check=True, capture_output=True)
+
+        main_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Create and switch to a feature branch with extra commits
+        subprocess.run(["git", "checkout", "-b", "feature/unrelated-work"], cwd=main_repo, check=True, capture_output=True)
+        (main_repo / "feature.py").write_text("# Unrelated feature work\n")
+        subprocess.run(["git", "add", "feature.py"], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Unrelated feature commit"], cwd=main_repo, check=True, capture_output=True)
+
+        feature_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # Precondition: we're on the feature branch, not main
+        current = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert current == "feature/unrelated-work"
+        assert feature_head != main_head
+
+        # Run _setup_worktree — should base on main, not feature branch HEAD
+        worktree_path, error = _setup_worktree(main_repo, 999, quiet=True, resume_existing=False)
+
+        assert worktree_path is not None, f"Should succeed, got: {error!r}"
+        assert error is None
+
+        worktree_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        # The worktree should be based on main, not the feature branch
+        assert worktree_head == main_head, (
+            f"Worktree should be based on main, not feature branch HEAD.\n"
+            f"  Main HEAD:    {main_head}\n"
+            f"  Feature HEAD: {feature_head}\n"
+            f"  Worktree HEAD: {worktree_head}\n"
+            f"Unrelated feature commits are leaking into the worktree."
+        )
+
+        # The unrelated feature file should NOT be present
+        assert not (worktree_path / "feature.py").exists(), (
+            "Unrelated file 'feature.py' from feature branch should not be in worktree"
+        )
+
+        # Clean up
+        subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
+                       cwd=main_repo, check=False, capture_output=True)
+
+    def test_change_orchestrator_fresh_run_from_non_main_uses_main(self, tmp_path):
+        """
+        Bug #897: Same as above but for the change orchestrator, which
+        has the identical HEAD problem at line 292.
+        """
+        from pdd.agentic_change_orchestrator import _setup_worktree as change_setup_worktree
+
+        main_repo = tmp_path / "main_repo"
+        main_repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=main_repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=main_repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=main_repo, check=True)
+
+        (main_repo / "README.md").write_text("# Test\n")
+        subprocess.run(["git", "add", "."], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=main_repo, check=True, capture_output=True)
+
+        main_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=main_repo, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        subprocess.run(["git", "checkout", "-b", "feature/other-work"], cwd=main_repo, check=True, capture_output=True)
+        (main_repo / "other.py").write_text("# Other work\n")
+        subprocess.run(["git", "add", "other.py"], cwd=main_repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Other feature commit"], cwd=main_repo, check=True, capture_output=True)
+
+        worktree_path, error = change_setup_worktree(main_repo, 999, quiet=True)
+
+        assert worktree_path is not None, f"Should succeed, got: {error!r}"
+
+        worktree_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree_path, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        assert worktree_head == main_head, (
+            f"Change orchestrator worktree should be based on main.\n"
+            f"  Main HEAD:     {main_head}\n"
+            f"  Worktree HEAD: {worktree_head}\n"
+        )
+
+        subprocess.run(["git", "worktree", "remove", str(worktree_path), "--force"],
+                       cwd=main_repo, check=False, capture_output=True)
+
     def test_change_orchestrator_handles_checked_out_branch(self, mock_git_repo_with_checked_out_branch):
         """
         Control test: verify the change orchestrator's _setup_worktree succeeds

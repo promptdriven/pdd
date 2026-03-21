@@ -1,0 +1,54 @@
+"""Fixture: real pdd-bug output for signal handler test (issue #591, after retry).
+
+This is a behavioral test that should NOT be flagged. It calls main(), verifies
+signal.signal was called, invokes the handler, and asserts on Firestore side effects.
+Copied from the validation run of pdd bug against promptdriven/pdd_cloud#591.
+"""
+
+import os
+import signal
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_job_runner_registers_signal_handlers():
+    """Verify that SIGTERM and SIGBUS handlers are registered for Firestore cleanup."""
+    from src import job_runner
+
+    mock_job_data = {
+        "id": "job-sig-1",
+        "owner": "test-owner",
+        "repo": "test-repo",
+        "status": "in_progress",
+    }
+    mock_secrets_data = {"_user_provided_keys": [], "_oauth_versions": []}
+    mock_job_obj = MagicMock()
+    mock_job_obj.id = "job-sig-1"
+
+    with (
+        patch("signal.signal") as mock_signal,
+        patch.dict(os.environ, {"JOB_ID": "job-sig-1"}),
+        patch.object(job_runner, "get_job", new_callable=AsyncMock, return_value=mock_job_data),
+        patch.object(job_runner, "get_and_delete_job_secrets", new_callable=AsyncMock, return_value=mock_secrets_data),
+        patch.object(job_runner.Job, "from_dict", return_value=mock_job_obj),
+        patch.object(job_runner.pdd_executor, "execute_pdd_job", new_callable=AsyncMock, return_value={"success": True}),
+        patch("src.clients.firestore_client._update_job_status_sync") as mock_update_status,
+    ):
+        await job_runner.main()
+
+        mock_signal.assert_any_call(signal.SIGTERM, ANY)
+        mock_signal.assert_any_call(signal.SIGBUS, ANY)
+
+        handlers = {call[0][0]: call[0][1] for call in mock_signal.call_args_list}
+        sigterm_handler = handlers.get(signal.SIGTERM)
+        assert sigterm_handler is not None
+
+        sigterm_handler(signal.SIGTERM, None)
+
+        mock_update_status.assert_called()
+        call_args = mock_update_status.call_args[0]
+        assert call_args[0] == "job-sig-1"
+        assert "failed" in call_args[1].lower()
+        assert any(word in str(call_args[2]).lower() for word in ["sigterm", "terminated", "signal"])
