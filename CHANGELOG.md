@@ -1,3 +1,31 @@
+## v0.0.183 (2026-03-20)
+
+### Fix
+
+- improve Claude API error handling for rate limits, prevent audit verdict from defaulting to fail on unparseable analysis, and preserve explicit section IDs in the UI.
+- annotation 8243ec21-e3d8-4749-ba68-d01209fdf60f The frame is at 87.5% progress (frame 104/120, hol
+- annotation 844c64b8-7df5-4e24-921f-7570060205f2 All required elements are present and the animatio
+- annotation fc08f4c7-6194-4f00-8250-d490e32edd64 The frame is sampled at frame 104/120 (87.5% throu
+- annotation c81a22d3-526a-43c5-be82-5da043d5a106 The frame is at 90.5% progress (frame 379/420), co
+- annotation c79da256-77e8-406c-a373-afb0d09abf52 The frame correctly renders the deep navy-black ba
+- E2E over-classification, issue-specific filenames, stale orchestrator prompt, worktree from HEAD (#854, #897)
+- structural test guard for pdd-bug step 9 (#901)
+- annotation d82251b1-6d93-4253-9382-06a342e96421 The frame is at 84.3% progress (frame 884/1050), w
+- annotation 78dc6e4a-d689-46e8-b379-874a962a5075 The frame is at 83.3% progress (hold phase, frame
+- optional <include> attribute resolves to empty string when file missing (#691)
+- annotation 60363542-4ca7-459a-94ba-60a71ecac813 The split-screen composition is correctly structur
+- annotation cc1a488b-a02f-4ea4-92f9-ed94f61f8b75 The frame is sampled at 91.7% progress (frame 219/
+- annotation bf9778f8-ecf2-492c-a0b6-f067924b583c The frame correctly renders the deep navy-black ba
+- annotation af4571b4-a1e0-4870-9cef-0ee0bc4f8d79 The split-screen composition is correctly structur
+- annotation 97d347f1-66ff-494a-8709-cebd7152fecb The frame is at 84.3% progress (frame 884/1050), w
+- annotation 6da5e47f-1cde-4ffe-89fc-9c71e370d5ec The frame is at 83.3% progress (hold phase, frame
+- annotation 5985a916-5eba-4b56-992d-297b101b0ada The title card layout is correct: Prompt-Driven D
+- annotation 356bd043-74bf-4580-bc81-1001982ae317 The frame is at 90.5% progress (frame 379/420), co
+- annotation 0d83f57f-c624-4283-a3c4-54a88b83d493 The frame is sampled at frame 104/120 (87.5% throu
+- annotation fa25d5f9-e866-4d6f-aba7-ccf0d93903ea The frame is sampled at 87.5% progress (frame 104/
+- annotation ecd8e598-d788-4378-a634-298d1cb049e4 The frame is at 87.5% progress (frame 104/120, hol
+- annotation 627b0945-b7bd-4ef2-a0d2-ab5494a30f97 The frame is sampled at 91.7% progress (frame 219/
+
 ## v0.0.182 (2026-03-19)
 
 ### Fix
