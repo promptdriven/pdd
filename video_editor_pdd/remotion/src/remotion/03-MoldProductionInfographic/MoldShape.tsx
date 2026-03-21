@@ -41,12 +41,20 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
   );
 
-  // Pulsing glow on the mold border
-  const glowPulse = interpolate(
-    Math.sin(frame * 0.08),
-    [-1, 1],
-    [0.6, 1.0]
-  );
+  // After fix phase, pulse with stronger amber glow (satisfied amber glow)
+  const isPostFix = frame >= WRENCH_APPEAR + WRENCH_FLASH_DURATION;
+  const glowPulse = isPostFix
+    ? interpolate(
+        Math.sin(frame * 0.1),
+        [-1, 1],
+        [0.3, 0.6],
+        { easing: Easing.inOut(Easing.sin) }
+      )
+    : interpolate(
+        Math.sin(frame * 0.08),
+        [-1, 1],
+        [0.6, 1.0]
+      );
 
   const labelOpacity = interpolate(
     frame,
@@ -55,7 +63,7 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Border flashes green when wrench appears, then returns to orange
+  // Border flashes green when wrench appears, then returns to amber
   const isFlashing =
     frame >= WRENCH_APPEAR && frame < WRENCH_APPEAR + WRENCH_FLASH_DURATION;
   const greenFlash = isFlashing
@@ -66,7 +74,13 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
       )
     : 0;
 
-  const borderColor = greenFlash > 0.5 ? FIX_COLOR : MOLD_GLOW_COLOR;
+  // Post-fix: use amber (#D9944A) border; during flash: green; default: orange
+  const AMBER_GLOW = "#D9944A";
+  const borderColor = isFlashing && greenFlash > 0.5
+    ? FIX_COLOR
+    : isPostFix
+    ? AMBER_GLOW
+    : MOLD_GLOW_COLOR;
 
   const cavityX = MOLD_X + (MOLD_W - MOLD_CAVITY_W) / 2;
   const cavityY = MOLD_Y + (MOLD_H - MOLD_CAVITY_H) / 2;
@@ -86,6 +100,13 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
+        <filter id="moldGlowAmber" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="10" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
 
       {/* Mold body */}
@@ -100,7 +121,7 @@ export const MoldShape: React.FC<MoldShapeProps> = ({
         stroke={borderColor}
         strokeWidth={4}
         opacity={glowPulse}
-        filter="url(#moldGlow)"
+        filter={isPostFix ? "url(#moldGlowAmber)" : "url(#moldGlow)"}
       />
 
       {/* Cavity cutout */}

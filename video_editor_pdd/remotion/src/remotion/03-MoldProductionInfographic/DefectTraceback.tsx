@@ -11,8 +11,8 @@ import {
   DEFECT_APPEAR,
   TRACEBACK_START,
   TRACEBACK_END,
-  FADEOUT_START,
-  FADEOUT_END,
+  DEFECT_DISSOLVE_START,
+  DEFECT_DISSOLVE_END,
   FPS,
 } from "./constants";
 
@@ -51,7 +51,7 @@ export const DefectTraceback: React.FC<DefectTracebackProps> = ({
 
   const opacity = interpolate(
     frame,
-    [DEFECT_APPEAR, DEFECT_APPEAR + 5, FADEOUT_START, FADEOUT_END],
+    [DEFECT_APPEAR, DEFECT_APPEAR + 5, DEFECT_DISSOLVE_START, DEFECT_DISSOLVE_END],
     [0, 1, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );

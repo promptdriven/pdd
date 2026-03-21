@@ -24,6 +24,7 @@ import {
   PANEL_FADE_START,
   PANEL_FADE_END,
   DEFECT_APPEAR,
+  DEFECT_DISSOLVE_END,
   WRENCH_APPEAR,
   FADEOUT_START,
   FADEOUT_END,
@@ -95,8 +96,8 @@ export const Part2ParadigmShift03MoldProductionInfographic: React.FC = () => {
       {/* Part counter */}
       <PartCounter />
 
-      {/* Defect "✗" mark + trace-back line */}
-      {frame >= DEFECT_APPEAR && (
+      {/* Defect "✗" mark + trace-back line — hidden after dissolve completes */}
+      {frame >= DEFECT_APPEAR && frame <= DEFECT_DISSOLVE_END && (
         <DefectTraceback defectX={defectX} />
       )}
     </AbsoluteFill>
