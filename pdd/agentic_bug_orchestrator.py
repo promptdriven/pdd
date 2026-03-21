@@ -316,6 +316,166 @@ def _get_state_dir(cwd: Path) -> Path:
     return root / ".pdd" / "bug-state"
 
 
+def detect_structural_test_patterns(file_path: str) -> List[str]:
+    """Scan a test file for structural/non-behavioral test patterns.
+
+    Returns a list of human-readable violation descriptions. Empty list means
+    the file is clean.
+
+    Detected patterns:
+    - inspect.getsource / inspect.signature used to read source or signatures
+    - assert "keyword" in source (source string matching)
+    - hasattr(module, ...) used as the primary assertion
+    - Path.read_text() / open().read() followed by string-in-content assertions
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return []
+
+    try:
+        content = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    if not content.strip():
+        return []
+
+    violations: List[str] = []
+
+    lines = content.splitlines()
+
+    # Track whether inspect.getsource or inspect.signature is used
+    has_getsource = False
+    has_signature = False
+
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Detect inspect.getsource usage
+        if "inspect.getsource" in stripped:
+            # Exclude comments
+            if not stripped.startswith("#"):
+                has_getsource = True
+                violations.append(
+                    f"Line {i}: inspect.getsource — reads source code as string "
+                    f"for structural assertion instead of testing behavior"
+                )
+
+        # Detect inspect.signature usage
+        if "inspect.signature" in stripped:
+            if not stripped.startswith("#"):
+                has_signature = True
+                violations.append(
+                    f"Line {i}: inspect.signature — inspects function signature "
+                    f"instead of calling the function and asserting on behavior"
+                )
+
+        # Detect hasattr as the primary assertion
+        if re.match(r"\s*assert\s+hasattr\s*\(", line):
+            violations.append(
+                f"Line {i}: assert hasattr() — checks attribute existence "
+                f"instead of calling and asserting on behavior"
+            )
+
+    # Detect source-string-matching patterns:
+    # Look for read_text()/read()/getsource() result being used in `assert ... in ...`
+    # Pattern: variable = <source read>, then assert "x" in variable
+    #
+    # Only flag when the file being read is Python source (.py). Reading config
+    # files (Dockerfile, YAML, JSON, etc.) and asserting on their content is a
+    # legitimate test pattern — it tests build/config correctness, not code structure.
+    _NON_SOURCE_EXTENSIONS = {
+        ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".env", ".txt",
+        ".md", ".rst", ".html", ".css", ".js", ".ts", ".sh", ".bash",
+    }
+    _NON_SOURCE_FILENAMES = {"dockerfile", "makefile", "gemfile", "rakefile"}
+
+    source_read_pattern = re.compile(
+        r'(\w+)\s*=\s*('
+        r'inspect\.getsource\s*\('
+        r'|(.+)\.read_text\s*\('
+        r'|(.+)\.read\s*\('
+        r')',
+    )
+
+    # Track `with open("filename") as var:` so we can resolve var.read()
+    open_as_pattern = re.compile(
+        r'with\s+open\s*\(\s*["\']([^"\']+)["\']\s*.*\)\s+as\s+(\w+)',
+    )
+    file_handle_filenames: dict = {}  # var_name -> filename
+    for line in lines:
+        om = open_as_pattern.search(line)
+        if om and not line.strip().startswith("#"):
+            file_handle_filenames[om.group(2)] = om.group(1)
+
+    def _is_non_source_file(filename: str) -> bool:
+        """Check if a filename refers to a non-source (config/build) file."""
+        basename = Path(filename).name.lower()
+        ext = Path(filename).suffix.lower()
+        if ext in _NON_SOURCE_EXTENSIONS:
+            return True
+        if basename in _NON_SOURCE_FILENAMES:
+            return True
+        if ext and ext != ".py":
+            return True
+        return False
+
+    source_var_names: set = set()
+    for line in lines:
+        m = source_read_pattern.search(line)
+        if m and not line.strip().startswith("#"):
+            # For getsource, always track (group 3 and 4 will be None)
+            if "inspect.getsource" in line:
+                source_var_names.add(m.group(1))
+                continue
+
+            # For read_text/read, check what file is being read
+            full_expr = m.group(3) or m.group(4) or ""
+
+            # Check if this is a file handle from `with open("file") as f:`
+            handle_name = full_expr.strip()
+            if handle_name in file_handle_filenames:
+                if _is_non_source_file(file_handle_filenames[handle_name]):
+                    continue
+                source_var_names.add(m.group(1))
+                continue
+
+            # Extract any quoted filename from the expression
+            filename_match = re.search(r"""['"]([^'"]+)['"]""", full_expr)
+            if filename_match:
+                if _is_non_source_file(filename_match.group(1)):
+                    continue
+            else:
+                # No quoted filename — could be a variable path.
+                # If the expression contains a non-.py hint, skip it.
+                expr_lower = full_expr.lower()
+                if any(name in expr_lower for name in _NON_SOURCE_FILENAMES):
+                    continue
+                if any(ext in expr_lower for ext in _NON_SOURCE_EXTENSIONS):
+                    continue
+
+            source_var_names.add(m.group(1))
+
+    if source_var_names:
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            for var in source_var_names:
+                # assert "keyword" in var  or  assert "keyword" not in var
+                if re.search(
+                    rf'assert\s+.*\bin\s+{re.escape(var)}\b', stripped
+                ):
+                    # Only flag if not already flagged by getsource/signature
+                    if not has_getsource and not has_signature:
+                        violations.append(
+                            f"Line {i}: source string matching — asserts keyword "
+                            f"presence in file/source content instead of testing behavior"
+                        )
+
+    return violations
+
+
 def run_agentic_bug_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -615,6 +775,85 @@ def run_agentic_bug_orchestrator(
                 changed_files.extend(extracted)
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
+
+            # Structural test guard: scan generated files for banned patterns
+            all_violations: List[str] = []
+            for fpath in extracted:
+                abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+                violations = detect_structural_test_patterns(str(abs_path))
+                if violations:
+                    all_violations.extend(violations)
+
+            if all_violations:
+                if not quiet:
+                    console.print(
+                        f"[yellow]  → Structural test patterns detected in generated tests, "
+                        f"retrying step 9:[/yellow]"
+                    )
+                    for v in all_violations:
+                        console.print(f"[yellow]    • {v}[/yellow]")
+
+                # Re-run step 9 with feedback about the violations
+                violation_summary = "\n".join(f"  - {v}" for v in all_violations)
+                retry_addendum = (
+                    "\n\n% IMPORTANT: Your previous attempt generated STRUCTURAL tests that "
+                    "were rejected. The following violations were detected:\n"
+                    f"{violation_summary}\n\n"
+                    "You MUST rewrite these tests as BEHAVIORAL tests that call functions "
+                    "and assert on observable outputs or side effects. Do NOT use "
+                    "inspect.getsource, inspect.signature, hasattr assertions, or "
+                    "source string matching."
+                )
+
+                retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
+                    instruction=formatted_prompt + retry_addendum,
+                    cwd=current_work_dir,
+                    verbose=verbose,
+                    quiet=quiet,
+                    timeout=timeout,
+                    label="step9",
+                    max_retries=DEFAULT_MAX_RETRIES,
+                )
+                total_cost += retry_cost
+                model_used = retry_model
+                state["total_cost"] = total_cost
+                state["model_used"] = model_used
+                step_success = retry_success
+
+                if not retry_success:
+                    if not quiet:
+                        console.print(
+                            "[red]  → Retry of step 9 failed; keeping original output.[/red]"
+                        )
+                else:
+                    # Re-extract files from retry
+                    retry_created = _parse_changed_files(retry_output, "FILES_CREATED")
+                    retry_modified = _parse_changed_files(retry_output, "FILES_MODIFIED")
+                    retry_extracted = retry_created + retry_modified
+                    if retry_extracted:
+                        changed_files.extend(retry_extracted)
+                        changed_files = list(set(changed_files))
+                        context["files_to_stage"] = ", ".join(changed_files)
+
+                    # Re-scan retry output for structural patterns
+                    retry_violations: List[str] = []
+                    for fpath in retry_extracted:
+                        abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+                        v = detect_structural_test_patterns(str(abs_path))
+                        if v:
+                            retry_violations.extend(v)
+
+                    if retry_violations and not quiet:
+                        console.print(
+                            "[yellow]  → Retry still contains structural patterns "
+                            "(proceeding with warning):[/yellow]"
+                        )
+                        for v in retry_violations:
+                            console.print(f"[yellow]    • {v}[/yellow]")
+
+                    # Update step output to the retry output
+                    step_output = retry_output
+                    context["step9_output"] = retry_output
 
         if step_num == 10:
             # Check for E2E classification marker in step output.

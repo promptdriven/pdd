@@ -1,0 +1,23 @@
+"""Fixture: real pdd-bug output for Dockerfile version pin test (issue #591).
+
+This is a legitimate config-content test that should NOT be flagged.
+Copied from the validation run of pdd bug against promptdriven/pdd_cloud#591.
+"""
+
+import re
+from pathlib import Path
+
+def test_claude_code_version_pinned():
+    """Verify that @anthropic-ai/claude-code is installed with an explicit version tag."""
+    dockerfile_path = Path(__file__).resolve().parents[1] / "Dockerfile.worker"
+    assert dockerfile_path.exists(), f"Dockerfile.worker not found at {dockerfile_path}"
+
+    content = dockerfile_path.read_text()
+
+    pin_pattern = r"@anthropic-ai/claude-code@\d+\.\d+\.\d+"
+    unpinned_pattern = r"@anthropic-ai/claude-code(?![@])"
+
+    assert re.search(pin_pattern, content), (
+        "@anthropic-ai/claude-code must be pinned to a specific version "
+        "(e.g., @anthropic-ai/claude-code@2.1.71) in Dockerfile.worker"
+    )
