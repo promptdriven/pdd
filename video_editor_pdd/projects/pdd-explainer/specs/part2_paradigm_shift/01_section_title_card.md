@@ -136,3 +136,13 @@ Segment: `part2_001`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: c79da256-77e8-406c-a373-afb0d09abf52 -->
+## Annotation Update
+Requested change: The frame correctly renders the deep navy-black background with blueprint grid, the 'PART 2' section label with letter-spacing, 'THE PARADIGM' in large bold centered text, 'SHIFT' below it, and the faint ghost shapes (injection mold on left, circuit schematic on right) at very low opacity. However, the horizontal rule specified as 200px wide, 2px height, #334155 at 0.5 opacity, centered between the two title lines at y:505, is not visible in the rendered frame. This rule should have been drawn d
+Technical assessment: The horizontal rule specified in the spec as 200px wide, 2px height, color #334155 at 0.5 opacity, centered at y:505 between 'THE PARADIGM' (y:460) and 'SHIFT' (y:545), is missing from the rendered frame. The spec defines this rule as drawing from center outward during frames 60-70 via a DrawLine component (from [860,505] to [1060,505]). At the current hold phase (frame 104/120), the rule should be fully drawn and visible. All other elements — background, blueprint grid, PART 2 label, both title lines, and ghost shapes — render correctly. The rule is a subtle decorative separator, but it is explicitly specified and contributes to the visual hierarchy between the two title words.
+- Verify the DrawLine component is included in the Remotion composition for this scene and that it renders at the correct Sequence from={60} with drawDuration={10}
+- Check that the DrawLine coordinates from=[860,505] to=[1060,505] are correct and the line is not being clipped or rendered behind another element
+- Ensure the opacity value of 0.5 and color #334155 produce sufficient contrast against the #0A0F1A background — the rule should be visible though subtle
+- Confirm the fromCenter draw animation completes correctly and does not leave the line at zero width after the draw duration
+<!-- ANNOTATION_UPDATE_END: c79da256-77e8-406c-a373-afb0d09abf52 -->

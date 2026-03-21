@@ -8,8 +8,7 @@ import {
   RULE_Y,
   RULE_MAX_WIDTH,
   RULE_HEIGHT,
-  ACCENT_ORANGE,
-  ACCENT_BLUE,
+  RULE_COLOR,
   RULE_OPACITY,
 } from "./constants";
 
@@ -23,7 +22,7 @@ export const HorizontalRule: React.FC = () => {
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
+      easing: Easing.inOut(Easing.quad),
     }
   );
 
@@ -47,7 +46,7 @@ export const HorizontalRule: React.FC = () => {
         transform: "translateX(-50%)",
         width,
         height: RULE_HEIGHT,
-        background: `linear-gradient(to right, ${ACCENT_ORANGE}, ${ACCENT_BLUE})`,
+        backgroundColor: RULE_COLOR,
         opacity: RULE_OPACITY * fadeOut,
       }}
     />

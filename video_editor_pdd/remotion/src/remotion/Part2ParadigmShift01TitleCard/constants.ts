@@ -13,8 +13,8 @@ export const EYEBROW_FADE_END = 35;
 export const TITLE_FADE_START = 25;
 export const TITLE_FADE_END = 50;
 
-export const RULE_EXPAND_START = 40;
-export const RULE_EXPAND_END = 60;
+export const RULE_EXPAND_START = 60;
+export const RULE_EXPAND_END = 70;
 
 export const HOLD_END = 120;
 
@@ -32,8 +32,8 @@ export const GLOW_RADIUS = 900;
 
 export const EYEBROW_Y = 360;
 export const TITLE_Y = 460;
-export const RULE_Y = 520;
-export const RULE_MAX_WIDTH = 480;
+export const RULE_Y = 505;
+export const RULE_MAX_WIDTH = 200;
 export const RULE_HEIGHT = 2;
 
 // Colors
@@ -53,4 +53,5 @@ export const TITLE_LETTER_SPACING = "-0.02em";
 export const TITLE_FONT_WEIGHT = 700;
 export const TITLE_SHADOW = "0 4px 24px rgba(249, 115, 22, 0.3)";
 
-export const RULE_OPACITY = 0.7;
+export const RULE_COLOR = "#334155";
+export const RULE_OPACITY = 0.5;
