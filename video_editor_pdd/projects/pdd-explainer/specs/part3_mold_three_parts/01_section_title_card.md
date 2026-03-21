@@ -147,3 +147,18 @@ Segment: `part3_001`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: fc08f4c7-6194-4f00-8250-d490e32edd64 -->
+## Annotation Update
+Requested change: The frame is sampled at frame 104/120 (87.5% through the animation), which falls in the hold phase (frames 90-120). Most elements are correctly present and positioned:
+
+**Passing elements:**
+- Background: Deep navy-black background is correct.
+- "PART 3": Visible above the title text with letter-spacing, correct muted color, correctly positioned.
+- "THE MOLD HAS": Large bold white text, correctly rendered and centered.
+- "THREE PARTS": Large bold white text, rendered below the first line.
+- Ghos
+Technical assessment: Frame 104/120 (87.5%, hold phase). The core title card reads correctly: deep navy-black background (#0A0F1A), 'PART 3' label with letter-spacing and muted color centered above, 'THE MOLD HAS' and 'THREE PARTS' in large bold white text centered. Three ghost shapes are faintly visible at the specified ultra-low opacities (wall segment left, nozzle center, material swatch right). Two minor spec deviations: (1) The horizontal rule between the two title lines (200px wide, 2px, #334155 at 0.5 opacity, y:505) is not visible — it should be distinguishable at 0.5 opacity even though it is thin. (2) 'THREE PARTS' appears centered rather than showing the specified 15px offset-right. Ghost labels ('WALLS', 'NOZZLE', 'MATERIAL') at 0.03 opacity and 8px size are effectively invisible, which is borderline acceptable given the extreme spec opacity. Blueprint grid at 0.05 opacity is not discernible but is acceptable at that value.
+- Add or fix the horizontal rule element between 'THE MOLD HAS' and 'THREE PARTS' — it should be a 200px wide, 2px line at #334155 with 0.5 opacity centered at y:505. Verify the DrawLine component is rendering and not clipped or hidden behind text.
+- Apply the 15px offset-right to 'THREE PARTS' text (x: 975 instead of 960) as specified in the Remotion code structure.
+<!-- ANNOTATION_UPDATE_END: fc08f4c7-6194-4f00-8250-d490e32edd64 -->
