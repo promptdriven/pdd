@@ -422,7 +422,6 @@ def _find_gemini_project_slug(cwd: Path) -> Optional[str]:
     try:
         data = json.loads(projects_file.read_text(encoding="utf-8"))
         projects = data.get("projects", {})
-        # Find the longest matching prefix
         cwd_str = str(cwd.resolve())
         best_match = None
         best_len = 0
@@ -440,48 +439,27 @@ def _find_gemini_session_file(cwd: Path, start_time: float) -> Optional[Path]:
     slug = _find_gemini_project_slug(cwd)
     if not slug:
         return None
-
     chats_dir = Path.home() / ".gemini" / "tmp" / slug / "chats"
     if not chats_dir.exists():
         return None
-
-    # Find session files modified after start_time
-    candidates = []
-    for f in chats_dir.glob("session-*.json"):
-        if f.stat().st_mtime >= start_time:
-            candidates.append(f)
-
+    candidates = [f for f in chats_dir.glob("session-*.json") if f.stat().st_mtime >= start_time]
     if not candidates:
         return None
-
-    # Return the most recently modified one
     return max(candidates, key=lambda f: f.stat().st_mtime)
 
 
 def _find_claude_session_file(cwd: Path, start_time: float) -> Optional[Path]:
     """Find the Claude Code session file created/updated after start_time."""
-    # Claude stores sessions at ~/.claude/projects/<hash>/<session_id>.jsonl
-    # The hash is derived from the cwd path with slashes replaced by dashes
     claude_projects = Path.home() / ".claude" / "projects"
     if not claude_projects.exists():
         return None
-
-    cwd_str = str(cwd.resolve())
-    # Claude uses the path with leading slash, slashes -> dashes
-    project_hash = cwd_str.replace("/", "-")
-
+    project_hash = str(cwd.resolve()).replace("/", "-")
     project_dir = claude_projects / project_hash
     if not project_dir.exists():
         return None
-
-    candidates = []
-    for f in project_dir.glob("*.jsonl"):
-        if f.stat().st_mtime >= start_time:
-            candidates.append(f)
-
+    candidates = [f for f in project_dir.glob("*.jsonl") if f.stat().st_mtime >= start_time]
     if not candidates:
         return None
-
     return max(candidates, key=lambda f: f.stat().st_mtime)
 
 
@@ -498,10 +476,13 @@ def _save_trace(
     """
     Find the provider's session file and copy it to .pdd/agentic-traces/.
 
+    The trace file contains the full agent reasoning process: every tool call
+    (file reads, edits, shell commands), thinking/reasoning traces, token
+    counts per turn, and the model used.
+
     Returns the path to the saved trace, or None if not found.
     """
     try:
-        # Find the session file
         if provider == "google":
             source = _find_gemini_session_file(cwd, start_time)
         elif provider == "anthropic":
@@ -512,19 +493,14 @@ def _save_trace(
         if source is None:
             return None
 
-        # Create trace directory
         trace_dir = Path(cwd) / AGENTIC_TRACE_DIR
         trace_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build trace filename: trace_<timestamp>_<label>_<provider>.<ext>
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_label = re.sub(r'[^\w\-]', '_', label) if label else "unlabeled"
         ext = source.suffix  # .json for Gemini, .jsonl for Claude
         trace_file = trace_dir / f"trace_{timestamp}_{safe_label}_{provider}{ext}"
 
-        # Write metadata + copy source content
-        # For Gemini (single JSON): wrap with metadata
-        # For Claude (JSONL): prepend metadata line
         metadata = {
             "type": "pdd_trace_metadata",
             "timestamp": datetime.now().isoformat(),
@@ -539,7 +515,6 @@ def _save_trace(
         }
 
         source_content = source.read_text(encoding="utf-8")
-
         with open(trace_file, "w", encoding="utf-8") as f:
             f.write(json.dumps(metadata) + "\n")
             f.write(source_content)
@@ -1032,7 +1007,7 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success — save trace and log
+                        # Real success — save trace
                         trace_path = _save_trace(
                             provider=provider, cwd=cwd,
                             start_time=attempt_start_time,
