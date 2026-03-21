@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Orchestrates the 11-step agentic bug workflow with E2E gate and state persistence.</pdd-reason>
+<pdd-reason>Orchestrates the 12-step agentic bug workflow with E2E gate and state persistence.</pdd-reason>
 
 <pdd-interface>
 {
@@ -20,17 +20,17 @@
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 11-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+Orchestrator for the 12-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
 % Requirements
 1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 11 steps sequentially (steps 1-5, 5.5, 6-10), each as a separate `run_agentic_task()` call
+3. Run 12 steps sequentially (steps 1-12), each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
-6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
-7. For Step 9: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
-8. Pass extracted files to Step 9 (E2E) and Step 10 (PR) via `files_to_stage` context variable for explicit git staging
+6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
+7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
+8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
@@ -65,20 +65,21 @@ For each step (1-5, 5.5, 6-10), convert step number to suffix with dots replaced
 | 1 | agentic_bug_step1_duplicate_LLM | Search for duplicate issues |
 | 2 | agentic_bug_step2_docs_LLM | Check documentation for user error |
 | 3 | agentic_bug_step3_triage_LLM | Assess if enough info to proceed |
-| 4 | agentic_bug_step4_reproduce_LLM | Attempt to reproduce the bug |
-| 5 | agentic_bug_step5_root_cause_LLM | Analyze root cause |
-| 5.5 | agentic_bug_step5_5_prompt_classification_LLM | Classify defect as code bug vs prompt defect; auto-fix prompts if needed |
-| 6 | agentic_bug_step6_test_plan_LLM | Design test strategy |
-| 7 | agentic_bug_step7_generate_LLM | Generate failing unit test |
-| 8 | agentic_bug_step8_verify_LLM | Verify test catches the bug |
-| 9 | agentic_bug_step9_e2e_test_LLM | Generate and run E2E tests |
-| 10 | agentic_bug_step10_pr_LLM | Create draft PR and link to issue |
+| 4 | agentic_bug_step4_api_research_LLM | Research external API dependencies and constraints |
+| 5 | agentic_bug_step5_reproduce_LLM | Attempt to reproduce the bug |
+| 6 | agentic_bug_step6_root_cause_LLM | Analyze root cause |
+| 7 | agentic_bug_step7_prompt_classification_LLM | Classify defect as code bug vs prompt defect; auto-fix prompts if needed |
+| 8 | agentic_bug_step8_test_plan_LLM | Design test strategy |
+| 9 | agentic_bug_step9_generate_LLM | Generate failing unit test |
+| 10 | agentic_bug_step10_verify_LLM | Verify test catches the bug; classify E2E necessity |
+| 11 | agentic_bug_step11_e2e_test_LLM | Generate and run E2E tests (skipped if E2E_NEEDED: no) |
+| 12 | agentic_bug_step12_pr_LLM | Create draft PR and link to issue |
 
 % Context Accumulation
-Each step receives issue_content plus all prior step outputs (e.g., step3 gets step1_output, step2_output). Steps 9 and 10 also receive worktree_path and files_to_stage.
+Each step receives issue_content plus all prior step outputs (e.g., step3 gets step1_output, step2_output). Steps 11 and 12 also receive worktree_path and files_to_stage.
 
-% Step 7 Filesystem Fallback
-Before Step 7 runs, snapshot the current modified/untracked files via `_get_modified_and_untracked(current_cwd)`. After Step 7, if no `FILES_CREATED`/`FILES_MODIFIED` markers are found in the output, detect new or modified files on disk by diffing against the snapshot. This handles providers (e.g. Codex) that create files without emitting markers.
+% Step 9 Filesystem Fallback
+Before Step 9 runs, snapshot the current modified/untracked files via `_get_modified_and_untracked(current_cwd)`. After Step 9, if no `FILES_CREATED`/`FILES_MODIFIED` markers are found in the output, detect new or modified files on disk by diffing against the snapshot. This handles providers (e.g. Codex) that create files without emitting markers.
 
 Helper: `_get_modified_and_untracked(cwd: Path) -> List[str]` — returns modified tracked files (`git diff --name-only HEAD`) plus untracked files (`git ls-files --others --exclude-standard`).
 
@@ -91,25 +92,26 @@ The orchestrator must parse step output to detect stop conditions:
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
 | 3 | Needs more info from author | Output contains "Needs More Info" |
-| 5.5 | Prompt defect needs human review | Output contains "PROMPT_REVIEW:" marker |
-| 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output AND no new files detected on disk (filesystem fallback) |
-| 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
-| 8 | E2E not needed (skip Step 9) | Output contains "E2E_NEEDED: no" — skip Step 9 entirely, continue to Step 10 |
-| 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
-| 9 | E2E test skipped (non-failure) | Output contains "E2E_SKIP:" — continue to Step 10 normally |
+| 7 | Prompt defect needs human review | Output contains "PROMPT_REVIEW:" marker |
+| 9 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output AND no new files detected on disk (filesystem fallback) |
+| 10 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 10 | E2E not needed (skip Step 11) | Output contains "E2E_NEEDED: no" — skip Step 11 entirely, continue to Step 12 |
+| 11 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
+| 11 | E2E test skipped (non-failure) | Output contains "E2E_SKIP:" — continue to Step 12 normally |
 
-% Step 5.5 Special Handling
-After Step 5.5, parse output for:
-- `DEFECT_TYPE: code` - Normal code bug, proceed to Step 6
+% Step 7 Special Handling
+After Step 7, parse output for:
+- `DEFECT_TYPE: code` - Normal code bug, proceed to Step 8
 - `DEFECT_TYPE: prompt` - Prompt was defective, check for PROMPT_FIXED marker
 - `PROMPT_FIXED: path/to/file.prompt` - The prompt was auto-fixed; add to changed_files list
 - `PROMPT_REVIEW: reason` - Hard stop, prompt defect needs human review (ambiguous case)
 
-**E2E gate (Step 8 → Step 9):**
-- After Step 8 (verify), parse output for `E2E_NEEDED: no`
-- If found, skip Step 9 (E2E test) entirely — do not invoke the LLM, do not wait for timeout
-- If `E2E_NEEDED: yes` or the marker is missing (backward compatibility), run Step 9 as normal
-- Log a message when skipping: `"Skipping Step 9 (E2E): unit tests provide sufficient coverage"`
+**E2E gate (Step 10 → Step 11):**
+- After Step 10 (verify), parse output for `E2E_NEEDED: no`
+- If found, skip Step 11 (E2E test) entirely — do not invoke the LLM, do not wait for timeout
+- If `E2E_NEEDED: yes` or the marker is missing (backward compatibility), run Step 11 as normal
+- Log a message when skipping: `"Skipping Step 11 (E2E): unit tests provide sufficient coverage"`
+- Step 10's classification should ask: "Is there a user-facing behavior or integration path NOT already covered by the unit test?" Do NOT default to yes when in doubt — classify based on the evidence.
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
@@ -123,28 +125,36 @@ Track consecutive steps where the output contains "All agent providers failed". 
 
 % Git Worktree Isolation
 
-Before Step 5.5, create an isolated git worktree for prompt fixes, test generation, and PR creation. This prevents the workflow from disturbing the user's current branch.
+Before Step 7, create an isolated git worktree for prompt fixes, test generation, and PR creation. This prevents the workflow from disturbing the user's current branch.
 
-1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]`
+1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
+   - Resolve the main branch ref for use as worktree base
+   - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
+   - For each, run `git rev-parse --verify <ref>` — return the commit hash on success
+   - If none resolve, return the literal string `"HEAD"` as last resort
+   - This prevents worktrees from being based on the user's current feature branch
+
+2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
    - Branch name: `fix/issue-{issue_number}`
    - Clean up any existing worktree/directory at path before creating
    - If branch already exists, attempt to delete it first
      - If deletion fails and `resume_existing=True`: keep the branch as-is (preserving accumulated work)
-     - If deletion fails and `resume_existing=False`: attach with `--force`, then `git reset --hard` to main repo's HEAD for a clean re-run
+     - If deletion fails and `resume_existing=False`: attach with `--force`, then `git reset --hard` to `_resolve_main_ref(git_root)` for a clean re-run
+   - When creating a new branch: use `_resolve_main_ref(git_root)` as the base ref, NOT `HEAD` — this ensures the worktree is always based on main regardless of what branch the user is currently on
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
-2. In orchestrator loop, before Step 5.5:
+3. In orchestrator loop, before Step 7:
    - Only create worktree if not already set (from resume)
    - Warn if not on main/master branch
    - If worktree creation fails, return early with error
-   - Switch working directory to worktree path for Steps 5.5-10
+   - Switch working directory to worktree path for Steps 7-12
    - Add `worktree_path` to context dict
 
-3. Git helpers: `_get_git_root`, `_worktree_exists`, `_branch_exists`, `_remove_worktree`, `_delete_branch`
+4. Git helpers: `_get_git_root`, `_worktree_exists`, `_branch_exists`, `_remove_worktree`, `_delete_branch`
 
 % Console Output
-Provide real-time feedback: header with issue number/title, step progress markers (`[Step N/11]`), brief step results, hard stop messages, and final summary with cost/files/worktree. Use `quiet` to suppress all output except errors, `verbose` for full agentic task output.
+Provide real-time feedback: header with issue number/title, step progress markers (`[Step N/12]`), brief step results, hard stop messages, and final summary with cost/files/worktree. Use `quiet` to suppress all output except errors, `verbose` for full agentic task output.
 
 After each successful step, print a step completion marker: `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
 

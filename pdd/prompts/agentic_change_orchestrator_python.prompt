@@ -249,19 +249,26 @@ After Step 10 completes, sanitize architecture.json in the worktree:
 
 Before Step 9, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
 
-1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
+   - Resolve the main branch ref for use as worktree base
+   - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
+   - For each, run `git rev-parse --verify <ref>` — return the commit hash on success
+   - If none resolve, return the literal string `"HEAD"` as last resort
+   - This prevents worktrees from being based on the user's current feature branch
+
+2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/change-issue-{issue_number}/` relative to git root
    - Branch name: `change/issue-{issue_number}`
    - If worktree already exists at path, remove with `git worktree remove --force`
    - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
    - If branch already exists locally, attempt to delete with `git branch -D`
      - Check the return value from `_delete_branch(cwd, branch_name)` which returns `Tuple[bool, str]`
-     - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} HEAD`
+     - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
      - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add --force {path} {branch}` (without `-b` flag, `--force` required because git refuses to checkout a branch already in use by another worktree)
-   - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} HEAD`
+   - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
-2. In orchestrator loop, before Step 9:
+3. In orchestrator loop, before Step 9:
    - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
    - Call `_setup_worktree(cwd, issue_number, quiet)`
    - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
@@ -269,7 +276,7 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - Add `worktree_path` to context dict (for Steps 9-13 prompt formatting)
    - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
 
-3. Additional helper functions:
+4. Additional helper functions:
    - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
    - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
    - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`

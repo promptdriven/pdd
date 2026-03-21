@@ -126,6 +126,24 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def _resolve_main_ref(git_root: Path) -> str:
+    """Resolve the main branch ref for use as worktree base.
+
+    Returns a commit hash when a named ref is found, or the literal
+    string "HEAD" as a last resort.  Checks origin/main, origin/master,
+    main, master (in that order).
+    """
+    for ref in ("origin/main", "origin/master", "main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            cwd=git_root, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    # Last resort — current HEAD
+    return "HEAD"
+
+
 def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
@@ -172,7 +190,10 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
             # Branch exists (resume or undeletable) — use --force
             cmd = ["git", "worktree", "add", "--force", str(worktree_path), branch_name]
         else:
-            cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"]
+            # Resolve main branch as base — avoids leaking unrelated commits
+            # when user runs pdd bug from a non-main branch.
+            base_ref = _resolve_main_ref(git_root)
+            cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref]
         subprocess.run(
             cmd,
             cwd=git_root,
@@ -181,13 +202,9 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: 
         )
         # Reset branch to main HEAD if we reused an undeletable branch
         if reset_after_attach:
-            main_head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=git_root,
-                capture_output=True, text=True, check=True,
-            ).stdout.strip()
+            main_ref = _resolve_main_ref(git_root)
             subprocess.run(
-                ["git", "reset", "--hard", main_head],
+                ["git", "reset", "--hard", main_ref],
                 cwd=worktree_path,
                 capture_output=True,
                 check=True,
@@ -672,7 +689,7 @@ def run_agentic_bug_orchestrator(
         # Skip E2E if flagged
         if step_num == 11 and skip_e2e:
             if not quiet:
-                console.print("Skipping Step 9 (E2E): unit tests provide sufficient coverage")
+                console.print("Skipping Step 11 (E2E): unit tests provide sufficient coverage")
             continue
 
         # Record progress so KeyboardInterrupt can report how far we got.

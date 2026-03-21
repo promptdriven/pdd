@@ -242,6 +242,23 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
     except subprocess.CalledProcessError as e:
         return False, str(e)
 
+def _resolve_main_ref(git_root: Path) -> str:
+    """Resolve the main branch ref for use as worktree base.
+
+    Returns a commit hash when a named ref is found, or the literal
+    string "HEAD" as a last resort.  Checks origin/main, origin/master,
+    main, master (in that order).
+    """
+    for ref in ("origin/main", "origin/master", "main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", ref],
+            cwd=git_root, capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    return "HEAD"
+
+
 def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
     """
     Create an isolated git worktree for the issue.
@@ -287,9 +304,10 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
                 cwd=git_root, capture_output=True, check=True
             )
         else:
-            # Branch was deleted or didn't exist — create new
+            # Branch was deleted or didn't exist — create new from main
+            base_ref = _resolve_main_ref(git_root)
             subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), "HEAD"],
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
                 cwd=git_root, capture_output=True, check=True
             )
         if not quiet:

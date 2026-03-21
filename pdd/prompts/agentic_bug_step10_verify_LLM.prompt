@@ -81,10 +81,11 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
 
 5. **Classify E2E test necessity**
-   Determine whether an E2E test (Step 11) is needed beyond the unit test:
-   - Output `E2E_NEEDED: yes` if the bug affects cross-component integration, user-facing workflows, or external interfaces (CLI, API, UI)
-   - Output `E2E_NEEDED: no` if the bug is purely internal (logic error, off-by-one, state management) and the unit test already provides full behavioral coverage
-   - When in doubt, default to `E2E_NEEDED: yes`
+   Determine whether an E2E test would add value beyond the unit test created in Step 9.
+   - Answer: "Is there a user-facing behavior or integration path NOT already covered by the unit test?"
+   - Output `E2E_NEEDED: yes` if the bug has user-facing symptoms (CLI output, API response, UI behavior) that the unit test cannot verify because it mocks the integration boundary.
+   - Output `E2E_NEEDED: no` if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path.
+   - Include a one-line justification after the marker (e.g., `E2E_NEEDED: no — unit test covers the full code path from input to output with no mocked boundaries`).
 
 6. **Summarize the investigation**
    - Recap the bug, root cause, and test created
@@ -133,8 +134,7 @@ Your comment should follow this format:
 - **Test File:** `{{test_file_path}}`
 
 ### E2E Classification
-E2E_NEEDED: [yes|no]
-**Reason:** [Brief explanation of why E2E is or isn't needed]
+E2E_NEEDED: [yes|no] — [one-line justification]
 
 ### Next Steps
 1. Fix the bug at the identified location
@@ -154,6 +154,7 @@ E2E_NEEDED: [yes|no]
 - The comment should serve as documentation for anyone fixing the bug
 - Always post your findings as a GitHub comment before completing
 - **MANDATORY E2E CLASSIFICATION:** Your GitHub comment MUST include the "### E2E Classification" section with exactly one of:
-  - `E2E_NEEDED: yes` — if the bug crosses module boundaries, affects CLI/API/UI, or involves integration paths
-  - `E2E_NEEDED: no` — if the bug is purely internal (logic error, off-by-one, state management in a single function) and unit tests already cover the behavior
+  - `E2E_NEEDED: yes — [justification]` — if the bug has user-facing symptoms that the unit test cannot verify because it mocks the integration boundary
+  - `E2E_NEEDED: no — [justification]` — if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path
   The orchestrator parses this marker to decide whether to run Step 11. If you omit it, Step 11 runs unconditionally (wasting time and cost). This line MUST appear exactly as shown — on its own line, starting with `E2E_NEEDED:`.
+- **CRITICAL — ECHO MARKER IN FINAL OUTPUT:** After posting the GitHub comment, your very last output line MUST repeat the `E2E_NEEDED:` marker verbatim (e.g., `E2E_NEEDED: no — unit test covers full path`). The orchestrator parses YOUR OUTPUT, not the GitHub comment. If you only include the marker in the GitHub comment but not in your final output, the gate will not work and Step 11 will run unnecessarily.
