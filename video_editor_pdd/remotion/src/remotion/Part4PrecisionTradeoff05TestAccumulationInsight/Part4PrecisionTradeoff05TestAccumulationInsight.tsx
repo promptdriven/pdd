@@ -49,13 +49,13 @@ export const Part4PrecisionTradeoff05TestAccumulationInsight: React.FC = () => {
   );
 
   // Arrow Y position (roughly midway in the stages area)
-  const arrowY = 340;
+  const arrowY = 350;
 
-  // Arrow X positions: from right edge of one column to left edge of next
-  const arrow1FromX = COLUMN_X[0] + 80;
-  const arrow1ToX = COLUMN_X[1] - 80;
-  const arrow2FromX = COLUMN_X[1] + 80;
-  const arrow2ToX = COLUMN_X[2] - 80;
+  // Arrow X positions: span the gap between column edges (spec positions)
+  const arrow1FromX = 470;
+  const arrow1ToX = 650;
+  const arrow2FromX = 1020;
+  const arrow2ToX = 1200;
 
   return (
     <AbsoluteFill

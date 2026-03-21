@@ -146,3 +146,12 @@ Segment: `part4_precision_tradeoff_001`
 ```
 
 ---
+
+<!-- ANNOTATION_UPDATE_START: 844c64b8-7df5-4e24-921f-7570060205f2 -->
+## Annotation Update
+Requested change: All required elements are present and the animation phase (Frame 260-300) is correct — all three stages visible, timeline filling, callout text shown. However, the three stage columns are clustered in the left ~65% of the canvas rather than distributed evenly across the full width. The spec places columns at approximately x: 160, 710, and 1260 (spanning the full 1920px width with even spacing). The render places them at roughly x: 120, 540, and 955, compressing them into less than two-thirds of 
+Technical assessment: The three stage columns (DAY 1, MONTH 1, MONTH 6) are horizontally compressed into the left ~65% of the 1920px canvas. The spec defines column x-positions at 160, 710, and 1260 (evenly spanning the full width with ~550px spacing), but the render places them at approximately x:120, 540, and 955 (~415px spacing). This compresses the three-column layout into less than two-thirds of the frame, leaving ~900px of empty space on the right side. The timeline bar at the bottom extends further right than the columns, creating a visible misalignment. All content elements (headers, prompt documents, molds, labels, arrows, callout text) are present and correct — only the horizontal distribution is wrong. This is a Remotion layout issue with the StageColumn x-position props.
+- Update the StageColumn x prop values to match the spec: Stage 1 x=160, Stage 2 x=710, Stage 3 x=1260
+- Adjust the connecting arrow endpoints accordingly: Arrow 1→2 from ~(470,350) to ~(650,350), Arrow 2→3 from ~(1020,350) to ~(1200,350)
+- Verify the timeline bar markers align with the updated column x-positions at 160, 710, and 1260
+<!-- ANNOTATION_UPDATE_END: 844c64b8-7df5-4e24-921f-7570060205f2 -->

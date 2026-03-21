@@ -2,7 +2,7 @@ import React from 'react';
 import { interpolate, useCurrentFrame, Easing } from 'remotion';
 import PromptDocument from './PromptDocument';
 import MoldCrossSection from './MoldCrossSection';
-import { PROMPT_DOC_WIDTH, MOLD_WIDTH, MOLD_HEIGHT, type StageData } from './constants';
+import { PROMPT_DOC_WIDTH, MOLD_WIDTH, MOLD_HEIGHT, COLUMN_WIDTH, type StageData } from './constants';
 
 interface StageColumnProps {
   stage: StageData;
@@ -46,13 +46,18 @@ const StageColumn: React.FC<StageColumnProps> = ({
   const moldY = promptY + stage.promptHeight + 25;
   const labelY = moldY + MOLD_HEIGHT + 15;
 
+  // Use the full spec column width (500px) for proper distribution
+  const colLeft = centerX - COLUMN_WIDTH / 2;
+  const docOffsetX = (COLUMN_WIDTH - PROMPT_DOC_WIDTH) / 2;
+  const moldOffsetX = (COLUMN_WIDTH - MOLD_WIDTH) / 2;
+
   return (
     <div
       style={{
         position: 'absolute',
-        left: centerX - PROMPT_DOC_WIDTH / 2 - 60,
+        left: colLeft,
         top: 0,
-        width: PROMPT_DOC_WIDTH + 120,
+        width: COLUMN_WIDTH,
         height: 600,
         opacity: fadeIn,
         transform: `translateY(${slideY}px)`,
@@ -81,8 +86,7 @@ const StageColumn: React.FC<StageColumnProps> = ({
         style={{
           position: 'absolute',
           top: promptY,
-          left: '50%',
-          transform: 'translateX(-50%)',
+          left: docOffsetX,
         }}
       >
         <PromptDocument
@@ -101,8 +105,7 @@ const StageColumn: React.FC<StageColumnProps> = ({
         style={{
           position: 'absolute',
           top: moldY,
-          left: '50%',
-          transform: 'translateX(-50%)',
+          left: moldOffsetX,
         }}
       >
         <MoldCrossSection
