@@ -1,0 +1,109 @@
+<pdd-reason>DAG workflow engine with conditional branching, saga rollback, result memoization, and priority-ordered execution.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "WorkflowEngine.add_task", "signature": "(name: str, handler: Callable[..., Any], *, priority: int = 5, dependencies: list[str] | None = None, compensate: Callable[..., Any] | None = None, condition: Callable[[dict[str, Any]], bool] | None = None) -> WorkflowTask", "returns": "WorkflowTask"},
+      {"name": "WorkflowEngine.execute", "signature": "() -> ExecutionResult", "returns": "ExecutionResult"},
+      {"name": "WorkflowEngine.reset", "signature": "() -> None", "returns": "None"},
+      {"name": "WorkflowEngine.get_execution_plan", "signature": "() -> list[str]", "returns": "list[str]"}
+    ],
+    "dataclasses": [
+      {"name": "WorkflowTask", "fields": ["name: str", "handler: Callable", "priority: int", "dependencies: list[str]", "compensate: Callable | None", "condition: Callable | None", "status: TaskStatus", "result: Any", "error: str | None"]},
+      {"name": "ExecutionResult", "fields": ["completed: list[str]", "skipped: list[str]", "failed_task: str | None", "rolled_back: list[str]", "results: dict[str, Any]", "success: bool"]}
+    ],
+    "enums": [
+      {"name": "TaskStatus", "values": ["PENDING", "READY", "RUNNING", "COMPLETED", "SKIPPED", "FAILED", "ROLLED_BACK"]}
+    ],
+    "exceptions": [
+      {"name": "CycleError", "base": "ValueError"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write a standalone DAG-based workflow execution engine.
+
+% Role & Scope
+The `workflow_engine` module provides a directed acyclic graph (DAG) workflow engine
+for orchestrating multi-step processes. Tasks declare dependencies, optional conditions
+for conditional execution, and optional compensation handlers for rollback. The engine
+resolves execution order via topological sort, respects priority ordering, supports
+conditional branch skipping, memoizes results across runs, and performs saga-pattern
+rollback on failure. Used as a general-purpose workflow primitive.
+
+% Requirements
+
+1. Enum `TaskStatus` with values: PENDING, READY, RUNNING, COMPLETED, SKIPPED, FAILED,
+   ROLLED_BACK. Tasks begin as PENDING.
+
+2. Dataclass `WorkflowTask` with fields: name (str), handler (Callable), priority (int,
+   0=highest, 10=lowest, default 5), dependencies (list[str], default empty),
+   compensate (Callable or None, default None), condition (Callable or None, default
+   None), status (TaskStatus, default PENDING), result (Any, default None),
+   error (str or None, default None). Tasks must be comparable: primary sort by priority
+   (lower number = higher priority), tiebreak by name (alphabetical).
+
+3. Dataclass `ExecutionResult` with fields: completed (list[str]), skipped (list[str]),
+   failed_task (str or None), rolled_back (list[str]), results (dict mapping task name
+   to its handler's return value), success (bool — True if no task failed).
+
+4. `WorkflowEngine` class. Constructor takes no arguments. Maintains an internal task
+   registry (dict keyed by name), an adjacency list for the DAG, an in-degree map, and
+   a result cache for memoization.
+
+5. `add_task(name, handler, *, priority=5, dependencies=None, compensate=None,
+   condition=None) -> WorkflowTask` — registers a task. Raises ValueError if name
+   already exists or priority is not 0-10. Stores the task and updates the DAG edges.
+
+6. `get_execution_plan() -> list[str]` — returns task names in topological order using
+   Kahn's algorithm. Within each topological level, tasks are ordered by priority
+   (lowest number first), then by name (alphabetical). Raises `CycleError(ValueError)`
+   if circular dependencies exist (detected when output has fewer items than task count).
+   This method must NOT mutate any engine state — it must work on a copy of the
+   in-degree map so the engine remains usable after calling it, including calling
+   get_execution_plan() multiple times in a row with consistent results.
+
+7. `execute() -> ExecutionResult` — the main execution method:
+   a. Run cycle detection (via get_execution_plan).
+   b. Recompute fresh in-degrees for execution.
+   c. Use a min-heap keyed by (priority, name) to always execute the highest-priority
+      ready task next.
+   d. For each ready task, if it has a `condition` callable, call it with a dict of all
+      completed task results so far. If the condition returns False, skip the task AND
+      propagate the skip to all transitive dependents in the DAG. For each skipped task,
+      decrement in-degrees of its dependents so tasks outside the skipped branch can
+      still become ready.
+   e. For non-skipped tasks: call `handler(inputs)` where inputs is a dict mapping each
+      dependency name to its result. Tasks with no dependencies receive an empty dict.
+   f. On success: mark COMPLETED, store result, update dependent in-degrees.
+   g. On handler exception: mark FAILED, trigger rollback, stop execution.
+
+8. Saga-pattern rollback: when a task fails, collect all COMPLETED tasks in execution
+   order, REVERSE that list, and call each task's `compensate(result)` handler (if
+   present) in that reversed order. The reversal must be of the actual execution order
+   (the sequence in which tasks completed), NOT alphabetical or any other ordering.
+   Mark rolled-back tasks as ROLLED_BACK. If a compensate handler raises, store the
+   error but continue rolling back remaining tasks.
+
+9. Result memoization: cache handler results keyed on (task_name, inputs_content_hash).
+   The hash must be computed from the actual content of the inputs dict using
+   deterministic serialization (e.g., sorted JSON). Do NOT use object identity (id())
+   or memory-address-based hashing. On cache hit, return the cached value without
+   re-executing the handler. Cache persists across reset() calls. This means if
+   execute() is called, then reset(), then execute() again with the same DAG, the
+   second run should use cached results for tasks whose inputs haven't changed.
+
+10. `reset() -> None` — resets all task statuses to PENDING, clears results and errors,
+    and recomputes in-degrees. Does NOT clear the result cache.
+
+11. Thread-safety is NOT required. All operations are single-threaded.
+
+% Dependencies
+Standard library only: `enum`, `dataclasses`, `heapq`, `json`, `hashlib`, `typing`.
+
+% Deliverables
+- Module at `pdd/workflow_engine.py` exporting `WorkflowEngine`, `WorkflowTask`,
+  `TaskStatus`, `ExecutionResult`, `CycleError`.
