@@ -388,6 +388,11 @@ Instructions:
 - For [veo:] specs, use **Tool:** Veo (cinematic B-roll) or **Tool:** Veo.
 - For [title:] specs, use **Tool:** Title.
 - For [split:] specs, use **Tool:** Split.
+- IMPORTANT: A [split:] layout often spans multiple consecutive script beats — e.g., the script may
+  show a split screen, then describe actions in each panel, then "zoom out" while the split persists.
+  The [split:] spec's **Timestamp:** must cover ALL consecutive beats that share the same layout.
+  End the split only when the script explicitly breaks the layout (e.g., "Hard cut to..." or a
+  completely new scene). Do NOT create a separate [split:] for each beat within the same layout.
 - IMPORTANT: If a [split:] or other composition spec embeds Veo video clips (e.g., a split-screen
   showing live-action footage in each panel), you MUST also generate separate companion [veo:] spec
   files for EACH embedded clip. The Veo generation pipeline only discovers standalone [veo:] specs —

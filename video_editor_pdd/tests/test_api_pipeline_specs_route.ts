@@ -978,3 +978,27 @@ describe("specs executor — word timestamp injection", () => {
     expect(prompt).not.toContain("Total audio duration");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 11. Split-screen persistence instruction in prompt
+// ---------------------------------------------------------------------------
+
+describe("specs executor — split-screen layout persistence", () => {
+  it("prompt instructs that split-screen layouts span multiple narrative beats", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    // The prompt must tell Claude that a [split:] spec's timestamp should cover
+    // all consecutive script beats that use the same layout, not just the first.
+    expect(prompt).toMatch(/split.*screen.*span|split.*persist|split.*cover.*consecutive|split.*multiple.*beat/i);
+  });
+
+  it("prompt instructs split timestamp should end where the script breaks the layout", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toMatch(/hard cut|layout.*break|split.*end.*when/i);
+  });
+});
