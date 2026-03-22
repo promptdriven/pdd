@@ -1,65 +1,93 @@
 [Remotion]
 
-# Section 0.5: Code Regeneration
+# Section 0.4b: Code Regeneration Hold — The Cursor Blinks
 
 **Tool:** Remotion
-**Duration:** ~2s
+**Duration:** ~1.5s (45 frames @ 30fps)
 **Timestamp:** 0:16 - 0:17
 
 ## Visual Description
-The patched code from the previous scene is still on screen. Then — the entire function body selects (a highlight wash sweeps down the lines), and in one swift motion the code deletes. A brief empty beat (200ms). Then new, clean code streams in line-by-line from the top — same function signature, but the implementation is clean: consistent style, no patch comments, proper naming, elegant structure. Each line appears with a faint cyan glow (#00D9FF15) that fades after 200ms, suggesting the code is being generated, not written. In the bottom-left corner, a small terminal prompt shows `$ pdd generate` with a green checkmark appearing at the end.
+
+A brief hold on the freshly regenerated code from the previous spec. The clean function sits on screen — no hack comments, no workarounds, consistent structure. The cursor blinks at the end of the last line. The terminal snippet in the corner still shows `pdd generate ✓`.
+
+This is the contemplative beat before the rhetorical question. The viewer sees the clean code and is meant to think: "Wait — that's all it took?" The visual silence does the work.
+
+Then the code begins to fade and soften, creating a transition bed for the title card that follows.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #1E1E1E (VS Code dark)
-- Line gutter: #2D2D2D, 48px wide
+- Background: `#0D1117` (dark IDE background)
+- Continuity from previous spec — same code, same layout
 
 ### Chart/Visual Elements
-- **Selection highlight:** #264F7840 sweeping top-to-bottom across existing code
-- **Clean code lines:** same syntax highlighting as previous spec, but no red comments
-- **Generation glow:** per-line #00D9FF15 background highlight, fades over 200ms
-- **Terminal overlay (bottom-left):** 320x40px, background #0D1117, border-radius 6px
-  - Text: `$ pdd generate` in #E6EDF3, `JetBrains Mono` 12px
-  - Green checkmark: #3FB950, appears after code finishes streaming
+
+#### Clean Code (held from previous spec)
+- Same JetBrains Mono, 13px layout at x: 80, y: 120
+- All 25 lines of clean regenerated code visible
+- Syntax highlighting active (purple keywords, green strings, blue variables)
+- No hack comments — the contrast with the previous version is the point
+- Cursor: blinking `|` at end of last line, `#E2E8F0` at 0.8, 500ms cycle
+
+#### Terminal Snippet (held from previous spec)
+- Position: bottom-right, x: 1500, y: 980
+- `$ pdd generate ✓` — still visible, `#5AAA6E` checkmark
+
+#### Fade-to-Background Transition
+- Starting at frame 30: entire code view fades to 50% opacity
+- Background subtly brightens from `#0D1117` to `#111827`
+- Code becomes a backdrop for the incoming title card
 
 ### Animation Sequence
-1. **Frame 0-8 (0-0.27s):** Selection highlight sweeps down all code lines (top → bottom, 30ms per line)
-2. **Frame 8-12 (0.27-0.4s):** Selected code deletes instantly — lines vanish, leaving empty editor
-3. **Frame 12-15 (0.4-0.5s):** Empty beat — just the editor background and line numbers
-4. **Frame 15-45 (0.5-1.5s):** Clean code streams in line-by-line from top. Each line appears with cyan glow that fades. ~2 lines per frame for rapid generation feel.
-5. **Frame 45-50 (1.5-1.67s):** Terminal overlay fades in with `$ pdd generate`, green checkmark appears
+1. **Frame 0-30 (0-1s):** Hold on clean code. Cursor blinks. Terminal snippet visible. Visual silence — let the viewer absorb the before/after.
+2. **Frame 30-45 (1-1.5s):** Code and terminal begin fading to 50% opacity. Background subtly brightens. Preparing transition bed for title card.
 
 ### Typography
-- Code: `JetBrains Mono`, 14px, line-height 1.6
-- Terminal: `JetBrains Mono`, 12px, #E6EDF3
+- Code: JetBrains Mono, 13px (held from previous spec)
+- Terminal: JetBrains Mono, 10px (held from previous spec)
 
 ### Easing
-- Selection sweep: `linear` (constant speed down lines)
-- Code stream-in: `easeOutQuad` per line (each line decelerates into place)
-- Glow fade: `easeOutExpo`
-- Terminal fade-in: `easeOutCubic`
+- Code fade: `easeIn(quad)` over 15 frames
+- Background brighten: `easeIn(quad)` over 15 frames
 
 ## Narration Sync
 > "So why are we still patching?"
 
+Segment: `cold_open_006`
+
+- **16.02s** ("So why are we"): Clean code holds — the question is visual
+- **17.00s** ("still patching?"): Code begins to fade, making way for title
+
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={50}>
-  <AbsoluteFill style={{ background: '#1E1E1E' }}>
-    <Sequence from={0} durationInFrames={8}>
-      <SelectionSweep lines={codeLines} />
-    </Sequence>
-    <Sequence from={8} durationInFrames={4}>
-      <EmptyEditor />
-    </Sequence>
-    <Sequence from={15} durationInFrames={30}>
-      <CodeStreamIn lines={cleanCodeLines} glowColor="#00D9FF15" linesPerFrame={2} />
-    </Sequence>
-    <Sequence from={45} durationInFrames={5}>
-      <TerminalOverlay command="pdd generate" showCheck={true} />
-    </Sequence>
+<Sequence from={0} durationInFrames={45}>
+  <AbsoluteFill>
+    {/* Background with brightening transition */}
+    <AnimatedBackground
+      from="#0D1117" to="#111827"
+      startFrame={30} duration={15}
+    />
+
+    {/* Clean code hold — fades at end */}
+    <FadeOut startFrame={30} duration={15} toOpacity={0.5}>
+      <CodeBlock
+        code={CLEAN_REGENERATED_CODE}
+        font="JetBrains Mono" size={13}
+        x={80} y={120}
+        lineNumbers
+        cursor={{ line: 25, blink: true, interval: 500 }}
+      />
+    </FadeOut>
+
+    {/* Terminal snippet — also fades */}
+    <FadeOut startFrame={30} duration={15} toOpacity={0.5}>
+      <TerminalSnippet
+        command="pdd generate"
+        status="success"
+        x={1500} y={980}
+      />
+    </FadeOut>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -67,13 +95,20 @@ The patched code from the previous scene is still on screen. Then — the entire
 ## Data Points JSON
 ```json
 {
-  "type": "code_regeneration",
-  "language": "typescript",
-  "theme": "vscode_dark",
-  "patchedLineCount": 23,
-  "cleanLineCount": 16,
-  "generationGlow": "#00D9FF15",
-  "terminalCommand": "pdd generate",
-  "streamRate": "2_lines_per_frame"
+  "type": "code_hold",
+  "content": "clean_regenerated_code",
+  "cursor": { "blinking": true, "position": "end_of_last_line" },
+  "transition": {
+    "type": "fade_to_background",
+    "codeOpacity": { "from": 1.0, "to": 0.5 },
+    "backgroundColor": { "from": "#0D1117", "to": "#111827" }
+  },
+  "terminalSnippet": {
+    "command": "pdd generate",
+    "status": "success"
+  },
+  "narrationSegments": ["cold_open_006"]
 }
 ```
+
+---
