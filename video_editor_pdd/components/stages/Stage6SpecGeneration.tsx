@@ -581,13 +581,13 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                       {saving && <div className="text-xs text-slate-400">Saving…</div>}
                                     </div>
                                   </div>
-                                  <div className="grid gap-3 xl:grid-cols-3">
-                                    <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60">
+                                  <div className="grid max-h-[500px] gap-3 xl:grid-cols-3 items-stretch">
+                                    <div className="flex min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60">
                                       <div className="border-b border-slate-700 px-3 py-2">
                                         <div className="text-sm font-medium text-slate-100">Script Context</div>
                                         <div className="text-xs text-slate-400">{selectedScriptHeading}</div>
                                       </div>
-                                      <div className="space-y-3 p-3">
+                                      <div className="flex min-h-0 flex-1 flex-col space-y-3 p-3">
                                         <div className="text-xs text-slate-400">
                                           Highlighted lines come from the spec&apos;s Narration Sync quote.
                                         </div>
@@ -609,7 +609,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                           </div>
                                         )}
 
-                                        <div className="max-h-[320px] space-y-1 overflow-y-auto">
+                                        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
                                           {scriptLoading && (
                                             <div className="text-sm text-slate-400">Loading script…</div>
                                           )}
@@ -656,14 +656,14 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                       </div>
                                     </div>
 
-                                    <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60">
+                                    <div className="flex min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60">
                                       <div className="border-b border-slate-700 px-3 py-2">
                                         <div className="text-sm font-medium text-slate-100">Audio Sync Timing</div>
                                         <div className="text-xs text-slate-400">
                                           {selectedSection?.label ?? 'No section selected'}
                                         </div>
                                       </div>
-                                      <div className="space-y-3 p-3">
+                                      <div className="flex min-h-0 flex-1 flex-col space-y-3 p-3">
                                         <div className="text-xs text-slate-400">
                                           Stage 5 word timestamps for this section. Words matching the current Narration Sync quote are highlighted.
                                         </div>
@@ -692,7 +692,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                           </div>
                                         ) : null}
 
-                                        <div className="max-h-[320px] space-y-1 overflow-y-auto">
+                                        <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
                                           {timingLoading && (
                                             <div className="text-sm text-slate-400">Loading audio sync timing…</div>
                                           )}
@@ -744,7 +744,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                       </div>
                                     </div>
 
-                                    <div className="min-w-0 rounded border border-slate-700 bg-slate-900/60 p-3">
+                                    <div className="flex min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60 p-3">
                                       <div className="mb-2 text-sm font-medium text-slate-100">Visual Spec</div>
                                       {editorMode === 'edit' ? (
                                         <CodeMirror
@@ -757,7 +757,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                           theme="dark"
                                         />
                                       ) : (
-                                        <div className="max-h-[320px] overflow-y-auto rounded border border-slate-700 bg-slate-950 p-4">
+                                        <div className="min-h-0 flex-1 overflow-y-auto rounded border border-slate-700 bg-slate-950 p-4">
                                           <MarkdownPreview content={editorValue} />
                                         </div>
                                       )}
