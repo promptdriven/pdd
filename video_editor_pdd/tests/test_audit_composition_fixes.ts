@@ -273,3 +273,33 @@ describe("Batch resolve concurrency control", () => {
     expect(source).toMatch(/maxParallelResolves|activeResolveCount|resolveSemaphore|RESOLVE_CONCURRENCY/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 10. VideoPlayer must handle already-loaded video metadata
+// ---------------------------------------------------------------------------
+
+describe("VideoPlayer duration initialization", () => {
+  const filePath = path.join(
+    __dirname,
+    "..",
+    "components",
+    "VideoPlayer.tsx"
+  );
+  let source: string;
+
+  beforeAll(() => {
+    source = fs.readFileSync(filePath, "utf-8");
+  });
+
+  it("sets duration immediately if video metadata is already loaded, not just on event", () => {
+    // If the video is cached, loadedmetadata fires before the effect subscribes.
+    // The effect must check if metadata is already available and set duration
+    // immediately, outside the event listener callback.
+    const effectBody = source.slice(
+      source.indexOf("Sync time/duration"),
+      source.indexOf("Sync time/duration") + 600
+    );
+    // Must have a direct readyState check outside the event listener
+    expect(effectBody).toMatch(/if\s*\(.*readyState/);
+  });
+});

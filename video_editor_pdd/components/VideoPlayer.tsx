@@ -495,6 +495,11 @@ export default function VideoPlayer({
       onTimeChange?.(videoEl.currentTime);
     };
 
+    // If metadata is already loaded (e.g. cached video), set duration immediately
+    if (videoEl.readyState >= 1 && videoEl.duration > 0) {
+      setDuration(videoEl.duration);
+    }
+
     videoEl.addEventListener('loadedmetadata', onLoaded);
     videoEl.addEventListener('timeupdate', onTime);
     return () => {
