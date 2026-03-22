@@ -6641,3 +6641,291 @@ def test_validate_imports_dunder_all_augassign_pattern(tmp_path):
     unresolved = _validate_python_imports(code)
     # extra_func is in __all__ (via +=), so it should NOT be flagged
     assert len(unresolved) == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #899: Non-Python agentic test must use real test execution,
+# not synthetic RunReport (which hardcodes tests_failed=0 and makes
+# the 'fix' operation unreachable via sync_determine_operation).
+# ---------------------------------------------------------------------------
+
+
+def test_non_python_agentic_test_runs_real_tests_not_synthetic(orchestration_fixture):
+    """
+    Bug #899: For non-Python languages (Go) in agentic mode, after
+    agentic_success=True from cmd_test_main, sync should run
+    _execute_tests_and_create_run_report (real tests) instead of
+    _create_synthetic_run_report_for_agentic_success (hardcoded tests_failed=0).
+
+    On buggy code, line 2157 routes all non-Python languages to the synthetic
+    path, masking real test failures and making 'fix' unreachable.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_get_paths = mocks['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up Go files
+    (tmp_path / "prompts" / "calculator_go.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.go").write_text("package calc")
+    (tmp_path / "tests" / "test_calculator_test.go").write_text("package calc")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_go.prompt',
+        'code': tmp_path / 'src' / 'calculator.go',
+        'example': tmp_path / 'examples' / 'calculator_example.go',
+        'test': tmp_path / 'tests' / 'test_calculator_test.go',
+    }
+
+    # cmd_test_main returns agentic_success=True (4th element of tuple)
+    def mock_test_agentic(*args, **kwargs):
+        test_file = tmp_path / "tests" / "test_calculator_test.go"
+        test_file.write_text("package calc\n// generated tests")
+        return ("test_code", 0.06, "mock-model", True)
+
+    mock_test.side_effect = mock_test_agentic
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests, \
+         patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic:
+        sync_orchestration(basename="calculator", language="go", no_steer=True)
+
+        # For Go: should run real tests, NOT create synthetic report
+        mock_exec_tests.assert_called_once()
+        mock_synthetic.assert_not_called()
+
+
+def test_typescript_agentic_test_runs_real_tests_not_synthetic(orchestration_fixture):
+    """
+    Bug #899: TypeScript is excluded from the synthetic path for test_extend
+    (line 2203) but NOT for the test operation (line 2157). This means
+    TypeScript's test operation also creates a synthetic report with
+    tests_failed=0, making 'fix' unreachable.
+
+    On buggy code, the guard at line 2157 is `language.lower() != 'python'`,
+    which includes TypeScript in the synthetic path.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_get_paths = mocks['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up TypeScript files
+    (tmp_path / "prompts" / "calculator_typescript.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.ts").write_text("export function add(a: number, b: number) { return a + b; }")
+    (tmp_path / "tests" / "test_calculator.ts").write_text("import { add } from '../src/calculator';")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_typescript.prompt',
+        'code': tmp_path / 'src' / 'calculator.ts',
+        'example': tmp_path / 'examples' / 'calculator_example.ts',
+        'test': tmp_path / 'tests' / 'test_calculator.ts',
+    }
+
+    # cmd_test_main returns agentic_success=True (4th element of tuple)
+    def mock_test_agentic(*args, **kwargs):
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.write_text("import { add } from '../src/calculator';\n// generated tests")
+        return ("test_code", 0.06, "mock-model", True)
+
+    mock_test.side_effect = mock_test_agentic
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests, \
+         patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success') as mock_synthetic:
+        sync_orchestration(basename="calculator", language="typescript", no_steer=True)
+
+        # For TypeScript test op: should run real tests, NOT create synthetic report
+        mock_exec_tests.assert_called_once()
+        mock_synthetic.assert_not_called()
+
+
+def test_non_python_agentic_test_with_failures_persists_real_count(orchestration_fixture):
+    """
+    Bug #899: When a non-Python language (Go) generates tests via agentic mode
+    and tests have real failures, the run report persisted to disk must contain
+    tests_failed > 0. This is the prerequisite for sync_determine_operation to
+    recommend the 'fix' operation.
+
+    On buggy code: _create_synthetic_run_report_for_agentic_success hardcodes
+    tests_failed=0 in the persisted report, making 'fix' permanently unreachable.
+
+    On fixed code: _execute_tests_and_create_run_report captures real results,
+    allowing tests_failed > 0 to propagate.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_get_paths = mocks['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    # Set up Go files
+    (tmp_path / "prompts" / "calculator_go.prompt").write_text("Create a calculator.")
+    (tmp_path / "src" / "calculator.go").write_text("package calc")
+    (tmp_path / "tests" / "test_calculator_test.go").write_text("package calc")
+
+    mock_get_paths.return_value = {
+        'prompt': tmp_path / 'prompts' / 'calculator_go.prompt',
+        'code': tmp_path / 'src' / 'calculator.go',
+        'example': tmp_path / 'examples' / 'calculator_example.go',
+        'test': tmp_path / 'tests' / 'test_calculator_test.go',
+    }
+
+    # cmd_test_main returns agentic_success=True (4th element of tuple)
+    def mock_test_agentic(*args, **kwargs):
+        test_file = tmp_path / "tests" / "test_calculator_test.go"
+        test_file.write_text("package calc\n// tests with some failures")
+        return ("test_code", 0.06, "mock-model", True)
+
+    mock_test.side_effect = mock_test_agentic
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Mock _create_synthetic_run_report_for_agentic_success to write tests_failed=0
+    # (matching the real buggy behavior)
+    def synthetic_side_effect(test_file, basename, language, *, atomic_state=None):
+        report_file = Path('.pdd') / 'meta' / f'{basename}_{language.lower()}_run.json'
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(json.dumps({
+            'timestamp': '2024-01-01T00:00:00+00:00',
+            'exit_code': 0,
+            'tests_passed': 1,
+            'tests_failed': 0,
+            'coverage': 0.0,
+            'test_hash': 'synthetic',
+        }))
+
+    # Mock _execute_tests_and_create_run_report to write tests_failed=3
+    # (matching what real test execution would produce when tests fail)
+    def execute_side_effect(test_file, basename, language, target_coverage=90.0,
+                            *, code_file=None, atomic_state=None, test_files=None):
+        report_file = Path('.pdd') / 'meta' / f'{basename}_{language.lower()}_run.json'
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(json.dumps({
+            'timestamp': '2024-01-01T00:00:00+00:00',
+            'exit_code': 1,
+            'tests_passed': 5,
+            'tests_failed': 3,
+            'coverage': 45.0,
+            'test_hash': 'real_test_hash',
+        }))
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report',
+               side_effect=execute_side_effect) as mock_exec_tests, \
+         patch('pdd.sync_orchestration._create_synthetic_run_report_for_agentic_success',
+               side_effect=synthetic_side_effect) as mock_synthetic:
+        sync_orchestration(basename="calculator", language="go", no_steer=True)
+
+    # Read the persisted run report from disk
+    report_file = tmp_path / '.pdd' / 'meta' / 'calculator_go_run.json'
+    assert report_file.exists(), (
+        "Run report file should be written to disk after test operation"
+    )
+    report_data = json.loads(report_file.read_text())
+
+    # The persisted report must contain real test failures (tests_failed > 0),
+    # not the synthetic hardcoded value (tests_failed=0).
+    # With tests_failed=0, sync_determine_operation can never recommend 'fix'.
+    assert report_data['tests_failed'] > 0, (
+        f"Bug #899: Run report has tests_failed={report_data['tests_failed']}. "
+        f"Expected tests_failed > 0 from real test execution, but got the "
+        f"synthetic hardcoded value. This means sync_determine_operation will "
+        f"never recommend 'fix', silently masking test failures for Go."
+    )
+
+
+@pytest.mark.e2e
+def test_e2e_typescript_real_execution_detects_failures(tmp_path):
+    """
+    E2E integration test: verify the full chain from buggy TypeScript code
+    through Jest execution to tests_failed > 0 in the run report.
+
+    This test runs real npm install + Jest — no mocks. It validates that:
+    1. get_test_command_for_file detects jest.config.js and returns npx jest
+    2. _execute_tests_and_create_run_report runs Jest and parses output
+    3. tests_failed > 0 when tests actually fail (not masked by synthetic report)
+    """
+    import subprocess
+
+    # Create a minimal TypeScript project with a bug
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+
+    (tmp_path / "src" / "calculator.ts").write_text(
+        'export function add(a: number, b: number): number {\n'
+        '  return a - b;  // BUG: subtracts instead of adding\n'
+        '}\n'
+    )
+
+    (tmp_path / "tests" / "test_calculator.test.ts").write_text(
+        "import { add } from '../src/calculator';\n"
+        "describe('add', () => {\n"
+        "  it('adds two numbers', () => {\n"
+        "    expect(add(2, 3)).toBe(5);\n"
+        "  });\n"
+        "});\n"
+    )
+
+    (tmp_path / "jest.config.js").write_text(
+        "module.exports = {\n"
+        "  preset: 'ts-jest',\n"
+        "  testEnvironment: 'node',\n"
+        "};\n"
+    )
+
+    (tmp_path / "tsconfig.json").write_text(
+        '{"compilerOptions": {"module": "commonjs", "target": "es6", '
+        '"esModuleInterop": true, "strict": true}}\n'
+    )
+
+    (tmp_path / "package.json").write_text(
+        '{"name": "test", "private": true}\n'
+    )
+
+    # Install Jest dependencies
+    result = subprocess.run(
+        ["npm", "install", "--save-dev", "jest", "ts-jest", "@types/jest", "typescript"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, f"npm install failed: {result.stderr}"
+
+    from pdd.sync_orchestration import (
+        _execute_tests_and_create_run_report,
+        _create_synthetic_run_report_for_agentic_success,
+    )
+
+    test_file = tmp_path / "tests" / "test_calculator.test.ts"
+
+    # Patch get_test_command_for_file to use Jest from project root
+    # (_execute_tests_and_create_run_report runs from test_file.parent, but Jest
+    # needs the project root where jest.config.js and node_modules live)
+    jest_cmd = f"cd {tmp_path} && npx jest --no-coverage -- {test_file}"
+    with patch('pdd.get_test_command.get_test_command_for_file', return_value=jest_cmd):
+        # Compare: synthetic report vs real execution
+        synthetic = _create_synthetic_run_report_for_agentic_success(test_file, "calculator", "typescript")
+        real = _execute_tests_and_create_run_report(test_file, "calculator", "typescript", 80.0)
+
+    # Synthetic always masks failures
+    assert synthetic.tests_failed == 0, "Synthetic should hardcode tests_failed=0"
+    assert synthetic.exit_code == 0, "Synthetic should hardcode exit_code=0"
+
+    # Real execution must detect the bug
+    assert real.exit_code != 0, f"Real execution should fail (exit_code={real.exit_code})"
+    assert real.tests_failed > 0, (
+        f"Real execution should report tests_failed > 0, got {real.tests_failed}. "
+        f"This means sync_determine_operation would never recommend 'fix'."
+    )
+    assert real.tests_passed == 0 or real.tests_failed > 0, "At least some tests must fail"

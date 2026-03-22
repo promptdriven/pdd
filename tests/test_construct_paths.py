@@ -2847,6 +2847,168 @@ contexts:
             f"Expected 'backend-utils' from paths pattern but got '{context_name}'"
 
 
+class TestNestedPddrcDetectContext:
+    """detect_context_for_file should use the nearest .pddrc when repo_root points to a subdirectory."""
+
+    def test_nested_pddrc_uses_repo_root_not_parent(self, tmp_path):
+        """
+        Bug repro: when a subdirectory has its own .pddrc and repo_root
+        points to that subdirectory, detect_context_for_file should use
+        the subdirectory's .pddrc — not re-search upward and find a
+        parent .pddrc with different contexts.
+        """
+        from pdd.construct_paths import detect_context_for_file
+
+        # Parent repo with its own .pddrc (different contexts)
+        parent_pddrc = tmp_path / ".pddrc"
+        parent_pddrc.write_text('''version: "1.0"
+contexts:
+  pdd_cli:
+    paths: ["pdd/**", "*.py"]
+    defaults:
+      generate_output_path: "pdd"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        # Nested subdirectory project with its own .pddrc
+        subdir = tmp_path / "video_editor"
+        subdir.mkdir()
+        sub_pddrc = subdir / ".pddrc"
+        sub_pddrc.write_text('''version: "1.0"
+contexts:
+  lib_db:
+    paths: ["lib/db/**", "*lib_db*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/db.ts"
+        prompt:
+          path: "prompts/lib_db_TypeScript.prompt"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+''')
+
+        # Create a code file that matches via paths pattern relative to subdir
+        code_dir = subdir / "lib" / "db"
+        code_dir.mkdir(parents=True)
+        code_file = code_dir / "index.ts"
+        code_file.write_text("export const db = {}")
+
+        # Call with repo_root pointing to the subdirectory
+        context_name, config = detect_context_for_file(
+            str(code_file),
+            repo_root=str(subdir)
+        )
+
+        # Should match the subdirectory's .pddrc context, NOT fall through
+        # to default because the parent .pddrc was found instead
+        assert context_name == "lib_db", \
+            f"Expected 'lib_db' from nested .pddrc but got '{context_name}'. " \
+            f"detect_context_for_file is likely finding the parent .pddrc instead of " \
+            f"using the repo_root's .pddrc."
+
+    def test_nested_pddrc_prompt_file_matches(self, tmp_path):
+        """
+        When repo_root points to a subdirectory, prompt files should match
+        contexts in the subdirectory's .pddrc via paths patterns.
+        """
+        from pdd.construct_paths import detect_context_for_file
+
+        # Parent repo .pddrc
+        (tmp_path / ".pddrc").write_text('''version: "1.0"
+contexts:
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        # Nested project .pddrc with glob-based path patterns
+        subdir = tmp_path / "myproject"
+        subdir.mkdir()
+        (subdir / ".pddrc").write_text('''version: "1.0"
+contexts:
+  lib_utils:
+    paths: ["*lib_utils*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/utils.ts"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+''')
+
+        # Create a prompt file that should match lib_utils context
+        prompts_dir = subdir / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "lib_utils_TypeScript.prompt"
+        prompt_file.write_text("Generate utils module")
+
+        context_name, _ = detect_context_for_file(
+            str(prompt_file),
+            repo_root=str(subdir)
+        )
+
+        assert context_name == "lib_utils", \
+            f"Expected 'lib_utils' but got '{context_name}'. " \
+            f"Relative path should be computed from the nested repo_root."
+
+    def test_nested_pddrc_resolve_prompt_from_pddrc(self, tmp_path):
+        """
+        End-to-end: _resolve_prompt_from_pddrc should use the nested .pddrc
+        to resolve the correct prompt path for a code file, using
+        outputs.code.path to match and outputs.prompt.path for the result.
+        """
+        from pdd.update_main import _resolve_prompt_from_pddrc
+
+        # Parent repo with its own .pddrc
+        (tmp_path / ".pddrc").write_text('''version: "1.0"
+contexts:
+  pdd_cli:
+    paths: ["pdd/**"]
+    defaults:
+      generate_output_path: "pdd"
+  default:
+    defaults:
+      generate_output_path: "./"
+''')
+
+        # Nested subdirectory project with its own .pddrc
+        subdir = tmp_path / "video_editor"
+        subdir.mkdir()
+        (subdir / ".pddrc").write_text('''version: "1.0"
+contexts:
+  api_specs_route:
+    paths: ["*api_specs_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/specs/route.ts"
+        prompt:
+          path: "prompts/api_specs_route_TypeScript.prompt"
+  default:
+    defaults:
+      prompts_dir: "prompts/"
+''')
+
+        # Create the code file
+        code_dir = subdir / "app" / "api" / "specs"
+        code_dir.mkdir(parents=True)
+        code_file = code_dir / "route.ts"
+        code_file.write_text("export async function POST() {}")
+
+        # Resolve prompt path — repo_root is the subdirectory
+        result = _resolve_prompt_from_pddrc(str(code_file), str(subdir), "TypeScript")
+
+        expected = str(subdir / "prompts" / "api_specs_route_TypeScript.prompt")
+        assert result == expected, \
+            f"Expected '{expected}' but got '{result}'. " \
+            f"_resolve_prompt_from_pddrc should use nested .pddrc's outputs.prompt.path."
+
+
 class TestSyncDiscoveryBasenameContextDetection:
     """Sync discovery should infer context from basename prefixes and patterns."""
 

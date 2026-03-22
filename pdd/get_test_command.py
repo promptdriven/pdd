@@ -15,6 +15,25 @@ from .agentic_langtest import default_verify_cmd_for
 from .get_language import get_language
 
 
+def _detect_ts_test_runner(test_path: Path) -> Optional[str]:
+    """Detect Jest or Vitest config by walking up from the test file.
+
+    Returns 'npx jest --no-coverage' or 'npx vitest run' if a config is found,
+    otherwise None (fall through to CSV default).
+    """
+    search_dir = test_path.resolve().parent
+    for _ in range(5):  # Walk up at most 5 levels
+        if any((search_dir / cfg).exists() for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')):
+            return "npx jest --no-coverage --"
+        if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):
+            return "npx vitest run"
+        parent = search_dir.parent
+        if parent == search_dir:
+            break
+        search_dir = parent
+    return None
+
+
 def _load_language_format() -> dict:
     """Load language_format.csv into a dict keyed by extension."""
     # Try multiple paths: package-relative first, then project-root-relative
@@ -59,7 +78,13 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     if resolved_language is None:
         resolved_language = get_language(ext)
 
-    # 1. Check CSV for run_test_command
+    # 1. For TypeScript/TSX: detect Jest or Vitest config and use appropriate runner
+    if ext in ('.ts', '.tsx') and resolved_language and resolved_language.lower() in ('typescript', 'typescriptreact'):
+        runner = _detect_ts_test_runner(test_path)
+        if runner:
+            return f"{runner} {test_file}"
+
+    # 2. Check CSV for run_test_command
     lang_formats = _load_language_format()
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()

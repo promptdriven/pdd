@@ -200,10 +200,14 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     from .construct_paths import _find_pddrc_file, _load_pddrc_config, detect_context_for_file, BUILTIN_EXT_MAP
     from .template_expander import expand_template
 
-    # Prefer .pddrc closest to the code file, fall back to repo_root
-    pddrc_path = _find_pddrc_file(Path(code_file_path).parent)
+    # Prefer .pddrc at repo_root (the caller already resolved the nearest one),
+    # fall back to searching from the code file's parent directory.
+    pddrc_path = None
+    repo_root_pddrc = Path(repo_root) / ".pddrc"
+    if repo_root_pddrc.is_file():
+        pddrc_path = repo_root_pddrc
     if not pddrc_path:
-        pddrc_path = _find_pddrc_file(Path(repo_root))
+        pddrc_path = _find_pddrc_file(Path(code_file_path).parent)
     if not pddrc_path:
         return None
 
@@ -216,6 +220,26 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
 
     # Find matching context — use pddrc_parent as the effective root
     context_name, _ = detect_context_for_file(code_file_path, str(pddrc_parent))
+
+    # If paths-based matching only found 'default', try matching via
+    # outputs.code.path — needed when paths patterns are prompt-name
+    # globs (e.g., "*api_specs_route*") that don't match code file paths.
+    if not context_name or context_name == 'default':
+        code_abs = os.path.abspath(code_file_path)
+        try:
+            code_rel = os.path.relpath(code_abs, str(pddrc_parent)).replace('\\', '/')
+        except ValueError:
+            code_rel = None
+        if code_rel:
+            contexts = config.get('contexts', {})
+            for ctx_name, ctx_config in contexts.items():
+                if ctx_name == 'default':
+                    continue
+                ctx_code_path = ctx_config.get('defaults', {}).get('outputs', {}).get('code', {}).get('path')
+                if ctx_code_path and ctx_code_path == code_rel:
+                    context_name = ctx_name
+                    break
+
     if not context_name:
         return None
 
@@ -803,11 +827,17 @@ def update_main(
             # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
             return None
 
-        # Use specified directory if provided, otherwise scan from repo root
+        # Use specified directory if provided; if CWD has its own .pddrc
+        # (subdirectory project), scope scan to CWD instead of the git root.
         if directory:
             scan_dir = os.path.abspath(directory)
         else:
-            scan_dir = repo_root
+            cwd = os.getcwd()
+            cwd_pddrc = Path(cwd) / ".pddrc"
+            if cwd_pddrc.is_file() and os.path.abspath(cwd) != os.path.abspath(repo_root):
+                scan_dir = cwd
+            else:
+                scan_dir = repo_root
         pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
 
         if pairs:

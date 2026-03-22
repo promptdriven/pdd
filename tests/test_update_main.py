@@ -397,6 +397,131 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     assert len(pairs) == len(expected_pairs)
     assert sorted(p[1] for p in pairs) == sorted(ep[1] for ep in expected_pairs)
 
+def test_find_and_resolve_pairs_scans_only_scan_dir(tmp_path, mock_get_language_for_repo):
+    """
+    Bug repro: when scan_dir is a subdirectory of the git root,
+    find_and_resolve_all_pairs should only return code files under
+    scan_dir, not files from the parent repo.
+    """
+    # Create a git repo with a subdirectory project
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = git.Repo.init(repo_path)
+
+    # Parent repo files (should NOT be scanned)
+    (repo_path / "pdd").mkdir()
+    (repo_path / "pdd" / "cli.py").write_text("def main(): pass")
+
+    # Subdirectory project files (should be scanned)
+    subdir = repo_path / "video_editor"
+    subdir.mkdir()
+    (subdir / "lib").mkdir()
+    (subdir / "lib" / "db.py").write_text("def query(): pass")
+    (subdir / "app").mkdir()
+    (subdir / "app" / "main.py").write_text("def run(): pass")
+
+    repo.index.add([
+        str(repo_path / "pdd" / "cli.py"),
+        str(subdir / "lib" / "db.py"),
+        str(subdir / "app" / "main.py"),
+    ])
+    repo.index.commit("Initial commit")
+
+    original_cwd = os.getcwd()
+    os.chdir(subdir)
+    try:
+        pairs = find_and_resolve_all_pairs(str(subdir), quiet=True)
+
+        # Only files under video_editor/ should be found
+        code_files = sorted(p[1] for p in pairs)
+        for f in code_files:
+            assert f.startswith(str(subdir)), \
+                f"File '{f}' is outside scan_dir '{subdir}'. " \
+                f"find_and_resolve_all_pairs should only scan within scan_dir."
+
+        # Should find the 2 subdir files, NOT the parent's pdd/cli.py
+        assert len(pairs) == 2, \
+            f"Expected 2 files under video_editor/ but got {len(pairs)}: {code_files}"
+    finally:
+        os.chdir(original_cwd)
+
+
+def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_language_for_repo):
+    """
+    Bug repro: when CWD is a subdirectory with its own .pddrc,
+    update_main in repo-wide mode (0 args) should scope the scan
+    to CWD, not the entire git root.
+    """
+    from pdd.update_main import update_main
+
+    # Create a git repo
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = git.Repo.init(repo_path)
+
+    # Parent repo .pddrc and files
+    (repo_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    defaults:\n      generate_output_path: "./"\n')
+    (repo_path / "pdd").mkdir()
+    (repo_path / "pdd" / "cli.py").write_text("def main(): pass")
+
+    # Subdirectory with its own .pddrc
+    subdir = repo_path / "video_editor"
+    subdir.mkdir()
+    (subdir / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    defaults:\n      prompts_dir: "prompts/"\n')
+    (subdir / "lib").mkdir()
+    (subdir / "lib" / "db.py").write_text("def query(): pass")
+    (subdir / "prompts").mkdir()
+
+    repo.index.add([
+        str(repo_path / ".pddrc"),
+        str(repo_path / "pdd" / "cli.py"),
+        str(subdir / ".pddrc"),
+        str(subdir / "lib" / "db.py"),
+    ])
+    repo.index.commit("Initial commit")
+
+    # Simulate running from the subdirectory (0 args → repo mode)
+    original_cwd = os.getcwd()
+    os.chdir(subdir)
+    try:
+        ctx = click.Context(click.Command("update"))
+        ctx.params = {"force": False, "quiet": True}
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False}
+
+        with patch('pdd.update_main.update_file_pair') as mock_update, \
+             patch('pdd.update_main.is_code_changed', return_value=(True, "changed")), \
+             patch('pdd.update_main.get_git_changed_files', return_value={str(subdir / "lib" / "db.py")}), \
+             patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}}):
+
+            mock_update.return_value = {
+                "prompt_file": "test.prompt", "status": "ok",
+                "cost": 0.0, "model": "mock", "error": ""
+            }
+
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                extensions=None,
+                directory=None,  # No --directory flag, should detect from CWD
+                simple=True,
+            )
+
+        # Verify that only subdir files were processed, not parent repo files
+        if mock_update.called:
+            for call in mock_update.call_args_list:
+                code_file = call[0][1] if len(call[0]) > 1 else call[1].get('code_file', '')
+                assert 'pdd/cli.py' not in str(code_file), \
+                    f"Parent repo file was processed: {code_file}. " \
+                    f"update_main should scope scan to CWD when it has a .pddrc."
+    finally:
+        os.chdir(original_cwd)
+
+
 @patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())

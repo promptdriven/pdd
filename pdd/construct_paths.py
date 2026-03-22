@@ -299,12 +299,17 @@ def detect_context_for_file(file_path: str, repo_root: Optional[str] = None) -> 
     else:
         relative_path = file_path
 
-    # Find and load .pddrc — prefer one closer to the file over repo_root
-    pddrc_path = _find_pddrc_file(Path(file_path).parent)
+    # Find and load .pddrc — when repo_root was explicitly provided, prefer
+    # the .pddrc at that location (the caller already resolved the nearest one).
+    # Only fall back to searching from the file when repo_root was auto-detected.
+    pddrc_path = None
+    repo_root_pddrc = Path(repo_root) / ".pddrc"
+    if repo_root_pddrc.is_file():
+        pddrc_path = repo_root_pddrc
     if not pddrc_path:
-        pddrc_path = _find_pddrc_file(Path(repo_root))
+        pddrc_path = _find_pddrc_file(Path(file_path).parent)
 
-    # If the nearest .pddrc is in a nested directory, recalculate
+    # If the .pddrc lives in a directory different from repo_root, recalculate
     # repo_root_abs and relative_path so context matching works correctly
     if pddrc_path:
         pddrc_root_abs = os.path.abspath(str(pddrc_path.parent))

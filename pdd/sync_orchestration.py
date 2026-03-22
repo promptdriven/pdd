@@ -2146,24 +2146,9 @@ def sync_orchestration(
                                 test_file_exists = pdd_files['test'].exists()
                                 result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
 
-                                # Extract agentic_success from result (4th element if present)
-                                agentic_success = None
-                                if isinstance(result, tuple) and len(result) >= 4:
-                                    agentic_success = result[3]
-
-                                # For agentic test generation (non-Python): if agent succeeded, skip execution
-                                # and create synthetic RunReport instead (tests already ran in agentic mode).
-                                # Python always needs real test execution to get actual coverage numbers.
-                                if agentic_success is True and language.lower() != 'python':
-                                    # Create synthetic run report - trust the agent's success report
-                                    # even if the test file is at a different path than expected
-                                    _create_synthetic_run_report_for_agentic_success(
-                                        pdd_files['test'],
-                                        basename,
-                                        language,
-                                        atomic_state=atomic_state,
-                                    )
-                                elif pdd_files['test'].exists():
+                                # Always run real tests to get accurate pass/fail counts.
+                                # sync_determine_operation needs real tests_failed to recommend 'fix'.
+                                if pdd_files['test'].exists():
                                     _execute_tests_and_create_run_report(
                                         pdd_files['test'],
                                         basename,
@@ -2193,50 +2178,22 @@ def sync_orchestration(
                                         temperature=temperature
                                     )
 
-                                    # Extract agentic_success from result (4th element if present)
-                                    agentic_success = None
-                                    if isinstance(result, tuple) and len(result) >= 4:
-                                        agentic_success = result[3]
-
-                                    # For non-Python/non-TypeScript: if agentic test agent succeeded, skip execution
-                                    lang_lower = language.lower()
-                                    if lang_lower not in ('python', 'typescript') and agentic_success is True:
-                                        _create_synthetic_run_report_for_agentic_success(
-                                            pdd_files['test'],
-                                            basename,
-                                            language,
-                                            atomic_state=atomic_state,
-                                        )
-                                    else:
-                                        _execute_tests_and_create_run_report(
-                                            pdd_files['test'],
-                                            basename,
-                                            language,
-                                            target_coverage,
-                                            code_file=pdd_files.get("code"),
-                                            atomic_state=atomic_state,
-                                            test_files=pdd_files.get('test_files'),  # Bug #156
-                                        )
+                                    # Always run real tests for accurate pass/fail counts.
+                                    _execute_tests_and_create_run_report(
+                                        pdd_files['test'],
+                                        basename,
+                                        language,
+                                        target_coverage,
+                                        code_file=pdd_files.get("code"),
+                                        atomic_state=atomic_state,
+                                        test_files=pdd_files.get('test_files'),  # Bug #156
+                                    )
                                 else:
                                     # No existing test file, fall back to regular test generation
                                     result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
 
-                                    # Extract agentic_success from result (4th element if present)
-                                    agentic_success = None
-                                    if isinstance(result, tuple) and len(result) >= 4:
-                                        agentic_success = result[3]
-
-                                    # For non-Python/non-TypeScript: if agentic test agent succeeded, skip execution
-                                    lang_lower = language.lower()
-                                    if lang_lower not in ('python', 'typescript') and agentic_success is True:
-                                        if pdd_files['test'].exists():
-                                            _create_synthetic_run_report_for_agentic_success(
-                                                pdd_files['test'],
-                                                basename,
-                                                language,
-                                                atomic_state=atomic_state,
-                                            )
-                                    elif pdd_files['test'].exists():
+                                    # Always run real tests for accurate pass/fail counts.
+                                    if pdd_files['test'].exists():
                                         _execute_tests_and_create_run_report(
                                             pdd_files['test'],
                                             basename,
