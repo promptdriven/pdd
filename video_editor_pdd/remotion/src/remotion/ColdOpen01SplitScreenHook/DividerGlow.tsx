@@ -11,7 +11,8 @@ import {
 
 /**
  * A pulsing gradient glow on the vertical divider line.
- * Uses a sine oscillation to smoothly cycle between the two panel colours.
+ * Uses a sine-eased opacity pulse cycling every GLOW_CYCLE_FRAMES.
+ * Gradient blends from left panel colour (#4A90D9, top) to right panel colour (#D9944A, bottom).
  */
 export const DividerGlow: React.FC<{
   /** Frames elapsed since this Sequence started */
@@ -19,10 +20,10 @@ export const DividerGlow: React.FC<{
 }> = () => {
   const frame = useCurrentFrame();
 
-  // Sine oscillation: 0 → 1 → 0 over GLOW_CYCLE_FRAMES
-  const cycle = Math.sin((frame / GLOW_CYCLE_FRAMES) * Math.PI * 2);
-  // Map -1…1 → 0…1 for gradient mixing
-  const mix = (cycle + 1) / 2;
+  // Sine-eased pulse: oscillates 0 → 1 → 0 over GLOW_CYCLE_FRAMES
+  const sinePhase = Math.sin((frame / GLOW_CYCLE_FRAMES) * Math.PI * 2);
+  // Map -1…1 → 0.5…1.0 for opacity modulation (never fully invisible)
+  const pulseFactor = 0.5 + 0.5 * ((sinePhase + 1) / 2);
 
   // Fade glow in over first 10 frames of the sequence
   const fadeIn = interpolate(frame, [0, 10], [0, 1], {
@@ -31,25 +32,41 @@ export const DividerGlow: React.FC<{
     easing: Easing.out(Easing.cubic),
   });
 
-  const glowWidth = 30;
+  const glowWidth = 8;
+  const blurWidth = 30;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: DIVIDER_X - glowWidth / 2,
-        width: glowWidth,
-        height: COMP_HEIGHT,
-        background: `linear-gradient(to bottom, ${GLOW_COLOR_LEFT}, ${GLOW_COLOR_RIGHT})`,
-        opacity: GLOW_MAX_OPACITY * fadeIn,
-        filter: `blur(8px)`,
-        pointerEvents: 'none',
-        zIndex: 6,
-        // Shift the gradient position with the sine cycle to create the pulse
-        transform: `scaleX(${0.6 + 0.4 * mix})`,
-      }}
-    />
+    <>
+      {/* Core gradient glow — narrow, bright */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: DIVIDER_X - glowWidth / 2,
+          width: glowWidth,
+          height: COMP_HEIGHT,
+          background: `linear-gradient(to bottom, ${GLOW_COLOR_LEFT}, ${GLOW_COLOR_RIGHT})`,
+          opacity: GLOW_MAX_OPACITY * fadeIn * pulseFactor,
+          pointerEvents: 'none',
+          zIndex: 7,
+        }}
+      />
+      {/* Soft blurred halo around the glow */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: DIVIDER_X - blurWidth / 2,
+          width: blurWidth,
+          height: COMP_HEIGHT,
+          background: `linear-gradient(to bottom, ${GLOW_COLOR_LEFT}, ${GLOW_COLOR_RIGHT})`,
+          opacity: GLOW_MAX_OPACITY * 0.6 * fadeIn * pulseFactor,
+          filter: 'blur(10px)',
+          pointerEvents: 'none',
+          zIndex: 6,
+        }}
+      />
+    </>
   );
 };
 

@@ -30,7 +30,7 @@ export const PanelHeader: React.FC<PanelHeaderProps> = ({
   const opacity = interpolate(
     frame,
     [TIMING.HEADER_FADE_START, TIMING.HEADER_FADE_START + TIMING.HEADER_FADE_DURATION],
-    [0, 0.6],
+    [0, 0.85],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -51,7 +51,7 @@ export const PanelHeader: React.FC<PanelHeaderProps> = ({
         fontWeight: 600,
         color: hexToRgba(color, opacity),
         letterSpacing: 3,
-        textShadow: `0 0 8px ${hexToRgba(color, opacity * 0.5)}, 0 1px 4px rgba(0,0,0,${Math.min(opacity * 2, 0.8)})`,
+        textShadow: `0 0 10px ${hexToRgba(color, opacity * 0.6)}, 0 1px 6px rgba(0,0,0,${Math.min(opacity * 2.5, 0.9)})`,
         zIndex: 10,
       }}
     >

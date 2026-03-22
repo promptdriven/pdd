@@ -53,8 +53,8 @@ export const TriangleGlow: React.FC = () => {
     >
       <defs>
         {GLOW_LAYERS.map((layer, i) => (
-          <filter key={i} id={`edgeGlow${i}`} x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation={layer.blur / 2} />
+          <filter key={i} id={`edgeGlow${i}`} x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation={layer.blur} />
           </filter>
         ))}
       </defs>
@@ -74,7 +74,7 @@ export const TriangleGlow: React.FC = () => {
             d={path}
             fill="none"
             stroke={layer.color}
-            strokeWidth={edgeWidth + layer.blur * 0.5}
+            strokeWidth={edgeWidth + layer.blur}
             opacity={layer.opacity * glowProgress}
             filter={`url(#edgeGlow${i})`}
           />

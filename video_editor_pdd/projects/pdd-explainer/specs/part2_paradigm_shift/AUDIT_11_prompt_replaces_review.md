@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (code, cognitive, load, prompt, test), so the frame does not support a hard missing-text failure.
+The frame is sampled at frame 319/360 (88.9% progress), solidly in the final hold phase (frames 280-360). All major compositional elements are present and correctly rendered: split layout with divider, frozen code diff at low opacity on the left, red question mark overlay with glow, prompt document with amber-highlighted phrases on the right, test suite panel with all six green checkmarks, and both cognitive load meters (left fully filled red 'OVERLOADED', right ~25% filled green 'MANAGEABLE'). The one discrepancy is that the LEFT panel header 'REVIEW THE CODE' does not display a visible strikethrough line. The spec calls for a strikethrough line at 0.3 opacity, which should be faintly visible even at that low opacity. This is a minor visual detail that reinforces the 'old approach is obsolete' message.

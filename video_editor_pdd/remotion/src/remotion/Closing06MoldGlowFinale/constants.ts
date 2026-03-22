@@ -35,24 +35,33 @@ export const GLOW_LAYERS = [
 export const NODES = [
   {
     label: 'PROMPT',
+    descriptor: 'Encodes intent',
     center: [960, 280] as [number, number],
     fillFrom: '#4A90D9',
     fillTo: '#6AB0F0',
     glowColor: '#4A90D9',
+    labelY: 248,
+    descriptorY: 232,
   },
   {
     label: 'TESTS',
+    descriptor: 'Preserve behavior',
     center: [710, 713] as [number, number],
     fillFrom: '#D9944A',
     fillTo: '#F0B86A',
     glowColor: '#D9944A',
+    labelY: 748,
+    descriptorY: 768,
   },
   {
     label: 'GROUNDING',
+    descriptor: 'Maintains style',
     center: [1210, 713] as [number, number],
     fillFrom: '#5AAA6E',
     fillTo: '#7CC98E',
     glowColor: '#5AAA6E',
+    labelY: 748,
+    descriptorY: 768,
   },
 ] as const;
 

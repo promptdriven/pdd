@@ -16,8 +16,8 @@ export const METER_WIDTH = 60;
 export const METER_HEIGHT = 400;
 export const METER_BORDER_RADIUS = 8;
 
-export const LEFT_X = 580;
-export const RIGHT_X = 1340;
+export const LEFT_X = 480;
+export const RIGHT_X = 1440;
 export const METER_CENTER_Y = 320; // top of meter track area
 
 // ── Frame Timing ───────────────────────────────────────────────────

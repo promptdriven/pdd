@@ -32,10 +32,10 @@ export const TerminalSnippet: React.FC = () => {
         bottom: 60,
         fontFamily: '"JetBrains Mono", monospace',
         fontSize: 10,
-        color: `rgba(74,144,217,0.5)`,
+        color: `rgba(74,144,217,0.7)`,
         zIndex: 10,
         whiteSpace: 'nowrap',
-        textShadow: '0 1px 3px rgba(0,0,0,0.7)',
+        textShadow: '0 0 6px rgba(0,0,0,0.9), 0 1px 4px rgba(0,0,0,0.8)',
       }}
     >
       {displayText}

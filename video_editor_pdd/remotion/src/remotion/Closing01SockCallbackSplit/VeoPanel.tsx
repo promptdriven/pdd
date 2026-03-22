@@ -91,21 +91,21 @@ export const VeoPanel: React.FC<VeoPanelProps> = ({
           left: 0,
           top: 0,
           width: panelWidth,
-          height: 80,
-          background: 'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, transparent 100%)',
+          height: 90,
+          background: 'linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, transparent 100%)',
           pointerEvents: 'none',
         }}
       />
 
-      {/* Bottom gradient strip — contrast for cost labels */}
+      {/* Bottom gradient strip — contrast for cost labels and sub-labels */}
       <div
         style={{
           position: 'absolute',
           left: 0,
           bottom: 0,
           width: panelWidth,
-          height: 160,
-          background: 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%)',
+          height: 180,
+          background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 100%)',
           pointerEvents: 'none',
         }}
       />

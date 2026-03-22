@@ -110,7 +110,7 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({
         />
       )}
 
-      {/* Panel header label */}
+      {/* Panel header label — rendered above all overlays */}
       <div
         style={{
           position: 'absolute',
@@ -118,13 +118,14 @@ export const SplitPanel: React.FC<SplitPanelProps> = ({
           left: labelX,
           fontFamily: HEADER_FONT_FAMILY,
           fontSize: HEADER_FONT_SIZE,
-          fontWeight: HEADER_FONT_WEIGHT,
+          fontWeight: HEADER_FONT_WEIGHT as React.CSSProperties['fontWeight'],
           color: HEADER_TEXT_COLOR,
           opacity: HEADER_TEXT_OPACITY,
           letterSpacing: '0.05em',
           userSelect: 'none',
-          zIndex: 20,
-          textShadow: '0 0 8px rgba(0,0,0,0.9), 0 0 2px rgba(0,0,0,0.7)',
+          zIndex: 50,
+          textShadow: '0 0 10px rgba(0,0,0,1), 0 0 4px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.8)',
+          lineHeight: 1,
         }}
       >
         {label}

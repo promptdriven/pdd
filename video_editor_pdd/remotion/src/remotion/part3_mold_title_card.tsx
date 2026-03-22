@@ -386,8 +386,8 @@ export const Part3MoldTitleCard: React.FC = () => {
               left: 960 - ruleWidth / 2,
               width: ruleWidth,
               height: 2,
-              backgroundColor: "#334155",
-              opacity: 0.5,
+              backgroundColor: "#475569",
+              opacity: 0.75,
             }}
           />
         )}

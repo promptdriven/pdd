@@ -42,7 +42,7 @@ export const CostLabel: React.FC<CostLabelProps> = ({
   const subOpacity = interpolate(
     frame,
     [subStart, subStart + TIMING.SUB_LABEL_DURATION],
-    [0, 0.6],
+    [0, 0.75],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
@@ -63,7 +63,7 @@ export const CostLabel: React.FC<CostLabelProps> = ({
           fontSize: 28,
           fontWeight: 700,
           color: hexToRgba(color, costOpacity),
-          textShadow: `0 0 12px ${hexToRgba(color, costOpacity * 0.4)}, 0 2px 6px rgba(0,0,0,${Math.min(costOpacity * 1.2, 0.85)})`,
+          textShadow: `0 0 14px ${hexToRgba(color, costOpacity * 0.5)}, 0 2px 8px rgba(0,0,0,${Math.min(costOpacity * 1.5, 0.9)})`,
           zIndex: 10,
         }}
       >
@@ -79,7 +79,7 @@ export const CostLabel: React.FC<CostLabelProps> = ({
           fontFamily: 'Inter, sans-serif',
           fontSize: 11,
           color: hexToRgba(COLORS.SUBTITLE, subOpacity),
-          textShadow: `0 1px 4px rgba(0,0,0,${Math.min(subOpacity * 2, 0.9)})`,
+          textShadow: `0 1px 6px rgba(0,0,0,${Math.min(subOpacity * 2.5, 0.9)})`,
           zIndex: 10,
         }}
       >
