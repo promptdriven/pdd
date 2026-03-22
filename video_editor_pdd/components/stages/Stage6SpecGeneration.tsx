@@ -581,8 +581,8 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                       {saving && <div className="text-xs text-slate-400">Saving…</div>}
                                     </div>
                                   </div>
-                                  <div className="grid max-h-[500px] gap-3 xl:grid-cols-3 items-stretch">
-                                    <div className="flex min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60">
+                                  <div className="grid h-[420px] gap-3 xl:grid-cols-3">
+                                    <div className="flex min-h-0 min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60">
                                       <div className="border-b border-slate-700 px-3 py-2">
                                         <div className="text-sm font-medium text-slate-100">Script Context</div>
                                         <div className="text-xs text-slate-400">{selectedScriptHeading}</div>
@@ -656,7 +656,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                       </div>
                                     </div>
 
-                                    <div className="flex min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60">
+                                    <div className="flex min-h-0 min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60">
                                       <div className="border-b border-slate-700 px-3 py-2">
                                         <div className="text-sm font-medium text-slate-100">Audio Sync Timing</div>
                                         <div className="text-xs text-slate-400">
@@ -744,7 +744,7 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                       </div>
                                     </div>
 
-                                    <div className="flex min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60 p-3">
+                                    <div className="flex min-h-0 min-w-0 flex-col rounded border border-slate-700 bg-slate-900/60 p-3">
                                       <div className="mb-2 text-sm font-medium text-slate-100">Visual Spec</div>
                                       {editorMode === 'edit' ? (
                                         <CodeMirror
