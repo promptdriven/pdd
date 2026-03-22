@@ -61,7 +61,7 @@ export const ColdOpen01SplitScreenHook: React.FC = () => {
   });
 
   // Resolve video sources — assets are available in veo/ via staticFile
-  const leftVideoSrc = staticFile('veo/developer_cursor_edit.mp4');
+  const leftVideoSrc = staticFile('veo/developer_ai_edit.mp4');
   const rightVideoSrc = staticFile('veo/grandmother_darning.mp4');
 
   return (

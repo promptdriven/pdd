@@ -2596,6 +2596,141 @@ class TestGeneratedTimelineWrapper:
         assert 'baseSrc: "veo/02_veo_ocean_broll.mp4"' in tsx
         assert 'revealSrc: "veo/03_veo_forest_cutaway.mp4"' in tsx
 
+    def test_generated_timeline_resolves_clipid_based_split_media_aliases(self, tmp_path):
+        """leftClipId / rightClipId fields (no file extension) must resolve to leftSrc / rightSrc."""
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "cold_open"
+        split_dir = remotion_src / "ColdOpen01SplitScreenHook"
+        specs_dir = project_dir / "specs" / "cold_open"
+
+        section_dir.mkdir()
+        split_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 150, id: "01_split_screen_hook", desc: "Split" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (split_dir / "index.ts").write_text(
+            'export const ColdOpen01SplitScreenHook = () => null;\n'
+            'export default ColdOpen01SplitScreenHook;',
+            encoding="utf-8",
+        )
+        (split_dir / "constants.ts").write_text(
+            "export const TIMING = { totalFrames: 150 };\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "01_split_screen_hook.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    "{",
+                    '  "type": "split_screen",',
+                    '  "leftClipId": "developer_ai_edit",',
+                    '  "rightClipId": "grandmother_darning"',
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "developer_ai_edit.mp4").write_bytes(b"\x00" * 32)
+        (remotion_public / "veo" / "grandmother_darning.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpen",
+            "durationSeconds": 5,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": ["01_split_screen_hook"],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'leftSrc: "veo/developer_ai_edit.mp4"' in tsx
+        assert 'rightSrc: "veo/grandmother_darning.mp4"' in tsx
+        assert 'defaultSrc: "veo/developer_ai_edit.mp4"' in tsx
+
+    def test_generated_timeline_resolves_standalone_clipid_media_alias(self, tmp_path):
+        """A standalone veo spec with clipId (no extension) must resolve to defaultSrc."""
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "cold_open"
+        specs_dir = project_dir / "specs" / "cold_open"
+
+        section_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 150, id: "02_developer_ai_edit", desc: "Dev" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "02_developer_ai_edit.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    "{",
+                    '  "type": "veo_clip",',
+                    '  "clipId": "developer_ai_edit"',
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "developer_ai_edit.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpen",
+            "durationSeconds": 5,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": [],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'defaultSrc: "veo/developer_ai_edit.mp4"' in tsx
+
     def test_generated_timeline_resolves_image_style_split_sources_via_structured_refs(self, tmp_path):
         project_dir = tmp_path
         remotion_src = tmp_path

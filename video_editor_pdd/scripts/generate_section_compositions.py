@@ -120,9 +120,12 @@ NARRATION_JSON_RE = re.compile(
 VIDEO_EXTENSION_PRIORITY = ('.mp4', '.webm', '.mov', '.m4v')
 MEDIA_ALIAS_KEY_MAP = {
     'clipsource': 'defaultSrc',
+    'clipid': 'defaultSrc',
     'leftclip': 'leftSrc',
+    'leftclipid': 'leftSrc',
     'leftsrc': 'leftSrc',
     'rightclip': 'rightSrc',
+    'rightclipid': 'rightSrc',
     'rightsrc': 'rightSrc',
     'outputsrc': 'outputSrc',
     'outputfile': 'defaultSrc',
@@ -158,6 +161,9 @@ SOURCE_FIELD_KEYS = {
     'asset',
     'assetfile',
     'clip',
+    'clipid',
+    'leftclipid',
+    'rightclipid',
 }
 REFERENCE_SUFFIXES = (
     '_still',
