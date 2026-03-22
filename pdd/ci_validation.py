@@ -206,6 +206,11 @@ def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str
     if returncode == 0:
         return "passed"
     if returncode == 1:
+        # Exit code 1 with no checks means "no checks reported" (gh pr checks
+        # returns 1 when there are no required checks). Only treat as "failed"
+        # if we actually have check results showing failures.
+        if not checks:
+            return "no_checks"
         return "failed"
     return "pending"
 
