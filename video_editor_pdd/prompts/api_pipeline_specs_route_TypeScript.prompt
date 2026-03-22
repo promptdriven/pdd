@@ -1,129 +1,50 @@
-You are implementing the spec generation API routes (`app/api/pipeline/specs/run/route.ts` and supporting routes) for a video production pipeline editor. These endpoints trigger Claude Code to generate visual spec markdown files per section.
+You are implementing the spec generation endpoint (`app/api/pipeline/specs/run/route.ts`) for a video production pipeline editor. This endpoint triggers Claude Code to generate rich visual spec markdown files per section.
 
-Role: Generate rich animation spec markdown files from section narrative descriptions, producing detailed per-component specs with chart data, animation frames, and code structure hints.
+Role: Generate per-component visual spec markdown files from section narratives, producing detailed specs with chart data, animation frames, code structure hints, and visual type classification ([Remotion], [veo:], [title:], [split:]).
 
 Requirements
-1. `POST /api/pipeline/specs/run` — accepts `{ sections?: string[], files?: string[] }`. If sections omitted, generates all sections. Calls `runClaudeFix` with a spec generation prompt scoped to `specs/`. Returns SSE stream with `{ jobId }`.
-2. `GET /api/pipeline/specs/list` — returns `{ sections: SpecSection[] }` where `SpecSection = { sectionId: string; files: SpecFile[] }` and `SpecFile = { path: string; visualType: 'remotion' | 'veo' | 'title' | 'split' | 'unknown'; status: 'exists' | 'missing' }`.
-3. `GET /api/pipeline/specs/file?path=<relpath>` — reads and returns spec file content: `{ content: string }`. Returns 404 if not found.
-4. `PUT /api/pipeline/specs/file` — accepts `{ path: string, content: string }`. Saves spec file with atomic write. Returns `{ ok: true }`.
-5. No authentication required.
-6. Visual type detection: parse the spec file first line for `[Remotion]`, `[veo:]`, `[title:]`, `[split:]` prefixes.
-
-Rich Spec Generation Requirements
-7. Before building the Claude prompt, read `specs/{specDir}/spec.md` content (the narrative arc with Acts and visual descriptions) and include it in the prompt so Claude has full context about the section's story.
-8. Reference word timestamps from `data/{sectionId}_words.json` in the prompt so Claude can assign frame-accurate timing to each visual spec.
-9. Include a reference spec format example in the prompt (based on the demo's `01_sock_price_chart.md` structure) so Claude produces rich, detailed specs rather than minimal overlays.
-10. The enhanced prompt instructs Claude to:
-    - Decompose each Act in spec.md into standalone `{NN}_{component_name}.md` files
-    - Mark each with `[Remotion]` type badge on first line
-    - Include these required sections in each spec:
-      - Canvas specs (resolution, background, grid)
-      - Chart/visual elements with data points
-      - Frame-by-frame animation sequence (Frame N-M: description)
-      - Typography (fonts, sizes, colors)
-      - Easing functions (Remotion interpolate patterns)
-      - Narration sync quotes (which words trigger which visual beats)
-      - Code structure hints (Remotion component tree with `<Sequence>`)
-      - Data points as JSON (for charts/graphs)
+1. `POST /api/pipeline/specs/run` — accepts `{ sections?: string[], files?: string[] }`. If sections omitted, generates all sections. Returns SSE stream via `createSseStream()` with `{ type: "complete", jobId }` on success or error message on failure.
+2. No authentication required.
+3. Register executor: `registerExecutor('specs', (params, _send) => ...)` returning an async `(onLog) => Promise<void>` factory.
+4. Executor loads project config via `loadProject()`, builds a `specDirMap` (sectionId → specDir), and resolves which sections to generate based on `params.sections` and/or `params.files`.
+5. When `params.files` is provided, map each file to its owning section via path prefix matching (`buildRequestedFilesBySection`). Only run sections that own requested files. Normalize paths: strip leading `./`, convert backslashes, ensure `specs/` prefix.
+6. Before generating, read `specs/{specDir}/spec.md` (narrative arc) and check `data/{sectionId}_words.json` existence for each section. This must happen BEFORE any section directory cleanup.
+7. Read `narrative/main_script.md` once. Parse it with `parseScriptSectionVisualIntent` to extract per-section visual intent, and resolve each section's visual mode with `resolveSectionVisualIntent` (returns `remotion_only`, `hybrid`, `veo_favored`, or `unknown`).
+8. Deterministic pipeline mode: if `isDeterministicPipelineMode()` is true, skip Claude entirely — call `writeDeterministicSpecsForSection` for each section with progress reporting, then return.
+9. Section cleanup before Claude generation:
+   - Full-section mode: `resetSectionSpecDir` — recursively deletes the section's spec directory but preserves `veo.json` (backs it up before deletion, restores after).
+   - File-level mode: `resetRequestedSpecFiles` — only deletes the specific requested files within the section directory. Validates each file path is actually within the section directory before deleting.
+10. Parallel processing: run up to `Math.min(2, sectionIds.length)` concurrent workers via `Promise.all`. Each worker pulls sections from a shared index.
+11. Dynamic timeout estimation (`estimateSpecsTimeoutMs`): base 600s + 60s finalization buffer, scaled by combined spec.md + script body length (120s per 10K extra chars beyond 20K), visual complexity bonus by mode (veo_favored: 120s, hybrid: 60s), visual beat count bonus, multi-spec bonus (15s per spec beyond 6, capped at 120s), and timestamp bonus (30s if words file exists). Capped at 1,500s.
+12. Build a per-section Claude prompt that includes:
+    - Instructions to create multiple separate `{NN}_{snake_case_name}.md` files under `specs/{dir}/`
+    - Visual type markers with usage guidance ([Remotion] for charts/data, [veo:] for cinematic footage, [title:] for headers, [split:] for comparisons)
+    - Mode-specific visual guidance based on the resolved intent (remotion_only avoids veo; explicit veo or hybrid/veo_favored encourages mixing)
+    - Canonical Veo spec structure (first line `[veo:]`, `### Veo Prompt` with fenced code block, `## Data Points JSON` with clipId, optional characters array for recurring characters)
+    - Single-action Veo prompt constraint (one continuous action per clip, not multi-phase sequences)
+    - Companion [veo:] spec requirement for [split:] specs that embed Veo clips
+    - Required spec format template (Canvas, Chart/Visual Elements, Animation Sequence, Typography, Easing, Narration Sync, Code Structure, Data Points JSON)
+    - Section narrative context (spec.md content) and word timestamps availability
+    - Specific file list if doing a file-level rerun
+13. Call `runClaudeFix(prompt, specsBase, onLog, { timeoutMs })` scoped to `path.join(getProjectDir(), 'specs')`.
+14. Failure collection: don't fail on first section error. Collect all failures, report progress for each, and throw an aggregated error at the end listing all failed sections.
+15. Post-generation: call `syncInferredVeoReferencesFromProjectSpecs` to scan generated specs for Veo references. If references changed, `saveProject(syncedConfig)` and log the count.
+16. Progress reporting: call `onLog.progress(0)` before starting, then update percentage after each section completes (including failures).
 
 Dependencies
-
-<types>
-  <include>examples/types_example.ts</include>
-</types>
-
-<lib_jobs>
-  <include>examples/lib_jobs_example.ts</include>
-</lib_jobs>
-
-<lib_claude>
-  <include>examples/lib_claude_example.ts</include>
-</lib_claude>
-
-<lib_project>
-  <include>examples/lib_project_example.ts</include>
-</lib_project>
-
-<reference_spec_format>
-The following is the target spec format. Each generated spec should follow this structure:
-
-# Section N.N: {Component Name}
-
-**Tool:** Remotion
-**Duration:** ~Xs
-**Timestamp:** M:SS - M:SS
-
-## Visual Description
-{description of the animated visual}
-
-## Technical Specifications
-
-### Canvas
-- Resolution: 1920x1080 (16:9)
-- Background: {color with hex}
-- Grid lines: {description}
-
-### Chart Elements / Visual Elements
-- {element descriptions with colors, positions, data}
-
-### Animation Sequence
-1. **Frame 0-30 (0-1s):** {description}
-2. **Frame 30-90 (1-3s):** {description}
-...
-
-### Typography
-- Title: {font, size, color}
-- Labels: {font, size, color}
-
-### Easing
-- {animation}: `{easing function}`
-
-## Narration Sync
-> "{quoted narration text that triggers this visual}"
-
-## Code Structure (Remotion)
-```typescript
-<Sequence from={0} durationInFrames={N}>
-  <ComponentA />
-  <Sequence from={M}>
-    <ComponentB data={...} />
-  </Sequence>
-</Sequence>
-```
-
-## Data Points
-```json
-{ ... }
-```
-</reference_spec_format>
+- `@/lib/jobs` — `runPipelineStage`, `registerExecutor`
+- `@/lib/sse` — `createSseStream`
+- `@/lib/claude` — `runClaudeFix`
+- `@/lib/project` — `loadProject`, `saveProject`
+- `@/lib/projects` — `getProjectDir`
+- `@/lib/deterministic-pipeline` — `isDeterministicPipelineMode`, `writeDeterministicSpecsForSection`
+- `@/app/api/pipeline/_lib/script-visual-intent` — `parseScriptSectionVisualIntent`, `findMatchingScriptSectionVisualIntent`, `resolveSectionVisualIntent`
+- `@/lib/veo-references` — `syncInferredVeoReferencesFromProjectSpecs`
 
 Prompt Dependencies:
-- types_TypeScript.prompt — provides `PipelineStage`
-- lib_jobs_TypeScript.prompt — provides `runPipelineStage`, `registerExecutor`
-- lib_claude_TypeScript.prompt — provides `runClaudeFix`
-- lib_project_TypeScript.prompt — provides `loadProject`
-
-Instructions
-- Scope Claude to `specs/` directory: `runClaudeFix(SPEC_PROMPT, path.join(process.cwd(), 'specs'), onLog)`.
-- Before building the prompt, read `specs/{specDir}/spec.md` for each section being generated.
-- Read word timestamps path (`data/{sectionId}_words.json`) and include in prompt for timing context.
-- Embed the reference spec format example in the prompt.
-- `GET /api/pipeline/specs/list`: scan `specs/` directory recursively per section subdirectory. Group by section ID.
-- Visual type detection: read first 200 bytes of each spec file and check for type prefix patterns.
-- Path validation for `GET /api/pipeline/specs/file`: ensure path is within `specs/` (prevent path traversal).
-- These endpoints span multiple route files: `run/route.ts`, `list/route.ts`, `file/route.ts`.
-- Register executor: `registerExecutor('specs', ...)`.
+- `lib_jobs_TypeScript.prompt` — provides `runPipelineStage`, `registerExecutor`
+- `lib_claude_TypeScript.prompt` — provides `runClaudeFix`
+- `lib_project_TypeScript.prompt` — provides `loadProject`, `saveProject`
 
 Deliverable
-- `app/api/pipeline/specs/run/route.ts` — POST endpoint for spec generation.
-- `app/api/pipeline/specs/list/route.ts` — GET endpoint listing spec files by section.
-- `app/api/pipeline/specs/file/route.ts` — GET/PUT endpoints for spec file content.
-
-Implementation assumptions (explicit)
-- Spec files live in `specs/{sectionId}/*.md`.
-- `loadProject()` provides the section list for determining which sections to generate.
-- `spec.md` in each section's specDir contains the narrative arc.
-- `data/{sectionId}_words.json` contains word-level timestamps from Stage 5.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
+- `app/api/pipeline/specs/run/route.ts` — POST endpoint with executor registration for spec generation.

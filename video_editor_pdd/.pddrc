@@ -11,6 +11,8 @@ contexts:
       outputs:
         code:
           path: "lib/types.ts"
+        prompt:
+          path: "prompts/types_TypeScript.prompt"
 
   next_config:
     paths: ["*next_config*"]
@@ -18,6 +20,8 @@ contexts:
       outputs:
         code:
           path: "next.config.ts"
+        prompt:
+          path: "prompts/next_config_TypeScript.prompt"
 
   package_json:
     paths: ["*package_json*"]
@@ -25,6 +29,8 @@ contexts:
       outputs:
         code:
           path: "package.json"
+        prompt:
+          path: "prompts/package_json_JSON.prompt"
 
   tsconfig_json:
     paths: ["*tsconfig_json*"]
@@ -32,6 +38,8 @@ contexts:
       outputs:
         code:
           path: "tsconfig.json"
+        prompt:
+          path: "prompts/tsconfig_json_JSON.prompt"
 
   # ============================================================
   # PYTHON SCRIPTS
@@ -43,6 +51,8 @@ contexts:
       outputs:
         code:
           path: "scripts/render_tts.py"
+        prompt:
+          path: "prompts/render_tts_Python.prompt"
 
   sync_audio_pipeline:
     paths: ["*sync_audio_pipeline*"]
@@ -50,6 +60,8 @@ contexts:
       outputs:
         code:
           path: "scripts/sync_audio_pipeline.py"
+        prompt:
+          path: "prompts/sync_audio_pipeline_Python.prompt"
 
   generate_section_compositions:
     paths: ["*generate_section_compositions*"]
@@ -57,38 +69,59 @@ contexts:
       outputs:
         code:
           path: "scripts/generate_section_compositions.py"
+        prompt:
+          path: "prompts/generate_section_compositions_Python.prompt"
+
+  benchmark_stt_models:
+    paths: ["*benchmark_stt_models*"]
+    defaults:
+      outputs:
+        code:
+          path: "scripts/benchmark_stt_models.py"
+        prompt:
+          path: "prompts/benchmark_stt_models_Python.prompt"
+
+  extract_composition_timing:
+    paths: ["*extract_composition_timing*"]
+    defaults:
+      outputs:
+        code:
+          path: "scripts/extract_composition_timing.py"
+        prompt:
+          path: "prompts/extract_composition_timing_Python.prompt"
 
   # ============================================================
   # SERVER LIBRARIES
   # ============================================================
+  # NOTE: More specific lib_veo_* and lib_project* entries must
+  # come BEFORE their shorter prefixes to avoid glob collisions.
 
-  lib_db:
-    paths: ["*lib_db*"]
+  lib_veo_prompt_fix:
+    paths: ["*lib_veo_prompt_fix*"]
     defaults:
       outputs:
         code:
-          path: "lib/db.ts"
+          path: "lib/veo-prompt-fix.ts"
+        prompt:
+          path: "prompts/lib_veo_prompt_fix_TypeScript.prompt"
 
-  lib_project:
-    paths: ["*lib_project*"]
+  lib_veo_references:
+    paths: ["*lib_veo_references*"]
     defaults:
       outputs:
         code:
-          path: "lib/project.ts"
+          path: "lib/veo-references.ts"
+        prompt:
+          path: "prompts/lib_veo_references_TypeScript.prompt"
 
-  lib_sse:
-    paths: ["*lib_sse*"]
+  lib_veo_spec_context:
+    paths: ["*lib_veo_spec_context*"]
     defaults:
       outputs:
         code:
-          path: "lib/sse.ts"
-
-  lib_claude:
-    paths: ["*lib_claude*"]
-    defaults:
-      outputs:
-        code:
-          path: "lib/claude.ts"
+          path: "lib/veo-spec-context.ts"
+        prompt:
+          path: "prompts/lib_veo_spec_context_TypeScript.prompt"
 
   lib_veo:
     paths: ["*lib_veo*"]
@@ -96,6 +129,53 @@ contexts:
       outputs:
         code:
           path: "lib/veo.ts"
+        prompt:
+          path: "prompts/lib_veo_TypeScript.prompt"
+
+  lib_projects:
+    paths: ["*lib_projects*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/projects.ts"
+        prompt:
+          path: "prompts/lib_projects_TypeScript.prompt"
+
+  lib_project:
+    paths: ["*lib_project*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/project.ts"
+        prompt:
+          path: "prompts/lib_project_TypeScript.prompt"
+
+  lib_db:
+    paths: ["*lib_db*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/db.ts"
+        prompt:
+          path: "prompts/lib_db_TypeScript.prompt"
+
+  lib_sse:
+    paths: ["*lib_sse*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/sse.ts"
+        prompt:
+          path: "prompts/lib_sse_TypeScript.prompt"
+
+  lib_claude:
+    paths: ["*lib_claude*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/claude.ts"
+        prompt:
+          path: "prompts/lib_claude_TypeScript.prompt"
 
   lib_render:
     paths: ["*lib_render*"]
@@ -103,17 +183,8 @@ contexts:
       outputs:
         code:
           path: "lib/render.ts"
-
-  globals_css:
-    paths: ["*globals_css*"]
-    defaults:
-      outputs:
-        code:
-          path: "app/globals.css"
-
-  # ============================================================
-  # CORE INFRA
-  # ============================================================
+        prompt:
+          path: "prompts/lib_render_TypeScript.prompt"
 
   lib_jobs:
     paths: ["*lib_jobs*"]
@@ -121,6 +192,215 @@ contexts:
       outputs:
         code:
           path: "lib/jobs.ts"
+        prompt:
+          path: "prompts/lib_jobs_TypeScript.prompt"
+
+  lib_git:
+    paths: ["*lib_git*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/git.ts"
+        prompt:
+          path: "prompts/lib_git_TypeScript.prompt"
+
+  lib_annotation_analysis:
+    paths: ["*lib_annotation_analysis*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/annotation-analysis.ts"
+        prompt:
+          path: "prompts/lib_annotation_analysis_TypeScript.prompt"
+
+  lib_annotation_target:
+    paths: ["*lib_annotation_target*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/annotation-target.ts"
+        prompt:
+          path: "prompts/lib_annotation_target_TypeScript.prompt"
+
+  lib_audit_evidence:
+    paths: ["*lib_audit_evidence*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/audit-evidence.ts"
+        prompt:
+          path: "prompts/lib_audit_evidence_TypeScript.prompt"
+
+  lib_audit_geometry:
+    paths: ["*lib_audit_geometry*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/audit-geometry.ts"
+        prompt:
+          path: "prompts/lib_audit_geometry_TypeScript.prompt"
+
+  lib_audit_spec_normalization:
+    paths: ["*lib_audit_spec_normalization*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/audit-spec-normalization.ts"
+        prompt:
+          path: "prompts/lib_audit_spec_normalization_TypeScript.prompt"
+
+  lib_audit_timing:
+    paths: ["*lib_audit_timing*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/audit-timing.ts"
+        prompt:
+          path: "prompts/lib_audit_timing_TypeScript.prompt"
+
+  lib_client_pipeline_runner:
+    paths: ["*lib_client_pipeline_runner*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/client/pipeline-runner.ts"
+        prompt:
+          path: "prompts/lib_client_pipeline_runner_TypeScript.prompt"
+
+  lib_client_sse_utils:
+    paths: ["*lib_client_sse_utils*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/client/sse-utils.ts"
+        prompt:
+          path: "prompts/lib_client_sse_utils_TypeScript.prompt"
+
+  lib_clip_events:
+    paths: ["*lib_clip_events*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/clip-events.ts"
+        prompt:
+          path: "prompts/lib_clip_events_TypeScript.prompt"
+
+  lib_composition_timing:
+    paths: ["*lib_composition_timing*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/composition-timing.ts"
+        prompt:
+          path: "prompts/lib_composition_timing_TypeScript.prompt"
+
+  lib_deterministic_pipeline:
+    paths: ["*lib_deterministic_pipeline*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/deterministic-pipeline.ts"
+        prompt:
+          path: "prompts/lib_deterministic_pipeline_TypeScript.prompt"
+
+  lib_markdown_format:
+    paths: ["*lib_markdown_format*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/markdown-format.ts"
+        prompt:
+          path: "prompts/lib_markdown_format_TypeScript.prompt"
+
+  lib_markdown_preview:
+    paths: ["*lib_markdown_preview*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/markdown-preview.tsx"
+        prompt:
+          path: "prompts/lib_markdown_preview_TypeScriptReact.prompt"
+
+  lib_remotion_spec_fix:
+    paths: ["*lib_remotion_spec_fix*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/remotion-spec-fix.ts"
+        prompt:
+          path: "prompts/lib_remotion_spec_fix_TypeScript.prompt"
+
+  lib_section_timing:
+    paths: ["*lib_section_timing*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/section-timing.ts"
+        prompt:
+          path: "prompts/lib_section_timing_TypeScript.prompt"
+
+  lib_spec_script_context:
+    paths: ["*lib_spec_script_context*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/spec-script-context.ts"
+        prompt:
+          path: "prompts/lib_spec_script_context_TypeScript.prompt"
+
+  lib_spec_timestamp:
+    paths: ["*lib_spec_timestamp*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/spec-timestamp.ts"
+        prompt:
+          path: "prompts/lib_spec_timestamp_TypeScript.prompt"
+
+  lib_spec_timing_context:
+    paths: ["*lib_spec_timing_context*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/spec-timing-context.ts"
+        prompt:
+          path: "prompts/lib_spec_timing_context_TypeScript.prompt"
+
+  lib_tts_script_format:
+    paths: ["*lib_tts_script_format*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/tts-script-format.ts"
+        prompt:
+          path: "prompts/lib_tts_script_format_TypeScript.prompt"
+
+  lib_tts_segments:
+    paths: ["*lib_tts_segments*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/tts-segments.ts"
+        prompt:
+          path: "prompts/lib_tts_segments_TypeScript.prompt"
+
+  lib_visual_runtime:
+    paths: ["*lib_visual_runtime*"]
+    defaults:
+      outputs:
+        code:
+          path: "lib/visual-runtime.ts"
+        prompt:
+          path: "prompts/lib_visual_runtime_TypeScript.prompt"
+
+  globals_css:
+    paths: ["*globals_css*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/globals.css"
+        prompt:
+          path: "prompts/globals_css_CSS.prompt"
 
   # ============================================================
   # API ROUTES
@@ -132,6 +412,8 @@ contexts:
       outputs:
         code:
           path: "app/api/project/route.ts"
+        prompt:
+          path: "prompts/api_project_route_TypeScript.prompt"
 
   api_project_script_route:
     paths: ["*api_project_script_route*"]
@@ -139,6 +421,35 @@ contexts:
       outputs:
         code:
           path: "app/api/project/script/route.ts"
+        prompt:
+          path: "prompts/api_project_script_route_TypeScript.prompt"
+
+  api_projects_create_route:
+    paths: ["*api_projects_create_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/projects/create/route.ts"
+        prompt:
+          path: "prompts/api_projects_create_route_TypeScript.prompt"
+
+  api_projects_select_route:
+    paths: ["*api_projects_select_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/projects/select/route.ts"
+        prompt:
+          path: "prompts/api_projects_select_route_TypeScript.prompt"
+
+  api_projects_route:
+    paths: ["*api_projects_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/projects/route.ts"
+        prompt:
+          path: "prompts/api_projects_route_TypeScript.prompt"
 
   api_pipeline_status_route:
     paths: ["*api_pipeline_status_route*"]
@@ -146,6 +457,8 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/status/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_status_route_TypeScript.prompt"
 
   api_pipeline_tts_script_route:
     paths: ["*api_pipeline_tts_script_route*"]
@@ -153,6 +466,17 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/tts-script/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_tts_script_route_TypeScript.prompt"
+
+  api_pipeline_tts_render_segments_route:
+    paths: ["*api_pipeline_tts_render_segments_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/tts-render/segments/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_tts_render_segments_route_TypeScript.prompt"
 
   api_pipeline_tts_render_route:
     paths: ["*api_pipeline_tts_render_route*"]
@@ -160,6 +484,17 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/tts-render/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_tts_render_route_TypeScript.prompt"
+
+  api_pipeline_audio_sync_timestamps_route:
+    paths: ["*api_pipeline_audio_sync_timestamps_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/audio-sync/timestamps/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_audio_sync_timestamps_route_TypeScript.prompt"
 
   api_pipeline_audio_sync_route:
     paths: ["*api_pipeline_audio_sync_route*"]
@@ -167,6 +502,26 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/audio-sync/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_audio_sync_route_TypeScript.prompt"
+
+  api_pipeline_specs_file_route:
+    paths: ["*api_pipeline_specs_file_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/specs/file/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_specs_file_route_TypeScript.prompt"
+
+  api_pipeline_specs_list_route:
+    paths: ["*api_pipeline_specs_list_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/specs/list/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_specs_list_route_TypeScript.prompt"
 
   api_pipeline_specs_route:
     paths: ["*api_pipeline_specs_route*"]
@@ -174,6 +529,53 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/specs/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_specs_route_TypeScript.prompt"
+
+  api_pipeline_veo_clips_route:
+    paths: ["*api_pipeline_veo_clips_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/veo/clips/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_veo_clips_route_TypeScript.prompt"
+
+  api_pipeline_veo_references_run_route:
+    paths: ["*api_pipeline_veo_references_run_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/veo/references/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_veo_references_run_route_TypeScript.prompt"
+
+  api_pipeline_veo_staging_manifest_route:
+    paths: ["*api_pipeline_veo_staging_manifest_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/veo/staging-manifest/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_veo_staging_manifest_route_TypeScript.prompt"
+
+  api_pipeline_veo_stream_route:
+    paths: ["*api_pipeline_veo_stream_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/veo/stream/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_veo_stream_route_TypeScript.prompt"
+
+  api_pipeline_veo_lib_frame_chains:
+    paths: ["*api_pipeline_veo_lib_frame_chains*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/veo/_lib/frame-chains.ts"
+        prompt:
+          path: "prompts/api_pipeline_veo_lib_frame_chains_TypeScript.prompt"
 
   api_pipeline_veo_route:
     paths: ["*api_pipeline_veo_route*"]
@@ -181,6 +583,26 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/veo/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_veo_route_TypeScript.prompt"
+
+  api_pipeline_compositions_list_route:
+    paths: ["*api_pipeline_compositions_list_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/compositions/list/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_compositions_list_route_TypeScript.prompt"
+
+  api_pipeline_compositions_preview_route:
+    paths: ["*api_pipeline_compositions_preview_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/compositions/preview/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_compositions_preview_route_TypeScript.prompt"
 
   api_pipeline_compositions_route:
     paths: ["*api_pipeline_compositions_route*"]
@@ -188,6 +610,26 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/compositions/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_compositions_route_TypeScript.prompt"
+
+  api_pipeline_render_status_route:
+    paths: ["*api_pipeline_render_status_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/render/status/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_render_status_route_TypeScript.prompt"
+
+  api_pipeline_render_stream_route:
+    paths: ["*api_pipeline_render_stream_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/render/stream/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_render_stream_route_TypeScript.prompt"
 
   api_pipeline_render_route:
     paths: ["*api_pipeline_render_route*"]
@@ -195,6 +637,35 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/render/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_render_route_TypeScript.prompt"
+
+  api_pipeline_audit_results_route:
+    paths: ["*api_pipeline_audit_results_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/audit/results/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_audit_results_route_TypeScript.prompt"
+
+  api_pipeline_audit_stream_route:
+    paths: ["*api_pipeline_audit_stream_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/audit/stream/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_audit_stream_route_TypeScript.prompt"
+
+  api_pipeline_audit_lib_spec_paths:
+    paths: ["*api_pipeline_audit_lib_spec_paths*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/audit/_lib/spec-paths.ts"
+        prompt:
+          path: "prompts/api_pipeline_audit_lib_spec_paths_TypeScript.prompt"
 
   api_pipeline_audit_route:
     paths: ["*api_pipeline_audit_route*"]
@@ -202,6 +673,62 @@ contexts:
       outputs:
         code:
           path: "app/api/pipeline/audit/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_audit_route_TypeScript.prompt"
+
+  api_pipeline_asset_staging_run_route:
+    paths: ["*api_pipeline_asset_staging_run_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/asset-staging/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_asset_staging_run_route_TypeScript.prompt"
+
+  api_pipeline_setup_extract_sections_route:
+    paths: ["*api_pipeline_setup_extract_sections_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/setup/extract-sections/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_setup_extract_sections_route_TypeScript.prompt"
+
+  api_pipeline_stitch_run_route:
+    paths: ["*api_pipeline_stitch_run_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/stitch/run/route.ts"
+        prompt:
+          path: "prompts/api_pipeline_stitch_run_route_TypeScript.prompt"
+
+  api_pipeline_lib_composition_manifest:
+    paths: ["*api_pipeline_lib_composition_manifest*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/_lib/composition-manifest.ts"
+        prompt:
+          path: "prompts/api_pipeline_lib_composition_manifest_TypeScript.prompt"
+
+  api_pipeline_lib_script_visual_intent:
+    paths: ["*api_pipeline_lib_script_visual_intent*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/_lib/script-visual-intent.ts"
+        prompt:
+          path: "prompts/api_pipeline_lib_script_visual_intent_TypeScript.prompt"
+
+  api_pipeline_lib_visual_contract_manifest:
+    paths: ["*api_pipeline_lib_visual_contract_manifest*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/pipeline/_lib/visual-contract-manifest.ts"
+        prompt:
+          path: "prompts/api_pipeline_lib_visual_contract_manifest_TypeScript.prompt"
 
   api_jobs_stream_route:
     paths: ["*api_jobs_stream_route*"]
@@ -209,27 +736,8 @@ contexts:
       outputs:
         code:
           path: "app/api/jobs/[id]/stream/route.ts"
-
-  api_annotations_id_analyze_route:
-    paths: ["*api_annotations_id_analyze_route*"]
-    defaults:
-      outputs:
-        code:
-          path: "app/api/annotations/[id]/analyze/route.ts"
-
-  api_annotations_id_route:
-    paths: ["*api_annotations_id_route*"]
-    defaults:
-      outputs:
-        code:
-          path: "app/api/annotations/[id]/route.ts"
-
-  api_annotations_route:
-    paths: ["*api_annotations_route*"]
-    defaults:
-      outputs:
-        code:
-          path: "app/api/annotations/route.ts"
+        prompt:
+          path: "prompts/api_jobs_stream_route_TypeScript.prompt"
 
   api_jobs_id_retry_route:
     paths: ["*api_jobs_id_retry_route*"]
@@ -237,6 +745,8 @@ contexts:
       outputs:
         code:
           path: "app/api/jobs/[id]/retry/route.ts"
+        prompt:
+          path: "prompts/api_jobs_id_retry_route_TypeScript.prompt"
 
   api_jobs_id_route:
     paths: ["*api_jobs_id_route*"]
@@ -244,6 +754,62 @@ contexts:
       outputs:
         code:
           path: "app/api/jobs/[id]/route.ts"
+        prompt:
+          path: "prompts/api_jobs_id_route_TypeScript.prompt"
+
+  api_annotations_id_analyze_route:
+    paths: ["*api_annotations_id_analyze_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/[id]/analyze/route.ts"
+        prompt:
+          path: "prompts/api_annotations_id_analyze_route_TypeScript.prompt"
+
+  api_annotations_id_diff_route:
+    paths: ["*api_annotations_id_diff_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/[id]/diff/route.ts"
+        prompt:
+          path: "prompts/api_annotations_id_diff_route_TypeScript.prompt"
+
+  api_annotations_id_revert_route:
+    paths: ["*api_annotations_id_revert_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/[id]/revert/route.ts"
+        prompt:
+          path: "prompts/api_annotations_id_revert_route_TypeScript.prompt"
+
+  api_annotations_id_route:
+    paths: ["*api_annotations_id_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/[id]/route.ts"
+        prompt:
+          path: "prompts/api_annotations_id_route_TypeScript.prompt"
+
+  api_annotations_route:
+    paths: ["*api_annotations_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/annotations/route.ts"
+        prompt:
+          path: "prompts/api_annotations_route_TypeScript.prompt"
+
+  api_sections_id_preview_fixes_route:
+    paths: ["*api_sections_id_preview_fixes_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/sections/[id]/preview-fixes/route.ts"
+        prompt:
+          path: "prompts/api_sections_id_preview_fixes_route_TypeScript.prompt"
 
   api_sections_id_resolve_batch_route:
     paths: ["*api_sections_id_resolve_batch_route*"]
@@ -251,6 +817,35 @@ contexts:
       outputs:
         code:
           path: "app/api/sections/[id]/resolve-batch/route.ts"
+        prompt:
+          path: "prompts/api_sections_id_resolve_batch_route_TypeScript.prompt"
+
+  api_audio_tts_route:
+    paths: ["*api_audio_tts_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/audio/tts/[...path]/route.ts"
+        prompt:
+          path: "prompts/api_audio_tts_route_TypeScript.prompt"
+
+  api_costs_route:
+    paths: ["*api_costs_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/costs/route.ts"
+        prompt:
+          path: "prompts/api_costs_route_TypeScript.prompt"
+
+  api_export_route:
+    paths: ["*api_export_route*"]
+    defaults:
+      outputs:
+        code:
+          path: "app/api/export/route.ts"
+        prompt:
+          path: "prompts/api_export_route_TypeScript.prompt"
 
   api_video_route:
     paths: ["*api_video_route*"]
@@ -258,6 +853,8 @@ contexts:
       outputs:
         code:
           path: "app/api/video/[...path]/route.ts"
+        prompt:
+          path: "prompts/api_video_route_TypeScript.prompt"
 
   # ============================================================
   # SHARED COMPONENTS
@@ -269,6 +866,8 @@ contexts:
       outputs:
         code:
           path: "components/SseLogPanel.tsx"
+        prompt:
+          path: "prompts/sse_log_panel_TypeScriptReact.prompt"
 
   stage_sidebar:
     paths: ["*stage_sidebar*"]
@@ -276,6 +875,8 @@ contexts:
       outputs:
         code:
           path: "components/StageSidebar.tsx"
+        prompt:
+          path: "prompts/stage_sidebar_TypeScriptReact.prompt"
 
   video_player:
     paths: ["*video_player*"]
@@ -283,6 +884,8 @@ contexts:
       outputs:
         code:
           path: "components/VideoPlayer.tsx"
+        prompt:
+          path: "prompts/video_player_TypeScriptReact.prompt"
 
   annotation_panel:
     paths: ["*annotation_panel*"]
@@ -290,6 +893,35 @@ contexts:
       outputs:
         code:
           path: "components/AnnotationPanel.tsx"
+        prompt:
+          path: "prompts/annotation_panel_TypeScriptReact.prompt"
+
+  cost_dashboard:
+    paths: ["*cost_dashboard*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/CostDashboard.tsx"
+        prompt:
+          path: "prompts/cost_dashboard_TypeScriptReact.prompt"
+
+  fix_preview_panel:
+    paths: ["*fix_preview_panel*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/FixPreviewPanel.tsx"
+        prompt:
+          path: "prompts/fix_preview_panel_TypeScriptReact.prompt"
+
+  pipeline_advance_button:
+    paths: ["*pipeline_advance_button*"]
+    defaults:
+      outputs:
+        code:
+          path: "components/PipelineAdvanceButton.tsx"
+        prompt:
+          path: "prompts/pipeline_advance_button_TypeScriptReact.prompt"
 
   # ============================================================
   # STAGE COMPONENTS
@@ -301,6 +933,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage1ProjectSetup.tsx"
+        prompt:
+          path: "prompts/stage1_project_setup_TypeScriptReact.prompt"
 
   stage2_script_editor:
     paths: ["*stage2_script_editor*"]
@@ -308,6 +942,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage2ScriptEditor.tsx"
+        prompt:
+          path: "prompts/stage2_script_editor_TypeScriptReact.prompt"
 
   stage3_tts_script_gen:
     paths: ["*stage3_tts_script_gen*"]
@@ -315,6 +951,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage3TtsScriptGen.tsx"
+        prompt:
+          path: "prompts/stage3_tts_script_gen_TypeScriptReact.prompt"
 
   stage4_tts_rendering:
     paths: ["*stage4_tts_rendering*"]
@@ -322,6 +960,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage4TtsRendering.tsx"
+        prompt:
+          path: "prompts/stage4_tts_rendering_TypeScriptReact.prompt"
 
   stage5_audio_sync:
     paths: ["*stage5_audio_sync*"]
@@ -329,6 +969,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage5AudioSync.tsx"
+        prompt:
+          path: "prompts/stage5_audio_sync_TypeScriptReact.prompt"
 
   stage6_spec_generation:
     paths: ["*stage6_spec_generation*"]
@@ -336,6 +978,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage6SpecGeneration.tsx"
+        prompt:
+          path: "prompts/stage6_spec_generation_TypeScriptReact.prompt"
 
   stage7_veo_generation:
     paths: ["*stage7_veo_generation*"]
@@ -343,6 +987,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage7VeoGeneration.tsx"
+        prompt:
+          path: "prompts/stage7_veo_generation_TypeScriptReact.prompt"
 
   stage8_composition_gen:
     paths: ["*stage8_composition_gen*"]
@@ -350,6 +996,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage8CompositionGen.tsx"
+        prompt:
+          path: "prompts/stage8_composition_gen_TypeScriptReact.prompt"
 
   stage9_render_stitch:
     paths: ["*stage9_render_stitch*"]
@@ -357,6 +1005,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage9RenderStitch.tsx"
+        prompt:
+          path: "prompts/stage9_render_stitch_TypeScriptReact.prompt"
 
   stage10_audit:
     paths: ["*stage10_audit*"]
@@ -364,6 +1014,8 @@ contexts:
       outputs:
         code:
           path: "components/stages/Stage10Audit.tsx"
+        prompt:
+          path: "prompts/stage10_audit_TypeScriptReact.prompt"
 
   # ============================================================
   # APP ENTRY
@@ -375,6 +1027,8 @@ contexts:
       outputs:
         code:
           path: "app/layout.tsx"
+        prompt:
+          path: "prompts/app_layout_TypeScriptReact.prompt"
 
   app_page:
     paths: ["*app_page*"]
@@ -382,6 +1036,8 @@ contexts:
       outputs:
         code:
           path: "app/page.tsx"
+        prompt:
+          path: "prompts/app_page_TypeScriptReact.prompt"
 
   # ============================================================
   # DEFAULT FALLBACK
