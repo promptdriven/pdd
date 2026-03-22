@@ -17,6 +17,7 @@ interface SpecFile {
   path: string;
   exists: boolean;
   firstLine?: string;
+  parentSpec?: string;
 }
 
 interface SpecSection {
@@ -84,6 +85,102 @@ function listSpecFiles(specDirAbs: string, specDirRel: string): SpecFile[] {
   return files;
 }
 
+const DATA_POINTS_JSON_RE = /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
+const SPLIT_MARKER_RE = /^\s*\[split:[^\]]*\]/i;
+
+function extractChildClipIds(content: string): string[] {
+  if (!SPLIT_MARKER_RE.test(content)) {
+    return [];
+  }
+
+  const match = DATA_POINTS_JSON_RE.exec(content);
+  if (!match?.[1]) {
+    return [];
+  }
+
+  let dataPoints: Record<string, unknown>;
+  try {
+    dataPoints = JSON.parse(match[1]);
+  } catch {
+    return [];
+  }
+
+  const ids: string[] = [];
+
+  function collect(value: unknown): void {
+    if (typeof value === "string" && value.trim()) {
+      ids.push(value.trim());
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+        const normalized = key.replace(/[_-]/g, "").toLowerCase();
+        if (
+          (normalized === "leftclipid" || normalized === "rightclipid" ||
+           normalized === "clipid" || normalized === "content") &&
+          typeof nested === "string" && nested.trim()
+        ) {
+          ids.push(nested.trim());
+        } else if (typeof nested === "object" && nested !== null) {
+          collect(nested);
+        }
+      }
+    }
+  }
+
+  collect(dataPoints);
+  return ids;
+}
+
+function resolveParentSpecs(files: SpecFile[], specDirAbs: string): void {
+  const containerChildren = new Map<string, string[]>();
+
+  for (const file of files) {
+    const fileName = path.basename(file.path);
+    const absPath = path.join(specDirAbs, fileName);
+    if (!file.exists) continue;
+
+    let content: string;
+    try {
+      content = fs.readFileSync(absPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    const childIds = extractChildClipIds(content);
+    if (childIds.length > 0) {
+      containerChildren.set(fileName, childIds);
+    }
+  }
+
+  if (containerChildren.size === 0) return;
+
+  for (const file of files) {
+    const fileName = path.basename(file.path);
+    const baseName = fileName.replace(/\.md$/, "");
+    const stripped = baseName.replace(/^\d+_/, "");
+
+    for (const [containerName, childIds] of containerChildren) {
+      if (fileName === containerName) continue;
+
+      const matched = childIds.some((id) => {
+        const normalizedId = id.replace(/[_-]/g, "").toLowerCase();
+        const normalizedBase = baseName.replace(/[_-]/g, "").toLowerCase();
+        const normalizedStripped = stripped.replace(/[_-]/g, "").toLowerCase();
+        return (
+          normalizedBase === normalizedId ||
+          normalizedStripped === normalizedId ||
+          normalizedBase.includes(normalizedId) ||
+          normalizedStripped.includes(normalizedId)
+        );
+      });
+
+      if (matched) {
+        file.parentSpec = containerName;
+        break;
+      }
+    }
+  }
+}
+
 export async function GET(): Promise<NextResponse> {
   try {
     const config = loadProject();
@@ -97,6 +194,7 @@ export async function GET(): Promise<NextResponse> {
       );
 
       const files = listSpecFiles(specDirAbs, specDirRel);
+      resolveParentSpecs(files, specDirAbs);
 
       // If no files exist yet, add a placeholder entry for the expected spec
       if (files.length === 0) {

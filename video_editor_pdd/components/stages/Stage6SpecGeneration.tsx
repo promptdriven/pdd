@@ -29,6 +29,7 @@ type SpecFile = {
   exists: boolean;
   // optional metadata from API
   firstLine?: string;
+  parentSpec?: string;
 };
 
 type SpecSection = {
@@ -511,7 +512,12 @@ export const Stage6SpecGeneration: React.FC<Stage6SpecGenerationProps> = ({ onAd
                                 <span className="text-xs text-slate-400">—</span>
                               )}
                             </td>
-                            <td className="py-2 font-mono text-xs text-slate-300">{file.path}</td>
+                            <td className="py-2 font-mono text-xs text-slate-300">
+                              {file.parentSpec && (
+                                <span className="mr-1 text-slate-500">└─</span>
+                              )}
+                              {file.path}
+                            </td>
                             <td className="py-2">
                               {file.exists ? (
                                 <span className="text-green-600">exists</span>
