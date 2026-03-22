@@ -1,3 +1,19 @@
+## v0.0.184 (2026-03-21)
+
+### Fix
+
+- support nested .pddrc files for subdirectory projects
+- Stage 6 three-column panels use fixed height with independent scrolling
+- align three-column layout height in Stage 6 Spec Generation
+- VideoPlayer shows 0 duration when video metadata is already cached
+- single-action Veo prompts to improve clip quality (#905)
+- 18 general pipeline fixes for video editor (#904)
+- route non-Python agentic test ops to real execution, detect Jest/Vitest for TypeScript (#449, #899)
+
+### Refactor
+
+- reimplement code panel animations with character-level dissolve and streaming regenerated code.
+
 ## v0.0.183 (2026-03-20)
 
 ### Fix

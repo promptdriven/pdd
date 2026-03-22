@@ -227,6 +227,67 @@ class TestEdgeCases:
         assert result is None
 
 
+class TestTypeScriptTestRunnerDetection:
+    """Tests for smart Jest/Vitest detection for TypeScript files."""
+
+    def test_jest_config_overrides_csv_tsx_command(self, tmp_path):
+        """When jest.config.js exists, TypeScript test files should use npx jest, not npx tsx."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('test', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+
+    def test_vitest_config_overrides_csv_tsx_command(self, tmp_path):
+        """When vitest.config.ts exists, TypeScript test files should use npx vitest."""
+        (tmp_path / "vitest.config.ts").write_text("export default {};")
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('test', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert result.startswith("npx vitest"), f"Expected command starting with 'npx vitest', got: {result}"
+
+    def test_no_config_falls_back_to_csv(self, tmp_path):
+        """Without jest/vitest config, TypeScript should use the CSV command (npx tsx)."""
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("console.log('test')")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert result.startswith("npx tsx"), f"Expected command starting with 'npx tsx', got: {result}"
+
+    def test_jest_config_ts_also_detected(self, tmp_path):
+        """jest.config.ts should also trigger Jest detection."""
+        (tmp_path / "jest.config.ts").write_text("export default {};")
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('test', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+
+    def test_tsx_files_also_use_jest_when_available(self, tmp_path):
+        """TSX files should also detect Jest config."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "tests" / "test_component.tsx"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('test', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescriptreact")
+
+        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+
+
 class TestIntegrationWithRealCSV:
     """Integration tests using the actual CSV file."""
 
