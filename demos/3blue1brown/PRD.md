@@ -1,8 +1,9 @@
 # PRD: AI-First Video Editor
 
-**Status:** Internal Engineering Document — derived from working prototype
-**Date:** 2026-02-19
+**Status:** Internal Engineering Document — updated to reflect V1 implementation
+**Date:** 2026-03-22 (originally 2026-02-19)
 **Prototype:** `demos/3blue1brown/`
+**V1 Implementation:** `video_editor_pdd/` (109 code files, 106 PDD prompts, 246K total lines)
 
 ---
 
@@ -45,7 +46,7 @@ A complete 20-minute educational video ("Why You're Still Darning Socks") about 
 | Live-action footage | Google Veo 3.1 | 50+ MP4 clips (8s each, 9:16 & 16:9) |
 | Animated visualizations | Remotion 4.0 + React 19 | 60 compositions, 73 named components |
 | Section rendering | Remotion CLI + AWS Lambda | 7 section videos + 1 full 232MB video |
-| Review & auto-fix | Express.js (prototype) + Claude Opus 4.6 | `review-app/` — the key innovation (V1 migrates to Next.js API routes) |
+| Review & auto-fix | Next.js App Router + Claude Opus 4.6 | `video_editor_pdd/` — 50+ API routes, 10-stage pipeline UI, SQLite persistence |
 
 ### What It Demonstrates
 
@@ -1243,13 +1244,26 @@ models/
 
 V1 loads all models from the local `models/` directory. (`render_full.py` in the prototype loaded from HuggingFace Hub, but V1 standardizes on local-only to avoid runtime downloads.) A setup script downloads model weights on first run (see §9.3).
 
-### Review App
+### Review App & Video Editor Webapp
 
 | Package | Purpose |
 |---------|---------|
-| Next.js API routes | HTTP server (annotation API, video streaming, job management) |
+| Next.js 16.0.10 (App Router) | HTTP server — all API routes under `app/api/` |
+| `better-sqlite3` | SQLite database (annotations, jobs) — sync API, configured in `next.config.ts` `serverExternalPackages` |
+| CodeMirror 6 | Script editor (Stage 2) |
+| WaveSurfer.js | Audio waveform visualization (Stage 4) |
 | `jest` + `supertest` | Testing |
 | Web Speech API | Browser-native speech recognition |
+
+### V1 Codebase Scale
+
+| Category | Files | Lines |
+|----------|------:|------:|
+| App code (app/, components/, lib/, scripts/) | 109 | 31,995 |
+| Tests (tests/, e2e/) | 131 | 74,336 |
+| PDD Prompts | 106 | 3,880 |
+| Remotion compositions (excl. node_modules) | 1,586 | 136,203 |
+| **Total** | **1,932** | **246,414** |
 
 ---
 
@@ -1272,30 +1286,31 @@ V1 loads all models from the local `models/` directory. (`render_full.py` in the
 
 ### What's Prototype-Quality (Duct Tape)
 
-| Area | Issue | Impact |
-|------|-------|--------|
-| **Persistence** | Annotations stored in a flat JSON file (`data/annotations.json`) | No concurrent access, no backup, no history |
-| **Auth** | None | Single-user local app — no auth needed (see §9.5) |
-| **Claude spawning** | New CLI process per analysis/fix — cold start every time | ~10s overhead per invocation |
-| **JSON extraction** | Three fallback strategies for parsing Claude's output (direct parse, code fence, brace matching) | Fragile; depends on Claude's output format |
-| **Section mapping** | Hardcoded array of 7 sections with manual spec/remotion/composition mapping | Adding sections requires server code change |
-| **Video streaming** | Range request support but no caching, CDN, or adaptive bitrate | Fine for local, won't scale |
-| **Drawing state** | Canvas paths serialized as JSON arrays | No undo history, no layer management |
-| **Error recovery** | Jobs marked as error on server restart, no retry | Manual re-run required |
-| **Thumbnail storage** | Local filesystem `data/thumbnails/` | Not backed up, grows unbounded |
-| **Rendering** | Full Remotion render for any change, even single-frame fixes | Rendering a 2-minute section takes ~60s for a 1-line color change |
+| Area | Issue | Impact | V1 Status |
+|------|-------|--------|-----------|
+| **Persistence** | Annotations stored in a flat JSON file (`data/annotations.json`) | No concurrent access, no backup, no history | **Fixed** — SQLite via `better-sqlite3` (sync API) in `lib/db.ts` |
+| **Auth** | None | Single-user local app — no auth needed (see §9.5) | Unchanged (by design) |
+| **Claude spawning** | New CLI process per analysis/fix — cold start every time | ~10s overhead per invocation | Unchanged |
+| **JSON extraction** | Three fallback strategies for parsing Claude's output (direct parse, code fence, brace matching) | Fragile; depends on Claude's output format | Unchanged |
+| **Section mapping** | Hardcoded array of 7 sections with manual spec/remotion/composition mapping | Adding sections requires server code change | **Fixed** — `project.json` loaded at runtime; section registry editable in Stage 1 UI |
+| **Video streaming** | Range request support but no caching, CDN, or adaptive bitrate | Fine for local, won't scale | Unchanged |
+| **Drawing state** | Canvas paths serialized as JSON arrays | No undo history, no layer management | Unchanged |
+| **Error recovery** | Jobs marked as error on server restart, no retry | Manual re-run required | **Fixed** — `POST /api/jobs/:id/retry` implemented |
+| **Thumbnail storage** | Local filesystem `data/thumbnails/` | Not backed up, grows unbounded | Unchanged |
+| **Rendering** | Full Remotion render for any change, even single-frame fixes | Rendering a 2-minute section takes ~60s for a 1-line color change | Unchanged |
 
-### What's Missing
+### What Was Missing (Prototype) → V1 Status
 
-| Feature | Why It Matters |
-|---------|---------------|
-| **Version control for fixes** | No way to revert a bad Claude fix. Once it edits the .tsx file, the old version is gone (unless git tracked). |
-| **Multi-annotation batching** | In the prototype, each annotation triggers a separate fix → render → stitch cycle. Five annotations on the same section = five full renders. V1 implements per-section batch queuing (see §4.4, §9.2). |
-| **Diff preview** | No way to see what Claude will change before it changes it. The fix is applied blindly. |
-| **Selective re-render** | Rendering is per-section. Can't re-render just the 3 seconds around the fix. |
-| **Asset management** | Veo clips, TTS segments, and reference images are scattered across `outputs/`, `remotion/public/`, and `references/`. No manifest or DAM. |
-| **Collaboration** | Single-user, single-machine. No shared annotation state. |
-| **Cost tracking** | No visibility into Claude API costs, Veo generation costs, or Lambda rendering costs per fix. |
+| Feature | Prototype Gap | V1 Status |
+|---------|---------------|-----------|
+| **Version control for fixes** | No way to revert a bad Claude fix | **Implemented** — `lib/git.ts` for git integration; `POST /api/annotations/:id/revert` for rollback; `POST /api/annotations/:id/diff` for code diff view |
+| **Multi-annotation batching** | Each annotation triggers a separate fix → render → stitch cycle | **Implemented** — per-section batch queuing via `POST /api/sections/:sectionId/resolve-batch` (see §4.4) |
+| **Diff preview** | No way to see what Claude will change before it changes it | **Implemented** — `FixPreviewPanel` component; `POST /api/sections/:id/preview-fixes` endpoint |
+| **Selective re-render** | Rendering is per-section. Can't re-render just the 3 seconds around the fix. | Still per-section |
+| **Asset management** | Veo clips, TTS segments, and reference images scattered with no manifest | **Implemented** — `GET /api/pipeline/veo/staging-manifest` provides manifest; `POST /api/pipeline/asset-staging/run` automates staging |
+| **Collaboration** | Single-user, single-machine. No shared annotation state. | Still single-user (by design, §9.5) |
+| **Cost tracking** | No visibility into API costs per fix | **Implemented** — `CostDashboard` component; `GET /api/costs` endpoint |
+| **Multi-project support** | Single hardcoded project | **Implemented** — `POST /api/projects/create`, `GET /api/projects`, `POST /api/projects/select` |
 
 ---
 
@@ -1369,49 +1384,50 @@ For a 19-second rendered video:
 
 **P0 — The webapp controls the full pipeline, not just the review loop:**
 
-- [ ] **Project setup:** Create a new video project from a source script. Define sections, configure TTS voice/model, set output resolution.
-- [ ] **Script → TTS script generation:** Trigger Claude Code to extract narration and add TTS annotations. Review/edit the generated TTS script in-app.
-- [ ] **TTS rendering:** Trigger TTS generation from the UI. Preview audio per-segment. Re-generate individual segments.
-- [ ] **Audio sync pipeline:** Trigger section grouping, silence insertion, Whisper transcription. Display word-level timestamps.
-- [ ] **Spec generation:** Trigger Claude Code to generate visual specs from the source script. Edit specs in-app with live preview.
-- [ ] **Veo generation:** Trigger reference image creation (Imagen) and clip generation (Veo) from the UI. Manage frame chaining dependencies. Preview clips inline.
-- [ ] **Composition generation:** Trigger Claude Code to write Remotion compositions from specs. Trigger section wrapper scaffolding. Preview individual compositions.
-- [ ] **Asset staging:** Automated staging of Veo clips and TTS audio to `remotion/public/` with manifest tracking (replacing the manual Claude Code `cp` pattern).
-- [ ] **Section render + stitch:** Render sections via local Remotion CLI, assemble full video. (Lambda remains available as an opt-in for long renders.)
-- [ ] **Progress streaming:** Real-time SSE updates for every pipeline stage — not just the fix loop. (SSE is preferred over WebSockets: communication is one-directional server→client, SSE has built-in browser reconnection, and the client never sends messages during a job.)
+- [x] **Project setup:** Create a new video project from a source script. Define sections, configure TTS voice/model, set output resolution. (`Stage1ProjectSetup`, `POST /api/projects/create`, `POST /api/pipeline/setup/extract-sections`)
+- [x] **Script → TTS script generation:** Trigger Claude Code to extract narration and add TTS annotations. Review/edit the generated TTS script in-app. (`Stage2ScriptEditor`, `Stage3TtsScriptGen`, `POST /api/pipeline/tts-script/run`)
+- [x] **TTS rendering:** Trigger TTS generation from the UI. Preview audio per-segment. Re-generate individual segments. (`Stage4TtsRendering`, `POST /api/pipeline/tts-render/run`, `GET /api/pipeline/tts-render/segments`)
+- [x] **Audio sync pipeline:** Trigger section grouping, silence insertion, Whisper transcription. Display word-level timestamps. (`Stage5AudioSync`, `POST /api/pipeline/audio-sync/run`, `GET /api/pipeline/audio-sync/timestamps`)
+- [x] **Spec generation:** Trigger Claude Code to generate visual specs from the source script. Edit specs in-app with live preview. (`Stage6SpecGeneration`, `POST /api/pipeline/specs/run`, `GET /api/pipeline/specs/list`, `GET /api/pipeline/specs/file`)
+- [x] **Veo generation:** Trigger reference image creation (Imagen) and clip generation (Veo) from the UI. Manage frame chaining dependencies. Preview clips inline. (`Stage7VeoGeneration`, `POST /api/pipeline/veo/run`, `POST /api/pipeline/veo/references/run`, `GET /api/pipeline/veo/clips`)
+- [x] **Composition generation:** Trigger Claude Code to write Remotion compositions from specs. Trigger section wrapper scaffolding. Preview individual compositions. (`Stage8CompositionGen`, `POST /api/pipeline/compositions/run`, `POST /api/pipeline/compositions/preview`)
+- [x] **Asset staging:** Automated staging of Veo clips and TTS audio to `remotion/public/` with manifest tracking. (`POST /api/pipeline/asset-staging/run`, `GET /api/pipeline/veo/staging-manifest`)
+- [x] **Section render + stitch:** Render sections via local Remotion CLI, assemble full video. (`Stage9RenderStitch`, `POST /api/pipeline/render/run`, `POST /api/pipeline/stitch/run`)
+- [x] **Progress streaming:** Real-time SSE updates for every pipeline stage. (`lib/sse.ts`, `SseLogPanel`, `GET /api/jobs/:id/stream`, dedicated stream endpoints per stage)
 
 ### 9.2 Review/Fix Loop (Must Have)
 
-**P0 — The review/fix/render cycle, productized (extends the prototype's most polished piece):**
+**P0 — The review/fix/render cycle, productized:**
 
-- [ ] **Video player with annotation:** Spacebar workflow (pause → draw → speak → save → resume), drawing tools (freehand, rectangle, circle, arrow, text), speech-to-text input
-- [ ] **AI analysis:** Send annotation context (frame, drawing, text, spec, source code, TTS/Veo files as relevant) to Claude; return structured assessment with severity/category/`fixType`/fixes
-- [ ] **Batch fix trigger:** Annotations queue per section after analysis. User reviews queued annotations (with `fixType` badge) and clicks [Apply N Fixes] to trigger the batch. This is the primary flow — not per-annotation real-time.
-- [ ] **Fix preview (per fix type):** Before executing: code diff for `remotion` fixes; side-by-side clip preview for `veo` fixes; audio playback comparison for `tts` fixes. User can accept, reject, or edit per annotation.
-- [ ] **AI fix (per fix type):** `remotion` — Claude edits .tsx files, git commit per batch for rollback. `veo` — server calls Veo API to regenerate clip, stages to `remotion/public/`. `tts` — server re-renders audio segment(s), re-runs audio sync pipeline.
-- [ ] **Section re-render + re-stitch:** After all fixes in the batch are applied, render the section once and reassemble full video.
+- [x] **Video player with annotation:** Spacebar workflow, drawing tools, speech-to-text input (`VideoPlayer`, `AnnotationPanel`)
+- [x] **AI analysis:** Structured severity/category/fixType assessment (`POST /api/annotations/:id/analyze`, `lib/claude.ts`, `lib/annotation-analysis.ts`)
+- [x] **Batch fix trigger:** Per-section batch queuing (`POST /api/sections/:id/resolve-batch`)
+- [x] **Fix preview:** Code diff for remotion fixes; preview panel before applying (`FixPreviewPanel`, `POST /api/sections/:id/preview-fixes`, `POST /api/annotations/:id/diff`)
+- [x] **AI fix (per fix type):** Remotion edits + git commit, Veo regeneration + staging, TTS re-render + audio sync (`lib/git.ts`, `lib/veo.ts`, `lib/render.ts`)
+- [x] **Fix revert:** Undo applied fixes (`POST /api/annotations/:id/revert`)
+- [x] **Section re-render + re-stitch:** After batch fixes, render once and reassemble (`POST /api/pipeline/render/run`, `POST /api/pipeline/stitch/run`)
 
 ### 9.3 Reliability (Must Have)
 
-**P0 — Things that are currently broken or fragile:**
+**P0 — Things that were broken or fragile in the prototype:**
 
-- [ ] **Project config:** Section registry, composition mappings, and pipeline settings in a config file (e.g., `project.json`) loaded at startup — not hardcoded in server logic
-- [ ] **Database-backed persistence:** Replace `annotations.json` with SQLite or Postgres. Support concurrent access, annotation history, and backup.
-- [ ] **Structured Claude output:** Use Claude's tool_use mode or structured output instead of free-form JSON parsing with three fallback strategies
-- [ ] **Git integration:** Auto-commit before and after every Claude fix. Enable `git diff` preview and `git revert` for bad fixes.
-- [ ] **Job retry:** Allow retrying failed jobs (any pipeline stage, not just resolve) without re-running upstream steps
-- [ ] **Asset manifest:** Central registry of all clips, audio segments, reference images, and generated compositions — replacing the current scatter across `outputs/`, `remotion/public/`, and `references/`
-- [ ] **Dependency management:** `requirements.txt` for all Python dependencies (including `qwen_tts`, `google-genai`, `faster-whisper`, `soundfile`, `transformers`) and `package.json` for all Node dependencies. No implicit/undocumented dependencies.
-- [ ] **Setup script:** A single `setup.sh` (or `make setup`) that installs Python + Node dependencies, downloads Qwen3-TTS model weights (~4.5GB) to `models/`, verifies `ffmpeg` is installed, and creates the expected directory structure (`outputs/`, `references/`, `audits/`, `data/`).
+- [x] **Project config:** `project.json` loaded at runtime — `lib/project.ts` (`GET/PUT /api/project`)
+- [x] **Database-backed persistence:** SQLite via `better-sqlite3` — `lib/db.ts`
+- [ ] **Structured Claude output:** Still using CLI invocation with JSON parsing
+- [x] **Git integration:** `lib/git.ts` — diff preview, revert for bad fixes
+- [x] **Job retry:** `POST /api/jobs/:id/retry`
+- [x] **Asset manifest:** `GET /api/pipeline/veo/staging-manifest` — expected vs present files
+- [x] **Dependency management:** `requirements.txt` + `package.json` + `setup.sh`
+- [x] **Setup script:** `setup.sh` / `setup_Bash.prompt`
 
 ### 9.4 Efficiency (Should Have)
 
 **P1 — Performance and cost improvements:**
 
-- [ ] **Incremental rendering:** Render only the frames around the fix (Remotion supports `--frames` flag), composite into existing section video
-- [ ] **Claude session reuse:** Keep a warm Claude session per section instead of cold-starting the CLI for every invocation
-- [ ] **Parallel pipeline stages:** Run independent pipeline stages concurrently (e.g., TTS and Veo generation in parallel; multi-section renders in parallel)
-- [ ] **Cost dashboard:** Track and display Claude API, Veo, and Imagen costs per stage and per session (local rendering has no marginal cost; Lambda costs tracked only if Lambda opt-in is used)
+- [ ] **Incremental rendering:** Still per-section (Remotion `--frames` not yet integrated)
+- [ ] **Claude session reuse:** Still cold-starting CLI per invocation
+- [x] **Parallel pipeline stages:** Independent stages run concurrently; prerequisite auto-run follows the dependency graph (`lib/deterministic-pipeline.ts`, `PipelineAdvanceButton`)
+- [x] **Cost dashboard:** `CostDashboard` component + `GET /api/costs` endpoint
 
 ### 9.5 Out of Scope for V1
 
@@ -1456,14 +1472,22 @@ For a 19-second rendered video:
 
 ## Appendix A: API Surface
 
-> Prototype implemented in `review-app/server.js` (Express). V1 moves to Next.js API routes (`/app/api/...`). The endpoint contracts below are unchanged; only the implementation layer moves.
+> V1 implemented in Next.js App Router API routes (`app/api/...`), replacing the Express prototype (`review-app/server.js`). All routes use `export const dynamic = 'force-dynamic'`. Persistence via SQLite (`lib/db.ts`). 106 PDD prompts cover the full codebase.
+
+### Projects (V1 — multi-project support)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/projects/create` | Create new project workspace with default config |
+| GET | `/api/projects` | List all projects + selected project ID |
+| POST | `/api/projects/select` | Switch active project |
 
 ### Video
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/video/full` | Stream full video with range requests |
-| GET | `/video/sections/:file` | Stream section video with range requests |
+| GET | `/api/video/[...path]` | Stream full or section video with range requests |
+| GET | `/api/audio/tts/[...path]` | Serve TTS audio files |
 
 ### Annotations
 
@@ -1471,16 +1495,14 @@ For a 19-second rendered video:
 |--------|------|-------------|
 | GET | `/api/annotations` | List all annotations |
 | POST | `/api/annotations` | Create annotation (auto-ID) |
+| GET | `/api/annotations/:id` | Get single annotation |
 | PUT | `/api/annotations/:id` | Update annotation |
 | DELETE | `/api/annotations/:id` | Delete annotation |
 | POST | `/api/annotations/:id/analyze` | Trigger Claude analysis |
-| POST | `/api/sections/:sectionId/resolve-batch` | Start batch fix → render → stitch for all pending annotations in a section (returns `{ jobId }`) |
-
-### Analysis
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/analyze` | One-off analysis (no annotation created) |
+| POST | `/api/annotations/:id/diff` | Get code diff for annotation fix |
+| POST | `/api/annotations/:id/revert` | Revert an applied fix |
+| POST | `/api/sections/:id/resolve-batch` | Start batch fix → render → stitch (returns `{ jobId }`) |
+| POST | `/api/sections/:id/preview-fixes` | Preview fixes before applying |
 
 ### Jobs
 
@@ -1490,32 +1512,88 @@ For a 19-second rendered video:
 | GET | `/api/jobs/:id/stream` | SSE stream of job progress |
 | POST | `/api/jobs/:id/retry` | Retry a failed job with original parameters |
 
-### Metadata
+### Metadata & Export
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/sections` | List section metadata |
-| POST | `/api/thumbnails` | Upload base64 frame capture |
-| GET | `/api/export` | Download annotations.json |
+| GET | `/api/export` | Export project data |
+| GET | `/api/costs` | Cost tracking (Claude API, Veo, Imagen) |
 
-### Pipeline
+### Project Config
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/project` | Get project config (`project.json`) |
 | PUT | `/api/project` | Update project config (sections, voice, resolution, etc.) |
 | PUT | `/api/project/script` | Save edits to `narrative/main_script.md` |
+
+### Pipeline — TTS & Audio
+
+| Method | Path | Description |
+|--------|------|-------------|
 | POST | `/api/pipeline/tts-script/run` | Trigger Claude Code TTS script generation |
 | POST | `/api/pipeline/tts-render/run` | Trigger TTS rendering (body: `{ segments?: string[] }`) |
+| GET | `/api/pipeline/tts-render/segments` | Get per-segment render status |
 | POST | `/api/pipeline/audio-sync/run` | Trigger `sync_audio_pipeline.py` |
-| POST | `/api/pipeline/specs/run` | Trigger Claude Code spec generation (body: `{ sections?: string[], files?: string[] }`) |
-| POST | `/api/pipeline/veo/run` | Trigger Veo clip generation (body: `{ clips?: string[] }`) |
-| POST | `/api/pipeline/compositions/run` | Trigger Claude Code composition generation (body: `{ ids?: string[] }`) |
-| POST | `/api/pipeline/asset-staging/run` | Stage assets to `remotion/public/` (body: `{ files?: string[] }`) |
-| POST | `/api/pipeline/render/run` | Trigger section render(s) (body: `{ sections?: string[] }`) |
-| POST | `/api/pipeline/stitch/run` | Trigger `ffmpeg` concat stitch |
-| POST | `/api/pipeline/audit/run` | Trigger multi-agent audit (body: `{ sections?: string[] }`) |
+| GET | `/api/pipeline/audio-sync/timestamps` | Get word-level timestamps |
+
+### Pipeline — Specs
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/pipeline/specs/run` | Trigger Claude Code spec generation (body: `{ sections?, files? }`) |
+| GET | `/api/pipeline/specs/list` | List spec files per section |
+| GET | `/api/pipeline/specs/file` | Read a single spec file |
+
+### Pipeline — Veo
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/pipeline/veo/run` | Trigger Veo clip generation (body: `{ clips? }`) |
+| GET | `/api/pipeline/veo/stream` | SSE stream for Veo generation progress |
+| GET | `/api/pipeline/veo/clips` | List/manage Veo clips |
+| POST | `/api/pipeline/veo/references/run` | Generate Imagen reference portraits |
+| GET | `/api/pipeline/veo/staging-manifest` | Asset staging manifest (expected vs present) |
+
+### Pipeline — Compositions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/pipeline/compositions/run` | Trigger Claude Code composition generation (body: `{ ids? }`) |
+| GET | `/api/pipeline/compositions/list` | List compositions per section |
+| POST | `/api/pipeline/compositions/preview` | Preview a composition (still frame) |
+
+### Pipeline — Render, Stitch, Audit
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/pipeline/asset-staging/run` | Stage assets to `remotion/public/` |
+| POST | `/api/pipeline/render/run` | Trigger section render(s) (body: `{ sections? }`) |
+| GET | `/api/pipeline/render/status` | Render progress polling |
+| GET | `/api/pipeline/render/stream` | SSE stream for render progress |
+| POST | `/api/pipeline/stitch/run` | Trigger ffmpeg concat stitch |
+| POST | `/api/pipeline/audit/run` | Trigger multi-agent audit (body: `{ sections? }`) |
+| GET | `/api/pipeline/audit/results` | Get audit results |
+| GET | `/api/pipeline/audit/stream` | SSE stream for audit progress |
+
+### Pipeline — Setup & Status
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/pipeline/setup/extract-sections` | Claude extracts sections from script |
 | GET | `/api/pipeline/status` | Get status of all pipeline stages |
+
+### Internal Pipeline Libraries
+
+These are not API routes but internal server modules that support pipeline stages:
+
+| Module | Purpose |
+|--------|---------|
+| `_lib/composition-manifest` | Maps specs to Remotion compositions |
+| `_lib/script-visual-intent` | Extracts visual intent from narrative script |
+| `_lib/visual-contract-manifest` | Visual contract validation between specs and compositions |
+| `veo/_lib/frame-chains` | Frame chaining dependency resolution |
+| `audit/_lib/spec-paths` | Spec file path resolution for audit agents |
 
 ### Common Response Schemas
 
@@ -1586,55 +1664,117 @@ data: {"jobId": "job_...", "error": "Error message string"}
 
 ## Appendix B: Project Directory Structure
 
-Any video project built with this system should follow this general layout:
+### V1 Webapp Layout (`video_editor_pdd/`)
+
+The V1 webapp is a Next.js App Router application. The Express prototype (`review-app/`) was replaced entirely.
 
 ```
-{project}/
-├── narrative/
-│   ├── main_script.md            # Source script (human-written)
-│   └── tts_script.md             # TTS-optimized script (Claude Code-generated)
+video_editor_pdd/
+├── app/                          # Next.js App Router
+│   ├── api/                      # API routes (50+ endpoints)
+│   │   ├── annotations/          # CRUD + analyze + diff + revert
+│   │   ├── audio/tts/            # TTS audio file serving
+│   │   ├── costs/                # Cost tracking
+│   │   ├── export/               # Project export
+│   │   ├── jobs/                 # Job status + SSE stream + retry
+│   │   ├── pipeline/             # All pipeline stage triggers
+│   │   │   ├── _lib/             # Internal: composition-manifest,
+│   │   │   │                     #   script-visual-intent, visual-contract-manifest
+│   │   │   ├── asset-staging/    # Asset staging to remotion/public/
+│   │   │   ├── audio-sync/      # run + timestamps
+│   │   │   ├── audit/           # run + results + stream + _lib/spec-paths
+│   │   │   ├── compositions/    # run + list + preview
+│   │   │   ├── render/          # run + status + stream
+│   │   │   ├── setup/           # extract-sections (Claude)
+│   │   │   ├── specs/           # run + list + file
+│   │   │   ├── status/          # Pipeline status polling
+│   │   │   ├── stitch/          # ffmpeg concat
+│   │   │   ├── tts-render/      # run + segments
+│   │   │   ├── tts-script/      # run (Claude Code)
+│   │   │   └── veo/             # run + clips + references + staging-manifest
+│   │   │                        #   + stream + _lib/frame-chains
+│   │   ├── project/             # GET/PUT project config + script
+│   │   ├── projects/            # create + list + select
+│   │   ├── sections/            # resolve-batch + preview-fixes
+│   │   └── video/               # Video file streaming
+│   ├── layout.tsx                # Root layout
+│   ├── page.tsx                  # Main page
+│   └── globals.css               # Tailwind v4 CSS-first config
 │
-├── specs/
-│   └── {NN-section-name}/        # One directory per section
-│       ├── segment_NN_*.md       # Per-shot visual specs
-│       ├── AUDIT_*.md            # Per-spec audit results
-│       └── prompts/              # Veo prompt files (optional)
+├── components/                   # React UI components
+│   ├── AnnotationPanel.tsx       # Annotation list + review
+│   ├── CostDashboard.tsx         # API cost tracking
+│   ├── FixPreviewPanel.tsx       # Diff preview before applying fixes
+│   ├── PipelineAdvanceButton.tsx # Pipeline stage advancement
+│   ├── SseLogPanel.tsx           # SSE log streaming
+│   ├── StageSidebar.tsx          # 10-stage navigation sidebar
+│   ├── VideoPlayer.tsx           # Video player with spacebar workflow
+│   └── stages/                   # One component per pipeline stage
+│       ├── Stage1ProjectSetup.tsx
+│       ├── Stage2ScriptEditor.tsx
+│       ├── Stage3TtsScriptGen.tsx
+│       ├── Stage4TtsRendering.tsx
+│       ├── Stage5AudioSync.tsx
+│       ├── Stage6SpecGeneration.tsx
+│       ├── Stage7VeoGeneration.tsx
+│       ├── Stage8CompositionGen.tsx
+│       ├── Stage9RenderStitch.tsx
+│       └── Stage10Audit.tsx
 │
-├── remotion/
-│   ├── src/remotion/
-│   │   ├── Root.tsx              # Composition registrations
-│   │   ├── {NN-ComponentName}/   # Individual animation compositions
-│   │   └── {S0N-SectionName}/    # Section wrapper compositions
-│   ├── public/                   # Static assets (WAVs, MP4s) for Remotion
-│   ├── deploy.mjs                # AWS Lambda deployment (optional)
-│   └── package.json
+├── lib/                          # Server-side libraries
+│   ├── db.ts                     # SQLite via better-sqlite3
+│   ├── types.ts                  # Shared TypeScript types
+│   ├── project.ts                # Project config (project.json) I/O
+│   ├── projects.ts               # Multi-project workspace management
+│   ├── jobs.ts                   # Job queue management
+│   ├── sse.ts                    # SSE streaming utilities
+│   ├── claude.ts                 # Claude CLI invocation
+│   ├── git.ts                    # Git integration (diff, revert, commit)
+│   ├── render.ts                 # Remotion rendering
+│   ├── veo.ts                    # Veo API client
+│   ├── veo-references.ts         # Imagen reference portrait management
+│   ├── veo-prompt-fix.ts         # Veo prompt correction
+│   ├── veo-spec-context.ts       # Veo spec context resolution
+│   ├── audit-*.ts                # Audit subsystem (geometry, timing, evidence, spec-normalization)
+│   ├── annotation-*.ts           # Annotation analysis + targeting
+│   ├── composition-timing.ts     # Composition timing resolution
+│   ├── clip-events.ts            # Clip event tracking
+│   ├── deterministic-pipeline.ts # Deterministic pipeline mode
+│   ├── markdown-format.ts        # Markdown formatting
+│   ├── remotion-spec-fix.ts      # Remotion spec correction
+│   ├── section-timing.ts         # Section timing
+│   ├── spec-*.ts                 # Spec context/timestamp/timing helpers
+│   ├── tts-*.ts                  # TTS script format + segment management
+│   ├── visual-runtime.ts         # Visual runtime context
+│   └── client/                   # Client-side utilities
+│       ├── pipeline-runner.ts    # Client pipeline invocation
+│       └── sse-utils.ts          # Client SSE helpers
 │
-├── tools/
-│   ├── tts/
-│   │   ├── render_tts.py         # TTS rendering
-│   │   └── sync_audio_pipeline.py # Section grouping + Whisper
-│   ├── veo/
-│   │   ├── generate_segments.py  # Video clip generation
-│   │   ├── generate_references.py # Reference image generation
-│   │   └── composite_segments.py # Split-screen compositing
-│   └── generate_section_compositions.py  # Whisper → BEATS → Remotion
+├── scripts/                      # Python pipeline tools
+│   ├── render_tts.py             # TTS rendering (Qwen3-TTS)
+│   ├── sync_audio_pipeline.py    # Section grouping + Whisper
+│   ├── generate_section_compositions.py  # Whisper → BEATS → Remotion
+│   ├── benchmark_stt_models.py   # STT model benchmarking
+│   └── extract_composition_timing.py     # Composition timing extraction
 │
-├── review-app/
-│   ├── server.js                 # Express API
-│   ├── public/                   # Editor UI (spacebar workflow)
-│   └── data/                     # Annotations + thumbnails
+├── prompts/                      # PDD prompts (106 files, 3,880 lines)
+│   ├── types_TypeScript.prompt
+│   ├── lib_db_TypeScript.prompt
+│   ├── api_pipeline_specs_route_TypeScript.prompt
+│   ├── stage1_project_setup_TypeScriptReact.prompt
+│   └── ... (106 total — one per code file)
 │
-├── outputs/
-│   ├── full_video.mp4            # Final stitched video
-│   ├── sections/                 # Per-section rendered videos
-│   ├── tts/                      # Audio segments + timestamps
-│   └── veo/                      # Generated video clips
-│
-├── references/                   # Character reference images for Veo
-├── audits/                       # QA audit reports
-├── models/                       # Local model weights (TTS, etc.)
-├── docs/                         # Process documentation
-└── archive/                      # Stale files preserved for reference
+├── .pddrc                        # PDD context mapping (104 contexts)
+├── architecture.json             # Module dependency graph
+└── projects/                     # Video project data (per-project)
+    └── {project-name}/
+        ├── project.json          # Single source of truth
+        ├── narrative/            # Scripts
+        ├── specs/                # Visual specs per section
+        ├── remotion/             # Remotion compositions + public/ assets
+        ├── outputs/              # Rendered videos, TTS audio, Veo clips
+        ├── references/           # Character reference images
+        └── audits/               # QA audit reports
 ```
 
 > **In the demo (`demos/3blue1brown/`):**
@@ -1642,6 +1782,6 @@ Any video project built with this system should follow this general layout:
 > - `specs/` — 7 section dirs (`00-cold-open` through `06-closing`), ~150+ spec files
 > - `remotion/src/remotion/` — 60 registered compositions (`01-ColdOpen/` through `51-SockMetaphorFinal/`), 7 section wrappers (`S00-ColdOpen/` through `S06-Closing/`)
 > - `tools/veo/` — 9 generation scripts (section-specific, see Section 5.3)
-> - `review-app/` — `server.js` (862 lines), 7 public JS modules, `server.test.js` (Jest)
+> - `review-app/` — `server.js` (862 lines), 7 public JS modules, `server.test.js` (Jest) — **replaced by V1 webapp**
 > - `outputs/` — `full_video.mp4` (232MB), 7 section videos, 112 TTS segments
 > - `docs/` — `RENDERING_METHODOLOGY.md` (354 lines), `audio-synced-animation-process.md`
