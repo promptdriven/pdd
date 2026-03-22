@@ -34,6 +34,8 @@ Success: `python {example_path}` exits 0 and someone can fully understand how to
 
 If `{example_path}` exists, check that it's up-to-date with the spec and fix it if needed. Otherwise, write a concise, runnable example. Read the code file first — do NOT guess at imports or API names. Import from `{import_base}`. Document input/output parameters and their units in docstrings. Mock external dependencies so it runs standalone. The script must run to completion without interaction — do NOT use `input()`, `sys.stdin`, servers, event loops, or anything that waits for input. Hardcode all values, resolve paths with `os.path.dirname(__file__)`, and handle missing env vars by printing what's needed and exiting with code 0. Never include hardcoded absolute paths.
 
+Use separate `print()` calls for blank lines instead of embedding `\n` inside string literals — file-writing tools can mangle escape sequences into actual newlines, breaking the string.
+
 Mock return values must satisfy the code's conditions for the behavior you are showing — read the code to check what conditions it evaluates (e.g., if you demo cache reuse, make sure the mock data meets all cache-hit conditions and confirm cost is $0 on the cached run).
 
 ## Step 2 — Crash-fix (`crash_fix`)
@@ -76,6 +78,7 @@ Use the requirement list from Step 3 to build a test plan. For each requirement,
 - Each if/else branch in the code (both sides)
 - Boolean parameters (verbose, dry_run, etc.) — test both True and False
 - Return type/shape and error cases
+- Every bug fixed in Steps 2-3 — write a regression test designed to fail if the bug were reintroduced
 
 Write this plan as a comment block at the top of `{test_path}`.
 
@@ -118,4 +121,4 @@ You may modify the test file, the code file, or supporting files. Install missin
 
 ## Final gate (`done`)
 
-Run `pytest -xvs {test_path}` one last time. Verify that `{example_path}` and `{test_path}` both exist. Only report `done` if ALL tests pass (exit code 0) AND both deliverable files exist. If any test fails or any file is missing, the session has FAILED — do NOT report `done`.
+Run `pytest -xvs {test_path}` one last time. Compare your tests against the plan at the top of `{test_path}` — every plan entry must have at least one corresponding test. If any were skipped, add them now and re-run. Verify that `{example_path}` and `{test_path}` both exist. Only report `done` if ALL tests pass (exit code 0) AND both deliverable files exist. If any test fails or any file is missing, the session has FAILED — do NOT report `done`.
