@@ -191,7 +191,9 @@ registerExecutor("specs", (params, _send) => {
 
     // Read spec.md and word timestamps BEFORE cleaning, so the narrative
     // context survives the stale-file purge.
-    const sectionContextMap = new Map<string, { specMd: string; hasWords: boolean }>();
+    type SegmentSummary = { segmentId: string; startSeconds: number; endSeconds: number; wordCount: number; previewText: string };
+    type SectionContext = { specMd: string; hasWords: boolean; wordSummary: SegmentSummary[] | null; audioDurationSeconds: number | null };
+    const sectionContextMap = new Map<string, SectionContext>();
     for (const sid of sectionIds) {
       const dir = specDirMap.get(sid) ?? sid;
       const specMdPath = path.join(specsBase, dir, "spec.md");
@@ -199,10 +201,43 @@ registerExecutor("specs", (params, _send) => {
       if (fs.existsSync(specMdPath)) {
         try { specMdContent = fs.readFileSync(specMdPath, "utf-8"); } catch { /* ignore */ }
       }
-      const wordsPath = path.join(dataDir, `${sid}_words.json`);
+      const wordsPath = path.join(getProjectDir(), "outputs", "tts", sid, "word_timestamps.json");
+      let hasWords = false;
+      let wordSummary: SegmentSummary[] | null = null;
+      let audioDurationSeconds: number | null = null;
+      if (fs.existsSync(wordsPath)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(wordsPath, "utf-8")) as
+            | Array<{ word?: string; start?: number; end?: number; segmentId?: string }>
+            | { words?: Array<{ word?: string; start?: number; end?: number; segmentId?: string }> };
+          const words = Array.isArray(raw) ? raw : raw.words ?? [];
+          if (words.length > 0) {
+            hasWords = true;
+            audioDurationSeconds = words.reduce((max, w) => Math.max(max, typeof w.end === "number" ? w.end : 0), 0);
+            const segmentMap = new Map<string, { start: number; end: number; wordList: string[] }>();
+            for (const w of words) {
+              const segId = w.segmentId ?? "unknown";
+              const entry = segmentMap.get(segId) ?? { start: Infinity, end: 0, wordList: [] };
+              if (typeof w.start === "number") entry.start = Math.min(entry.start, w.start);
+              if (typeof w.end === "number") entry.end = Math.max(entry.end, w.end);
+              if (w.word) entry.wordList.push(w.word);
+              segmentMap.set(segId, entry);
+            }
+            wordSummary = Array.from(segmentMap.entries()).map(([segId, data]) => ({
+              segmentId: segId,
+              startSeconds: data.start === Infinity ? 0 : data.start,
+              endSeconds: data.end,
+              wordCount: data.wordList.length,
+              previewText: data.wordList.slice(0, 5).join(" "),
+            }));
+          }
+        } catch { /* ignore parse errors */ }
+      }
       sectionContextMap.set(sid, {
         specMd: specMdContent,
-        hasWords: fs.existsSync(wordsPath),
+        hasWords,
+        wordSummary,
+        audioDurationSeconds,
       });
     }
 
@@ -277,10 +312,25 @@ registerExecutor("specs", (params, _send) => {
           resetSectionSpecDir(sectionSpecDir);
         }
 
+        const wordTimingBlock = ctx.hasWords && ctx.wordSummary
+          ? [
+              `Total audio duration: ${ctx.audioDurationSeconds?.toFixed(1)}s`,
+              "",
+              "Narration segment timing:",
+              "| Segment | Start | End | Words | Preview |",
+              "| --- | --- | --- | --- | --- |",
+              ...ctx.wordSummary.map((seg) =>
+                `| ${seg.segmentId} | ${seg.startSeconds.toFixed(2)}s | ${seg.endSeconds.toFixed(2)}s | ${seg.wordCount} | ${seg.previewText} |`
+              ),
+              "",
+              "IMPORTANT: Set each spec's **Timestamp:** to match these segment times, NOT the main script heading times.",
+            ].join("\n")
+          : "(No word timestamps available yet.)";
+
         const sectionContext = `
 ### Section: ${sid} → specs/${dir}/
 ${ctx.specMd ? `\nNarrative arc (spec.md):\n${ctx.specMd}\n` : "(No spec.md found — infer visual needs from section name.)"}
-${ctx.hasWords ? `Word timestamps available at: data/${sid}_words.json (use for frame-accurate timing)` : "(No word timestamps available yet.)"}
+${wordTimingBlock}
 `;
 
         const sectionVisualGuidance =
@@ -359,6 +409,7 @@ Instructions:
     phases, split them into separate [veo:] specs.
 ${sectionVisualGuidanceList}
 - You should generate at least 4-8 spec files per section.
+- When narration segment timing is provided, **Timestamp:** values MUST be derived from those segment times, NOT the main script heading times.
 ${sectionFiles.length > 0 ? `- Only generate these specific files: ${sectionFiles.join(", ")}` : "- Generate ALL spec files needed for the section."}
 
 REQUIRED SPEC FORMAT — each spec file MUST include ALL of these sections:

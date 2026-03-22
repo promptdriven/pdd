@@ -500,4 +500,123 @@ describe("lib/composition-timing", () => {
     expect(timings[2].startSeconds).toBeGreaterThan(7);
     expect(timings[2].endSeconds).toBe(12);
   });
+
+  it("clamps spec timestamps within 15% of section duration instead of scaling", () => {
+    // Specs total 6.5s against a 6s section (1.08x, within 15% tolerance)
+    // Should clamp end times, not scale all timestamps proportionally
+    const specDir = path.join(tmpDir, "specs", "tight_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_intro.md"),
+      "**Timestamp:** 0:00 - 0:03\n\n# Intro"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_main.md"),
+      "**Timestamp:** 0:03 - 0:06.5\n\n# Main"
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "tight_section",
+        specDir: "tight_section",
+        durationSeconds: 6,
+      },
+      ["tight_section_01_intro", "tight_section_02_main"]
+    );
+
+    expect(timings).toHaveLength(2);
+    // First spec start should NOT be scaled — should remain at 0
+    expect(timings[0].startSeconds).toBe(0);
+    // First spec should preserve its original 3s start-relative timing
+    expect(timings[0].endSeconds).toBe(3);
+    // Second spec start should remain at 3s (not scaled down)
+    expect(timings[1].startSeconds).toBe(3);
+    // Second spec end should be clamped to section duration
+    expect(timings[1].endSeconds).toBe(6);
+  });
+
+  it("linearly scales timestamps far exceeding section duration (backward compat)", () => {
+    // Specs total 8s against 6s section (1.33x, > 15% tolerance)
+    // This matches the existing test at line 51 — should still fully scale
+    const specDir = path.join(tmpDir, "specs", "overlong_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:03\n\n# Title"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_key_visual.md"),
+      "**Timestamp:** 0:03 - 0:08\n\n# Key Visual"
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "overlong_section",
+        specDir: "overlong_section",
+        durationSeconds: 6,
+      },
+      ["overlong_section_01_title_card", "02_key_visual"]
+    );
+
+    expect(timings).toHaveLength(2);
+    // With linear scaling at 6/8 = 0.75:
+    // 01: 0*0.75=0, 3*0.75=2.25
+    // 02: 3*0.75=2.25, 8*0.75=6
+    expect(timings[0]).toEqual(
+      expect.objectContaining({
+        startSeconds: 0,
+        endSeconds: 2.25,
+        source: "spec",
+      })
+    );
+    expect(timings[1]).toEqual(
+      expect.objectContaining({
+        startSeconds: 2.25,
+        endSeconds: 6,
+        source: "spec",
+      })
+    );
+  });
+
+  it("passes through spec timestamps unchanged when within section duration", () => {
+    const specDir = path.join(tmpDir, "specs", "exact_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_intro.md"),
+      "**Timestamp:** 0:00 - 0:02\n\n# Intro"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_outro.md"),
+      "**Timestamp:** 0:02 - 0:05\n\n# Outro"
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "exact_section",
+        specDir: "exact_section",
+        durationSeconds: 6,
+      },
+      ["exact_section_01_intro", "exact_section_02_outro"]
+    );
+
+    expect(timings).toHaveLength(2);
+    expect(timings[0]).toEqual(
+      expect.objectContaining({
+        startSeconds: 0,
+        endSeconds: 2,
+        source: "spec",
+      })
+    );
+    // Start preserved; end extends to fill remaining section duration (existing behavior)
+    expect(timings[1]).toEqual(
+      expect.objectContaining({
+        startSeconds: 2,
+        endSeconds: 6,
+        source: "spec",
+      })
+    );
+  });
 });

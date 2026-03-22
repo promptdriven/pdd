@@ -889,3 +889,92 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/\[veo:\].*video|footage|cinematic/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 10. Word timestamp injection into Claude prompt
+// ---------------------------------------------------------------------------
+
+describe("specs executor — word timestamp injection", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "specs-word-timing-"));
+    process.chdir(tmpDir);
+
+    mockLoadProject.mockReturnValue({
+      ...mockProjectConfig(),
+      sections: [
+        { id: "cold_open", label: "Cold Open", specDir: "cold_open" },
+      ],
+    });
+  });
+
+  it("includes segment timing summary when word timestamps exist at the correct path", async () => {
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "cold_open");
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(wordsDir, "word_timestamps.json"),
+      JSON.stringify([
+        { word: "So", start: 0.0, end: 0.2, segmentId: "cold_open_001" },
+        { word: "why", start: 0.2, end: 0.5, segmentId: "cold_open_001" },
+        { word: "are", start: 0.5, end: 0.7, segmentId: "cold_open_001" },
+        { word: "patching", start: 14.0, end: 14.5, segmentId: "cold_open_003" },
+        { word: "still", start: 15.8, end: 16.0, segmentId: "cold_open_003" },
+        { word: "done", start: 17.0, end: 17.6, segmentId: "cold_open_003" },
+      ])
+    );
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("cold_open_001");
+    expect(prompt).toContain("cold_open_003");
+    expect(prompt).toMatch(/total.*audio.*duration|audio.*duration/i);
+  });
+
+  it("includes total audio duration in the prompt", async () => {
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "cold_open");
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(wordsDir, "word_timestamps.json"),
+      JSON.stringify([
+        { word: "hello", start: 0.0, end: 0.5, segmentId: "cold_open_001" },
+        { word: "world", start: 16.0, end: 17.6, segmentId: "cold_open_002" },
+      ])
+    );
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("17.6");
+  });
+
+  it("instructs Claude to derive timestamps from segment times", async () => {
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "cold_open");
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(wordsDir, "word_timestamps.json"),
+      JSON.stringify([
+        { word: "hello", start: 0.0, end: 0.5, segmentId: "cold_open_001" },
+      ])
+    );
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toMatch(/timestamp.*MUST.*segment|segment.*times.*NOT.*script.*heading/i);
+  });
+
+  it("falls back gracefully when no word timestamps exist", async () => {
+    // No word_timestamps.json created — directory doesn't exist
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("No word timestamps available");
+    expect(prompt).not.toContain("Total audio duration");
+  });
+});

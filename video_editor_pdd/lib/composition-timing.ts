@@ -801,6 +801,26 @@ function scaleSpecCandidatesToSectionDuration(
     return candidates;
   }
 
+  // Within 15% tolerance: clamp end times instead of scaling all timestamps.
+  // This preserves accurate word-timestamp-derived specs while still scaling
+  // obviously-wrong script-timeline specs (typically 2-10x too large).
+  if (maxSpecEnd <= sectionDurationSeconds * 1.15) {
+    return candidates.map((candidate) => {
+      if (!candidate || candidate.source !== "spec") {
+        return candidate;
+      }
+
+      return {
+        ...candidate,
+        startSeconds: Math.min(candidate.startSeconds, sectionDurationSeconds),
+        endSeconds: Math.min(
+          candidate.endSeconds ?? candidate.startSeconds + MIN_VISUAL_DURATION_SECONDS,
+          sectionDurationSeconds
+        ),
+      };
+    });
+  }
+
   const scale = sectionDurationSeconds / maxSpecEnd;
   return candidates.map((candidate) => {
     if (!candidate || candidate.source !== "spec") {
