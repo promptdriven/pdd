@@ -352,6 +352,11 @@ Instructions:
     "characters": [{ "id": "{snake_case_character_id}", "label": "{Display Name}", "referencePrompt": "{portrait/reference description}" }]
   - include characters ONLY for recurring or consistency-critical people, not one-off background extras
   - Do NOT put the natural-language Veo prompt inline inside the [veo:] marker.
+  - IMPORTANT: Each Veo prompt must describe a single continuous action or moment, NOT a multi-step
+    sequence. Veo models cannot reliably produce complex multi-phase action sequences (e.g.
+    "examine → toss → grab → hold") in a single 8-second clip. Instead, describe ONE key visual
+    moment or action. Avoid chaining multiple distinct actions — if a scene requires multiple
+    phases, split them into separate [veo:] specs.
 ${sectionVisualGuidanceList}
 - You should generate at least 4-8 spec files per section.
 ${sectionFiles.length > 0 ? `- Only generate these specific files: ${sectionFiles.join(", ")}` : "- Generate ALL spec files needed for the section."}

@@ -863,6 +863,14 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/separate.*\[veo:\].*spec.*embedded|embedded.*\[veo:\].*separate/is);
   });
 
+  it("prompt instructs Veo prompts to describe a single continuous action, not multi-phase sequences", () => {
+    // Veo models can't reliably produce complex multi-action sequences in a single
+    // 8-second clip. The spec gen prompt must guide Claude to write simple, single-action
+    // Veo prompts instead of multi-phase sequences like "examine → toss → grab → hold".
+    expect(sourceCode).toMatch(/single.*action|single.*moment|one.*continuous.*action/i);
+    expect(sourceCode).toMatch(/avoid.*chain|NOT.*multi.*step|split.*into.*separate/i);
+  });
+
   it("prompt explicitly forbids creating a single monolithic spec.md", () => {
     expect(sourceCode).toMatch(/DO NOT create a single spec\.md/);
   });
