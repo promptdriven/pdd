@@ -1,162 +1,102 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing, spring, useVideoConfig } from 'remotion';
-import { COLORS, FONTS, LAYOUT, EXISTING_TESTS, NEW_TEST } from './constants';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import {
+  HEADER_COLOR,
+  MONO_FONT,
+  TEST_PANEL_X,
+  TEST_PANEL_Y,
+  TEST_PANEL_W,
+  TEST_PANEL_H,
+  EXISTING_TESTS,
+  NEW_TEST,
+  TEST_GREEN,
+  BUG_RED,
+  PASS_GREEN,
+  TEXT_DEFAULT,
+  LAYOUT_FADEIN_END,
+  NEW_TEST_APPEAR,
+  TESTS_PASS_FRAME,
+} from './constants';
 
-const LINE_HEIGHT = 28;
-
-const TestLine: React.FC<{
-  name: string;
-  status: 'pass' | 'fail';
-  highlight?: boolean;
-}> = ({ name, status, highlight }) => {
-  const isPass = status === 'pass';
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        height: LINE_HEIGHT,
-        padding: '0 12px',
-        fontFamily: FONTS.mono,
-        fontSize: 12,
-        ...(highlight
-          ? { backgroundColor: `rgba(217, 148, 74, 0.08)` }
-          : {}),
-      }}
-    >
-      <span
-        style={{
-          color: isPass ? COLORS.greenCheck : COLORS.red,
-          fontSize: 14,
-          width: 16,
-          textAlign: 'center',
-        }}
-      >
-        {isPass ? '✓' : '✗'}
-      </span>
-      <span style={{ color: COLORS.textDefault, opacity: 0.7 }}>{name}</span>
-    </div>
-  );
-};
-
-export const TestPanel: React.FC = () => {
+const TestPanel: React.FC = () => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const { x, y, width, height } = LAYOUT.testPanel;
 
-  // Layout fade-in
-  const panelOpacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
+  const layoutOpacity = interpolate(frame, [0, LAYOUT_FADEIN_END], [0, 1], {
     easing: Easing.out(Easing.quad),
-  });
-
-  // New test appears at frame 50
-  const newTestOpacity = interpolate(frame, [50, 62], [0, 1], {
-    extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
-  // At frame 160, the new test flips from fail to pass
-  const newTestPasses = frame >= 160;
+  // New test fade-in
+  const newTestOpacity = interpolate(
+    frame,
+    [NEW_TEST_APPEAR, NEW_TEST_APPEAR + 12],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
 
-  // Spring bounce for the check flip
-  const flipScale = newTestPasses
-    ? spring({
-        frame: frame - 160,
-        fps,
-        config: {
-          damping: 12,
-          stiffness: 200,
-          mass: 0.5,
-        },
-      })
-    : 1;
+  // Test status flip (fail -> pass) at TESTS_PASS_FRAME
+  const flipProgress = interpolate(
+    frame,
+    [TESTS_PASS_FRAME, TESTS_PASS_FRAME + 10],
+    [0, 1],
+    {
+      easing: Easing.out(Easing.back(1.6)),
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
+  );
 
-  // Green pulse at frame 160
+  const newTestPassing = frame >= TESTS_PASS_FRAME;
+
+  // Green pulse effect
   const pulseOpacity =
-    frame >= 160 && frame < 175
-      ? interpolate(frame, [160, 167, 175], [0, 0.15, 0], {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-        })
+    frame >= TESTS_PASS_FRAME && frame < TESTS_PASS_FRAME + 15
+      ? interpolate(
+          frame,
+          [TESTS_PASS_FRAME, TESTS_PASS_FRAME + 7, TESTS_PASS_FRAME + 15],
+          [0, 0.12, 0],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+        )
       : 0;
+
+  const lineHeight = 38;
+  const startY = 55;
+  const startX = 24;
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x,
-        top: y,
-        width,
-        height,
+        left: TEST_PANEL_X,
+        top: TEST_PANEL_Y,
+        width: TEST_PANEL_W,
+        height: TEST_PANEL_H,
         backgroundColor: `rgba(30, 41, 59, 0.3)`,
         borderRadius: 8,
-        opacity: panelOpacity,
+        opacity: layoutOpacity,
         overflow: 'hidden',
       }}
     >
       {/* Header */}
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
           padding: '10px 16px',
           borderBottom: '1px solid rgba(100, 116, 139, 0.15)',
         }}
       >
         <span
           style={{
-            fontFamily: FONTS.mono,
+            fontFamily: MONO_FONT,
             fontSize: 11,
-            color: COLORS.textDim,
-            opacity: 0.5,
+            color: HEADER_COLOR,
+            opacity: 0.8,
           }}
         >
           test_user_parser.py
         </span>
-      </div>
-
-      {/* Test list */}
-      <div style={{ padding: '12px 8px' }}>
-        {EXISTING_TESTS.map((test, i) => (
-          <TestLine key={i} name={test} status="pass" />
-        ))}
-
-        {/* New test line */}
-        {frame >= 50 && (
-          <div style={{ opacity: newTestOpacity }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                height: LINE_HEIGHT,
-                padding: '0 12px',
-                fontFamily: FONTS.mono,
-                fontSize: 12,
-                backgroundColor: newTestPasses
-                  ? 'transparent'
-                  : `rgba(217, 148, 74, 0.08)`,
-              }}
-            >
-              <span
-                style={{
-                  color: newTestPasses ? COLORS.greenCheck : COLORS.red,
-                  fontSize: 14,
-                  width: 16,
-                  textAlign: 'center',
-                  display: 'inline-block',
-                  transform: `scale(${flipScale})`,
-                }}
-              >
-                {newTestPasses ? '✓' : '✗'}
-              </span>
-              <span style={{ color: COLORS.textDefault, opacity: 0.7 }}>
-                {NEW_TEST}
-              </span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Green pulse overlay */}
@@ -165,13 +105,103 @@ export const TestPanel: React.FC = () => {
           style={{
             position: 'absolute',
             inset: 0,
-            backgroundColor: COLORS.greenCheck,
+            backgroundColor: PASS_GREEN,
             opacity: pulseOpacity,
             borderRadius: 8,
             pointerEvents: 'none',
           }}
         />
       )}
+
+      {/* Existing tests */}
+      {EXISTING_TESTS.map((testName, i) => (
+        <div
+          key={testName}
+          style={{
+            position: 'absolute',
+            top: startY + i * lineHeight,
+            left: startX,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: MONO_FONT,
+              fontSize: 14,
+              color: TEST_GREEN,
+              opacity: 0.8,
+            }}
+          >
+            ✓
+          </span>
+          <span
+            style={{
+              fontFamily: MONO_FONT,
+              fontSize: 12,
+              color: TEXT_DEFAULT,
+              opacity: 0.7,
+            }}
+          >
+            {testName}
+          </span>
+        </div>
+      ))}
+
+      {/* New test line */}
+      {frame >= NEW_TEST_APPEAR && (
+        <div
+          style={{
+            position: 'absolute',
+            top: startY + EXISTING_TESTS.length * lineHeight,
+            left: 0,
+            right: 0,
+            height: lineHeight,
+            display: 'flex',
+            alignItems: 'center',
+            paddingLeft: startX,
+            gap: 10,
+            backgroundColor: `rgba(217, 148, 74, 0.08)`,
+            opacity: newTestOpacity,
+          }}
+        >
+          {/* Status icon with flip animation */}
+          <span
+            style={{
+              fontFamily: MONO_FONT,
+              fontSize: 14,
+              color: newTestPassing ? PASS_GREEN : BUG_RED,
+              opacity: 0.9,
+              display: 'inline-block',
+              transform: `scale(${
+                newTestPassing
+                  ? interpolate(
+                      flipProgress,
+                      [0, 0.5, 1],
+                      [1, 1.3, 1],
+                      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+                    )
+                  : 1
+              })`,
+            }}
+          >
+            {newTestPassing ? '✓' : '✗'}
+          </span>
+          <span
+            style={{
+              fontFamily: MONO_FONT,
+              fontSize: 12,
+              color: TEXT_DEFAULT,
+              opacity: 0.7,
+            }}
+          >
+            {NEW_TEST}
+          </span>
+        </div>
+      )}
     </div>
   );
 };
+
+export default TestPanel;

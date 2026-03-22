@@ -1,141 +1,278 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  COLORS,
-  FONTS,
-  LAYOUT,
+  HEADER_COLOR,
+  MONO_FONT,
+  CODE_PANEL_X,
+  CODE_PANEL_Y,
+  CODE_PANEL_W,
+  CODE_PANEL_H,
   ORIGINAL_CODE,
   REGENERATED_CODE,
   BUG_LINE_INDEX,
+  BUG_RED,
+  PASS_GREEN,
+  LAYOUT_FADEIN_END,
+  DISSOLVE_START,
+  DISSOLVE_END,
+  STREAM_START,
+  ANNOTATION_START,
+  CodeToken,
 } from './constants';
 
-const LINE_HEIGHT = 22;
-const CODE_PADDING_TOP = 44;
-const CODE_PADDING_LEFT = 20;
+/**
+ * Generates deterministic pseudo-random values for particle scatter effect.
+ */
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 9301 + 4927) * 49297;
+  return x - Math.floor(x);
+}
 
-// Character dissolve: each character drifts upward and fades
-const DissolveChar: React.FC<{
+interface CharParticle {
   char: string;
   color: string;
-  charIndex: number;
-  lineIndex: number;
-  dissolveStart: number;
-}> = ({ char, color, charIndex, lineIndex, dissolveStart }) => {
+  x: number;
+  y: number;
+  driftX: number;
+  driftY: number;
+  delay: number;
+}
+
+const CodePanel: React.FC = () => {
   const frame = useCurrentFrame();
-  const delay = dissolveStart + lineIndex * 1 + charIndex * 0.3;
-  const duration = 25;
 
-  if (frame < delay) {
-    return <span style={{ color }}>{char}</span>;
-  }
-
-  const progress = interpolate(frame, [delay, delay + duration], [0, 1], {
-    extrapolateLeft: 'clamp',
+  // Layout fade in
+  const layoutOpacity = interpolate(frame, [0, LAYOUT_FADEIN_END], [0, 1], {
+    easing: Easing.out(Easing.quad),
     extrapolateRight: 'clamp',
-    easing: Easing.in(Easing.quad),
   });
 
-  const yOffset = interpolate(progress, [0, 1], [0, -30]);
-  const opacity = interpolate(progress, [0, 1], [1, 0]);
-
-  return (
-    <span
-      style={{
-        color,
-        display: 'inline-block',
-        transform: `translateY(${yOffset}px)`,
-        opacity,
-      }}
-    >
-      {char}
-    </span>
+  // File tab dot color: red until annotation, then green
+  const dotColorTransition = interpolate(
+    frame,
+    [ANNOTATION_START, ANNOTATION_START + 10],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
-};
+  const dotColor = dotColorTransition < 0.5 ? BUG_RED : PASS_GREEN;
 
-// Stream-in line animation
-const StreamLine: React.FC<{
-  tokens: Array<{ value: string; color: string }>;
-  lineIndex: number;
-  streamStart: number;
-  lineDelay: number;
-}> = ({ tokens, lineIndex, streamStart, lineDelay }) => {
-  const frame = useCurrentFrame();
-  const lineStart = streamStart + lineIndex * lineDelay;
+  // Dissolve phase (frame 100-130)
+  const isDissolving = frame >= DISSOLVE_START && frame < STREAM_START;
+  // Show original code before dissolve, regenerated after stream-in start
+  const showOriginal = frame < DISSOLVE_START;
+  const showRegenerated = frame >= STREAM_START;
 
-  const opacity = interpolate(frame, [lineStart, lineStart + 8], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
+  // Build character particles for dissolve effect
+  const particles = useMemo(() => {
+    const chars: CharParticle[] = [];
+    const lineHeight = 28;
+    const charWidth = 8.4;
+    const startY = 50;
+    const startX = 20;
+    let idx = 0;
 
-  const yOffset = interpolate(frame, [lineStart, lineStart + 8], [6, 0], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
+    ORIGINAL_CODE.forEach((tokens: CodeToken[], lineIdx: number) => {
+      let col = 0;
+      tokens.forEach((token: CodeToken) => {
+        for (let c = 0; c < token.text.length; c++) {
+          chars.push({
+            char: token.text[c],
+            color: token.color,
+            x: startX + col * charWidth,
+            y: startY + lineIdx * lineHeight,
+            driftX: (seededRandom(idx * 3 + 1) - 0.5) * 60,
+            driftY: -(seededRandom(idx * 3 + 2) * 40 + 20),
+            delay: idx,
+          });
+          col++;
+          idx++;
+        }
+      });
+    });
+    return chars;
+  }, []);
 
-  if (frame < lineStart) return null;
+  // Total chars for stagger calculation
+  const totalChars = particles.length;
 
-  return (
-    <div
-      style={{
-        opacity,
-        transform: `translateY(${yOffset}px)`,
-        height: LINE_HEIGHT,
-        whiteSpace: 'pre',
-      }}
-    >
-      {tokens.map((tok, i) => (
-        <span key={i} style={{ color: tok.color }}>
-          {tok.value}
-        </span>
-      ))}
-    </div>
-  );
-};
+  // Render code lines (static)
+  const renderCodeLines = (
+    lines: CodeToken[][],
+    bugLine: number | null,
+    globalOpacity: number
+  ) => {
+    const lineHeight = 28;
+    const startY = 50;
+    const startX = 20;
 
-export const CodePanel: React.FC = () => {
-  const frame = useCurrentFrame();
-  const { x, y, width, height } = LAYOUT.codePanel;
+    return lines.map((tokens, lineIdx) => {
+      const isBugLine = bugLine !== null && lineIdx === bugLine;
+      return (
+        <div
+          key={lineIdx}
+          style={{
+            position: 'absolute',
+            top: startY + lineIdx * lineHeight,
+            left: 0,
+            right: 0,
+            height: lineHeight,
+            display: 'flex',
+            alignItems: 'center',
+            paddingLeft: startX,
+            backgroundColor: isBugLine
+              ? `rgba(239, 68, 68, 0.08)`
+              : 'transparent',
+            borderLeft: isBugLine ? `2px solid ${BUG_RED}` : '2px solid transparent',
+            opacity: globalOpacity,
+          }}
+        >
+          {tokens.map((token, tIdx) => (
+            <span
+              key={tIdx}
+              style={{
+                fontFamily: MONO_FONT,
+                fontSize: 12,
+                color: token.color,
+                opacity: 0.85,
+                whiteSpace: 'pre',
+              }}
+            >
+              {token.text}
+            </span>
+          ))}
+        </div>
+      );
+    });
+  };
 
-  // Layout fade-in
-  const panelOpacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
+  // Stream-in animation for regenerated code
+  const renderStreamingCode = () => {
+    const lineHeight = 28;
+    const startY = 50;
+    const startX = 20;
+    const lineStagger = 3;
 
-  // Phase: original code visible 0-100, dissolve 100-160, regen 130+
-  const isDissolving = frame >= 100 && frame < 160;
-  const showOriginal = frame < 130;
-  const showRegenerated = frame >= 130;
+    return REGENERATED_CODE.map((tokens, lineIdx) => {
+      const lineStart = STREAM_START + lineIdx * lineStagger;
+      const lineOpacity = interpolate(
+        frame,
+        [lineStart, lineStart + 8],
+        [0, 0.85],
+        {
+          easing: Easing.out(Easing.quad),
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        }
+      );
+      const lineY = interpolate(
+        frame,
+        [lineStart, lineStart + 8],
+        [startY + lineIdx * lineHeight - 10, startY + lineIdx * lineHeight],
+        {
+          easing: Easing.out(Easing.quad),
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        }
+      );
 
-  // File tab dot color: red before fix, green after
-  const dotColor = frame >= 200 ? COLORS.greenCheck : COLORS.red;
+      return (
+        <div
+          key={lineIdx}
+          style={{
+            position: 'absolute',
+            top: lineY,
+            left: 0,
+            right: 0,
+            height: lineHeight,
+            display: 'flex',
+            alignItems: 'center',
+            paddingLeft: startX,
+            opacity: lineOpacity,
+          }}
+        >
+          {tokens.map((token, tIdx) => (
+            <span
+              key={tIdx}
+              style={{
+                fontFamily: MONO_FONT,
+                fontSize: 12,
+                color: token.color,
+                whiteSpace: 'pre',
+              }}
+            >
+              {token.text}
+            </span>
+          ))}
+        </div>
+      );
+    });
+  };
 
-  // Dot color transition
-  const dotOpacity = frame >= 200
-    ? interpolate(frame, [200, 210], [0.5, 1], {
+  // Render dissolving particles
+  const renderDissolve = () => {
+    const dissolveDuration = DISSOLVE_END - DISSOLVE_START;
+    const maxDelay = totalChars;
+
+    return particles.map((p, i) => {
+      // Normalize delay to fit within dissolve window
+      const charDelay = (p.delay / maxDelay) * (dissolveDuration * 0.6);
+      const charStart = DISSOLVE_START + charDelay;
+      const charEnd = charStart + 15;
+
+      const opacity = interpolate(frame, [charStart, charEnd], [0.85, 0], {
+        easing: Easing.in(Easing.quad),
         extrapolateLeft: 'clamp',
         extrapolateRight: 'clamp',
-      })
-    : 1;
+      });
+
+      const driftProgress = interpolate(
+        frame,
+        [charStart, charEnd],
+        [0, 1],
+        {
+          easing: Easing.in(Easing.quad),
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        }
+      );
+
+      if (opacity <= 0) return null;
+
+      return (
+        <span
+          key={i}
+          style={{
+            position: 'absolute',
+            left: p.x + p.driftX * driftProgress,
+            top: p.y + p.driftY * driftProgress,
+            fontFamily: MONO_FONT,
+            fontSize: 12,
+            color: p.color,
+            opacity,
+            pointerEvents: 'none',
+          }}
+        >
+          {p.char}
+        </span>
+      );
+    });
+  };
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: x,
-        top: y,
-        width,
-        height,
+        left: CODE_PANEL_X,
+        top: CODE_PANEL_Y,
+        width: CODE_PANEL_W,
+        height: CODE_PANEL_H,
         backgroundColor: `rgba(30, 41, 59, 0.4)`,
         borderRadius: 8,
-        opacity: panelOpacity,
+        opacity: layoutOpacity,
         overflow: 'hidden',
       }}
     >
-      {/* Header */}
+      {/* Header bar */}
       <div
         style={{
           display: 'flex',
@@ -145,96 +282,36 @@ export const CodePanel: React.FC = () => {
           borderBottom: '1px solid rgba(100, 116, 139, 0.15)',
         }}
       >
+        {/* File tab dot */}
         <div
           style={{
             width: 8,
             height: 8,
             borderRadius: '50%',
             backgroundColor: dotColor,
-            opacity: dotOpacity,
+            transition: 'background-color 0.3s',
           }}
         />
         <span
           style={{
-            fontFamily: FONTS.mono,
+            fontFamily: MONO_FONT,
             fontSize: 11,
-            color: COLORS.textDim,
-            opacity: 0.5,
+            color: HEADER_COLOR,
+            opacity: 0.8,
           }}
         >
           user_parser.py
         </span>
       </div>
 
-      {/* Code content */}
-      <div
-        style={{
-          padding: `8px ${CODE_PADDING_LEFT}px`,
-          fontFamily: FONTS.mono,
-          fontSize: 12,
-          lineHeight: `${LINE_HEIGHT}px`,
-        }}
-      >
-        {/* Original code (with dissolve) */}
-        {showOriginal &&
-          ORIGINAL_CODE.map((line, lineIdx) => {
-            const isBugLine = lineIdx === BUG_LINE_INDEX;
-            return (
-              <div
-                key={`orig-${lineIdx}`}
-                style={{
-                  height: LINE_HEIGHT,
-                  whiteSpace: 'pre',
-                  position: 'relative',
-                  ...(isBugLine
-                    ? {
-                        backgroundColor: `rgba(239, 68, 68, 0.08)`,
-                        borderLeft: `2px solid ${COLORS.red}`,
-                        paddingLeft: 8,
-                        marginLeft: -10,
-                      }
-                    : {}),
-                }}
-              >
-                {isDissolving
-                  ? line.tokens.map((tok, tIdx) =>
-                      tok.value.split('').map((char, cIdx) => (
-                        <DissolveChar
-                          key={`${tIdx}-${cIdx}`}
-                          char={char}
-                          color={tok.color}
-                          charIndex={
-                            line.tokens
-                              .slice(0, tIdx)
-                              .reduce((a, t) => a + t.value.length, 0) + cIdx
-                          }
-                          lineIndex={lineIdx}
-                          dissolveStart={100}
-                        />
-                      ))
-                    )
-                  : line.tokens.map((tok, i) => (
-                      <span key={i} style={{ color: tok.color }}>
-                        {tok.value}
-                      </span>
-                    ))}
-              </div>
-            );
-          })}
-
-        {/* Regenerated code (streams in) */}
-        {showRegenerated &&
-          !showOriginal &&
-          REGENERATED_CODE.map((line, lineIdx) => (
-            <StreamLine
-              key={`regen-${lineIdx}`}
-              tokens={line.tokens}
-              lineIndex={lineIdx}
-              streamStart={130}
-              lineDelay={3}
-            />
-          ))}
+      {/* Code content area */}
+      <div style={{ position: 'relative', width: '100%', height: CODE_PANEL_H - 40 }}>
+        {showOriginal && renderCodeLines(ORIGINAL_CODE, BUG_LINE_INDEX, 1)}
+        {isDissolving && renderDissolve()}
+        {showRegenerated && renderStreamingCode()}
       </div>
     </div>
   );
 };
+
+export default CodePanel;
