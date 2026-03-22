@@ -1,0 +1,16 @@
+You are implementing a spec normalization utility (`lib/audit-spec-normalization.ts`) for a video production audit pipeline. This module rescales spec markdown from its declared resolution to the project's target resolution and produces a Claude-friendly audit snapshot with relative layout descriptions.
+
+Dependencies
+
+- Import `OutputResolution` (type with `width` and `height`) from `@/lib/types`.
+
+Requirements
+
+1. Export `detectSpecResolution(specContent: string): Dimensions | null`. Parse the first `Resolution: WxH` pattern (case-insensitive) from the markdown and return `{ width, height }`. `Dimensions` is a local type alias.
+2. Export `normalizeSpecForAudit(specContent: string, targetResolution: OutputResolution): string`. Strip `<!-- ANNOTATION_UPDATE_START: ... -->...<!-- ANNOTATION_UPDATE_END: ... -->` blocks (case-insensitive, greedy across lines) before any processing. Detect source resolution; if absent or already matching, return sanitized content. Otherwise rescale: the `Resolution:` line, coordinate pairs `(x, y)`, `x=` and `y=` assignments, `Npx` values (choose scaleX or scaleY by proximity to source width vs height), and remaining `WxH` dimension strings.
+3. Export `buildClaudeAuditSpecSnapshot(specContent: string, targetResolution: OutputResolution): string`. Normalize via (2), then strip `## Code Structure` and `## Data Points` sections (split on `\n` before `## ` headings). Replace pixel anchors with relative descriptions: `centered at (x, y)` → `visually centered on the canvas`; `Npx width` → `full frame width` if N equals target width, else `intended visual width`; `x=N` → `expected horizontal anchor`; `y=N` → `expected vertical anchor`; remaining `(x, y)` pairs → `(intended anchor position)`.
+
+Instructions
+
+- Helper `roundScaled` formats scaled numbers: integers as-is, decimals with `toFixed(2)` trimming trailing zeros.
+- All regex replacements use global flags where appropriate.

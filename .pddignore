@@ -5,10 +5,8 @@
 pdd/architecture_registry.py
 
 # Video editor: exclude non-app code from prompt scanning
-video_editor_pdd/remotion/
-video_editor_pdd/projects/
-video_editor_pdd/tests/
-video_editor_pdd/node_modules/
-video_editor_pdd/.next/
-video_editor_pdd/__mocks__/
-video_editor_pdd/e2e/
+# (bare directory names match as path components anywhere)
+remotion/
+projects/
+__mocks__/
+e2e/

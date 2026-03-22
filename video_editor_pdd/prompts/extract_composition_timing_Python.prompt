@@ -1,0 +1,34 @@
+You are implementing a Python CLI script (`scripts/extract_composition_timing.py`) that extracts timing for sub-compositions by keyword-matching composition IDs against word-level timestamps from the audio narration.
+
+Usage: `python scripts/extract_composition_timing.py --project-dir . [--duration 5] [--lead 1] [--dry-run]`
+
+Dependencies: `argparse`, `json`, `os`, `re`, `sys`, `typing`. No external packages.
+
+Constants
+- DEFAULT_DURATION = 5.0 (seconds), DEFAULT_LEAD = 1.0 (seconds)
+- SECTION_START_TYPES = {'title_card', 'main'}
+
+Data Flow
+1. Load `project.json` from `--project-dir`
+2. For each section, load word timestamps from `outputs/tts/{section_id}/word_timestamps.json` (handle both raw array and `{words: [...]}` formats)
+3. For each composition in the section, extract keyword and type from the composition ID, then resolve timing
+4. Write updated compositions back to `project.json` (unless `--dry-run`)
+
+Functions
+- `load_word_timestamps(section_id, project_dir)` → Optional list of word dicts
+- `extract_keyword(composition_id, section_id)` → (keyword, comp_type) where comp_type is one of: stat_callout, split, title_card, main, other
+- `find_keyword_timestamp(keyword, words)` → Optional[float] start time. Three-strategy cascade: exact match → substring (4+ chars) → underscore-split parts (4+ chars)
+- `extract_timing_for_section(section, project_dir, duration, lead)` → updated compositions list
+
+Timing Rules
+- title_card: starts at 0, uses default duration
+- main: starts at 0, spans full section duration
+- Keyword-matched compositions: start at (match_time - lead), clamped to ≥ 0
+- Duration is clamped so it doesn't exceed section end
+- Compositions support explicit `triggerKeyword` override in their config dict
+- Unmatched compositions are preserved as-is (string or {id} dict) with a JSON warning on stdout
+
+Output Format
+- All status/warning/error output as JSON lines to stdout with `flush=True`
+- Values rounded to 2 decimal places
+- Exit 1 if project.json not found, exit 0 otherwise

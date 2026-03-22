@@ -1,0 +1,13 @@
+Utility for resolving section spec file paths between relative and absolute forms.
+
+Uses `getProjectDir()` from `@/lib/projects` as the project root.
+
+<projects_ts>
+<include>video_editor_pdd/lib/projects.ts</include>
+</projects_ts>
+
+Requirements:
+- Private helper `stripSpecsPrefix` removes a leading `specs/` or `specs\` prefix and any leading slashes from a specDir string
+- `resolveSectionSpecDir(specDir)`: returns specDir as-is if absolute; otherwise joins `getProjectDir()/specs/{stripped specDir}`
+- `resolveSectionSpecFile(specDir, fileName)`: joins resolved dir with fileName
+- `toSectionSpecPath(specDir, fileName)`: converts to a forward-slash relative posix path prefixed with `specs/`. If specDir is absolute, compute relative to `{projectDir}/specs` and strip leading `./`; otherwise use stripped specDir with backslashes normalized to forward slashes

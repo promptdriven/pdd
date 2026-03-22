@@ -1,0 +1,17 @@
+You are implementing the project selection API route (`app/api/projects/select/route.ts`) for a video production pipeline editor. This Next.js 15 App Router Route Handler provides a POST endpoint that selects an existing project as the active workspace.
+
+Requirements
+1. `POST /api/projects/select` — accepts `{ projectId: string }`. Resolves the project workspace, selects it, and returns `{ ok: true, project: { id, name } }`.
+2. Returns HTTP 400 for malformed JSON or missing/empty `projectId` (trim before checking).
+3. Returns HTTP 404 when `resolveProjectWorkspace` returns null.
+
+Dependencies
+
+Prompt Dependencies:
+- lib_projects_TypeScript.prompt — provides `resolveProjectWorkspace`, `setSelectedProjectId`
+
+Instructions
+- Import `resolveProjectWorkspace`, `setSelectedProjectId` from `@/lib/projects`.
+- Parse request body with `request.json()`; wrap in try/catch for malformed JSON (return 400).
+- After resolving the workspace, call `setSelectedProjectId(project.id)` to persist the selection.
+- Add `export const dynamic = 'force-dynamic'`.

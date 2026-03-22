@@ -1,0 +1,9 @@
+You are implementing a timestamp parser (`lib/spec-timestamp.ts`) for a video production pipeline. This module extracts and normalizes `**Timestamp:**` ranges from spec markdown files so that downstream timing and audit modules can work in section-local time.
+
+Requirements
+
+1. Export `parseSpecTimestampRange(content: string): { startSeconds: number; endSeconds: number } | null`. Parse the first `**Timestamp:** <start>-<end>` line from markdown content. Accept `-`, `–`, and `—` as separators. Return null if no match or if end <= start.
+2. Internal `parseClockTime(value: string): number | null` converts clock strings to seconds. Support bare seconds (`5`), MM:SS (`1:30`), and H:MM:SS (`1:02:30`). Return null for empty/invalid input.
+3. Export `normalizeSpecTimestampRangeToSection(range, sectionDurationSeconds, sectionOffsetSeconds?, minSectionGuardSeconds?)`. When `sectionOffsetSeconds > 0`, subtract the offset to produce a shifted range. Return the shifted range if the original fits the narrative window (offset ± guard to offset + duration + guard). If neither fits, return shifted only when the shifted range overlaps the section window; otherwise return the original range unchanged.
+4. `MIN_SECTION_GUARD_SECONDS = 1/30` (one frame at 30fps). Default for `minSectionGuardSeconds`.
+5. When `sectionOffsetSeconds <= 0`, return the range unchanged (no-op).

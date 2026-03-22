@@ -1,0 +1,44 @@
+You are implementing the section extraction endpoint (`app/api/pipeline/setup/extract-sections/route.ts`) for a video production pipeline editor. This standalone route uses Claude to parse the main script and extract section definitions.
+
+Role: Parse `narrative/main_script.md` via Claude extraction to identify video sections from `##` headings with timestamps, returning structured section metadata via SSE.
+
+Requirements
+1. `POST /api/pipeline/setup/extract-sections` — no request body needed. Returns SSE stream (status 202) with headers: `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`.
+2. No authentication required.
+3. Standalone route — uses `createJob`/`runJob` directly (NOT `registerExecutor` or `runPipelineStage`).
+4. Create a job with stage `"setup"` and empty params. Associate the SSE send function via `setJobSend(jobId, send)` before running, and always `clearJobSend(jobId)` in a `finally` block.
+5. Inside the job executor, call `runClaudeExtract<Section[]>(prompt, onLog)` and validate the result is an array.
+6. Module-level `EXTRACT_SECTIONS_PROMPT` constant instructs Claude to:
+   - Read `narrative/main_script.md` and identify `##` headings that are actual video sections (have timestamps like `0:00 - 2:00`)
+   - Exclude appendix/reference sections without timestamps
+   - Merge child sections that fold into a parent
+   - Return a JSON array with fields: `id` (snake_case), `label`, `videoFile` (`{id}.mp4`), `specDir` (same as id), `remotionDir` (`S{NN}-{PascalCase}` zero-padded), `compositionId` (PascalCase), `durationSeconds: 0`, `offsetSeconds: 0`
+7. On success: send `{ type: "sections", sections, jobId }`, then `{ type: "complete", jobId }`, then close stream via `done()`.
+8. On error: call `error(msg)` with the error message (or `"Unknown error"` for non-Error throws).
+9. Fire-and-forget pattern: the async work runs inside an IIFE; the Response is returned immediately.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_sse>
+  <include>examples/lib_sse_example.ts</include>
+</lib_sse>
+
+<lib_jobs>
+  <include>examples/lib_jobs_example.ts</include>
+</lib_jobs>
+
+<lib_claude>
+  <include>examples/lib_claude_example.ts</include>
+</lib_claude>
+
+- `@/lib/sse` — `createSseStream`
+- `@/lib/jobs` — `createJob`, `runJob`, `setJobSend`, `clearJobSend`
+- `@/lib/claude` — `runClaudeExtract<T>(prompt, onLog)` — calls Claude CLI to extract structured data, returns parsed JSON of type T
+- `@/lib/types` — `Section` (type-only import)
+
+Deliverable
+- `app/api/pipeline/setup/extract-sections/route.ts` — standalone POST endpoint for Claude-powered section extraction.

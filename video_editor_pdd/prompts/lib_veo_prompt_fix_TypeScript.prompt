@@ -1,0 +1,16 @@
+You are implementing `lib/veo-prompt-fix.ts`, a module that extracts suggested Veo prompt rewrites from reviewer annotations and patches the corresponding spec markdown files. It updates both the `[veo: ...]` marker line and any JSON prompt fields (`veoPrompt`, `prompt`, `videoPrompt`) in the target spec.
+
+Dependencies
+- `lib/composition-timing.ts` — import `listSectionVisualIds` and `resolveSectionVisualTimings` to resolve per-clip timing windows within a section.
+- `lib/veo-spec-context.ts` — import `listResolvedVeoClipSpecs` (returns resolved clip specs from markdown entries) and `normalizeSpecDir` (strips leading `specs/` and trailing slashes from spec dir paths).
+- `lib/types.ts` — import `Annotation` (with `.analysis.suggestedFixes`, `.text`, `.timestamp`) and `Section`.
+
+Requirements
+1. Export type `VeoPromptPatchResult = { clipId: string; specPath: string; prompt: string }`.
+2. Export `extractSuggestedVeoPrompt(annotation)` returning `string | null`. Parse `suggestedFixes` strings to extract a quoted prompt using three regex patterns tried in order per fix: (a) "from X to Y" replacement form, (b) direct "update the veo prompt to: X", (c) example form with "e.g.:" or "for example:". Support single, double, and backtick quotes. Return the first match found, trimmed.
+3. Export `applyVeoPromptFixForAnnotation(projectDir, section, annotation)` returning `VeoPromptPatchResult | null`. Returns null if no prompt can be extracted or no target spec is found.
+4. Define a `SectionTarget` type picking `id`, `label`, `specDir`, `durationSeconds`, `offsetSeconds`, `compositionId`, `compositions` from `Section`.
+5. Target resolution priority: (a) explicit clip/spec reference found in analysis text or suggestedFixes (match `NN_slug.md` spec filenames or `veo/slug.mp4` clip filenames), (b) annotation timestamp — first try direct containment within a clip's timing window, then fall back to nearest clip by midpoint distance, (c) first clip if no timestamp.
+6. Load section markdown entries from `<projectDir>/specs/<normalizedSpecDir>`, filtering to `.md` files excluding `AUDIT_` prefix.
+7. When patching a spec file, apply two replacements: replace existing `[veo:...]` marker (or prepend `[veo: <prompt>]` if none exists), and replace the first matching JSON prompt field among `veoPrompt`, `prompt`, `videoPrompt`.
+8. Only write the file if content actually changed.

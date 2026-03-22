@@ -1,0 +1,14 @@
+You are creating a Jest configuration file (`jest.config.remotion.js`) for running Remotion integration tests in a Next.js video editor project. This is a standalone config separate from the main Jest config, scoped to slow integration tests that bundle Remotion, render sections, and hit real APIs.
+
+Requirements
+1. Use CommonJS format (`module.exports = config`).
+2. `testEnvironment`: `"node"` (no DOM needed — tests use `fs`, `child_process`, Remotion CLI).
+3. Transform `.ts`/`.tsx` files with `ts-jest` using `tsconfig.test.json` and `diagnostics: false` (avoids type-check failures from Remotion/Next type conflicts).
+4. `testMatch`: restrict to `<rootDir>/tests/integration/test_remotion_environment.ts` only.
+5. `moduleNameMapper`:
+   - `^@/(.*)$` → `<rootDir>/$1` (mirrors the project's `@/` path alias from tsconfig).
+   - `^server-only$` → `<rootDir>/__mocks__/server-only.js` (stubs the Next.js server-only import guard).
+6. No other settings — keep the config minimal.
+
+Deliverable
+- `jest.config.remotion.js` — a focused Jest config for Remotion integration tests.

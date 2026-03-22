@@ -1,0 +1,35 @@
+You are implementing a composition manifest module (`app/api/pipeline/_lib/composition-manifest.ts`) for a video production pipeline. This module manages a JSON manifest that tracks generated Remotion composition metadata per section.
+
+Role: Provide CRUD helpers and staleness detection for the composition manifest stored at `{projectDir}/outputs/compositions/manifest.json`.
+
+Requirements
+1. Export types: `GeneratedCompositionManifestSection` (id, compositionId, optional specDir, optional timelineSource, compositions array from `Section["compositions"]`). Internal manifest type has `version: 1`, `updatedAt` ISO string, optional `generatorFingerprint`, and sections array.
+2. Export `CompositionArtifactState` type with `stale: boolean`, `manifestFingerprint: string | null`, `currentFingerprint: string`, `reason: "generator_changed" | "missing_manifest_fingerprint" | null`.
+3. `getCompositionGeneratorFingerprint()` — SHA-256 hash of a versioned salt (`composition-generator-v{N}`) plus the content of key generator input files: `generate_section_compositions.py`, `composition-timing.ts`, `spec-timestamp.ts`, `section-timing.ts`, `visual-contract-manifest.ts`, `visual-runtime.tsx`. Skip missing files. Hash includes relative paths.
+4. `getCompositionManifestPath(projectDir?)` — returns `{projectDir}/outputs/compositions/manifest.json`.
+5. `loadCompositionManifest(projectDir?)` — reads and parses the manifest JSON. Returns `null` if missing, unparseable, or structurally invalid (must have `sections` array and `updatedAt` string).
+6. `mergeCompositionManifest(sections, projectDir?)` — merges incoming sections into existing manifest by `id` (upsert), stamps `updatedAt` and `generatorFingerprint`, writes atomically with `mkdirSync({ recursive: true })`.
+7. `getCompositionArtifactState(projectDir?)` — returns staleness info. No manifest → not stale. Manifest without fingerprint → stale with reason `"missing_manifest_fingerprint"`. Fingerprint mismatch → stale with reason `"generator_changed"`.
+8. `isCompositionArtifactSetStale(projectDir?)` — boolean convenience wrapper around `getCompositionArtifactState`.
+9. `resolveSectionGeneratedMetadata(section)` — looks up a section by `id` in the default manifest.
+10. `resolveSectionCompositionIds(section)` — resolves composition entries (manifest-first, fallback to `section.compositions`), extracts string IDs, filters nullish.
+
+Dependencies
+
+<types>
+  <include>examples/types_example.ts</include>
+</types>
+
+<lib_project>
+  <include>examples/lib_project_example.ts</include>
+</lib_project>
+
+Prompt Dependencies:
+- types_TypeScript.prompt — provides `Section` type (with `compositions` field)
+- lib_project_TypeScript.prompt — provides `getProjectDir`, `getAppScriptsDir`, `getAppRemotionSrcDir`
+
+Instructions
+- All path helpers use `getProjectDir()` as default via optional parameter.
+- Generator fingerprint input paths use `getAppScriptsDir()`, `process.cwd()`, and `getAppRemotionSrcDir()` to locate files.
+- `resolveSectionCompositionEntries` is a helper that checks manifest first, falls back to `section.compositions ?? []`.
+- Composition entries can be strings or objects with `id` — handle both in ID extraction.

@@ -1,0 +1,9 @@
+You are implementing a spec timing context helper (`lib/spec-timing-context.ts`) for a video production pipeline. This thin module bridges spec markdown timestamps and word-level TTS timing data, allowing downstream components to select only the words that fall within a spec's time window.
+
+Requirements
+
+1. Export type `SpecTimingWindow = { startSeconds: number; endSeconds: number }`.
+2. Export type `SpecTimingWord = { word: string; start: number; end: number; segmentId?: string }`.
+3. Export `parseSpecTimingWindow(specContent: string): SpecTimingWindow | null`. Delegate to `parseSpecTimestampRange` from `./spec-timestamp`. Return null when no range is found.
+4. Export `filterWordsForSpecTimingWindow(words: SpecTimingWord[], window: SpecTimingWindow | null): SpecTimingWord[]`. When window is null, return all words. Otherwise keep only words whose time span overlaps the window (word.end > window.startSeconds AND word.start < window.endSeconds).
+5. Only import from `./spec-timestamp`. Do not import from `./composition-timing` or any other heavy module — this file must stay browser-safe.

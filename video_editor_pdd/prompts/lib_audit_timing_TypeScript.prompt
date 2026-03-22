@@ -1,0 +1,44 @@
+You are implementing a timing resolver (`lib/audit-timing.ts`) for a video production audit pipeline. Given a spec's markdown content, this module determines the optimal sample window (time range and representative frame) for auditing a rendered visual.
+
+Dependencies
+
+- `resolveSectionVisuals`, `resolveSectionVisualTimings` from `./composition-timing`
+- `resolveSectionNarrativeTiming` from `./section-timing`
+- `normalizeSpecTimestampRangeToSection`, `parseSpecTimestampRange` from `./spec-timestamp`
+- `Section` type from `./types`
+- Node.js `fs` and `path`
+
+Types
+
+1. `ResolveOptions`: `{ sectionDurationSeconds: number; fps: number; sectionOffsetSeconds?: number }`.
+2. `RenderedResolveOptions`: `{ projectDir: string; specPath: string; section: Section; fps: number; sectionSpecFiles?: string[]; sectionDurationSeconds?: number }`.
+3. `AuditSampleWindow`: `{ source: "timestamp" | "frame-range" | "fallback"; startSeconds: number; endSeconds: number; sampleSeconds: number; intrinsicDurationSeconds: number; intrinsicSampleSeconds: number; intrinsicDurationFrames: number; intrinsicSampleFrame: number; normalizedSample: number }`.
+
+Requirements
+
+1. Export `resolveAuditSampleWindow(specContent: string, options: ResolveOptions): AuditSampleWindow`. Parse both timestamp ranges and frame ranges from the spec, then resolve using a priority cascade:
+   - **timestamp + frame-range**: Map local frame offsets proportionally into the timestamp window. Clamp to section bounds.
+   - **frame-range only**: Convert frame numbers to seconds via fps. Use max frame end across all ranges for intrinsic duration.
+   - **timestamp only**: Sample at 75% into the clamped window.
+   - **fallback**: Section midpoint with `normalizedSample: 0.5`.
+
+2. Export `resolveRenderedAuditSampleWindow(specContent: string, options: RenderedResolveOptions): AuditSampleWindow`. Resolve the raw sample window using narrative timing, then remap into the visual's rendered time slot:
+   - Resolve section narrative timing and raw timeline duration from spec files on disk.
+   - Match the spec to a configured composition visual by resolved path.
+   - If matched, apply a guard band (min of 2/fps or slotDuration/4) and interpolate using `normalizedSample`.
+   - If unmatched, return the raw sample.
+
+3. Frame range parsing: match lines like `Frame(s) N-M: label` or `**Frame N-M (timing):** label`. Strip list prefixes and bold markers. The regex must tolerate parenthetical time hints before the colon.
+
+4. Hold range selection: prefer the last frame range whose label matches hold/static/steady keywords, but only if its start is in the second half of the timeline. Otherwise use the final range.
+
+5. Section-offset normalization: when `sectionOffsetSeconds > 0`, normalize global timestamps to section-local time and reject ranges that don't overlap the section window (using a 1-frame guard).
+
+6. Raw timeline duration: scan non-AUDIT spec files in the section's spec directory, parse their timestamp ranges, and return the maximum end time.
+
+Instructions
+
+- `midpointSample` computes `start + (end - start) / 2 - epsilon` (epsilon = 0.0005s).
+- `clampEndToSection` uses `min(end, max(sectionDuration - 0.001, 0))`.
+- `toIntrinsicSampleFrame` clamps `floor(sampleSeconds * fps)` to `[0, durationFrames - 1]`.
+- All intrinsic duration values use a floor of `FRAME_SAMPLE_EPSILON_SECONDS` (0.0005).

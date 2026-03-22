@@ -1,0 +1,94 @@
+You are implementing a composition timing resolver (`lib/composition-timing.ts`) that maps visual components in a video section to precise time windows, using a multi-source priority chain: project config → spec timestamps → audio-sync word matching → fallback distribution.
+
+<types_ts>
+<include>video_editor_pdd/lib/types.ts</include>
+</types_ts>
+
+<spec_timestamp_ts>
+<include>video_editor_pdd/lib/spec-timestamp.ts</include>
+</spec_timestamp_ts>
+
+<section_timing_ts>
+<include>video_editor_pdd/lib/section-timing.ts</include>
+</section_timing_ts>
+
+<visual_contract_manifest_ts>
+<include>video_editor_pdd/app/api/pipeline/_lib/visual-contract-manifest.ts</include>
+</visual_contract_manifest_ts>
+
+Dependencies: `fs`, `path`, `zod`. Re-export `parseSpecTimestampRange` and `normalizeSpecTimestampRangeToSection` from `./spec-timestamp`. Import `resolveSectionVisualContract` from the visual-contract-manifest lib and `resolveSectionNarrativeTiming` from `./section-timing`.
+
+Constants
+- DEFAULT_FPS = 30, DEFAULT_VISUAL_DURATION_SECONDS = 5, DEFAULT_KEYWORD_LEAD_SECONDS = 1
+- MIN_VISUAL_DURATION_SECONDS = 1/DEFAULT_FPS (one frame)
+- NON_COMPONENT_BASENAMES: Set containing "spec" and "veo" (excluded from visual listing)
+- VIDEO_PATH_RE: regex matching quoted paths ending in .mp4/.webm/.mov/.m4v
+
+Exported Types
+1. `WordTimestamp`: `{ word, start, end, segmentId? }`
+2. `TimingSource`: `"project" | "spec" | "audio-sync" | "fallback"`
+3. `ResolvedVisualTiming`: `{ id, startSeconds, endSeconds, source: TimingSource, desc, specPath? }`
+4. `ResolvedSectionVisual`: `{ id, specBaseName, specPath?, hasComponent, hasExplicitMedia, requiresCompositedAudit, previewCompositionId?, mediaReferences: string[], stagedAssetPath?, auditHints: AuditHints }`
+5. `AuditTransitionWindow`: `{ startFrame, endFrame, description }`
+6. `AuditHints`: `{ criticalElements, decorativeElements, layoutKeywords, transitionWindows }`
+
+Internal types: `SectionComposition`, `SectionTimingTarget` (Pick from Section), `TimingCandidate`.
+
+Visual Resolution (`resolveSectionVisuals`, `listSectionVisualIds`)
+- List spec markdown files in the section's specDir (exclude AUDIT_ prefixed, non-component basenames)
+- Merge with configured composition IDs (preserving order, deduplicating)
+- For each spec, resolve media info via `resolveSpecMediaInfo` which:
+  - Checks visual contract manifest for mediaAliases and renderMode
+  - Reads spec content to detect media references (clipSource/leftClip/rightClip/etc regex, staticFile(), generic media extensions)
+  - Checks staged assets in outputs/veo/ and remotion/public/veo/
+  - Determines `requiresCompositedAudit` from JSX component tags (excluding AbsoluteFill/Sequence/OffthreadVideo/Audio), composited media hints, or z-index overlay patterns
+- Specs with a matching component get full visual entry; specs without component only included if they have explicit media
+- Remaining composition IDs (no matching spec) get component-only entries
+
+Preview Composition ID (`resolvePreviewCompositionId`)
+- Convert componentId to PascalCase, prefix with section PascalCase if starts with digit
+- Convert PascalCase to kebab-case (lowercase with hyphens)
+
+Audit Hints Extraction (`resolveSpecAuditHints`)
+- Parse bullet items with bold labels: critical vs decorative classification using DECORATIVE_HINT_RE (glow, shadow, blur, bloom, trail, etc.)
+- Skip metadata labels (tool, duration, timestamp, resolution, background, easing)
+- Detect layout phrases (split-screen, side-by-side, centered, lower-third, overlay, etc.)
+- Extract animation frame ranges from "Frame N–M: description" patterns into transitionWindows
+
+Timing Resolution (`resolveSectionVisualTimings`)
+Pipeline: buildTimingCandidates → scaleSpecCandidatesToSectionDuration → effectiveSectionDuration → buildFallbackTimings → conditionally sequentializeTimings → normalizeVisualTimings.
+
+1. **buildTimingCandidates** — For each visual, try sources in priority order:
+   - Project: composition entry with explicit startSeconds/durationSeconds
+   - Spec: parse timestamp range from spec markdown, normalize to section-local time using section offset
+   - Audio-sync: extract keyword from componentId (title_card→start at 0, main→full section, stat_callout_X/split_X→keyword match, other→suffix as keyword). Find keyword in word timestamps (exact → substring if ≥4 chars → underscore-split parts ≥4 chars). Apply DEFAULT_KEYWORD_LEAD_SECONDS offset.
+
+2. **scaleSpecCandidatesToSectionDuration** — When spec timestamps exceed section duration:
+   - Within 15% tolerance: clamp end times only (preserves accurate timestamps)
+   - Beyond 15%: linearly scale all spec timestamps proportionally
+
+3. **buildFallbackTimings** — Anchored candidates keep their times. Untimed blocks between anchors are distributed evenly across the available gap.
+
+4. **sequentializeTimings** — Triggered when overlapping windows detected (half-frame tolerance). Scales desired durations proportionally to fill the section without overlap.
+
+5. **normalizeVisualTimings** — Ensures monotonically increasing starts with minimum one-frame spacing. Last visual extends to section end.
+
+Code Generation (`buildSectionConstantsSource`)
+Generates a TypeScript constants file containing:
+- SECTION_FPS, SECTION_DURATION_SECONDS, SECTION_DURATION_FRAMES
+- `s2f` helper (seconds to frames via Math.round)
+- BEATS object with VISUAL_NN_START/VISUAL_NN_END entries (3 decimal places)
+- VISUAL_SEQUENCE array with `{ start, end, id, desc }` entries
+- Zod props schema with `showTitle: z.boolean().default(true)` using PascalCase export name derived from compositionId or section id
+
+Helper Functions
+- `stripSpecsPrefix`: remove leading "specs/" from specDir
+- `resolveSectionSpecDir`: resolve specDir to absolute path under projectDir/specs/
+- `escapeDescription`: escape backslashes and double quotes for embedding in string literals
+- `titleFromId`: strip numeric prefix, split on _/-, capitalize first letter of each part
+- `componentBaseName`: strip sectionId_ prefix from componentId
+- `toPascalCase`: split on _/-, capitalize, join
+- `readSpecContent`: try .md then .txt extensions for spec files
+- `parseSpecHeading`: extract first markdown heading or fall back to titleFromId
+- `loadWordTimestamps`: read outputs/tts/{sectionId}/word_timestamps.json, validate word/start/end fields
+- `normalizeWord`: strip punctuation and lowercase for keyword matching

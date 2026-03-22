@@ -1,0 +1,23 @@
+Write a Bash setup script (`setup.sh`) for the "Video Editor PDD" project that validates prerequisites, installs dependencies, creates directories, and initializes the database.
+
+### Requirements
+1. **Prerequisites** — check each tool, exit on failure for mandatory ones, warn-only for optional:
+   - Node.js 20+ (mandatory)
+   - Python 3.11+ (mandatory)
+   - `ffmpeg` (mandatory)
+   - `git` (optional — warn if missing)
+   - Claude CLI (optional — warn with install hint: `npm install -g @anthropic-ai/claude-code`)
+2. **Dependencies** — `npm install` in root; if `remotion/` exists, also install there; `pip3 install -r requirements.txt` if file exists.
+3. **Directories** — ensure `outputs/`, `references/`, `audits/`, `data/`, `models/` exist.
+4. **Database** — initialize SQLite via `npx tsx -e "require('./lib/db').getDb()"`, warn on failure.
+5. **UX** — color-coded helpers (`ok` green, `warn` yellow, `fail` red+exit); numbered section headers; "Next steps" summary at end (copy .env.example, run dev server, download Qwen3-TTS weights).
+6. **Safety** — `set -euo pipefail`; script must be idempotent.
+
+### Dependencies
+<project_structure>
+    <include>package.json</include>
+    <include>requirements.txt</include>
+</project_structure>
+<database_utility>
+    <include>lib/db.ts</include>
+</database_utility>

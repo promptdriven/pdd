@@ -1,16 +1,12 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame is sampled at frame 254/270 (94.4% progress), which falls within the final hold phase (Frame 240-270). The spec requires: clean code fully displayed with terminal overlay visible. All critical elements are present and correct:
+The frame is sampled at frame 47/50 (95% progress), which is in animation phase 5 (frames 45-50). At this point, the spec requires: (1) Clean code lines fully streamed in with syntax highlighting and no red comments, (2) A terminal overlay in the bottom-left showing '$ pdd generate' with a green checkmark. Issues found:
 
-1. **Clean code (14-16 lines):** The editor shows 16 lines of clean TypeScript for the `processUserInput` function. The code has no comments, no patches, no scars — it reads as freshly generated code. The line count (16 visible lines of code) is close to the spec's 14 lines; the difference is within acceptable variation as the code is visibly shorter and cleaner than the 18-line patched version from scene 0.6.
+1. **Clean code lines** — Code is present in the upper portion of the frame, but it appears heavily degraded. The text is rendered as scattered dots/particles rather than readable code with proper syntax highlighting. The code looks like it's mid-dissolve or using a character-level particle effect rather than clean, fully-rendered code lines. By frame 47, all code should be fully streamed in and readable.
 
-2. **Syntax highlighting:** Proper syntax coloring is visible — keywords (`function`, `const`, `if`, `return`) in blue/red tones, types (`string`, `ProcessedInput`) in distinct colors, strings in orange/salmon, operators and punctuation in light gray. Consistent with GitHub dark theme scheme.
+2. **Terminal overlay missing** — The spec requires a 320x40px terminal overlay in the bottom-left corner with dark background (#0D1117), showing '$ pdd generate' text and a green checkmark. No such terminal overlay is visible anywhere in the bottom-left (or anywhere else in the frame). At frame 47 (95% into the animation), this overlay should be visibly fading in or already present.
 
-3. **Background:** Dark `#0D1117` GitHub dark theme background. Editor chrome with line numbers on the left side in muted gray.
+3. **Line gutter** — A narrow dark vertical strip is visible on the far left edge, which could serve as the line gutter area, though no line numbers are visible.
 
-4. **Terminal overlay:** Visible in the bottom-right corner showing `$ pdd generate processUserInput ✓` with the checkmark in green. The overlay has a dark background with subtle border, positioned correctly in the lower-right quadrant. Position and styling match spec expectations.
-
-5. **No green entrance glow visible:** At 94.4% progress in the hold phase, all entrance animations have completed, so the absence of green glow is expected.
-
-6. **Layout:** Code is left-aligned in the editor area with proper indentation. The terminal overlay is bottom-right as specified. Overall composition matches the intended centered/overlay layout.
+4. **No syntax highlighting** — The code text that is visible appears to be monochrome (light dots on dark background) without the expected syntax highlighting colors.

@@ -1,0 +1,41 @@
+You are implementing a TTS script formatter (`lib/tts-script-format.ts`) that merges a main narrative script with a raw TTS-annotated script to produce a canonical, section-structured TTS output.
+
+<types_ts>
+<include>video_editor_pdd/lib/types.ts</include>
+</types_ts>
+
+Dependencies: none beyond the `Section` type (only `id` and `label` fields used, via a local `SectionSummary = Pick<Section, "id" | "label">`).
+
+Single export: `buildCanonicalTtsScript(mainScript: string, rawTtsScript: string, sections: ReadonlyArray<SectionSummary>): string`
+
+Internal Types
+- `NarrationSection`: `{ heading: string; narration: string[] }` — paragraphs extracted from mainScript under `## Heading`
+- `GeneratedBlock`: `{ tags: string[]; speech: string; trailingPause: string | null }` — parsed from rawTtsScript
+
+Tag System
+- TTS tags match `[TONE|PACE|EMOTION|INSTRUCT:value]` (case-insensitive). Pause tags match `[PAUSE:value]`.
+- `NARRATOR:` lines (with optional bold markdown) are stripped to extract speech text.
+- `ensureInstructionTag`: if no `[INSTRUCT:]` tag exists in a block's tags, synthesize one from TONE/PACE/EMOTION values combined with a BASE_INSTRUCTION constant ("Speak with a confident, authoritative tone like a knowledgeable educator"). Explicit INSTRUCT tags pass through unchanged.
+
+Main Script Extraction (`extractNarrationSections`)
+- Split mainScript on `## Heading` lines into sections
+- Within each section, collect narrator paragraphs: start after `NARRATOR:` line, break on blank lines / `##` headings / `---` rules / `### ` subheadings / `[VISUAL:` lines
+- Each continuous run of text lines forms one paragraph (joined, whitespace-collapsed)
+
+Raw TTS Parsing (`parseGeneratedBlocks`)
+- Parse rawTtsScript line-by-line into GeneratedBlocks
+- TTS tags accumulate until speech text appears; a new TTS tag after speech flushes the current block
+- PAUSE tags attach as trailingPause to the current block (or previous block if no current content)
+- Blank lines, `---`, and `## ` headings flush the current block; `# ` top-level headings are skipped
+
+Heading Match (`scoreSectionHeadingMatch`)
+- Normalize headings: strip parentheticals, separate letter-digit boundaries, lowercase, collapse non-alphanumeric
+- Scoring: exact=1000, prefix match=900-delta, all desired tokens present=800+count, partial=proportional token overlap, no overlap=-1
+- Each section tries matching via its label and `titleFromId(id)`, taking the best score
+
+Output Assembly
+- If `sections` array is empty, derive sections from mainScript headings
+- For each section, resolve narration paragraphs via heading match, then pair with generated blocks (consumed sequentially by index)
+- Each paragraph gets: its matched generated block's tags (with ensureInstructionTag) or default `[TONE: explanatory][PACE: moderate][EMOTION: calm]`, speech text (generated speech preferred over mainScript paragraph), and a trailing pause (generated pause, or `[PAUSE: 1.0s]` between paragraphs within a section)
+- Leftover generated blocks append to the last section
+- Sections are joined with `\n\n---\n\n` separators; falls back to raw trimmed script if no sections resolved

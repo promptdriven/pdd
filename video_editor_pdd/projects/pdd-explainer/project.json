@@ -24,11 +24,8 @@
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_hook",
-        "03_zoom_out_accumulated",
         "06_code_blink_patched",
-        "07_code_regeneration",
-        "08_still_patching_beat",
-        "09_pdd_title_card"
+        "07_code_regeneration"
       ],
       "timelineSource": "generated"
     },
@@ -238,6 +235,7 @@
         "label": "Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
+          "cold_open",
           "part1_economics",
           "part3_mold_three_parts",
           "part5_compound_returns"
@@ -248,14 +246,24 @@
       },
       {
         "id": "grandmother",
-        "label": "Great-Grandmother",
+        "label": "Grandmother",
         "imagePath": "outputs/veo/references/grandmother.png",
         "sections": [
-          "cold_open",
           "part5_compound_returns"
         ],
         "referencePrompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
         "prompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "great_grandmother",
+        "label": "Great-Grandmother",
+        "imagePath": "outputs/veo/references/great_grandmother.png",
+        "sections": [
+          "cold_open"
+        ],
+        "referencePrompt": "Elderly woman with weathered hands, 1950s domestic setting, cotton housedress, reading glasses, warm amber lamplight, darning a sock",
+        "prompt": "Elderly woman with weathered hands, 1950s domestic setting, cotton housedress, reading glasses, warm amber lamplight, darning a sock",
         "source": "stage6-inferred"
       }
     ],

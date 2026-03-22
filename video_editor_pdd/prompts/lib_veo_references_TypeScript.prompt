@@ -1,0 +1,42 @@
+You are implementing a Veo character-reference extraction and merge module (`lib/veo-references.ts`) that scans project spec markdown files for character definitions embedded in Data Points JSON blocks, then reconciles them with manually-authored references in the project config.
+
+<types_ts>
+<include>video_editor_pdd/lib/types.ts</include>
+</types_ts>
+
+Dependencies: `fs`, `path`. Import `extractMarkdownJsonBlock`, `isVeoMarkdownSpec`, `normalizeSpecDir` from `./veo-spec-context`. Import types `ProjectConfig`, `Section`, `VeoReference` from `./types`.
+
+Internal Types
+- `MarkdownSpecEntry`: `{ sectionId, path, content }` — a single spec file read from disk.
+- `VeoCharacterContract`: loosely typed object with optional `id`, `label`, `referencePrompt`, `prompt`, `appearance`, `description` (all `unknown`).
+
+Helper Functions
+1. `humanizeReferenceId` — split on `_` or `-`, capitalize first letter of each token, join with spaces.
+2. `normalizeReferenceId` — lowercase, collapse non-alphanumeric runs to `_`, strip leading/trailing underscores.
+3. `uniqueSorted` — deduplicate and sort strings via Set + localeCompare.
+4. `coerceCharacterPrompt` — try `referencePrompt`, `prompt`, `appearance`, `description` in that order; return first non-empty trimmed string or null.
+
+Character Extraction (`extractVeoCharacters`)
+- Parse the `Data Points` JSON block from spec content via `extractMarkdownJsonBlock`.
+- Accept characters from either `characters` or `characterReferences` array.
+- Derive `id` from `character.id` falling back to `character.label`; normalize via `normalizeReferenceId`.
+- Derive `label` from explicit `character.label` or humanize the id.
+- Return array of `{ id, label, prompt }`.
+
+Exported Functions
+1. `collectInferredVeoReferences(entries: MarkdownSpecEntry[]): VeoReference[]`
+   - Filter to veo specs only (`isVeoMarkdownSpec`).
+   - Extract characters; deduplicate by id, union section lists, keep first non-null prompt.
+   - Default `imagePath` to `outputs/veo/references/{id}.png`.
+   - Tag all with `source: "stage6-inferred"`.
+   - Return sorted by id.
+
+2. `mergeInferredVeoReferences(existing: VeoReference[], inferred: VeoReference[]): VeoReference[]`
+   - Start from inferred map; overlay non-inferred (manual) references.
+   - Manual fields win (spread order: inferred then manual), but sections are unioned.
+   - Return sorted by id.
+
+3. `syncInferredVeoReferencesFromProjectSpecs(projectDir: string, config: ProjectConfig): ProjectConfig`
+   - List spec entries from disk: for each section, read `.md` files (excluding `AUDIT_` prefix) from `specs/{normalizedSpecDir}`.
+   - Collect inferred references, merge with existing `config.veo.references`.
+   - Return updated config with merged references.

@@ -11,11 +11,8 @@ import { Part5CompoundReturnsSection } from "./part5_compound_returns";
 import { WhereToStartSection } from "./where_to_start";
 import { ClosingSection } from "./closing";
 import { ColdOpen01SplitScreenHook } from "./ColdOpen01SplitScreenHook";
-import { ColdOpen03ZoomOutAccumulated } from "./ColdOpen03ZoomOutAccumulated";
 import { ColdOpen06CodeBlinkPatched } from "./ColdOpen06CodeBlinkPatched";
 import { ColdOpen07CodeRegeneration } from "./ColdOpen07CodeRegeneration";
-import { ColdOpen08StillPatchingBeat } from "./ColdOpen08StillPatchingBeat";
-import { ColdOpen09PddTitleCard } from "./ColdOpen09PddTitleCard";
 import { Part1Economics01SectionTitleCard } from "./Part1Economics01SectionTitleCard";
 import { Part1Economics02SockEconomicsChart } from "./Part1Economics02SockEconomicsChart";
 import { Part1Economics03CodeCostTripleLine } from "./Part1Economics03CodeCostTripleLine";
@@ -74,12 +71,9 @@ import { Closing08MoldIsWhatMatters } from "./Closing08MoldIsWhatMatters";
 import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "cold_open:01_split_screen_hook": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
-  "cold_open:03_zoom_out_accumulated": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
-  "cold_open:06_code_blink_patched": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
-  "cold_open:07_code_regeneration": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
-  "cold_open:08_still_patching_beat": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
-  "cold_open:09_pdd_title_card": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "cold_open:01_split_screen_hook": { defaultSrc: "veo/developer_ai_edit.mp4", backgroundSrc: "veo/developer_ai_edit.mp4", outputSrc: "veo/developer_ai_edit.mp4", baseSrc: "veo/developer_ai_edit.mp4" },
+  "cold_open:06_code_blink_patched": { defaultSrc: "veo/sock_toss.mp4", backgroundSrc: "veo/sock_toss.mp4", outputSrc: "veo/sock_toss.mp4", baseSrc: "veo/sock_toss.mp4" },
+  "cold_open:07_code_regeneration": { defaultSrc: "veo/sock_toss.mp4", backgroundSrc: "veo/sock_toss.mp4", outputSrc: "veo/sock_toss.mp4", baseSrc: "veo/sock_toss.mp4" },
   "part1_economics:09_crossing_lines_moment": { defaultSrc: "veo/developer_patching_montage.mp4", backgroundSrc: "veo/developer_patching_montage.mp4", outputSrc: "veo/developer_patching_montage.mp4", baseSrc: "veo/developer_patching_montage.mp4" },
   "part1_economics:10_double_meter_insight": { defaultSrc: "veo/developer_patching_montage.mp4", backgroundSrc: "veo/developer_patching_montage.mp4", outputSrc: "veo/developer_patching_montage.mp4", baseSrc: "veo/developer_patching_montage.mp4" },
   "part2_paradigm_shift:04_defect_fix_the_mold": { defaultSrc: "veo/injection_molding_process.mp4", backgroundSrc: "veo/injection_molding_process.mp4", outputSrc: "veo/injection_molding_process.mp4", baseSrc: "veo/injection_molding_process.mp4" },
@@ -104,12 +98,9 @@ const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
 };
 
 const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "cold_open:01_split_screen_hook": {"specBaseName": "01_split_screen_hook", "dataPoints": {"type": "split_screen", "layout": "vertical", "divider": {"x": 960, "color": "#334155", "opacity": 0.4, "width": 2}, "panels": {"left": {"label": "2025", "veoClipId": "developer_cursor_edit", "colorGrade": {"tint": "#4A90D9", "opacity": 0.02}, "vignette": {"color": "#000000", "opacity": 0.15}}, "right": {"label": "1955", "veoClipId": "grandmother_darning", "colorGrade": {"tint": "#D4A043", "opacity": 0.04}, "filmGrain": {"opacity": 0.06, "fps": 12}}}, "embeddedVeoClips": ["developer_cursor_edit", "grandmother_darning"], "narrationSegments": ["cold_open_001", "cold_open_002"]}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:03_zoom_out_accumulated": {"specBaseName": "03_zoom_out_accumulated", "dataPoints": {"type": "animated_infographic", "layout": "split_screen", "left": {"label": "Codebase Patches", "blockCount": 80, "diffMarkerPercent": 60, "floatingComments": ["// TODO: refactor", "// HACK", "// fixed null case", "// workaround for #412", "// legacy — do not touch", "// temporary fix 2023-04"], "counter": {"from": 0, "to": 1247, "suffix": " patches", "color": "#F85149"}}, "right": {"label": "Mended Garments", "garmentCount": 47, "garmentTypes": ["sock", "shirt", "trouser", "sock", "sweater"], "counter": {"from": 0, "to": 47, "suffix": " mended garments", "color": "#D9944A"}}, "zoom": {"from": 1.0, "to": 0.15, "startFrame": 10, "durationFrames": 80}, "narrationSegments": ["cold_open_003", "cold_open_004"]}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:06_code_blink_patched": {"specBaseName": "06_code_blink_patched", "dataPoints": {"type": "code_editor", "function": {"name": "processUserInput", "lineCount": 18, "language": "typescript", "code": ["function processUserInput(raw: string): ProcessedInput {", "  const sanitized = raw.trim().toLowerCase();", "  let result: ProcessedInput;", "", "  // fixed null case", "  if (!sanitized || sanitized === 'undefined') {", "    return { valid: false, value: '', error: 'empty input' };", "  }", "", "  // workaround for #412", "  const cleaned = sanitized.replace(/[^\\w@.\\-]/g, '');", "  if (cleaned !== sanitized) {", "    result = { valid: true, value: cleaned, warning: 'chars stripped' };", "  // TODO: refactor this", "  } else if (cleaned.length > MAX_INPUT_LENGTH) {", "    result = { valid: true, value: cleaned.slice(0, MAX_INPUT_LENGTH) };", "  // legacy — do not touch", "  } else { result = { valid: true, value: cleaned }; }", "  return result;", "}"]}, "patchScars": [{"line": 5, "text": "// fixed null case", "highlightColor": "#F85149", "opacity": 0.5}, {"line": 9, "text": "// workaround for #412", "highlightColor": "#F85149", "opacity": 0.5}, {"line": 13, "text": "// TODO: refactor this", "highlightColor": "#D29922", "opacity": 0.4}, {"line": 16, "text": "// legacy — do not touch", "highlightColor": "#F85149", "opacity": 0.5}], "cursor": {"line": 1, "column": 0, "color": "#58A6FF", "blinkMs": 530}, "narrationSegments": ["cold_open_007"]}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:07_code_regeneration": {"specBaseName": "07_code_regeneration", "dataPoints": {"type": "code_editor_animation", "phases": [{"name": "selection", "frames": [0, 20], "lineRange": [1, 18], "highlightColor": "#388BFD", "highlightOpacity": 0.15}, {"name": "dissolution", "frames": [20, 75], "effect": "particle_scatter", "direction": "bottom_to_top", "staggerFramesPerLine": 3, "particleSize": 2}, {"name": "empty_beat", "frames": [75, 105], "description": "Empty editor with blinking cursor"}, {"name": "regeneration", "frames": [105, 210], "effect": "typewriter", "charsPerSecond": 60, "lineCount": 14}, {"name": "terminal_confirm", "frames": [210, 270], "command": "pdd generate processUserInput", "result": "✓"}], "oldCode": {"functionName": "processUserInput", "lineCount": 18, "patchComments": 4}, "newCode": {"functionName": "processUserInput", "lineCount": 14, "patchComments": 0, "code": ["function processUserInput(raw: string): ProcessedInput {", "  const sanitized = raw.trim().toLowerCase();", "", "  if (!sanitized) {", "    return { valid: false, value: '', error: 'empty input' };", "  }", "", "  const cleaned = sanitized.replace(/[^\\w@.\\-]/g, '');", "  const truncated = cleaned.slice(0, MAX_INPUT_LENGTH);", "", "  return {", "    valid: true,", "    value: truncated,", "    ...(cleaned !== sanitized && { warning: 'chars stripped' }),", "  };", "}"]}, "narrationSegments": ["cold_open_008"]}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:08_still_patching_beat": {"specBaseName": "08_still_patching_beat", "dataPoints": {"type": "title_card", "text": "So why are we still patching?", "font": {"family": "Inter", "weight": 600, "size": 52}, "color": "#C9D1D9", "opacity": 0.92, "position": {"x": 960, "y": 520}, "background": "#0D1117", "ambientGlow": {"color": "#4A90D9", "opacity": 0.03, "radius": 400}, "timing": {"fadeInFrames": 20, "holdFrames": 60, "fadeOutFrames": 40}, "narrationSegments": ["cold_open_009"]}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:09_pdd_title_card": {"specBaseName": "09_pdd_title_card", "dataPoints": {"type": "title_card", "title": {"text": "Prompt-Driven Development", "font": {"family": "Inter", "weight": 700, "size": 64}, "color": "#E6EDF3", "opacity": 0.95, "position": {"x": 960, "y": 460}, "letterSpacing": -1}, "subtitle": {"text": "WHY YOU'RE STILL DARNING SOCKS", "font": {"family": "Inter", "weight": 400, "size": 24}, "color": "#8B949E", "opacity": 0.7, "position": {"x": 960, "y": 568}, "letterSpacing": 2}, "rule": {"y": 510, "xRange": [460, 1460], "color": "#4A90D9", "glow": {"opacity": 0.12, "blur": 4}}, "background": {"color": "#0A0F1A", "dots": {"count": 50, "color": "#4A90D9", "opacity": 0.06, "speed": 0.3}}, "timing": {"ruleDrawFrames": [0, 30], "titleRiseFrames": [30, 60], "subtitleFadeFrames": [50, 80], "holdFrames": [80, 150], "fadeOutFrames": [150, 180]}, "narrationSegments": ["cold_open_010"]}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:01_split_screen_hook": {"specBaseName": "01_split_screen_hook", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "leftClipId": "developer_ai_edit", "rightClipId": "grandmother_darning", "divider": {"width": 1, "color": "#FFFFFF20"}}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:06_code_blink_patched": {"specBaseName": "06_code_blink_patched", "dataPoints": {"type": "code_editor", "language": "typescript", "theme": "vscode_dark", "annotations": [{"line": 4, "text": "// FIXME: edge case from PR #847", "color": "#F44747"}, {"line": 12, "text": "// patched — original logic broke on null", "color": "#F44747"}, {"line": 18, "text": "// TODO: refactor this entire block", "color": "#F4A347"}], "cursorPosition": {"line": 23, "column": 0}, "cursorBlinkMs": 530}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:07_code_regeneration": {"specBaseName": "07_code_regeneration", "dataPoints": {"type": "code_regeneration", "language": "typescript", "theme": "vscode_dark", "patchedLineCount": 23, "cleanLineCount": 16, "generationGlow": "#00D9FF15", "terminalCommand": "pdd generate", "streamRate": "2_lines_per_frame"}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 1, "sectionLabel": "Part 1", "title": "The Economics of Darning", "titleColor": "#D9944A", "subtitle": "Why patching was rational — and when it stopped.", "subtitleColor": "#94A3B8", "backgroundColor": "#0D1117", "narrationSegments": ["part1_economics_001"]}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:02_sock_economics_chart": {"specBaseName": "02_sock_economics_chart", "dataPoints": {"type": "animated_chart", "chartType": "dual_line_crossover", "xAxis": {"label": "Year", "range": [1950, 1975], "majorInterval": 5, "minorInterval": 1}, "yAxis": {"label": "Cost (% of hourly wage)", "range": [0, 100], "majorInterval": 25}, "series": [{"id": "labor_cost_darn", "label": "Cost to darn (time)", "color": "#D9944A", "data": [{"x": 1950, "y": 35}, {"x": 1955, "y": 34}, {"x": 1960, "y": 33}, {"x": 1965, "y": 33}, {"x": 1970, "y": 32}, {"x": 1975, "y": 32}]}, {"id": "new_sock_cost", "label": "Cost of new socks", "color": "#4A90D9", "data": [{"x": 1950, "y": 80}, {"x": 1955, "y": 55}, {"x": 1960, "y": 38}, {"x": 1962, "y": 33}, {"x": 1965, "y": 25}, {"x": 1970, "y": 18}, {"x": 1975, "y": 14}]}], "crossingPoint": {"x": 1962, "y": 33, "label": "The Threshold"}, "backgroundColor": "#0D1117", "narrationSegments": ["part1_economics_002", "part1_economics_004"]}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:03_code_cost_triple_line": {"specBaseName": "03_code_cost_triple_line", "dataPoints": {"type": "animated_chart", "chartType": "triple_line_debt_reveal", "xAxis": {"label": "Year", "range": [2015, 2025], "majorInterval": 2, "minorInterval": 1}, "yAxis": {"label": "Cost (Developer Hours)", "range": [0, 20], "majorInterval": 5}, "milestones": [{"x": 2021, "label": "Codex"}, {"x": 2022, "label": "Copilot"}, {"x": 2023, "label": "GPT-4 / Claude"}, {"x": 2024, "label": "Cursor / Claude Code"}], "series": [{"id": "cost_to_generate", "label": "Cost to generate", "color": "#4A90D9", "strokeWidth": 3, "style": "solid", "data": [{"x": 2015, "y": 18}, {"x": 2018, "y": 17.5}, {"x": 2020, "y": 17}, {"x": 2021, "y": 16}, {"x": 2022, "y": 14}, {"x": 2023, "y": 10}, {"x": 2024, "y": 6}, {"x": 2025, "y": 4}]}, {"id": "immediate_patch_cost", "label": "Immediate patch cost", "color": "#D9944A", "strokeWidth": 3, "style": "solid", "data": [{"x": 2015, "y": 8}, {"x": 2018, "y": 7.5}, {"x": 2020, "y": 7}, {"x": 2021, "y": 6}, {"x": 2022, "y": 5}, {"x": 2023, "y": 4}, {"x": 2024, "y": 3}, {"x": 2025, "y": 2}]}, {"id": "total_cost_with_debt", "label": "Total cost (with debt)", "color": "#D9944A", "strokeWidth": 2, "style": "dashed", "data": [{"x": 2015, "y": 14}, {"x": 2018, "y": 14}, {"x": 2020, "y": 13.5}, {"x": 2021, "y": 13.5}, {"x": 2022, "y": 13}, {"x": 2023, "y": 13}, {"x": 2024, "y": 13}, {"x": 2025, "y": 13}]}], "debtShadedArea": {"upperSeries": "total_cost_with_debt", "lowerSeries": "immediate_patch_cost", "color": "#D9944A", "opacity": 0.08}, "backgroundColor": "#0D1117", "narrationSegments": ["part1_economics_005", "part1_economics_006", "part1_economics_008", "part1_economics_009", "part1_economics_011", "part1_economics_012"]}, "overlayConfig": null, "renderMode": "component"},
@@ -175,13 +166,6 @@ const ColdOpen01SplitScreenHookPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen03ZoomOutAccumulatedPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:03_zoom_out_accumulated"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:03_zoom_out_accumulated"] ?? null}>
-      <ColdOpen03ZoomOutAccumulated />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
 const ColdOpen06CodeBlinkPatchedPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:06_code_blink_patched"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:06_code_blink_patched"] ?? null}>
@@ -193,20 +177,6 @@ const ColdOpen07CodeRegenerationPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_code_regeneration"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_code_regeneration"] ?? null}>
       <ColdOpen07CodeRegeneration />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const ColdOpen08StillPatchingBeatPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:08_still_patching_beat"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:08_still_patching_beat"] ?? null}>
-      <ColdOpen08StillPatchingBeat />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const ColdOpen09PddTitleCardPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:09_pdd_title_card"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:09_pdd_title_card"] ?? null}>
-      <ColdOpen09PddTitleCard />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -679,14 +649,6 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="cold-open03-zoom-out-accumulated"
-        component={ColdOpen03ZoomOutAccumulatedPreview}
-        durationInFrames={210}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
         id="cold-open06-code-blink-patched"
         component={ColdOpen06CodeBlinkPatchedPreview}
         durationInFrames={150}
@@ -698,22 +660,6 @@ export const RemotionRoot: React.FC = () => {
         id="cold-open07-code-regeneration"
         component={ColdOpen07CodeRegenerationPreview}
         durationInFrames={270}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="cold-open08-still-patching-beat"
-        component={ColdOpen08StillPatchingBeatPreview}
-        durationInFrames={120}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="cold-open09-pdd-title-card"
-        component={ColdOpen09PddTitleCardPreview}
-        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
