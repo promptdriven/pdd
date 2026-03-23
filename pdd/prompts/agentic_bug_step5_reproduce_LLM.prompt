@@ -115,17 +115,11 @@ Your comment should follow this format:
 
 % CRITICAL: Machine-Readable Output (REQUIRED)
 
-**You MUST output exactly one of these lines at the very end of your response.**
-This is required for the automation to continue. Without this line, the workflow will fail.
-
-If you created a reproduction test file:
+If you created a reproduction test file, output this line at the very end of your response:
 ```
-FILES_CREATED: tests/test_issue_{issue_number}_reproduction.py
+REPRO_FILES_CREATED: tests/test_issue_{issue_number}_reproduction.py
 ```
 
-If you could not reproduce and did not create a test file:
-```
-FILES_CREATED: none
-```
+If you could not reproduce and did not create a test file, simply omit this line.
 
-⚠️ IMPORTANT: This line must be the last thing you output. Do not add any text after it.
+⚠️ IMPORTANT: If present, this line must be the last thing you output. Do not add any text after it.

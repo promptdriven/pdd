@@ -139,13 +139,19 @@ You are now working in an isolated git worktree at: {worktree_path}
 
 % Step 5 Reproduction Tests
 
-If Step 5 created reproduction test files (check step5_output for a `FILES_CREATED:` line), you MUST incorporate those tests into your test file:
+If Step 5 wrote reproduction tests, their content is provided below. These tests call existing code and prove the bug exists on current code. You MUST incorporate them into your test file as regression tests, alongside your new tests for the fix.
 
-1. Read the reproduction test file written by Step 5 (path from step5_output's `FILES_CREATED:` tag)
-2. Merge those tests into your test file as regression tests — they call existing code and demonstrate the bug's existence
-3. Add your new tests (from Step 8's plan) alongside the reproduction tests
-4. Preserve the reproduction tests' assertions and structure — they are behavioral tests that should remain as-is
-5. If Step 5 did not create test files (or `FILES_CREATED: none`), proceed normally without this step
+<step5_reproduction_tests>
+{step5_reproduction_tests}
+</step5_reproduction_tests>
+
+If the above is empty, Step 5 did not write reproduction tests — proceed normally.
+
+When incorporating reproduction tests:
+- Preserve their assertions and test logic
+- Adapt imports/fixtures to match your test file's structure
+- Keep them as separate test functions (don't merge into your fix-detection tests)
+- Add a comment like `# Reproduction test from Step 5` above each
 
 % Your Task
 

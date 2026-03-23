@@ -87,9 +87,8 @@ Do NOT create a new branch - just stage, commit, and push.
 1. **Prepare the commit**
    - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
    - **CRITICAL: Stage ONLY the files listed in `files_to_stage` above**
-   - This includes test files from Steps 5, 9, and 11, AND any prompt files fixed in Step 7
+   - This includes test files from Steps 9 and 11, AND any prompt files fixed in Step 7
    - Get the exact file paths from:
-     - Step 5's `FILES_CREATED:` output (reproduction tests, if not `none`)
      - Step 7's `PROMPT_FIXED:` output (prompt files)
      - Step 9's `FILES_CREATED:` or `FILES_MODIFIED:` output (unit tests)
      - Step 11's `E2E_FILES_CREATED:` or `E2E_FILES_MODIFIED:` output (E2E tests)
