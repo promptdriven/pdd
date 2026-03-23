@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
@@ -288,3 +289,260 @@ def test_context_accumulation_verification(mock_dependencies, tmp_path):
     # Call 0 is step 1, Call 1 is step 2
     step2_call_args = mock_run.call_args_list[1]
     assert "Previous: STEP1_SECRET" in step2_call_args.kwargs["instruction"]
+
+
+# ============================================================================
+# Issue #928: Step 5 reproduction tests must flow into changed_files / PR
+# ============================================================================
+
+
+def test_step5_files_created_appears_in_changed_files(mock_dependencies, tmp_path):
+    """Verifies that when Step 5 emits FILES_CREATED, the file appears in the
+    orchestrator's returned changed_files list.
+
+    Bug: The orchestrator has no per-step handler for step_num == 5, so
+    FILES_CREATED output is silently ignored and the reproduction test file
+    never reaches the PR.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    def side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step5" == label:
+            return (True, "Reproduction complete.\nFILES_CREATED: tests/test_issue_123_reproduction.py", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    # Step 5's reproduction test must appear in changed_files
+    assert "tests/test_issue_123_reproduction.py" in changed_files, (
+        "Step 5 FILES_CREATED output was not tracked in changed_files — "
+        "reproduction tests are silently dropped (issue #928)"
+    )
+
+
+def test_step5_file_flows_into_files_to_stage_for_step12(mock_dependencies, tmp_path):
+    """Verifies that Step 5's reproduction test file appears in the
+    files_to_stage context passed to Step 12's prompt.
+
+    Bug: The orchestrator never adds Step 5 files to files_to_stage, so
+    Step 12 has no way to stage them for the PR.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    captured_instructions = {}
+
+    def side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        captured_instructions[label] = instruction
+        if "step5" == label:
+            return (True, "FILES_CREATED: tests/test_issue_123_reproduction.py", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    # Use a template that includes {files_to_stage} so we can verify substitution
+    def load_side_effect(name):
+        if "step12" in name:
+            return "Stage these files: {files_to_stage}"
+        return "Template for {issue_number}"
+
+    mock_load.side_effect = load_side_effect
+
+    run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    step12_instruction = captured_instructions.get("step12", "")
+    assert step12_instruction, "Step 12 was never called"
+    assert "tests/test_issue_123_reproduction.py" in step12_instruction, (
+        "Step 5's reproduction test file is missing from files_to_stage in "
+        "Step 12's prompt — the file will not be committed (issue #928)"
+    )
+
+
+def test_step5_file_staged_via_git_add_before_step12(mock_dependencies, tmp_path):
+    """Verifies that Step 5's reproduction test file is staged via 'git add'
+    in the pre-Step 12 deterministic staging block.
+
+    Bug: Since Step 5 files never enter changed_files, the pre-Step 12 loop
+    at lines 717-730 never stages them.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    def side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step5" == label:
+            return (True, "FILES_CREATED: tests/test_issue_123_reproduction.py", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    with patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
+        mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_subprocess.CalledProcessError = subprocess.CalledProcessError
+
+        import subprocess as real_subprocess
+        mock_subprocess.CalledProcessError = real_subprocess.CalledProcessError
+
+        run_agentic_bug_orchestrator(
+            issue_url="url", issue_content="content", repo_owner="owner",
+            repo_name="name", issue_number=123, issue_author="author",
+            issue_title="title", cwd=tmp_path, quiet=True
+        )
+
+        # Collect all git add calls
+        git_add_calls = [
+            c for c in mock_subprocess.run.call_args_list
+            if len(c.args) > 0 and isinstance(c.args[0], list)
+            and len(c.args[0]) >= 3
+            and c.args[0][0] == "git" and c.args[0][1] == "add"
+        ]
+        staged_files = [c.args[0][2] for c in git_add_calls]
+
+        assert "tests/test_issue_123_reproduction.py" in staged_files, (
+            "Step 5's reproduction test was not staged via 'git add' before "
+            "Step 12 — the file will be missing from the commit (issue #928)"
+        )
+
+
+def test_step5_files_re_extracted_on_resume(mock_dependencies, tmp_path):
+    """Verifies that when resuming from saved state, Step 5's FILES_CREATED
+    output is re-parsed and the file appears in changed_files.
+
+    Bug: Lines 562-586 re-extract files from step5.5, step7, and step9
+    outputs but skip step5_output entirely.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    # Simulate a resume: load_workflow_state returns previous step outputs
+    saved_state = {
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Not user error",
+            "3": "Proceed",
+            "4": "No API issues",
+            "5": "Reproduction done.\nFILES_CREATED: tests/test_issue_456_reproduction.py",
+            "6": "Root cause found",
+            "7": "DEFECT_TYPE: code\nClassification done",
+            "8": "Test plan ready",
+            "9": "FILES_CREATED: tests/test_issue_456_fix.py",
+        },
+        "last_completed_step": 9,
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(tmp_path),
+    }
+
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)):
+        # Steps 10-12 will run; Step 9 output already provides files
+        def side_effect(instruction, **kwargs):
+            label = kwargs.get("label", "")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+            issue_url="url", issue_content="content", repo_owner="owner",
+            repo_name="name", issue_number=456, issue_author="author",
+            issue_title="title", cwd=tmp_path, quiet=True
+        )
+
+    # Step 5's reproduction file should be re-extracted from saved state
+    assert "tests/test_issue_456_reproduction.py" in changed_files, (
+        "Step 5 FILES_CREATED was not re-extracted on resume — reproduction "
+        "tests are lost when the workflow is resumed (issue #928)"
+    )
+
+
+def test_step5_files_created_none_not_tracked(mock_dependencies, tmp_path):
+    """Verifies that 'FILES_CREATED: none' from Step 5 does not add 'none'
+    as a file path to changed_files.
+
+    Edge case: Step 5 may output 'FILES_CREATED: none' when no reproduction
+    test was created. The orchestrator must not treat 'none' as a file path.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    def side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step5" == label:
+            return (True, "Could not reproduce.\nFILES_CREATED: none", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    assert "none" not in changed_files, (
+        "FILES_CREATED: none was incorrectly tracked as a file path"
+    )
+
+
+def test_step5_file_copied_to_worktree_after_step7(mock_dependencies, tmp_path):
+    """Verifies that Step 5's reproduction test file is transferred from the
+    original cwd to the worktree after the worktree is created at Step 7.
+
+    Bug: Step 5 runs in the original cwd (before the worktree exists).
+    The worktree is created at Step 7. Without a file transfer mechanism,
+    the reproduction test file is stranded in the original directory and
+    never reaches the worktree where Steps 9-12 operate.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    # Create the actual Step 5 reproduction test file in the original cwd
+    repro_file = tmp_path / "tests" / "test_issue_789_reproduction.py"
+    repro_file.parent.mkdir(parents=True, exist_ok=True)
+    repro_file.write_text("# reproduction test\ndef test_repro(): pass\n")
+
+    # Set up a separate worktree path
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    (worktree_dir / "tests").mkdir()
+    mock_wt.return_value = (worktree_dir, None)
+
+    def side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if "step5" == label:
+            return (True, "FILES_CREATED: tests/test_issue_789_reproduction.py", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: tests/test_issue_789_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=789, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    # The reproduction test file must exist in the worktree after Step 7
+    worktree_repro = worktree_dir / "tests" / "test_issue_789_reproduction.py"
+    assert worktree_repro.exists(), (
+        "Step 5's reproduction test file was not transferred to the worktree "
+        "after Step 7 created it — the file is stranded in the original "
+        "directory (issue #928)"
+    )

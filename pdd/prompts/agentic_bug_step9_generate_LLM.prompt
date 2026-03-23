@@ -137,6 +137,16 @@ You are now working in an isolated git worktree at: {worktree_path}
    - Try running an existing test to confirm the setup is correct
    - If tests fail due to missing config, investigate and fix before proceeding
 
+% Step 5 Reproduction Tests
+
+If Step 5 created reproduction test files (check step5_output for a `FILES_CREATED:` line), you MUST incorporate those tests into your test file:
+
+1. Read the reproduction test file written by Step 5 (path from step5_output's `FILES_CREATED:` tag)
+2. Merge those tests into your test file as regression tests — they call existing code and demonstrate the bug's existence
+3. Add your new tests (from Step 8's plan) alongside the reproduction tests
+4. Preserve the reproduction tests' assertions and structure — they are behavioral tests that should remain as-is
+5. If Step 5 did not create test files (or `FILES_CREATED: none`), proceed normally without this step
+
 % Your Task
 
 1. **Review the test plan and implement Step 8's test strategy**

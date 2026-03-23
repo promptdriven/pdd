@@ -55,7 +55,14 @@ You are working on step 5 of 12 in an agentic bug investigation workflow. Previo
    - Run the code and observe the behavior
    - Capture the actual error/output
 
-4. **Document results**
+4. **Save reproduction tests**
+   - Write your reproduction tests to a file: `tests/test_issue_{issue_number}_reproduction.py`
+   - Tests should call the existing (buggy) code to demonstrate the bug exists
+   - Tests should PASS on current code — they prove the bug EXISTS by exercising the buggy behavior
+   - These tests serve as permanent regression tests after the fix lands
+   - Include necessary imports, descriptive test names, and docstrings explaining what each test demonstrates
+
+5. **Document results**
    - **Reproduced**: Describe exact steps and observed behavior
    - **Partially reproduced**: Describe what worked and what differed
    - **Could not reproduce**: Explain what was tried and potential reasons
@@ -104,3 +111,21 @@ Your comment should follow this format:
 - Document your environment carefully for comparison with the reporter's
 - Capture actual error output, not paraphrased descriptions
 - Always post your findings as a GitHub comment before completing
+- Always write reproduction tests to disk before posting the comment
+
+% CRITICAL: Machine-Readable Output (REQUIRED)
+
+**You MUST output exactly one of these lines at the very end of your response.**
+This is required for the automation to continue. Without this line, the workflow will fail.
+
+If you created a reproduction test file:
+```
+FILES_CREATED: tests/test_issue_{issue_number}_reproduction.py
+```
+
+If you could not reproduce and did not create a test file:
+```
+FILES_CREATED: none
+```
+
+⚠️ IMPORTANT: This line must be the last thing you output. Do not add any text after it.
