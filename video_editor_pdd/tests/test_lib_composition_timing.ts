@@ -619,4 +619,97 @@ describe("lib/composition-timing", () => {
       })
     );
   });
+
+  it("excludes companion veo specs embedded in a parent split spec from the timeline", () => {
+    const specDir = path.join(tmpDir, "specs", "cold_open");
+    const veoDir = path.join(tmpDir, "outputs", "veo");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(veoDir, { recursive: true });
+
+    // Split container referencing two companion clips via clipId
+    fs.writeFileSync(
+      path.join(specDir, "01_split_screen_hook.md"),
+      [
+        "[split:]",
+        "**Timestamp:** 0:00 - 0:11",
+        "",
+        "## Data Points JSON",
+        "```json",
+        "{",
+        '  "type": "split_screen",',
+        '  "leftClipId": "developer_ai_edit",',
+        '  "rightClipId": "grandmother_darning"',
+        "}",
+        "```",
+      ].join("\n")
+    );
+    // Companion veo spec — should NOT get its own timeline slot
+    fs.writeFileSync(
+      path.join(specDir, "02_developer_ai_edit.md"),
+      "[veo:]\n**Timestamp:** 0:00 - 0:11\n\n# Developer AI Edit"
+    );
+    // Companion veo spec — should NOT get its own timeline slot
+    fs.writeFileSync(
+      path.join(specDir, "03_grandmother_darning.md"),
+      "[veo:]\n**Timestamp:** 0:00 - 0:11\n\n# Grandmother Darning"
+    );
+    // Standalone spec — SHOULD get its own timeline slot
+    fs.writeFileSync(
+      path.join(specDir, "05_sock_toss.md"),
+      "[veo:]\n**Timestamp:** 0:11 - 0:14\n\n# Sock Toss"
+    );
+    // Stage veo clips under remotion/public/veo/ (where media resolution looks)
+    const remotionVeoDir = path.join(tmpDir, "remotion", "public", "veo");
+    fs.mkdirSync(remotionVeoDir, { recursive: true });
+    fs.writeFileSync(path.join(remotionVeoDir, "developer_ai_edit.mp4"), "stub");
+    fs.writeFileSync(path.join(remotionVeoDir, "grandmother_darning.mp4"), "stub");
+    fs.writeFileSync(path.join(remotionVeoDir, "05_sock_toss.mp4"), "stub");
+
+    const visualIds = listSectionVisualIds(
+      tmpDir,
+      {
+        id: "cold_open",
+        specDir: "cold_open",
+        durationSeconds: 17.5,
+        compositionId: "ColdOpenSection",
+      },
+      ["cold_open_01_split_screen_hook"]
+    );
+
+    // Companions excluded — only split container + sock toss
+    expect(visualIds).toContain("cold_open_01_split_screen_hook");
+    expect(visualIds).toContain("05_sock_toss");
+    expect(visualIds).not.toContain("02_developer_ai_edit");
+    expect(visualIds).not.toContain("03_grandmother_darning");
+  });
+
+  it("keeps standalone veo specs that are not embedded in any split container", () => {
+    const specDir = path.join(tmpDir, "specs", "simple_section");
+    const veoDir = path.join(tmpDir, "outputs", "veo");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(veoDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(specDir, "01_title.md"),
+      "[title:]\n**Timestamp:** 0:00 - 0:03\n\n# Title"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_broll.md"),
+      "[veo:]\n**Timestamp:** 0:03 - 0:08\n\n# B-Roll"
+    );
+    fs.writeFileSync(path.join(veoDir, "02_broll.mp4"), "stub");
+
+    const visualIds = listSectionVisualIds(
+      tmpDir,
+      {
+        id: "simple_section",
+        specDir: "simple_section",
+        durationSeconds: 8,
+        compositionId: "SimpleSection",
+      },
+      []
+    );
+
+    expect(visualIds).toContain("02_broll");
+  });
 });

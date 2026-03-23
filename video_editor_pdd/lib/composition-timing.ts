@@ -432,6 +432,87 @@ function resolveSpecMediaInfo(
   };
 }
 
+const SPLIT_MARKER_RE = /^\s*\[split:[^\]]*\]/i;
+const DATA_POINTS_JSON_RE =
+  /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
+
+function collectEmbeddedCompanionIds(
+  projectDir: string,
+  section: Pick<SectionTimingTarget, "id" | "specDir">
+): Set<string> {
+  const companionIds = new Set<string>();
+  if (!section.specDir) return companionIds;
+
+  const specDir = resolveSectionSpecDir(projectDir, section.specDir);
+  if (!fs.existsSync(specDir)) return companionIds;
+
+  for (const entry of fs.readdirSync(specDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+
+    let content: string;
+    try {
+      content = fs.readFileSync(path.join(specDir, entry.name), "utf-8");
+    } catch {
+      continue;
+    }
+
+    if (!SPLIT_MARKER_RE.test(content)) continue;
+
+    const match = DATA_POINTS_JSON_RE.exec(content);
+    if (!match?.[1]) continue;
+
+    let dataPoints: Record<string, unknown>;
+    try {
+      dataPoints = JSON.parse(match[1]);
+    } catch {
+      continue;
+    }
+
+    const collect = (value: unknown): void => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+          const normalized = key.replace(/[_-]/g, "").toLowerCase();
+          if (
+            (normalized === "leftclipid" || normalized === "rightclipid" ||
+             normalized === "clipid" || normalized === "content") &&
+            typeof nested === "string" && nested.trim()
+          ) {
+            companionIds.add(nested.trim());
+          } else if (typeof nested === "object" && nested !== null) {
+            collect(nested);
+          }
+        }
+      }
+    };
+
+    collect(dataPoints);
+  }
+
+  return companionIds;
+}
+
+function isEmbeddedCompanion(specBaseName: string, companionIds: Set<string>): boolean {
+  if (companionIds.size === 0) return false;
+
+  const stripped = specBaseName.replace(/^\d+_/, "");
+  const normalizedBase = specBaseName.replace(/[_-]/g, "").toLowerCase();
+  const normalizedStripped = stripped.replace(/[_-]/g, "").toLowerCase();
+
+  for (const id of companionIds) {
+    const normalizedId = id.replace(/[_-]/g, "").toLowerCase();
+    if (
+      normalizedBase === normalizedId ||
+      normalizedStripped === normalizedId ||
+      normalizedBase.includes(normalizedId) ||
+      normalizedStripped.includes(normalizedId)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function resolveSectionVisuals(
   projectDir: string,
   section: SectionTimingTarget,
@@ -441,6 +522,7 @@ export function resolveSectionVisuals(
   const configuredIds = listCompositionIds(section, componentIds);
   const consumedCompositionIds = new Set<string>();
   const resolvedVisuals: ResolvedSectionVisual[] = [];
+  const companionIds = collectEmbeddedCompanionIds(projectDir, section);
 
   for (const specBaseName of specBaseNames) {
     const matchingCompositionId = configuredIds.find((compositionId) => {
@@ -476,6 +558,12 @@ export function resolveSectionVisuals(
     }
 
     if (!mediaInfo.hasExplicitMedia) {
+      continue;
+    }
+
+    // Skip companion veo specs embedded in a parent [split:] — the parent
+    // component already renders them; they shouldn't occupy timeline slots.
+    if (isEmbeddedCompanion(specBaseName, companionIds)) {
       continue;
     }
 
