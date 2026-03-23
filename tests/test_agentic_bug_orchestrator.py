@@ -2631,3 +2631,244 @@ def test_step3_needs_more_info_hard_stop(mock_dependencies, default_args):
     assert success is False
     assert "step 3" in msg
     assert "info" in msg.lower()
+
+
+# --- Issue #912: _parse_changed_files drops multi-line markers ---
+
+
+class TestParseChangedFilesMultiLine:
+    """Issue #912: _parse_changed_files uses re.search which only finds the first
+    match. When Step 7 outputs multiple PROMPT_FIXED: lines (one per file),
+    the second file is silently dropped from changed_files."""
+
+    def test_single_marker_single_file(self):
+        """Baseline: single marker line with one file works correctly."""
+        from pdd.agentic_bug_orchestrator import _parse_changed_files
+
+        output = "Some output\nPROMPT_FIXED: prompts/module_python.prompt\nMore output"
+        result = _parse_changed_files(output, "PROMPT_FIXED")
+        assert result == ["prompts/module_python.prompt"]
+
+    def test_single_marker_comma_separated(self):
+        """Baseline: comma-separated files on one line works correctly."""
+        from pdd.agentic_bug_orchestrator import _parse_changed_files
+
+        output = "PROMPT_FIXED: prompts/a.prompt, prompts/b.prompt"
+        result = _parse_changed_files(output, "PROMPT_FIXED")
+        assert result == ["prompts/a.prompt", "prompts/b.prompt"]
+
+    def test_multiple_marker_lines(self):
+        """Bug: two separate PROMPT_FIXED: lines — second file must not be dropped."""
+        from pdd.agentic_bug_orchestrator import _parse_changed_files
+
+        output = (
+            "DEFECT_TYPE: prompt\n"
+            "PROMPT_FIXED: pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt\n"
+            "PROMPT_FIXED: pdd/prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt"
+        )
+        result = _parse_changed_files(output, "PROMPT_FIXED")
+        assert len(result) == 2, (
+            f"Expected 2 files from two PROMPT_FIXED: lines, got {len(result)}: {result}"
+        )
+        assert "pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt" in result
+        assert "pdd/prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt" in result
+
+    def test_multiple_files_created_lines(self):
+        """Same bug applies to FILES_CREATED: markers across multiple lines."""
+        from pdd.agentic_bug_orchestrator import _parse_changed_files
+
+        output = (
+            "FILES_CREATED: tests/test_unit.py\n"
+            "FILES_CREATED: tests/test_e2e.py"
+        )
+        result = _parse_changed_files(output, "FILES_CREATED")
+        assert len(result) == 2, (
+            f"Expected 2 files from two FILES_CREATED: lines, got {len(result)}: {result}"
+        )
+
+    def test_mixed_multiline_and_comma(self):
+        """Multiple lines where one line has comma-separated files."""
+        from pdd.agentic_bug_orchestrator import _parse_changed_files
+
+        output = (
+            "PROMPT_FIXED: prompts/a.prompt, prompts/b.prompt\n"
+            "PROMPT_FIXED: prompts/c.prompt"
+        )
+        result = _parse_changed_files(output, "PROMPT_FIXED")
+        assert len(result) == 3
+        assert "prompts/a.prompt" in result
+        assert "prompts/b.prompt" in result
+        assert "prompts/c.prompt" in result
+
+
+class TestMultiplePromptFixedInWorkflow:
+    """Issue #912: When Step 7 fixes two prompt files, both must appear in
+    changed_files and files_to_stage for Step 12 to commit them."""
+
+    def test_two_prompt_fixed_files_both_tracked(self, mock_dependencies, default_args):
+        """When Step 7 outputs two PROMPT_FIXED: lines, both files must be
+        in the returned changed_files list."""
+        mock_run, _, _ = mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if label == 'step7':
+                return (True, (
+                    "Classification: Prompt Defect\n"
+                    "DEFECT_TYPE: prompt\n"
+                    "PROMPT_FIXED: pdd/prompts/orchestrator_python.prompt\n"
+                    "PROMPT_FIXED: pdd/prompts/step9_verify_all_LLM.prompt"
+                ), 0.1, "model")
+            if label == 'step9':
+                return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+            return (True, "ok", 0.1, "model")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _, _, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+        assert success is True
+        assert "pdd/prompts/orchestrator_python.prompt" in changed_files, (
+            f"First PROMPT_FIXED file missing from changed_files: {changed_files}"
+        )
+        assert "pdd/prompts/step9_verify_all_LLM.prompt" in changed_files, (
+            f"Second PROMPT_FIXED file missing from changed_files: {changed_files}"
+        )
+        assert "tests/test_fix.py" in changed_files
+
+    def test_files_to_stage_reaches_step12_template(self, mock_dependencies, default_args):
+        """E2E: verify that files_to_stage (with both prompt files) is substituted
+        into the Step 12 prompt that the LLM receives."""
+        mock_run, mock_load, _ = mock_dependencies
+
+        # Return a template that contains {files_to_stage} for Step 12
+        def load_side_effect(name):
+            if "step12" in name:
+                return "Stage these files:\n{files_to_stage}\nNow commit."
+            return "Prompt for {issue_number}"
+
+        mock_load.side_effect = load_side_effect
+
+        def run_side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if label == 'step7':
+                return (True, (
+                    "DEFECT_TYPE: prompt\n"
+                    "PROMPT_FIXED: pdd/prompts/orchestrator.prompt\n"
+                    "PROMPT_FIXED: pdd/prompts/step9.prompt"
+                ), 0.1, "model")
+            if label == 'step9':
+                return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+            return (True, "ok", 0.1, "model")
+
+        mock_run.side_effect = run_side_effect
+
+        run_agentic_bug_orchestrator(**default_args)
+
+        # Find the Step 12 call and inspect the instruction it received
+        step12_calls = [
+            c for c in mock_run.call_args_list
+            if c.kwargs.get('label', '') == 'step12'
+        ]
+        assert len(step12_calls) == 1, "Step 12 should run exactly once"
+
+        step12_instruction = step12_calls[0].kwargs.get('instruction', '')
+        assert "pdd/prompts/orchestrator.prompt" in step12_instruction, (
+            f"First prompt file not in Step 12 instruction:\n{step12_instruction}"
+        )
+        assert "pdd/prompts/step9.prompt" in step12_instruction, (
+            f"Second prompt file not in Step 12 instruction:\n{step12_instruction}"
+        )
+        assert "tests/test_fix.py" in step12_instruction, (
+            f"Test file not in Step 12 instruction:\n{step12_instruction}"
+        )
+
+
+# --- Issue #912 Fix 2: Orchestrator-driven staging before Step 12 ---
+
+
+class TestOrchestratorPreStaging:
+    """Issue #912: The orchestrator must stage changed_files via git add
+    before dispatching Step 12, so the LLM cannot selectively omit files.
+    This follows the precedent set by _commit_and_push() in
+    agentic_e2e_fix_orchestrator.py (line 788)."""
+
+    def test_prompt_files_staged_before_step12(self, tmp_path):
+        """When Step 7 fixes prompt files, the orchestrator must git-add them
+        before Step 12 runs. Verify subprocess.run(['git', 'add', ...]) is
+        called for each file in changed_files prior to Step 12's
+        run_agentic_task invocation."""
+        mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+        call_log = []  # Track ordering of git-add vs step12
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
+
+            mock_load.return_value = "Prompt for {issue_number}"
+            mock_worktree.return_value = (mock_worktree_path, None)
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get('label', '')
+                if label == 'step12':
+                    call_log.append('step12_run')
+                if label == 'step7':
+                    return (True, (
+                        "DEFECT_TYPE: prompt\n"
+                        "PROMPT_FIXED: pdd/prompts/orchestrator.prompt\n"
+                        "PROMPT_FIXED: pdd/prompts/step9.prompt"
+                    ), 0.1, "model")
+                if label == 'step9':
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            # Intercept subprocess.run to log git-add calls
+            def subprocess_side_effect(*args, **kwargs):
+                cmd = args[0] if args else kwargs.get('args', [])
+                if isinstance(cmd, list) and len(cmd) >= 3 and cmd[0] == "git" and cmd[1] == "add":
+                    call_log.append(f'git_add:{cmd[2]}')
+                return MagicMock(returncode=0, stdout="", stderr="")
+            mock_subprocess.run.side_effect = subprocess_side_effect
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        # git add calls for changed files must appear BEFORE step12_run
+        git_adds = [c for c in call_log if c.startswith('git_add:')]
+        step12_idx = call_log.index('step12_run') if 'step12_run' in call_log else len(call_log)
+
+        assert len(git_adds) >= 2, (
+            f"Expected git add for at least 2 files before Step 12, "
+            f"but got {len(git_adds)} git adds. Full log: {call_log}"
+        )
+
+        # All git adds must come before step12
+        for ga in git_adds:
+            ga_idx = call_log.index(ga)
+            assert ga_idx < step12_idx, (
+                f"{ga} at index {ga_idx} came AFTER step12_run at {step12_idx}. "
+                f"Orchestrator must stage files before Step 12 dispatch. Log: {call_log}"
+            )

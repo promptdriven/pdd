@@ -297,10 +297,9 @@ def _verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]:
 
 
 def _parse_changed_files(output: str, marker: str) -> List[str]:
-    """Extract file paths from specific marker lines."""
+    """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
-    match = re.search(rf"{marker}:\s*(.*)", output)
-    if match:
+    for match in re.finditer(rf"{marker}:\s*(.*)", output):
         files.extend([f.strip() for f in match.group(1).split(",") if f.strip()])
     return files
 
@@ -714,6 +713,21 @@ def run_agentic_bug_orchestrator(
         pre_step7_files: List[str] = []
         if step_num == 9:
             pre_step7_files = _get_modified_and_untracked(current_work_dir)
+
+        # Pre-Step 12: deterministic file staging (#912)
+        # Stage all tracked changed_files before Step 12 dispatch so the LLM
+        # cannot selectively omit files. Follows _commit_and_push() precedent
+        # in agentic_e2e_fix_orchestrator.py (line 788).
+        if step_num == 12 and changed_files:
+            for filepath in changed_files:
+                stage_result = subprocess.run(
+                    ["git", "add", filepath],
+                    cwd=current_work_dir,
+                    capture_output=True,
+                    text=True,
+                )
+                if stage_result.returncode != 0 and not quiet:
+                    console.print(f"[yellow]Warning: failed to stage {filepath}: {stage_result.stderr.strip()}[/yellow]")
 
         # Load and preprocess template
         step_str = str(step_num).replace(".", "_")

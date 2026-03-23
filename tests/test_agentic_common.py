@@ -1426,8 +1426,11 @@ def test_run_agentic_task_retry_backoff(mock_shutil_which, mock_subprocess_run, 
     with patch("pdd.agentic_common.time.sleep") as mock_sleep:
         run_agentic_task("Do work", tmp_path, max_retries=3, retry_delay=5)
 
-    # Verify exponential backoff: 5s after attempt 1, 10s after attempt 2
-    assert mock_sleep.call_args_list == [call(5), call(10)]
+    # Verify exponential backoff: 5s after attempt 1, 10s after attempt 2 (with jitter)
+    sleep_values = [c.args[0] for c in mock_sleep.call_args_list]
+    assert len(sleep_values) == 2
+    assert 5.0 <= sleep_values[0] <= 10.0  # 5 * 2^0 + [0, 5] additive jitter
+    assert 10.0 <= sleep_values[1] <= 15.0 # 5 * 2^1 + [0, 5] additive jitter
 
 
 def test_run_agentic_task_moves_to_next_after_max_retries(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
@@ -2679,7 +2682,8 @@ class TestFindStateCommentPagination:
         mock_comments = _make_mock_comments(42, state_positions=[35])
 
         with patch("shutil.which", return_value="/usr/bin/gh"), \
-             patch("subprocess.run") as mock_run:
+             patch("subprocess.run") as mock_run, \
+             patch.dict("os.environ", {"PDD_NO_GITHUB_STATE": "0"}):
             mock_run.return_value = MagicMock(
                 returncode=0,
                 stdout=json.dumps(mock_comments),

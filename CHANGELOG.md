@@ -1,46 +1,60 @@
+## v0.0.185 (2026-03-22)
+
+### Feat
+
+- Update ColdOpen04/08 components and audit specs
+- Reimplement ColdOpen04ZoomOutAccumulated with a code editor UI and add new components for ColdOpen08PddTitleCard, along with spec updates.
+- Implement `ColdOpen08PddTitleCard` and `ColdOpen04ZoomOutAccumulated` scenes, update cold open specifications and audit results, and refine overall project configuration.
+- show parent-child relationships in specs list for split containers
+- Add leftSrc, rightSrc, and revealSrc video sources to the split screen hook media configuration.
+- Introduce new AI prompts for video pipeline components and refactor cold open video specifications.
+
+### Fix
+
+- Fix CI test failures in orchestrator_1 and core_errors
+- infer section from component name prefix for spec lookup
+- _parse_changed_files drops multi-line PROMPT_FIXED markers (#913)
+- exclude companion veo specs from timeline when embedded in a split container
+- instruct Stage 6 that split-screen layouts span multiple narrative beats
+- resolve clipId and leftClipId/rightClipId in visual manifest media aliases
+- exponential backoff, error classification, prompt source-of-truth (#902)
+- anchor spec timestamps to TTS word timing instead of script headings
+
 ## v0.0.184 (2026-03-21)
 
 ### Fix
 
-- support nested .pddrc files for subdirectory projects
-- Stage 6 three-column panels use fixed height with independent scrolling
-- align three-column layout height in Stage 6 Spec Generation
-- VideoPlayer shows 0 duration when video metadata is already cached
-- single-action Veo prompts to improve clip quality (#905)
-- 18 general pipeline fixes for video editor (#904)
-- route non-Python agentic test ops to real execution, detect Jest/Vitest for TypeScript (#449, #899)
+- nested `.pddrc` support for subdirectory projects: prefer the `.pddrc` at the resolved repo root, scope file scanning to CWD when a local `.pddrc` exists, and fall back to `outputs.code.path` matching when `paths` patterns are prompt-name globs
+- route non-Python agentic test operations to real test execution instead of synthetic RunReports that hardcoded `tests_failed=0` (making the `fix` operation unreachable)
+- auto-detect Jest or Vitest config for TypeScript test files instead of defaulting to `npx tsx`
 
-### Refactor
+### Test
 
-- reimplement code panel animations with character-level dissolve and streaming regenerated code.
+- add coverage for nested `.pddrc` resolution, TypeScript runner detection, agentic test execution routing, and subdirectory file scanning
 
 ## v0.0.183 (2026-03-20)
 
+### Feat
+
+- structural test guard: new detect_structural_test_patterns() scans generated test files for banned patterns (inspect.getsource, source string matching, hasattr assertions, Path.read_text() keyword checks) and rejects non-behavioral tests during pdd-bug step 9 — prevents pdd-fix from producing dead code that satisfies structural tests without implementing real behavior
+
 ### Fix
 
-- improve Claude API error handling for rate limits, prevent audit verdict from defaulting to fail on unparseable analysis, and preserve explicit section IDs in the UI.
-- annotation 8243ec21-e3d8-4749-ba68-d01209fdf60f The frame is at 87.5% progress (frame 104/120, hol
-- annotation 844c64b8-7df5-4e24-921f-7570060205f2 All required elements are present and the animatio
-- annotation fc08f4c7-6194-4f00-8250-d490e32edd64 The frame is sampled at frame 104/120 (87.5% throu
-- annotation c81a22d3-526a-43c5-be82-5da043d5a106 The frame is at 90.5% progress (frame 379/420), co
-- annotation c79da256-77e8-406c-a373-afb0d09abf52 The frame correctly renders the deep navy-black ba
-- E2E over-classification, issue-specific filenames, stale orchestrator prompt, worktree from HEAD (#854, #897)
-- structural test guard for pdd-bug step 9 (#901)
-- annotation d82251b1-6d93-4253-9382-06a342e96421 The frame is at 84.3% progress (frame 884/1050), w
-- annotation 78dc6e4a-d689-46e8-b379-874a962a5075 The frame is at 83.3% progress (hold phase, frame
-- optional <include> attribute resolves to empty string when file missing (#691)
-- annotation 60363542-4ca7-459a-94ba-60a71ecac813 The split-screen composition is correctly structur
-- annotation cc1a488b-a02f-4ea4-92f9-ed94f61f8b75 The frame is sampled at 91.7% progress (frame 219/
-- annotation bf9778f8-ecf2-492c-a0b6-f067924b583c The frame correctly renders the deep navy-black ba
-- annotation af4571b4-a1e0-4870-9cef-0ee0bc4f8d79 The split-screen composition is correctly structur
-- annotation 97d347f1-66ff-494a-8709-cebd7152fecb The frame is at 84.3% progress (frame 884/1050), w
-- annotation 6da5e47f-1cde-4ffe-89fc-9c71e370d5ec The frame is at 83.3% progress (hold phase, frame
-- annotation 5985a916-5eba-4b56-992d-297b101b0ada The title card layout is correct: Prompt-Driven D
-- annotation 356bd043-74bf-4580-bc81-1001982ae317 The frame is at 90.5% progress (frame 379/420), co
-- annotation 0d83f57f-c624-4283-a3c4-54a88b83d493 The frame is sampled at frame 104/120 (87.5% throu
-- annotation fa25d5f9-e866-4d6f-aba7-ccf0d93903ea The frame is sampled at 87.5% progress (frame 104/
-- annotation ecd8e598-d788-4378-a634-298d1cb049e4 The frame is at 87.5% progress (frame 104/120, hol
-- annotation 627b0945-b7bd-4ef2-a0d2-ab5494a30f97 The frame is sampled at 91.7% progress (frame 219/
+- worktree creation now resolves main branch ref (origin/main → origin/master → main → master) instead of using HEAD, preventing unrelated feature-branch commits from leaking into bug-fix worktrees
+- Claude API error handling: detect rate-limit messages ("hit your limit", "rate limit") in addition to 401 errors audit verdict no longer defaults to "fail" when analysis is unparseable — returns "skip" instead optional <include> attribute resolves to empty string when file is missing, with boolean attribute parsing support (contributed by @Vishal Ramvelu (ramvelu2) in promptdriven/pdd#694)
+- E2E test prompt discourages issue-specific filenames (test_e2e_issue_123.py) in favor of module/feature-based names; overrides legacy convention even if existing files use the old pattern
+- E2E_NEEDED marker format simplified to single-line with justification; prompt now requires marker echo in final orchestrator output to ensure gate works
+- fix step numbering in console output (was printing "Step 9" instead of "Step 11" when skipping E2E)
+
+### Refactor
+
+- bug orchestrator prompt updated from 11-step to 12-step workflow with renumbered step table
+- extract shared _resolve_main_ref() helper in both bug and change orchestrators for worktree base resolution
+- remove duplicate exit-code tests in test_analysis.py
+
+### Docs
+
+- document optional <include> attribute in README and prompting guide
 
 ## v0.0.182 (2026-03-19)
 
@@ -206,7 +220,6 @@
 
 - New `private_prompt` pytest marker in `pytest.ini` for tests that check private prompt content
 - Removed stale `.pdd/meta/agentic_common_python_run.json` tracking file
-
 
 ## v0.0.176 (2026-03-13)
 
