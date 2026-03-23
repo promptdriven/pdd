@@ -36,7 +36,7 @@ def _console_output(mock_console):
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch.object(_generate_module, 'code_generator_main')
 def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for FileNotFoundError."""
     files = create_dummy_files("test.prompt")
@@ -58,7 +58,7 @@ def test_cli_handle_error_filenotfound(mock_main, mock_auto_update, mock_console
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch.object(_generate_module, 'code_generator_main')
 def test_cli_handle_error_valueerror(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for ValueError."""
     files = create_dummy_files("test.prompt")
@@ -78,7 +78,7 @@ def test_cli_handle_error_valueerror(mock_main, mock_auto_update, mock_console, 
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch.object(_generate_module, 'code_generator_main')
 def test_cli_handle_error_generic(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error for generic Exception."""
     files = create_dummy_files("test.prompt")
@@ -98,7 +98,7 @@ def test_cli_handle_error_generic(mock_main, mock_auto_update, mock_console, cre
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch.object(_generate_module, 'code_generator_main')
 def test_cli_handle_error_quiet(mock_main, mock_auto_update, mock_console, create_dummy_files):
     """Test handle_error respects --quiet."""
     files = create_dummy_files("test.prompt")
@@ -139,7 +139,7 @@ def test_handle_error_keyboard_interrupt_messages(mock_console):
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
-@patch('pdd.commands.generate.code_generator_main')
+@patch.object(_generate_module, 'code_generator_main')
 def test_keyboard_interrupt_reports_correct_command_name(
     mock_main, mock_auto_update, mock_console, create_dummy_files
 ):
