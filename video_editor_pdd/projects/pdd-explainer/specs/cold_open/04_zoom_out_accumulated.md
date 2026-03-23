@@ -1,151 +1,125 @@
 [Remotion]
 
-# Section 0.2: Zoom Out — Accumulated Patches Reveal
+# Section 0.4: Zoom Out Accumulated — Codebase Reveal
 
 **Tool:** Remotion
-**Duration:** ~5.5s (165 frames @ 30fps)
+**Duration:** ~5.5s (164 frames @ 30fps)
 **Timestamp:** 0:06 - 0:11
 
 ## Visual Description
 
-The split screen from the previous spec holds, but now both sides zoom out to reveal the accumulated weight of all that careful repair work.
+A Remotion-rendered zoom-out animation that replaces the LEFT panel's Veo footage during the split screen's "reveal" phase. What appeared to be a single clean AI-assisted edit is revealed to be one tiny patch in a massive, sprawling codebase.
 
-**LEFT panel — Code:** The single clean edit from the developer shot pulls back to reveal it's one patch among hundreds. The codebase expands outward — files multiply, diff markers appear, `// TODO` comments scatter across the surface, `// HACK` and `// temporary fix` labels glow faintly. The single edit that looked so satisfying is now a tiny green dot in a sea of amber/red patches. A counter ticks upward: "patches: 1 → 47 → 312 → 1,847".
+The animation starts zoomed in on a single file showing the edit that just landed — clean, highlighted in green. Then the camera zooms out rapidly, revealing layer after layer of code: more files, more tabs, more diff markers. TODO comments, `// HACK`, `// temporary fix`, and `// don't touch this` annotations pepper the landscape. File explorer trees expand. The single edit shrinks to a pixel in an ocean of accumulated patches.
 
-**RIGHT panel — Socks:** The grandmother's single repaired sock pulls back to reveal an open drawer full of carefully mended garments — socks, shirts, trousers — each with visible repair marks. The mending is skilled but the sheer quantity is overwhelming. This panel is a static illustration (Remotion-drawn) rather than Veo, matching the stylized zoom-out.
+The visual metaphor is clear: the edit was excellent. The problem is everything around it.
 
-The zoom-out is smooth and continuous. Both panels expand at the same rate. The split divider remains at center. The visual argument: both are skilled at repair, but the accumulation is the real story.
+The aesthetic matches VS Code / Cursor's dark theme — `#0D1117` background, syntax-highlighted code, familiar IDE chrome. The zoom-out uses a 2.5D layered approach where files appear at different depths, creating parallax.
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1920x1080 (16:9)
-- Background: `#000000` (true black behind panels)
-- Split line: 2px vertical divider at x: 960, color `#1E293B` at 0.15
+- Resolution: 1920x1080 (16:9) — renders into LEFT half of split (958x1080 viewport)
+- Background: `#0D1117` (IDE dark background)
+- Grid lines: None
 
 ### Chart/Visual Elements
 
-#### Left Panel — Codebase Zoom Out
-- Initial state: single highlighted code edit (green glow `#5AAA6E` at 0.3) centered in panel
-- Zoom-out reveals grid of code file blocks:
-  - Each file: 40x28px rounded rect, `#1E293B` fill, `#334155` 1px border at 0.3
-  - Patch markers on files: small colored dots
-    - Green dots (recent AI edits): `#5AAA6E` at 0.5
-    - Amber dots (older patches): `#D9944A` at 0.4
-    - Red dots (problematic patches): `#E74C3C` at 0.3
-  - Scattered TODO labels: JetBrains Mono, 6px, `#D9944A` at 0.25, rotated ±5°
-  - Scattered HACK labels: JetBrains Mono, 6px, `#E74C3C` at 0.2, rotated ±3°
-- Patch counter: Inter, 16px, bold (700), `#94A3B8` at 0.5, bottom-left of panel
-  - Ticks: "1" → "47" → "312" → "1,847" over 3s
+#### Initial View (Zoomed In)
+- Single file open: `UserService.ts` — JetBrains Mono, 11px, syntax-highlighted
+- One line highlighted green `#5AAA6E` at 0.15 background — the AI edit that just landed
+- Cursor blinking at end of edited line
+- File tab active: `UserService.ts` with green dot (modified)
 
-#### Right Panel — Mended Garments Drawer
-- Initial state: single repaired sock centered (stylized illustration)
-- Zoom-out reveals open wooden drawer (warm brown `#8B6F47` border lines)
-- Drawer contents: 12-16 garment shapes arranged in rows
-  - Socks (6): dark ovals with visible cross-hatch repair marks in lighter thread
-  - Shirts (4): folded rectangles with patch squares in contrasting colors
-  - Trousers (3): folded shapes with knee-area patches
-  - Each repair mark: thin lines in `#D9944A` at 0.3 (the thread color)
-- Warm amber wash over entire panel: `#D9944A` at 0.03
+#### Zoom-Out Layers (Progressive Reveal)
+- **Layer 1 (scale 1.0→0.6):** Adjacent files appear — 3-4 file tabs: `AuthController.ts`, `DatabaseHelper.ts`, `legacy_utils.py`
+- **Layer 2 (scale 0.6→0.3):** File explorer tree slides in from left — 40+ files visible, deep nesting
+- **Layer 3 (scale 0.3→0.15):** Multiple editor groups / split panes — diff markers (`+`, `-`, `~`) scattered across files
+- **Layer 4 (scale 0.15→0.10):** Full workspace view — TODO comments float as labels: `// HACK`, `// temporary fix (2019)`, `// don't touch this`, `// TODO: refactor someday`
+
+#### Visual Markers (appear during zoom-out)
+- Diff markers: `+` in `#5AAA6E`, `-` in `#E74C3C`, `~` in `#D9944A` — scattered across files
+- TODO/HACK labels: Inter, 8px, `#E74C3C` at 0.5, with slight rotation (-2° to +2°)
+- Original edit: green highlight shrinks to a tiny dot — barely visible at final zoom level
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Split screen holds from previous spec. Both panels show completed single tasks.
-2. **Frame 15-90 (0.5-3s):** Smooth zoom-out on both panels simultaneously. LEFT: code files multiply outward from center. RIGHT: drawer opens and garments appear. Scale factor: 1.0 → 0.15 (revealing ~7x more content).
-3. **Frame 90-120 (3-4s):** Zoom settles. Patch counter on LEFT ticks rapidly: 1 → 47 → 312 → 1,847. TODO/HACK labels fade in scattered across the code grid.
-4. **Frame 120-150 (4-5s):** Hold. Both sides fully revealed. The weight of accumulation is visible.
-5. **Frame 150-165 (5-5.5s):** Brief hold before transition to next beat.
+1. **Frame 0-15 (0-0.5s):** Zoomed in on single file. Green-highlighted edit visible. Cursor blinks.
+2. **Frame 15-50 (0.5-1.67s):** Zoom begins. Scale 1.0→0.6. Adjacent files and tabs appear. First TODO labels fade in.
+3. **Frame 50-90 (1.67-3s):** Scale 0.6→0.3. File explorer tree slides in. Diff markers scatter across the expanding view.
+4. **Frame 90-120 (3-4s):** Scale 0.3→0.15. Multiple editor panes. The codebase feels enormous. HACK/legacy labels appear.
+5. **Frame 120-140 (4-4.67s):** Scale 0.15→0.10. Final zoom level. The original edit is a tiny green speck. The accumulated weight is overwhelming.
+6. **Frame 140-164 (4.67-5.5s):** Hold at final zoom. Gentle drift (~0.5px/frame leftward) to suggest the codebase extends even further.
 
 ### Typography
-- Patch counter: Inter, 16px, bold (700), `#94A3B8` at 0.5
-- TODO labels: JetBrains Mono, 6px, `#D9944A` at 0.25
-- HACK labels: JetBrains Mono, 6px, `#E74C3C` at 0.2
+- Code text: JetBrains Mono, 11px (scales down with zoom), syntax colors
+- File tabs: Inter, 11px, `#E2E8F0` at 0.7
+- TODO/HACK labels: Inter, 8px, `#E74C3C` at 0.5
+- File tree: Inter, 10px, `#94A3B8` at 0.4
 
 ### Easing
-- Zoom-out scale: `easeInOut(cubic)` over 75 frames
-- File block appearance: `easeOut(quad)` staggered from center outward, 2-frame delay per ring
-- Patch counter tick: `easeOut(expo)` with 15-frame intervals
-- TODO/HACK label fade: `easeOut(quad)` over 10 frames, staggered randomly
+- Zoom-out: `easeInOut(cubic)` — starts slow, accelerates through middle layers, settles at end
+- File/tab reveals: `easeOut(quad)` over 15 frames each, staggered
+- TODO label fade-in: `easeOut(quad)` over 10 frames, staggered by layer
+- Final drift: `linear` — constant slow movement
 
 ## Narration Sync
-> "But here's what your great-grandmother figured out sixty years ago."
+> "Ah, but here's what your grandmother could have told you: the goal was never to get better at darning."
 
 Segment: `cold_open_003`
 
-- **5.82s** ("But here's what"): Zoom-out begins — both panels start expanding
-- **8.00s** ("figured out"): Zoom-out complete — full accumulation visible
-- **11.28s** ("sixty years ago"): Hold — the weight of the visual sinks in
+- **0:06** ("here's what your grandmother"): Zoom-out begins, first additional files appear
+- **0:08** ("the goal was never"): Deep zoom — codebase sprawl visible
+- **0:10** ("to get better at darning"): Final zoom level — the single edit is lost in accumulated patches
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={165}>
-  <AbsoluteFill style={{ backgroundColor: '#000000' }}>
-    {/* Left panel — Code zoom out */}
-    <Panel x={0} width={958}>
-      <ZoomContainer from={1.0} to={0.15} duration={75} startFrame={15}>
-        {/* Central highlighted edit */}
-        <CodeEditHighlight color="#5AAA6E" opacity={0.3} />
+<Sequence from={0} durationInFrames={164}>
+  <AbsoluteFill style={{ backgroundColor: '#0D1117' }}>
+    <ZoomContainer
+      fromScale={1.0} toScale={0.10}
+      easing="easeInOutCubic"
+      driftX={-0.5} driftPhaseStart={140}
+    >
+      {/* Layer 0: The original edit */}
+      <CodeFile
+        name="UserService.ts"
+        language="typescript"
+        highlightLine={14}
+        highlightColor="#5AAA6E"
+        cursorBlink
+      />
 
-        {/* Expanding grid of file blocks */}
-        <Sequence from={15}>
-          <CodeFileGrid
-            count={200}
-            blockSize={{ w: 40, h: 28 }}
-            fill="#1E293B"
-            border="#334155"
-            patchColors={['#5AAA6E', '#D9944A', '#E74C3C']}
-            staggerDelay={2}
-          />
-        </Sequence>
-
-        {/* Scattered labels */}
-        <Sequence from={90}>
-          <ScatteredLabels
-            labels={['// TODO', '// HACK', '// temporary fix', '// don\'t touch']}
-            font="JetBrains Mono" size={6}
-            colors={['#D9944A', '#E74C3C']}
-            opacity={0.25}
-            count={20}
-          />
-        </Sequence>
-      </ZoomContainer>
-
-      {/* Patch counter */}
-      <Sequence from={90}>
-        <AnimatedCounter
-          values={[1, 47, 312, 1847]}
-          prefix="patches: "
-          font="Inter" size={16} weight={700}
-          color="#94A3B8" opacity={0.5}
-          x={40} y={1000}
-          interval={15}
-        />
+      {/* Layer 1: Adjacent files (appear at scale ~0.6) */}
+      <Sequence from={15}>
+        <FadeIn duration={15}>
+          <FileTabBar tabs={['AuthController.ts', 'DatabaseHelper.ts', 'legacy_utils.py']}
+            activeTab={0} />
+          <CodeFile name="AuthController.ts" offset={{ x: 400, y: 0 }} />
+        </FadeIn>
       </Sequence>
-    </Panel>
 
-    {/* Split divider */}
-    <SplitLine x={960} color="#1E293B" opacity={0.15} width={2} />
+      {/* Layer 2: File tree (appear at scale ~0.3) */}
+      <Sequence from={50}>
+        <SlideIn from="left" duration={20}>
+          <FileExplorer fileCount={42} depth={6}
+            font="Inter" fontSize={10} color="#94A3B8" />
+        </SlideIn>
+        <DiffMarkers count={25} stagger={3} />
+      </Sequence>
 
-    {/* Right panel — Garment drawer zoom out */}
-    <Panel x={962} width={958}>
-      <ZoomContainer from={1.0} to={0.15} duration={75} startFrame={15}>
-        <DarnedSock centerX={479} centerY={540} />
-
-        <Sequence from={15}>
-          <GarmentDrawer
-            drawerColor="#8B6F47"
-            garments={[
-              { type: 'sock', count: 6 },
-              { type: 'shirt', count: 4 },
-              { type: 'trousers', count: 3 }
-            ]}
-            repairColor="#D9944A"
-            repairOpacity={0.3}
+      {/* Layer 3: Multiple panes + labels (appear at scale ~0.15) */}
+      <Sequence from={90}>
+        <FadeIn duration={15}>
+          <EditorPanes count={4} layout="grid" />
+          <TodoLabels
+            labels={['// HACK', '// temporary fix (2019)', '// don\'t touch this', '// TODO: refactor someday']}
+            color="#E74C3C" opacity={0.5}
+            rotationRange={[-2, 2]}
+            stagger={5}
           />
-        </Sequence>
-      </ZoomContainer>
-
-      <ColorGrade color="#D9944A" opacity={0.03} />
-    </Panel>
+        </FadeIn>
+      </Sequence>
+    </ZoomContainer>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -153,37 +127,26 @@ Segment: `cold_open_003`
 ## Data Points JSON
 ```json
 {
-  "type": "animated_infographic",
-  "layout": "split_screen_zoom_out",
-  "splitPosition": 960,
-  "leftPanel": {
-    "content": "code_accumulation_grid",
-    "fileCount": 200,
-    "patchCounter": {
-      "values": [1, 47, 312, 1847],
-      "label": "patches"
-    },
-    "scatteredLabels": ["// TODO", "// HACK", "// temporary fix", "// don't touch"],
-    "colors": {
-      "recentEdit": "#5AAA6E",
-      "olderPatch": "#D9944A",
-      "problematicPatch": "#E74C3C",
-      "fileBlock": "#1E293B"
-    }
+  "type": "remotion_animation",
+  "animationType": "zoom_out_reveal",
+  "initialFile": "UserService.ts",
+  "editHighlight": { "line": 14, "color": "#5AAA6E" },
+  "zoomLevels": [
+    { "scale": 1.0, "frame": 0, "content": "single_file_edit" },
+    { "scale": 0.6, "frame": 15, "content": "adjacent_files" },
+    { "scale": 0.3, "frame": 50, "content": "file_tree_diffs" },
+    { "scale": 0.15, "frame": 90, "content": "multi_pane_labels" },
+    { "scale": 0.10, "frame": 120, "content": "full_workspace" }
+  ],
+  "markers": {
+    "diffCount": 25,
+    "todoLabels": ["// HACK", "// temporary fix (2019)", "// don't touch this", "// TODO: refactor someday"],
+    "totalFiles": 42
   },
-  "rightPanel": {
-    "content": "garment_drawer_illustration",
-    "garments": [
-      { "type": "sock", "count": 6 },
-      { "type": "shirt", "count": 4 },
-      { "type": "trousers", "count": 3 }
-    ],
-    "repairColor": "#D9944A",
-    "drawerColor": "#8B6F47"
-  },
-  "zoomFactor": { "from": 1.0, "to": 0.15 },
-  "backgroundColor": "#000000",
-  "narrationSegments": ["cold_open_003"]
+  "backgroundColor": "#0D1117",
+  "narrationSegments": ["cold_open_003"],
+  "parentSplit": "01_split_screen_hook",
+  "panelPosition": "left"
 }
 ```
 

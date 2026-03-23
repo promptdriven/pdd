@@ -1002,3 +1002,62 @@ describe("specs executor — split-screen layout persistence", () => {
     expect(prompt).toMatch(/hard cut|layout.*break|split.*end.*when/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 12. Script visual beats injected into prompt
+// ---------------------------------------------------------------------------
+
+describe("specs executor — script visual beats in prompt", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "specs-visual-beats-"));
+    process.chdir(tmpDir);
+
+    mockLoadProject.mockReturnValue({
+      ...mockProjectConfig(),
+      sections: [
+        { id: "cold_open", label: "Cold Open: The Sock Hook", specDir: "cold_open" },
+      ],
+    });
+  });
+
+  it("includes script visual beat lines from main_script.md in the prompt", async () => {
+    const narrativeDir = path.join(tmpDir, "narrative");
+    fs.mkdirSync(narrativeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(narrativeDir, "main_script.md"),
+      [
+        "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+        "",
+        "**[VISUAL: Split screen. LEFT: Developer. RIGHT: Grandmother.]**",
+        "",
+        "NARRATOR: If you use Cursor...",
+        "",
+        "**[VISUAL: Both complete their task simultaneously.]**",
+        "",
+        "**[VISUAL: Zoom out. Split screen holds.]**",
+        "",
+        "**[VISUAL: Hard cut to modern day. Sock toss.]**",
+      ].join("\n")
+    );
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("Script visual beats");
+    expect(prompt).toContain("Split screen. LEFT: Developer. RIGHT: Grandmother.");
+    expect(prompt).toContain("Split screen holds");
+    expect(prompt).toContain("Hard cut to modern day");
+  });
+
+  it("omits script visual beats block when no matching section in main_script.md", async () => {
+    // No main_script.md at all
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).not.toContain("Script visual beats");
+  });
+});

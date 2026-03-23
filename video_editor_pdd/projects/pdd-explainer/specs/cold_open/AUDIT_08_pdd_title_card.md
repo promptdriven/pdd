@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (when, writes, first, draft, cold), so the frame does not support a hard missing-text failure.
+The rendered frame significantly departs from the spec in multiple ways: (1) A large stylized 'PDD' acronym with decorative brackets dominates the center — not specified. (2) The title 'Prompt-Driven Development' is rendered in all-caps as a secondary subtitle rather than as the primary 56px bold title in #4A90D9. (3) A subtitle 'When the prompt is the program' is present despite the spec explicitly stating 'No subtitle. No explanation. Just the name.' (4) No code underlay from spec 07 is visible at 0.12 opacity — the background is a solid dark color. (5) No terminal overlay persists from spec 07 in the bottom-right; a version string 'v0.8.0' appears instead. (6) The horizontal rule appears wider than the specified 160px. The overall composition is a branded logo treatment rather than the spec's intentionally minimal title-card-over-code design.

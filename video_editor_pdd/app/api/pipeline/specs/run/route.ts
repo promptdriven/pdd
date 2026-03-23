@@ -327,9 +327,18 @@ registerExecutor("specs", (params, _send) => {
             ].join("\n")
           : "(No word timestamps available yet.)";
 
+        const scriptVisualBeats = matchingScriptSection?.visualLines.length
+          ? [
+              "Script visual beats (from main_script.md):",
+              ...matchingScriptSection.visualLines.map((line, i) => `  ${i + 1}. ${line}`),
+              "",
+            ].join("\n")
+          : "";
+
         const sectionContext = `
 ### Section: ${sid} → specs/${dir}/
 ${ctx.specMd ? `\nNarrative arc (spec.md):\n${ctx.specMd}\n` : "(No spec.md found — infer visual needs from section name.)"}
+${scriptVisualBeats}
 ${wordTimingBlock}
 `;
 

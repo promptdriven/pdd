@@ -248,9 +248,10 @@
       },
       {
         "id": "grandmother",
-        "label": "Grandmother",
+        "label": "Great-Grandmother",
         "imagePath": "outputs/veo/references/grandmother.png",
         "sections": [
+          "cold_open",
           "part5_compound_returns"
         ],
         "referencePrompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",

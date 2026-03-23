@@ -2,227 +2,97 @@ import React from "react";
 import {
   AbsoluteFill,
   useCurrentFrame,
-  useVideoConfig,
   interpolate,
   Easing,
-  spring,
+  Sequence,
 } from "remotion";
 import {
   BG_COLOR,
-  LAYER_BG_INNER,
-  LAYER_BG_MID,
-  LAYER_BG_OUTER,
-  TEXT_PRIMARY,
-  TEXT_SECONDARY,
-  ACCENT_BLUE,
-  ACCENT_GREEN,
-  ACCENT_AMBER,
-  ACCENT_PURPLE,
-  DIVIDER_COLOR,
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
-  LAYER_CARD_WIDTH,
-  LAYER_CARD_HEIGHT,
-  LAYER_GAP,
-  PHASE_INNER_END,
-  PHASE_MID_ZOOM_START,
-  PHASE_MID_ZOOM_END,
-  PHASE_OUTER_ZOOM_START,
-  PHASE_OUTER_ZOOM_END,
-  PHASE_FULL_ZOOM_START,
-  PHASE_FULL_ZOOM_END,
-  PHASE_HOLD_START,
-  TOTAL_DURATION_FRAMES,
-  LAYER_LABELS,
+  TOTAL_FRAMES,
+  ZOOM_LEVELS,
+  DRIFT_START_FRAME,
+  DRIFT_PX_PER_FRAME,
+  LAYER1_START,
+  LAYER2_START,
+  LAYER3_START,
+  USER_SERVICE_CODE,
+  AUTH_CONTROLLER_CODE,
+  MINI_PANE_SNIPPETS,
+  INITIAL_TABS,
+  EXPANDED_TABS,
+  EDITOR_BG,
+  TAB_BORDER,
+  TEXT_DIM,
 } from "./constants";
-import { LayerCard } from "./LayerCard";
-import { ConnectorLinesGroup } from "./ConnectorLines";
+import { TabBar, CodeBlock, MiniCodePane } from "./CodeEditor";
+import FileExplorerTree from "./FileExplorerTree";
+import DiffMarkersLayer from "./DiffMarkersLayer";
+import TodoLabelsLayer from "./TodoLabelsLayer";
 
-// ── Default props (empty, self-contained) ──
-export const defaultColdOpen04ZoomOutAccumulatedProps = {};
-
-// ── Grid background pattern ──
-const GridBackground: React.FC<{ opacity: number }> = ({ opacity }) => (
-  <div
-    style={{
-      position: "absolute",
-      inset: 0,
-      opacity,
-      backgroundImage: `
-        linear-gradient(rgba(59,130,246,0.06) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(59,130,246,0.06) 1px, transparent 1px)
-      `,
-      backgroundSize: "60px 60px",
-    }}
-  />
-);
-
-// ── Floating particle dots ──
-const FloatingParticles: React.FC<{ frame: number }> = ({ frame }) => {
-  const particles = React.useMemo(() => {
-    const result: Array<{
-      x: number;
-      y: number;
-      size: number;
-      speed: number;
-      color: string;
-      phaseOffset: number;
-    }> = [];
-    const colors = [ACCENT_BLUE, ACCENT_GREEN, ACCENT_AMBER, ACCENT_PURPLE];
-    for (let i = 0; i < 24; i++) {
-      // Deterministic pseudo-random using index
-      const seed = (i * 7919 + 1) % 997;
-      result.push({
-        x: (seed % 1920),
-        y: ((seed * 3) % 1080),
-        size: 2 + (seed % 4),
-        speed: 0.3 + (seed % 10) / 20,
-        color: colors[i % colors.length],
-        phaseOffset: (seed % 60),
-      });
-    }
-    return result;
-  }, []);
-
-  return (
-    <>
-      {particles.map((p, i) => {
-        const yOffset = Math.sin((frame + p.phaseOffset) * 0.04 * p.speed) * 30;
-        const xOffset = Math.cos((frame + p.phaseOffset) * 0.03 * p.speed) * 20;
-        const particleOpacity = interpolate(
-          Math.sin((frame + p.phaseOffset) * 0.05),
-          [-1, 1],
-          [0.1, 0.4]
-        );
-        return (
-          <div
-            key={i}
-            style={{
-              position: "absolute",
-              left: p.x + xOffset,
-              top: p.y + yOffset,
-              width: p.size,
-              height: p.size,
-              borderRadius: "50%",
-              backgroundColor: p.color,
-              opacity: particleOpacity,
-              boxShadow: `0 0 ${p.size * 2}px ${p.color}40`,
-            }}
-          />
-        );
-      })}
-    </>
-  );
-};
-
-// ── Title overlay that appears at final zoom ──
-const TitleOverlay: React.FC<{ frame: number; fps: number }> = ({
-  frame,
-  fps,
+// ── Zoom Container ──────────────────────────────────────────────────
+const ZoomContainer: React.FC<{ children: React.ReactNode }> = ({
+  children,
 }) => {
-  const titleOpacity = interpolate(
-    frame,
-    [PHASE_FULL_ZOOM_START + 10, PHASE_FULL_ZOOM_END],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  const frame = useCurrentFrame();
 
-  const titleY = interpolate(
-    frame,
-    [PHASE_FULL_ZOOM_START + 10, PHASE_FULL_ZOOM_END],
-    [30, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.poly(3)),
-    }
-  );
+  // Build zoom interpolation from zoom levels
+  const inputRange = ZOOM_LEVELS.map((z) => z.frame);
+  const outputRange = ZOOM_LEVELS.map((z) => z.scale);
 
-  // Subtle scale pulse in hold phase
-  const holdPulse = interpolate(
-    frame,
-    [PHASE_HOLD_START, PHASE_HOLD_START + 15, PHASE_HOLD_START + 30],
-    [1, 1.02, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+  const scale = interpolate(frame, inputRange, outputRange, {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.inOut(Easing.cubic),
+  });
+
+  // Final drift after frame 140
+  const driftX =
+    frame > DRIFT_START_FRAME
+      ? (frame - DRIFT_START_FRAME) * DRIFT_PX_PER_FRAME
+      : 0;
 
   return (
     <div
       style={{
         position: "absolute",
-        top: 48,
-        left: 0,
-        right: 0,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        opacity: titleOpacity,
-        transform: `translateY(${titleY}px) scale(${holdPulse})`,
+        width: CANVAS_WIDTH,
+        height: CANVAS_HEIGHT,
+        left: "50%",
+        top: "50%",
+        transform: `translate(-50%, -50%) scale(${scale}) translateX(${driftX}px)`,
+        transformOrigin: "center center",
       }}
     >
-      <div
-        style={{
-          fontSize: 18,
-          fontFamily: "monospace",
-          color: ACCENT_BLUE,
-          letterSpacing: "0.2em",
-          textTransform: "uppercase",
-          fontWeight: 600,
-          marginBottom: 12,
-          opacity: 0.9,
-        }}
-      >
-        Accumulated View
-      </div>
-      <div
-        style={{
-          fontSize: 48,
-          fontWeight: 800,
-          color: TEXT_PRIMARY,
-          fontFamily: "Inter, system-ui, sans-serif",
-          letterSpacing: "-0.03em",
-          textAlign: "center",
-        }}
-      >
-        Every Layer Matters
-      </div>
-      {/* Divider rule */}
-      <div
-        style={{
-          width: 120,
-          height: 3,
-          backgroundColor: DIVIDER_COLOR,
-          marginTop: 16,
-          borderRadius: 2,
-          opacity: 0.85,
-        }}
-      />
+      {children}
     </div>
   );
 };
 
-// ── Ring decoration around zoomed-out layers ──
-const LayerRing: React.FC<{
-  frame: number;
-  revealFrame: number;
-  radius: number;
-  color: string;
-}> = ({ frame, revealFrame, radius, color }) => {
-  const ringOpacity = interpolate(
-    frame,
-    [revealFrame, revealFrame + 25],
-    [0, 0.25],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+// ── Adjacent File Panel ─────────────────────────────────────────────
+const AdjacentFilePanel: React.FC = () => {
+  const frame = useCurrentFrame();
 
-  const ringScale = interpolate(
+  const opacity = interpolate(
     frame,
-    [revealFrame, revealFrame + 30],
-    [0.8, 1],
+    [LAYER1_START, LAYER1_START + 15],
+    [0, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.poly(3)),
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const slideX = interpolate(
+    frame,
+    [LAYER1_START, LAYER1_START + 15],
+    [40, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
     }
   );
 
@@ -230,66 +100,219 @@ const LayerRing: React.FC<{
     <div
       style={{
         position: "absolute",
-        left: "50%",
-        top: "50%",
-        width: radius * 2,
-        height: radius * 2,
-        marginLeft: -radius,
-        marginTop: -radius + 60,
-        borderRadius: "50%",
-        border: `2px solid ${color}`,
-        opacity: ringOpacity,
-        transform: `scale(${ringScale})`,
-        boxShadow: `0 0 20px ${color}20`,
+        left: CANVAS_WIDTH * 0.52,
+        top: 0,
+        width: CANVAS_WIDTH * 0.48,
+        height: CANVAS_HEIGHT,
+        opacity,
+        transform: `translateX(${slideX}px)`,
+        display: "flex",
+        flexDirection: "column",
       }}
-    />
+    >
+      <div
+        style={{
+          backgroundColor: EDITOR_BG,
+          flex: 1,
+          borderLeft: `1px solid ${TAB_BORDER}`,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Mini tab */}
+        <div
+          style={{
+            height: 28,
+            backgroundColor: "#1C2128",
+            borderBottom: `1px solid ${TAB_BORDER}`,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 10px",
+            gap: 8,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: "Inter, sans-serif",
+              fontSize: 10,
+              color: TEXT_DIM,
+              opacity: 0.8,
+            }}
+          >
+            AuthController.ts
+          </span>
+        </div>
+
+        {/* Code content */}
+        <div style={{ padding: "8px 0", flex: 1, overflow: "hidden" }}>
+          {AUTH_CONTROLLER_CODE.map((line) => (
+            <div
+              key={line.lineNum}
+              style={{
+                display: "flex",
+                height: 18,
+                alignItems: "center",
+                paddingLeft: 8,
+              }}
+            >
+              <span
+                style={{
+                  width: 30,
+                  textAlign: "right",
+                  paddingRight: 8,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 10,
+                  color: TEXT_DIM,
+                  opacity: 0.4,
+                  flexShrink: 0,
+                }}
+              >
+                {line.lineNum}
+              </span>
+              <span
+                style={{
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 11,
+                  whiteSpace: "pre",
+                }}
+              >
+                {line.tokens.map((token, j) => (
+                  <span key={j} style={{ color: token.color }}>
+                    {token.text}
+                  </span>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 };
 
-// ── Main component ──
+// ── Multi-Pane Grid (Layer 3) ───────────────────────────────────────
+const MultiPaneGrid: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  const opacity = interpolate(
+    frame,
+    [LAYER3_START, LAYER3_START + 15],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const scale = interpolate(
+    frame,
+    [LAYER3_START, LAYER3_START + 15],
+    [0.9, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const paneNames = ["app.config.ts", "user.test.ts", "helpers.ts"];
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 250,
+        top: CANVAS_HEIGHT + 20,
+        display: "flex",
+        gap: 12,
+        opacity,
+        transform: `scale(${scale})`,
+      }}
+    >
+      {MINI_PANE_SNIPPETS.map((snippet, i) => (
+        <MiniCodePane
+          key={i}
+          lines={snippet}
+          title={paneNames[i]}
+          width={380}
+          height={140}
+        />
+      ))}
+    </div>
+  );
+};
+
+// ── Status Bar ──────────────────────────────────────────────────────
+const StatusBar: React.FC = () => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 24,
+        backgroundColor: "#1F6FEB",
+        display: "flex",
+        alignItems: "center",
+        padding: "0 12px",
+        gap: 16,
+      }}
+    >
+      <span
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: 10,
+          color: "white",
+          opacity: 0.9,
+        }}
+      >
+        main
+      </span>
+      <span
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: 10,
+          color: "white",
+          opacity: 0.7,
+        }}
+      >
+        TypeScript
+      </span>
+      <span
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: 10,
+          color: "white",
+          opacity: 0.7,
+          marginLeft: "auto",
+        }}
+      >
+        Ln 14, Col 42
+      </span>
+      <span
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: 10,
+          color: "white",
+          opacity: 0.7,
+        }}
+      >
+        UTF-8
+      </span>
+    </div>
+  );
+};
+
+// ── Main Component ──────────────────────────────────────────────────
+export const defaultColdOpen04ZoomOutAccumulatedProps = {};
+
 export const ColdOpen04ZoomOutAccumulated: React.FC = () => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
 
-  // ── Zoom scale: starts zoomed in (3x), progressively zooms out to 1x ──
-  const zoomScale = interpolate(
-    frame,
-    [0, PHASE_INNER_END, PHASE_MID_ZOOM_END, PHASE_OUTER_ZOOM_END, PHASE_FULL_ZOOM_END],
-    [3, 3, 2, 1.4, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.poly(3)),
-    }
-  );
-
-  // ── Pan Y: camera moves up as we zoom out to reveal stacked layers ──
-  const panY = interpolate(
-    frame,
-    [0, PHASE_INNER_END, PHASE_MID_ZOOM_END, PHASE_OUTER_ZOOM_END, PHASE_FULL_ZOOM_END],
-    [-200, -200, -50, 50, 80],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.poly(3)),
-    }
-  );
-
-  // ── Grid fade ──
-  const gridOpacity = interpolate(frame, [0, 30], [0.3, 0.6], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // ── Vignette ──
-  const vignetteOpacity = interpolate(frame, [0, PHASE_FULL_ZOOM_END], [0.4, 0.2], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // ── Layer vertical positions (stacked, centered horizontally) ──
-  const cardTotalHeight = LAYER_CARD_HEIGHT + LAYER_GAP;
-  const stackBaseY = CANVAS_HEIGHT / 2 - LAYER_CARD_HEIGHT / 2;
+  // Determine which tab bar to show based on zoom phase
+  const showExpandedTabs = frame >= LAYER1_START;
 
   return (
     <AbsoluteFill
@@ -298,216 +321,73 @@ export const ColdOpen04ZoomOutAccumulated: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Background grid */}
-      <GridBackground opacity={gridOpacity} />
-
-      {/* Floating particles */}
-      <FloatingParticles frame={frame} />
-
-      {/* Main zoom container */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          transform: `scale(${zoomScale}) translateY(${panY}px)`,
-          transformOrigin: "center center",
-          willChange: "transform",
-        }}
-      >
-        {/* Decorative rings around layer groups */}
-        <LayerRing
-          frame={frame}
-          revealFrame={PHASE_MID_ZOOM_START}
-          radius={360}
-          color={ACCENT_BLUE}
-        />
-        <LayerRing
-          frame={frame}
-          revealFrame={PHASE_OUTER_ZOOM_START}
-          radius={560}
-          color={ACCENT_GREEN}
-        />
-
-        {/* Connector lines between layers */}
-        <ConnectorLinesGroup zoomScale={zoomScale} panY={panY} />
-
-        {/* Layer 1: Inner – "The Code" (visible from frame 0) */}
+      <ZoomContainer>
+        {/* ── IDE Chrome: Full workspace container ── */}
         <div
           style={{
             position: "absolute",
-            left: CANVAS_WIDTH / 2 - LAYER_CARD_WIDTH / 2,
-            top: stackBaseY - cardTotalHeight,
-            display: "flex",
-            justifyContent: "center",
+            left: 0,
+            top: 0,
+            width: CANVAS_WIDTH,
+            height: CANVAS_HEIGHT,
           }}
         >
-          <LayerCard
-            title={LAYER_LABELS[0].title}
-            subtitle={LAYER_LABELS[0].subtitle}
-            icon={LAYER_LABELS[0].icon}
-            bgColor={LAYER_BG_INNER}
-            accentColor={ACCENT_BLUE}
-            revealFrame={0}
-            cardIndex={0}
-          />
-        </div>
+          {/* Tab bar */}
+          <TabBar tabs={showExpandedTabs ? EXPANDED_TABS : INITIAL_TABS} />
 
-        {/* Layer 2: Mid – "The Context" (revealed during zoom phase 2) */}
-        <div
-          style={{
-            position: "absolute",
-            left: CANVAS_WIDTH / 2 - LAYER_CARD_WIDTH / 2,
-            top: stackBaseY,
-            display: "flex",
-            justifyContent: "center",
-          }}
-        >
-          <LayerCard
-            title={LAYER_LABELS[1].title}
-            subtitle={LAYER_LABELS[1].subtitle}
-            icon={LAYER_LABELS[1].icon}
-            bgColor={LAYER_BG_MID}
-            accentColor={ACCENT_GREEN}
-            revealFrame={PHASE_MID_ZOOM_START}
-            cardIndex={1}
-          />
-        </div>
-
-        {/* Layer 3: Outer – "The System" (revealed during zoom phase 3) */}
-        <div
-          style={{
-            position: "absolute",
-            left: CANVAS_WIDTH / 2 - LAYER_CARD_WIDTH / 2,
-            top: stackBaseY + cardTotalHeight,
-            display: "flex",
-            justifyContent: "center",
-          }}
-        >
-          <LayerCard
-            title={LAYER_LABELS[2].title}
-            subtitle={LAYER_LABELS[2].subtitle}
-            icon={LAYER_LABELS[2].icon}
-            bgColor={LAYER_BG_OUTER}
-            accentColor={ACCENT_PURPLE}
-            revealFrame={PHASE_OUTER_ZOOM_START}
-            cardIndex={2}
-          />
-        </div>
-
-        {/* Layer index labels on the side */}
-        {[0, 1, 2].map((i) => {
-          const layerRevealFrames = [0, PHASE_MID_ZOOM_START, PHASE_OUTER_ZOOM_START];
-          const labelOpacity = interpolate(
-            frame,
-            [layerRevealFrames[i] + 5, layerRevealFrames[i] + 25],
-            [0, 0.7],
-            { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-          );
-          const labelColors = [ACCENT_BLUE, ACCENT_GREEN, ACCENT_PURPLE];
-          return (
-            <div
-              key={`label-${i}`}
-              style={{
-                position: "absolute",
-                left: CANVAS_WIDTH / 2 - LAYER_CARD_WIDTH / 2 - 80,
-                top: stackBaseY - cardTotalHeight + i * cardTotalHeight + LAYER_CARD_HEIGHT / 2 - 12,
-                opacity: labelOpacity,
-                fontSize: 22,
-                fontFamily: "monospace",
-                color: labelColors[i],
-                fontWeight: 700,
-                textAlign: "right",
-                width: 60,
-              }}
-            >
-              L{i + 1}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Title overlay (appears at final zoom) */}
-      <TitleOverlay frame={frame} fps={fps} />
-
-      {/* Bottom status bar */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 32,
-          left: 0,
-          right: 0,
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          gap: 24,
-          opacity: interpolate(
-            frame,
-            [PHASE_FULL_ZOOM_START, PHASE_FULL_ZOOM_END],
-            [0, 0.8],
-            { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-          ),
-        }}
-      >
-        {[
-          { label: "Layers", value: "3", color: ACCENT_BLUE },
-          { label: "Accumulated", value: "100%", color: ACCENT_GREEN },
-          { label: "Zoom", value: `${zoomScale.toFixed(1)}x`, color: ACCENT_AMBER },
-        ].map((stat, i) => (
+          {/* Main editor area */}
           <div
-            key={stat.label}
             style={{
+              position: "absolute",
+              top: TAB_HEIGHT,
+              left: 0,
+              right: 0,
+              bottom: 24,
               display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "8px 16px",
-              backgroundColor: "rgba(15, 29, 50, 0.85)",
-              borderRadius: 8,
-              border: `1px solid ${stat.color}30`,
             }}
           >
+            {/* Primary code editor (UserService.ts) */}
             <div
               style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: stat.color,
-                boxShadow: `0 0 6px ${stat.color}60`,
-              }}
-            />
-            <span
-              style={{
-                fontSize: 14,
-                fontFamily: "monospace",
-                color: TEXT_SECONDARY,
-                fontWeight: 500,
+                flex: showExpandedTabs ? 0.52 : 1,
+                display: "flex",
+                flexDirection: "column",
+                transition: "flex 0.3s ease",
               }}
             >
-              {stat.label}
-            </span>
-            <span
-              style={{
-                fontSize: 16,
-                fontFamily: "monospace",
-                color: TEXT_PRIMARY,
-                fontWeight: 700,
-              }}
-            >
-              {stat.value}
-            </span>
+              <CodeBlock
+                lines={USER_SERVICE_CODE}
+                showCursor={frame < 30}
+                cursorLine={14}
+              />
+            </div>
           </div>
-        ))}
-      </div>
 
-      {/* Vignette overlay */}
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          background: `radial-gradient(ellipse at center, transparent 40%, ${BG_COLOR} 100%)`,
-          opacity: vignetteOpacity,
-          pointerEvents: "none",
-        }}
-      />
+          {/* Status bar */}
+          <StatusBar />
+        </div>
+
+        {/* ── Layer 1: Adjacent file (frame 15+) ── */}
+        <Sequence from={LAYER1_START} layout="none">
+          <AdjacentFilePanel />
+        </Sequence>
+
+        {/* ── Layer 2: File explorer tree (frame 50+) ── */}
+        <Sequence from={LAYER2_START} layout="none">
+          <FileExplorerTree width={220} />
+        </Sequence>
+
+        {/* ── Layer 2: Diff markers (frame 50+) ── */}
+        <Sequence from={LAYER2_START} layout="none">
+          <DiffMarkersLayer />
+        </Sequence>
+
+        {/* ── Layer 3: Multi-pane grid + TODO labels (frame 90+) ── */}
+        <Sequence from={LAYER3_START} layout="none">
+          <MultiPaneGrid />
+          <TodoLabelsLayer />
+        </Sequence>
+      </ZoomContainer>
     </AbsoluteFill>
   );
 };

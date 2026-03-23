@@ -1,80 +1,87 @@
 [veo:]
 
-# Section 0.3: Sock Toss — She Stopped
+# Section 0.5: Sock Toss — Modern Disposability
 
 **Tool:** Veo
-**Duration:** ~3s (90 frames @ 30fps)
+**Duration:** ~2.5s (74 frames @ 30fps)
 **Timestamp:** 0:11 - 0:14
 
 ## Visual Description
 
-Hard cut to modern day. A person discovers a hole in their sock, shrugs casually, and tosses it into a wastebasket. The gesture is effortless and unbothered — the opposite of the grandmother's careful, time-intensive repair. This is the punchline of the setup.
+Hard cut to modern day. A person in a contemporary apartment notices a hole in their sock, shrugs casually, and tosses it into a trash can. The gesture is effortless, without a second thought — no sentimentality, no repair instinct. They reach over and grab a fresh pair from a cellophane-wrapped multi-pack on the counter.
 
-The shot is clean and bright — modern apartment or laundry room. Natural daylight. The person holds up a sock with a visible hole, glances at it for a beat, then drops it into a small trash can with a dismissive toss. No drama, no ceremony. The sock is disposable now.
+This is the pivot beat of the cold open. The grandmother's careful repair ethic is contrasted with modern disposability. The shot is bright, clean, slightly over-lit compared to the warm lamplight and cool monitor glow of the split screen — the aesthetic shift signals a different era and a different relationship with objects.
 
-The color grade is neutral and bright — modern, casual, everyday. A strong contrast to the warm amber nostalgia of the grandmother and the cool blue intensity of the developer.
+The framing is simple: medium shot, eye-level, clean apartment background. The action is quick — notice, shrug, toss. One continuous motion.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Bright modern interior, daylight
+- Background: Modern apartment interior — bright, minimal, clean
+- Grid lines: N/A (live-action footage)
 
 ### Chart/Visual Elements
 
 **Camera**
-- Framing: medium shot — person from waist up, wastebasket visible at lower frame edge
-- Movement: static — no camera movement
-- Depth of field: moderate, f/3.5 — subject and nearby environment in focus
-- Angle: eye level, straight on
+- Framing: Medium shot — person from waist up, trash can and sock multi-pack visible
+- Movement: Static, no movement
+- Depth of field: Medium, f/4.0 — subject and nearby objects sharp
+- Angle: Eye level, straight-on
 
 **Lighting**
-- Key: natural daylight from window, soft and bright `#F5F0E8`
-- Fill: ambient room light, neutral warm `#E8E0D4`
-- No dramatic lighting — flat, everyday, casual
-- Overall: bright, neutral, modern
+- Key light: Bright natural daylight from window, `#F0EDE8` warm white
+- Fill: Ambient room light, clean and even
+- Rim: None — flat, modern lighting
+- Overall tone: Bright, clean, slightly cool — contemporary feel
 
 **Subject**
-- Person: casual, any age 25-45, wearing comfortable clothes
-- Action: holds up a sock with visible hole, brief glance, then tosses it into wastebasket
-- Expression: slight shrug, unbothered — this is not a decision that requires thought
-- Props: sock with hole, small wastebasket or trash can
+- Modern person: casual clothing, 20s-30s, relaxed posture
+- Action: notices hole in sock → shrugs → tosses sock in trash → grabs fresh pair from multi-pack
+- Props: worn sock with visible hole, small trash can, cellophane-wrapped sock multi-pack
+
+**Key Moments**
+- 0-1s: Person holds up a sock, notices a hole. Brief look, casual shrug.
+- 1-2s: Sock tossed into nearby trash can. Easy, zero friction.
+- 2-2.5s: Hand grabs a fresh pair from a multi-pack on the counter.
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Person holds up a sock, examines the hole briefly.
-2. **Frame 30-60 (1-2s):** Slight shrug. Casual toss toward wastebasket.
-3. **Frame 60-90 (2-3s):** Sock lands in basket. Person turns away or reaches for a fresh pair.
+1. **Frame 0-5 (0-0.17s):** Hard cut from split screen. Jarring brightness shift.
+2. **Frame 5-30 (0.17-1s):** Person holds sock, notices hole, shrugs.
+3. **Frame 30-55 (1-1.83s):** Sock tossed into trash.
+4. **Frame 55-74 (1.83-2.5s):** Fresh pair grabbed from multi-pack. Hold briefly.
 
 ### Typography
-- None (pure B-roll)
+- None (pure B-roll footage)
 
 ### Easing
-- Hard cut in: instant (from previous zoom-out)
-- Natural video playback
-- Hard cut out: to code regeneration spec
+- Hard cut in: instant — no transition from split screen
+- All motion is natural/in-camera
 
 ### Veo Prompt
 
 ```
-Medium shot of a person in a bright modern apartment holding up a sock with a visible hole. Natural daylight from a window illuminates the scene. The person glances at the hole, gives a slight casual shrug, and tosses the sock into a small wastebasket beside them. The gesture is effortless and unbothered. Bright neutral color grade, everyday modern interior. Static camera at eye level. Moderate depth of field. The mood is casual indifference — disposing of something that is no longer worth repairing. 24fps, clean natural lighting, no dramatic shadows.
+Medium shot of a person in a bright modern apartment holding up a worn sock and noticing a hole in it. They give a casual shrug and toss the sock into a small trash can beside them. Bright natural daylight from a window, clean minimal apartment interior. Eye-level camera, static framing, medium depth of field. Contemporary casual clothing. The gesture is effortless and indifferent. Cinematic, 24fps. The mood is modern disposability — no sentimentality, just convenience.
 ```
 
 ## Narration Sync
-> "When socks got cheap enough, she stopped."
+> "When socks got cheap enough, we stopped darning."
 
 Segment: `cold_open_004`
 
-- **11.46s** ("When socks got cheap enough"): Person holds up holed sock, shrugs
-- **13.50s** ("she stopped"): Sock tossed into wastebasket — punchline lands
+- **0:11** ("When socks got cheap"): Hard cut — person notices hole, shrugs
+- **0:13** ("we stopped darning"): Sock tossed in trash, fresh pair grabbed
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={90}>
+<Sequence from={0} durationInFrames={74}>
   <VeoClip
     clipId="sock_toss"
     src="/clips/sock_toss.mp4"
     fit="cover"
   />
+  {/* Slight brightness bump — contrast with dark split screen */}
+  <ColorGrade brightness={1.05} />
 </Sequence>
 ```
 
@@ -84,20 +91,20 @@ Segment: `cold_open_004`
   "type": "veo_clip",
   "clipId": "sock_toss",
   "camera": {
-    "framing": "medium_shot",
+    "framing": "medium_shot_waist_up",
     "movement": "static",
-    "dof": "moderate",
-    "aperture": "f/3.5",
+    "dof": "medium",
+    "aperture": "f/4.0",
     "angle": "eye_level"
   },
   "lighting": {
-    "key": { "color": "#F5F0E8", "position": "window", "type": "natural_daylight" },
-    "fill": { "color": "#E8E0D4", "type": "ambient" },
-    "grade": "bright_neutral_modern"
+    "key": { "color": "#F0EDE8", "position": "window_left", "type": "natural_daylight" },
+    "fill": { "color": "#F0EDE8", "opacity": 0.6, "type": "ambient" },
+    "rim": "none",
+    "grade": "bright_clean_contemporary"
   },
-  "props": ["sock_with_hole", "wastebasket"],
-  "narrationSegments": ["cold_open_004"],
-  "narrationTimingSeconds": { "start": 11.46, "end": 13.94 }
+  "props": ["worn_sock_with_hole", "trash_can", "sock_multi_pack"],
+  "narrationSegments": ["cold_open_004"]
 }
 ```
 

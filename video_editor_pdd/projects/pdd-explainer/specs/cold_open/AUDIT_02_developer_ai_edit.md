@@ -1,4 +1,0 @@
-## Verdict
-fail
-## Summary
-The camera framing fundamentally deviates from the spec. The spec requires a slightly elevated (~15°) top-down medium-close shot with hands in the lower third and monitor in the upper two-thirds, with the developer's face only partially visible at the top edge. The rendered frame is a low/eye-level side-profile shot where the developer's face is a dominant subject (left ~40% of frame), the monitor is in the right background rather than filling the upper portion, and the overall composition reads as a portrait rather than a hands-and-screen B-roll shot. Since this clip will be cropped to the left 958px for the split screen, the left half would be almost entirely the developer's face/profile rather than the intended hands+screen action. Additionally, at 91.7% progress (phase 4), hands should be resting but appear actively engaged.

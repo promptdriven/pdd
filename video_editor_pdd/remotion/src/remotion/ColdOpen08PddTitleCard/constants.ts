@@ -1,35 +1,35 @@
-// ── Color Palette ──────────────────────────────────────────────
-export const BG_COLOR = "#0A1628";
-export const BG_GRADIENT_TOP = "#0D1B2A";
-export const BG_GRADIENT_BOTTOM = "#060E1A";
-
+// ─── Color Palette ───────────────────────────────────────────────
+export const BG_DEEP_NAVY = "#0A1228";
+export const BG_CARD_SURFACE = "#111D35";
 export const ACCENT_BLUE = "#3B82F6";
 export const ACCENT_CYAN = "#06B6D4";
 export const ACCENT_GREEN = "#22C55E";
-export const TEXT_WHITE = "#FFFFFF";
-export const TEXT_DIM = "#94A3B8";
+export const TEXT_PRIMARY = "#F8FAFC";
+export const TEXT_SECONDARY = "#94A3B8";
 export const GLOW_BLUE = "rgba(59, 130, 246, 0.35)";
 export const GLOW_CYAN = "rgba(6, 182, 212, 0.25)";
-export const GRID_LINE_COLOR = "rgba(59, 130, 246, 0.12)";
-export const DIVIDER_COLOR = "rgba(59, 130, 246, 0.75)";
+export const BRACKET_COLOR = "#3B82F6";
+export const DIVIDER_COLOR = "rgba(148, 163, 184, 0.75)";
 
-// ── Typography ─────────────────────────────────────────────────
-export const TITLE_FONT_SIZE = 96;
-export const SUBTITLE_FONT_SIZE = 32;
-export const LABEL_FONT_SIZE = 22;
+// ─── Typography ──────────────────────────────────────────────────
+export const FONT_MONO = "'SF Mono', 'Fira Code', 'Cascadia Code', monospace";
+export const FONT_SANS = "'Inter', 'SF Pro Display', system-ui, sans-serif";
 
-// ── Layout ─────────────────────────────────────────────────────
+// ─── Layout ──────────────────────────────────────────────────────
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
-export const DIVIDER_THICKNESS = 3;
+export const CENTER_X = CANVAS_WIDTH / 2;
+export const CENTER_Y = CANVAS_HEIGHT / 2;
 
-// ── Timing (frames at 30fps) ──────────────────────────────────
-export const GRID_FADE_IN_END = 15;
-export const TITLE_ENTER_START = 0;
-export const TITLE_ENTER_END = 20;
-export const DIVIDER_DRAW_START = 12;
-export const DIVIDER_DRAW_END = 28;
-export const SUBTITLE_ENTER_START = 18;
-export const SUBTITLE_ENTER_END = 34;
-export const GLOW_PULSE_PERIOD = 60;
-export const PARTICLE_COUNT = 24;
+// ─── Timing (frames @ 30fps) ────────────────────────────────────
+export const FPS = 30;
+export const TOTAL_DURATION_FRAMES = 150; // 5 seconds
+
+// Phase timings
+export const PHASE_BRACKET_DRAW = { start: 0, end: 18 };
+export const PHASE_PDD_REVEAL = { start: 6, end: 30 };
+export const PHASE_SUBTITLE_IN = { start: 28, end: 48 };
+export const PHASE_DIVIDER_IN = { start: 42, end: 54 };
+export const PHASE_TAGLINE_IN = { start: 50, end: 70 };
+export const PHASE_GLOW_PULSE = { start: 60, end: 150 };
+export const PHASE_CURSOR_BLINK = { start: 30, end: 150 };

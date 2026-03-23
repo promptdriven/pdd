@@ -1,83 +1,93 @@
 [veo:]
 
-# Section 0.1b: Grandmother Darning — Companion Clip
+# Section 0.3: Grandmother Darning — Companion Clip (Split RIGHT)
 
 **Tool:** Veo
-**Duration:** ~6s (180 frames @ 30fps)
-**Timestamp:** 0:00 - 0:05
+**Duration:** ~11s (338 frames @ 30fps)
+**Timestamp:** 0:00 - 0:11
 
 ## Visual Description
 
-Companion Veo clip for the RIGHT panel of the split screen hook (spec `01_split_screen_hook.md`). This clip will be masked to the right half of frame.
+Cinematic footage of a 1950s great-grandmother carefully darning a wool sock by warm lamplight. This clip plays in the RIGHT panel of the split screen (spec 01). The grandmother is skilled and unhurried — her hands move with decades of practiced precision, threading a darning needle through the heel of a wool sock stretched over a darning egg.
 
-An elderly woman's hands carefully darning a wool sock by warm lamplight. Her movements are practiced and deliberate — needle pulling thread through the fabric in a cross-hatch repair pattern over a small hole. The sock is dark wool, the thread a slightly different shade. A wooden darning egg or mushroom is visible inside the sock, providing tension.
+The first 8 seconds show the close, intimate act of darning. At the zoom-out phase (~6s), the camera pulls back to reveal a drawer or basket beside her containing dozens of carefully mended garments — socks, shirts, trousers — each bearing neat, visible patches. The accumulation is loving but enormous.
 
-The framing matches the developer shot: medium-close on hands in the lower third, the sock and darning work filling frame. Her face is partially visible at the top edge, lit warmly by a table lamp or floor lamp. The setting suggests a 1950s-60s parlor — a comfortable chair, warm textures, soft focus background.
-
-Color grade: warm amber from lamplight, soft and slightly diffused. Nostalgic but not sepia — real warmth, not a filter.
+The lighting is warm amber from a nearby table lamp or oil lamp — a period-appropriate warm glow that contrasts with the developer's cool blue. The color palette is rich, warm, slightly golden, evoking nostalgia and craft.
 
 ## Technical Specifications
 
 ### Canvas
-- Resolution: 1920x1080 (16:9) — will be cropped to right 958px in split
-- Background: Warm-lit parlor/living room, period-appropriate
+- Resolution: 1920x1080 (16:9)
+- Background: 1950s domestic interior — armchair, side table, lamp
+- Grid lines: N/A (live-action footage)
 
 ### Chart/Visual Elements
 
 **Camera**
-- Framing: medium-close on hands + sock + darning work
-- Movement: static — no movement
-- Depth of field: shallow, f/2.0 — hands and sock sharp, background soft
-- Angle: slightly elevated, matching developer shot angle (~15°)
+- Framing: Close-up on hands → pull back to medium shot revealing drawer/basket
+- Movement: Slow dolly-back/zoom-out starting at ~6s
+- Depth of field: Moderate, f/2.8 — hands sharp, background warmly blurred initially
+- Angle: Slightly above, looking down at the work in her lap
 
 **Lighting**
-- Key: warm amber lamplight `#F5D6A8`, from table/floor lamp at camera-right
-- Fill: warm ambient room light `#3D2B1A` at 0.15
-- Subtle rim/edge light on hands from lamp
-- Overall: warm, soft, nostalgic — natural incandescent quality
+- Key light: Warm amber lamp glow `#D9944A`, from frame-right table lamp
+- Fill: Soft warm ambient `#2A1F14` at 0.2
+- Rim: None — single-source period lighting
+- Overall tone: Warm, golden, nostalgic — slightly heightened warmth
 
 **Subject**
-- Elderly woman, 70s-80s — only hands and partial face visible
-- Hands: experienced, careful, threading a darning needle through wool sock
-- Props: dark wool sock, darning needle, thread, wooden darning egg/mushroom
-- Setting hints: comfortable upholstered chair arm, warm textured background
-- Action: steady, practiced cross-hatch stitching over a small hole
+- Grandmother: elderly woman, 70s, silver hair, wearing period-appropriate house dress or cardigan
+- Hands: wrinkled, skilled, holding darning needle and wool sock on darning egg
+- Surroundings: 1950s domestic interior — wooden side table, fabric-shade lamp, patterned armchair
+
+**Key Moments**
+- 0-3s: Close-up on grandmother's hands darning. Needle passes through wool. Lamplight flickers.
+- 3-6s: She finishes a patch. The sock is lifted slightly, inspected. Satisfaction in the gesture.
+- 6-8s: Camera pulls back. A drawer or mending basket comes into view beside her, full of neatly mended garments.
+- 8-11s: Wide enough to see the scale — dozens of mended items. Her hands rest on the completed sock. The weight of all that careful work is visible.
 
 ### Animation Sequence
-1. **Frame 0-60 (0-2s):** Hands visible, mid-stitch. Needle pulls thread through sock fabric.
-2. **Frame 60-120 (2-4s):** Another stitch. The cross-hatch pattern grows. Practiced, rhythmic.
-3. **Frame 120-150 (4-5s):** Final stitch of a pass. Thread pulled taut. The repair looks clean.
-4. **Frame 150-180 (5-6s):** Hold. Hands pause briefly. The work is neat.
+1. **Frame 0-90 (0-3s):** Close-up on hands. Darning in progress. Warm amber light.
+2. **Frame 90-180 (3-6s):** Patch finishes. Sock lifted and inspected.
+3. **Frame 180-240 (6-8s):** Camera pulls back, revealing mending basket/drawer.
+4. **Frame 240-338 (8-11s):** Hold on wide shot. Accumulated mending visible.
 
 ### Typography
-- None (pure B-roll)
+- None (pure B-roll footage)
 
 ### Easing
-- Natural video — no programmatic easing
+- Hard cut in: instant
+- Camera pull-back: natural in-camera dolly, smooth and unhurried
+- Hold: static at final wide framing
 
 ### Veo Prompt
 
 ```
-Medium-close shot of an elderly woman's hands carefully darning a dark wool sock by warm amber lamplight. A darning needle pulls thread through the fabric in a practiced cross-hatch pattern over a small hole. A wooden darning mushroom is visible inside the sock. Warm incandescent lamplight from camera-right illuminates the hands and work. Shallow depth of field with a soft warm background suggesting a 1950s living room with an upholstered chair. Slightly elevated camera angle looking down at the hands. Static camera, no movement. Warm amber color grade, nostalgic but naturalistic. 24fps with subtle film grain. The mood is quiet domestic skill and patience.
+Close-up of an elderly woman's hands carefully darning a wool sock by warm lamplight. She is in her 70s with silver hair, seated in a 1950s domestic interior with a wooden side table and fabric-shade lamp. A darning needle threads through the heel of a grey wool sock stretched over a darning egg. Warm amber lamplight from frame-right illuminates her practiced hands. Slightly above camera angle looking down at her lap. Shallow depth of field, period-appropriate warm golden color grade. Cinematic, 24fps, subtle film grain. The mood is quiet domestic craftsmanship and accumulated skill.
 ```
 
 ## Narration Sync
-> "If you use Cursor, or Claude Code, or Copilot..."
-> "...you're getting really good at this."
+> "If you use Cursor or Copilot or Claude Code, you're getting really good at darning socks."
+> "Ah, but here's what your grandmother could have told you: the goal was never to get better at darning."
 
-Segments: `cold_open_001`, `cold_open_002`
+Segments: `cold_open_001`, `cold_open_002`, `cold_open_003`
 
-- **0:00**: Hands darning, mid-stitch
-- **3.46s** ("you're getting really good at this"): Stitch finishes — repair looks clean
+- **0:00** ("If you use Cursor"): Grandmother darning, close-up on hands
+- **0:03** ("really good"): She completes a patch — skill visible
+- **0:05** ("darning socks"): Sock lifted, inspected — the parallel to the developer's completed edit
+- **0:06** ("your grandmother"): Camera pulls back, drawer/basket revealed
+- **0:09** ("the goal was never"): Wide shot, accumulated mending visible
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={180}>
+<Sequence from={0} durationInFrames={338}>
   <VeoClip
     clipId="grandmother_darning"
     src="/clips/grandmother_darning.mp4"
     fit="cover"
   />
+  <ColorGrade color="#D9944A" opacity={0.04} />
+  <Vignette edgeColor="#1A0E00" edgeOpacity={0.2} />
 </Sequence>
 ```
 
@@ -87,20 +97,29 @@ Segments: `cold_open_001`, `cold_open_002`
   "type": "veo_clip",
   "clipId": "grandmother_darning",
   "camera": {
-    "framing": "medium_close_hands_and_sock",
-    "movement": "static",
-    "dof": "shallow",
-    "aperture": "f/2.0",
-    "angle": "slightly_elevated_15deg"
+    "framing": "close_up_to_medium_pullback",
+    "movement": "slow_dolly_back",
+    "dof": "moderate",
+    "aperture": "f/2.8",
+    "angle": "slightly_above_looking_down"
   },
   "lighting": {
-    "key": { "color": "#F5D6A8", "position": "camera_right_lamp", "type": "incandescent" },
-    "fill": { "color": "#3D2B1A", "opacity": 0.15, "type": "ambient" },
-    "grade": "warm_amber_nostalgic"
+    "key": { "color": "#D9944A", "position": "frame_right_lamp", "type": "warm_lamp" },
+    "fill": { "color": "#2A1F14", "opacity": 0.2, "type": "ambient" },
+    "rim": "none",
+    "grade": "warm_golden_nostalgic"
   },
-  "props": ["dark_wool_sock", "darning_needle", "thread", "wooden_darning_mushroom"],
-  "narrationSegments": ["cold_open_001", "cold_open_002"],
-  "narrationTimingSeconds": { "start": 0, "end": 5 }
+  "characters": [
+    {
+      "id": "grandmother",
+      "label": "Great-Grandmother",
+      "referencePrompt": "Elderly woman in her 70s, silver hair, wearing a 1950s house dress or cardigan. Warm lamplight illuminates her face and skilled hands. Seated in a period-appropriate armchair in a domestic interior."
+    }
+  ],
+  "props": ["darning_needle", "wool_sock", "darning_egg", "mending_basket"],
+  "narrationSegments": ["cold_open_001", "cold_open_002", "cold_open_003"],
+  "parentSplit": "01_split_screen_hook",
+  "panelPosition": "right"
 }
 ```
 
