@@ -22,7 +22,7 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "04_zoom_out_accumulated": 164,
   "06_code_blink_patched": 150,
   "07_code_regeneration": 270,
-  "08_pdd_title_card": 150,
+  "08_pdd_title_card": 75,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {

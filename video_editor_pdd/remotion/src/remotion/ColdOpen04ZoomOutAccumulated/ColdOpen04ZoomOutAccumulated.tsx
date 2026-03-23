@@ -24,6 +24,7 @@ import {
   EXPANDED_TABS,
   EDITOR_BG,
   TAB_BORDER,
+  TAB_HEIGHT,
   TEXT_DIM,
 } from "./constants";
 import { TabBar, CodeBlock, MiniCodePane } from "./CodeEditor";

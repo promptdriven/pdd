@@ -1,35 +1,69 @@
-// ─── Color Palette ───────────────────────────────────────────────
-export const BG_DEEP_NAVY = "#0A1228";
-export const BG_CARD_SURFACE = "#111D35";
-export const ACCENT_BLUE = "#3B82F6";
-export const ACCENT_CYAN = "#06B6D4";
-export const ACCENT_GREEN = "#22C55E";
-export const TEXT_PRIMARY = "#F8FAFC";
-export const TEXT_SECONDARY = "#94A3B8";
-export const GLOW_BLUE = "rgba(59, 130, 246, 0.35)";
-export const GLOW_CYAN = "rgba(6, 182, 212, 0.25)";
-export const BRACKET_COLOR = "#3B82F6";
-export const DIVIDER_COLOR = "rgba(148, 163, 184, 0.75)";
+// ── Colors ──────────────────────────────────────────────
+export const BG_COLOR = "#0D1117";
+export const PDD_BLUE = "#4A90D9";
+export const PDD_BLUE_GLOW = "rgba(74, 144, 217, 0.15)";
+export const OVERLAY_BG = "rgba(13, 17, 23, 0.88)";
 
-// ─── Typography ──────────────────────────────────────────────────
-export const FONT_MONO = "'SF Mono', 'Fira Code', 'Cascadia Code', monospace";
-export const FONT_SANS = "'Inter', 'SF Pro Display', system-ui, sans-serif";
+export const TERMINAL_BG = "#161B22";
+export const TERMINAL_BORDER = "#30363D";
+export const TERMINAL_PROMPT_COLOR = "#5AAA6E";
+export const TERMINAL_CMD_COLOR = "#E2E8F0";
+export const TERMINAL_STATS_COLOR = "#94A3B8";
 
-// ─── Layout ──────────────────────────────────────────────────────
+export const CODE_TEXT_COLOR = "#E2E8F0";
+export const CODE_KEYWORD_COLOR = "#C678DD";
+export const CODE_STRING_COLOR = "#98C379";
+export const CODE_FUNCTION_COLOR = "#61AFEF";
+export const CODE_TYPE_COLOR = "#E5C07B";
+export const CODE_COMMENT_COLOR = "#5C6370";
+export const CODE_PARAM_COLOR = "#ABB2BF";
+
+// ── Dimensions ──────────────────────────────────────────
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
-export const CENTER_X = CANVAS_WIDTH / 2;
-export const CENTER_Y = CANVAS_HEIGHT / 2;
 
-// ─── Timing (frames @ 30fps) ────────────────────────────────────
-export const FPS = 30;
-export const TOTAL_DURATION_FRAMES = 150; // 5 seconds
+export const TITLE_X = 960;
+export const TITLE_Y = 490;
+export const TITLE_FONT_SIZE = 56;
+export const TITLE_LETTER_SPACING = 1;
 
-// Phase timings
-export const PHASE_BRACKET_DRAW = { start: 0, end: 18 };
-export const PHASE_PDD_REVEAL = { start: 6, end: 30 };
-export const PHASE_SUBTITLE_IN = { start: 28, end: 48 };
-export const PHASE_DIVIDER_IN = { start: 42, end: 54 };
-export const PHASE_TAGLINE_IN = { start: 50, end: 70 };
-export const PHASE_GLOW_PULSE = { start: 60, end: 150 };
-export const PHASE_CURSOR_BLINK = { start: 30, end: 150 };
+export const RULE_Y = 545;
+export const RULE_WIDTH = 160;
+export const RULE_HEIGHT = 2;
+
+export const TERMINAL_X = 1540;
+export const TERMINAL_Y = 980;
+export const TERMINAL_WIDTH = 360;
+export const TERMINAL_HEIGHT = 80;
+export const TERMINAL_BORDER_RADIUS = 8;
+
+// ── Animation Timing (frames) ───────────────────────────
+export const TOTAL_FRAMES = 75;
+
+// Phase 1: Code dims (0–10)
+export const CODE_DIM_START = 0;
+export const CODE_DIM_END = 10;
+
+// Phase 2: Title fade-in + slide (10–30)
+export const TITLE_FADE_START = 10;
+export const TITLE_FADE_END = 30;
+
+// Phase 2b: Glow bloom (10–35)
+export const GLOW_BLOOM_START = 10;
+export const GLOW_BLOOM_END = 35;
+
+// Phase 3: Rule draw (35–45)
+export const RULE_DRAW_START = 35;
+export const RULE_DRAW_END = 45;
+
+// Terminal opacity reduce (0–15)
+export const TERMINAL_FADE_START = 0;
+export const TERMINAL_FADE_END = 15;
+export const TERMINAL_OPACITY_FROM = 0.92;
+export const TERMINAL_OPACITY_TO = 0.5;
+
+// ── Opacity values ──────────────────────────────────────
+export const CODE_UNDERLAY_OPACITY = 0.12;
+export const TITLE_OPACITY = 0.95;
+export const RULE_OPACITY = 0.7;
+export const TITLE_SLIDE_DISTANCE = 12;
