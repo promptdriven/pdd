@@ -10,6 +10,7 @@ import tempfile
 import time
 import uuid
 import re
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Union
@@ -283,8 +284,32 @@ DEFAULT_TIMEOUT_SECONDS: float = 600.0  # Increased from 240s; Claude needs time
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
+MAX_RETRY_DELAY: float = 120.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
+
+
+def _is_permanent_error(error_message: str) -> bool:
+    """Detect permanent provider errors that should NOT be retried.
+
+    Includes authentication failures, invalid parameters (like temperature),
+    and model access/not found errors.
+    """
+    msg = error_message.lower()
+    permanent_patterns = [
+        r"authentication\s+error",
+        r"authentication\s+failed",
+        r"invalid\s+api\s+key",
+        r"invalid\s+key",
+        r"invalid\s+parameter",
+        r"temperature",
+        r"not\s+supported\s+for\s+this\s+model",
+        r"model\s+not\s+found",
+        r"access\s+denied",
+        r"permission\s+denied",
+    ]
+    return any(re.search(p, msg) for p in permanent_patterns)
+
 
 # Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
 # can report how far the workflow progressed (console + core dumps).
@@ -381,124 +406,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 AGENTIC_LOG_DIR = ".pdd/agentic-logs"
-AGENTIC_TRACE_DIR = ".pdd/agentic-traces"
 _AGENTIC_SESSION_ID: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
-# Trace Capture: find and copy provider session files after a run
-# ---------------------------------------------------------------------------
-
-def _find_gemini_project_slug(cwd: Path) -> Optional[str]:
-    """Read ~/.gemini/projects.json to find the slug for the given cwd."""
-    projects_file = Path.home() / ".gemini" / "projects.json"
-    if not projects_file.exists():
-        return None
-    try:
-        data = json.loads(projects_file.read_text(encoding="utf-8"))
-        projects = data.get("projects", {})
-        cwd_str = str(cwd.resolve())
-        best_match = None
-        best_len = 0
-        for path_str, slug in projects.items():
-            if cwd_str.startswith(path_str) and len(path_str) > best_len:
-                best_match = slug
-                best_len = len(path_str)
-        return best_match
-    except Exception:
-        return None
-
-
-def _find_gemini_session_file(cwd: Path, start_time: float) -> Optional[Path]:
-    """Find the Gemini session file created/updated after start_time."""
-    slug = _find_gemini_project_slug(cwd)
-    if not slug:
-        return None
-    chats_dir = Path.home() / ".gemini" / "tmp" / slug / "chats"
-    if not chats_dir.exists():
-        return None
-    candidates = [f for f in chats_dir.glob("session-*.json") if f.stat().st_mtime >= start_time]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda f: f.stat().st_mtime)
-
-
-def _find_claude_session_file(cwd: Path, start_time: float) -> Optional[Path]:
-    """Find the Claude Code session file created/updated after start_time."""
-    claude_projects = Path.home() / ".claude" / "projects"
-    if not claude_projects.exists():
-        return None
-    project_hash = str(cwd.resolve()).replace("/", "-")
-    project_dir = claude_projects / project_hash
-    if not project_dir.exists():
-        return None
-    candidates = [f for f in project_dir.glob("*.jsonl") if f.stat().st_mtime >= start_time]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda f: f.stat().st_mtime)
-
-
-def _save_trace(
-    provider: str,
-    cwd: Path,
-    start_time: float,
-    label: str,
-    duration: float,
-    success: bool,
-    cost: float,
-    prompt: str = "",
-) -> Optional[Path]:
-    """
-    Find the provider's session file and copy it to .pdd/agentic-traces/.
-
-    The trace file contains the full agent reasoning process: every tool call
-    (file reads, edits, shell commands), thinking/reasoning traces, token
-    counts per turn, and the model used.
-
-    Returns the path to the saved trace, or None if not found.
-    """
-    try:
-        if provider == "google":
-            source = _find_gemini_session_file(cwd, start_time)
-        elif provider == "anthropic":
-            source = _find_claude_session_file(cwd, start_time)
-        else:
-            return None
-
-        if source is None:
-            return None
-
-        trace_dir = Path(cwd) / AGENTIC_TRACE_DIR
-        trace_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_label = re.sub(r'[^\w\-]', '_', label) if label else "unlabeled"
-        ext = source.suffix  # .json for Gemini, .jsonl for Claude
-        trace_file = trace_dir / f"trace_{timestamp}_{safe_label}_{provider}{ext}"
-
-        metadata = {
-            "type": "pdd_trace_metadata",
-            "timestamp": datetime.now().isoformat(),
-            "label": label,
-            "provider": provider,
-            "success": success,
-            "cost_usd": cost,
-            "duration_seconds": round(duration, 2),
-            "source_file": str(source),
-            "cwd": str(cwd),
-            "prompt": prompt,
-        }
-
-        source_content = source.read_text(encoding="utf-8")
-        with open(trace_file, "w", encoding="utf-8") as f:
-            f.write(json.dumps(metadata) + "\n")
-            f.write(source_content)
-            if source_content and not source_content.endswith("\n"):
-                f.write("\n")
-
-        return trace_file
-    except Exception:
-        return None
 
 
 def _log_agentic_interaction(
@@ -877,6 +785,8 @@ def run_agentic_task(
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
     task_start_time = time.time()
+    # Issue #902: Cap total time across all providers to prevent 150min burn
+    aggregate_deadline = task_start_time + (2 * effective_timeout)
 
     # Create a unique temp file for the prompt
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
@@ -910,51 +820,64 @@ def run_agentic_task(
             if verbose:
                 console.print(f"[dim]Attempting provider: {provider} for task '{label}'[/dim]")
 
+            # Issue #902: Check aggregate budget before starting new provider
+            if time.time() > aggregate_deadline:
+                if verbose:
+                    console.print(f"[yellow]Aggregate step timeout exceeded. Skipping {provider}.[/yellow]")
+                break
+
             last_output = ""
             deadline_exhausted = False
             for attempt in range(1, max_retries + 1):
                 # Deadline-aware budget check before each attempt
+                now = time.time()
+                budgets = []
                 if effective_deadline is not None:
-                    remaining = effective_deadline - time.time() - JOB_TIMEOUT_MARGIN_SECONDS
-                    if remaining < MIN_ATTEMPT_TIMEOUT_SECONDS:
-                        if verbose:
-                            console.print(
-                                f"[yellow]Deadline budget exhausted "
-                                f"({remaining:.0f}s remaining < {MIN_ATTEMPT_TIMEOUT_SECONDS}s min). "
-                                f"Skipping attempt {attempt}.[/yellow]"
-                            )
-                        deadline_exhausted = True
-                        break
-                    attempt_timeout = min(effective_timeout, remaining)
-                else:
-                    attempt_timeout = effective_timeout
+                    budgets.append(effective_deadline - now - JOB_TIMEOUT_MARGIN_SECONDS)
+                # Issue #902: Honor aggregate step budget
+                budgets.append(aggregate_deadline - now)
+                
+                remaining = min(budgets)
+                if remaining < MIN_ATTEMPT_TIMEOUT_SECONDS:
+                    if verbose:
+                        console.print(
+                            f"[yellow]Budget exhausted "
+                            f"({remaining:.0f}s remaining < {MIN_ATTEMPT_TIMEOUT_SECONDS}s min). "
+                            f"Skipping attempt {attempt}.[/yellow]"
+                        )
+                    deadline_exhausted = True
+                    break
+                
+                attempt_timeout = min(effective_timeout, remaining)
 
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-                attempt_start_time = time.time()
                 success, output, cost = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                 )
-                attempt_duration = time.time() - attempt_start_time
                 last_output = output
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
                 # regardless of cost. Claude may consume tokens running tools but produce
                 # no text response, which means the task wasn't actually completed.
+                # Issue #902: Error-like content with cost > 0 is also a false positive.
                 if success:
                     output_length = len(output.strip())
                     is_false_positive = (
                         output_length == 0 or  # Empty output is always a false positive
-                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH)  # Zero cost with short output
+                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH) or  # Zero cost with short output
+                        (cost > 0.0 and "Error:" in output and output_length < 4000) # Issue #902: error message with cost
                     )
 
                     if is_false_positive:
                         if not quiet:
                             console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt})[/yellow]")
-                        # Treat as failure, retry
+                        # False positives are provider-side bad outputs. Fall through to
+                        # the next provider instead of burning retries on the same one.
+                        break
                     else:
                         # Check for suspicious files (C, E, T)
                         suspicious = []
@@ -965,16 +888,7 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success — save trace
-                        trace_path = _save_trace(
-                            provider=provider, cwd=cwd,
-                            start_time=attempt_start_time,
-                            label=label, duration=attempt_duration,
-                            success=True, cost=cost,
-                            prompt=full_instruction,
-                        )
-                        if trace_path and not quiet:
-                            console.print(f"[dim]Trace saved: {trace_path}[/dim]")
+                        # Real success
                         if verbose:
                             _log_agentic_interaction(
                                 label=label,
@@ -988,20 +902,22 @@ def run_agentic_task(
                             )
                         return True, output, cost, provider
 
-                # Failed — save trace for debugging
-                _save_trace(
-                    provider=provider, cwd=cwd,
-                    start_time=attempt_start_time,
-                    label=label, duration=attempt_duration,
-                    success=False, cost=cost,
-                    prompt=full_instruction,
-                )
+                # Issue #902: Skip retries for permanent errors (auth, parameters)
+                if not success and _is_permanent_error(output):
+                    if verbose:
+                        console.print(f"[yellow]Permanent error from {provider}, skipping retries.[/yellow]")
+                    break
 
                 # Failed - retry with backoff if attempts remain
                 if attempt < max_retries:
-                    backoff = retry_delay * attempt
+                    # Issue #902: Exponential backoff with additive jitter and cap
+                    # Delay = base * 2^(attempt-1) + random_jitter
+                    base_backoff = retry_delay * (2 ** (attempt - 1))
+                    jitter = random.uniform(0, retry_delay)
+                    backoff = min(base_backoff + jitter, MAX_RETRY_DELAY)
+                    
                     if verbose:
-                        console.print(f"[dim]Waiting {backoff}s before retry...[/dim]")
+                        console.print(f"[dim]Waiting {backoff:.1f}s before retry...[/dim]")
                     time.sleep(backoff)
 
             # All retries exhausted (or deadline budget exhausted) for this provider
@@ -1019,7 +935,7 @@ def run_agentic_task(
                     cwd=cwd
                 )
             # If deadline was exhausted, don't try other providers either
-            if deadline_exhausted:
+            if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
         return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
@@ -1395,7 +1311,7 @@ def _find_state_comment(
     """
     Returns (comment_id, state_dict) if found, else None.
     """
-    if not shutil.which("gh"):
+    if not _find_cli_binary("gh"):
         return None
 
     try:
@@ -1436,7 +1352,7 @@ def github_save_state(
     """
     Creates or updates a GitHub comment with the state. Returns new/existing comment_id.
     """
-    if not shutil.which("gh"):
+    if not _find_cli_binary("gh"):
         return None
 
     body = _serialize_state_comment(workflow_type, issue_number, state)
@@ -1592,12 +1508,12 @@ def validate_cached_state(
 # --- High Level State Wrappers ---
 
 def load_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
     use_github_state: bool = True
 ) -> Tuple[Optional[Dict], Optional[int]]:
     """
@@ -1605,7 +1521,7 @@ def load_workflow_state(
     Returns (state_dict, github_comment_id).
     """
     local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-    
+
     # Try GitHub first
     if _should_use_github_state(use_github_state):
         gh_state, gh_id = github_load_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
@@ -1618,7 +1534,6 @@ def load_workflow_state(
             except Exception:
                 pass # Ignore local cache errors
             return gh_state, gh_id
-
     # Fallback to local
     if local_file.exists():
         try:
@@ -1723,7 +1638,7 @@ def post_step_comment(
     Returns:
         True if comment was posted successfully, False otherwise
     """
-    if not shutil.which("gh"):
+    if not _find_cli_binary("gh"):
         return False
 
     # Truncate output to avoid exceeding GitHub comment size limits
@@ -1778,7 +1693,7 @@ def post_pr_comment(
     Returns:
         True if comment was posted successfully, False otherwise
     """
-    if not shutil.which("gh"):
+    if not _find_cli_binary("gh"):
         return False
 
     try:
@@ -1831,7 +1746,7 @@ def post_final_comment(
     Returns:
         True if comment was posted successfully, False otherwise
     """
-    if not shutil.which("gh"):
+    if not _find_cli_binary("gh"):
         return False
 
     body = (
