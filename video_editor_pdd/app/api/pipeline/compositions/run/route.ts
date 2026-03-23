@@ -67,6 +67,32 @@ function findSpecForComponent(componentName: string, sectionSpecDir?: string): s
     }
   }
 
+  // Infer section from component name prefix (e.g., "cold_open_04_zoom_out" → section "cold_open")
+  // and search that section's specDir for the stripped name ("04_zoom_out").
+  if (!sectionSpecDir) {
+    try {
+      const cfg = loadProject();
+      for (const sec of cfg.sections) {
+        const prefix = `${sec.id}_`;
+        if (componentName.startsWith(prefix)) {
+          const strippedName = componentName.slice(prefix.length);
+          const secSpecDir = path.isAbsolute(sec.specDir)
+            ? sec.specDir
+            : path.join(getProjectDir(), "specs", sec.specDir.replace(/^specs[\\/]/, ""));
+          if (fs.existsSync(secSpecDir)) {
+            for (const ext of [".md", ".txt", ".tsx"]) {
+              const candidate = path.join(secSpecDir, `${strippedName}${ext}`);
+              if (fs.existsSync(candidate)) {
+                try { return fs.readFileSync(candidate, "utf-8"); } catch { /* fall through */ }
+              }
+            }
+          }
+          break;
+        }
+      }
+    } catch { /* fall through to existing fallbacks */ }
+  }
+
   // Handle fallback names like "animation_section_main" — map to specs/{sectionId}/spec.md
   if (componentName.endsWith("_main")) {
     const sectionId = componentName.slice(0, -"_main".length);

@@ -2365,7 +2365,7 @@ describe("specs route — enhanced prompt with spec.md and word timestamps", () 
   });
 
   it("references word timestamps file path", () => {
-    expect(specsSourceCode).toMatch(/_words\.json/);
+    expect(specsSourceCode).toMatch(/word_timestamps\.json/);
   });
 
   it("includes reference spec format example in prompt", () => {
@@ -3483,5 +3483,89 @@ describe("compositions preview — handles timing objects in compositions", () =
   it("preview route extracts string IDs from mixed compositions", () => {
     // preview/route.ts now delegates mixed composition handling to the shared manifest resolver
     expect(previewSourceCode).toMatch(/resolveSectionCompositionIds/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Section-prefix inference for spec lookup
+// ---------------------------------------------------------------------------
+
+describe("compositions executor — section-prefix spec inference", () => {
+  it("findSpecForComponent infers section from prefixed name and finds the stripped spec file", () => {
+    // Verify the source code contains the section-prefix inference logic
+    const realFs = jest.requireActual("fs") as typeof import("fs");
+    const pathMod = require("path");
+    const sourceCode = realFs.readFileSync(
+      pathMod.join(
+        __dirname,
+        "..",
+        "app",
+        "api",
+        "pipeline",
+        "compositions",
+        "run",
+        "route.ts"
+      ),
+      "utf-8"
+    );
+
+    // The function should infer section from component name prefix and strip it
+    expect(sourceCode).toMatch(/componentName\.startsWith\(prefix\)/);
+    expect(sourceCode).toMatch(/componentName\.slice\(prefix\.length\)/);
+    // It should search the section's specDir for the stripped name
+    expect(sourceCode).toMatch(/sec\.specDir/);
+  });
+
+  it("passes spec content to prompt when component has section prefix but no sectionId", async () => {
+    // The spec file is at specs/cold_open/04_zoom_out.md
+    // Component name is cold_open_04_zoom_out (section-prefixed)
+    // Without the fix, findSpecForComponent would not find it
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.endsWith("specs")) return true;
+      if (p.includes(path.join("specs", "cold_open"))) return true;
+      if (p.endsWith(path.join("cold_open", "04_zoom_out.md"))) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("04_zoom_out.md")) {
+        return "[Remotion]\n# Zoom Out\nZoom out spec content here";
+      }
+      return "";
+    });
+
+    const config = mockProjectConfig();
+    config.sections = [
+      { id: "cold_open", label: "Cold Open", specDir: "cold_open", compositionId: "ColdOpen", durationSeconds: 17.5, offsetSeconds: 0 },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const proc = createMockSpawnProcess(0);
+    mockSpawn.mockReturnValue(proc);
+    setTimeout(() => proc._triggerClose(), 5);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: ["cold_open_04_zoom_out"], wrappers: [] },
+      mockSend
+    );
+
+    // The executor will call runClaudeFix — even if artifact validation fails afterward,
+    // we can inspect the prompt that was passed
+    try { await executor(jest.fn()); } catch { /* generation may fail in test env */ }
+
+    if (mockRunClaudeFix.mock.calls.length > 0) {
+      const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+      expect(prompt).toContain("Zoom out spec content here");
+      expect(prompt).not.toContain("spec not found");
+    } else {
+      // If runClaudeFix wasn't called, verify spec was at least read
+      const readCalls = mockReadFileSync.mock.calls.map((c: any) => c[0]);
+      const specRead = readCalls.find(
+        (p: string) => typeof p === "string" && p.includes("04_zoom_out.md")
+      );
+      expect(specRead).toBeDefined();
+    }
   });
 });
