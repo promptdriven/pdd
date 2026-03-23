@@ -304,6 +304,26 @@ def _parse_changed_files(output: str, marker: str) -> List[str]:
     return files
 
 
+def _extract_repro_test_content(output: str, cwd: Path) -> str:
+    """Parse REPRO_FILES_CREATED from step 5 output and read file contents.
+
+    Returns the concatenated content of all referenced files that exist on disk,
+    or an empty string if no marker is found or no files exist.
+    """
+    repro_files = _parse_changed_files(output, "REPRO_FILES_CREATED")
+    if not repro_files:
+        return ""
+    contents: List[str] = []
+    for rf in repro_files:
+        rf_path = cwd / rf
+        if rf_path.exists():
+            try:
+                contents.append(rf_path.read_text())
+            except (OSError, UnicodeDecodeError):
+                pass
+    return "\n".join(contents)
+
+
 def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: bool) -> Optional[str]:
     """Check output for hard stop conditions."""
     if step_num == 1 and "Duplicate of #" in output:
@@ -553,6 +573,7 @@ def run_agentic_bug_orchestrator(
         "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "step5_reproduction_tests": "",
     }
     
     # Populate context with previous step outputs
@@ -562,6 +583,11 @@ def run_agentic_bug_orchestrator(
     # Re-extract files from step 5.5/7/9 outputs if available
     changed_files: List[str] = []
     
+    # Step 5
+    if "step5_output" in context:
+        s5_out = context["step5_output"]
+        context["step5_reproduction_tests"] = _extract_repro_test_content(s5_out, cwd)
+
     # Step 5.5
     if "step5.5_output" in context:
         s55_out = context["step5.5_output"]
@@ -781,6 +807,9 @@ def run_agentic_bug_orchestrator(
         files_extracted = False
 
         # Step-specific handling
+        if step_num == 5:
+            context["step5_reproduction_tests"] = _extract_repro_test_content(step_output, current_work_dir)
+
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
             if defect_type_match:
