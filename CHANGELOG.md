@@ -1,3 +1,25 @@
+## v0.0.185 (2026-03-22)
+
+### Feat
+
+- Update ColdOpen04/08 components and audit specs
+- Reimplement ColdOpen04ZoomOutAccumulated with a code editor UI and add new components for ColdOpen08PddTitleCard, along with spec updates.
+- Implement `ColdOpen08PddTitleCard` and `ColdOpen04ZoomOutAccumulated` scenes, update cold open specifications and audit results, and refine overall project configuration.
+- show parent-child relationships in specs list for split containers
+- Add leftSrc, rightSrc, and revealSrc video sources to the split screen hook media configuration.
+- Introduce new AI prompts for video pipeline components and refactor cold open video specifications.
+
+### Fix
+
+- Fix CI test failures in orchestrator_1 and core_errors
+- infer section from component name prefix for spec lookup
+- _parse_changed_files drops multi-line PROMPT_FIXED markers (#913)
+- exclude companion veo specs from timeline when embedded in a split container
+- instruct Stage 6 that split-screen layouts span multiple narrative beats
+- resolve clipId and leftClipId/rightClipId in visual manifest media aliases
+- exponential backoff, error classification, prompt source-of-truth (#902)
+- anchor spec timestamps to TTS word timing instead of script headings
+
 ## v0.0.184 (2026-03-21)
 
 ### Fix

@@ -128,6 +128,242 @@ Every step in the pipeline is one of three types. This pattern held across the d
 
 The key insight: **Claude Code is the orchestrator.** The automated scripts handle individual pipeline stages, but Claude Code acts as the glue — generating intermediate artifacts, staging files between pipelines, and refining scaffolded output. In the prototype, a human drove Claude Code from the terminal. In the product, **the webapp drives Claude Code programmatically** — every "LLM-directed" step becomes a server-side Claude Code invocation triggered by a button in the UI.
 
+### Data Model
+
+Every entity in the pipeline has a clear provenance (which stage creates it), storage location, and downstream consumers. The diagram below shows the relationships and a concrete example from the Cold Open section.
+
+```mermaid
+erDiagram
+    ProjectConfig ||--|{ Section : contains
+    Section ||--o{ SpecFile : "specs/{specDir}/"
+    Section ||--o| NarrativeTiming : "resolved from"
+    Section ||--|{ VisualContract : "manifest entry"
+    Section ||--|{ VisualTiming : "timeline slot"
+
+    SpecFile ||--o| SpecFile : "parentSpec (companion)"
+    SpecFile ||--o{ VeoClip : "clipId reference"
+    SpecFile }|--|| VisualContract : "parsed into"
+
+    NarrativeTiming ||--o{ WordTimestamp : "from TTS output"
+
+    VisualContract ||--o{ MediaAlias : "resolved paths"
+    VisualContract }|--|| RemotionVisual : "rendered as"
+
+    VisualTiming }|--|| RemotionVisual : "BEATS timing"
+
+    RemotionVisual }|--|| RenderedVideo : "Remotion render"
+    RenderedVideo ||--o{ AuditResult : "frame sampled"
+    AuditResult }o--|| SpecFile : "compared against"
+
+    ProjectConfig {
+        string name "PDD Explainer"
+        object tts "voice, rate, model"
+        object veo "model, aspectRatio"
+        object render "fps, resolution"
+    }
+
+    Section {
+        string id "cold_open"
+        string label "Cold Open"
+        string specDir "cold_open"
+        string compositionId "ColdOpenSection"
+        float durationSeconds "17.621"
+        float offsetSeconds "0"
+        string_array compositions "01_split_screen_hook, ..."
+    }
+
+    SpecFile {
+        string path "specs/cold_open/01_split_screen_hook.md"
+        string firstLine "[split:]"
+        string parentSpec "null (is a container)"
+        string timestamp "0:00 - 0:11"
+        json dataPoints "leftClipId, rightClipId, ..."
+    }
+
+    NarrativeTiming {
+        float offsetSeconds "0"
+        float durationSeconds "17.54"
+        string source "audio-sync"
+    }
+
+    WordTimestamp {
+        string word "If"
+        float start "0.00"
+        float end "0.24"
+        string segmentId "cold_open_001"
+    }
+
+    VeoClip {
+        string clipId "developer_ai_edit"
+        string file "outputs/veo/developer_ai_edit.mp4"
+        string staged "remotion/public/veo/developer_ai_edit.mp4"
+    }
+
+    VisualContract {
+        string id "01_split_screen_hook"
+        string renderMode "component"
+        json mediaAliases "leftSrc, rightSrc, defaultSrc"
+        json dataPoints "type: split_screen, ..."
+    }
+
+    MediaAlias {
+        string leftSrc "veo/developer_ai_edit.mp4"
+        string rightSrc "veo/grandmother_darning.mp4"
+        string defaultSrc "veo/developer_ai_edit.mp4"
+    }
+
+    VisualTiming {
+        string id "01_split_screen_hook"
+        float startSeconds "0.000"
+        float endSeconds "8.039"
+        string source "spec"
+    }
+
+    RemotionVisual {
+        string id "01_split_screen_hook"
+        int startFrame "0"
+        int endFrame "241"
+        int intrinsicDuration "240"
+        string component "ColdOpen01SplitScreenHook"
+    }
+
+    RenderedVideo {
+        string file "outputs/sections/cold_open.mp4"
+        float duration "17.621"
+        int fps "30"
+    }
+
+    AuditResult {
+        string spec "01_split_screen_hook"
+        string verdict "pass"
+        string summary "Split screen matches spec"
+        int sampledFrame "180"
+    }
+```
+
+**Example: Cold Open "Split Screen Hook" through the pipeline**
+
+The Cold Open section demonstrates how a `[split:]` container spec flows through the full pipeline. The source script describes a persistent split-screen layout across multiple narrative beats:
+
+> `**[VISUAL: Split screen. LEFT: Developer. RIGHT: Grandmother.]**`
+> `**[VISUAL: Both complete their task simultaneously.]**`
+> `**[VISUAL: Zoom out. Split screen holds.]**`
+> `**[VISUAL: Hard cut to modern day. Sock toss.]**`
+
+Stage 6 (Specs) generates this as:
+
+| File | Type | Timestamp | Role |
+|------|------|-----------|------|
+| `01_split_screen_hook.md` | `[split:]` | 0:00 - 0:11 | Container — spans beats 1-3 |
+| `02_developer_ai_edit.md` | `[veo:]` | 0:00 - 0:11 | Companion — left panel clip |
+| `03_grandmother_darning.md` | `[veo:]` | 0:00 - 0:11 | Companion — right panel clip |
+| `04_zoom_out_accumulated.md` | `[Remotion]` | 0:06 - 0:11 | Overlay on split screen |
+| `05_sock_toss.md` | `[veo:]` | 0:11 - 0:14 | Hard cut — split ends here |
+
+Key data flow decisions:
+- **Timestamps** are derived from word-level TTS timing (17.54s total audio), not the script heading "0:00 - 2:00"
+- **Companions** (02, 03) are excluded from VISUAL_SEQUENCE — the parent component renders them via `mediaAliases.leftSrc` / `rightSrc`
+- **The manifest** resolves `leftClipId: "developer_ai_edit"` → `leftSrc: "veo/developer_ai_edit.mp4"` via `MEDIA_ALIAS_KEY_MAP` + `SOURCE_FIELD_KEYS`
+- **Scaling tolerance**: spec timestamps within 15% of section duration are clamped (not linearly scaled), preserving audio-aligned timing
+
+### Timeline View: Nested Data Models
+
+The diagram below shows how the data models nest inside each other temporally, using the Cold Open section (17.54s) as a concrete example. Each layer adds fidelity — from the rough script heading, to audio-aligned word timestamps, to per-visual spec timestamps, to frame-level Remotion BEATS.
+
+```mermaid
+gantt
+    title Cold Open Section — Nested Timeline (17.54s total audio)
+    dateFormat X
+    axisFormat %s
+
+    section Script Heading
+    COLD OPEN THE SOCK HOOK (script says 0:00-2:00)  :script, 0, 120
+
+    section Audio Segments (word_timestamps.json)
+    cold_open_001 "If you use cursor..."           :seg1, 0, 3
+    cold_open_002 "you're getting really good..."   :seg2, 3, 6
+    cold_open_003 "here's what your great..."       :seg3, 6, 11
+    cold_open_004 "When socks got cheap enough..."  :seg4, 11, 14
+    cold_open_005 "Code just got that cheap..."     :seg5, 14, 16
+    cold_open_006 "So why are we still patching?"   :seg6, 16, 18
+
+    section Spec Timestamps (from Stage 6)
+    01 split_screen_hook [split]        :crit, spec1, 0, 11
+    02 developer_ai_edit [veo] companion  :spec2, 0, 11
+    03 grandmother_darning [veo] companion :spec3, 0, 11
+    04 zoom_out_accumulated [Remotion]   :spec4, 6, 11
+    05 sock_toss [veo]                   :spec5, 11, 14
+    06 code_blink_patched [Remotion]     :spec6, 14, 16
+    07 code_regeneration [Remotion]      :spec7, 16, 17
+    08 pdd_title_card [title]            :spec8, 16, 18
+
+    section VISUAL_SEQUENCE (constants.ts — companions excluded)
+    VISUAL_00 split_screen_hook         :crit, v0, 0, 8
+    VISUAL_01 zoom_out_accumulated      :v1, 8, 12
+    VISUAL_02 sock_toss                 :v2, 12, 14
+    VISUAL_03 code_blink_patched        :v3, 14, 15
+    VISUAL_04 code_regeneration         :v4, 15, 16
+    VISUAL_05 pdd_title_card            :v5, 16, 18
+
+    section Rendered Video (17.62s)
+    cold_open.mp4                       :active, vid, 0, 18
+```
+
+**How the layers nest:**
+
+```
+ProjectConfig
+ └─ Section: cold_open (17.62s, offset 0s)
+     │
+     ├─ NarrativeTiming (source: audio-sync, 17.54s)
+     │   └─ WordTimestamp[] — 45 words across 6 segments
+     │       ├─ cold_open_001: 0.00s – 2.72s  "If you use cursor or Claude..."
+     │       ├─ cold_open_002: 3.46s – 5.50s  "you're getting really good..."
+     │       ├─ cold_open_003: 5.82s – 11.28s "here's what your great..."
+     │       ├─ cold_open_004: 11.46s – 13.94s "When socks got cheap enough..."
+     │       ├─ cold_open_005: 14.12s – 15.86s "Code just got that cheap..."
+     │       └─ cold_open_006: 16.02s – 17.54s "So why are we still patching?"
+     │
+     ├─ SpecFile[] — 8 specs in specs/cold_open/
+     │   ├─ 01_split_screen_hook.md  [split:]  0:00–0:11  ← CONTAINER
+     │   │   ├─ leftClipId: "developer_ai_edit"
+     │   │   └─ rightClipId: "grandmother_darning"
+     │   │       │
+     │   │       ├─ 02_developer_ai_edit.md  [veo:] 0:00–0:11  ← COMPANION (excluded from timeline)
+     │   │       └─ 03_grandmother_darning.md [veo:] 0:00–0:11  ← COMPANION (excluded from timeline)
+     │   │
+     │   ├─ 04_zoom_out_accumulated.md  [Remotion]  0:06–0:11
+     │   ├─ 05_sock_toss.md             [veo:]      0:11–0:14
+     │   ├─ 06_code_blink_patched.md    [Remotion]  0:14–0:16
+     │   ├─ 07_code_regeneration.md     [Remotion]  0:16–0:17
+     │   └─ 08_pdd_title_card.md        [title:]    0:16–0:18
+     │
+     ├─ VisualContract[] — visual-manifest.json
+     │   └─ 01_split_screen_hook:
+     │       ├─ renderMode: "component"
+     │       ├─ mediaAliases:
+     │       │   ├─ leftSrc:  "veo/developer_ai_edit.mp4"
+     │       │   └─ rightSrc: "veo/grandmother_darning.mp4"
+     │       └─ dataPoints: { type: "split_screen", ... }
+     │
+     ├─ VISUAL_SEQUENCE — constants.ts (6 entries, companions filtered out)
+     │   ├─ VISUAL_00: 0.000s – 8.039s  01_split_screen_hook (component)
+     │   ├─ VISUAL_01: 8.039s – 11.693s 04_zoom_out_accumulated (component)
+     │   ├─ VISUAL_02: 11.693s – 13.886s 05_sock_toss (raw-media OffthreadVideo)
+     │   ├─ VISUAL_03: 13.886s – 15.348s 06_code_blink_patched (component)
+     │   ├─ VISUAL_04: 15.348s – 16.444s 07_code_regeneration (component)
+     │   └─ VISUAL_05: 16.444s – 17.540s 08_pdd_title_card (component)
+     │
+     └─ RenderedVideo: outputs/sections/cold_open.mp4 (17.621s, 30fps)
+         └─ AuditResult[] — one per spec
+             ├─ 01_split_screen_hook: skip (frame clamping)
+             ├─ 04_zoom_out_accumulated: fail (component quality)
+             ├─ 05_sock_toss: fail (Veo clip quality)
+             ├─ 06_code_blink_patched: warn (readable)
+             ├─ 07_code_regeneration: fail (particle effect)
+             └─ 08_pdd_title_card: pass
+```
+
 ### Data Flow: Annotation to Fixed Video
 
 ```
