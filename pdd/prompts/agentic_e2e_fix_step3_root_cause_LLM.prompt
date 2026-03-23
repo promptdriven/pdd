@@ -43,15 +43,18 @@ You are working on step 3 of 10 in an agentic e2e fix workflow. E2e tests are fa
    - Identify the assertion that failed or exception that was raised
    - Trace back to understand what behavior was unexpected
 
-2. **Review the documentation**
-   - Check project README, CLAUDE.md, or other docs
-   - Look for the expected behavior of the functionality being tested
-   - Understand what the correct behavior should be
+2. **Review the authoritative specification**
+   - **The `.prompt` file is the source of truth.** For every module under test, find its associated prompt file at `pdd/prompts/<module_name>_<language>.prompt`. The prompt is the authoritative specification; the code is a generated artifact. When the code disagrees with the prompt, it's a CODE_BUG — the code doesn't match the spec.
+   - Also check project README, CLAUDE.md, and other docs for expected behavior.
+   - If no prompt file exists for a module, fall back to documentation and docstrings.
 
-3. **Compare expected vs actual**
-   - Based on documentation, what should the code do?
+3. **Compare expected vs actual (prompt takes precedence over code)**
+   - Based on the prompt file and documentation, what should the code do?
    - What is the test expecting?
    - What is the code actually doing?
+   - **If the code disagrees with the prompt**: CODE_BUG (the code doesn't match its spec, even if the code "works")
+   - **If the test disagrees with the prompt**: TEST_BUG (the test expects wrong behavior)
+   - **If both disagree with the prompt**: BOTH
 
 4. **Assess fix scope: localized vs cross-cutting**
    Before jumping to a fix, count how many places would need the same change:
