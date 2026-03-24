@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
@@ -10,7 +10,6 @@ import { Part5CompoundReturns03CompoundDebtCurve } from "../Part5CompoundReturns
 import { Part5CompoundReturns04DivergingCostCurves } from "../Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "../Part5CompoundReturns05InvestmentComparisonTable";
 import { Part5CompoundReturns07EconomicsCrossingCallback } from "../Part5CompoundReturns07EconomicsCrossingCallback";
-import { Part5CompoundReturns08ContrarianQuoteCard } from "../Part5CompoundReturns08ContrarianQuoteCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "01_section_title_card": Part5CompoundReturns01SectionTitleCard,
@@ -19,7 +18,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "04_diverging_cost_curves": Part5CompoundReturns04DivergingCostCurves,
   "05_investment_comparison_table": Part5CompoundReturns05InvestmentComparisonTable,
   "08_economics_crossing_callback": Part5CompoundReturns07EconomicsCrossingCallback,
-  "09_contrarian_quote_card": Part5CompoundReturns08ContrarianQuoteCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
@@ -29,10 +27,14 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "04_diverging_cost_curves": 420,
   "05_investment_comparison_table": 420,
   "08_economics_crossing_callback": 300,
-  "09_contrarian_quote_card": 300,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
+  "04_diverging_cost_curves": { defaultSrc: "veo/developer_patching_montage.mp4", backgroundSrc: "veo/developer_patching_montage.mp4", outputSrc: "veo/developer_patching_montage.mp4", baseSrc: "veo/developer_patching_montage.mp4" },
+  "05_investment_comparison_table": { defaultSrc: "veo/developer_patching_montage.mp4", backgroundSrc: "veo/developer_patching_montage.mp4", outputSrc: "veo/developer_patching_montage.mp4", baseSrc: "veo/developer_patching_montage.mp4" },
+  "06_grandmother_socks_callback": { defaultSrc: "veo/grandmother_darning_lamplight.mp4", backgroundSrc: "veo/grandmother_darning_lamplight.mp4", outputSrc: "veo/grandmother_darning_lamplight.mp4", baseSrc: "veo/grandmother_darning_lamplight.mp4" },
+  "07_developer_cursor_callback": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "09_contrarian_quote_card": { defaultSrc: "veo/contrarian_quote_workspace.mp4", backgroundSrc: "veo/contrarian_quote_workspace.mp4", outputSrc: "veo/contrarian_quote_workspace.mp4", baseSrc: "veo/contrarian_quote_workspace.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
@@ -48,7 +50,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "06_grandmother_socks_callback": {"specBaseName": "06_grandmother_socks_callback", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_socks_callback", "camera": {"framing": "medium_close_up", "movement": "static", "dof": "moderate", "drift": false}, "lighting": {"key": {"color": "#D4A043", "position": "upper_left", "type": "table_lamp"}, "fill": "minimal", "grade": "warm_amber"}, "characters": [{"id": "grandmother_darner", "label": "Grandmother", "referencePrompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight"}], "callbackTo": "part1_economics/14_grandmother_darning_expert", "narrationSegments": ["part5_compound_returns_007"]}, "overlayConfig": null, "renderMode": "raw-media"},
   "07_developer_cursor_callback": {"specBaseName": "07_developer_cursor_callback", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_callback", "camera": {"framing": "medium_close_up", "movement": "static", "dof": "shallow", "drift": false}, "lighting": {"key": {"color": "#B8D4E8", "position": "monitor", "type": "cool_blue"}, "fill": {"color": "#E8D5B8", "position": "side", "type": "ambient"}, "grade": "cool_professional"}, "callbackTo": "part1_economics/13_developer_cursor_coding", "narrationSegments": ["part5_compound_returns_008"]}, "overlayConfig": null, "renderMode": "raw-media"},
   "08_economics_crossing_callback": {"specBaseName": "08_economics_crossing_callback", "dataPoints": {"type": "chart_callback", "chartId": "code_cost_triple_line", "callbackTo": "part1_economics/11_crossing_lines_moment", "event": "crossing_reprise", "crossingPoint": {"radius": 12, "glowRadius": 24, "pulseRange": [0.85, 1.15], "pulsePeriod": 45}, "newAnnotation": "When economics change, rational behavior changes.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_009"]}, "overlayConfig": null, "renderMode": "component"},
-  "09_contrarian_quote_card": {"specBaseName": "09_contrarian_quote_card", "dataPoints": {"type": "quote_card", "cardId": "contrarian_quote", "quote": "This is either the way of the future or it's going to crash and burn spectacularly.", "attribution": "Research engineer, after seeing PDD for the first time", "accentColor": "#4A90D9", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_010"]}, "overlayConfig": null, "renderMode": "component"},
+  "09_contrarian_quote_card": {"specBaseName": "09_contrarian_quote_card", "dataPoints": {"type": "quote_card", "cardId": "contrarian_quote", "quote": "This is either the way of the future or it's going to crash and burn spectacularly.", "attribution": "Research engineer, after seeing PDD for the first time", "accentColor": "#4A90D9", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_010"]}, "overlayConfig": null, "renderMode": "raw-media"},
   "10_transition_out": {"specBaseName": "10_transition_out", "dataPoints": {"type": "transition", "transitionId": "compound_returns_out", "echoes": [{"source": "diverging_cost_curves", "opacity": 0.08}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_011"]}, "overlayConfig": null, "renderMode": "component"},
 };
 
@@ -86,6 +88,16 @@ export const Part5CompoundReturnsSection: React.FC = () => {
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
                   <GeneratedContractVisual />
+                </VisualMediaProvider>
+              </VisualContractProvider>
+            ) : visualMedia?.defaultSrc ? (
+              <VisualContractProvider contract={visualContract}>
+                <VisualMediaProvider media={visualMedia}>
+                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (
+                  <GeneratedMediaVisual config={visualOverlayConfig} />
+                ) : (
+                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                )}
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

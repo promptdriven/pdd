@@ -255,6 +255,49 @@ REFERENCE_SUFFIXES = (
     '_thumbnail',
     '-thumbnail',
 )
+MEDIA_SEARCH_STOPWORDS = {
+    'the',
+    'and',
+    'for',
+    'with',
+    'from',
+    'into',
+    'through',
+    'over',
+    'under',
+    'this',
+    'that',
+    'these',
+    'those',
+    'your',
+    'their',
+    'frame',
+    'frames',
+    'section',
+    'visual',
+    'description',
+    'technical',
+    'specifications',
+    'sequence',
+    'camera',
+    'lighting',
+    'subject',
+    'animation',
+    'narration',
+    'timing',
+    'code',
+    'structure',
+    'remotion',
+    'tool',
+    'duration',
+    'timestamp',
+    'json',
+    'type',
+    'clip',
+    'video',
+    'media',
+    'callback',
+}
 
 
 def _read_text_if_exists(path: str) -> str:
@@ -369,6 +412,131 @@ def _normalize_reference_stems(raw_value: str) -> List[str]:
                 _add(candidate[: -len(suffix)])
 
     return candidates
+
+
+def _tokenize_media_search_text(raw_value: str) -> List[str]:
+    """Return normalized search tokens for fuzzy staged-media matching."""
+    tokens: List[str] = []
+    for token in re.findall(r'[a-z0-9]+', raw_value.lower()):
+        if token in MEDIA_SEARCH_STOPWORDS:
+            continue
+        if len(token) < 3 and not token.isdigit():
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _iter_available_video_static_paths(remotion_public: str) -> List[str]:
+    """List staged video assets under remotion/public for contextual matching."""
+    if not remotion_public:
+        return []
+
+    search_roots: List[str] = []
+    veo_root = os.path.join(remotion_public, 'veo')
+    if os.path.isdir(veo_root):
+        search_roots.append(veo_root)
+    else:
+        search_roots.append(remotion_public)
+
+    candidates: List[str] = []
+    for search_root in search_roots:
+        for root, _, filenames in os.walk(search_root):
+            for filename in filenames:
+                if Path(filename).suffix.lower() not in VIDEO_EXTENSIONS:
+                    continue
+                rel_path = os.path.relpath(os.path.join(root, filename), remotion_public)
+                normalized = rel_path.replace('\\', '/')
+                if normalized not in candidates:
+                    candidates.append(normalized)
+    return sorted(candidates)
+
+
+def _resolve_contextual_video_static_path(
+    spec_content: str,
+    spec_base: str,
+    remotion_public: str,
+) -> Optional[str]:
+    """Resolve alternate staged clip names from clip ids plus spec context."""
+    if not spec_content or not remotion_public:
+        return None
+
+    data_points = _extract_data_points_json(spec_content)
+    token_weights: Dict[str, int] = {}
+    exact_stems: List[str] = []
+
+    def _add_tokens(source: str, weight: int) -> None:
+        if not source:
+            return
+        for token in _tokenize_media_search_text(source):
+            token_weights[token] = token_weights.get(token, 0) + weight
+
+    def _add_exact_stems(source: str) -> None:
+        for stem in _normalize_reference_stems(source):
+            normalized = stem.split('/')[-1]
+            if normalized and normalized not in exact_stems:
+                exact_stems.append(normalized)
+
+    _add_tokens(spec_base, 2)
+    _add_exact_stems(spec_base)
+
+    for raw_value in _iter_video_reference_values(spec_content):
+        _add_tokens(raw_value, 4)
+        _add_exact_stems(raw_value)
+
+    if isinstance(data_points, dict):
+        callback_to = data_points.get('callbackTo')
+        if isinstance(callback_to, str) and callback_to.strip():
+            _add_tokens(callback_to, 3)
+            _add_exact_stems(callback_to)
+
+    heading_match = re.search(r'^\s*#\s+(.+)$', spec_content, re.MULTILINE)
+    if heading_match:
+        _add_tokens(heading_match.group(1), 2)
+
+    _add_tokens(spec_content, 1)
+
+    if not token_weights:
+        return None
+
+    best_path: Optional[str] = None
+    best_score = 0
+    best_overlap = 0
+    ambiguous = False
+
+    for candidate in _iter_available_video_static_paths(remotion_public):
+        candidate_stem = Path(candidate).stem.lower()
+        candidate_tokens = set(_tokenize_media_search_text(candidate_stem))
+        if not candidate_tokens:
+            continue
+
+        score = 0
+        overlap = 0
+        for token, weight in token_weights.items():
+            if token in candidate_tokens:
+                score += weight
+                overlap += 1
+
+        for stem in exact_stems:
+            if not stem:
+                continue
+            if candidate_stem == stem:
+                score += 100
+
+        if score < 3:
+            continue
+
+        if score > best_score or (score == best_score and overlap > best_overlap):
+            best_path = candidate
+            best_score = score
+            best_overlap = overlap
+            ambiguous = False
+            continue
+
+        if score == best_score and overlap == best_overlap:
+            ambiguous = True
+
+    return None if ambiguous else best_path
 
 
 def _iter_data_point_media_values(data_points: Any) -> List[str]:
@@ -900,6 +1068,17 @@ def _extract_visual_media_aliases(
         explicit = True
         if resolved not in explicit_sources:
             explicit_sources.append(resolved)
+
+    if not explicit_sources:
+        contextual_default = _resolve_contextual_video_static_path(
+            spec_content,
+            spec_base,
+            remotion_public,
+        )
+        if contextual_default is not None:
+            explicit = True
+            explicit_sources.append(contextual_default)
+            aliases.setdefault('defaultSrc', contextual_default)
 
     if not explicit_sources:
         generated_default = _resolve_generated_spec_basename_video(

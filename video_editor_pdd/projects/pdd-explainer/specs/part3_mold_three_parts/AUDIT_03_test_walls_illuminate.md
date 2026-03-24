@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame shows only a placeholder state — a dark background with the text 'ANIMATED DIAGRAM' and 'test_walls_illuminate' as a title in the top-left corner, plus a centered pill-shaped element reading 'Generated from visual contract'. None of the specified visual content is present. At frame 269/300 (90% progress, animation phase 240-300), the frame should show: (1) a mold cross-section with all 6 wall segments illuminated in amber (#D9944A), (2) 6 monospace test-condition labels (null → None, empty string → '', handles unicode, latency < 100ms, no exceptions thrown, idempotent), (3) liquid fully filling the cavity with a blue-to-purple gradient, (4) a brief glow on all walls, (5) a blueprint grid background, and (6) an 'Each test is a constraint' subtitle near the bottom. Instead, the visual is entirely a stub/placeholder with zero spec content rendered.
+OCR confirmed visible text tokens in the rendered frame (visual, animated, diagram, test, walls), so the frame does not support a hard missing-text failure.

@@ -4042,6 +4042,208 @@ class TestVisualContractManifestMediaDrivenRenderMode:
         assert visual["mediaAliases"] == {}
 
 
+class TestVisualMediaManifestContextualClipResolution:
+    def test_resolves_alternate_named_staged_assets_from_spec_context(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part2_paradigm_shift"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "chip_design_1980s_lab.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "09_1980s_chip_lab.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "# Section 2.9: 1980s Chip Lab",
+                    "",
+                    "## Visual Description",
+                    "Engineer in a 1980s chip design lab drawing circuits by hand.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "1980s_chip_lab" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "part2_paradigm_shift",
+                "specDir": "part2_paradigm_shift",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["09_1980s_chip_lab"]["defaultSrc"] == "veo/chip_design_1980s_lab.mp4"
+
+    def test_resolves_callback_assets_using_cross_spec_context(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part5_compound_returns"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "grandmother_darning.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+        (remotion_public / "veo" / "grandmother_darning_lamplight.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+        (remotion_public / "veo" / "developer_ai_edit.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "06_grandmother_socks_callback.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "# Section 5.6: Grandmother Socks Callback",
+                    "",
+                    "## Visual Description",
+                    "Warm lamplight on grandmother hands darning a sock.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    "{",
+                    '  "type": "veo_clip",',
+                    '  "clipId": "grandmother_socks_callback",',
+                    '  "callbackTo": "part1_economics/14_grandmother_darning_expert"',
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "07_developer_cursor_callback.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "# Section 5.7: Developer Cursor Callback",
+                    "",
+                    "## Visual Description",
+                    "Developer hands at a keyboard with a Cursor-like code editor.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    "{",
+                    '  "type": "veo_clip",',
+                    '  "clipId": "developer_cursor_callback",',
+                    '  "callbackTo": "part1_economics/13_developer_cursor_coding"',
+                    "}",
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "part5_compound_returns",
+                "specDir": "part5_compound_returns",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["06_grandmother_socks_callback"]["defaultSrc"] == "veo/grandmother_darning_lamplight.mp4"
+        assert manifest["07_developer_cursor_callback"]["defaultSrc"] == "veo/developer_cursor_edit.mp4"
+
+    def test_resolves_unique_remaining_wall_and_grounding_assets(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part3_mold_three_parts"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "bug_adds_wall.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+        (remotion_public / "veo" / "grounding_material_flow.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "04_liquid_hits_wall.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "# Section 3.4: Liquid Hits Wall",
+                    "",
+                    "## Visual Description",
+                    "Liquid flows through a mold channel and stops at a wall.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "liquid_hits_wall" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "16_grounding_material.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "# Section 3.16: Grounding Material",
+                    "",
+                    "## Visual Description",
+                    "Grounding material flow through a precision mold.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "grounding_material" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "part3_mold_three_parts",
+                "specDir": "part3_mold_three_parts",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["04_liquid_hits_wall"]["defaultSrc"] == "veo/bug_adds_wall.mp4"
+        assert manifest["16_grounding_material"]["defaultSrc"] == "veo/grounding_material_flow.mp4"
+
+
 class TestWrapperTemplateComponentMediaFiltering:
     """The generated section wrapper must NOT pass Veo media to
     component-mode visuals via VisualMediaProvider. When renderMode

@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (visual, animation, dual, meter, double), so the frame does not support a hard missing-text failure.
+The frame shows a placeholder/stub rendering instead of the actual visual. At sample progress 89.7% (frame 914 of 1020, animation phase 7: 'Hold on challenge text'), the frame should display: (1) two side-by-side vertical meters (left: 'Effective Context Window' at full height, right: 'Model Performance' at full height), both dimmed; (2) center text lines ('Bigger window AND smarter model.', 'Not one or the other. Both.', 'That's a category shift.') also dimmed; and (3) a prominent handwritten-style 'Try it yourself.' challenge text. Instead, the frame shows only a debug header ('DUAL METER ANIMATION' / 'double_meter_insight') in the top-left corner and a centered rounded-rectangle placeholder reading 'Generated from visual contract'. None of the specified visual elements are rendered — no meters, no bars, no labels, no scale markings, no center text, no challenge text, no blueprint grid.
