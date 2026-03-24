@@ -7,7 +7,7 @@ export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
-  VISUAL_00_START: s2f(227.480),
+  VISUAL_00_START: s2f(0.000),
   VISUAL_00_END: s2f(227.480),
   VISUAL_01_START: s2f(227.480),
   VISUAL_01_END: s2f(227.480),
@@ -19,7 +19,7 @@ export const BEATS = {
   VISUAL_04_END: s2f(227.480),
   VISUAL_05_START: s2f(227.480),
   VISUAL_05_END: s2f(227.480),
-  VISUAL_06_START: s2f(220.457),
+  VISUAL_06_START: s2f(227.480),
   VISUAL_06_END: s2f(227.480),
   VISUAL_07_START: s2f(227.480),
   VISUAL_07_END: s2f(227.480),
@@ -34,7 +34,7 @@ export const BEATS = {
 export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 0 },
   { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_factory_floor_intro", desc: "02 factory floor intro", lane: 0 },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_injection_molding_process", desc: "03 injection molding process", lane: 0 },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_injection_molding_process", desc: "03 injection molding process", lane: 1 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_defect_fix_the_mold", desc: "04 defect fix the mold", lane: 0 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_value_migration_split", desc: "05 value migration split", lane: 0 },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_chip_design_history", desc: "06 chip design history", lane: 0 },

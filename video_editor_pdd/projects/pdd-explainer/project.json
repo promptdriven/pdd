@@ -24,10 +24,7 @@
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_hook",
-        "04_zoom_out_accumulated",
-        "06_code_blink_patched",
-        "07_code_regeneration",
-        "08_pdd_title_card"
+        "07_pdd_title_card"
       ],
       "timelineSource": "generated"
     },
@@ -42,14 +39,8 @@
       "offsetSeconds": 17.621333,
       "compositions": [
         "01_section_title_card",
-        "02_sock_economics_chart",
-        "03_code_cost_triple_line",
         "04_research_annotations",
-        "05_context_window_shrink",
-        "06_two_by_two_grid",
-        "07_split_context_comparison",
-        "09_crossing_lines_moment",
-        "10_double_meter_insight"
+        "05_context_window_shrink"
       ],
       "timelineSource": "generated"
     },
@@ -63,14 +54,7 @@
       "durationSeconds": 227.562667,
       "offsetSeconds": 473.130666,
       "compositions": [
-        "01_section_title_card",
-        "04_defect_fix_the_mold",
-        "05_value_migration_split",
-        "07_verilog_synthesis_triple",
-        "08_synopsys_pdd_equivalence",
-        "09_abstraction_staircase",
-        "10_netlist_zoom_unreviewable",
-        "11_prompt_replaces_review"
+        "01_section_title_card"
       ],
       "timelineSource": "generated"
     },
@@ -85,13 +69,7 @@
       "offsetSeconds": 700.693333,
       "compositions": [
         "01_section_title_card",
-        "02_mold_cross_section",
-        "03_test_walls_constraint",
-        "04_research_annotations_ai_quality",
-        "06_ratchet_split_comparison",
-        "07_five_generations_z3",
-        "08_prompt_capital_specification",
-        "10_three_components_table"
+        "02_mold_cross_section"
       ],
       "timelineSource": "generated"
     },
@@ -107,12 +85,7 @@
       "compositions": [
         "01_section_title_card",
         "02_printer_vs_mold_split",
-        "03_precision_tradeoff_curve",
-        "04_prompt_comparison_split",
-        "05_test_accumulation_insight",
-        "06_takeaway_callout",
-        "07_embedded_code_document",
-        "08_prompt_code_spectrum"
+        "03_precision_tradeoff_curve"
       ],
       "timelineSource": "generated"
     },
@@ -130,10 +103,7 @@
         "02_maintenance_pie_chart",
         "03_compound_debt_curve",
         "04_diverging_cost_curves",
-        "05_investment_comparison_table",
-        "06_sock_callback_split",
-        "07_economics_crossing_callback",
-        "08_contrarian_quote_card"
+        "05_investment_comparison_table"
       ],
       "timelineSource": "generated"
     },
@@ -149,11 +119,7 @@
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
-        "03_module_highlight_update",
-        "04_source_of_truth_shift",
-        "05_regenerate_compare_loop",
-        "06_spreading_glow_migration",
-        "07_no_big_bang_callout"
+        "04_source_of_truth_shift"
       ],
       "timelineSource": "generated"
     },
@@ -167,14 +133,9 @@
       "durationSeconds": 20.714667,
       "offsetSeconds": 1304.127999,
       "compositions": [
-        "01_sock_callback_split",
-        "03_code_regenerate_workflow",
         "04_pdd_triangle",
         "05_dissolve_regenerate_loop",
-        "06_mold_glow_finale",
-        "07_the_beat",
-        "08_mold_is_what_matters",
-        "09_final_title_card"
+        "07_the_beat"
       ],
       "timelineSource": "generated"
     }
@@ -241,6 +202,17 @@
         ],
         "referencePrompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office.",
         "prompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office.",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "developer_protagonist",
+        "label": "Developer",
+        "imagePath": "outputs/veo/references/developer_protagonist.png",
+        "sections": [
+          "closing"
+        ],
+        "referencePrompt": "Developer seated at modern workstation, seen from behind, mechanical keyboard, monitor glow lighting",
+        "prompt": "Developer seated at modern workstation, seen from behind, mechanical keyboard, monitor glow lighting",
         "source": "stage6-inferred"
       },
       {

@@ -7,7 +7,7 @@ export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
-  VISUAL_00_START: s2f(344.160),
+  VISUAL_00_START: s2f(0.000),
   VISUAL_00_END: s2f(344.160),
   VISUAL_01_START: s2f(344.160),
   VISUAL_01_END: s2f(344.160),
@@ -21,7 +21,7 @@ export const BEATS = {
   VISUAL_05_END: s2f(344.160),
   VISUAL_06_START: s2f(344.160),
   VISUAL_06_END: s2f(344.160),
-  VISUAL_07_START: s2f(336.915),
+  VISUAL_07_START: s2f(344.160),
   VISUAL_07_END: s2f(344.160),
   VISUAL_08_START: s2f(344.160),
   VISUAL_08_END: s2f(344.160),

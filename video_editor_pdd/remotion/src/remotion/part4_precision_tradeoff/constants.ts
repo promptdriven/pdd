@@ -7,21 +7,21 @@ export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
-  VISUAL_00_START: s2f(111.840),
-  VISUAL_00_END: s2f(111.840),
-  VISUAL_01_START: s2f(109.868),
-  VISUAL_01_END: s2f(111.840),
-  VISUAL_02_START: s2f(111.840),
-  VISUAL_02_END: s2f(111.840),
-  VISUAL_03_START: s2f(111.840),
-  VISUAL_03_END: s2f(111.840),
-  VISUAL_04_START: s2f(111.840),
-  VISUAL_04_END: s2f(111.840),
-  VISUAL_05_START: s2f(111.840),
-  VISUAL_05_END: s2f(111.840),
-  VISUAL_06_START: s2f(111.840),
-  VISUAL_06_END: s2f(111.840),
-  VISUAL_07_START: s2f(111.840),
+  VISUAL_00_START: s2f(0.000),
+  VISUAL_00_END: s2f(6.620),
+  VISUAL_01_START: s2f(6.840),
+  VISUAL_01_END: s2f(26.580),
+  VISUAL_02_START: s2f(26.800),
+  VISUAL_02_END: s2f(47.000),
+  VISUAL_03_START: s2f(47.000),
+  VISUAL_03_END: s2f(47.000),
+  VISUAL_04_START: s2f(47.420),
+  VISUAL_04_END: s2f(58.240),
+  VISUAL_05_START: s2f(58.240),
+  VISUAL_05_END: s2f(64.460),
+  VISUAL_06_START: s2f(64.580),
+  VISUAL_06_END: s2f(95.980),
+  VISUAL_07_START: s2f(96.140),
   VISUAL_07_END: s2f(111.840),
 };
 
@@ -33,7 +33,7 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_test_accumulation_insight", desc: "05 test accumulation insight", lane: 0 },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_takeaway_callout", desc: "06 takeaway callout", lane: 0 },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_embedded_code_document", desc: "07 embedded code document", lane: 0 },
-  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_prompt_code_spectrum", desc: "08 prompt code spectrum", lane: 0 },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_prompt_code_spectrum", desc: "08 prompt code spectrum", lane: 1 },
 ];
 
 export const Part4PrecisionTradeoffSectionProps = z.object({

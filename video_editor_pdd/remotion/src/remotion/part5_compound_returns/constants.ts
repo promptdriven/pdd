@@ -7,9 +7,9 @@ export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
-  VISUAL_00_START: s2f(115.080),
+  VISUAL_00_START: s2f(0.000),
   VISUAL_00_END: s2f(115.080),
-  VISUAL_01_START: s2f(113.819),
+  VISUAL_01_START: s2f(115.080),
   VISUAL_01_END: s2f(115.080),
   VISUAL_02_START: s2f(115.080),
   VISUAL_02_END: s2f(115.080),
@@ -23,10 +23,6 @@ export const BEATS = {
   VISUAL_06_END: s2f(115.080),
   VISUAL_07_START: s2f(115.080),
   VISUAL_07_END: s2f(115.080),
-  VISUAL_08_START: s2f(115.080),
-  VISUAL_08_END: s2f(115.080),
-  VISUAL_09_START: s2f(115.080),
-  VISUAL_09_END: s2f(115.080),
 };
 
 export const VISUAL_SEQUENCE = [
@@ -35,11 +31,9 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_compound_debt_curve", desc: "03 compound debt curve", lane: 0 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_diverging_cost_curves", desc: "04 diverging cost curves", lane: 0 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_investment_comparison_table", desc: "05 investment comparison table", lane: 0 },
-  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_sock_callback_split", desc: "06 sock callback split", lane: 0 },
+  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_sock_callback_split", desc: "06 sock callback split", lane: 1 },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_economics_crossing_callback", desc: "07 economics crossing callback", lane: 0 },
   { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_contrarian_quote_card", desc: "08 contrarian quote card", lane: 0 },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_grandmother_realization", desc: "09 grandmother realization", lane: 0 },
-  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "10_developer_prompt_shift", desc: "10 developer prompt shift", lane: 0 },
 ];
 
 export const Part5CompoundReturnsSectionProps = z.object({
