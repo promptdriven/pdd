@@ -1,18 +1,14 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at frame 1079/1200 (90% progress), which falls within the final hold phase (frames 960-1200). All four annotation data points are visible on screen, and the underlying chart from 03 is present in a pulled-back state. However, there are several discrepancies from the spec:
+The frame is at 90% progress (frame 1079/1200), which falls within animation phase 8 (frames 960-1200: hold — all four annotations visible). The chart background and lines are present and correct. Three annotation cards are visible on the right side, but the spec calls for four distinct annotation cards. Specific observations:
 
-1. **Annotation grouping**: The spec calls for four separate annotation cards — (1) Individual task: −55%, (2) Overall throughput: ~0%, (3) Code churn: +44%, and (4) Refactoring: −60%. In the render, annotations 3 and 4 are merged into a single card ('Code churn: +44%' and 'Refactoring: −60%' share one card), yielding only three visible cards instead of four.
+1. **Annotation count/layout**: The spec requires four separate annotation cards. The rendered frame shows three cards stacked on the right. Annotations 3 ('Code churn: +44%') and 4 ('Refactoring: −60%') appear merged into a single card rather than being two separate cards. The spec places Annotation 3 at center-right and Annotation 4 at center-left, but the render combines them into one card at center-right.
 
-2. **Color of Annotation 1**: The spec requires the 'Individual task: −55%' header in green (#4ADE80). The render shows it in orange/amber rather than green, which undermines the intended green-vs-red contrast that makes the paradox 'viscerally clear.'
+2. **Annotation 1 color**: The spec says the header 'Individual task: −55%' should be green (#4ADE80). The rendered frame shows this text in what appears to be orange/amber rather than green. This is a meaningful color mismatch — the green-vs-red contrast between annotations 1 and 2 is described as central to the visual storytelling ('makes the paradox viscerally clear').
 
-3. **Callout lines**: The spec describes thin callout lines from each card to the relevant chart element. No callout lines are visible in the render; instead, the cards appear to float without any connecting lines to the chart.
+3. **Callout lines**: The spec describes thin callout lines connecting each card to the relevant chart element. No visible callout lines are present in the rendered frame.
 
-4. **Card positions**: The spec places Annotation 1 at 'lower-right near the dropping solid amber line' and Annotation 4 at 'center-left.' In the render, all three cards are stacked vertically on the far right side of the frame. There is no center-left positioned card.
+4. **Card positioning**: All three cards are stacked vertically on the right side. The spec places Annotation 4 at center-left, which is not reflected.
 
-5. **Fine print content**: Annotation 1's fine print reads '95 devs, one greenfield task' (abbreviated) rather than '95 developers, one greenfield task.' The second card includes '+41% more bugs' which is additional content not specified in the annotation card text. The merged third card omits the separate fine print lines for each stat.
-
-6. **Chart line colors**: The spec describes amber/orange lines (solid and dashed). The render shows a green solid line and an orange/amber dashed line. The chart title reads 'The AI Coding Productivity Paradox' and labels 'Immediate Patch Cost' (green solid) and 'Total Cost (incl. Debt)' (orange dashed), which departs from the spec's expectation of amber for both lines.
-
-7. **Source line formatting**: Annotation 2 source shows 'Uplevel, 2024 · 785 devs, one year' combined with the fine print on one line, rather than the spec's separate 'Uplevel, 2024' source and '785 developers, one year' fine print.
+5. **Overall throughput card**: Contains '+41% more bugs' in red text, which is additional detail not explicitly in the spec header but is acceptable as supplementary fine print. The spec fine print says '785 developers, one year' — the rendered text appears to read '785 devs, one year' which is a minor abbreviation.

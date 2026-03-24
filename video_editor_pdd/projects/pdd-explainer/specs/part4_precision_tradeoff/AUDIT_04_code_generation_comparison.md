@@ -1,16 +1,16 @@
 ## Verdict
 fail
 ## Summary
-The frame is sampled at 94% progress (frame 480/511), which falls in animation phase 7 (frames 450-511): 'Hold on takeaway. Text pulses gently.' The two takeaway text lines are present — 'More tests, less prompt.' and 'The walls do the precision work.' — which is correct for this phase. However, there are several significant deviations from the spec:
+The sampled frame is at 94% progress (frame 480/511), which falls within the animation phase 'Frame 450-511 (15-17s): Hold on takeaway. Text pulses gently.' The takeaway text IS present — 'More tests, less prompt.' and 'The walls do the precision work.' are both visible. However, there are several significant deviations from the spec:
 
-1. **Placeholder header visible:** The top-left shows 'ANIMATED DIAGRAM' and 'code_generation_comparison' in a debug/placeholder style. The spec calls for a clean deep navy-black background with no such labels. This appears to be a development scaffold or fallback rendering rather than the actual authored visual.
+1. **Placeholder header visible:** The frame shows 'ANIMATED DIAGRAM' in blue caps and 'code_generation_comparison' as a title in the top-left corner. This is a debug/placeholder label that should not appear in the final render — the spec calls for a clean deep navy-black background with only the takeaway text.
 
-2. **Takeaway text styling is wrong:** The spec requires 'More tests, less prompt.' in Inter 40px bold, color #E2E8F0 at 0.9 (near-white), centered on canvas. The rendered text is white but appears to be left-aligned within a dark rounded-rectangle card rather than being free-floating centered text with a subtle text shadow glow. Similarly 'The walls do the precision work.' should be Inter 24px, #D9944A (warm amber/orange) at 0.7, but is rendered in white inside a similar card.
+2. **Text styling is wrong:** The spec calls for 'More tests, less prompt.' in Inter 40px bold at #E2E8F0 (near-white) with 0.9 opacity, and 'The walls do the precision work.' in Inter 24px at #D9944A (amber/orange) with 0.7 opacity. In the render, both lines appear in plain white text at roughly the same size, inside rounded-rectangle card/pill containers with dark semi-transparent backgrounds. Neither line uses the specified amber color for line 2.
 
-3. **Card containers not in spec:** Both text lines are enclosed in wide rounded-rectangle cards with a slightly lighter navy fill and subtle border. The spec does not call for any card/container treatment — just bare text centered on the canvas with text shadow glow.
+3. **Text is not centered on canvas:** The spec requires both lines to be visually centered on the canvas. The rendered text is left-aligned within wide pill-shaped containers that are horizontally centered but the text itself is left-justified inside them, not centered.
 
-4. **Second line color wrong:** 'The walls do the precision work.' should be amber/orange (#D9944A) to differentiate it from the first line. Both lines appear white/near-white.
+4. **No text shadow glow:** The spec calls for 'subtle text shadow glow' on both lines. None is visible.
 
-5. **Text is not vertically centered on canvas:** The text appears roughly centered but the placeholder header pushes the perceived center down.
+5. **No visible pulse animation:** At 94% progress the text should be gently pulsing. The static frame cannot confirm this, but the overall styling issues make this secondary.
 
-6. **No visible text pulse animation:** The spec calls for gentle pulsing at this phase. While this is hard to confirm from a single frame, the overall rendering quality suggests this may not be implemented.
+6. **Background containers not in spec:** The two rounded-rectangle pill shapes behind the text are not specified anywhere in the spec. The takeaway should be bare text on the dark background.

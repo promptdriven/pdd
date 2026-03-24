@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (visual, network, graph, module, glow), so the frame does not support a hard missing-text failure.
+The rendered frame shows a stock/B-roll photograph of an industrial injection molding machine with orange-glowing heated metal components on a workshop surface. The spec requires a completely different visual: a programmatic Remotion-rendered module network graph on a dark navy-black (#0A0F1A) background, showing 14 code-module rectangles (e.g., auth_handler.py, payment_processor.py, user_service.py, etc.) connected by dependency lines, with ~7 modules glowing blue (#60A5FA) to indicate migration progress, and a '50% prompt-driven' counter visible. At sample frame 149/180 (83.3% progress, animation phase 7: hold), all migrations should be complete and the migrated modules should be pulsing gently. Instead, the frame contains no module nodes, no dependency lines, no migration counter, no dark background, and no blue glow — it is an entirely unrelated image.

@@ -1,10 +1,10 @@
 ## Verdict
 fail
 ## Summary
-The frame is sampled at 90% progress (frame 53/60), which is in the hold phase (frames 48-60). At this point, the spec requires the full title 'Prompt-Driven Development' to be visible, the horizontal rule drawn, and the subtitle 'So why are we still patching?' to be visible. Two issues are apparent:
+The frame is sampled at frame 53/60 (90% progress), which is in the final hold phase (frames 48-60). At this point, all elements should be fully visible and static. Two issues are visible:
 
-1. **Title text is truncated**: Only 'Prompt-Driven' is displayed. The word 'Development' is missing entirely. The spec requires the full text 'Prompt-Driven Development'.
+1. **Missing word 'Development'**: The title reads only 'Prompt-Driven' instead of the full 'Prompt-Driven Development'. The spec requires the complete title 'Prompt-Driven Development' centered on screen.
 
-2. **Subtitle is missing**: The subtitle 'So why are we still patching?' is not visible at all. At frame 53 (hold phase), it should be fully faded in and clearly readable.
+2. **Missing subtitle**: The subtitle 'So why are we still patching?' is not visible. At frame 53 (well into the hold phase, frames 48-60), the subtitle should be fully faded in and visible below the horizontal rule at approximately y:575.
 
-The horizontal rule is present and centered below the title text. The code underlay is visible at low opacity in the upper-left area, which matches the spec. The dark overlay background and blue (#4A90D9) title color appear correct. The title appears roughly centered horizontally, though it's hard to judge proper centering since the text is incomplete.
+Elements that are correctly present: the dimmed code underlay at low opacity in the upper-left area, the dark overlay background, the horizontal rule centered below the title text, and the blue color (#4A90D9) on the title text. The title appears roughly centered horizontally and vertically, consistent with the spec layout.
