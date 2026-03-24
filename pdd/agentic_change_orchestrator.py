@@ -65,13 +65,28 @@ MAX_REVIEW_ITERATIONS = 5
 
 
 def _review_loop_no_issues(output: str) -> bool:
-    """Detect 'no issues found' in step 11 output, case-insensitively.
+    """Detect 'no issues found' in step 11 output.
 
     LLMs don't reliably emit exact magic tokens (see #865, #868).
-    This checks for the canonical string and common semantic variants.
+    Uses case-insensitive matching with semantic variants so the review
+    loop exits early even when the LLM doesn't emit the exact phrase.
     """
     lower = output.lower()
-    return "no issues found" in lower
+    if "no issues found" in lower:
+        return True
+    variants = [
+        "no issues identified",
+        "no issues detected",
+        "no issues remain",
+        "no remaining issues",
+        "all checks passed",
+        "everything looks good",
+        "no problems found",
+        "no problems detected",
+        "no issues to fix",
+        "no issues to report",
+    ]
+    return any(v in lower for v in variants)
 
 
 def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
@@ -286,14 +301,39 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
             # Just a directory
             shutil.rmtree(worktree_path)
 
-    # Clean up branch if it exists
+    # Check if a remote branch exists with prior work to preserve
+    remote_ref = f"origin/{branch_name}"
+    remote_exists = False
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", branch_name],
+            cwd=git_root, capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "show-ref", "--verify", f"refs/remotes/{remote_ref}"],
+            cwd=git_root, capture_output=True, check=True
+        )
+        remote_exists = True
+    except subprocess.CalledProcessError as e:
+        # Distinguish "branch doesn't exist on remote" (exit code 128 with
+        # "couldn't find remote ref") from transient network/auth errors.
+        stderr = ""
+        if e.stderr:
+            stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace")
+        if "couldn't find remote ref" in stderr or "not found" in stderr.lower():
+            pass  # Branch doesn't exist remotely — expected on first run
+        elif stderr:
+            if not quiet:
+                console.print(f"[yellow]Warning: git fetch failed for {branch_name}: {stderr.strip()}[/yellow]")
+
+    # Clean up local branch if it exists
     branch_exists = _branch_exists(cwd, branch_name)
     if branch_exists:
         success, _err = _delete_branch(cwd, branch_name)
         if success:
             branch_exists = False
 
-    # Create worktree
+    # Create worktree — reuse remote branch if it has prior work
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
         if branch_exists:
@@ -303,8 +343,16 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
                 ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root, capture_output=True, check=True
             )
+        elif remote_exists:
+            # Remote branch has prior work — start from it instead of HEAD
+            subprocess.run(
+                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), remote_ref],
+                cwd=git_root, capture_output=True, check=True
+            )
+            if not quiet:
+                console.print(f"[blue]Reusing remote branch {branch_name} (preserving prior changes)[/blue]")
         else:
-            # Branch was deleted or didn't exist — create new from main
+            # No prior work — create new branch from main
             base_ref = _resolve_main_ref(git_root)
             subprocess.run(
                 ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
@@ -433,6 +481,7 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     if stop_match:
         return stop_match.group(1).strip()
     return None
+
 
 
 # Steps where a hard stop is a "clarification" request (user may respond, step should re-run)

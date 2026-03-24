@@ -62,10 +62,11 @@ You are working on step 9 of 10 in an agentic e2e fix workflow. This step verifi
 
 % Your Task
 
-1. **Run full test suite**
-   - Run all unit tests: `pytest tests/ -v`
-   - Run all e2e tests identified in the issue
-   - Capture complete results
+1. **Run issue-related tests**
+   - Run only the unit tests created or modified for this issue.
+   - Run the e2e tests identified in the issue description or Step 2.
+   - **Do NOT run the entire test suite.** Only run issue-related tests. Unrelated pre-existing failures should not drive the decision to continue cycles.
+   - Capture results only for these relevant tests.
 
 2. **Assess current state**
    - How many tests pass vs fail?

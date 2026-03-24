@@ -462,6 +462,8 @@ def e2e_fix_mock_dependencies(tmp_path):
     - save_workflow_state: No-op
     - clear_workflow_state: No-op
     - _get_file_hashes: Returns empty dict (skip git operations)
+    - _detect_changed_files: Returns ["module.py"] (simulate progress so
+      per-cycle file-hash comparison doesn't block multi-cycle tests)
     - _commit_and_push: No-op (skip git operations)
     """
     with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
@@ -471,9 +473,11 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save_state, \
          patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+         patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files") as mock_detect, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
          patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e, \
-         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify:
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify, \
+         patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post_comment:
 
         # Default: successful run, generic output
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
@@ -485,6 +489,8 @@ def e2e_fix_mock_dependencies(tmp_path):
         mock_save_state.return_value = None
         # Default: no file hashes
         mock_hashes.return_value = {}
+        # Default: simulate file changes so per-cycle progress check passes
+        mock_detect.return_value = ["module.py"]
         # Default: commit succeeds
         mock_commit.return_value = (True, "No changes to commit")
         # Default: E2E environment available
@@ -3172,6 +3178,73 @@ class TestClassifyStepOutput:
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
 
 
+class TestClassifyStepOutputCodeBugPriority:
+    """Bug: _classify_step_output for step 3 only checks for NOT_A_BUG, missing
+    CODE_BUG/TEST_BUG/BOTH. When the LLM correctly emits CODE_BUG, tiers 1-3
+    return None, and tier 4 misclassifies as NOT_A_BUG — killing the workflow.
+
+    Fix: check positive tokens (CODE_BUG, TEST_BUG, BOTH) before NOT_A_BUG,
+    matching the fail-before-pass pattern used for Steps 1/2/9.
+    """
+
+    def test_code_bug_detected_in_step3(self):
+        """When Step 3 output contains CODE_BUG, return it (not None)."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "## Step 3: Root Cause Analysis (Cycle 1)\n\n**Status:** CODE_BUG\n\n### Failure Analysis\n..."
+        assert _classify_step_output(output, step_num=3) == "CODE_BUG"
+
+    def test_test_bug_detected_in_step3(self):
+        """When Step 3 output contains TEST_BUG, return it."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** TEST_BUG\n\nThe test expectations are wrong."
+        assert _classify_step_output(output, step_num=3) == "TEST_BUG"
+
+    def test_both_detected_in_step3(self):
+        """When Step 3 output contains BOTH, return it."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** BOTH\n\nCode and tests both need fixing."
+        assert _classify_step_output(output, step_num=3) == "BOTH"
+
+    def test_code_bug_prevents_not_a_bug_false_positive(self):
+        """Real failure case: long output with CODE_BUG at top and 'not caused
+        by the bug' language in the tail. Must return CODE_BUG, not None."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = (
+            "## Step 3: Root Cause Analysis (Cycle 1)\n\n"
+            "**Status:** CODE_BUG\n\n"
+            "### Failure Analysis\n\n"
+            "The Step 2 full-suite run reported failures across multiple test files. "
+            "I categorized every failure and traced each to its root cause. "
+            "**None are caused by the issue #449 fix** — they are all pre-existing.\n\n"
+            "#### Category A: `python` binary not found (6 tests)\n"
+            "- **Root cause:** Pre-existing environment issue.\n\n"
+            "#### Category B: Missing `pytest-mock` package (94 errors)\n"
+            "- **Root cause:** Pre-existing dependency issue.\n\n"
+            "### Root Cause\n\n"
+            "The **code bug** is confirmed and localized.\n"
+            "No test fixes needed — the issue #449 tests are correctly written.\n"
+            "The 111 other failures are pre-existing environmental issues.\n"
+        )
+        result = _classify_step_output(output, step_num=3)
+        assert result == "CODE_BUG", (
+            f"Expected CODE_BUG but got {result!r}. "
+            "Tier 4 would misclassify this as NOT_A_BUG because the tail "
+            "discusses 'not caused by the bug' — but CODE_BUG at the top "
+            "should take priority."
+        )
+
+    def test_not_a_bug_still_works(self):
+        """Regression: NOT_A_BUG detection still works when no positive token present."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("NOT_A_BUG", step_num=3) == "NOT_A_BUG"
+
+    def test_code_bug_takes_priority_over_not_a_bug(self):
+        """If both CODE_BUG and NOT_A_BUG appear, CODE_BUG wins (checked first)."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** CODE_BUG\n\nNote: this is NOT_A_BUG for the unrelated issue."
+        assert _classify_step_output(output, step_num=3) == "CODE_BUG"
+
+
 class TestIssue673CheckE2ESubdirectory:
     """Bug: _check_e2e_environment only checks repo root for playwright config.
 
@@ -3600,4 +3673,312 @@ class TestSemanticTierConsoleLogging:
         console_output = " ".join(str(c) for c in mock_console.print.call_args_list)
         assert "semantic" in console_output.lower(), (
             f"Expected console log about semantic detection but got: {console_output}"
+        )
+
+
+class TestParseDevUnitsMarkerDistinction:
+    """Tests for _parse_dev_units to ensure it distinguishes absent vs empty markers."""
+
+    def test_parse_dev_units_returns_none_when_marker_absent(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "Analysis complete. I found some issues in the auth module."
+        assert _parse_dev_units(output) is None
+
+    def test_parse_dev_units_returns_empty_when_marker_present_but_empty(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "DEV_UNITS_IDENTIFIED: \nI found no issues."
+        assert _parse_dev_units(output) == ""
+
+    def test_parse_dev_units_returns_zero_when_marker_says_zero(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "DEV_UNITS_IDENTIFIED: 0"
+        assert _parse_dev_units(output) == "0"
+
+    def test_parse_dev_units_returns_value_when_marker_has_units(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "DEV_UNITS_IDENTIFIED: auth_service, login_tests"
+        assert _parse_dev_units(output) == "auth_service, login_tests"
+
+
+class TestEmptyDevUnitsShortCircuit:
+    """Issue #903: When Step 5 returns 0 dev units, Steps 6-8 should be skipped
+    and the cycle loop should break immediately."""
+
+    def test_zero_dev_units_skips_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns 'DEV_UNITS_IDENTIFIED: 0', steps 6-8 must not run."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "Analysis complete.\nDEV_UNITS_IDENTIFIED: 0\nNo dev units need fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Steps 6, 7, 8 should be skipped when dev units = 0.
+        # Only steps 1-5 should run (5 calls), then cycle breaks.
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 0, (
+            f"Steps 6-8 should be skipped when dev units = 0, but these ran: {steps_that_ran}"
+        )
+
+    def test_zero_slash_zero_dev_units_skips_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns 'DEV_UNITS_IDENTIFIED: 0/0', steps 6-8 must not run."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: 0/0\n0/0 Dev Units Needed Fix", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 0, (
+            f"Steps 6-8 should be skipped when dev units = 0/0, but these ran: {steps_that_ran}"
+        )
+
+    def test_marker_present_but_empty_value_skips_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns 'DEV_UNITS_IDENTIFIED: ' (empty), steps 6-8 must be skipped."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "Analysis complete.\nDEV_UNITS_IDENTIFIED: \nI found no issues.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 0, (
+            f"Steps 6-8 should be skipped when marker is present but empty, but these ran: {steps_that_ran}"
+        )
+
+    def test_marker_absent_does_not_short_circuit(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns output without DEV_UNITS_IDENTIFIED marker, steps 6-8 must run normally."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                # No DEV_UNITS_IDENTIFIED line at all — implies unknown state, should continue
+                return (True, "Analysis complete. I found some issues in the auth module.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 3, (
+            f"Steps 6-8 should run when marker is absent, but these ran: {steps_that_ran}"
+        )
+
+    def test_nonempty_dev_units_runs_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Regression guard: when dev units ARE found, steps 6-8 must still run."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: auth_module, api_handler\n2 dev units need fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 3, (
+            f"Steps 6-8 should run when dev units exist, but got: {step_labels}"
+        )
+
+
+class TestPerCycleFileHashComparison:
+    """Issue #903: The orchestrator should detect when a cycle made zero code
+    changes and stop cycling instead of burning wasted iterations."""
+
+    def test_no_file_changes_breaks_cycle_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When file hashes are identical before and after a cycle,
+        the next cycle should NOT start."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 3
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: auth_module\n1 dev unit needs fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # _get_file_hashes returns same {} for all calls, and _detect_changed_files
+        # returns [] (no progress) to trigger the no-progress stop.
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", return_value={}), \
+             patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Should run exactly 9 steps (1 cycle) then break on no-progress detection.
+        assert mock_run.call_count == 9, (
+            f"Expected 9 step calls (1 cycle) but got {mock_run.call_count}."
+        )
+
+    def test_file_changes_allow_next_cycle(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When files DO change between cycles, the orchestrator should continue
+        to the next cycle as normal."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: auth_module\n1 dev unit needs fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Override _get_file_hashes to return different hashes each call,
+        # simulating actual code changes.
+        hash_values = [
+            {},  # initial (before cycle 1)
+            {"pdd/auth.py": "hash_after_cycle1"},  # after cycle 1 — different from initial
+            {"pdd/auth.py": "hash_after_cycle2"},  # after cycle 2 — different from cycle 1
+        ]
+        hash_call_idx = [0]
+
+        def hash_side_effect(*args, **kwargs):
+            idx = min(hash_call_idx[0], len(hash_values) - 1)
+            hash_call_idx[0] += 1
+            return hash_values[idx]
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", side_effect=hash_side_effect):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # When files change, both cycles should run = 18 steps
+        assert mock_run.call_count == 18, (
+            f"Expected 2 full cycles (18 steps) when files changed each cycle, "
+            f"but got {mock_run.call_count} step calls"
+        )
+
+
+class TestStep9ScopedTestExecution:
+    """Issue #903: Step 9 prompt should run only issue-related tests,
+    not the entire test suite."""
+
+    def test_step9_prompt_does_not_run_all_tests(self):
+        """The Step 9 prompt file must NOT instruct running 'pytest tests/ -v'
+        (all tests). Pre-existing failures in unrelated tests should not drive
+        cycle decisions."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_step9_verify_all_LLM.prompt"
+        assert prompt_path.exists(), f"Step 9 prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # The old prompt had "Run all unit tests: `pytest tests/ -v`"
+        # The fixed prompt should NOT contain this instruction.
+        assert "Run all unit tests: `pytest tests/ -v`" not in prompt, (
+            "Step 9 prompt still contains 'Run all unit tests: `pytest tests/ -v`' which runs "
+            "ALL tests. It should scope to issue-related tests only."
+        )
+
+    def test_step9_prompt_scopes_to_issue_related_tests(self):
+        """The Step 9 prompt file must instruct running only issue-related tests,
+        not the full test suite."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_step9_verify_all_LLM.prompt"
+        assert prompt_path.exists(), f"Step 9 prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # The fixed prompt should explicitly prohibit running the entire test suite
+        assert "Do NOT run the entire test suite" in prompt, (
+            "Step 9 prompt should explicitly instruct NOT to run the entire test suite. "
+            "Pre-existing failures in unrelated tests must not influence cycle decisions."
+        )
+
+
+class TestConvergencePromptRequirements:
+    """Issue #903: The orchestrator prompt must contain convergence requirements
+    so that regenerated code implements them."""
+
+    def test_orchestrator_prompt_contains_empty_dev_units_requirement(self):
+        """The orchestrator prompt file must contain requirement 5a
+        (empty dev-units short-circuit) so code generation includes it."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        assert prompt_path.exists(), f"Orchestrator prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # Requirement 5a should mention skipping steps when dev units are empty/0
+        assert "empty dev-units short-circuit" in prompt.lower() or "Empty dev-units short-circuit" in prompt, (
+            "Orchestrator prompt is missing requirement 5a: empty dev-units short-circuit"
+        )
+
+    def test_orchestrator_prompt_contains_file_hash_comparison_requirement(self):
+        """The orchestrator prompt file must contain requirement 5b
+        (per-cycle file-hash comparison) so code generation includes it."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        assert prompt_path.exists(), f"Orchestrator prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # Requirement 5b should mention per-cycle file hash comparison
+        assert "per-cycle file-hash" in prompt.lower() or "Per-cycle file-hash comparison" in prompt, (
+            "Orchestrator prompt is missing requirement 5b: per-cycle file-hash comparison"
         )

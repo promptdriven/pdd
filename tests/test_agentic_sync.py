@@ -1134,3 +1134,83 @@ class TestFilterInvalidBasenames:
         valid, invalid = _filter_invalid_basenames(modules, architecture)
 
         assert valid == ["mod_b", "mod_a", "mod_c"]
+
+
+# ---------------------------------------------------------------------------
+# BUG: The identify-modules prompt references "the current issue number" but
+# never receives it. The LLM can't match origin fields without knowing which
+# issue it's working on. Two things must be true:
+#   1. The prompt template contains {issue_number} as a format placeholder
+#   2. run_agentic_sync passes issue_number to .format() so the LLM sees it
+# ---------------------------------------------------------------------------
+
+class TestIdentifyModulesPromptReceivesIssueNumber:
+    """The identify-modules LLM prompt must include the issue number so the
+    LLM can match architecture.json origin fields against the current issue."""
+
+    def test_prompt_template_contains_issue_number_placeholder(self):
+        """The real prompt file must have {issue_number} as a format placeholder."""
+        prompt_path = Path(__file__).resolve().parent.parent / "pdd" / "prompts" / "agentic_sync_identify_modules_LLM.prompt"
+        assert prompt_path.exists(), f"Prompt file not found at {prompt_path}"
+        template = prompt_path.read_text()
+        assert "{issue_number}" in template, (
+            "Prompt template must contain {issue_number} placeholder so the LLM "
+            "knows which issue it's working on (needed for origin field matching)"
+        )
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
+    @patch("pdd.agentic_sync.load_prompt_template",
+           return_value="Issue #{issue_number}\n{issue_content}\n{architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_format_call_passes_issue_number(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_runner_cls,
+    ):
+        """run_agentic_sync must pass issue_number to .format() so the
+        rendered prompt contains the actual number (e.g., '746'), not a
+        raw '{issue_number}' placeholder."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        run_agentic_sync(
+            "https://github.com/owner/repo/issues/746", quiet=True
+        )
+
+        # The prompt passed to run_agentic_task must contain "746"
+        prompt_arg = mock_agentic_task.call_args[1].get(
+            "instruction", mock_agentic_task.call_args[0][0]
+            if mock_agentic_task.call_args[0] else ""
+        )
+        assert "Issue #746" in prompt_arg, (
+            "The rendered prompt must contain the issue number (746) so the LLM "
+            f"can match origin fields. Got prompt starting with: {prompt_arg[:200]}"
+        )

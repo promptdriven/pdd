@@ -99,6 +99,16 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
         return "VERIFICATION_FAILED"
 
     if step_num == 3:
+        # Check for positive tokens first — if CODE_BUG/TEST_BUG/BOTH is found,
+        # return it so tier 4 NOT_A_BUG fallback is skipped (same fail-before-pass
+        # pattern used for Steps 1/2/9). Case-sensitive substring match (consistent
+        # with VERIFICATION_FAILED, LOCAL_TESTS_PASS, and detect_control_token tier 1)
+        # is safe here because these tokens don't appear uppercase in natural language
+        # (e.g., "Both tests passed" won't match "BOTH").
+        for positive_token in ("CODE_BUG", "TEST_BUG", "BOTH"):
+            if positive_token in output:
+                return positive_token
+
         match = detect_control_token(output, "NOT_A_BUG")
         if match:
             if match.tier == "semantic":
@@ -193,12 +203,18 @@ def _parse_changed_files(output: str) -> List[str]:
                 files.extend(paths)
     return files
 
-def _parse_dev_units(output: str) -> str:
-    """Parses DEV_UNITS_IDENTIFIED from output."""
+def _parse_dev_units(output: str) -> Optional[str]:
+    """Parses DEV_UNITS_IDENTIFIED from output.
+    
+    Returns:
+        None if the marker is absent from the output.
+        "" if the marker is present but empty.
+        The content after the marker if present and non-empty.
+    """
     for line in output.splitlines():
         if line.startswith("DEV_UNITS_IDENTIFIED:"):
             return line.split(":", 1)[1].strip()
-    return ""
+    return None
 
 # Patterns for intermediate/debug files that should not be committed
 # These are created by `pdd fix` as intermediate outputs (see generate_output_paths.py)
@@ -950,10 +966,26 @@ def run_agentic_e2e_fix_orchestrator(
         while current_cycle <= max_cycles:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
             
+            # Snapshot file hashes at cycle start for convergence detection (5b)
+            cycle_start_hashes = _get_file_hashes(cwd)
+            
             # Inner Loop (Steps 1-9)
             for step_num in range(1, 10):
                 if step_num <= last_completed_step:
                     continue # Skip already completed steps in this cycle
+
+                # Empty dev-units short-circuit (5a): Skip Steps 6-8 if Step 5 found nothing
+                if step_num in (6, 7, 8):
+                    step5_out = step_outputs.get("5", "")
+                    dev_units = _parse_dev_units(step5_out)
+                    # Short-circuit if marker present AND (empty or "0" or "0/N")
+                    if dev_units is not None:
+                        is_empty = not dev_units or dev_units == "0" or dev_units.startswith("0/")
+                        if is_empty:
+                            console.print(f"[bold][Step {step_num}/9] Skipped: No dev units identified for fixing.[/bold]")
+                            step_outputs[str(step_num)] = f"E2E_SKIP: No dev units identified (short-circuit)"
+                            last_completed_step = step_num
+                            continue
 
                 # Skip steps that failed for environmental/timeout reasons in previous cycles
                 if step_num in skipped_steps:
@@ -1050,11 +1082,13 @@ def run_agentic_e2e_fix_orchestrator(
                 # Derived variables for specific steps
                 if step_num >= 6:
                     s5_out = step_outputs.get("5", "")
-                    context["dev_units_identified"] = _parse_dev_units(s5_out)
+                    dev_units = _parse_dev_units(s5_out)
+                    context["dev_units_identified"] = dev_units if dev_units is not None else ""
                 
                 if step_num == 8:
                     s5_out = step_outputs.get("5", "")
-                    context["failing_dev_units"] = _parse_dev_units(s5_out)
+                    dev_units = _parse_dev_units(s5_out)
+                    context["failing_dev_units"] = dev_units if dev_units is not None else ""
 
                 if step_num == 9:
                     context["next_cycle"] = current_cycle + 1
@@ -1142,7 +1176,8 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 8:
                     s5_out = step_outputs.get("5", "")
                     dev_units_str = _parse_dev_units(s5_out)
-                    dev_unit_states = _update_dev_unit_states(step_output, dev_unit_states, dev_units_str)
+                    if dev_units_str is not None:
+                        dev_unit_states = _update_dev_unit_states(step_output, dev_unit_states, dev_units_str)
 
                 # Print brief result
                 if step_success:
@@ -1263,6 +1298,13 @@ def run_agentic_e2e_fix_orchestrator(
                         final_message = "Max cycles reached."
                         break
                     elif _step9_token == "CONTINUE_CYCLE":
+                        # Check for progress before starting next cycle (5b)
+                        cycle_changed = _detect_changed_files(cwd, cycle_start_hashes)
+                        # Stop if NO progress was made this cycle (no file changes)
+                        if not cycle_changed:
+                            console.print(f"[yellow]Warning: No file changes detected in cycle {current_cycle}. Stopping to avoid infinite loop.[/yellow]")
+                            final_message = f"No progress made in cycle {current_cycle} (no file changes)."
+                            break
                         break  # Break inner loop — outer loop will start next cycle
                     else:
                         console.print("[yellow]Warning: No loop control token found in Step 9. Stopping workflow — missing token treated as terminal condition.[/yellow]")

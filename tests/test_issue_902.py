@@ -19,10 +19,11 @@ from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 class TestIssue902(unittest.TestCase):
     
     # --- agentic_common Jitter Test ---
+    @patch("pdd.agentic_common.get_available_agents", return_value=["anthropic"])
     @patch("pdd.agentic_common._run_with_provider")
     @patch("pdd.agentic_common.time.sleep")
-    @patch("random.uniform")
-    def test_jitter_is_additive(self, mock_uniform, mock_sleep, mock_run_with_provider):
+    @patch("pdd.agentic_common.random.uniform")
+    def test_jitter_is_additive(self, mock_uniform, mock_sleep, mock_run_with_provider, _mock_agents):
         """Requirement: Backoff jitter should be additive to the exponential base."""
         mock_run_with_provider.return_value = (False, "Error: transient", 0.0)
         mock_uniform.return_value = 2.5
@@ -40,8 +41,9 @@ class TestIssue902(unittest.TestCase):
         self.assertAlmostEqual(first_sleep, 12.5)
 
     # --- agentic_common False Positive Test ---
+    @patch("pdd.agentic_common.get_available_agents", return_value=["anthropic"])
     @patch("pdd.agentic_common._run_with_provider")
-    def test_false_positive_error_with_cost(self, mock_run_with_provider):
+    def test_false_positive_error_with_cost(self, mock_run_with_provider, _mock_agents):
         """Requirement: Error-like content with cost > 0 is a false positive and should be retried/fail.
         Currently buggy code has a < 500 char limit which misses long error messages.
         """
@@ -59,9 +61,10 @@ class TestIssue902(unittest.TestCase):
         self.assertFalse(success, "Should detect long Error message as false positive")
 
     # --- agentic_common Aggregate Timeout Test ---
+    @patch("pdd.agentic_common.get_available_agents", return_value=["anthropic", "google"])
     @patch("pdd.agentic_common._run_with_provider")
     @patch("pdd.agentic_common.time.time")
-    def test_aggregate_timeout_skips_providers(self, mock_time, mock_run_with_provider):
+    def test_aggregate_timeout_skips_providers(self, mock_time, mock_run_with_provider, _mock_agents):
         """Requirement: Step should skip subsequent providers if aggregate deadline (2x step timeout) is reached."""
         T = 1000.0
         times = [
@@ -73,7 +76,7 @@ class TestIssue902(unittest.TestCase):
             T + 250, # next provider aggregate deadline check
         ]
         mock_time.side_effect = times
-        
+
         with patch("pdd.agentic_common._DEFAULT_PROVIDER_PREFERENCE", ["anthropic", "google"]):
             mock_run_with_provider.return_value = (False, "Fail", 0.0)
             

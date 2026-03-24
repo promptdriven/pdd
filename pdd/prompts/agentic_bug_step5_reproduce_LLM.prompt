@@ -55,7 +55,15 @@ You are working on step 5 of 12 in an agentic bug investigation workflow. Previo
    - Run the code and observe the behavior
    - Capture the actual error/output
 
-4. **Document results**
+4. **Save reproduction tests**
+   - Write your reproduction tests to a file in the project's test directory, using the project's language and testing conventions
+   - Use the naming pattern: `test_issue_{issue_number}_reproduction` with the appropriate file extension for the project's language
+   - Tests should call the existing (buggy) code and assert the CORRECT/expected behavior
+   - Tests will typically FAIL on the current buggy code because they assert what the behavior SHOULD be
+   - After the bug is fixed, these tests should PASS and remain as permanent regression tests
+   - Include necessary imports, descriptive test names, and docstrings/comments explaining what each test demonstrates
+
+5. **Document results**
    - **Reproduced**: Describe exact steps and observed behavior
    - **Partially reproduced**: Describe what worked and what differed
    - **Could not reproduce**: Explain what was tried and potential reasons
@@ -104,3 +112,21 @@ Your comment should follow this format:
 - Document your environment carefully for comparison with the reporter's
 - Capture actual error output, not paraphrased descriptions
 - Always post your findings as a GitHub comment before completing
+- Always write reproduction tests to disk before posting the comment
+
+% CRITICAL: Machine-Readable Output (REQUIRED)
+
+If you created a reproduction test file, output this line at the very end of your response:
+```
+REPRO_FILES_CREATED: <path-to-your-reproduction-test-file>
+```
+
+Examples by language:
+- Python: `REPRO_FILES_CREATED: tests/test_issue_{issue_number}_reproduction.py`
+- TypeScript: `REPRO_FILES_CREATED: tests/issue_{issue_number}_reproduction.test.ts`
+- Go: `REPRO_FILES_CREATED: tests/issue_{issue_number}_reproduction_test.go`
+- JavaScript: `REPRO_FILES_CREATED: tests/issue_{issue_number}_reproduction.test.js`
+
+If you could not reproduce and did not create a test file, simply omit this line.
+
+⚠️ IMPORTANT: If present, this line must be the last thing you output. Do not add any text after it.
