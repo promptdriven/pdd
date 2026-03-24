@@ -1,24 +1,50 @@
-## v0.0.185 (2026-03-22)
+## v0.0.186 (2026-03-23)
 
 ### Feat
 
-- Update ColdOpen04/08 components and audit specs
-- Reimplement ColdOpen04ZoomOutAccumulated with a code editor UI and add new components for ColdOpen08PddTitleCard, along with spec updates.
-- Implement `ColdOpen08PddTitleCard` and `ColdOpen04ZoomOutAccumulated` scenes, update cold open specifications and audit results, and refine overall project configuration.
-- show parent-child relationships in specs list for split containers
-- Add leftSrc, rightSrc, and revealSrc video sources to the split screen hook media configuration.
-- Introduce new AI prompts for video pipeline components and refactor cold open video specifications.
+- Define new video segment specifications, adjust Remotion component timings, and add audit documentation for explainer video parts.
+- enhance agentic sync module identification from long issue bodies (#746)
+- add explainer video specifications for prompt nozzle, compression ratio, and module aside sections.
+- implement three-manifest data model for audio-visual sync
 
 ### Fix
 
-- Fix CI test failures in orchestrator_1 and core_errors
-- infer section from component name prefix for spec lookup
-- _parse_changed_files drops multi-line PROMPT_FIXED markers (#913)
-- exclude companion veo specs from timeline when embedded in a split container
-- instruct Stage 6 that split-screen layouts span multiple narrative beats
-- resolve clipId and leftClipId/rightClipId in visual manifest media aliases
-- exponential backoff, error classification, prompt source-of-truth (#902)
-- anchor spec timestamps to TTS word timing instead of script headings
+- annotation b2ba7b3b-edbe-463e-b7d2-32f6fdc892f1 Change the main background color of this section t
+- make Step 5 reproduction test handling language-agnostic
+- programmatically copy Step 5 reproduction tests into worktree
+- add missing newline at end of test file
+- implement Step 5 reproduction test forwarding to Step 9 (#928)
+- rewrite PR #931 tests and prompts for correct Step 5 repro approach (#928)
+- resolve 14 public CI test failures unrelated to PR content (#942)
+- detect CODE_BUG before NOT_A_BUG in Step 3 tier 4 classification (#893)
+
+### Refactor
+
+- Restructure video explainer project specifications by deleting old audit files, adding new scenes, and updating existing ones.
+- Reorganize and update video project specifications across multiple sections and audit files.
+
+## v0.0.185 (2026-03-22)
+
+### Fix
+
+- `_parse_changed_files` now uses `re.finditer` instead of `re.search` to capture all multi-line `PROMPT_FIXED:` markers — second file was silently dropped (#913)
+- **exponential backoff with jitter** in `run_agentic_task`: replace linear backoff (`delay * attempt`) with `delay * 2^(attempt-1) + jitter`, capped at `MAX_RETRY_DELAY=120s` (#902)
+- **error classification**: new `_is_permanent_error()` detects auth failures, invalid parameters, and model-not-found errors to skip retries and move to next provider (#902)
+- **aggregate per-step timeout**: cap total time across all providers to `2 × effective_timeout` to prevent 150-minute burns on cascading failures (#902)
+- **false-positive detection**: treat error-like output with `cost > 0` as a false positive (previously only checked zero-cost short output) (#902)
+- **Step 3 root cause prompt**: consult the `.prompt` file as source of truth — when code disagrees with the prompt spec, classify as CODE_BUG instead of weakening tests (#902)
+- **deterministic file staging**: pre-Step 12 now `git add`s all tracked `changed_files` before LLM dispatch, preventing selective file omission (#912)
+
+### Build
+
+- simplify `.pddignore` patterns from full paths to bare directory names
+
+### Test
+
+- add `TestParseChangedFilesMultiLine` coverage for multi-line `PROMPT_FIXED:` parsing (#913)
+- add `test_e2e_issue_902_provider_fallback.py`: end-to-end test for aggregate timeout, exponential backoff, and permanent-error classification
+- add `test_issue_902.py` and `test_issue_902_prompt_sync.py`: unit tests for backoff math, error classification, and prompt-code synchronization
+
 
 ## v0.0.184 (2026-03-21)
 

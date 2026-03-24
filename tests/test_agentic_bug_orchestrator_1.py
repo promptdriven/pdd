@@ -288,3 +288,403 @@ def test_context_accumulation_verification(mock_dependencies, tmp_path):
     # Call 0 is step 1, Call 1 is step 2
     step2_call_args = mock_run.call_args_list[1]
     assert "Previous: STEP1_SECRET" in step2_call_args.kwargs["instruction"]
+
+
+# ============================================================================
+# Issue #928: Step 5 reproduction tests must flow into Step 9 via context
+# ============================================================================
+
+
+def test_step5_repro_content_passed_to_step9_context(mock_dependencies, tmp_path):
+    """Verifies that when Step 5 emits REPRO_FILES_CREATED and the file exists
+    on disk, its content is stored in context['step5_reproduction_tests'] and
+    appears in Step 9's formatted prompt.
+
+    Bug: The orchestrator has no handler for step_num == 5, so REPRO_FILES_CREATED
+    output is never parsed and reproduction test content never reaches Step 9.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+    # Sandbox worktree I/O to tmp_path instead of /tmp/worktree
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
+
+    # Create the reproduction test file that Step 5 would write in cwd
+    repro_file = tmp_path / "tests" / "test_issue_123_reproduction.py"
+    repro_file.parent.mkdir(parents=True, exist_ok=True)
+    repro_file.write_text(
+        "import pytest\n\ndef test_bug_exists():\n    assert 1 == 1  # proves bug\n"
+    )
+
+    captured_instructions = {}
+
+    def run_side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        captured_instructions[label] = instruction
+        if label == "step5":
+            return (True, "Reproduced.\nREPRO_FILES_CREATED: tests/test_issue_123_reproduction.py", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = run_side_effect
+
+    # Step 9 template must include {step5_reproduction_tests} placeholder
+    def load_side_effect(name):
+        if "step9" in name:
+            return "Tests: {step5_reproduction_tests} Issue: {issue_number}"
+        return "Template for {issue_number}"
+
+    mock_load.side_effect = load_side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    step9_instruction = captured_instructions.get("step9", "")
+    assert step9_instruction, "Step 9 was never called"
+    assert "test_bug_exists" in step9_instruction, (
+        "Step 5's reproduction test content was not passed to Step 9 via "
+        "context['step5_reproduction_tests'] — reproduction tests are lost (issue #928)"
+    )
+
+
+def test_step5_no_repro_marker_leaves_empty_context(mock_dependencies, tmp_path):
+    """Verifies that when Step 5 output has no REPRO_FILES_CREATED marker,
+    step5_reproduction_tests stays empty and Step 9 template resolves cleanly.
+
+    This is the normal case when Step 5 could not reproduce the bug.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
+
+    captured_instructions = {}
+
+    def run_side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        captured_instructions[label] = instruction
+        if label == "step5":
+            return (True, "Could not reproduce the bug.", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = run_side_effect
+
+    def load_side_effect(name):
+        if "step9" in name:
+            return "Tests: {step5_reproduction_tests} Issue: {issue_number}"
+        return "Template for {issue_number}"
+
+    mock_load.side_effect = load_side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    step9_instruction = captured_instructions.get("step9", "")
+    assert step9_instruction, "Step 9 was never called"
+    # The placeholder should resolve to empty string, not remain as literal
+    assert "{step5_reproduction_tests}" not in step9_instruction, (
+        "step5_reproduction_tests placeholder was not resolved in Step 9's prompt — "
+        "the key is missing from the initial context dict (issue #928)"
+    )
+
+
+def test_step5_repro_file_missing_on_disk(mock_dependencies, tmp_path):
+    """Verifies graceful handling when Step 5 emits REPRO_FILES_CREATED but
+    the file doesn't actually exist on disk.
+
+    The orchestrator should not crash — step5_reproduction_tests should
+    remain empty.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
+
+    # Do NOT create the file on disk — simulate Step 5 claiming it wrote a file
+    # that doesn't actually exist
+
+    captured_instructions = {}
+
+    def run_side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        captured_instructions[label] = instruction
+        if label == "step5":
+            return (True, "REPRO_FILES_CREATED: tests/test_issue_123_reproduction.py", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_issue_123_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = run_side_effect
+
+    def load_side_effect(name):
+        if "step9" in name:
+            return "Tests: {step5_reproduction_tests} Issue: {issue_number}"
+        return "Template for {issue_number}"
+
+    mock_load.side_effect = load_side_effect
+
+    # Should not crash
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    step9_instruction = captured_instructions.get("step9", "")
+    # File doesn't exist, so content should be empty (not crash)
+    assert "test_issue_123_reproduction" not in step9_instruction, (
+        "Nonexistent file path was somehow read and passed to Step 9"
+    )
+
+
+def test_step5_repro_content_re_extracted_on_resume(mock_dependencies, tmp_path):
+    """Verifies that when resuming from saved state, Step 5's REPRO_FILES_CREATED
+    output is re-parsed and the file content populates step5_reproduction_tests.
+
+    Bug: The re-extraction block (lines 562-586) parses step5.5, step7, and step9
+    outputs but skips step5_output entirely.
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    # Create the reproduction test file in cwd (it persists across resume)
+    repro_file = tmp_path / "tests" / "test_issue_456_reproduction.py"
+    repro_file.parent.mkdir(parents=True, exist_ok=True)
+    repro_file.write_text(
+        "def test_resume_repro():\n    assert True  # proves bug on resume\n"
+    )
+
+    # Simulate a resume: load_workflow_state returns previous step outputs
+    saved_state = {
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Not user error",
+            "3": "Proceed",
+            "4": "No API issues",
+            "5": "Reproduced.\nREPRO_FILES_CREATED: tests/test_issue_456_reproduction.py",
+            "6": "Root cause found",
+            "7": "DEFECT_TYPE: code\nClassification done",
+            "8": "Test plan ready",
+            "9": "FILES_CREATED: tests/test_issue_456_fix.py",
+        },
+        "last_completed_step": 9,
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(tmp_path),
+    }
+
+    captured_instructions = {}
+
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)):
+        def run_side_effect(instruction, **kwargs):
+            label = kwargs.get("label", "")
+            captured_instructions[label] = instruction
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = run_side_effect
+
+        def load_side_effect(name):
+            if "step12" in name:
+                return "Repro tests: {step5_reproduction_tests} Issue: {issue_number}"
+            return "Template for {issue_number}"
+
+        mock_load.side_effect = load_side_effect
+
+        success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+            issue_url="url", issue_content="content", repo_owner="owner",
+            repo_name="name", issue_number=456, issue_author="author",
+            issue_title="title", cwd=tmp_path, quiet=True
+        )
+
+    # The re-extraction block should have read the file and populated context
+    step12_instruction = captured_instructions.get("step12", "")
+    assert "test_resume_repro" in step12_instruction, (
+        "Step 5 REPRO_FILES_CREATED was not re-extracted on resume — "
+        "reproduction test content is lost when the workflow resumes (issue #928)"
+    )
+
+
+# ============================================================================
+# Path traversal validation for REPRO_FILES_CREATED
+# ============================================================================
+
+
+def test_copy_repro_files_to_worktree(tmp_path):
+    """Verify _copy_repro_files_to_worktree physically copies files into the worktree."""
+    from pdd.agentic_bug_orchestrator import _copy_repro_files_to_worktree
+
+    # Create source file in cwd (simulates Step 5 writing before worktree exists)
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    test_dir = cwd / "tests"
+    test_dir.mkdir()
+    repro_file = test_dir / "test_issue_99_reproduction.py"
+    repro_file.write_text("def test_repro(): assert True\n")
+
+    # Create separate worktree directory (empty — no untracked files)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    step5_output = "REPRO_FILES_CREATED: tests/test_issue_99_reproduction.py"
+
+    result = _copy_repro_files_to_worktree(step5_output, cwd, worktree)
+
+    assert result == ["tests/test_issue_99_reproduction.py"]
+    # The file must physically exist in the worktree
+    copied = worktree / "tests" / "test_issue_99_reproduction.py"
+    assert copied.exists(), "Reproduction test was not copied into the worktree"
+    assert copied.read_text() == "def test_repro(): assert True\n"
+
+
+def test_copy_repro_files_skips_existing_in_worktree(tmp_path):
+    """Verify _copy_repro_files_to_worktree does not overwrite existing files."""
+    from pdd.agentic_bug_orchestrator import _copy_repro_files_to_worktree
+
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / "tests").mkdir()
+    (cwd / "tests" / "test_repro.py").write_text("original from cwd\n")
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "tests").mkdir()
+    (worktree / "tests" / "test_repro.py").write_text("already in worktree\n")
+
+    result = _copy_repro_files_to_worktree(
+        "REPRO_FILES_CREATED: tests/test_repro.py", cwd, worktree
+    )
+
+    # Path is still returned (for staging) but content is NOT overwritten
+    assert result == ["tests/test_repro.py"]
+    assert (worktree / "tests" / "test_repro.py").read_text() == "already in worktree\n"
+
+
+def test_step5_repro_files_copied_to_worktree_on_resume(mock_dependencies, tmp_path):
+    """Verify that on resume, Step 5 reproduction tests are physically copied
+    into the worktree directory — not just added to context.
+
+    This is the most important path: Step 5 ran in a prior session, files are
+    in cwd, worktree was created previously. The copy must happen during
+    worktree restoration, not inside the step 7 handler (which is skipped).
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    # cwd and worktree must be DIFFERENT directories to catch the bug
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+
+    # Step 5 wrote this file in repo_dir (cwd) during a prior session
+    repro_file = repo_dir / "tests" / "test_issue_789_reproduction.py"
+    repro_file.parent.mkdir(parents=True, exist_ok=True)
+    repro_file.write_text("def test_resume_copy(): assert True\n")
+
+    # Resume from step 10 — step 7 handler will be skipped entirely
+    saved_state = {
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Not user error",
+            "3": "Proceed",
+            "4": "No API issues",
+            "5": "Reproduced.\nREPRO_FILES_CREATED: tests/test_issue_789_reproduction.py",
+            "6": "Root cause found",
+            "7": "DEFECT_TYPE: code\nClassification done",
+            "8": "Test plan ready",
+            "9": "FILES_CREATED: tests/test_issue_789_fix.py",
+        },
+        "last_completed_step": 9,
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(worktree_dir),
+    }
+
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)):
+        mock_run.side_effect = lambda instruction, **kwargs: (
+            True, f"Output for {kwargs.get('label')}", 0.1, "gpt-4"
+        )
+        mock_load.return_value = "Template for {issue_number}"
+
+        run_agentic_bug_orchestrator(
+            issue_url="url", issue_content="content", repo_owner="owner",
+            repo_name="name", issue_number=789, issue_author="author",
+            issue_title="title", cwd=repo_dir, quiet=True
+        )
+
+    # The file must physically exist in the worktree (not just in context)
+    copied = worktree_dir / "tests" / "test_issue_789_reproduction.py"
+    assert copied.exists(), (
+        "Step 5 reproduction test was NOT copied to worktree on resume — "
+        "the worktree restoration block must call _copy_repro_files_to_worktree"
+    )
+    assert copied.read_text() == "def test_resume_copy(): assert True\n"
+
+
+def test_validate_repro_path_rejects_traversal(tmp_path):
+    """Ensure _validate_repro_path blocks absolute paths and '..' traversal."""
+    from pdd.agentic_bug_orchestrator import _validate_repro_path
+
+    # Absolute path — should be rejected
+    assert _validate_repro_path("/etc/passwd", tmp_path) is None
+    # Traversal — should be rejected
+    assert _validate_repro_path("../../etc/passwd", tmp_path) is None
+    # Empty — should be rejected
+    assert _validate_repro_path("", tmp_path) is None
+    # Valid relative path — should be accepted
+    result = _validate_repro_path("tests/test_repro.py", tmp_path)
+    assert result is not None
+    assert result == (tmp_path / "tests" / "test_repro.py").resolve()
+
+
+def test_step5_traversal_path_ignored(mock_dependencies, tmp_path):
+    """REPRO_FILES_CREATED with path traversal should be silently ignored."""
+    mock_load, mock_run, mock_wt = mock_dependencies
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
+
+    # Create a file outside tmp_path that the traversal would target
+    # (we just check it's NOT read, not that the file exists)
+
+    captured_instructions = {}
+
+    def run_side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        captured_instructions[label] = instruction
+        if label == "step5":
+            return (True, "REPRO_FILES_CREATED: ../../etc/passwd", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = run_side_effect
+
+    def load_side_effect(name):
+        if "step9" in name:
+            return "Tests: {step5_reproduction_tests} Issue: {issue_number}"
+        return "Template for {issue_number}"
+
+    mock_load.side_effect = load_side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    step9_instruction = captured_instructions.get("step9", "")
+    # Traversal path content must NOT appear in the instruction
+    assert "root:" not in step9_instruction
+    assert "/etc/passwd" not in step9_instruction
