@@ -56,11 +56,12 @@ You are working on step 5 of 12 in an agentic bug investigation workflow. Previo
    - Capture the actual error/output
 
 4. **Save reproduction tests**
-   - Write your reproduction tests to a file: `tests/test_issue_{issue_number}_reproduction.py`
+   - Write your reproduction tests to a file in the project's test directory, using the project's language and testing conventions
+   - Use the naming pattern: `test_issue_{issue_number}_reproduction` with the appropriate file extension for the project's language
    - Tests should call the existing (buggy) code to demonstrate the bug exists
    - Tests should PASS on current code — they prove the bug EXISTS by exercising the buggy behavior
    - These tests serve as permanent regression tests after the fix lands
-   - Include necessary imports, descriptive test names, and docstrings explaining what each test demonstrates
+   - Include necessary imports, descriptive test names, and docstrings/comments explaining what each test demonstrates
 
 5. **Document results**
    - **Reproduced**: Describe exact steps and observed behavior
@@ -117,8 +118,14 @@ Your comment should follow this format:
 
 If you created a reproduction test file, output this line at the very end of your response:
 ```
-REPRO_FILES_CREATED: tests/test_issue_{issue_number}_reproduction.py
+REPRO_FILES_CREATED: <path-to-your-reproduction-test-file>
 ```
+
+Examples by language:
+- Python: `REPRO_FILES_CREATED: tests/test_issue_{issue_number}_reproduction.py`
+- TypeScript: `REPRO_FILES_CREATED: tests/issue_{issue_number}_reproduction.test.ts`
+- Go: `REPRO_FILES_CREATED: tests/issue_{issue_number}_reproduction_test.go`
+- JavaScript: `REPRO_FILES_CREATED: tests/issue_{issue_number}_reproduction.test.js`
 
 If you could not reproduce and did not create a test file, simply omit this line.
 

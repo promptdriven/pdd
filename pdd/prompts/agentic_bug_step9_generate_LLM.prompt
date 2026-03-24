@@ -151,7 +151,7 @@ When incorporating reproduction tests:
 - Preserve their assertions and test logic
 - Adapt imports/fixtures to match your test file's structure
 - Keep them as separate test functions (don't merge into your fix-detection tests)
-- Add a comment like `# Reproduction test from Step 5` above each
+- Add a comment above each marking it as a reproduction test from Step 5
 
 % Your Task
 

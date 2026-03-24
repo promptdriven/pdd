@@ -334,7 +334,6 @@ def _copy_repro_files_to_worktree(
     This ensures they physically exist in the worktree for commit,
     regardless of whether the Step 9 LLM incorporates them.
     """
-    import shutil
     repro_files = _parse_changed_files(step5_output, "REPRO_FILES_CREATED")
     copied: List[str] = []
     for rf in repro_files:
