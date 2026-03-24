@@ -324,6 +324,32 @@ def _extract_repro_test_content(output: str, cwd: Path) -> str:
     return "\n".join(contents)
 
 
+def _copy_repro_files_to_worktree(
+    step5_output: str, cwd: Path, worktree_path: Path
+) -> List[str]:
+    """Copy Step 5 reproduction test files from cwd into the worktree.
+
+    Returns list of relative paths that were copied (for staging).
+    Step 5 runs before the worktree exists, so files are in cwd.
+    This ensures they physically exist in the worktree for commit,
+    regardless of whether the Step 9 LLM incorporates them.
+    """
+    import shutil
+    repro_files = _parse_changed_files(step5_output, "REPRO_FILES_CREATED")
+    copied: List[str] = []
+    for rf in repro_files:
+        src = cwd / rf
+        dst = worktree_path / rf
+        if src.exists() and not dst.exists():
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst))
+                copied.append(rf)
+            except OSError:
+                pass
+    return copied
+
+
 def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: bool) -> Optional[str]:
     """Check output for hard stop conditions."""
     if step_num == 1 and "Duplicate of #" in output:
@@ -710,6 +736,17 @@ def run_agentic_bug_orchestrator(
                 current_work_dir = worktree_path
                 state["worktree_path"] = str(worktree_path)
                 context["worktree_path"] = str(worktree_path)
+
+            # Copy Step 5 reproduction tests into the worktree
+            if worktree_path and context.get("step5_output"):
+                repro_copied = _copy_repro_files_to_worktree(
+                    context["step5_output"], cwd, worktree_path
+                )
+                if repro_copied:
+                    changed_files.extend(repro_copied)
+                    context["files_to_stage"] = ", ".join(changed_files)
+                    if not quiet:
+                        console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
 
         # Skip E2E if flagged
         if step_num == 11 and skip_e2e:
