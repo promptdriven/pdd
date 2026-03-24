@@ -37,6 +37,8 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 4. Accumulate step outputs to pass as context to subsequent steps. Track total cost.
 5. Track per-dev-unit state (fixed/attempts) and skipped steps (environmental failures) across cycles.
    - `skipped_steps` Persists across cycles and is NOT cleared when `step_outputs` is cleared between cycles.
+   - **Requirement 5a (Convergence)**: Implement an empty dev-units short-circuit. After Step 5, parse `DEV_UNITS_IDENTIFIED`. If the marker is present and the value is empty or "0" or "0/N", skip Steps 6, 7, and 8 for this cycle and proceed directly to Step 9.
+   - **Requirement 5b (Convergence)**: Implement per-cycle file-hash comparison. At the start and end of each cycle, snapshot hashes of all tracked files. If no files changed during a cycle, stop the workflow to avoid infinite loops.
 6. Support `--protect-tests` by passing `protect_tests` boolean and `protect_tests_flag` string context to steps.
 7. On successful completion (`ALL_TESTS_PASS`):
    - Perform independent verification using `pytest` if test files are found.
