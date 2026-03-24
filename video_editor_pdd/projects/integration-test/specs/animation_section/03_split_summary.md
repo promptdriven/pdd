@@ -1,12 +1,12 @@
-[title:]
-# Veo Section Title Card
+[split:]
+# Animation Section Split Summary
 
 **Tool:** Remotion
-**Duration:** ~4s
+**Duration:** ~5s
 **Timestamp:** 0:00 - 0:05
 
 ## Visual Description
-Veo Section appears as a crisp title card with immediate readability.
+Animation Section is explained through a balanced split-screen comparison.
 
 ## Technical Specifications
 
@@ -20,7 +20,7 @@ Veo Section appears as a crisp title card with immediate readability.
 3. Frame 90-150: Hold the final state clearly for rendering verification.
 
 ## Narration Sync
-> "Veo Section appears as a crisp title card with immediate readability."
+> "Animation Section is explained through a balanced split-screen comparison."
 
 ## Code Structure (Remotion)
 ```typescript

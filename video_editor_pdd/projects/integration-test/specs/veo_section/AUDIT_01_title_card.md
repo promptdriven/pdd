@@ -1,4 +1,4 @@
 ## Verdict
-pass
+skip
 ## Summary
-The frame at 75% progress (frame 45/60) matches the spec for the Frame 40–60 hold phase. All required elements are present and correctly composed: (1) Background is dark navy, consistent with #0B1120. (2) Title text 'Veo Section' is displayed in large white bold text, centered horizontally, positioned above the horizontal rule. The font appears to be a bold sans-serif consistent with Inter Bold at approximately 64px. (3) Horizontal rule is a gold/amber line centered beneath the title, visually consistent with #C9A84C and approximately 200px wide. (4) Subtitle 'AI-Generated Cinematic Footage' is displayed in a muted gold tone below the rule, consistent with #C9A84C at reduced opacity, centered horizontally. All elements are fully visible and holding at full opacity as expected for this animation phase. The vertical stacking order (title → rule → subtitle) and centering are correct. The composition reads as the intended cinematic title card.
+Infrastructure error: Failed to render audit frame for 01_title_card. Still render for "veo-section01-title-card" frame 119 exited with code 1: Cannot use frame 119: Duration of composition is 51, therefore the highest frame that can be rendered is 50

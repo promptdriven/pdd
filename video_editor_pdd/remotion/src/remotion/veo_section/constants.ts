@@ -1,39 +1,30 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 7.957;
+export const SECTION_DURATION_SECONDS = 7.120;
 export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.000),
-  VISUAL_00_END: s2f(0.796),
-  VISUAL_01_START: s2f(0.796),
-  VISUAL_01_END: s2f(2.387),
-  VISUAL_02_START: s2f(2.387),
-  VISUAL_02_END: s2f(3.183),
-  VISUAL_03_START: s2f(3.183),
-  VISUAL_03_END: s2f(3.780),
-  VISUAL_04_START: s2f(3.780),
-  VISUAL_04_END: s2f(4.575),
-  VISUAL_05_START: s2f(4.575),
-  VISUAL_05_END: s2f(6.167),
-  VISUAL_06_START: s2f(6.167),
-  VISUAL_06_END: s2f(7.162),
-  VISUAL_07_START: s2f(7.162),
-  VISUAL_07_END: s2f(7.957),
+  VISUAL_00_END: s2f(1.424),
+  VISUAL_01_START: s2f(1.424),
+  VISUAL_01_END: s2f(2.848),
+  VISUAL_02_START: s2f(2.848),
+  VISUAL_02_END: s2f(4.272),
+  VISUAL_03_START: s2f(4.272),
+  VISUAL_03_END: s2f(5.696),
+  VISUAL_04_START: s2f(5.696),
+  VISUAL_04_END: s2f(7.120),
 };
 
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "veo_section_01_title_card", desc: "Section 2.1: Veo Section Title Card" },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_ocean_wave_sunset", desc: "Section 2.2: Ocean Wave Sunset B-Roll" },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_wave_data_overlay", desc: "Section 2.3: Wave Data Overlay" },
-  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_split_nature_comparison", desc: "Section 2.4: Split Nature Comparison" },
-  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_veo_pipeline_infographic", desc: "Section 2.5: Veo Pipeline Infographic" },
-  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_aerial_forest_canopy", desc: "Section 2.6: Aerial Forest Canopy Cutaway" },
-  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_narration_overlay_intro", desc: "Section 2.7: Narration Overlay Intro" },
-  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_section_end_card", desc: "Section 2.8: Veo Section End Card" },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "veo_section_01_title_card", desc: "Veo Section Title Card" },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "veo_section_02_key_visual", desc: "Veo Section Key Visual" },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "veo_section_03_split_summary", desc: "Veo Section Split Summary" },
+  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_veo_broll", desc: "Veo Section Veo B-Roll" },
+  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_veo_cutaway", desc: "Veo Section Veo Cutaway" },
 ];
 
 export const VeoSectionProps = z.object({
