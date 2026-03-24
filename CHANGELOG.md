@@ -1,24 +1,25 @@
 ## v0.0.185 (2026-03-22)
 
-### Feat
-
-- Update ColdOpen04/08 components and audit specs
-- Reimplement ColdOpen04ZoomOutAccumulated with a code editor UI and add new components for ColdOpen08PddTitleCard, along with spec updates.
-- Implement `ColdOpen08PddTitleCard` and `ColdOpen04ZoomOutAccumulated` scenes, update cold open specifications and audit results, and refine overall project configuration.
-- show parent-child relationships in specs list for split containers
-- Add leftSrc, rightSrc, and revealSrc video sources to the split screen hook media configuration.
-- Introduce new AI prompts for video pipeline components and refactor cold open video specifications.
-
 ### Fix
 
-- Fix CI test failures in orchestrator_1 and core_errors
-- infer section from component name prefix for spec lookup
-- _parse_changed_files drops multi-line PROMPT_FIXED markers (#913)
-- exclude companion veo specs from timeline when embedded in a split container
-- instruct Stage 6 that split-screen layouts span multiple narrative beats
-- resolve clipId and leftClipId/rightClipId in visual manifest media aliases
-- exponential backoff, error classification, prompt source-of-truth (#902)
-- anchor spec timestamps to TTS word timing instead of script headings
+- `_parse_changed_files` now uses `re.finditer` instead of `re.search` to capture all multi-line `PROMPT_FIXED:` markers — second file was silently dropped (#913)
+- **exponential backoff with jitter** in `run_agentic_task`: replace linear backoff (`delay * attempt`) with `delay * 2^(attempt-1) + jitter`, capped at `MAX_RETRY_DELAY=120s` (#902)
+- **error classification**: new `_is_permanent_error()` detects auth failures, invalid parameters, and model-not-found errors to skip retries and move to next provider (#902)
+- **aggregate per-step timeout**: cap total time across all providers to `2 × effective_timeout` to prevent 150-minute burns on cascading failures (#902)
+- **false-positive detection**: treat error-like output with `cost > 0` as a false positive (previously only checked zero-cost short output) (#902)
+- **Step 3 root cause prompt**: consult the `.prompt` file as source of truth — when code disagrees with the prompt spec, classify as CODE_BUG instead of weakening tests (#902)
+- **deterministic file staging**: pre-Step 12 now `git add`s all tracked `changed_files` before LLM dispatch, preventing selective file omission (#912)
+
+### Build
+
+- simplify `.pddignore` patterns from full paths to bare directory names
+
+### Test
+
+- add `TestParseChangedFilesMultiLine` coverage for multi-line `PROMPT_FIXED:` parsing (#913)
+- add `test_e2e_issue_902_provider_fallback.py`: end-to-end test for aggregate timeout, exponential backoff, and permanent-error classification
+- add `test_issue_902.py` and `test_issue_902_prompt_sync.py`: unit tests for backoff math, error classification, and prompt-code synchronization
+
 
 ## v0.0.184 (2026-03-21)
 
