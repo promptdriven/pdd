@@ -37,6 +37,8 @@ function getCompositionGeneratorInputPaths(): string[] {
     path.join(process.cwd(), "lib", "composition-timing.ts"),
     path.join(process.cwd(), "lib", "spec-timestamp.ts"),
     path.join(process.cwd(), "lib", "section-timing.ts"),
+    path.join(process.cwd(), "lib", "section-timeline.ts"),
+    path.join(process.cwd(), "lib", "narration-manifest.ts"),
     path.join(
       process.cwd(),
       "app",

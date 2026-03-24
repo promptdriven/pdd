@@ -3708,3 +3708,236 @@ class TestWrapperTemplateComponentMediaFiltering:
                     )
                     return
         assert False, "Could not find VisualMediaProvider wrapping VisualComponent in template"
+
+
+class TestVisualContractManifestNewFields:
+    """Tests for coverSegments, parentId, children, and laneHint in the visual contract manifest."""
+
+    def _build_section_with_spec(self, tmp_path, section_id, spec_name, spec_content, compositions=None):
+        """Helper: set up project dir with a single spec and return (section, project_dir, remotion_public)."""
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / section_id
+        specs_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True, exist_ok=True)
+        (specs_dir / f"{spec_name}.md").write_text(spec_content, encoding="utf-8")
+
+        section = {
+            "id": section_id,
+            "compositionId": section_id.replace("_", " ").title().replace(" ", ""),
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": section_id,
+            "compositions": compositions or [spec_name],
+        }
+        return section, str(project_dir), str(remotion_public)
+
+    def test_build_visual_contract_manifest_includes_coverSegments_from_dataPoints(self, tmp_path):
+        spec_content = "\n".join([
+            "[Remotion]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"coverSegments": ["cold_open_001", "cold_open_002"]}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "cold_open", "01_title", spec_content
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual["coverSegments"] == ["cold_open_001", "cold_open_002"]
+
+    def test_build_visual_contract_manifest_coverSegments_empty_when_absent(self, tmp_path):
+        spec_content = "\n".join([
+            "[Remotion]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"title": "Hello"}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "intro", "01_card", spec_content
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert "coverSegments" not in visual
+
+    def test_build_visual_contract_manifest_includes_parentId(self, tmp_path):
+        spec_content = "\n".join([
+            "[veo:]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"embeddedIn": "01_split_screen"}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "cold_open", "02_veo_clip", spec_content, compositions=["02_veo_clip"]
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual["parentId"] == "01_split_screen"
+
+    def test_build_visual_contract_manifest_populates_children_from_parentId(self, tmp_path):
+        """Second pass builds children arrays: parent gets child IDs."""
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "cold_open"
+        specs_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True, exist_ok=True)
+
+        (specs_dir / "01_split_screen.md").write_text(
+            "[split:]\n\n## Data Points JSON\n```json\n{}\n```",
+            encoding="utf-8",
+        )
+        # parentId references the visual ID as it appears in the manifest
+        (specs_dir / "02_veo_left.md").write_text(
+            '[veo:]\n\n## Data Points JSON\n```json\n{"embeddedIn": "01_split_screen"}\n```',
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpen",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": ["01_split_screen", "02_veo_left"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section], str(project_dir), str(remotion_public)
+        )
+
+        visuals_by_id = {v["id"]: v for v in manifest["sections"][0]["visuals"]}
+        parent = visuals_by_id["01_split_screen"]
+        child = visuals_by_id["02_veo_left"]
+
+        assert child["parentId"] == "01_split_screen"
+        assert "children" in parent
+        assert "02_veo_left" in parent["children"]
+
+    def test_build_visual_contract_manifest_laneHint_defaults_to_main(self, tmp_path):
+        """Visuals without overlay or explicit laneHint have no laneHint field (implicitly main)."""
+        spec_content = "\n".join([
+            "[Remotion]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"title": "Demo"}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "intro", "01_card", spec_content
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert "laneHint" not in visual
+
+    def test_build_visual_contract_manifest_laneHint_overlay_from_overlayConfig(self, tmp_path):
+        """Visuals with overlayConfig infer laneHint='overlay'."""
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "demo"
+        specs_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True, exist_ok=True)
+
+        # Spec that triggers overlay detection (lower-third badge pattern)
+        (specs_dir / "01_visual.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "lower-third badge",
+                "",
+                "NARRATOR: Hello world.",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{"title": "Test"}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "demo",
+            "compositionId": "Demo",
+            "durationSeconds": 5,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "demo",
+            "compositions": ["01_visual"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section], str(project_dir), str(remotion_public)
+        )
+        visual = manifest["sections"][0]["visuals"][0]
+
+        # If overlayConfig is present, laneHint should be 'overlay'
+        if visual.get("overlayConfig"):
+            assert visual["laneHint"] == "overlay"
+
+    def test_build_visual_contract_manifest_laneHint_from_dataPoints(self, tmp_path):
+        """Explicit laneHint in data points takes precedence."""
+        spec_content = "\n".join([
+            "[Remotion]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"laneHint": "background"}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "intro", "01_bg", spec_content
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual["laneHint"] == "background"
+
+    def test_legacy_manifest_without_new_fields_loads_without_error(self, tmp_path):
+        """Loading a manifest built without new fields still works."""
+        # Build a manifest that omits coverSegments/parentId/children/laneHint
+        legacy = {
+            "version": 1,
+            "updatedAt": "2026-01-01T00:00:00+00:00",
+            "sections": [{
+                "id": "intro",
+                "visuals": [{
+                    "id": "intro_01_card",
+                    "specBaseName": "01_card",
+                    "specPath": "specs/intro/01_card.md",
+                    "dataPoints": None,
+                    "mediaAliases": {},
+                    "overlayConfig": None,
+                    "renderMode": "component",
+                }],
+            }],
+        }
+
+        manifest_path = tmp_path / "outputs" / "compositions" / "visual-manifest.json"
+        manifest_path.parent.mkdir(parents=True)
+        manifest_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+        visual = loaded["sections"][0]["visuals"][0]
+
+        assert visual["id"] == "intro_01_card"
+        assert visual.get("coverSegments") is None
+        assert visual.get("parentId") is None
+        assert visual.get("children") is None
+        assert visual.get("laneHint") is None

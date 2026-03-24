@@ -11,6 +11,10 @@ export type GeneratedVisualContract = {
   mediaAliases?: Record<string, string>;
   overlayConfig?: Record<string, unknown> | null;
   renderMode?: "raw-media" | "generated-media" | "component";
+  coverSegments?: string[];
+  parentId?: string;
+  children?: string[];
+  laneHint?: "main" | "overlay" | "background";
 };
 
 type GeneratedVisualContractSection = {

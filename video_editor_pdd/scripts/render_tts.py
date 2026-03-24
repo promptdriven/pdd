@@ -156,8 +156,16 @@ class Segment:
         return _normalize_spoken_text(self.raw_text)
 
 
-def build_segments_manifest(segments: List["Segment"]) -> List[Dict[str, Any]]:
-    """Build a JSON-serializable manifest for the parsed TTS segments."""
+def build_segments_manifest(
+    segments: List["Segment"],
+    word_timestamps_by_section: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> List[Dict[str, Any]]:
+    """Build a JSON-serializable manifest for the parsed TTS segments.
+
+    When *word_timestamps_by_section* is provided, each segment is enriched
+    with ``startSeconds`` / ``endSeconds`` derived from the min/max of
+    matching words (keyed by ``segmentId``).
+    """
     manifest: List[Dict[str, Any]] = []
     for segment in segments:
         segment_id = segment.segment_id
@@ -166,26 +174,68 @@ def build_segments_manifest(segments: List["Segment"]) -> List[Dict[str, Any]]:
         if counter.isdigit():
             split_index = int(counter)
 
-        manifest.append(
-            {
-                "id": segment_id,
-                "sectionId": base_id or segment_id,
-                "splitIndex": split_index,
-                "text": segment.raw_text,
-                "cleanText": segment.clean_text,
-                "annotations": segment.annotations,
-            }
-        )
+        entry: Dict[str, Any] = {
+            "id": segment_id,
+            "sectionId": base_id or segment_id,
+            "splitIndex": split_index,
+            "text": segment.raw_text,
+            "cleanText": segment.clean_text,
+            "annotations": segment.annotations,
+        }
+
+        # Enrich with per-segment timing from word timestamps
+        if word_timestamps_by_section is not None:
+            section_id = base_id or segment_id
+            words = word_timestamps_by_section.get(section_id, [])
+            matching = [
+                w for w in words
+                if w.get("segmentId") == segment_id
+            ]
+            if matching:
+                entry["startSeconds"] = min(w["start"] for w in matching)
+                entry["endSeconds"] = max(w["end"] for w in matching)
+
+        manifest.append(entry)
 
     return manifest
+
+
+def _load_word_timestamps_by_section(output_dir: str, segments: List["Segment"]) -> Dict[str, List[Dict[str, Any]]]:
+    """Load per-section word_timestamps.json files for all sections referenced by segments."""
+    section_ids: set = set()
+    for seg in segments:
+        base_id, _, counter = seg.segment_id.rpartition("_")
+        if counter.isdigit() and base_id:
+            section_ids.add(base_id)
+        else:
+            section_ids.add(seg.segment_id)
+
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for section_id in section_ids:
+        ts_path = os.path.join(output_dir, section_id, "word_timestamps.json")
+        if not os.path.isfile(ts_path):
+            continue
+        try:
+            with open(ts_path, encoding="utf-8") as f:
+                parsed = json.load(f)
+            words = parsed if isinstance(parsed, list) else parsed.get("words", [])
+            result[section_id] = words
+        except (json.JSONDecodeError, OSError):
+            continue
+    return result
 
 
 def write_segments_manifest(output_dir: str, segments: List["Segment"]) -> str:
     """Persist the parsed segment manifest beside the generated WAV files."""
     os.makedirs(output_dir, exist_ok=True)
+    word_timestamps = _load_word_timestamps_by_section(output_dir, segments)
     manifest_path = os.path.join(output_dir, SEGMENTS_MANIFEST_FILENAME)
     with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump({"segments": build_segments_manifest(segments)}, f, indent=2)
+        json.dump(
+            {"segments": build_segments_manifest(segments, word_timestamps or None)},
+            f,
+            indent=2,
+        )
     return manifest_path
 
 

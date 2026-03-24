@@ -712,4 +712,159 @@ describe("lib/composition-timing", () => {
 
     expect(visualIds).toContain("02_broll");
   });
+
+  // -----------------------------------------------------------------------
+  // buildSectionConstantsSource — timeline manifest integration
+  // -----------------------------------------------------------------------
+
+  it("reads from section-timeline.json when available", () => {
+    // Set up a section-timeline.json with pre-computed entries
+    const compositionsDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(compositionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(compositionsDir, "section-timeline.json"),
+      JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-23T00:00:00Z",
+        sections: [
+          {
+            sectionId: "animation_section",
+            durationSeconds: 10,
+            entries: [
+              {
+                id: "01_title_card",
+                startSeconds: 0,
+                endSeconds: 4,
+                lane: 0,
+                source: "segment-anchor",
+                desc: "01 title card",
+              },
+              {
+                id: "02_key_visual",
+                startSeconds: 4,
+                endSeconds: 10,
+                lane: 0,
+                source: "segment-anchor",
+                desc: "02 key visual",
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    // Provide word_timestamps for narrative timing
+    const ttsDir = path.join(tmpDir, "outputs", "tts", "animation_section");
+    fs.mkdirSync(ttsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ttsDir, "word_timestamps.json"),
+      JSON.stringify([{ word: "Hello", start: 0, end: 10 }])
+    );
+
+    const result = buildSectionConstantsSource(
+      tmpDir,
+      {
+        id: "animation_section",
+        specDir: "animation_section",
+        durationSeconds: 10,
+        compositionId: "AnimationSection",
+      },
+      ["01_title_card", "02_key_visual"]
+    );
+
+    expect(result).toContain("SECTION_DURATION_SECONDS = 10.000");
+    expect(result).toContain("VISUAL_00_START");
+    expect(result).toContain("VISUAL_01_END");
+    expect(result).toContain('"01_title_card"');
+    expect(result).toContain('"02_key_visual"');
+  });
+
+  it("falls back when no section-timeline.json exists (existing behavior)", () => {
+    // Set up specs for the existing chain
+    const specDir = path.join(tmpDir, "specs", "animation_section");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      "**Timestamp:** 0:00 - 0:03\n\n# Title"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_key_visual.md"),
+      "**Timestamp:** 0:03 - 0:08\n\n# Key Visual"
+    );
+
+    const ttsDir = path.join(tmpDir, "outputs", "tts", "animation_section");
+    fs.mkdirSync(ttsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ttsDir, "word_timestamps.json"),
+      JSON.stringify([{ word: "Hello", start: 0, end: 8 }])
+    );
+
+    const result = buildSectionConstantsSource(
+      tmpDir,
+      {
+        id: "animation_section",
+        specDir: "animation_section",
+        durationSeconds: 8,
+        compositionId: "AnimationSection",
+      },
+      ["01_title_card", "02_key_visual"]
+    );
+
+    // Should still produce valid constants from spec timestamps
+    expect(result).toContain("SECTION_FPS");
+    expect(result).toContain("BEATS");
+    expect(result).toContain("VISUAL_SEQUENCE");
+  });
+
+  it("emits lane in VISUAL_SEQUENCE when from timeline", () => {
+    const compositionsDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(compositionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(compositionsDir, "section-timeline.json"),
+      JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-23T00:00:00Z",
+        sections: [
+          {
+            sectionId: "demo",
+            durationSeconds: 5,
+            entries: [
+              {
+                id: "01_main",
+                startSeconds: 0,
+                endSeconds: 5,
+                lane: 0,
+                source: "segment-anchor",
+                desc: "01 main",
+              },
+              {
+                id: "02_overlay",
+                startSeconds: 0,
+                endSeconds: 5,
+                lane: 1,
+                source: "segment-anchor",
+                desc: "02 overlay",
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const ttsDir = path.join(tmpDir, "outputs", "tts", "demo");
+    fs.mkdirSync(ttsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ttsDir, "word_timestamps.json"),
+      JSON.stringify([{ word: "Hi", start: 0, end: 5 }])
+    );
+
+    const result = buildSectionConstantsSource(
+      tmpDir,
+      { id: "demo", specDir: "demo", durationSeconds: 5, compositionId: "Demo" },
+      ["01_main", "02_overlay"]
+    );
+
+    expect(result).toContain("lane: 0");
+    expect(result).toContain("lane: 1");
+  });
 });

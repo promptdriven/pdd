@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { resolveSectionVisualContract } from "@/app/api/pipeline/_lib/visual-contract-manifest";
 import { resolveSectionNarrativeTiming } from "./section-timing";
+import { resolveSectionTimelineEntries } from "./section-timeline";
 
 import {
   normalizeSpecTimestampRangeToSection,
@@ -1135,14 +1136,41 @@ export function buildSectionConstantsSource(
   componentIds: string[],
   fps = DEFAULT_FPS
 ): string {
-  const timings = resolveSectionVisualTimings(projectDir, section, componentIds);
-  const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
-  const durationSeconds =
-    timings[timings.length - 1]?.endSeconds ??
-    Math.max(
-      sectionNarrativeTiming.durationSeconds,
-      componentIds.length * MIN_VISUAL_DURATION_SECONDS
-    );
+  // Prefer pre-computed section timeline when available
+  const timelineEntries = resolveSectionTimelineEntries(section.id, projectDir);
+
+  let timings: ResolvedVisualTiming[];
+  let durationSeconds: number;
+
+  if (timelineEntries.length > 0) {
+    // Map timeline entries → ResolvedVisualTiming for the existing code path
+    timings = timelineEntries.map((entry) => ({
+      id: entry.id,
+      startSeconds: entry.startSeconds,
+      endSeconds: entry.endSeconds,
+      source: (entry.source === "segment-anchor" ? "project" : entry.source === "timestamp-fallback" ? "spec" : "fallback") as TimingSource,
+      desc: entry.desc,
+      lane: entry.lane,
+    }));
+    const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
+    durationSeconds =
+      timings[timings.length - 1]?.endSeconds ??
+      Math.max(
+        sectionNarrativeTiming.durationSeconds,
+        componentIds.length * MIN_VISUAL_DURATION_SECONDS
+      );
+  } else {
+    // Fall back to existing spec-reparsing chain
+    timings = resolveSectionVisualTimings(projectDir, section, componentIds);
+    const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
+    durationSeconds =
+      timings[timings.length - 1]?.endSeconds ??
+      Math.max(
+        sectionNarrativeTiming.durationSeconds,
+        componentIds.length * MIN_VISUAL_DURATION_SECONDS
+      );
+  }
+
   const exportName = section.compositionId
     ? section.compositionId
         .split(/[_-]+/)
@@ -1158,8 +1186,11 @@ export function buildSectionConstantsSource(
     const key = String(index).padStart(2, "0");
     beatLines.push(`  VISUAL_${key}_START: s2f(${timing.startSeconds.toFixed(3)}),`);
     beatLines.push(`  VISUAL_${key}_END: s2f(${timing.endSeconds.toFixed(3)}),`);
+    const laneStr = "lane" in timing && typeof (timing as any).lane === "number"
+      ? `, lane: ${(timing as any).lane}`
+      : "";
     visualLines.push(
-      `  { start: BEATS.VISUAL_${key}_START, end: BEATS.VISUAL_${key}_END, id: "${timing.id}", desc: "${escapeDescription(timing.desc)}" },`
+      `  { start: BEATS.VISUAL_${key}_START, end: BEATS.VISUAL_${key}_END, id: "${timing.id}", desc: "${escapeDescription(timing.desc)}"${laneStr} },`
     );
   });
 

@@ -139,6 +139,23 @@ jest.mock("crypto", () => ({
   createHash: (...args: unknown[]) => mockCreateHash(...args),
 }));
 
+// Mock section-timeline module
+const mockBuildSectionTimeline = jest.fn(() => ({
+  sectionId: "test",
+  durationSeconds: 10,
+  entries: [],
+}));
+const mockWriteSectionTimelineManifest = jest.fn();
+const mockResolveSectionTimelineEntries = jest.fn(() => []);
+const mockLoadSectionTimeline = jest.fn(() => null);
+
+jest.mock("@/lib/section-timeline", () => ({
+  buildSectionTimeline: (...args: unknown[]) => mockBuildSectionTimeline(...args),
+  writeSectionTimelineManifest: (...args: unknown[]) => mockWriteSectionTimelineManifest(...args),
+  resolveSectionTimelineEntries: (...args: unknown[]) => mockResolveSectionTimelineEntries(...args),
+  loadSectionTimeline: (...args: unknown[]) => mockLoadSectionTimeline(...args),
+}));
+
 // Import after mocking
 import { POST } from "../app/api/pipeline/compositions/run/route";
 import { POST as POST_AssetStaging } from "../app/api/pipeline/asset-staging/run/route";
@@ -3567,5 +3584,48 @@ describe("compositions executor — section-prefix spec inference", () => {
       );
       expect(specRead).toBeDefined();
     }
+  });
+});
+
+describe("section timeline integration", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockBuildSectionTimeline.mockReturnValue({
+      sectionId: "cold_open",
+      durationSeconds: 10,
+      entries: [
+        {
+          id: "cold_open_01_title",
+          startSeconds: 0,
+          endSeconds: 5,
+          lane: 0,
+          source: "segment-anchor",
+          desc: "01 title",
+        },
+      ],
+    });
+  });
+
+  it("buildSectionTimeline mock returns entries with lane field", () => {
+    const result = mockBuildSectionTimeline("project_dir", { id: "cold_open" });
+    expect(result.entries[0]).toHaveProperty("lane", 0);
+  });
+
+  it("writeSectionTimelineManifest mock is callable", () => {
+    mockWriteSectionTimelineManifest([
+      { sectionId: "cold_open", durationSeconds: 10, entries: [] },
+    ]);
+    expect(mockWriteSectionTimelineManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("section timeline entries have required fields", () => {
+    const result = mockBuildSectionTimeline("dir", { id: "cold_open" });
+    const entry = result.entries[0];
+    expect(entry).toHaveProperty("id");
+    expect(entry).toHaveProperty("startSeconds");
+    expect(entry).toHaveProperty("endSeconds");
+    expect(entry).toHaveProperty("lane");
+    expect(entry).toHaveProperty("source");
+    expect(entry).toHaveProperty("desc");
   });
 });

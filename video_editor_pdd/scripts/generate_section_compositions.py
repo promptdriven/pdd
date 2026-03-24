@@ -824,7 +824,26 @@ def build_visual_contract_manifest(
             spec_content = _read_text_if_exists(spec_path)
             data_points = _extract_data_points_json(spec_content) if spec_content else None
             has_component = spec_base in composition_ids
-            visuals.append({
+            # Extract new manifest fields from data points
+            cover_segments = None
+            parent_id = None
+            lane_hint = None
+            if isinstance(data_points, dict):
+                raw_cover = data_points.get('coverSegments') or data_points.get('narrationSegments')
+                if isinstance(raw_cover, list):
+                    cover_segments = [str(s) for s in raw_cover]
+                raw_parent = data_points.get('embeddedIn') or data_points.get('compositeOver')
+                if isinstance(raw_parent, str) and raw_parent:
+                    parent_id = raw_parent
+                raw_lane = data_points.get('laneHint')
+                if isinstance(raw_lane, str) and raw_lane in ('main', 'overlay', 'background'):
+                    lane_hint = raw_lane
+
+            # Infer laneHint from overlayConfig when not explicitly set
+            if lane_hint is None and overlay_manifest.get(visual_id):
+                lane_hint = 'overlay'
+
+            visual_entry: Dict[str, Any] = {
                 'id': visual_id,
                 'specBaseName': spec_base,
                 'specPath': os.path.relpath(spec_path, project_dir).replace('\\', '/') if spec_content else None,
@@ -836,7 +855,25 @@ def build_visual_contract_manifest(
                     overlay_manifest.get(visual_id),
                     has_component=has_component,
                 ),
-            })
+            }
+            if cover_segments is not None:
+                visual_entry['coverSegments'] = cover_segments
+            if parent_id is not None:
+                visual_entry['parentId'] = parent_id
+            if lane_hint is not None:
+                visual_entry['laneHint'] = lane_hint
+
+            visuals.append(visual_entry)
+
+        # Second pass: populate children arrays from parentId references
+        id_to_visual: Dict[str, Dict[str, Any]] = {v['id']: v for v in visuals}
+        for visual in visuals:
+            pid = visual.get('parentId')
+            if pid and pid in id_to_visual:
+                parent = id_to_visual[pid]
+                parent.setdefault('children', [])
+                if visual['id'] not in parent['children']:
+                    parent['children'].append(visual['id'])
 
         manifest_sections.append({
             'id': section['id'],

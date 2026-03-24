@@ -17,6 +17,7 @@ import {
   getProjectDir,
 } from "@/lib/projects";
 import { mergeCompositionManifest } from "@/app/api/pipeline/_lib/composition-manifest";
+import { buildSectionTimeline, writeSectionTimelineManifest } from "@/lib/section-timeline";
 import { renderStill } from "@/lib/render";
 import type { Section, SseSend } from "@/lib/types";
 import {
@@ -1147,6 +1148,16 @@ registerExecutor("compositions", (params, send: SseSend) => {
           const msg = err instanceof Error ? err.message : "Unknown error";
           onLog(`[compositions] Warning: section constants/composition generation failed for ${section.id}: ${msg}`);
           // Non-fatal — the Python wrapper can still scaffold a basic composition
+        }
+
+        // Build and persist section timeline manifest
+        try {
+          const sectionTimeline = buildSectionTimeline(getProjectDir(), section);
+          writeSectionTimelineManifest([sectionTimeline], getProjectDir());
+          onLog(`[compositions] Updated section timeline for ${section.id} (${sectionTimeline.entries.length} entries).`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          onLog(`[compositions] Warning: section timeline generation failed for ${section.id}: ${msg}`);
         }
       }
     }
