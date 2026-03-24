@@ -44,35 +44,105 @@ def resolve_comp_import(comp_id: str, section_id: str, remotion_src: str) -> tup
     Returns:
         (js_identifier, import_path) e.g. ("Part1Economics07StatCalloutGitclear", "Part1Economics07StatCalloutGitclear")
     """
+    resolved = _resolve_existing_comp_import(comp_id, section_id, remotion_src)
+    if resolved is not None:
+        return resolved
+
     comp_pascal = to_pascal_case(comp_id)
     section_pascal = to_pascal_case(section_id)
+    if comp_pascal and comp_pascal[0].isdigit():
+        comp_pascal = section_pascal + comp_pascal
+    return (comp_pascal, comp_id)
 
-    # If PascalCase starts with a digit, prefix with section PascalCase
+
+def _normalize_component_lookup_key(value: str, section_id: str) -> str:
+    """Normalize component names for semantic matching across numbering drift."""
+    normalized = value.strip()
+    section_pascal = to_pascal_case(section_id)
+    if section_pascal and normalized.startswith(section_pascal):
+        normalized = normalized[len(section_pascal):]
+    normalized = component_base_name(normalized, section_id)
+    normalized = re.sub(r'^[0-9]+', '', normalized)
+    return re.sub(r'[^a-z0-9]+', '', normalized.lower())
+
+
+def _iter_component_import_candidates(remotion_src: str) -> List[tuple[str, str]]:
+    """List importable component targets under remotion/src/remotion."""
+    if not remotion_src or not os.path.isdir(remotion_src):
+        return []
+
+    candidates: List[tuple[str, str]] = []
+    for entry in sorted(os.listdir(remotion_src)):
+        if entry.startswith('.'):
+            continue
+        abs_path = os.path.join(remotion_src, entry)
+        if os.path.isdir(abs_path):
+            candidates.append((entry, entry))
+            continue
+        if entry.endswith('.tsx'):
+            stem = os.path.splitext(entry)[0]
+            candidates.append((stem, stem))
+    return candidates
+
+
+def _resolve_existing_comp_import(
+    comp_id: str,
+    section_id: str,
+    remotion_src: str,
+) -> Optional[tuple[str, str]]:
+    """Resolve an actual import target when a generated component exists on disk."""
+    comp_pascal = to_pascal_case(comp_id)
+    section_pascal = to_pascal_case(section_id)
     if comp_pascal and comp_pascal[0].isdigit():
         comp_pascal = section_pascal + comp_pascal
 
-    # Resolve the import path by checking filesystem in priority order
-    if remotion_src:
-        # 1. PascalCase directory (e.g. Part1Economics07StatCalloutGitclear/)
-        pascal_dir = os.path.join(remotion_src, comp_pascal)
-        if os.path.isdir(pascal_dir):
-            return (comp_pascal, comp_pascal)
+    if not remotion_src:
+        return None
 
-        # 2. Kebab-style directory (e.g. 07-StatCalloutGitclear/)
-        # Build kebab from comp_id: "07_stat_callout_gitclear" -> "07-StatCalloutGitclear"
-        parts = re.split(r'[_\-]', comp_id)
-        kebab_name = parts[0] + '-' + ''.join(p.capitalize() for p in parts[1:] if p) if len(parts) > 1 else comp_id
-        kebab_dir = os.path.join(remotion_src, kebab_name)
-        if os.path.isdir(kebab_dir):
-            return (comp_pascal, kebab_name)
+    pascal_dir = os.path.join(remotion_src, comp_pascal)
+    if os.path.isdir(pascal_dir):
+        return (comp_pascal, comp_pascal)
 
-        # 3. Flat file (e.g. 07_stat_callout_gitclear.tsx)
-        flat_file = os.path.join(remotion_src, f'{comp_id}.tsx')
-        if os.path.isfile(flat_file):
-            return (comp_pascal, comp_id)
+    parts = re.split(r'[_\-]', comp_id)
+    kebab_name = parts[0] + '-' + ''.join(p.capitalize() for p in parts[1:] if p) if len(parts) > 1 else comp_id
+    kebab_dir = os.path.join(remotion_src, kebab_name)
+    if os.path.isdir(kebab_dir):
+        return (comp_pascal, kebab_name)
 
-    # Fallback: use comp_id as import path
-    return (comp_pascal, comp_id)
+    flat_file = os.path.join(remotion_src, f'{comp_id}.tsx')
+    if os.path.isfile(flat_file):
+        return (comp_pascal, comp_id)
+
+    target_key = _normalize_component_lookup_key(comp_id, section_id)
+    if not target_key:
+        return None
+
+    matches = [
+        candidate
+        for candidate in _iter_component_import_candidates(remotion_src)
+        if _normalize_component_lookup_key(candidate[0], section_id) == target_key
+    ]
+    if not matches:
+        return None
+
+    section_matches = [
+        candidate
+        for candidate in matches
+        if candidate[0].startswith(section_pascal)
+    ]
+    if len(section_matches) == 1:
+        return section_matches[0]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def resolve_preview_composition_id(comp_id: str, section_id: str) -> str:
+    """Mirror the TS preview composition id for logical visual ids."""
+    comp_pascal = to_pascal_case(comp_id)
+    if comp_pascal and comp_pascal[0].isdigit():
+        comp_pascal = f'{to_pascal_case(section_id)}{comp_pascal}'
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
 
 
 def load_project_json(project_dir: str) -> Dict[str, Any]:
@@ -452,6 +522,33 @@ def _has_renderable_spec_media(
     return any(os.path.isfile(candidate) for candidate in staged_candidates)
 
 
+def _has_component_visual_intent(
+    project_dir: str,
+    section: Dict[str, Any],
+    spec_base: str,
+) -> bool:
+    """Return True when a spec explicitly declares a non-media/component visual."""
+    if not project_dir:
+        return False
+
+    spec_dir = section.get('specDir') or section['id']
+    if not os.path.isabs(spec_dir):
+        spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
+
+    spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+    spec_content = _read_text_if_exists(spec_path)
+    if not spec_content:
+        return False
+
+    lines = spec_content.splitlines()
+    first_line = lines[0].strip().lower() if lines else ''
+    if '[veo:' in first_line:
+        return False
+    if '[remotion]' in first_line or '[split:' in first_line:
+        return True
+    return _extract_data_points_json(spec_content) is not None
+
+
 def resolve_section_visual_ids(
     section: Dict[str, Any],
     project_dir: str,
@@ -482,6 +579,8 @@ def resolve_section_visual_ids(
             visual_ids.append(matching)
             consumed.add(matching)
         elif _has_renderable_spec_media(project_dir, section, base, remotion_public):
+            visual_ids.append(base)
+        elif _has_component_visual_intent(project_dir, section, base):
             visual_ids.append(base)
 
     for comp_id in composition_ids:
@@ -785,6 +884,34 @@ def _extract_visual_media_aliases(
     return aliases, primary, explicit
 
 
+MEDIA_DRIVEN_VISUAL_TYPES = {
+    'veo_clip',
+    'video',
+    'video_clip',
+    'media',
+    'broll',
+    'raw-media',
+    'raw_media',
+}
+
+
+def _allows_inherited_visual_media(spec_content: str) -> bool:
+    """Only media-driven visuals may inherit a prior clip implicitly.
+
+    Title cards, beats, code views, and other non-media visuals should not pick
+    up the previous spec's clip just because they happen to follow it.
+    """
+    data_points = _extract_data_points_json(spec_content)
+    if not isinstance(data_points, dict):
+        return True
+
+    visual_type = data_points.get('type')
+    if not isinstance(visual_type, str):
+        return True
+
+    return visual_type.strip().lower() in MEDIA_DRIVEN_VISUAL_TYPES
+
+
 def build_visual_contract_manifest(
     sections: List[Dict[str, Any]],
     project_dir: str,
@@ -984,6 +1111,50 @@ def build_section_visual_contract_map(
     return contracts
 
 
+def resolve_section_component_records(
+    section: Dict[str, Any],
+    project_dir: str = '',
+    remotion_public: str = '',
+    remotion_src: str = '',
+) -> List[tuple[str, str, str]]:
+    """Resolve renderable component visuals using the visual contract as truth.
+
+    Returns tuples of (logical visual id, export name, import path).
+    """
+    resolved_records: List[tuple[str, str, str]] = []
+    seen_visual_ids: set[str] = set()
+    section_id = str(section.get('id') or '')
+
+    def _add_record(visual_id: str, require_existing: bool) -> None:
+        if not visual_id or visual_id in seen_visual_ids:
+            return
+        resolved = (
+            _resolve_existing_comp_import(visual_id, section_id, remotion_src)
+            if require_existing
+            else resolve_comp_import(visual_id, section_id, remotion_src)
+        )
+        if resolved is None:
+            return
+        export_name, import_path = resolved
+        resolved_records.append((visual_id, export_name, import_path))
+        seen_visual_ids.add(visual_id)
+
+    require_existing = bool(project_dir and remotion_public and remotion_src)
+    if require_existing:
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        section_entry = next(iter(manifest.get('sections', [])), None)
+        for visual in section_entry.get('visuals', []) if section_entry else []:
+            if visual.get('renderMode') != 'component':
+                continue
+            _add_record(str(visual.get('id') or ''), require_existing=True)
+
+    for composition in section.get('compositions', []):
+        comp_id = composition if isinstance(composition, str) else composition.get('id', '')
+        _add_record(str(comp_id or ''), require_existing=require_existing)
+
+    return resolved_records
+
+
 def build_visual_media_manifest(
     section: Dict[str, Any],
     project_dir: str,
@@ -1017,10 +1188,11 @@ def build_visual_media_manifest(
         aliases: Dict[str, str] = {}
 
         if os.path.isfile(spec_path):
+            spec_content = _read_text_if_exists(spec_path)
             aliases, next_default, explicit = _extract_visual_media_aliases(
-                _read_text_if_exists(spec_path),
+                spec_content,
                 remotion_public,
-                inherited_default,
+                inherited_default if _allows_inherited_visual_media(spec_content) else None,
                 spec_base,
                 reference_aliases,
             )
@@ -1625,16 +1797,19 @@ def generate_generated_timeline_wrapper(
         project_dir=project_dir,
     )
     compositions: List[Dict[str, Any]] = section.get('compositions', [])
-    composition_ids = {
-        (c if isinstance(c, str) else c.get('id', ''))
-        for c in compositions
-    }
+    component_records = resolve_section_component_records(
+        section,
+        project_dir=project_dir,
+        remotion_public=remotion_public,
+        remotion_src=remotion_src,
+    )
+    component_visual_ids = {visual_id for visual_id, _, _ in component_records}
     visual_media_manifest = build_visual_media_manifest(
         section,
         project_dir,
         remotion_public,
         direct_video_src if needs_direct_video else None,
-        component_visual_ids=composition_ids,
+        component_visual_ids=component_visual_ids,
     )
     visual_overlay_manifest = build_visual_overlay_manifest(
         section,
@@ -1646,14 +1821,8 @@ def generate_generated_timeline_wrapper(
         remotion_public,
     )
 
-    resolved_components: List[tuple[str, str, str]] = []
     component_durations: Dict[str, int] = {}
-    for comp in compositions:
-        comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-        if not comp_id or comp_id.startswith('veo:'):
-            continue
-        comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
-        resolved_components.append((comp_id, comp_pascal, import_path))
+    for comp_id, _, _ in component_records:
         intrinsic_duration = resolve_component_intrinsic_duration_frames(
             comp_id,
             section_id,
@@ -1681,12 +1850,12 @@ def generate_generated_timeline_wrapper(
     if visual_overlay_manifest:
         lines.append('import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";')
 
-    for _, comp_pascal, import_path in resolved_components:
+    for _, comp_pascal, import_path in component_records:
         lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
 
     lines.append('')
     lines.append('const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {')
-    for comp_id, comp_pascal, _ in resolved_components:
+    for comp_id, comp_pascal, _ in component_records:
         lines.append(f'  "{comp_id}": {comp_pascal},')
     lines.append('};')
     lines.append('')
@@ -1963,6 +2132,7 @@ def generate_root_tsx(
     preview_contract_records: List[tuple[str, str, Dict[str, Any]]] = []
     preview_wrapper_names: Dict[str, str] = {}
     section_contract_lookup: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    section_component_records: Dict[str, List[tuple[str, str, str]]] = {}
 
     if project_dir and remotion_public:
         visual_contract_manifest = build_visual_contract_manifest(
@@ -1983,14 +2153,21 @@ def generate_root_tsx(
 
     for section in sections:
         if not project_dir or not remotion_public:
+            section_component_records[section['id']] = resolve_section_component_records(
+                section,
+                remotion_src=remotion_src,
+            )
             continue
 
         fallback_video_src = resolve_direct_video_src(section['id'], remotion_public)
-        compositions = section.get('compositions', [])
-        comp_ids = {
-            (c if isinstance(c, str) else c.get('id', ''))
-            for c in compositions
-        }
+        component_records = resolve_section_component_records(
+            section,
+            project_dir=project_dir,
+            remotion_public=remotion_public,
+            remotion_src=remotion_src,
+        )
+        section_component_records[section['id']] = component_records
+        comp_ids = {visual_id for visual_id, _, _ in component_records}
         visual_media_manifest = build_visual_media_manifest(
             section,
             project_dir,
@@ -1998,16 +2175,12 @@ def generate_root_tsx(
             fallback_video_src=fallback_video_src,
             component_visual_ids=comp_ids,
         )
-        for comp in compositions:
-            comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-            if not comp_id:
-                continue
+        for comp_id, comp_pascal, _ in component_records:
             media = visual_media_manifest.get(comp_id)
             contract = section_contract_lookup.get(section['id'], {}).get(comp_id)
             if not media:
                 if not contract:
                     continue
-            comp_pascal, _ = resolve_comp_import(comp_id, section['id'], remotion_src)
             preview_wrapper_names[comp_pascal] = f'{comp_pascal}Preview'
             if media:
                 preview_media_records.append((section['id'], comp_id, media))
@@ -2033,15 +2206,10 @@ def generate_root_tsx(
     # Import individual components for preview compositions
     imported_pascals: set = set()
     for section in sections:
-        section_id = section['id']
-        compositions = section.get('compositions', [])
-        for comp in compositions:
-            comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-            if comp_id:
-                comp_pascal, import_path = resolve_comp_import(comp_id, section_id, remotion_src)
-                if comp_pascal not in imported_pascals:
-                    lines.append(f'import {{ {comp_pascal} }} from "./{import_path}";')
-                    imported_pascals.add(comp_pascal)
+        for _, comp_pascal, import_path in section_component_records.get(section['id'], []):
+            if comp_pascal not in imported_pascals:
+                lines.append(f'import {{ {comp_pascal} }} from "./{import_path}";')
+                imported_pascals.add(comp_pascal)
 
     lines.append('')
     if preview_media_records or preview_contract_records:
@@ -2062,12 +2230,7 @@ def generate_root_tsx(
         generated_preview_wrappers: set = set()
         for section in sections:
             section_id = section['id']
-            compositions = section.get('compositions', [])
-            for comp in compositions:
-                comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-                if not comp_id:
-                    continue
-                comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
+            for comp_id, comp_pascal, _ in section_component_records.get(section_id, []):
                 preview_wrapper_name = preview_wrapper_names.get(comp_pascal)
                 if not preview_wrapper_name or preview_wrapper_name in generated_preview_wrappers:
                     continue
@@ -2113,38 +2276,32 @@ def generate_root_tsx(
     registered: set = set()
     for section in sections:
         section_id = section['id']
-        compositions = section.get('compositions', [])
         width = section.get('width', default_width)
         height = section.get('height', default_height)
-        for comp in compositions:
-            comp_id = comp if isinstance(comp, str) else comp.get('id', '')
-            if comp_id:
-                comp_pascal, _ = resolve_comp_import(comp_id, section_id, remotion_src)
-                if comp_pascal in registered:
-                    continue
-                preview_component = preview_wrapper_names.get(comp_pascal, comp_pascal)
-                preview_duration = (
-                    resolve_component_intrinsic_duration_frames(
-                        comp_id,
-                        section_id,
-                        remotion_src,
-                        project_dir=project_dir,
-                        spec_dir=section.get('specDir', ''),
-                    )
-                    or 150
+        for comp_id, comp_pascal, _ in section_component_records.get(section_id, []):
+            if comp_pascal in registered:
+                continue
+            preview_component = preview_wrapper_names.get(comp_pascal, comp_pascal)
+            preview_duration = (
+                resolve_component_intrinsic_duration_frames(
+                    comp_id,
+                    section_id,
+                    remotion_src,
+                    project_dir=project_dir,
+                    spec_dir=section.get('specDir', ''),
                 )
-                # Use hyphenated comp_pascal as the Remotion composition ID
-                # to ensure uniqueness across sections
-                remotion_id = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
-                lines.append(f'      <Composition')
-                lines.append(f'        id="{remotion_id}"')
-                lines.append(f'        component={{{preview_component}}}')
-                lines.append(f'        durationInFrames={{{preview_duration}}}')
-                lines.append(f'        fps={{{fps}}}')
-                lines.append(f'        width={{{width}}}')
-                lines.append(f'        height={{{height}}}')
-                lines.append(f'      />')
-                registered.add(comp_pascal)
+                or 150
+            )
+            remotion_id = resolve_preview_composition_id(comp_id, section_id)
+            lines.append(f'      <Composition')
+            lines.append(f'        id="{remotion_id}"')
+            lines.append(f'        component={{{preview_component}}}')
+            lines.append(f'        durationInFrames={{{preview_duration}}}')
+            lines.append(f'        fps={{{fps}}}')
+            lines.append(f'        width={{{width}}}')
+            lines.append(f'        height={{{height}}}')
+            lines.append(f'      />')
+            registered.add(comp_pascal)
 
     lines.append('    </>')
     lines.append('  );')

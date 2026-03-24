@@ -71,6 +71,8 @@ const HARD_PROBLEM_RE =
   /\b(missing|wrong subject|wrong scene|off-screen|outside the frame|clipped|cut off|cropped|illegible|unreadable|completely absent|not visible|invisible|far from|significantly|materially)\b/i;
 const GEOMETRY_DISCREPANCY_RE =
   /\b(center|centering|offset|drift|position|alignment|aligned|spacing|left|right|panel|split|x=|y=|undersized|oversized|size|width|height)\b/i;
+const MAX_RENDERABLE_FRAME_RE =
+  /highest frame that can be rendered is (\d+)/i;
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -166,6 +168,16 @@ function clearStaleAuditStill(outputStill: string): void {
   } catch {
     // Best-effort cleanup; stale PNG removal should not abort the audit run.
   }
+}
+
+function extractMaxRenderableFrame(message: string): number | null {
+  const match = message.match(MAX_RENDERABLE_FRAME_RE);
+  if (!match) {
+    return null;
+  }
+
+  const frame = Number(match[1]);
+  return Number.isFinite(frame) && frame >= 0 ? frame : null;
 }
 
 function shouldSaveAuditTraces(): boolean {
@@ -545,16 +557,37 @@ async function auditSection(
       throw new Error(`Unsupported audit render source: ${JSON.stringify(renderSource)}`);
     }
 
-    try {
-      clearStaleAuditStill(outputStill);
+      try {
+        clearStaleAuditStill(outputStill);
 
-      if (renderSource.kind === "preview-composition") {
-        const sampleFrame = Math.max(0, sampleWindow.intrinsicSampleFrame);
-        onLog(
-          `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
-        );
-        await renderStill(renderSource.compositionId, sampleFrame, outputStill);
-      } else if (renderSource.kind === "media-clip") {
+        if (renderSource.kind === "preview-composition") {
+          const sampleFrame = Math.max(0, sampleWindow.intrinsicSampleFrame);
+          onLog(
+            `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
+          );
+          try {
+            await renderStill(renderSource.compositionId, sampleFrame, outputStill);
+          } catch (err) {
+            const message =
+              err instanceof Error ? err.message : "Unknown audit render failure";
+            const maxRenderableFrame = extractMaxRenderableFrame(message);
+            if (
+              maxRenderableFrame === null ||
+              maxRenderableFrame >= sampleFrame
+            ) {
+              throw err;
+            }
+
+            onLog(
+              `[audit] Preview still frame ${sampleFrame} exceeded ${renderSource.compositionId}; retrying at frame ${maxRenderableFrame}`
+            );
+            await renderStill(
+              renderSource.compositionId,
+              maxRenderableFrame,
+              outputStill
+            );
+          }
+        } else if (renderSource.kind === "media-clip") {
         onLog(
           `[audit] Extracting standalone media frame for ${section.id} (${specName}) at ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s`
         );

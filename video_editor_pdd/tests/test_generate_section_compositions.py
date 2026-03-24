@@ -2435,7 +2435,8 @@ class TestGeneratedTimelineWrapper:
             project_dir=str(project_dir),
         )
 
-        assert "const activeVisuals = VISUAL_SEQUENCE.filter" in tsx
+        assert "const activeVisuals = VISUAL_SEQUENCE" in tsx
+        assert '.filter((visual) => frame >= visual.start && frame < visual.end)' in tsx
         assert "activeVisuals.map((visual) => {" in tsx
         assert "const VisualComponent = COMPONENT_MAP[visual.id] ?? null;" in tsx
         assert "let activeVisual = VISUAL_SEQUENCE.length > 0 ? VISUAL_SEQUENCE[0] : null;" not in tsx
@@ -3531,6 +3532,16 @@ class TestDigitPrefixedIdentifiers:
         # Should not have double section prefix
         assert not comp_pascal.startswith("ColdOpenColdOpen")
 
+    def test_resolve_comp_import_matches_unique_semantic_suffix_when_numbers_drift(self, tmp_path):
+        """Unique section-scoped component matches should survive numbering drift."""
+        remotion_src = str(tmp_path)
+        (tmp_path / "Closing09FinalTitleCard").mkdir()
+        comp_pascal, import_path = resolve_comp_import(
+            "08_final_title_card", "closing", remotion_src
+        )
+        assert comp_pascal == "Closing09FinalTitleCard"
+        assert import_path == "Closing09FinalTitleCard"
+
     def test_root_tsx_no_digit_leading_identifiers(self):
         """Root.tsx must not contain identifiers starting with digits."""
         sections = [{
@@ -3548,6 +3559,109 @@ class TestDigitPrefixedIdentifiers:
         # Should contain the section-prefixed versions
         assert "Part1Economics07StatCalloutGitclear" in root
         assert "Part1Economics09ContextDegradationChart" in root
+
+    def test_generate_section_component_imports_manifest_backed_component_visuals(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "closing"
+        section_dir = remotion_src / "closing"
+        component_dir = remotion_src / "Closing09FinalTitleCard"
+
+        specs_dir.mkdir(parents=True)
+        section_dir.mkdir(parents=True)
+        component_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+
+        (specs_dir / "08_final_title_card.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{"type":"title_card","title":"Prompt-Driven Development"}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "08_final_title_card", desc: "Outro" }];',
+            encoding="utf-8",
+        )
+        (component_dir / "index.ts").write_text(
+            'export const Closing09FinalTitleCard = () => null;\n'
+            'export default Closing09FinalTitleCard;',
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "closing",
+            "compositionId": "ClosingSection",
+            "durationSeconds": 8,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "closing",
+            "compositions": [],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";' in tsx
+        assert '"08_final_title_card": Closing09FinalTitleCard,' in tsx
+
+    def test_generate_root_tsx_uses_logical_preview_id_when_import_name_drifts(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "closing"
+        component_dir = remotion_src / "Closing09FinalTitleCard"
+
+        component_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (specs_dir / "08_final_title_card.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{"type":"title_card","title":"Prompt-Driven Development"}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (component_dir / "index.ts").write_text(
+            'export const Closing09FinalTitleCard = () => null;\n'
+            'export default Closing09FinalTitleCard;',
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "closing",
+                "compositionId": "ClosingSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "closing",
+                "compositions": [],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' in root
+        assert 'id="closing08-final-title-card"' in root
 
     def test_section_wrapper_no_digit_leading_identifiers(self):
         """Section wrapper must not contain identifiers starting with digits."""
@@ -3675,6 +3789,68 @@ class TestBuildVisualMediaManifestComponentFiltering:
         fn = self._import_fn()
         sig = inspect.signature(fn)
         assert 'component_visual_ids' in sig.parameters
+
+    def test_does_not_inherit_previous_clip_for_non_media_visual_types(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "closing"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "06_mold_glow_finale.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "06_mold_glow_finale.md").write_text(
+            "\n".join(
+                [
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "mold_glow_finale" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "07_the_beat.md").write_text(
+            "\n".join(
+                [
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "beat", "chartId": "the_beat" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "08_final_title_card.md").write_text(
+            "\n".join(
+                [
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "title_card", "title": "Prompt-Driven Development" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "closing",
+            "specDir": "closing",
+            "durationSeconds": 8,
+            "offsetSeconds": 0,
+            "compositions": [],
+        }
+
+        manifest = build_visual_media_manifest(
+            section,
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["06_mold_glow_finale"]["defaultSrc"] == "veo/06_mold_glow_finale.mp4"
+        assert "07_the_beat" not in manifest
+        assert "08_final_title_card" not in manifest
 
 
 class TestWrapperTemplateComponentMediaFiltering:

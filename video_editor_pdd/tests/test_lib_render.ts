@@ -16,6 +16,7 @@
  *   8. import 'server-only' guard
  *   9. Ensure output directories exist before rendering
  *  10. stitchFullVideo writes ffmpeg concat file and runs ffmpeg -f concat -safe 0
+ *      with fast-start MP4 output for browser playback
  *  11. getSectionDuration runs ffprobe and parses float duration
  *  12. renderStill uses selectComposition + remotion renderStill
  */
@@ -527,7 +528,7 @@ describe("stitchFullVideo — ffmpeg concat", () => {
     expect(filePath).toContain("concat-");
   });
 
-  it("runs ffmpeg with -f concat -safe 0 -c copy flags", async () => {
+  it("runs ffmpeg with concat copy and fast-start flags", async () => {
     const sections = ["/a/intro.mp4"];
     await stitchFullVideo(sections, "/out/final.mp4", jest.fn());
 
@@ -536,6 +537,7 @@ describe("stitchFullVideo — ffmpeg concat", () => {
     expect(execCall).toContain("-f concat");
     expect(execCall).toContain("-safe 0");
     expect(execCall).toContain("-c copy");
+    expect(execCall).toContain("-movflags +faststart");
   });
 
   it("passes output path to ffmpeg command", async () => {

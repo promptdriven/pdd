@@ -327,6 +327,8 @@ function resolveSpecMediaInfo(
   section: Pick<SectionTimingTarget, "id" | "specDir">,
   specBaseName: string
 ): {
+  contractId?: string;
+  contractRenderMode?: "raw-media" | "generated-media" | "component";
   specPath?: string;
   hasExplicitMedia: boolean;
   hasSpecReferencedMedia: boolean;
@@ -351,6 +353,8 @@ function resolveSpecMediaInfo(
 
   if (!section.specDir) {
     return {
+      contractId: visualContract?.id,
+      contractRenderMode,
       hasExplicitMedia: contractMediaReferences.length > 0,
       hasSpecReferencedMedia: false,
       requiresCompositedAudit:
@@ -376,6 +380,8 @@ function resolveSpecMediaInfo(
   const hasStagedAsset = Boolean(stagedAssetPath);
   if (!fs.existsSync(specPath)) {
     return {
+      contractId: visualContract?.id,
+      contractRenderMode,
       specPath: undefined,
       hasExplicitMedia: hasStagedAsset || contractMediaReferences.length > 0,
       hasSpecReferencedMedia: false,
@@ -405,6 +411,8 @@ function resolveSpecMediaInfo(
     GENERIC_MEDIA_RE.test(content);
   const requiresCompositedAudit = requiresCompositedMediaAudit(content);
   return {
+    contractId: visualContract?.id,
+    contractRenderMode,
     specPath,
     hasExplicitMedia:
       hasStagedAsset ||
@@ -448,11 +456,13 @@ function collectEmbeddedCompanionIds(
   if (!fs.existsSync(specDir)) return companionIds;
 
   for (const entry of fs.readdirSync(specDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+    const entryName = typeof entry === "string" ? entry : entry.name;
+    const entryIsFile = typeof entry === "string" ? true : entry.isFile();
+    if (!entryIsFile || !entryName.endsWith(".md")) continue;
 
     let content: string;
     try {
-      content = fs.readFileSync(path.join(specDir, entry.name), "utf-8");
+      content = fs.readFileSync(path.join(specDir, entryName), "utf-8");
     } catch {
       continue;
     }
@@ -559,6 +569,26 @@ export function resolveSectionVisuals(
     }
 
     if (!mediaInfo.hasExplicitMedia) {
+      if (mediaInfo.contractRenderMode !== "component") {
+        continue;
+      }
+
+      const contractVisualId = mediaInfo.contractId || specBaseName;
+      resolvedVisuals.push({
+        id: contractVisualId,
+        specBaseName,
+        specPath: path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`),
+        hasComponent: true,
+        hasExplicitMedia: false,
+        requiresCompositedAudit: false,
+        previewCompositionId: resolvePreviewCompositionId(
+          contractVisualId,
+          section.id
+        ),
+        mediaReferences: [],
+        stagedAssetPath: mediaInfo.stagedAssetPath,
+        auditHints: mediaInfo.auditHints,
+      });
       continue;
     }
 

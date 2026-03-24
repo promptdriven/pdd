@@ -953,6 +953,91 @@ describe("audit executor factory", () => {
     );
   });
 
+  it("retries preview still rendering at the highest valid frame when the sampled frame exceeds preview duration", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 8,
+        offsetSeconds: 0,
+        compositions: ["07_long_timeline_visual"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["07_long_timeline_visual.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
+    const specPath = pathMod.join(specDir, "07_long_timeline_visual.md");
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === specPath) {
+        return [
+          "[Remotion]",
+          "",
+          "**Duration:** ~8s (240 frames @ 30fps)",
+          "",
+          "## Animation Sequence",
+          "1. Frame 0-40: Fade in.",
+          "2. Frame 40-120: Build the main layout.",
+          "3. Frame 120-210: Transition to the payoff state.",
+          "4. Frame 210-240: Hold on the final payoff frame.",
+        ].join("\n");
+      }
+      return "**Timestamp:** 0:00 - 0:03\n";
+    });
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return candidate === specDir || candidate === specPath;
+    });
+    mockRenderStill
+      .mockRejectedValueOnce(
+        new Error(
+          'Still render for "animation-section07-long-timeline-visual" frame 224 exited with code 1: Cannot use frame 224: Duration of composition is 120, therefore the highest frame that can be rendered is 119'
+        )
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenNthCalledWith(
+      1,
+      "animation-section07-long-timeline-visual",
+      224,
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "animation_section",
+        "07_long_timeline_visual_frame.png"
+      )
+    );
+    expect(mockRenderStill).toHaveBeenNthCalledWith(
+      2,
+      "animation-section07-long-timeline-visual",
+      119,
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "animation_section",
+        "07_long_timeline_visual_frame.png"
+      )
+    );
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      pathMod.join("/project-root", "specs", "animation_section", "AUDIT_07_long_timeline_visual.md"),
+      expect.stringContaining("## Verdict\npass\n## Summary\n"),
+      "utf-8"
+    );
+  });
+
   it("uses the rendered preview sample window when a preview composition spec timestamp is global to the full section timeline", async () => {
     const config = mockProjectConfig();
     config.sections = [

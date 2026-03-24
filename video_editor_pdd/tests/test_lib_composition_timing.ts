@@ -422,6 +422,69 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("keeps manifest-backed component visuals even when project compositions omit them", () => {
+    const specDir = path.join(tmpDir, "specs", "closing");
+    const manifestDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "08_final_title_card.md"),
+      [
+        "# Final Title Card",
+        "",
+        "## Data Points JSON",
+        "```json",
+        '{"type":"title_card","title":"Prompt-Driven Development"}',
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "visual-manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-03-24T00:00:00.000Z",
+          sections: [
+            {
+              id: "closing",
+              visuals: [
+                {
+                  id: "08_final_title_card",
+                  specBaseName: "08_final_title_card",
+                  renderMode: "component",
+                  mediaAliases: {},
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const visuals = resolveSectionVisuals(
+      tmpDir,
+      {
+        id: "closing",
+        specDir: "closing",
+        durationSeconds: 6,
+        compositionId: "ClosingSection",
+      },
+      []
+    );
+
+    expect(visuals).toEqual([
+      expect.objectContaining({
+        id: "08_final_title_card",
+        specBaseName: "08_final_title_card",
+        hasComponent: true,
+        hasExplicitMedia: false,
+        previewCompositionId: "closing08-final-title-card",
+      }),
+    ]);
+  });
+
   it("derives general audit hints from spec structure for layout, effects, and animation phases", () => {
     const hints = resolveSpecAuditHints([
       "# Split Comparison",

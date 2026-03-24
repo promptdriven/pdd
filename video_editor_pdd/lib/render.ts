@@ -286,7 +286,10 @@ export const stitchFullVideo = async (
   await fs.promises.writeFile(concatFile, concatContents, "utf-8");
 
   try {
-    const cmd = `ffmpeg -y -f concat -safe 0 -i "${concatFile}" -c copy "${outputPath}"`;
+    // Write a browser-friendly MP4 so review playback can load metadata immediately.
+    const cmd =
+      `ffmpeg -y -f concat -safe 0 -i "${concatFile}" ` +
+      `-c copy -movflags +faststart "${outputPath}"`;
     await execAsync(cmd);
 
     onProgress({
