@@ -3,7 +3,7 @@
 export const CANVAS = {
   width: 1920,
   height: 1080,
-  background: '#0A1225',
+  background: '#0A0F1A',
 } as const;
 
 export const GLOW = {
@@ -16,45 +16,45 @@ export const GLOW = {
 
 export const TRIANGLE = {
   sideLength: 500,
-  edgeColor: '#475569',
-  edgeOpacity: 0.6,
+  edgeColor: '#334155',
+  edgeOpacity: 0.4,
   edgeWidth: 2,
   glowBlur: 4,
-  glowOpacity: 0.06,
+  glowOpacity: 0.15,
 } as const;
 
 export const NODES = {
   prompt: {
     id: 'prompt',
     label: 'PROMPT',
-    descriptor: 'Encodes intent',
+    descriptor: 'encode intent',
     cx: 960,
-    cy: 280,
-    color: '#4A90D9',
-    labelY: 248,
-    descriptorY: 232,
+    cy: 200,
+    color: '#60A5FA',
+    labelY: 160,
+    descriptorY: 185,
     labelBelow: false,
   },
   tests: {
     id: 'tests',
     label: 'TESTS',
-    descriptor: 'Preserve behavior',
-    cx: 710,
-    cy: 713,
-    color: '#D9944A',
-    labelY: 748,
-    descriptorY: 768,
+    descriptor: 'preserve behavior',
+    cx: 480,
+    cy: 750,
+    color: '#4ADE80',
+    labelY: 800,
+    descriptorY: 825,
     labelBelow: true,
   },
   grounding: {
     id: 'grounding',
     label: 'GROUNDING',
-    descriptor: 'Maintains style',
-    cx: 1210,
-    cy: 713,
-    color: '#5AAA6E',
-    labelY: 748,
-    descriptorY: 768,
+    descriptor: 'maintain style',
+    cx: 1440,
+    cy: 750,
+    color: '#D9944A',
+    labelY: 800,
+    descriptorY: 825,
     labelBelow: true,
   },
 } as const;
@@ -65,9 +65,9 @@ export const NODE_PULSE_MAX = 22;
 export const NODE_PULSE_PERIOD = 60;
 
 export const EDGES = [
-  { from: [960, 280] as const, to: [710, 713] as const, startFrame: 30 },
-  { from: [710, 713] as const, to: [1210, 713] as const, startFrame: 60 },
-  { from: [1210, 713] as const, to: [960, 280] as const, startFrame: 90 },
+  { from: [960, 200] as const, to: [480, 750] as const, startFrame: 30 },
+  { from: [480, 750] as const, to: [1440, 750] as const, startFrame: 60 },
+  { from: [1440, 750] as const, to: [960, 200] as const, startFrame: 90 },
 ] as const;
 
 // Animation timing

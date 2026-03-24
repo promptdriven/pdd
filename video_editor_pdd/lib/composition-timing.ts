@@ -137,8 +137,17 @@ const SPEC_MEDIA_RE =
 const STATIC_FILE_RE = /staticFile\(\s*["'][^"']+\.(?:mp4|webm|mov|m4v)["']\s*\)/i;
 const GENERIC_MEDIA_RE = /\.(?:mp4|webm|mov|m4v)\b/i;
 const JSX_COMPONENT_TAG_RE = /<([A-Z][A-Za-z0-9]*)\b/g;
+const STANDALONE_MEDIA_TAGS = new Set([
+  "AbsoluteFill",
+  "Sequence",
+  "OffthreadVideo",
+  "Audio",
+  "VeoClip",
+  "FadeIn",
+  "FadeOut",
+]);
 const COMPOSITED_MEDIA_HINT_RE =
-  /\b(lower-third|narration badge|narration text|voice badge|caption|subtitle|gradient overlay|light bloom|overlay|badge|label|rule)\b/i;
+  /\b(lower-third|narration badge|narration text|voice badge|caption|subtitle|gradient overlay|light bloom|overlay|badge|rule)\b/i;
 const Z_INDEX_OVERLAY_RE = /z-index\s*[1-9]/i;
 const BULLET_BOLD_LABEL_RE =
   /^\s*(?:[-*]|\d+\.)\s+\*\*(.+?)\*\*(?:\s*[—–-]\s*|:\s*)?(.*)$/gm;
@@ -183,7 +192,7 @@ function requiresCompositedMediaAudit(content: string): boolean {
       continue;
     }
 
-    if (!["AbsoluteFill", "Sequence", "OffthreadVideo", "Audio"].includes(tagName)) {
+    if (!STANDALONE_MEDIA_TAGS.has(tagName)) {
       return true;
     }
   }

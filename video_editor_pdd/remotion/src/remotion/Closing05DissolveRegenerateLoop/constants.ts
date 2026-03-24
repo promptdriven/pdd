@@ -3,7 +3,7 @@
 export const CANVAS = {
   width: 1920,
   height: 1080,
-  backgroundColor: '#0A1225',
+  backgroundColor: '#0A0F1A',
 } as const;
 
 export const RADIAL_GLOW = {
@@ -22,17 +22,17 @@ export const TRIANGLE = {
     [1210, 713],
   ] as [number, number][],
   center: [960, 520] as [number, number],
-  edgeColor: '#475569',
-  edgeOpacity: 0.6,
+  edgeColor: '#334155',
+  edgeOpacity: 0.3,
   edgeWidth: 2,
   glowBlur: 4,
-  glowOpacity: 0.06,
+  glowOpacity: 0.15,
 } as const;
 
 export const NODES = [
-  { center: [960, 280] as [number, number], fill: '#4A90D9', label: 'Prompt' },
-  { center: [710, 713] as [number, number], fill: '#D9944A', label: 'Design' },
-  { center: [1210, 713] as [number, number], fill: '#5AAA6E', label: 'Deliver' },
+  { center: [960, 280] as [number, number], fill: '#60A5FA', label: 'PROMPT' },
+  { center: [710, 713] as [number, number], fill: '#4ADE80', label: 'TESTS' },
+  { center: [1210, 713] as [number, number], fill: '#D9944A', label: 'GROUNDING' },
 ] as const;
 
 export const NODE_RADIUS = 20;
@@ -138,13 +138,14 @@ export const CYCLES = [
 
 // Terminal heartbeat
 export const TERMINAL = {
-  x: 1640,
+  x: 960,
   y: 980,
+  width: 800,
   command: 'pdd generate',
   successMark: '\u2713',
-  fontSize: 10,
-  color: '#4A90D9',
-  opacity: 0.2,
+  fontSize: 11,
+  color: '#64748B',
+  opacity: 0.5,
   // Frames at which terminal shows checkmark
   checkFrames: [40, 95, 140] as number[],
 } as const;

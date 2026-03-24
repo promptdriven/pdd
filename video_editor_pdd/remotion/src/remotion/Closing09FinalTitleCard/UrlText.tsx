@@ -6,7 +6,6 @@ import {
   URL_FONT_SIZE,
   URL_COLOR,
   URL_OPACITY,
-  URL_UNDERLINE_OPACITY,
   URL_FADE_START,
   URL_FADE_DURATION,
 } from './constants';
@@ -45,23 +44,13 @@ export const UrlText: React.FC = () => {
           style={{
             fontFamily: 'Inter, sans-serif',
             fontSize: URL_FONT_SIZE,
-            fontWeight: 600,
+            fontWeight: 400,
             color: URL_COLOR,
             opacity: URL_OPACITY,
           }}
         >
           {URL_TEXT}
         </span>
-        {/* Subtle underline */}
-        <div
-          style={{
-            width: '100%',
-            height: 1,
-            backgroundColor: URL_COLOR,
-            opacity: URL_UNDERLINE_OPACITY,
-            marginTop: 4,
-          }}
-        />
       </div>
     </AbsoluteFill>
   );

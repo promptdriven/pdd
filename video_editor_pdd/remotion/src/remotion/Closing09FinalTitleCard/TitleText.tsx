@@ -7,6 +7,8 @@ import {
   TITLE_COLOR,
   TITLE_OPACITY,
   TITLE_LETTER_SPACING,
+  TITLE_GLOW_COLOR,
+  TITLE_GLOW_BLUR,
   TITLE_FADE_START,
   TITLE_FADE_DURATION,
 } from './constants';
@@ -45,6 +47,7 @@ export const TitleText: React.FC = () => {
           letterSpacing: TITLE_LETTER_SPACING,
           textAlign: 'center',
           whiteSpace: 'nowrap',
+          textShadow: `0 0 ${TITLE_GLOW_BLUR}px ${TITLE_GLOW_COLOR}14`,
         }}
       >
         {TITLE_TEXT}

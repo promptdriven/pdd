@@ -38,12 +38,15 @@ export const TerminalHeartbeat: React.FC = () => {
         position: 'absolute',
         left: TERMINAL.x,
         top: TERMINAL.y,
+        width: TERMINAL.width,
+        transform: 'translateX(-50%)',
         fontFamily: 'JetBrains Mono, monospace',
         fontSize: TERMINAL.fontSize,
         color: TERMINAL.color,
         opacity: TERMINAL.opacity,
         whiteSpace: 'nowrap',
         letterSpacing: 0.5,
+        textAlign: 'center',
       }}
     >
       {text}

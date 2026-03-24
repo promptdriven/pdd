@@ -485,6 +485,161 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("treats raw-media Veo clips with fade helpers as standalone media for audit", () => {
+    const specDir = path.join(tmpDir, "specs", "closing");
+    const manifestDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "03_developer_regenerate_clip.md"),
+      [
+        "[veo:]",
+        "",
+        "## Code Structure (Remotion)",
+        "```tsx",
+        "<Sequence from={0} durationInFrames={120}>",
+        '  <VeoClip clipId="code_regenerate_closing" src="/clips/code_regenerate_closing.mp4" fit="cover" />',
+        "  <Sequence from={0} durationInFrames={10}>",
+        "    <FadeIn />",
+        "  </Sequence>",
+        "  <Sequence from={90} durationInFrames={30}>",
+        "    <FadeOut />",
+        "  </Sequence>",
+        "</Sequence>",
+        "```",
+        "",
+        "## Data Points JSON",
+        "```json",
+        '{',
+        '  "type": "veo_clip",',
+        '  "clipId": "code_regenerate_closing",',
+        '  "characters": [',
+        '    { "id": "developer_protagonist", "label": "Developer" }',
+        "  ]",
+        '}',
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "visual-manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-03-24T00:00:00.000Z",
+          sections: [
+            {
+              id: "closing",
+              visuals: [
+                {
+                  id: "03_developer_regenerate_clip",
+                  specBaseName: "03_developer_regenerate_clip",
+                  renderMode: "raw-media",
+                  mediaAliases: {
+                    defaultSrc: "veo/code_regenerate_closing.mp4",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const visuals = resolveSectionVisuals(
+      tmpDir,
+      {
+        id: "closing",
+        specDir: "closing",
+        durationSeconds: 6,
+        compositionId: "ClosingSection",
+      },
+      []
+    );
+
+    expect(visuals).toEqual([
+      expect.objectContaining({
+        id: "03_developer_regenerate_clip",
+        hasComponent: false,
+        hasExplicitMedia: true,
+        requiresCompositedAudit: false,
+        mediaReferences: expect.arrayContaining([
+          "clips/code_regenerate_closing.mp4",
+          "veo/code_regenerate_closing.mp4",
+        ]),
+      }),
+    ]);
+  });
+
+  it("still marks media specs with text overlays as requiring composited audit", () => {
+    const specDir = path.join(tmpDir, "specs", "closing");
+    const manifestDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "01_sock_callback_discard.md"),
+      [
+        "[veo:]",
+        "",
+        "## Code Structure (Remotion)",
+        "```tsx",
+        "<Sequence from={0} durationInFrames={78}>",
+        '  <VeoClip clipId="sock_discard_closing" src="/clips/sock_discard_closing.mp4" fit="cover" />',
+        "  <FadeIn duration={15}>",
+        "    <Text text=\"Replace, don't patch\" />",
+        "  </FadeIn>",
+        "</Sequence>",
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "visual-manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-03-24T00:00:00.000Z",
+          sections: [
+            {
+              id: "closing",
+              visuals: [
+                {
+                  id: "01_sock_callback_discard",
+                  specBaseName: "01_sock_callback_discard",
+                  renderMode: "raw-media",
+                  mediaAliases: {
+                    defaultSrc: "veo/sock_discard_closing.mp4",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const visuals = resolveSectionVisuals(
+      tmpDir,
+      {
+        id: "closing",
+        specDir: "closing",
+        durationSeconds: 6,
+        compositionId: "ClosingSection",
+      },
+      []
+    );
+
+    expect(visuals).toEqual([
+      expect.objectContaining({
+        id: "01_sock_callback_discard",
+        hasExplicitMedia: true,
+        requiresCompositedAudit: true,
+      }),
+    ]);
+  });
+
   it("derives general audit hints from spec structure for layout, effects, and animation phases", () => {
     const hints = resolveSpecAuditHints([
       "# Split Comparison",
