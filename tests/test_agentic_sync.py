@@ -323,7 +323,8 @@ class TestRunAgenticSync:
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
-        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        # Runner now includes initial_cost (0.05) + per-module (0.10) = 0.15
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.15)
         mock_runner_cls.return_value = mock_runner
 
         success, msg, cost, model = run_agentic_sync(
@@ -391,6 +392,54 @@ class TestRunAgenticSync:
         # Verify stripped basenames were passed to AsyncSyncRunner
         runner_kwargs = mock_runner_cls.call_args[1]
         assert sorted(runner_kwargs["basenames"]) == ["api_orders", "crm_models"]
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_initial_cost_passed_to_runner(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_runner_cls,
+    ):
+        """Issue #745: LLM module analysis cost must be passed as initial_cost to AsyncSyncRunner."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        # LLM module identification costs 0.07
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.07,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
+
+        # Verify initial_cost was passed to AsyncSyncRunner constructor
+        runner_kwargs = mock_runner_cls.call_args[1]
+        assert "initial_cost" in runner_kwargs
+        assert runner_kwargs["initial_cost"] == pytest.approx(0.07)
 
 
 # ---------------------------------------------------------------------------

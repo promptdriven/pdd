@@ -7,15 +7,16 @@ Write the `pdd/agentic_sync_runner.py` module.
 Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
 
 % Requirements
-1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds)`
+1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
    - `sync_options: Dict` — budget, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
    - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
    - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
+   - `initial_cost: float` — pre-runner cost (LLM module identification and dry-run fallback) to include in total cost display and return value (default 0.0)
    - Tracks per-module state: pending -> running -> success | failed
-2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost)
+2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost) where total_cost includes initial_cost + per-module costs
 3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`
 4. Dependency-aware scheduling: a module starts only when all its dependencies (within target set) have status "success"
 5. Dependencies NOT in basenames are assumed already synced
@@ -51,7 +52,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - Markdown table format: Module | Status | Phase | Duration | Cost
 - Phase column: running modules show `current_phase (N done)`, completed modules show `N phases` or `-`
 - Status icons: pending (hourglass), running (sync), success (checkmark), failed (cross)
-- Footer: total cost, overall status (in progress / paused / all success)
+- Footer: total cost (initial_cost + sum of per-module costs), overall status (in progress / paused / all success)
 
 % Function: `build_dep_graph_from_architecture(arch_path: Path, target_basenames: List[str]) -> Dict[str, List[str]]`
 - Load architecture.json, map prompt filename -> basename via `extract_module_from_include`

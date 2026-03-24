@@ -24,8 +24,8 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 13. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py`
 14. Run dry-run validation for each module (see Dry-Run Validation below); fail the workflow if any module cannot be validated
 15. Filter already-synced modules via fingerprint check (see Fingerprint Filtering below); skip workflow if all modules are synced
-16. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, and `module_cwds` map from dry-run validation
-17. Aggregate costs from LLM identification + dry-run LLM fallback + fingerprint filtering + runner execution
+16. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, `module_cwds` map from dry-run validation, and `initial_cost` (the sum of LLM identification + dry-run LLM fallback costs) so the runner can display the full cost in its GitHub progress comment
+17. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
 18. Include `one_session` in `sync_options` dict passed to `AsyncSyncRunner`
 
 % Dry-Run Validation
