@@ -520,6 +520,117 @@ def test_step5_repro_content_re_extracted_on_resume(mock_dependencies, tmp_path)
 # ============================================================================
 
 
+def test_copy_repro_files_to_worktree(tmp_path):
+    """Verify _copy_repro_files_to_worktree physically copies files into the worktree."""
+    from pdd.agentic_bug_orchestrator import _copy_repro_files_to_worktree
+
+    # Create source file in cwd (simulates Step 5 writing before worktree exists)
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    test_dir = cwd / "tests"
+    test_dir.mkdir()
+    repro_file = test_dir / "test_issue_99_reproduction.py"
+    repro_file.write_text("def test_repro(): assert True\n")
+
+    # Create separate worktree directory (empty — no untracked files)
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+
+    step5_output = "REPRO_FILES_CREATED: tests/test_issue_99_reproduction.py"
+
+    result = _copy_repro_files_to_worktree(step5_output, cwd, worktree)
+
+    assert result == ["tests/test_issue_99_reproduction.py"]
+    # The file must physically exist in the worktree
+    copied = worktree / "tests" / "test_issue_99_reproduction.py"
+    assert copied.exists(), "Reproduction test was not copied into the worktree"
+    assert copied.read_text() == "def test_repro(): assert True\n"
+
+
+def test_copy_repro_files_skips_existing_in_worktree(tmp_path):
+    """Verify _copy_repro_files_to_worktree does not overwrite existing files."""
+    from pdd.agentic_bug_orchestrator import _copy_repro_files_to_worktree
+
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / "tests").mkdir()
+    (cwd / "tests" / "test_repro.py").write_text("original from cwd\n")
+
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "tests").mkdir()
+    (worktree / "tests" / "test_repro.py").write_text("already in worktree\n")
+
+    result = _copy_repro_files_to_worktree(
+        "REPRO_FILES_CREATED: tests/test_repro.py", cwd, worktree
+    )
+
+    # Path is still returned (for staging) but content is NOT overwritten
+    assert result == ["tests/test_repro.py"]
+    assert (worktree / "tests" / "test_repro.py").read_text() == "already in worktree\n"
+
+
+def test_step5_repro_files_copied_to_worktree_on_resume(mock_dependencies, tmp_path):
+    """Verify that on resume, Step 5 reproduction tests are physically copied
+    into the worktree directory — not just added to context.
+
+    This is the most important path: Step 5 ran in a prior session, files are
+    in cwd, worktree was created previously. The copy must happen during
+    worktree restoration, not inside the step 7 handler (which is skipped).
+    """
+    mock_load, mock_run, mock_wt = mock_dependencies
+
+    # cwd and worktree must be DIFFERENT directories to catch the bug
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+
+    # Step 5 wrote this file in repo_dir (cwd) during a prior session
+    repro_file = repo_dir / "tests" / "test_issue_789_reproduction.py"
+    repro_file.parent.mkdir(parents=True, exist_ok=True)
+    repro_file.write_text("def test_resume_copy(): assert True\n")
+
+    # Resume from step 10 — step 7 handler will be skipped entirely
+    saved_state = {
+        "step_outputs": {
+            "1": "No duplicates",
+            "2": "Not user error",
+            "3": "Proceed",
+            "4": "No API issues",
+            "5": "Reproduced.\nREPRO_FILES_CREATED: tests/test_issue_789_reproduction.py",
+            "6": "Root cause found",
+            "7": "DEFECT_TYPE: code\nClassification done",
+            "8": "Test plan ready",
+            "9": "FILES_CREATED: tests/test_issue_789_fix.py",
+        },
+        "last_completed_step": 9,
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "worktree_path": str(worktree_dir),
+    }
+
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)):
+        mock_run.side_effect = lambda instruction, **kwargs: (
+            True, f"Output for {kwargs.get('label')}", 0.1, "gpt-4"
+        )
+        mock_load.return_value = "Template for {issue_number}"
+
+        run_agentic_bug_orchestrator(
+            issue_url="url", issue_content="content", repo_owner="owner",
+            repo_name="name", issue_number=789, issue_author="author",
+            issue_title="title", cwd=repo_dir, quiet=True
+        )
+
+    # The file must physically exist in the worktree (not just in context)
+    copied = worktree_dir / "tests" / "test_issue_789_reproduction.py"
+    assert copied.exists(), (
+        "Step 5 reproduction test was NOT copied to worktree on resume — "
+        "the worktree restoration block must call _copy_repro_files_to_worktree"
+    )
+    assert copied.read_text() == "def test_resume_copy(): assert True\n"
+
+
 def test_validate_repro_path_rejects_traversal(tmp_path):
     """Ensure _validate_repro_path blocks absolute paths and '..' traversal."""
     from pdd.agentic_bug_orchestrator import _validate_repro_path

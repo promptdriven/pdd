@@ -334,8 +334,8 @@ def _extract_repro_test_content(output: str, cwd: Path) -> str:
         if rf_path and rf_path.exists():
             try:
                 contents.append(rf_path.read_text())
-            except (OSError, UnicodeDecodeError):
-                pass
+            except (OSError, UnicodeDecodeError) as exc:
+                console.print(f"[yellow]Warning: failed to read reproduction test {rf}: {exc}[/yellow]")
     return "\n".join(contents)
 
 
@@ -361,8 +361,8 @@ def _copy_repro_files_to_worktree(
             if not dst_path.exists():
                 shutil.copy2(str(src_path), str(dst_path))
             staged.append(rf)
-        except OSError:
-            pass
+        except OSError as exc:
+            console.print(f"[yellow]Warning: failed to copy reproduction test {rf} to worktree: {exc}[/yellow]")
     return staged
 
 
@@ -723,6 +723,18 @@ def run_agentic_bug_orchestrator(
             state["worktree_path"] = str(worktree_path)
             context["worktree_path"] = str(worktree_path)
 
+        # Copy Step 5 reproduction tests into worktree on resume
+        if worktree_path and "5" in step_outputs:
+            repro_copied = _copy_repro_files_to_worktree(
+                step_outputs["5"], cwd, worktree_path
+            )
+            if repro_copied:
+                changed_files.extend(repro_copied)
+                changed_files = list(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
+                if not quiet:
+                    console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
+
     for step_index, (step_num, name, description) in enumerate(steps_config, 1):
         if step_num < start_step:
             continue
@@ -762,6 +774,7 @@ def run_agentic_bug_orchestrator(
                 )
                 if repro_copied:
                     changed_files.extend(repro_copied)
+                    changed_files = list(set(changed_files))
                     context["files_to_stage"] = ", ".join(changed_files)
                     if not quiet:
                         console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
@@ -864,6 +877,11 @@ def run_agentic_bug_orchestrator(
         # Step-specific handling
         if step_num == 5:
             context["step5_reproduction_tests"] = _extract_repro_test_content(step_output, current_work_dir)
+            repro_files = _parse_changed_files(step_output, "REPRO_FILES_CREATED")
+            if repro_files:
+                changed_files.extend(repro_files)
+                changed_files = list(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
 
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
