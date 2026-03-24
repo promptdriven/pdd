@@ -3172,6 +3172,73 @@ class TestClassifyStepOutput:
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
 
 
+class TestClassifyStepOutputCodeBugPriority:
+    """Bug: _classify_step_output for step 3 only checks for NOT_A_BUG, missing
+    CODE_BUG/TEST_BUG/BOTH. When the LLM correctly emits CODE_BUG, tiers 1-3
+    return None, and tier 4 misclassifies as NOT_A_BUG — killing the workflow.
+
+    Fix: check positive tokens (CODE_BUG, TEST_BUG, BOTH) before NOT_A_BUG,
+    matching the fail-before-pass pattern used for Steps 1/2/9.
+    """
+
+    def test_code_bug_detected_in_step3(self):
+        """When Step 3 output contains CODE_BUG, return it (not None)."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "## Step 3: Root Cause Analysis (Cycle 1)\n\n**Status:** CODE_BUG\n\n### Failure Analysis\n..."
+        assert _classify_step_output(output, step_num=3) == "CODE_BUG"
+
+    def test_test_bug_detected_in_step3(self):
+        """When Step 3 output contains TEST_BUG, return it."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** TEST_BUG\n\nThe test expectations are wrong."
+        assert _classify_step_output(output, step_num=3) == "TEST_BUG"
+
+    def test_both_detected_in_step3(self):
+        """When Step 3 output contains BOTH, return it."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** BOTH\n\nCode and tests both need fixing."
+        assert _classify_step_output(output, step_num=3) == "BOTH"
+
+    def test_code_bug_prevents_not_a_bug_false_positive(self):
+        """Real failure case: long output with CODE_BUG at top and 'not caused
+        by the bug' language in the tail. Must return CODE_BUG, not None."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = (
+            "## Step 3: Root Cause Analysis (Cycle 1)\n\n"
+            "**Status:** CODE_BUG\n\n"
+            "### Failure Analysis\n\n"
+            "The Step 2 full-suite run reported failures across multiple test files. "
+            "I categorized every failure and traced each to its root cause. "
+            "**None are caused by the issue #449 fix** — they are all pre-existing.\n\n"
+            "#### Category A: `python` binary not found (6 tests)\n"
+            "- **Root cause:** Pre-existing environment issue.\n\n"
+            "#### Category B: Missing `pytest-mock` package (94 errors)\n"
+            "- **Root cause:** Pre-existing dependency issue.\n\n"
+            "### Root Cause\n\n"
+            "The **code bug** is confirmed and localized.\n"
+            "No test fixes needed — the issue #449 tests are correctly written.\n"
+            "The 111 other failures are pre-existing environmental issues.\n"
+        )
+        result = _classify_step_output(output, step_num=3)
+        assert result == "CODE_BUG", (
+            f"Expected CODE_BUG but got {result!r}. "
+            "Tier 4 would misclassify this as NOT_A_BUG because the tail "
+            "discusses 'not caused by the bug' — but CODE_BUG at the top "
+            "should take priority."
+        )
+
+    def test_not_a_bug_still_works(self):
+        """Regression: NOT_A_BUG detection still works when no positive token present."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("NOT_A_BUG", step_num=3) == "NOT_A_BUG"
+
+    def test_code_bug_takes_priority_over_not_a_bug(self):
+        """If both CODE_BUG and NOT_A_BUG appear, CODE_BUG wins (checked first)."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** CODE_BUG\n\nNote: this is NOT_A_BUG for the unrelated issue."
+        assert _classify_step_output(output, step_num=3) == "CODE_BUG"
+
+
 class TestIssue673CheckE2ESubdirectory:
     """Bug: _check_e2e_environment only checks repo root for playwright config.
 

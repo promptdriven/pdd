@@ -99,6 +99,16 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
         return "VERIFICATION_FAILED"
 
     if step_num == 3:
+        # Check for positive tokens first — if CODE_BUG/TEST_BUG/BOTH is found,
+        # return it so tier 4 NOT_A_BUG fallback is skipped (same fail-before-pass
+        # pattern used for Steps 1/2/9). Case-sensitive substring match (consistent
+        # with VERIFICATION_FAILED, LOCAL_TESTS_PASS, and detect_control_token tier 1)
+        # is safe here because these tokens don't appear uppercase in natural language
+        # (e.g., "Both tests passed" won't match "BOTH").
+        for positive_token in ("CODE_BUG", "TEST_BUG", "BOTH"):
+            if positive_token in output:
+                return positive_token
+
         match = detect_control_token(output, "NOT_A_BUG")
         if match:
             if match.tier == "semantic":
