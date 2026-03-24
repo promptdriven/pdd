@@ -2,6 +2,7 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
+import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Part4PrecisionTradeoff01SectionTitleCard } from "../Part4PrecisionTradeoff01SectionTitleCard";
 import { Part4PrecisionTradeoff02PrinterVsMoldSplit } from "../Part4PrecisionTradeoff02PrinterVsMoldSplit";
 import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "../Part4PrecisionTradeoff03PrecisionTradeoffCurve";
@@ -69,6 +70,12 @@ export const Part4PrecisionTradeoffSection: React.FC = () => {
                   </VisualMediaProvider>
                 </VisualContractProvider>
               </SlotScaledSequence>
+            ) : visualContract?.renderMode === "component" ? (
+              <VisualContractProvider contract={visualContract}>
+                <VisualMediaProvider media={visualMedia}>
+                  <GeneratedContractVisual />
+                </VisualMediaProvider>
+              </VisualContractProvider>
             ) : null}
           </Sequence>
         );

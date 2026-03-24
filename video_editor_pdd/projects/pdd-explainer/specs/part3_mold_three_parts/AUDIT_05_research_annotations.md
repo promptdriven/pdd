@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame shows a placeholder/stub visual instead of the actual spec content. The frame displays only a debug label ('ANNOTATION OVERLAY' / 'research_annotations') in the top-left and a centered pill-shaped element reading 'Generated from visual contract'. None of the specified visual elements are present: no Card 1 (red warning annotation about AI code issues), no Card 2 (green positive annotation about AI + strong tests), no mold cross-section background, no glowing walls, no terminal overlay with checkmarks, and no bottom annotation text. At frame 479/540 (88.9% progress), all elements from every animation phase should be fully visible — both cards, pulsing walls, and the terminal overlay. Instead, the component appears to be rendering a generic placeholder that has not been implemented.

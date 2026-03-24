@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame is sampled at frame 329 (68.7% progress), which is in animation phase 6 (hold with all elements visible). The overall composition and data representation are correct: a large maintenance slice (~85%) dominates a smaller initial development slice (~15%), with two stat callouts on the right. However, there are several visible discrepancies: (1) The chart is rendered as a donut (with center hole and 'SOFTWARE COST' text) rather than a filled pie chart as specified. (2) The Initial Development slice uses blue instead of the specified green-teal (#4ADE80). (3) Callout text wording and styling differ from spec — cards with icons and dark backgrounds rather than simple text with left-border accents. (4) No connecting lines from labels to slices. Despite these differences, the visual intent — showing maintenance dominance with supporting research callouts — reads correctly and the animation phase timing is appropriate.

@@ -2,26 +2,32 @@
 
 ### Feat
 
-- Define new video segment specifications, adjust Remotion component timings, and add audit documentation for explainer video parts.
-- enhance agentic sync module identification from long issue bodies (#746)
-- add explainer video specifications for prompt nozzle, compression ratio, and module aside sections.
-- implement three-manifest data model for audio-visual sync
+- **Step 5 reproduction test pipeline**: Step 5 now writes reproduction tests to disk (`REPRO_FILES_CREATED:`), forwards their content to Step 9 as regression tests, and copies them into the worktree for commit in Step 12 — language-agnostic with path traversal validation
+- **E2E fix convergence detection** (#903): empty dev-units short-circuit skips Steps 6–8 when `DEV_UNITS_IDENTIFIED` is `0`; per-cycle file-hash comparison stops the workflow when no files change, preventing infinite loops
+- **agentic sync module identification** for long issue bodies: prioritized section scanning, few-shot examples, origin-matching fallback, and `{issue_number}` template variable
+- **worktree remote branch reuse**: `_setup_worktree` fetches and starts from `origin/<branch>` when a remote branch has prior work, preserving changes across retries
+- **Step 9 test scoping**: verify-all prompt now runs only issue-related tests instead of the full suite — unrelated pre-existing failures no longer drive cycle decisions
 
 ### Fix
 
-- annotation b2ba7b3b-edbe-463e-b7d2-32f6fdc892f1 Change the main background color of this section t
-- make Step 5 reproduction test handling language-agnostic
-- programmatically copy Step 5 reproduction tests into worktree
-- add missing newline at end of test file
-- implement Step 5 reproduction test forwarding to Step 9 (#928)
-- rewrite PR #931 tests and prompts for correct Step 5 repro approach (#928)
-- resolve 14 public CI test failures unrelated to PR content (#942)
-- detect CODE_BUG before NOT_A_BUG in Step 3 tier 4 classification (#893)
+- **detect CODE_BUG before NOT_A_BUG** in Step 3 tier 4 classification — positive tokens checked before semantic `NOT_A_BUG` fallback (#893)
+- **`_parse_dev_units` sentinel**: returns `None` when marker is absent (previously `""`), distinguishing "not yet parsed" from "parsed to empty" — prevents false short-circuit in Steps 6–8
+- **structural test false-positive reduction**: `detect_structural_test_patterns` now tracks path variable assignments (e.g., `arch_path = Path(tmpdir) / "config.json"`) and skips reads of non-source files through tracked variables
+- **Step 9 retry with backup/restore**: first-attempt test files are backed up before retry and restored on failure — prevents empty worktree after failed structural-test retry
+- **violation feedback with code snippets**: structural test retry addendum now includes actual source lines with `>>>` markers around each violation, plus concrete bad/good example pairs
+- resolve 14 public CI test failures unrelated to PR content
 
-### Refactor
+### Build
 
-- Restructure video explainer project specifications by deleting old audit files, adding new scenes, and updating existing ones.
-- Reorganize and update video project specifications across multiple sections and audit files.
+- update cloud image hash and CI test durations
+
+### Test
+
+- add `test_e2e_issue_903_convergence.py`: E2E tests for zero-dev-units and no-file-changes convergence, plus Step 9 test-scoping verification
+- expand `test_agentic_bug_orchestrator.py`: reproduction test extraction, worktree copying, path traversal validation, structural pattern detection with path variables, violation snippet extraction
+- expand `test_agentic_change_orchestrator.py`: review loop variant detection, worktree remote branch reuse
+- expand `test_agentic_e2e_fix_orchestrator.py`: convergence detection (empty dev units, file-hash comparison), `_parse_dev_units` None sentinel
+- add `test_agentic_sync.py` coverage for module identification from long issue bodies
 
 ## v0.0.185 (2026-03-22)
 

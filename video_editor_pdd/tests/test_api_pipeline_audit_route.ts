@@ -2460,6 +2460,81 @@ describe("GET — audit markdown parsing", () => {
     );
   });
 
+  it("omits embedded child specs from standalone Review rows", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "cold_open",
+        label: "Cold Open",
+        specDir: "cold_open",
+        compositions: ["01_split_screen_hook"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "cold_open");
+    const parentSpecPath = pathMod.join(specDir, "01_split_screen_hook.md");
+    const childSpecPath = pathMod.join(specDir, "02_developer_ai_edit.md");
+    const parentAuditPath = pathMod.join(specDir, "AUDIT_01_split_screen_hook.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === parentSpecPath ||
+      candidate === childSpecPath ||
+      candidate === parentAuditPath
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return [
+          "01_split_screen_hook.md",
+          "02_developer_ai_edit.md",
+          "AUDIT_01_split_screen_hook.md",
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === parentAuditPath) {
+        return "## Verdict\npass\n## Summary\nFrame matches spec\n";
+      }
+      if (candidate === parentSpecPath) {
+        return [
+          "[split:]",
+          "",
+          "## Data Points JSON",
+          "```json",
+          '{ "leftPanel": { "content": "developer_ai_edit" } }',
+          "```",
+        ].join("\n");
+      }
+      if (candidate === childSpecPath) {
+        return [
+          "[veo:]",
+          "",
+          "## Data Points JSON",
+          "```json",
+          '{ "type": "veo_clip", "clipId": "developer_ai_edit", "usedIn": "01_split_screen_hook (left panel)" }',
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    expect(body.sections[0].specs).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({
+          specName: "02_developer_ai_edit",
+        }),
+      ])
+    );
+    expect(body.sections[0].status).toBe("done");
+  });
+
   it("reads audit files from specs/{specDir} when project.json omits the specs/ prefix", async () => {
     const config = mockProjectConfig();
     config.sections = [

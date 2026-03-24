@@ -145,6 +145,14 @@ def resolve_preview_composition_id(comp_id: str, section_id: str) -> str:
     return re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', comp_pascal).lower()
 
 
+def resolve_logical_component_name(comp_id: str, section_id: str) -> str:
+    """Return a safe PascalCase identifier for a logical visual id."""
+    comp_pascal = to_pascal_case(comp_id)
+    if comp_pascal and comp_pascal[0].isdigit():
+        comp_pascal = f'{to_pascal_case(section_id)}{comp_pascal}'
+    return comp_pascal
+
+
 def load_project_json(project_dir: str) -> Dict[str, Any]:
     """Load and parse project.json from the given directory."""
     project_path = os.path.join(project_dir, 'project.json')
@@ -722,6 +730,46 @@ def _iter_video_reference_values(spec_content: str) -> List[str]:
     return values
 
 
+def _declares_explicit_visual_media(spec_content: str) -> bool:
+    """Return True when a spec explicitly names media, even if it is unresolved."""
+    if not spec_content:
+        return False
+
+    if VISUAL_MEDIA_KEY_RE.search(spec_content):
+        return True
+    if STRUCTURED_VIDEO_FIELD_RE.search(spec_content):
+        return True
+    if GENERIC_VIDEO_REF_RE.search(spec_content):
+        return True
+
+    for rel_path in STATIC_FILE_RE.findall(spec_content):
+        if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
+            return True
+
+    data_points = _extract_data_points_json(spec_content)
+    return bool(data_points is not None and _iter_data_point_media_values(data_points))
+
+
+def _is_media_driven_visual(
+    spec_content: str,
+    data_points: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Return True when the spec is fundamentally a media clip rather than a component."""
+    lines = spec_content.splitlines()
+    first_line = lines[0].strip().lower() if lines else ''
+    if '[veo:' in first_line:
+        return True
+
+    if not isinstance(data_points, dict):
+        data_points = _extract_data_points_json(spec_content)
+
+    if not isinstance(data_points, dict):
+        return False
+
+    visual_type = data_points.get('type')
+    return isinstance(visual_type, str) and visual_type.strip().lower() in MEDIA_DRIVEN_VISUAL_TYPES
+
+
 def _build_section_video_reference_aliases(
     visual_ids: List[str],
     spec_dir: str,
@@ -1023,6 +1071,19 @@ def build_visual_contract_manifest(
             if lane_hint is None and overlay_manifest.get(visual_id):
                 lane_hint = 'overlay'
 
+            render_mode = _resolve_visual_render_mode(
+                media_manifest.get(visual_id, {}),
+                overlay_manifest.get(visual_id),
+                has_component=has_component,
+            )
+            if (
+                render_mode == 'component'
+                and not has_component
+                and spec_content
+                and _is_media_driven_visual(spec_content, data_points if isinstance(data_points, dict) else None)
+            ):
+                render_mode = 'raw-media'
+
             visual_entry: Dict[str, Any] = {
                 'id': visual_id,
                 'specBaseName': spec_base,
@@ -1030,11 +1091,7 @@ def build_visual_contract_manifest(
                 'dataPoints': data_points,
                 'mediaAliases': media_manifest.get(visual_id, {}),
                 'overlayConfig': overlay_manifest.get(visual_id),
-                'renderMode': _resolve_visual_render_mode(
-                    media_manifest.get(visual_id, {}),
-                    overlay_manifest.get(visual_id),
-                    has_component=has_component,
-                ),
+                'renderMode': render_mode,
             }
             if cover_segments is not None:
                 visual_entry['coverSegments'] = cover_segments
@@ -1189,10 +1246,13 @@ def build_visual_media_manifest(
 
         if os.path.isfile(spec_path):
             spec_content = _read_text_if_exists(spec_path)
+            declares_explicit_media = _declares_explicit_visual_media(spec_content)
             aliases, next_default, explicit = _extract_visual_media_aliases(
                 spec_content,
                 remotion_public,
-                inherited_default if _allows_inherited_visual_media(spec_content) else None,
+                inherited_default
+                if _allows_inherited_visual_media(spec_content) and not declares_explicit_media
+                else None,
                 spec_base,
                 reference_aliases,
             )
@@ -1820,6 +1880,10 @@ def generate_generated_timeline_wrapper(
         project_dir,
         remotion_public,
     )
+    needs_generated_contract_visual = any(
+        contract.get('renderMode') == 'component' and visual_id not in component_visual_ids
+        for visual_id, contract in visual_contract_map.items()
+    )
 
     component_durations: Dict[str, int] = {}
     for comp_id, _, _ in component_records:
@@ -1849,6 +1913,8 @@ def generate_generated_timeline_wrapper(
     lines.append('import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";')
     if visual_overlay_manifest:
         lines.append('import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";')
+    if needs_generated_contract_visual:
+        lines.append('import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";')
 
     for _, comp_pascal, import_path in component_records:
         lines.append(f'import {{ {comp_pascal} }} from "../{import_path}";')
@@ -1924,6 +1990,12 @@ def generate_generated_timeline_wrapper(
     lines.append('                </VisualContractProvider>')
     lines.append('              </SlotScaledSequence>')
     if visual_media_manifest:
+        lines.append('            ) : visualContract?.renderMode === "component" ? (')
+        lines.append('              <VisualContractProvider contract={visualContract}>')
+        lines.append('                <VisualMediaProvider media={visualMedia}>')
+        lines.append('                  <GeneratedContractVisual />')
+        lines.append('                </VisualMediaProvider>')
+        lines.append('              </VisualContractProvider>')
         lines.append('            ) : visualMedia?.defaultSrc ? (')
         lines.append('              <VisualContractProvider contract={visualContract}>')
         lines.append('                <VisualMediaProvider media={visualMedia}>')
@@ -1939,6 +2011,12 @@ def generate_generated_timeline_wrapper(
         lines.append('              </VisualContractProvider>')
         lines.append('            ) : null}')
     else:
+        lines.append('            ) : visualContract?.renderMode === "component" ? (')
+        lines.append('              <VisualContractProvider contract={visualContract}>')
+        lines.append('                <VisualMediaProvider media={visualMedia}>')
+        lines.append('                  <GeneratedContractVisual />')
+        lines.append('                </VisualMediaProvider>')
+        lines.append('              </VisualContractProvider>')
         lines.append('            ) : null}')
     lines.append('          </Sequence>')
     lines.append('        );')
@@ -2133,6 +2211,9 @@ def generate_root_tsx(
     preview_wrapper_names: Dict[str, str] = {}
     section_contract_lookup: Dict[str, Dict[str, Dict[str, Any]]] = {}
     section_component_records: Dict[str, List[tuple[str, str, str]]] = {}
+    section_component_lookup: Dict[str, Dict[str, str]] = {}
+    section_preview_visual_ids: Dict[str, List[str]] = {}
+    needs_generated_contract_preview = False
 
     if project_dir and remotion_public:
         visual_contract_manifest = build_visual_contract_manifest(
@@ -2157,6 +2238,13 @@ def generate_root_tsx(
                 section,
                 remotion_src=remotion_src,
             )
+            section_component_lookup[section['id']] = {
+                visual_id: export_name
+                for visual_id, export_name, _ in section_component_records[section['id']]
+            }
+            section_preview_visual_ids[section['id']] = [
+                visual_id for visual_id, _, _ in section_component_records[section['id']]
+            ]
             continue
 
         fallback_video_src = resolve_direct_video_src(section['id'], remotion_public)
@@ -2167,6 +2255,10 @@ def generate_root_tsx(
             remotion_src=remotion_src,
         )
         section_component_records[section['id']] = component_records
+        section_component_lookup[section['id']] = {
+            visual_id: export_name
+            for visual_id, export_name, _ in component_records
+        }
         comp_ids = {visual_id for visual_id, _, _ in component_records}
         visual_media_manifest = build_visual_media_manifest(
             section,
@@ -2175,13 +2267,25 @@ def generate_root_tsx(
             fallback_video_src=fallback_video_src,
             component_visual_ids=comp_ids,
         )
-        for comp_id, comp_pascal, _ in component_records:
+        contract_visuals = section_contract_lookup.get(section['id'], {})
+        preview_visual_ids = [
+            visual_id
+            for visual_id, contract in contract_visuals.items()
+            if contract.get('renderMode') == 'component'
+        ]
+        if not preview_visual_ids:
+            preview_visual_ids = [visual_id for visual_id, _, _ in component_records]
+        section_preview_visual_ids[section['id']] = preview_visual_ids
+
+        for comp_id in preview_visual_ids:
             media = visual_media_manifest.get(comp_id)
-            contract = section_contract_lookup.get(section['id'], {}).get(comp_id)
-            if not media:
-                if not contract:
-                    continue
-            preview_wrapper_names[comp_pascal] = f'{comp_pascal}Preview'
+            contract = contract_visuals.get(comp_id)
+            wrapper_key = f'{section["id"]}:{comp_id}'
+            export_name = section_component_lookup.get(section['id'], {}).get(comp_id)
+            logical_name = export_name or resolve_logical_component_name(comp_id, section['id'])
+            preview_wrapper_names[wrapper_key] = f'{logical_name}Preview'
+            if export_name is None:
+                needs_generated_contract_preview = True
             if media:
                 preview_media_records.append((section['id'], comp_id, media))
             if contract:
@@ -2194,6 +2298,8 @@ def generate_root_tsx(
         if preview_contract_records:
             imports.append('VisualContractProvider')
         lines.append(f'import {{ {", ".join(imports)} }} from "./_shared/visual-runtime";')
+    if needs_generated_contract_preview:
+        lines.append('import { GeneratedContractVisual } from "./_shared/GeneratedContractVisual";')
     lines.append('')
 
     # Import all section components (always from wrapper directory)
@@ -2230,14 +2336,20 @@ def generate_root_tsx(
         generated_preview_wrappers: set = set()
         for section in sections:
             section_id = section['id']
-            for comp_id, comp_pascal, _ in section_component_records.get(section_id, []):
-                preview_wrapper_name = preview_wrapper_names.get(comp_pascal)
+            preview_visual_ids = section_preview_visual_ids.get(section_id, [])
+            for comp_id in preview_visual_ids:
+                wrapper_key = f'{section_id}:{comp_id}'
+                preview_wrapper_name = preview_wrapper_names.get(wrapper_key)
                 if not preview_wrapper_name or preview_wrapper_name in generated_preview_wrappers:
                     continue
+                component_export = section_component_lookup.get(section_id, {}).get(comp_id)
                 lines.append(f'const {preview_wrapper_name}: React.FC = () => (')
                 lines.append(f'  <VisualContractProvider contract={{PREVIEW_VISUAL_CONTRACTS["{section_id}:{comp_id}"] ?? null}}>')
                 lines.append(f'    <VisualMediaProvider media={{PREVIEW_VISUAL_MEDIA["{section_id}:{comp_id}"] ?? null}}>')
-                lines.append(f'      <{comp_pascal} />')
+                if component_export:
+                    lines.append(f'      <{component_export} />')
+                else:
+                    lines.append('      <GeneratedContractVisual />')
                 lines.append('    </VisualMediaProvider>')
                 lines.append('  </VisualContractProvider>')
                 lines.append(');')
@@ -2278,10 +2390,20 @@ def generate_root_tsx(
         section_id = section['id']
         width = section.get('width', default_width)
         height = section.get('height', default_height)
-        for comp_id, comp_pascal, _ in section_component_records.get(section_id, []):
-            if comp_pascal in registered:
+        preview_visual_ids = section_preview_visual_ids.get(section_id)
+        if not preview_visual_ids:
+            preview_visual_ids = [visual_id for visual_id, _, _ in section_component_records.get(section_id, [])]
+        for comp_id in preview_visual_ids:
+            wrapper_key = f'{section_id}:{comp_id}'
+            if wrapper_key in registered:
                 continue
-            preview_component = preview_wrapper_names.get(comp_pascal, comp_pascal)
+            preview_component = preview_wrapper_names.get(
+                wrapper_key,
+                section_component_lookup.get(section_id, {}).get(
+                    comp_id,
+                    resolve_logical_component_name(comp_id, section_id),
+                ),
+            )
             preview_duration = (
                 resolve_component_intrinsic_duration_frames(
                     comp_id,
@@ -2301,7 +2423,7 @@ def generate_root_tsx(
             lines.append(f'        width={{{width}}}')
             lines.append(f'        height={{{height}}}')
             lines.append(f'      />')
-            registered.add(comp_pascal)
+            registered.add(wrapper_key)
 
     lines.append('    </>')
     lines.append('  );')

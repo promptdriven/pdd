@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The sampled frame is at intrinsic frame 674/720 (93.7% progress), which falls within animation phase 8 (frames 630-720). According to the spec, at this point the chip layout should have dissolved and a massive code diff should be scrolling past. Instead, the frame shows the full staircase still displayed with all five steps visible (Transistors 1970s, Schematics 1980s, RTL/Verilog 1990s, Behavioral/HLS 2010s, Natural Language → Code 2020s) along with 'Couldn't scale' arrows. There is a dark rectangle in the upper-right area that may represent a partially-rendered chip layout, but there is no visible code diff scrolling past. The staircase has not compressed to the left side as specified for phases 6-8. The visual is stuck showing what appears to be the phase 5 state (all steps visible) with a partial transition element, rather than the phase 8 code-diff-scrolling state.

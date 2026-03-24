@@ -3663,6 +3663,97 @@ class TestDigitPrefixedIdentifiers:
         assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' in root
         assert 'id="closing08-final-title-card"' in root
 
+    def test_generate_root_tsx_registers_fallback_preview_for_manifest_component_without_import(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+
+        remotion_src.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (specs_dir / "02_sock_price_chart.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{"type":"animated_chart","chartId":"sock_economics","narrationSegments":["part1_economics_005"]}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "part1_economics",
+                "compositionId": "Part1EconomicsSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "part1_economics",
+                "compositions": [],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { GeneratedContractVisual } from "./_shared/GeneratedContractVisual";' in root
+        assert 'const Part1Economics02SockPriceChartPreview: React.FC = () => (' in root
+        assert '<GeneratedContractVisual />' in root
+        assert 'id="part1-economics02-sock-price-chart"' in root
+
+    def test_generate_section_component_falls_back_to_generated_contract_visual_when_import_missing(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        section_dir = remotion_src / "part1_economics"
+
+        section_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "02_sock_price_chart", desc: "Sock economics", lane: 0 }];',
+            encoding="utf-8",
+        )
+        (specs_dir / "02_sock_price_chart.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{"type":"animated_chart","chartId":"sock_economics","narrationSegments":["part1_economics_005"]}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        tsx = generate_section_component(
+            {
+                "id": "part1_economics",
+                "compositionId": "Part1EconomicsSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "part1_economics",
+                "compositions": [],
+            },
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' in tsx
+        assert 'visualContract?.renderMode === "component" ? (' in tsx
+        assert '<GeneratedContractVisual />' in tsx
+
     def test_section_wrapper_no_digit_leading_identifiers(self):
         """Section wrapper must not contain identifiers starting with digits."""
         section = {
@@ -3851,6 +3942,104 @@ class TestBuildVisualMediaManifestComponentFiltering:
         assert manifest["06_mold_glow_finale"]["defaultSrc"] == "veo/06_mold_glow_finale.mp4"
         assert "07_the_beat" not in manifest
         assert "08_final_title_card" not in manifest
+
+    def test_does_not_inherit_previous_clip_when_spec_declares_unresolved_clipid(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part2_paradigm_shift"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "03_injection_molding_process.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "03_injection_molding_process.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "injection_molding_process" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "04_1980s_chip_lab.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "1980s_chip_lab" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "part2_paradigm_shift",
+                "specDir": "part2_paradigm_shift",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["03_injection_molding_process"]["defaultSrc"] == "veo/03_injection_molding_process.mp4"
+        assert "04_1980s_chip_lab" not in manifest
+
+
+class TestVisualContractManifestMediaDrivenRenderMode:
+    def test_marks_unresolved_veo_specs_as_raw_media_instead_of_component(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part3_mold_three_parts"
+
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (specs_dir / "04_liquid_hits_wall.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "liquid_hits_wall" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_contract_manifest(
+            [
+                {
+                    "id": "part3_mold_three_parts",
+                    "specDir": "part3_mold_three_parts",
+                    "durationSeconds": 8,
+                    "offsetSeconds": 0,
+                    "compositions": [],
+                }
+            ],
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        visual = manifest["sections"][0]["visuals"][0]
+        assert visual["id"] == "04_liquid_hits_wall"
+        assert visual["renderMode"] == "raw-media"
+        assert visual["mediaAliases"] == {}
 
 
 class TestWrapperTemplateComponentMediaFiltering:

@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame shows a placeholder/stub instead of the actual grounding feedback loop visual. At frame 599/660 (90.9% progress, Phase 6: 540-660), the spec requires the complete pipeline view with all components visible (Prompt → Grounding → Mold → Test Walls → Code Output) pulsing left to right, plus the label 'Prompt plus tests plus grounding. Intent plus constraints plus style.' Instead, the frame displays only a debug header reading 'ANIMATED DIAGRAM' and 'grounding_feedback_loop' in the top-left, with a centered rounded rectangle containing the text 'Generated from visual contract'. None of the specified visual elements are present: no prompt node, no dual grounding paths, no code panels, no grounding database cylinder, no pipeline flow diagram, no connecting arrows, no component labels, and no bottom descriptive label.

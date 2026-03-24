@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame shows a placeholder/debug state rather than the specified transition visual. At frame 74/90 (83.3% progress, animation phase 3: 'everything fades to pure black'), the frame should show near-pure black (#0A0F1A background with all elements dissolved). Instead, the frame displays: (1) A 'TRANSITION' label in blue text at top-left, (2) 'where_to_start_to_closing' as a title in white text at top-left, (3) A centered rounded-rectangle card reading 'Generated from visual contract' — this is clearly a fallback/placeholder component, not the authored visual. The spec requires no text at this point (typography: 'None — text-free transition'), and the screen should be essentially pure black at 83.3% through the animation. No sock outline ghost, no dissolving quote echoes, and no clean black transition are visible.

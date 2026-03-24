@@ -2,6 +2,7 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
+import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { WhereToStart01SectionTitleCard } from "../WhereToStart01SectionTitleCard";
 import { WhereToStart02LegacyCodebaseReveal } from "../WhereToStart02LegacyCodebaseReveal";
 import { WhereToStart04SourceOfTruthShift } from "../WhereToStart04SourceOfTruthShift";
@@ -67,6 +68,12 @@ export const WhereToStartSection: React.FC = () => {
                   </VisualMediaProvider>
                 </VisualContractProvider>
               </SlotScaledSequence>
+            ) : visualContract?.renderMode === "component" ? (
+              <VisualContractProvider contract={visualContract}>
+                <VisualMediaProvider media={visualMedia}>
+                  <GeneratedContractVisual />
+                </VisualMediaProvider>
+              </VisualContractProvider>
             ) : null}
           </Sequence>
         );

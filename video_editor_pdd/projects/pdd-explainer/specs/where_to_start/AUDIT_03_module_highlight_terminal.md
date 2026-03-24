@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame is a placeholder — it shows only a title 'CODE TRANSFORMATION' with the component name 'module_highlight_terminal' and a centered box reading 'Generated from visual contract'. None of the spec's critical visual elements are present: no dimmed legacy codebase panels, no highlighted `auth_handler.py` module with blue selection glow, no terminal window with typed command `pdd update auth_handler.py`, no green checkmark output line, no prompt file icon with `.prompt.md` label, no desaturated code panel, and no 'source of truth' / 'artifact' labels. At frame 134/150 (90% progress, hold phase), every element described in the spec should be fully visible and the code-to-prompt inversion should be clearly depicted. Instead, the frame is an unimplemented stub.

@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame shows a placeholder state — a dark background with the title 'ANIMATED DIAGRAM / five_generations' in the top-left corner and a centered pill reading 'Generated from visual contract'. None of the spec's required visual content is present. At frame 479/540 (88.9% progress, animation phase 420-540 'Hold'), the frame should show: (1) five tall narrow code panels arranged horizontally, (2) panels 1 and 3 with red X overlays, (3) panels 2 and 4 with yellow warning triangle overlays, (4) panel 5 glowing green with a checkmark and scaled up slightly, (5) non-green panels dimmed to ~0.3 opacity, (6) a main label 'Generate five. Pick the one that passes all tests.' centered near y:900, and (7) a sub-label 'The walls don't care how many attempts it took.' centered near y:940. Zero of these elements are visible.

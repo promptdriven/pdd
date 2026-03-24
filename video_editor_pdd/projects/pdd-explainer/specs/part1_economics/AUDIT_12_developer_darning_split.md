@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame shows a completely wrong visual. Instead of the specified 'Developer Darning Split' (a vertical split screen with a developer coding on the left and grandmother darning on the right, with code comment overlays and tangled dependency lines at 88% progress), the frame displays a placeholder screen labeled 'ANIMATED DIAGRAM' with the slug 'context_compression' and a centered pill reading 'Generated from visual contract'. This is an entirely different visual from a different audit spec — none of the required elements are present: no vertical split divider, no left/right panels, no 'CURSOR' or 'DARNING NEEDLE' headers, no Veo clip content, no code comment overlays ('// don't touch this', '// legacy', '// temporary fix (2019)'), and no tangled dependency lines.

@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The frame shows a placeholder stub instead of the actual bug fork diagram. The rendered frame displays only a top-left label reading 'ANIMATED DIAGRAM' / 'bug_fork' and a centered rounded rectangle containing the text 'Generated from visual contract'. None of the specified visual elements are present: no 'Bug found' root node with red alert icon, no left branch (amber 'Code bug — add a wall'), no right branch (teal 'Prompt defect — change the mold'), no convergence 'Regenerate' node, no branch lines, no file icons, no wall/nozzle icons, and no blueprint grid. The component has not been implemented — it is rendering a generic placeholder instead of the fork-in-the-road diagram described in the spec. At frame 319/360 (88.9% progress, within the hold phase), the full diagram with both glowing paths should be visible.

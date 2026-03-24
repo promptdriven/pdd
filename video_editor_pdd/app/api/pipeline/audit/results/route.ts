@@ -36,6 +36,9 @@ type AuditSectionResult = {
   specs: SpecAuditResult[];
 };
 
+const DATA_POINTS_JSON_RE =
+  /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
+
 function parseAuditMarkdown(content: string): {
   verdict: "PASS" | "FAIL" | "SKIP" | "WARN";
   summary: string;
@@ -59,6 +62,33 @@ function parseAuditMarkdown(content: string): {
   const summary = summaryMatch[1].trim();
 
   return { verdict, summary };
+}
+
+function parseDataPointsJson(content: string): Record<string, unknown> | null {
+  const match = DATA_POINTS_JSON_RE.exec(content);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(match[1]);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isEmbeddedChildSpec(content: string): boolean {
+  const dataPoints = parseDataPointsJson(content);
+  if (!dataPoints) {
+    return false;
+  }
+
+  const rawParent =
+    dataPoints.embeddedIn ?? dataPoints.compositeOver ?? dataPoints.usedIn;
+  return typeof rawParent === "string" && rawParent.trim().length > 0;
 }
 
 export async function GET(_request: NextRequest): Promise<NextResponse> {
@@ -173,6 +203,18 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
         const specName = path.basename(specFile, ".md");
         if (knownSpecNames.has(specName)) {
           continue;
+        }
+
+        const specSourcePath = resolveSectionSpecFile(section.specDir, specFile);
+        if (fs.existsSync(specSourcePath)) {
+          try {
+            const specContent = fs.readFileSync(specSourcePath, "utf-8");
+            if (isEmbeddedChildSpec(specContent)) {
+              continue;
+            }
+          } catch {
+            // Fall through to a visible SKIP entry for unreadable specs.
+          }
         }
 
         specResultsByName.set(specName, {
