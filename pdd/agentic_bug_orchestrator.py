@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
@@ -304,6 +305,67 @@ def _parse_changed_files(output: str, marker: str) -> List[str]:
     return files
 
 
+def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
+    """Validate a REPRO_FILES_CREATED path is safe (no traversal/absolute paths).
+
+    Returns the resolved Path if safe, or None if the path is absolute,
+    contains traversal segments, or resolves outside base_dir.
+    """
+    if not raw_path or os.path.isabs(raw_path):
+        return None
+    resolved = (base_dir / raw_path).resolve()
+    if not resolved.is_relative_to(base_dir.resolve()):
+        return None
+    return resolved
+
+
+def _extract_repro_test_content(output: str, cwd: Path) -> str:
+    """Parse REPRO_FILES_CREATED from step 5 output and read file contents.
+
+    Returns the concatenated content of all referenced files that exist on disk,
+    or an empty string if no marker is found or no files exist.
+    """
+    repro_files = _parse_changed_files(output, "REPRO_FILES_CREATED")
+    if not repro_files:
+        return ""
+    contents: List[str] = []
+    for rf in repro_files:
+        rf_path = _validate_repro_path(rf, cwd)
+        if rf_path and rf_path.exists():
+            try:
+                contents.append(rf_path.read_text())
+            except (OSError, UnicodeDecodeError) as exc:
+                console.print(f"[yellow]Warning: failed to read reproduction test {rf}: {exc}[/yellow]")
+    return "\n".join(contents)
+
+
+def _copy_repro_files_to_worktree(
+    step5_output: str, cwd: Path, worktree_path: Path
+) -> List[str]:
+    """Copy Step 5 reproduction test files from cwd into the worktree.
+
+    Returns list of all valid relative paths (for staging), regardless of
+    whether a copy was needed. Step 5 runs before the worktree exists, so
+    files are in cwd. This ensures they physically exist in the worktree
+    for commit, regardless of whether the Step 9 LLM incorporates them.
+    """
+    repro_files = _parse_changed_files(step5_output, "REPRO_FILES_CREATED")
+    staged: List[str] = []
+    for rf in repro_files:
+        src_path = _validate_repro_path(rf, cwd)
+        dst_path = _validate_repro_path(rf, worktree_path)
+        if not src_path or not dst_path or not src_path.exists():
+            continue
+        try:
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_path.exists():
+                shutil.copy2(str(src_path), str(dst_path))
+            staged.append(rf)
+        except OSError as exc:
+            console.print(f"[yellow]Warning: failed to copy reproduction test {rf} to worktree: {exc}[/yellow]")
+    return staged
+
+
 def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: bool) -> Optional[str]:
     """Check output for hard stop conditions."""
     if step_num == 1 and "Duplicate of #" in output:
@@ -553,6 +615,7 @@ def run_agentic_bug_orchestrator(
         "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
+        "step5_reproduction_tests": "",
     }
     
     # Populate context with previous step outputs
@@ -562,6 +625,13 @@ def run_agentic_bug_orchestrator(
     # Re-extract files from step 5.5/7/9 outputs if available
     changed_files: List[str] = []
     
+    # Step 5
+    if "step5_output" in context:
+        s5_out = context["step5_output"]
+        context["step5_reproduction_tests"] = _extract_repro_test_content(s5_out, cwd)
+        repro_files = _parse_changed_files(s5_out, "REPRO_FILES_CREATED")
+        changed_files.extend(repro_files)
+
     # Step 5.5
     if "step5.5_output" in context:
         s55_out = context["step5.5_output"]
@@ -653,6 +723,18 @@ def run_agentic_bug_orchestrator(
             state["worktree_path"] = str(worktree_path)
             context["worktree_path"] = str(worktree_path)
 
+        # Copy Step 5 reproduction tests into worktree on resume
+        if worktree_path and "5" in step_outputs:
+            repro_copied = _copy_repro_files_to_worktree(
+                step_outputs["5"], cwd, worktree_path
+            )
+            if repro_copied:
+                changed_files.extend(repro_copied)
+                changed_files = list(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
+                if not quiet:
+                    console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
+
     for step_index, (step_num, name, description) in enumerate(steps_config, 1):
         if step_num < start_step:
             continue
@@ -684,6 +766,18 @@ def run_agentic_bug_orchestrator(
                 current_work_dir = worktree_path
                 state["worktree_path"] = str(worktree_path)
                 context["worktree_path"] = str(worktree_path)
+
+            # Copy Step 5 reproduction tests into the worktree
+            if worktree_path and context.get("step5_output"):
+                repro_copied = _copy_repro_files_to_worktree(
+                    context["step5_output"], cwd, worktree_path
+                )
+                if repro_copied:
+                    changed_files.extend(repro_copied)
+                    changed_files = list(set(changed_files))
+                    context["files_to_stage"] = ", ".join(changed_files)
+                    if not quiet:
+                        console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
 
         # Skip E2E if flagged
         if step_num == 11 and skip_e2e:
@@ -781,6 +875,14 @@ def run_agentic_bug_orchestrator(
         files_extracted = False
 
         # Step-specific handling
+        if step_num == 5:
+            context["step5_reproduction_tests"] = _extract_repro_test_content(step_output, current_work_dir)
+            repro_files = _parse_changed_files(step_output, "REPRO_FILES_CREATED")
+            if repro_files:
+                changed_files.extend(repro_files)
+                changed_files = list(set(changed_files))
+                context["files_to_stage"] = ", ".join(changed_files)
+
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
             if defect_type_match:
