@@ -58,9 +58,9 @@ You are working on step 5 of 12 in an agentic bug investigation workflow. Previo
 4. **Save reproduction tests**
    - Write your reproduction tests to a file in the project's test directory, using the project's language and testing conventions
    - Use the naming pattern: `test_issue_{issue_number}_reproduction` with the appropriate file extension for the project's language
-   - Tests should call the existing (buggy) code to demonstrate the bug exists
-   - Tests should PASS on current code — they prove the bug EXISTS by exercising the buggy behavior
-   - These tests serve as permanent regression tests after the fix lands
+   - Tests should call the existing (buggy) code and assert the CORRECT/expected behavior
+   - Tests will typically FAIL on the current buggy code because they assert what the behavior SHOULD be
+   - After the bug is fixed, these tests should PASS and remain as permanent regression tests
    - Include necessary imports, descriptive test names, and docstrings/comments explaining what each test demonstrates
 
 5. **Document results**

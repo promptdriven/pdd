@@ -304,6 +304,10 @@ def test_step5_repro_content_passed_to_step9_context(mock_dependencies, tmp_path
     output is never parsed and reproduction test content never reaches Step 9.
     """
     mock_load, mock_run, mock_wt = mock_dependencies
+    # Sandbox worktree I/O to tmp_path instead of /tmp/worktree
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
 
     # Create the reproduction test file that Step 5 would write in cwd
     repro_file = tmp_path / "tests" / "test_issue_123_reproduction.py"
@@ -355,6 +359,9 @@ def test_step5_no_repro_marker_leaves_empty_context(mock_dependencies, tmp_path)
     This is the normal case when Step 5 could not reproduce the bug.
     """
     mock_load, mock_run, mock_wt = mock_dependencies
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
 
     captured_instructions = {}
 
@@ -400,6 +407,9 @@ def test_step5_repro_file_missing_on_disk(mock_dependencies, tmp_path):
     remain empty.
     """
     mock_load, mock_run, mock_wt = mock_dependencies
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
 
     # Do NOT create the file on disk — simulate Step 5 claiming it wrote a file
     # that doesn't actually exist
@@ -503,3 +513,67 @@ def test_step5_repro_content_re_extracted_on_resume(mock_dependencies, tmp_path)
         "Step 5 REPRO_FILES_CREATED was not re-extracted on resume — "
         "reproduction test content is lost when the workflow resumes (issue #928)"
     )
+
+
+# ============================================================================
+# Path traversal validation for REPRO_FILES_CREATED
+# ============================================================================
+
+
+def test_validate_repro_path_rejects_traversal(tmp_path):
+    """Ensure _validate_repro_path blocks absolute paths and '..' traversal."""
+    from pdd.agentic_bug_orchestrator import _validate_repro_path
+
+    # Absolute path — should be rejected
+    assert _validate_repro_path("/etc/passwd", tmp_path) is None
+    # Traversal — should be rejected
+    assert _validate_repro_path("../../etc/passwd", tmp_path) is None
+    # Empty — should be rejected
+    assert _validate_repro_path("", tmp_path) is None
+    # Valid relative path — should be accepted
+    result = _validate_repro_path("tests/test_repro.py", tmp_path)
+    assert result is not None
+    assert result == (tmp_path / "tests" / "test_repro.py").resolve()
+
+
+def test_step5_traversal_path_ignored(mock_dependencies, tmp_path):
+    """REPRO_FILES_CREATED with path traversal should be silently ignored."""
+    mock_load, mock_run, mock_wt = mock_dependencies
+    worktree_dir = tmp_path / "worktree"
+    worktree_dir.mkdir()
+    mock_wt.return_value = (worktree_dir, None)
+
+    # Create a file outside tmp_path that the traversal would target
+    # (we just check it's NOT read, not that the file exists)
+
+    captured_instructions = {}
+
+    def run_side_effect(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        captured_instructions[label] = instruction
+        if label == "step5":
+            return (True, "REPRO_FILES_CREATED: ../../etc/passwd", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_CREATED: tests/test_fix.py", 0.5, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = run_side_effect
+
+    def load_side_effect(name):
+        if "step9" in name:
+            return "Tests: {step5_reproduction_tests} Issue: {issue_number}"
+        return "Template for {issue_number}"
+
+    mock_load.side_effect = load_side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(
+        issue_url="url", issue_content="content", repo_owner="owner",
+        repo_name="name", issue_number=123, issue_author="author",
+        issue_title="title", cwd=tmp_path, quiet=True
+    )
+
+    assert success is True
+    step9_instruction = captured_instructions.get("step9", "")
+    # Traversal path content must NOT appear in the instruction
+    assert "root:" not in step9_instruction
+    assert "/etc/passwd" not in step9_instruction
