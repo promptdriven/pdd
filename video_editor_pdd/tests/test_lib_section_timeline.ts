@@ -221,6 +221,16 @@ describe("lib/section-timeline", () => {
       const timeline = buildSectionTimeline(tmpDir, baseSectionConfig);
       expect(timeline.entries).toHaveLength(1);
       expect(timeline.entries[0].source).toBe("segment-anchor");
+      expect(timeline.entries[0].start).toEqual({
+        type: "segmentStart",
+        segmentId: "cold_open_001",
+      });
+      expect(timeline.entries[0].end).toEqual({
+        type: "segmentEnd",
+        segmentId: "cold_open_002",
+      });
+      expect(timeline.entries[0].resolvedStartSeconds).toBe(0.0);
+      expect(timeline.entries[0].resolvedEndSeconds).toBe(5.0);
       expect(timeline.entries[0].startSeconds).toBe(0.0);
       expect(timeline.entries[0].endSeconds).toBe(5.0);
       expect(timeline.entries[0].coverSegments).toEqual([
@@ -256,6 +266,14 @@ describe("lib/section-timeline", () => {
       const timeline = buildSectionTimeline(tmpDir, baseSectionConfig);
       expect(timeline.entries).toHaveLength(1);
       expect(timeline.entries[0].source).toBe("timestamp-fallback");
+      expect(timeline.entries[0].start).toEqual({
+        type: "absolute",
+        seconds: 3.75,
+      });
+      expect(timeline.entries[0].end).toEqual({
+        type: "absolute",
+        seconds: 10,
+      });
       expect(timeline.entries[0].startSeconds).toBeGreaterThanOrEqual(0);
     });
 
@@ -352,7 +370,7 @@ describe("lib/section-timeline", () => {
       expect(overlayEntry.endSeconds).toBe(5.0);
     });
 
-    it("sequentializes same-lane overlaps", () => {
+    it("preserves same-lane overlaps instead of rewriting them", () => {
       writeVisualManifest([
         {
           id: "cold_open",
@@ -390,8 +408,43 @@ describe("lib/section-timeline", () => {
       const v1 = timeline.entries.find((e) => e.id === "v1")!;
       const v2 = timeline.entries.find((e) => e.id === "v2")!;
 
-      // Both on lane 0, same time range → v2 pushed after v1
-      expect(v2.startSeconds).toBeGreaterThanOrEqual(v1.endSeconds);
+      expect(v1.startSeconds).toBe(0.0);
+      expect(v2.startSeconds).toBe(0.0);
+      expect(v1.endSeconds).toBe(5.0);
+      expect(v2.endSeconds).toBe(5.0);
+    });
+
+    it("resolves explicit absolute and sectionEnd anchors", () => {
+      writeVisualManifest([
+        {
+          id: "cold_open",
+          visuals: [
+            {
+              id: "v_pause",
+              specBaseName: "07_pause",
+              startAnchor: { type: "absolute", seconds: 4.25 },
+              endAnchor: { type: "sectionEnd" },
+            },
+          ],
+        },
+      ]);
+
+      writeWordTimestamps("cold_open", [
+        { word: "Hello", start: 0.0, end: 10.0 },
+      ]);
+
+      const timeline = buildSectionTimeline(tmpDir, baseSectionConfig);
+      expect(timeline.entries).toHaveLength(1);
+      expect(timeline.entries[0].source).toBe("absolute");
+      expect(timeline.entries[0].start).toEqual({
+        type: "absolute",
+        seconds: 4.25,
+      });
+      expect(timeline.entries[0].end).toEqual({
+        type: "sectionEnd",
+      });
+      expect(timeline.entries[0].resolvedStartSeconds).toBe(4.25);
+      expect(timeline.entries[0].resolvedEndSeconds).toBe(10);
     });
 
     it("excludes children from entries", () => {
@@ -524,6 +577,36 @@ describe("lib/section-timeline", () => {
         "cold_open",
         "intro",
       ]);
+    });
+  });
+
+  describe("project regressions", () => {
+    it("uses explicit segment anchors for the closing beat in pdd-explainer", () => {
+      const projectDir = path.join(process.cwd(), "projects", "pdd-explainer");
+      const timeline = buildSectionTimeline(projectDir, {
+        id: "closing",
+        specDir: "closing",
+        durationSeconds: 0,
+        compositionId: "ClosingSection",
+      });
+
+      const beat = timeline.entries.find((entry) => entry.id === "07_the_beat");
+      const titleCard = timeline.entries.find(
+        (entry) => entry.id === "08_final_title_card"
+      );
+
+      expect(beat).toBeDefined();
+      expect(titleCard).toBeDefined();
+      expect(beat!.source).toBe("segment-anchor");
+      expect(beat!.start).toEqual({
+        type: "segmentEnd",
+        segmentId: "closing_004",
+      });
+      expect(beat!.end).toEqual({
+        type: "segmentStart",
+        segmentId: "closing_005",
+      });
+      expect(beat!.resolvedEndSeconds).toBe(titleCard!.resolvedStartSeconds);
     });
   });
 });

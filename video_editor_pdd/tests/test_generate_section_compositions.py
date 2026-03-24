@@ -3709,6 +3709,13 @@ class TestWrapperTemplateComponentMediaFiltering:
                     return
         assert False, "Could not find VisualMediaProvider wrapping VisualComponent in template"
 
+    def test_wrapper_template_sorts_active_visuals_by_lane(self):
+        source = self._get_source()
+        assert ".slice()" in source
+        assert ".sort((" in source
+        assert "left.lane" in source
+        assert "right.lane" in source
+
 
 class TestVisualContractManifestNewFields:
     """Tests for coverSegments, parentId, children, and laneHint in the visual contract manifest."""
@@ -3776,6 +3783,24 @@ class TestVisualContractManifestNewFields:
             "## Data Points JSON",
             "```json",
             '{"embeddedIn": "01_split_screen"}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "cold_open", "02_veo_clip", spec_content, compositions=["02_veo_clip"]
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual["parentId"] == "01_split_screen"
+
+    def test_build_visual_contract_manifest_normalizes_usedIn_to_parentId(self, tmp_path):
+        spec_content = "\n".join([
+            "[veo:]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"usedIn": "01_split_screen (left panel)"}',
             "```",
         ])
         section, project_dir, remotion_public = self._build_section_with_spec(
@@ -3908,6 +3933,25 @@ class TestVisualContractManifestNewFields:
         visual = manifest["sections"][0]["visuals"][0]
 
         assert visual["laneHint"] == "background"
+
+    def test_build_visual_contract_manifest_includes_explicit_anchor_hints(self, tmp_path):
+        spec_content = "\n".join([
+            "[Remotion]",
+            "",
+            "## Data Points JSON",
+            "```json",
+            '{"startAnchor": {"type": "absolute", "seconds": 4.25}, "endAnchor": {"type": "sectionEnd"}}',
+            "```",
+        ])
+        section, project_dir, remotion_public = self._build_section_with_spec(
+            tmp_path, "closing", "07_the_beat", spec_content
+        )
+
+        manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual["startAnchor"] == {"type": "absolute", "seconds": 4.25}
+        assert visual["endAnchor"] == {"type": "sectionEnd"}
 
     def test_legacy_manifest_without_new_fields_loads_without_error(self, tmp_path):
         """Loading a manifest built without new fields still works."""

@@ -33,7 +33,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "04_pdd_triangle": {"specBaseName": "04_pdd_triangle", "dataPoints": {"type": "animated_diagram", "chartId": "pdd_triangle", "vertices": [{"id": "prompt", "label": "PROMPT", "position": [960, 200], "color": "#60A5FA", "descriptor": "encode intent"}, {"id": "tests", "label": "TESTS", "position": [480, 750], "color": "#4ADE80", "descriptor": "preserve behavior"}, {"id": "grounding", "label": "GROUNDING", "position": [1440, 750], "color": "#D9944A", "descriptor": "maintain style"}], "centerElement": {"type": "generated_code", "position": [960, 520], "font": "JetBrains Mono"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_002"]}, "overlayConfig": null, "renderMode": "component"},
   "05_dissolve_regenerate_loop": {"specBaseName": "05_dissolve_regenerate_loop", "dataPoints": {"type": "animated_diagram", "chartId": "dissolve_regenerate_loop", "cycles": 3, "cycleTints": ["#60A5FA", "#4ADE80", "#D9944A"], "triangle": {"persistent": true, "source": "pdd_triangle"}, "terminal": {"command": "pdd generate", "successIndicator": "✓"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_003", "closing_004"]}, "overlayConfig": null, "renderMode": "component"},
   "06_mold_glow_finale": {"specBaseName": "06_mold_glow_finale", "dataPoints": {"type": "veo_clip", "clipId": "mold_glow_finale", "camera": {"framing": "close_up", "movement": "static", "dof": "moderate", "drift": false}, "lighting": {"key": {"color": "#D4A043", "position": "internal", "type": "practical_glow"}, "fill": "minimal", "rim": {"color": "#60A5FA", "opacity": 0.1}, "grade": "high_contrast_warm"}, "callbackTo": "part2_injection_mold", "narrationSegments": ["closing_004"]}, "overlayConfig": null, "renderMode": "raw-media"},
-  "07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": {"type": "beat", "chartId": "the_beat", "ghostElements": [{"source": "pdd_triangle", "opacity": 0.02}], "backgroundColor": "#0A0F1A", "narrationSegments": []}, "overlayConfig": null, "renderMode": "component"},
+  "07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": {"type": "beat", "chartId": "the_beat", "startAnchor": {"type": "segmentEnd", "segmentId": "closing_004"}, "endAnchor": {"type": "segmentStart", "segmentId": "closing_005"}, "ghostElements": [{"source": "pdd_triangle", "opacity": 0.02}], "backgroundColor": "#0A0F1A", "narrationSegments": []}, "overlayConfig": null, "renderMode": "component"},
   "08_final_title_card": {"specBaseName": "08_final_title_card", "dataPoints": {"type": "title_card", "chartId": "final_title_card", "title": "Prompt-Driven Development", "titleFont": {"family": "Inter", "size": 52, "weight": 700, "color": "#E2E8F0"}, "titleGlow": {"color": "#D9944A", "opacity": 0.08, "blur": 60}, "url": "promptdrivendevelopment.com", "commands": ["uv tool install pdd-cli", "pdd update your_module.py"], "commandFont": {"family": "JetBrains Mono", "size": 16, "color": "#64748B"}, "ghostElements": [{"source": "pdd_triangle", "opacity": 0.03, "scale": 0.4}], "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_005"]}, "overlayConfig": null, "renderMode": "raw-media"},
 };
 
@@ -41,7 +41,10 @@ export const ClosingSection: React.FC = () => {
   const fps = 30;
   const durationSeconds = 20.66;
   const frame = useCurrentFrame();
-  const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
+  const activeVisuals = VISUAL_SEQUENCE
+    .filter((visual) => frame >= visual.start && frame < visual.end)
+    .slice()
+    .sort((left, right) => ((left.lane ?? 0) - (right.lane ?? 0)) || (left.start - right.start));
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>

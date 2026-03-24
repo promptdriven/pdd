@@ -63,6 +63,17 @@ jest.mock("@/lib/render", () => ({
   renderStill: (...args: unknown[]) => mockRenderStill(...args),
 }));
 
+const mockIsDeterministicPipelineMode = jest.fn();
+const mockWriteDeterministicComponent = jest.fn();
+const mockWriteDeterministicSectionConstants = jest.fn();
+
+jest.mock("@/lib/deterministic-pipeline", () => ({
+  isDeterministicPipelineMode: (...args: unknown[]) => mockIsDeterministicPipelineMode(...args),
+  writeDeterministicComponent: (...args: unknown[]) => mockWriteDeterministicComponent(...args),
+  writeDeterministicSectionConstants: (...args: unknown[]) =>
+    mockWriteDeterministicSectionConstants(...args),
+}));
+
 // Mock fs
 const mockExistsSync = jest.fn();
 const mockReadFileSync = jest.fn();
@@ -351,6 +362,13 @@ beforeEach(() => {
   mockCreateHash.mockReset();
   mockHashUpdate.mockReset();
   mockHashDigest.mockReset();
+  mockBuildSectionTimeline.mockReset();
+  mockWriteSectionTimelineManifest.mockReset();
+  mockResolveSectionTimelineEntries.mockReset();
+  mockLoadSectionTimeline.mockReset();
+  mockIsDeterministicPipelineMode.mockReset();
+  mockWriteDeterministicComponent.mockReset();
+  mockWriteDeterministicSectionConstants.mockReset();
 
   mockRunPipelineStage.mockResolvedValue("test-job-compositions-001");
   mockRunClaudeFix.mockResolvedValue(undefined);
@@ -361,6 +379,14 @@ beforeEach(() => {
     update: mockHashUpdate,
     digest: mockHashDigest,
   });
+  mockBuildSectionTimeline.mockReturnValue({
+    sectionId: "test",
+    durationSeconds: 10,
+    entries: [],
+  });
+  mockResolveSectionTimelineEntries.mockReturnValue([]);
+  mockLoadSectionTimeline.mockReturnValue(null);
+  mockIsDeterministicPipelineMode.mockReturnValue(false);
   mockHashDigest.mockReturnValue("test-generator-fingerprint");
   mockExecSync.mockReturnValue("");
   let tempDirCounter = 0;
@@ -1225,6 +1251,46 @@ describe("compositions executor factory — wrapper generation", () => {
       path.join(process.cwd(), "remotion"),
       "--force",
     ]);
+  });
+
+  it("rebuilds timeline before constants after wrapper generation finishes", async () => {
+    mockIsDeterministicPipelineMode.mockReturnValue(true);
+    const config = mockProjectConfig();
+    config.sections[0] = {
+      ...config.sections[0],
+      compositions: ["01_title_card"],
+      timelineSource: "generated",
+    };
+    mockLoadProject.mockReturnValue(config);
+
+    const proc = createMockSpawnProcess(0);
+    mockSpawn.mockReturnValue(proc);
+    mockReaddirSync.mockReturnValue([]);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory(
+      { components: [], wrappers: ["introWrapper"] },
+      mockSend
+    );
+
+    const promise = executor(jest.fn());
+    await new Promise((r) => setTimeout(r, 10));
+    proc._triggerClose();
+    await promise;
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockBuildSectionTimeline).toHaveBeenCalled();
+    expect(mockWriteSectionTimelineManifest).toHaveBeenCalled();
+    expect(mockWriteDeterministicSectionConstants).toHaveBeenCalled();
+    expect(mockSpawn.mock.invocationCallOrder[0]).toBeLessThan(
+      mockWriteSectionTimelineManifest.mock.invocationCallOrder[0]
+    );
+    expect(mockBuildSectionTimeline.mock.invocationCallOrder[0]).toBeLessThan(
+      mockWriteSectionTimelineManifest.mock.invocationCallOrder[0]
+    );
+    expect(mockWriteSectionTimelineManifest.mock.invocationCallOrder[0]).toBeLessThan(
+      mockWriteDeterministicSectionConstants.mock.invocationCallOrder[0]
+    );
   });
 
   it("emits 'generating' status for each wrapper before subprocess", async () => {

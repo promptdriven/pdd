@@ -1118,48 +1118,6 @@ registerExecutor("compositions", (params, send: SseSend) => {
         mergeCompositionManifest(manifestSections, getProjectDir());
         onLog("[compositions] Updated generated composition manifest.");
       }
-
-      // Generate section constants and section composition for each section
-      // that has discovered components (animation components → constants → composition)
-      for (const section of freshConfig.sections) {
-        if (!section.compositions || section.compositions.length === 0) continue;
-        if (section.timelineSource !== "generated") {
-          onLog(`[compositions] Preserving authored section timeline for ${section.id}.`);
-          continue;
-        }
-
-        const sectionRemotionDir = path.join(getAppRemotionSrcDir(), section.id);
-        // Extract string IDs from compositions (which may contain timing objects)
-        const componentIds = (section.compositions as SectionComposition[]).map(
-          (comp) => typeof comp === "string" ? comp : (comp.id as string)
-        );
-        try {
-          if (isDeterministicPipelineMode()) {
-            writeDeterministicSectionConstants(getProjectDir(), section, componentIds, onLog);
-          } else {
-            await generateSectionConstants(
-              section,
-              componentIds,
-              sectionRemotionDir,
-              onLog,
-            );
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "Unknown error";
-          onLog(`[compositions] Warning: section constants/composition generation failed for ${section.id}: ${msg}`);
-          // Non-fatal — the Python wrapper can still scaffold a basic composition
-        }
-
-        // Build and persist section timeline manifest
-        try {
-          const sectionTimeline = buildSectionTimeline(getProjectDir(), section);
-          writeSectionTimelineManifest([sectionTimeline], getProjectDir());
-          onLog(`[compositions] Updated section timeline for ${section.id} (${sectionTimeline.entries.length} entries).`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "Unknown error";
-          onLog(`[compositions] Warning: section timeline generation failed for ${section.id}: ${msg}`);
-        }
-      }
     }
 
     if (generationError) {
@@ -1198,6 +1156,58 @@ registerExecutor("compositions", (params, send: SseSend) => {
         else reject(new Error(`Wrapper generation failed (code ${code})`));
       });
     });
+
+    {
+      const freshConfig = loadProject();
+      const sectionTimelines: Array<ReturnType<typeof buildSectionTimeline>> = [];
+
+      for (const section of freshConfig.sections) {
+        if (!section.compositions || section.compositions.length === 0) continue;
+        if (section.timelineSource !== "generated") {
+          onLog(`[compositions] Preserving authored section timeline for ${section.id}.`);
+          continue;
+        }
+
+        try {
+          const sectionTimeline = buildSectionTimeline(getProjectDir(), section);
+          sectionTimelines.push(sectionTimeline);
+          onLog(`[compositions] Resolved section timeline for ${section.id} (${sectionTimeline.entries.length} entries).`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          onLog(`[compositions] Warning: section timeline generation failed for ${section.id}: ${msg}`);
+        }
+      }
+
+      if (sectionTimelines.length > 0) {
+        writeSectionTimelineManifest(sectionTimelines, getProjectDir());
+        onLog("[compositions] Updated section timeline manifest.");
+      }
+
+      for (const section of freshConfig.sections) {
+        if (!section.compositions || section.compositions.length === 0) continue;
+        if (section.timelineSource !== "generated") continue;
+
+        const sectionRemotionDir = path.join(getAppRemotionSrcDir(), section.id);
+        const componentIds = (section.compositions as SectionComposition[]).map(
+          (comp) => typeof comp === "string" ? comp : (comp.id as string)
+        );
+        try {
+          if (isDeterministicPipelineMode()) {
+            writeDeterministicSectionConstants(getProjectDir(), section, componentIds, onLog);
+          } else {
+            await generateSectionConstants(
+              section,
+              componentIds,
+              sectionRemotionDir,
+              onLog,
+            );
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          onLog(`[compositions] Warning: section constants/composition generation failed for ${section.id}: ${msg}`);
+        }
+      }
+    }
 
     if (wrappers.length > 0) {
       for (const name of wrappers) {

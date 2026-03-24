@@ -818,6 +818,42 @@ def build_visual_contract_manifest(
         )
         overlay_manifest = build_visual_overlay_manifest(section, project_dir)
         visuals: List[Dict[str, Any]] = []
+
+        def _normalize_parent_reference(raw_parent: Any) -> Optional[str]:
+            if not isinstance(raw_parent, str):
+                return None
+            parent = raw_parent.strip()
+            if not parent:
+                return None
+            parent = re.sub(r'\s+\([^)]*\)\s*$', '', parent).strip()
+            return parent or None
+
+        def _normalize_anchor_hint(raw_anchor: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(raw_anchor, dict):
+                return None
+            anchor_type = raw_anchor.get('type')
+            if anchor_type in ('segmentStart', 'segmentEnd'):
+                segment_id = raw_anchor.get('segmentId')
+                if not isinstance(segment_id, str) or not segment_id:
+                    return None
+                anchor: Dict[str, Any] = {'type': anchor_type, 'segmentId': segment_id}
+                offset_ms = raw_anchor.get('offsetMs')
+                if isinstance(offset_ms, (int, float)):
+                    anchor['offsetMs'] = int(offset_ms)
+                return anchor
+            if anchor_type == 'absolute':
+                seconds = raw_anchor.get('seconds')
+                if not isinstance(seconds, (int, float)):
+                    return None
+                return {'type': 'absolute', 'seconds': float(seconds)}
+            if anchor_type in ('sectionStart', 'sectionEnd'):
+                anchor = {'type': anchor_type}
+                offset_ms = raw_anchor.get('offsetMs')
+                if isinstance(offset_ms, (int, float)):
+                    anchor['offsetMs'] = int(offset_ms)
+                return anchor
+            return None
+
         for visual_id in visual_ids:
             spec_base = component_base_name(visual_id, section['id'])
             spec_path = os.path.join(spec_dir, f'{spec_base}.md')
@@ -828,16 +864,33 @@ def build_visual_contract_manifest(
             cover_segments = None
             parent_id = None
             lane_hint = None
+            start_anchor = None
+            end_anchor = None
+            start_offset_ms = None
+            end_offset_ms = None
             if isinstance(data_points, dict):
                 raw_cover = data_points.get('coverSegments') or data_points.get('narrationSegments')
                 if isinstance(raw_cover, list):
                     cover_segments = [str(s) for s in raw_cover]
-                raw_parent = data_points.get('embeddedIn') or data_points.get('compositeOver')
-                if isinstance(raw_parent, str) and raw_parent:
-                    parent_id = raw_parent
+                raw_parent = (
+                    data_points.get('embeddedIn')
+                    or data_points.get('compositeOver')
+                    or data_points.get('usedIn')
+                )
+                parent_id = _normalize_parent_reference(raw_parent)
                 raw_lane = data_points.get('laneHint')
                 if isinstance(raw_lane, str) and raw_lane in ('main', 'overlay', 'background'):
                     lane_hint = raw_lane
+                elif isinstance(raw_lane, (int, float)):
+                    lane_hint = int(raw_lane)
+                start_anchor = _normalize_anchor_hint(data_points.get('startAnchor'))
+                end_anchor = _normalize_anchor_hint(data_points.get('endAnchor'))
+                raw_start_offset = data_points.get('startOffsetMs')
+                if isinstance(raw_start_offset, (int, float)):
+                    start_offset_ms = int(raw_start_offset)
+                raw_end_offset = data_points.get('endOffsetMs')
+                if isinstance(raw_end_offset, (int, float)):
+                    end_offset_ms = int(raw_end_offset)
 
             # Infer laneHint from overlayConfig when not explicitly set
             if lane_hint is None and overlay_manifest.get(visual_id):
@@ -862,6 +915,14 @@ def build_visual_contract_manifest(
                 visual_entry['parentId'] = parent_id
             if lane_hint is not None:
                 visual_entry['laneHint'] = lane_hint
+            if start_anchor is not None:
+                visual_entry['startAnchor'] = start_anchor
+            if end_anchor is not None:
+                visual_entry['endAnchor'] = end_anchor
+            if start_offset_ms is not None:
+                visual_entry['startOffsetMs'] = start_offset_ms
+            if end_offset_ms is not None:
+                visual_entry['endOffsetMs'] = end_offset_ms
 
             visuals.append(visual_entry)
 
@@ -1664,7 +1725,10 @@ def generate_generated_timeline_wrapper(
     lines.append(f'  const fps = {fps};')
     lines.append(f'  const durationSeconds = {duration_seconds};')
     lines.append('  const frame = useCurrentFrame();')
-    lines.append('  const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);')
+    lines.append('  const activeVisuals = VISUAL_SEQUENCE')
+    lines.append('    .filter((visual) => frame >= visual.start && frame < visual.end)')
+    lines.append('    .slice()')
+    lines.append('    .sort((left, right) => ((left.lane ?? 0) - (right.lane ?? 0)) || (left.start - right.start));')
     lines.append('')
     lines.append('  return (')
     lines.append('    <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>')

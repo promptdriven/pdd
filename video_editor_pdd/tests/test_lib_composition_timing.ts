@@ -831,6 +831,10 @@ describe("lib/composition-timing", () => {
             entries: [
               {
                 id: "01_main",
+                start: { type: "segmentStart", segmentId: "demo_001" },
+                end: { type: "segmentEnd", segmentId: "demo_001" },
+                resolvedStartSeconds: 0,
+                resolvedEndSeconds: 5,
                 startSeconds: 0,
                 endSeconds: 5,
                 lane: 0,
@@ -839,6 +843,10 @@ describe("lib/composition-timing", () => {
               },
               {
                 id: "02_overlay",
+                start: { type: "segmentStart", segmentId: "demo_001" },
+                end: { type: "segmentEnd", segmentId: "demo_001" },
+                resolvedStartSeconds: 0,
+                resolvedEndSeconds: 5,
                 startSeconds: 0,
                 endSeconds: 5,
                 lane: 1,
@@ -866,5 +874,64 @@ describe("lib/composition-timing", () => {
 
     expect(result).toContain("lane: 0");
     expect(result).toContain("lane: 1");
+  });
+
+  it("uses the max resolved end from the timeline for section duration", () => {
+    const compositionsDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(compositionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(compositionsDir, "section-timeline.json"),
+      JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-23T00:00:00Z",
+        sections: [
+          {
+            sectionId: "demo",
+            durationSeconds: 5,
+            entries: [
+              {
+                id: "01_late",
+                start: { type: "segmentStart", segmentId: "demo_001" },
+                end: { type: "segmentEnd", segmentId: "demo_001" },
+                resolvedStartSeconds: 3,
+                resolvedEndSeconds: 9,
+                startSeconds: 3,
+                endSeconds: 9,
+                lane: 0,
+                source: "segment-anchor",
+                desc: "01 late",
+              },
+              {
+                id: "02_early_overlay",
+                start: { type: "segmentStart", segmentId: "demo_001" },
+                end: { type: "segmentEnd", segmentId: "demo_001" },
+                resolvedStartSeconds: 0,
+                resolvedEndSeconds: 5,
+                startSeconds: 0,
+                endSeconds: 5,
+                lane: 1,
+                source: "segment-anchor",
+                desc: "02 early overlay",
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    const ttsDir = path.join(tmpDir, "outputs", "tts", "demo");
+    fs.mkdirSync(ttsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(ttsDir, "word_timestamps.json"),
+      JSON.stringify([{ word: "Hi", start: 0, end: 9 }])
+    );
+
+    const result = buildSectionConstantsSource(
+      tmpDir,
+      { id: "demo", specDir: "demo", durationSeconds: 5, compositionId: "Demo" },
+      ["01_late", "02_early_overlay"]
+    );
+
+    expect(result).toContain("SECTION_DURATION_SECONDS = 9.000");
   });
 });

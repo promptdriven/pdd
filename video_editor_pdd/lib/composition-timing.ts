@@ -1146,29 +1146,27 @@ export function buildSectionConstantsSource(
     // Map timeline entries → ResolvedVisualTiming for the existing code path
     timings = timelineEntries.map((entry) => ({
       id: entry.id,
-      startSeconds: entry.startSeconds,
-      endSeconds: entry.endSeconds,
+      startSeconds: entry.resolvedStartSeconds ?? entry.startSeconds,
+      endSeconds: entry.resolvedEndSeconds ?? entry.endSeconds,
       source: (entry.source === "segment-anchor" ? "project" : entry.source === "timestamp-fallback" ? "spec" : "fallback") as TimingSource,
       desc: entry.desc,
       lane: entry.lane,
     }));
     const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
-    durationSeconds =
-      timings[timings.length - 1]?.endSeconds ??
-      Math.max(
-        sectionNarrativeTiming.durationSeconds,
-        componentIds.length * MIN_VISUAL_DURATION_SECONDS
-      );
+    durationSeconds = Math.max(
+      sectionNarrativeTiming.durationSeconds,
+      ...timings.map((timing) => timing.endSeconds),
+      componentIds.length * MIN_VISUAL_DURATION_SECONDS
+    );
   } else {
     // Fall back to existing spec-reparsing chain
     timings = resolveSectionVisualTimings(projectDir, section, componentIds);
     const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
-    durationSeconds =
-      timings[timings.length - 1]?.endSeconds ??
-      Math.max(
-        sectionNarrativeTiming.durationSeconds,
-        componentIds.length * MIN_VISUAL_DURATION_SECONDS
-      );
+    durationSeconds = Math.max(
+      sectionNarrativeTiming.durationSeconds,
+      ...timings.map((timing) => timing.endSeconds),
+      componentIds.length * MIN_VISUAL_DURATION_SECONDS
+    );
   }
 
   const exportName = section.compositionId

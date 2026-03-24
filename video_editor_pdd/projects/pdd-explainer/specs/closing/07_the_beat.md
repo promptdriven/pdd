@@ -71,6 +71,8 @@ Segment: between `closing_004` and `closing_005`
 {
   "type": "beat",
   "chartId": "the_beat",
+  "startAnchor": { "type": "segmentEnd", "segmentId": "closing_004" },
+  "endAnchor": { "type": "segmentStart", "segmentId": "closing_005" },
   "ghostElements": [
     { "source": "pdd_triangle", "opacity": 0.02 }
   ],

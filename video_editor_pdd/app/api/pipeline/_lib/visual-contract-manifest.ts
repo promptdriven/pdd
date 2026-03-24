@@ -3,6 +3,21 @@ import path from "path";
 
 import { getProjectDir } from "@/lib/projects";
 
+export type GeneratedTimingAnchor =
+  | {
+      type: "segmentStart" | "segmentEnd";
+      segmentId: string;
+      offsetMs?: number;
+    }
+  | {
+      type: "absolute";
+      seconds: number;
+    }
+  | {
+      type: "sectionStart" | "sectionEnd";
+      offsetMs?: number;
+    };
+
 export type GeneratedVisualContract = {
   id: string;
   specBaseName: string;
@@ -14,7 +29,11 @@ export type GeneratedVisualContract = {
   coverSegments?: string[];
   parentId?: string;
   children?: string[];
-  laneHint?: "main" | "overlay" | "background";
+  laneHint?: "main" | "overlay" | "background" | number;
+  startAnchor?: GeneratedTimingAnchor;
+  endAnchor?: GeneratedTimingAnchor;
+  startOffsetMs?: number;
+  endOffsetMs?: number;
 };
 
 type GeneratedVisualContractSection = {

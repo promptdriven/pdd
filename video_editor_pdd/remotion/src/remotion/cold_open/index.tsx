@@ -44,7 +44,10 @@ export const ColdOpenSection: React.FC = () => {
   const fps = 30;
   const durationSeconds = 17.54;
   const frame = useCurrentFrame();
-  const activeVisuals = VISUAL_SEQUENCE.filter((visual) => frame >= visual.start && frame < visual.end);
+  const activeVisuals = VISUAL_SEQUENCE
+    .filter((visual) => frame >= visual.start && frame < visual.end)
+    .slice()
+    .sort((left, right) => ((left.lane ?? 0) - (right.lane ?? 0)) || (left.start - right.start));
 
   return (
     <Sequence from={0} durationInFrames={Math.max(1, Math.ceil(durationSeconds * fps))}>
