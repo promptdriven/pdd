@@ -85,6 +85,36 @@ Your generated tests must verify **observable behavior**, not code structure.
 
 **Self-check:** Before writing each test, ask: "Could this test pass if someone just changed the function signature or added an empty stub without implementing any actual logic?" If yes, the test is structural — rewrite it to verify observable behavior.
 
+**Concrete Python examples:**
+
+BAD (structural — reads source, checks keywords):
+```python
+def test_handles_signal():
+    source = inspect.getsource(module.main)
+    assert 'signal' in source
+```
+
+GOOD (behavioral — calls function, asserts on outcome):
+```python
+def test_handles_signal():
+    result = module.main()
+    assert result is not None
+```
+
+BAD (structural — reads file content, checks for definition):
+```python
+def test_function_exists():
+    content = Path("pdd/module.py").read_text()
+    assert "def target_func" in content
+```
+
+GOOD (behavioral — imports and calls the function):
+```python
+def test_function_exists():
+    output = module.target_func(test_input)
+    assert output == expected_value
+```
+
 % Critical: No Vacuous waitFor Negative Assertions
 
 **BLOCKED:** Using negative assertions (`.not`) inside `waitFor`, `waitForEffect`, or any async retry utility. These are vacuous — they pass immediately and test nothing.

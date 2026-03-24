@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -27,6 +28,7 @@ from .pytest_output import run_pytest_and_capture_output
 
 # Initialize console for rich output
 console = Console()
+logger = logging.getLogger(__name__)
 
 # Per-Step Timeouts (Workflow specific)
 BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
@@ -486,6 +488,30 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
         if om and not line.strip().startswith("#"):
             file_handle_filenames[om.group(2)] = om.group(1)
 
+    # Track path variable assignments like:
+    #   arch_path = Path(tmpdir) / "architecture.json"
+    #   arch_path = worktree_path / "architecture.json"
+    #   p = Path(tmpdir) / subdir / "file.json"
+    #   config = Path("config.yaml")
+    # So when we later see arch_path.read_text(), we can resolve the filename.
+    # Alt 1: Path-join operator / before quoted filename.  Requires the char
+    #   before / to be ) or a word char or ] (i.e. Python path-join, not
+    #   string concat like  "/" + "endpoint").  Greedy .* so multi-segment
+    #   paths (Path(x) / subdir / "file") match the last /.
+    # Alt 2: Direct Path("filename") construction.
+    path_var_pattern = re.compile(
+        r'(\w+)\s*=\s*.*[\w)\]]\s*/\s*["\']([^"\']+)["\']'
+        r'|(\w+)\s*=\s*Path\s*\(\s*["\']([^"\']+)["\']\s*\)',
+    )
+    path_var_filenames: dict = {}  # var_name -> filename
+    for line in lines:
+        pm = path_var_pattern.search(line)
+        if pm and not line.strip().startswith("#"):
+            var_name = pm.group(1) or pm.group(3)
+            filename = pm.group(2) or pm.group(4)
+            if var_name and filename:
+                path_var_filenames[var_name] = filename
+
     def _is_non_source_file(filename: str) -> bool:
         """Check if a filename refers to a non-source (config/build) file."""
         basename = Path(filename).name.lower()
@@ -516,6 +542,18 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
                 if _is_non_source_file(file_handle_filenames[handle_name]):
                     continue
                 source_var_names.add(m.group(1))
+                continue
+
+            # Check if reading from a tracked path variable (e.g. arch_path.read_text())
+            # full_expr may be "arch_path" or "json.loads(arch_path" etc.
+            # Check if ANY tracked path variable appears as a word in the expression.
+            _skip_path_var = False
+            for pvar, pfilename in path_var_filenames.items():
+                if re.search(r'\b' + re.escape(pvar) + r'\b', full_expr):
+                    if _is_non_source_file(pfilename):
+                        _skip_path_var = True
+                        break
+            if _skip_path_var:
                 continue
 
             # Extract any quoted filename from the expression
@@ -552,6 +590,61 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
                         )
 
     return violations
+
+
+def _extract_violation_snippets(
+    file_violations: dict,
+    work_dir: Path,
+) -> str:
+    """Read actual violating code lines from generated test files.
+
+    Parses line numbers from violation strings, reads the source files,
+    and returns formatted snippets with context around each violation.
+    Falls back to plain violation list if files can't be read.
+
+    Args:
+        file_violations: Mapping of file path -> list of violation strings
+            for that file. Keeps violations associated with their source file
+            so snippets are never pulled from the wrong file.
+        work_dir: Working directory to resolve relative file paths against.
+    """
+    snippets: List[str] = []
+    for fpath, violations in file_violations.items():
+        abs_path = (work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+        if not abs_path.exists():
+            logger.warning("File %s not found for violation snippets", abs_path)
+            for v in violations:
+                snippets.append(f"  - {v}")
+            continue
+        try:
+            file_lines = abs_path.read_text().splitlines()
+        except OSError as e:
+            logger.warning("Could not read %s for violation snippets: %s", abs_path, e)
+            for v in violations:
+                snippets.append(f"  - {v}")
+            continue
+        except UnicodeDecodeError as e:
+            logger.warning("Could not decode %s for violation snippets: %s", abs_path, e)
+            for v in violations:
+                snippets.append(f"  - {v}")
+            continue
+        for v in violations:
+            m = re.match(r"Line (\d+):", v)
+            if not m:
+                snippets.append(f"  - {v}")
+                continue
+            line_num = int(m.group(1))
+            start = max(0, line_num - 3)
+            end = min(len(file_lines), line_num + 2)
+            snippet_lines = []
+            for idx in range(start, end):
+                marker = ">>>" if idx == line_num - 1 else "   "
+                snippet_lines.append(f"  {marker} {idx + 1}: {file_lines[idx]}")
+            if snippet_lines:
+                snippets.append(f"{v}\n" + "\n".join(snippet_lines))
+            else:
+                snippets.append(f"  - {v}")
+    return "\n\n".join(snippets)
 
 
 def run_agentic_bug_orchestrator(
@@ -910,11 +1003,13 @@ def run_agentic_bug_orchestrator(
                 context["files_to_stage"] = ", ".join(changed_files)
 
             # Structural test guard: scan generated files for banned patterns
+            file_violations: dict = {}  # fpath -> [violations]
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
                 violations = detect_structural_test_patterns(str(abs_path))
                 if violations:
+                    file_violations[fpath] = violations
                     all_violations.extend(violations)
 
             if all_violations:
@@ -927,16 +1022,75 @@ def run_agentic_bug_orchestrator(
                         console.print(f"[yellow]    • {v}[/yellow]")
 
                 # Re-run step 9 with feedback about the violations
-                violation_summary = "\n".join(f"  - {v}" for v in all_violations)
-                retry_addendum = (
-                    "\n\n% IMPORTANT: Your previous attempt generated STRUCTURAL tests that "
-                    "were rejected. The following violations were detected:\n"
-                    f"{violation_summary}\n\n"
-                    "You MUST rewrite these tests as BEHAVIORAL tests that call functions "
-                    "and assert on observable outputs or side effects. Do NOT use "
-                    "inspect.getsource, inspect.signature, hasattr assertions, or "
-                    "source string matching."
+                violation_snippets = _extract_violation_snippets(
+                    file_violations, current_work_dir
                 )
+                retry_addendum = (
+                    "\n\n% IMPORTANT — STRUCTURAL TEST REJECTION\n"
+                    "Your previous attempt was REJECTED because it contains structural tests.\n"
+                    "Here are the specific violations with the actual offending code:\n\n"
+                    f"{violation_snippets}\n\n"
+                    "% Example rewrite — BAD vs GOOD:\n\n"
+                    "BAD (structural — reads source, checks keywords):\n"
+                    "```python\n"
+                    "def test_handles_signal():\n"
+                    "    source = inspect.getsource(module.main)\n"
+                    "    assert 'signal' in source\n"
+                    "```\n\n"
+                    "GOOD (behavioral — calls function, asserts on outcome):\n"
+                    "```python\n"
+                    "def test_handles_signal():\n"
+                    "    result = module.main()\n"
+                    "    assert result is not None\n"
+                    "```\n\n"
+                    "BAD (structural — reads file content, checks for definition):\n"
+                    "```python\n"
+                    "def test_function_exists():\n"
+                    '    content = Path("pdd/module.py").read_text()\n'
+                    '    assert "def target_func" in content\n'
+                    "```\n\n"
+                    "GOOD (behavioral — imports and calls the function):\n"
+                    "```python\n"
+                    "def test_function_exists():\n"
+                    "    output = module.target_func(test_input)\n"
+                    "    assert output == expected_value\n"
+                    "```\n\n"
+                    "You MUST rewrite ALL tests as BEHAVIORAL. Each test must CALL a function "
+                    "and assert on return values, side effects, or exceptions. Do NOT use "
+                    "inspect.getsource, inspect.signature, hasattr assertions, or "
+                    "source string matching.\n\n"
+                    "% CRITICAL: The rejected test files have been renamed. "
+                    "Write completely new test files from scratch. "
+                    "Do NOT attempt to read or reuse any previous test code."
+                )
+
+                # Back up first-attempt files so the LLM generates fresh.
+                # If retry fails, originals are restored (no data loss).
+                # Only touch files that resolve under current_work_dir (path
+                # traversal guard — LLM-emitted paths are untrusted).
+                base_dir = current_work_dir.resolve()
+                backed_up: List[Tuple[Path, Path]] = []
+                for fpath in extracted:
+                    try:
+                        candidate = (base_dir / Path(fpath)).resolve()
+                    except OSError:
+                        continue
+                    try:
+                        candidate.relative_to(base_dir)
+                    except ValueError:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: refusing to touch path outside worktree: {candidate}[/yellow]"
+                            )
+                        continue
+                    try:
+                        if candidate.exists():
+                            backup = candidate.with_suffix(candidate.suffix + ".bak")
+                            candidate.rename(backup)
+                            backed_up.append((candidate, backup))
+                    except OSError as e:
+                        if not quiet:
+                            console.print(f"[yellow]Warning: failed to back up {candidate}: {e}[/yellow]")
 
                 retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
                     instruction=formatted_prompt + retry_addendum,
@@ -954,11 +1108,25 @@ def run_agentic_bug_orchestrator(
                 step_success = retry_success
 
                 if not retry_success:
+                    # Restore original files so the worktree isn't left empty
+                    for original, backup in backed_up:
+                        try:
+                            if backup.exists():
+                                backup.rename(original)
+                        except OSError as e:
+                            logger.warning("Failed to restore %s from backup: %s", original, e)
                     if not quiet:
                         console.print(
-                            "[red]  → Retry of step 9 failed; keeping original output.[/red]"
+                            "[red]  → Retry of step 9 failed; original files restored.[/red]"
                         )
                 else:
+                    # Retry succeeded — clean up backup files
+                    for _original, backup in backed_up:
+                        try:
+                            if backup.exists():
+                                backup.unlink()
+                        except OSError:
+                            pass  # Best-effort cleanup
                     # Re-extract files from retry
                     retry_created = _parse_changed_files(retry_output, "FILES_CREATED")
                     retry_modified = _parse_changed_files(retry_output, "FILES_MODIFIED")

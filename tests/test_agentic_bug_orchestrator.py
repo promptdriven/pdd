@@ -2872,3 +2872,759 @@ class TestOrchestratorPreStaging:
                 f"{ga} at index {ga_idx} came AFTER step12_run at {step12_idx}. "
                 f"Orchestrator must stage files before Step 12 dispatch. Log: {call_log}"
             )
+
+
+# --- Step 9 Structural Guard Retry Tests (Issue #929) ---
+
+
+def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): The retry addendum must include the actual
+    violating code lines from the generated test files, not just violation
+    description strings like 'Line 4: assert hasattr() — ...'.
+
+    Without the actual code, the LLM receives nearly identical input on retry
+    and regenerates the same structural violations.
+
+    This test:
+    1. Creates a real test file on disk with an assert hasattr() violation
+    2. Mocks run_agentic_task so first call returns output pointing to that file
+    3. Captures the retry call's instruction parameter
+    4. Asserts the instruction contains the actual code line from the file
+    """
+    # Create the worktree directory structure
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create a test file with a structural violation (assert hasattr)
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # The violating code line we expect to see in the retry addendum
+    violating_code_line = 'assert hasattr(some_module, "target_func")'
+    test_file.write_text(
+        "from pdd import some_module\n"
+        "\n"
+        "def test_bug():\n"
+        f"    {violating_code_line}\n"
+    )
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                # First step9 call: return output pointing to the violating file
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                # This is the retry call — capture the instruction
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    # The retry must have been triggered (structural violations detected)
+    assert captured_retry_instruction is not None, (
+        "Expected a retry call for step9 due to structural violations, "
+        "but no retry was captured"
+    )
+
+    # BUG: The current code only includes violation descriptions like
+    # "Line 4: assert hasattr() — checks attribute existence..."
+    # but does NOT include the actual violating code line.
+    # The fix should include the actual code so the LLM knows what to rewrite.
+    assert violating_code_line in captured_retry_instruction, (
+        f"Retry addendum must include the actual violating code line "
+        f"'{violating_code_line}' so the LLM knows what to rewrite. "
+        f"Currently it only includes violation descriptions."
+    )
+
+
+def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): When source-string-matching violations are
+    detected, the retry addendum must include the actual assertion lines,
+    not just 'Line N: source string matching — asserts keyword presence...'.
+
+    This is the most common violation type from the original bug report
+    (27 violations in the real case).
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create a test file with source-string-matching violations
+    # Build the file content line-by-line to avoid triggering the structural
+    # pattern detector on THIS test file (the detector does line-by-line regex)
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    file_lines = [
+        "from pathlib import Path",
+        "",
+        "def test_function_exists():",
+    ]
+    # Construct the violating lines using concatenation so the detector
+    # doesn't see "content = ....read_text()" on a single line in THIS file
+    src_read = 'content = Path("pdd/module.py").read' + '_text()'
+    src_assertion = 'assert "def target_func" in content'
+    file_lines.append(f"    {src_read}")
+    file_lines.append(f"    {src_assertion}")
+    test_file.write_text("\n".join(file_lines) + "\n")
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert captured_retry_instruction is not None, (
+        "Expected a retry call for step9 due to source string matching violations"
+    )
+
+    # BUG: The retry addendum only says "Line 5: source string matching — ..."
+    # It should include the actual assertion code so the LLM can rewrite it
+    expected_violation = src_assertion
+    assert expected_violation in captured_retry_instruction, (
+        f"Retry addendum must include the actual violating assertion line "
+        f"'{expected_violation}' so the LLM can rewrite it. "
+        f"Currently it only includes generic violation descriptions."
+    )
+
+
+def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): The retry addendum must include concrete
+    rewrite guidance — a before/after example showing how to convert a
+    structural test into a behavioral test.
+
+    Without rewrite examples, the LLM has no model for what a correct
+    rewrite looks like and regenerates the same structural tests.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create a test file with a structural violation (assert hasattr)
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    violating_code_line = 'assert hasattr(module, "func_a")'
+    test_file.write_text(
+        "from pdd import module\n"
+        "\n"
+        "def test_one():\n"
+        f"    {violating_code_line}\n"
+    )
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert captured_retry_instruction is not None, "Retry step9 call not captured"
+
+    # The retry addendum must include BOTH:
+    # 1. The actual violating code (so the LLM sees what it produced)
+    # 2. A concrete rewrite showing a behavioral alternative
+    #
+    # Without both, the LLM has no before/after model and regenerates
+    # the same structural tests.
+
+    # Check that the actual violating code line is shown
+    assert violating_code_line in captured_retry_instruction, (
+        f"Retry addendum must include the actual violating code "
+        f"'{violating_code_line}' so the LLM sees what it produced. "
+        f"Currently it only includes generic descriptions "
+        f"like 'Line 4: assert hasattr() — ...'."
+    )
+
+    # Check that a behavioral alternative is provided alongside the violating code
+    # The addendum should show how to rewrite: call the function and assert on output
+    instruction_lower = captured_retry_instruction.lower()
+    has_behavioral_alternative = (
+        ("result" in instruction_lower or "return" in instruction_lower)
+        and "assert" in instruction_lower
+    ) or (
+        "call" in instruction_lower
+        and "assert" in instruction_lower
+    )
+    assert has_behavioral_alternative, (
+        "Retry addendum must include a concrete behavioral alternative "
+        "showing how to rewrite the structural test (e.g., call the function "
+        "and assert on the result). Currently it only says 'do not use X' "
+        "without showing what to do instead."
+    )
+
+
+def test_step9_retry_includes_code_from_multiple_files(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): When multiple generated files have violations,
+    the retry addendum must include violating code from ALL files, not just
+    file-agnostic descriptions.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create two test files with different hasattr violations
+    tests_dir = worktree_path / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+
+    violation_a = 'assert hasattr(alpha, "run_pipeline")'
+    file_a = tests_dir / "test_fix_a.py"
+    file_a.write_text(
+        "from pdd import alpha\n"
+        "\n"
+        "def test_alpha():\n"
+        f"    {violation_a}\n"
+    )
+
+    violation_b = 'assert hasattr(beta, "execute_task")'
+    file_b = tests_dir / "test_fix_b.py"
+    file_b.write_text(
+        "from pdd import beta\n"
+        "\n"
+        "def test_beta():\n"
+        f"    {violation_b}\n"
+    )
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_fix_a.py, tests/test_fix_b.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_fix_a.py, tests/test_fix_b.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert captured_retry_instruction is not None, (
+        "Expected retry for step9 with violations from both files"
+    )
+
+    # The retry must include actual code from BOTH files
+    assert violation_a in captured_retry_instruction, (
+        f"Retry addendum missing violating code from test_fix_a.py: '{violation_a}'"
+    )
+    assert violation_b in captured_retry_instruction, (
+        f"Retry addendum missing violating code from test_fix_b.py: '{violation_b}'"
+    )
+
+
+# --- Direct unit tests for _extract_violation_snippets ---
+
+from pdd.agentic_bug_orchestrator import _extract_violation_snippets
+
+
+def test_extract_violation_snippets_shows_correct_line(tmp_path):
+    """Snippet output includes the violating line marked with >>>."""
+    test_file = tmp_path / "test_foo.py"
+    test_file.write_text(
+        "import os\n"
+        "\n"
+        "def test_one():\n"
+        '    assert hasattr(mod, "fn")\n'
+    )
+    result = _extract_violation_snippets(
+        {"test_foo.py": ["Line 4: assert hasattr() — checks attribute existence"]},
+        tmp_path,
+    )
+    assert '>>> 4:' in result
+    assert 'assert hasattr(mod, "fn")' in result
+
+
+def test_extract_violation_snippets_missing_file_falls_back(tmp_path):
+    """When the file doesn't exist, violations are included as plain text."""
+    result = _extract_violation_snippets(
+        {"nonexistent.py": ["Line 1: some violation"]},
+        tmp_path,
+    )
+    assert "Line 1: some violation" in result
+    assert ">>>" not in result
+
+
+def test_extract_violation_snippets_missing_file_not_dropped_alongside_snippets(tmp_path):
+    """Violations from a missing file must appear even when another file has snippets."""
+    # File A exists and will produce snippets
+    file_a = tmp_path / "test_a.py"
+    file_a.write_text(
+        "import os\n"
+        "\n"
+        "def test_one():\n"
+        '    assert hasattr(mod, "fn")\n'
+    )
+    # File B doesn't exist — its 3 violations must still appear
+    result = _extract_violation_snippets(
+        {
+            "test_a.py": ["Line 4: hasattr check"],
+            "nonexistent.py": [
+                "Line 1: violation one",
+                "Line 2: violation two",
+                "Line 3: violation three",
+            ],
+        },
+        tmp_path,
+    )
+    # File A snippet is present
+    assert ">>>" in result
+    assert "hasattr" in result
+    # File B violations are NOT silently dropped
+    assert "violation one" in result
+    assert "violation two" in result
+    assert "violation three" in result
+
+
+def test_extract_violation_snippets_line_out_of_range(tmp_path):
+    """Line number beyond file length doesn't crash."""
+    test_file = tmp_path / "short.py"
+    test_file.write_text("x = 1\n")
+    result = _extract_violation_snippets(
+        {"short.py": ["Line 999: out of range violation"]},
+        tmp_path,
+    )
+    # No snippet lines extracted (line 999 doesn't exist), falls back
+    assert "Line 999: out of range violation" in result
+
+
+def test_extract_violation_snippets_no_line_number_in_violation(tmp_path):
+    """Violations without 'Line N:' prefix are included as plain text."""
+    test_file = tmp_path / "test_foo.py"
+    test_file.write_text("x = 1\n")
+    result = _extract_violation_snippets(
+        {"test_foo.py": ["general violation without line number"]},
+        tmp_path,
+    )
+    assert "general violation without line number" in result
+
+
+def test_extract_violation_snippets_no_line_number_alongside_snippets(tmp_path):
+    """Violations without Line N: are included even when other violations have snippets."""
+    test_file = tmp_path / "test_foo.py"
+    test_file.write_text(
+        "import os\n"
+        "\n"
+        "def test_one():\n"
+        '    assert hasattr(mod, "fn")\n'
+    )
+    result = _extract_violation_snippets(
+        {"test_foo.py": [
+            "Line 4: hasattr check",
+            "general violation without line number",
+        ]},
+        tmp_path,
+    )
+    # Snippet from Line 4 is present
+    assert ">>>" in result
+    # The no-line-number violation is NOT silently dropped
+    assert "general violation without line number" in result
+
+
+def test_extract_violation_snippets_isolates_files(tmp_path):
+    """Violations from file A don't produce snippets from file B."""
+    file_a = tmp_path / "test_a.py"
+    file_a.write_text(
+        "line1\n"
+        "line2\n"
+        "line3\n"
+        "violation_a_here\n"
+    )
+    file_b = tmp_path / "test_b.py"
+    file_b.write_text(
+        "innocent1\n"
+        "innocent2\n"
+        "innocent3\n"
+        "innocent4\n"
+    )
+    # Only file A has the violation — file B's line 4 should NOT appear
+    result = _extract_violation_snippets(
+        {"test_a.py": ["Line 4: some violation"]},
+        tmp_path,
+    )
+    assert "violation_a_here" in result
+    assert "innocent4" not in result
+
+
+# --- Issue #932 comment #1: Backup/restore on retry failure ---
+
+
+def test_step9_retry_failure_restores_original_files(tmp_path):
+    """If retry fails, original test files must be restored (not left deleted)."""
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    violating_content = (
+        "from pdd import some_module\n"
+        "\n"
+        "def test_bug():\n"
+        '    assert hasattr(some_module, "target_func")\n'
+    )
+    test_file.write_text(violating_content)
+
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal first_step9
+        label = kwargs.get("label", "")
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                # Retry FAILS
+                return (False, "LLM error", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Original file must be restored after retry failure
+    assert test_file.exists(), (
+        "Original test file should be restored when retry fails, "
+        "not left deleted"
+    )
+    assert test_file.read_text() == violating_content
+    # Backup file should not linger
+    backup = test_file.with_suffix(".py.bak")
+    assert not backup.exists(), "Backup file should be cleaned up after restore"
+
+
+def test_step9_retry_success_cleans_up_backups(tmp_path):
+    """If retry succeeds, .bak files must be removed."""
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "from pdd import some_module\n"
+        "\n"
+        "def test_bug():\n"
+        '    assert hasattr(some_module, "target_func")\n'
+    )
+
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal first_step9
+        label = kwargs.get("label", "")
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                # Retry succeeds — write a new clean file
+                test_file.write_text(
+                    "from pdd import some_module\n"
+                    "\n"
+                    "def test_bug():\n"
+                    "    result = some_module.target_func()\n"
+                    "    assert result is not None\n"
+                )
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Backup must be cleaned up after successful retry
+    backup = test_file.with_suffix(".py.bak")
+    assert not backup.exists(), (
+        ".bak backup file should be removed after successful retry"
+    )
+
+
+# --- Issue #932 comment #3: Path variable regex robustness ---
+
+
+def test_path_var_regex_rejects_url_concat():
+    """URL string concatenation like url = base + '/' + 'endpoint' must NOT be
+    tracked as a path variable — it would cause false negatives in the detector."""
+    from pdd.agentic_bug_orchestrator import detect_structural_test_patterns
+    import tempfile, os
+
+    code = (
+        'url = base + "/" + "endpoint"\n'
+        'content = url_var.read_text()\n'
+        'assert "keyword" in content\n'
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        f.flush()
+        try:
+            violations = detect_structural_test_patterns(f.name)
+        finally:
+            os.unlink(f.name)
+    # The read_text + assert pattern should be flagged (url is NOT a path variable)
+    assert len(violations) > 0, (
+        "URL concatenation should not be treated as a path variable; "
+        "the read_text + assert pattern should still be flagged"
+    )
+
+
+def test_path_var_regex_tracks_multi_segment_path():
+    """Multi-segment path like p = Path(tmpdir) / subdir / 'file.json' must be
+    tracked so that p.read_text() is not falsely flagged."""
+    from pdd.agentic_bug_orchestrator import detect_structural_test_patterns
+    import tempfile, os
+
+    code = (
+        'p = Path(tmpdir) / subdir / "architecture.json"\n'
+        'data = json.loads(p.read_text())\n'
+        'assert "key" in data\n'
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        f.flush()
+        try:
+            violations = detect_structural_test_patterns(f.name)
+        finally:
+            os.unlink(f.name)
+    # p points to a .json file — should NOT be flagged as source reading
+    assert len(violations) == 0, (
+        f"Multi-segment path to .json should not be flagged, got: {violations}"
+    )
