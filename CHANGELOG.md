@@ -1,3 +1,28 @@
+## v0.0.186 (2026-03-23)
+
+### Feat
+
+- Define new video segment specifications, adjust Remotion component timings, and add audit documentation for explainer video parts.
+- enhance agentic sync module identification from long issue bodies (#746)
+- add explainer video specifications for prompt nozzle, compression ratio, and module aside sections.
+- implement three-manifest data model for audio-visual sync
+
+### Fix
+
+- annotation b2ba7b3b-edbe-463e-b7d2-32f6fdc892f1 Change the main background color of this section t
+- make Step 5 reproduction test handling language-agnostic
+- programmatically copy Step 5 reproduction tests into worktree
+- add missing newline at end of test file
+- implement Step 5 reproduction test forwarding to Step 9 (#928)
+- rewrite PR #931 tests and prompts for correct Step 5 repro approach (#928)
+- resolve 14 public CI test failures unrelated to PR content (#942)
+- detect CODE_BUG before NOT_A_BUG in Step 3 tier 4 classification (#893)
+
+### Refactor
+
+- Restructure video explainer project specifications by deleting old audit files, adding new scenes, and updating existing ones.
+- Reorganize and update video project specifications across multiple sections and audit files.
+
 ## v0.0.185 (2026-03-22)
 
 ### Fix
