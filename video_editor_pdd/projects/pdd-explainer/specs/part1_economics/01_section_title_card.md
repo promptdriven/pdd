@@ -1,108 +1,122 @@
 [title:]
 
-# Section 1.0: Part 1 Section Title — The Economics of Darning
+# Section 1.1: The Economics of Darning — Section Title Card
 
 **Tool:** Title
 **Duration:** ~4s (120 frames @ 30fps)
-**Timestamp:** 2:30 - 2:34
+**Timestamp:** 0:00 - 0:04
 
 ## Visual Description
 
-A clean section title card marks the transition from the 30-second demo into the economics argument. The screen clears to the video's dark background, and "Part 1" appears as a small label above the main title "The Economics of Darning." Below, a thin horizontal rule and a faint subtitle: "Why patching was rational — and when it stopped."
+A section title card introducing the economic argument. "THE ECONOMICS" appears first in large bold weight, then "OF DARNING" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
 
-The mood shifts from the punchy demo energy to grounded, explanatory authority. The title uses warm amber (`#D9944A`) — the "patching / traditional" color from the palette — because this section examines the cost of patching before revealing the alternative.
+Behind the text, a faint ghost image of intersecting cost curves — one descending, one ascending — sits at low opacity, previewing the charting theme of the section. The curves cross near center-right, hinting at the threshold moment. Background is deep navy-black.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0D1117` (dark IDE background, consistent with video)
-- No code underlay — clean slate for the new section
+- Background: `#0A0F1A` (deep navy-black)
+- Blueprint grid: 60px spacing, `#1E293B` at 0.05
 
 ### Chart/Visual Elements
 
-#### Part Label
-- "Part 1" — Inter, 14px, semi-bold (600), `#94A3B8` at 0.4, letter-spacing 4px, uppercase, centered at y: 420
-
 #### Title Text
-- "The Economics of Darning" — Inter, 52px, bold (700), `#D9944A` at 0.92, centered at y: 500
+- "THE ECONOMICS" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
+- "OF DARNING" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 240px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
-#### Horizontal Rule
-- 120px wide, 2px, `#D9944A` at 0.2, centered at y: 555, draws from center outward
+#### Section Number
+- "PART 1" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
-#### Subtitle
-- "Why patching was rational — and when it stopped." — Inter, 16px, weight 300 (light), italic, `#94A3B8` at 0.4, centered at y: 585
+#### Background Ghost (cost curves)
+- Two quadratic bezier curves, crossing at (1050, 500)
+- Descending curve: `#D9944A` at 0.04, 2px stroke
+- Ascending curve: `#4A90D9` at 0.04, 2px stroke
+- Crossing point: small circle 8px, `#E2E8F0` at 0.05
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Fade up from previous shot. Background settles to `#0D1117`.
-2. **Frame 15-35 (0.5-1.17s):** "Part 1" label fades in with 6px upward slide.
-3. **Frame 35-60 (1.17-2s):** Title "The Economics of Darning" fades in with 10px upward slide.
+1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
+2. **Frame 15-40 (0.5-1.33s):** "PART 1" label fades in. Ghost cost curves draw with stroke-dashoffset.
+3. **Frame 40-60 (1.33-2s):** "THE ECONOMICS" types on character-by-character (2 frames per character).
 4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
-5. **Frame 70-90 (2.33-3s):** Subtitle fades in.
-6. **Frame 90-120 (3-4s):** Hold. Title sits with authority.
+5. **Frame 70-90 (2.33-3s):** "OF DARNING" fades in with 10px upward slide.
+6. **Frame 90-120 (3-4s):** Hold. Ghost curves pulse subtly.
 
 ### Typography
-- Part label: Inter, 14px, semi-bold (600), `#94A3B8` at 0.4, uppercase, letter-spacing 4px
-- Title: Inter, 52px, bold (700), `#D9944A` at 0.92
-- Subtitle: Inter, 16px, light (300), italic, `#94A3B8` at 0.4
+- Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
+- Title words: Inter, 72px, bold (700), `#E2E8F0`
+- Rule: `#334155` at 0.5
 
 ### Easing
-- Part label fade-in + slide: `easeOut(cubic)` over 15 frames
-- Title fade-in + slide: `easeOut(cubic)` over 20 frames
-- Rule draw: `easeOut(cubic)` over 10 frames
-- Subtitle fade-in: `easeOut(quad)` over 15 frames
+- Text fade-in: `easeOut(quad)` over 20 frames
+- "OF DARNING" slide-up: `easeOut(cubic)` over 20 frames
+- Rule draw: `easeInOut(quad)` over 10 frames
+- Ghost curve draw: `easeInOut(cubic)` over 30 frames
+- Curve pulse: `easeInOut(sine)` on 60-frame cycle
 
 ## Narration Sync
-> "This isn't nostalgia. It's economics."
+> "Watch this."
+> "15 lines of prompt. 200 lines of code."
 
-Segment: `part1_economics_001`
+Segment: `part1_economics_001`, `part1_economics_002`
 
-- **2:30** ("This isn't nostalgia"): Title card fully visible
-- **2:33** ("It's economics"): Hold — title reinforces the word "economics"
+- **0.00s** ("Watch this."): Title card begins fade-in
+- **0.74s** ("15 lines of prompt"): "THE ECONOMICS" typing on screen
+- **2.5s** ("200 lines of code"): "OF DARNING" revealed, hold
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
-  <AbsoluteFill style={{ backgroundColor: '#0D1117' }}>
-    {/* Part label */}
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
+
+    {/* Ghost cost curves */}
     <Sequence from={15}>
-      <SlideUp distance={6} duration={15}>
-        <FadeIn duration={15}>
-          <Text text="PART 1" font="Inter" size={14}
-            weight={600} color="#94A3B8" opacity={0.4}
-            letterSpacing={4}
-            x={960} y={420} align="center" />
-        </FadeIn>
-      </SlideUp>
+      <StrokeDraw duration={30}>
+        <QuadraticCurve
+          points={[[200, 300], [600, 480], [1050, 500]]}
+          color="#D9944A" opacity={0.04} width={2} />
+        <QuadraticCurve
+          points={[[200, 700], [600, 520], [1050, 500]]}
+          color="#4A90D9" opacity={0.04} width={2} />
+        <Circle cx={1050} cy={500} r={4}
+          fill="#E2E8F0" opacity={0.05} />
+      </StrokeDraw>
     </Sequence>
 
-    {/* Title */}
-    <Sequence from={35}>
-      <SlideUp distance={10} duration={20}>
-        <FadeIn duration={20}>
-          <Text text="The Economics of Darning" font="Inter" size={52}
-            weight={700} color="#D9944A" opacity={0.92}
-            x={960} y={500} align="center" />
-        </FadeIn>
-      </SlideUp>
+    {/* Section label */}
+    <Sequence from={15}>
+      <FadeIn duration={20}>
+        <Text text="PART 1" font="Inter" size={14}
+          weight={600} color="#64748B" opacity={0.5}
+          letterSpacing={4} x={960} y={400} align="center" />
+      </FadeIn>
+    </Sequence>
+
+    {/* Title: THE ECONOMICS */}
+    <Sequence from={40}>
+      <TypeWriter text="THE ECONOMICS" font="Inter" size={72}
+        weight={700} color="#E2E8F0"
+        charDelay={2} x={960} y={460} align="center" />
     </Sequence>
 
     {/* Horizontal rule */}
     <Sequence from={60}>
-      <DrawLine from={[900, 555]} to={[1020, 555]}
-        color="#D9944A" opacity={0.2} width={2}
+      <DrawLine from={[840, 505]} to={[1080, 505]}
+        color="#334155" opacity={0.5} width={2}
         drawDuration={10} fromCenter />
     </Sequence>
 
-    {/* Subtitle */}
+    {/* Title: OF DARNING */}
     <Sequence from={70}>
-      <FadeIn duration={15}>
-        <Text text="Why patching was rational — and when it stopped."
-          font="Inter" size={16} weight={300}
-          fontStyle="italic"
-          color="#94A3B8" opacity={0.4}
-          x={960} y={585} align="center" />
-      </FadeIn>
+      <SlideUp distance={10} duration={20}>
+        <FadeIn duration={20}>
+          <Text text="OF DARNING" font="Inter" size={72}
+            weight={700} color="#E2E8F0"
+            x={975} y={545} align="center" />
+        </FadeIn>
+      </SlideUp>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -113,44 +127,17 @@ Segment: `part1_economics_001`
 {
   "type": "title_card",
   "sectionNumber": 1,
-  "sectionLabel": "Part 1",
-  "title": "The Economics of Darning",
-  "titleColor": "#D9944A",
-  "subtitle": "Why patching was rational — and when it stopped.",
-  "subtitleColor": "#94A3B8",
-  "backgroundColor": "#0D1117",
-  "narrationSegments": ["part1_economics_001"]
+  "sectionLabel": "PART 1",
+  "titleLine1": "THE ECONOMICS",
+  "titleLine2": "OF DARNING",
+  "backgroundColor": "#0A0F1A",
+  "ghostElements": [
+    { "shape": "quadratic_curve", "color": "#D9944A", "component": "descending_cost" },
+    { "shape": "quadratic_curve", "color": "#4A90D9", "component": "ascending_cost" },
+    { "shape": "crossing_point", "color": "#E2E8F0", "component": "threshold" }
+  ],
+  "narrationSegments": ["part1_economics_001", "part1_economics_002"]
 }
 ```
 
 ---
-
-<!-- ANNOTATION_UPDATE_START: 78dc6e4a-d689-46e8-b379-874a962a5075 -->
-## Annotation Update
-Requested change: The frame is at 83.3% progress (hold phase, frame 449/540), so the chart should be fully complete with all labels visible. Overall the composition matches the spec well: dark background, two lines (amber/orange for labor cost, blue for new sock cost), crossing point with white circle and 'The Threshold' label, post-crossing shaded area with 'Darning is irrational' text, axes with year labels and percentage ticks. However, there are two notable issues:
-
-1. **Line labels clipped at right edge**: B
-Technical assessment: The chart composition largely matches the spec: dark #0D1117 background, amber labor-cost line flat at ~35%, blue new-sock-cost line declining from ~80% to ~15%, white crossing-point circle with 'The Threshold' label, post-crossing blue shaded area with 'Darning is irrational' italic text, and correct axis labels and ticks. However, the line-end labels ('Cost to darn (time)' and 'Cost of new socks') are positioned at the extreme right edge of the canvas where they risk clipping. The spec calls for 100px right margin, but the labels extend very close to or touching the right boundary. At the hold phase (frame 449/540), all elements are present and visible, so this is cosmetic rather than functional. The labels are still readable in the current frame but have no breathing room.
-- Increase the right margin from 100px to ~160px to give line-end labels adequate clearance, or reposition labels slightly inward from the line endpoints
-- Alternatively, anchor the line labels to a position slightly left of the 1975 endpoint (e.g., at x=1972) so text doesn't crowd the right edge
-- Consider placing line labels inline along the line body (near 1970) rather than at the terminal endpoint to avoid edge-clipping entirely
-<!-- ANNOTATION_UPDATE_END: 78dc6e4a-d689-46e8-b379-874a962a5075 -->
-
-<!-- ANNOTATION_UPDATE_START: d82251b1-6d93-4253-9382-06a342e96421 -->
-## Annotation Update
-Requested change: The frame is at 84.3% progress (frame 884/1050), well within animation phase 720-1050 ('Chart holds for narration'). All three lines, the debt shaded area, milestone markers, axes, legend, and labels are correctly rendered. The chart data and shapes match the spec closely. The one visible issue is that the right-side line endpoint labels ('Cost to generat...', 'Immediate patc...', 'Total cost (with...') are being clipped/truncated at the right edge of the frame. This appears to be a margin issue
-Technical assessment: The chart correctly renders all three lines, shaded debt area, milestone markers, axes, and legend per spec. The reported issue concerns right-side endpoint labels at line termini being truncated/clipped at the right edge of the frame. The spec defines a 100px right margin for the chart area, which is insufficient for full-length endpoint labels like 'Cost to generate', 'Immediate patch cost', and 'Total cost (with debt)'. The legend in the top-right corner renders these labels correctly, making this a cosmetic redundancy issue. All other elements — line shapes, data values, animation phase (hold at frame 884/1050), colors, and the expanding debt shaded area — match the spec closely. The 'Technical Debt' label inside the shaded area is additive but consistent with the visual intent.
-- Increase the right margin from 100px to 160-180px to provide space for unclipped endpoint labels, or reposition endpoint labels to sit inside the chart area (left of the line endpoint) rather than to the right of it
-- Alternatively, remove the endpoint labels entirely since the legend already provides the same information — this avoids redundancy and the clipping issue
-- If endpoint labels are retained, use abbreviated forms at the endpoints (e.g., 'Generate', 'Patch', 'Total') while keeping full labels in the legend
-<!-- ANNOTATION_UPDATE_END: d82251b1-6d93-4253-9382-06a342e96421 -->
-
-<!-- ANNOTATION_UPDATE_START: adda6165-e4d2-47ba-bfd4-c61eb07111ba -->
-## Annotation Update
-Requested change: All required elements are present and correctly rendered at frame 644/750 (86% progress, hold phase). Both meters are fully filled to peak values (10× and +89%), labels, icons, scale markers, and current values are all visible with correct colors. Center text ('Bigger window AND smarter model.') shows proper blue/white/green coloring. Summary line and 'Try it yourself.' challenge text with handwritten font and slight rotation are both present. However, the horizontal positioning of both meters i
-Technical assessment: The annotation identifies a horizontal positioning issue with both meters. The spec defines LEFT_X=580 and RIGHT_X=1340, and the constants file matches these values. However, the rendered frame at 644/750 shows both meters shifted significantly left — the left meter appears at roughly x~440 and the right meter at roughly x~1015, making them clustered toward the left-center rather than symmetrically flanking the center of the 1920px canvas. All other elements (fill levels at 10× and +89%, labels, icons, scale markers, center text with correct blue/white/green coloring, summary line, and 'Try it yourself.' challenge text with handwritten font and rotation) render correctly per spec. The positioning discrepancy may stem from a rendering context issue, a parent container offset, or the constants having been different at the time this frame was captured.
-- Verify that the parent container of Part1Economics10DoubleMeterInsight renders at full 1920x1080 without any offset or transform that could shift child elements left
-- Check if the Remotion composition's width matches 1920px — a narrower composition would compress absolute positions
-- Confirm LEFT_X=580 and RIGHT_X=1340 in constants.ts match the spec and re-render the frame to see if the issue persists with current code
-- If the issue persists after re-render, adjust LEFT_X and RIGHT_X values so the meters appear symmetrically placed (e.g., LEFT_X=480, RIGHT_X=1440 for wider spacing, or verify the centering arithmetic)
-<!-- ANNOTATION_UPDATE_END: adda6165-e4d2-47ba-bfd4-c61eb07111ba -->

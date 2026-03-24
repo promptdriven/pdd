@@ -1,0 +1,4 @@
+## Verdict
+warn
+## Summary
+The frame shows aerial drone footage of a forest canopy with sunlight filtering through, which broadly matches the spec. However, the camera angle is not 'looking straight down' as specified — it is shot at an oblique/angled perspective rather than a top-down overhead view. The spec explicitly calls for 'looking straight down at a dense green forest canopy' showing 'organic fractal patterns of treetops,' but the rendered frame shows a side-angled aerial view where individual tree trunks and canopy sides are visible, with a prominent sun flare from the horizon. The color grade is reasonable — deep greens with warm golden highlights from the sun — and the full-bleed video with no text overlay is correct. The footage is cinematic B-roll as intended. The sun flare comes from the horizon/edge rather than filtering 'through gaps in the leaves' as dappled patterns, which is a consequence of the non-overhead camera angle.

@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame is sampled at frame 449/540 (83.3% progress) within the hold phase (360-540). All required elements are present and correctly rendered: (1) Dark background matching spec. (2) X-axis spans 1950-1975 with 5-year major ticks; Y-axis spans 0%-100% with 25% interval ticks. (3) Amber labor-cost line sits roughly flat at ~35%. (4) Blue new-sock-cost line declines from ~80% to ~15%. (5) White crossing-point circle with glow at ~1961-1962. (6) 'The Threshold' label appears in bold above the crossing point. (7) Blue-tinted shaded area fills between the diverging lines post-crossing. (8) 'Darning is irrational' label is visible within the shaded gap. (9) Line labels 'Cost to darn (time)' and 'Cost of new socks' are positioned at line ends. (10) Axis labels 'Year' and 'Cost (% of hourly wage)' are present. The chart is in its fully completed hold state with all labels visible, matching the expected animation phase.

@@ -1,89 +1,81 @@
 [veo:]
 
-# Section 0.2: Developer AI Edit — Companion Clip (Split LEFT)
+# Section 0.2: Developer AI Edit — Cursor in Action
 
 **Tool:** Veo
-**Duration:** ~8s (240 frames @ 30fps)
-**Timestamp:** 0:00 - 0:08
+**Duration:** ~6s (180 frames @ 30fps)
+**Timestamp:** 0:00 - 0:06
 
 ## Visual Description
 
-Close-up cinematic footage of a developer making a slick AI-assisted code edit. This clip plays in the LEFT panel of the split screen (spec 01). The developer is skilled and focused — hands on a mechanical keyboard, a modern IDE (dark theme) fills a large monitor. An AI suggestion ghost-text appears inline, the developer accepts it with a keystroke, and the edit lands cleanly. The code compiles, a green checkmark or inline validation flashes. One smooth, satisfying interaction.
+A cinematic close-up of a developer making an AI-assisted code edit using Cursor IDE. The developer is focused and skilled — hands moving confidently across a mechanical keyboard. The monitor shows a dark-themed IDE with an inline AI suggestion appearing and being accepted. The edit lands cleanly: a function gets patched, a green diff highlight appears, and the code looks better than before.
 
-The lighting is cool blue from the monitor, with a dark office backdrop. The feel is modern, competent, effortless — this person is good at what they do.
+The lighting is modern and cool — dominated by the blue-white glow of the monitor in a dim room. The mood is competence and efficiency. This is someone who is *good* at what they do.
 
-The camera holds a tight medium shot on the developer's hands and the lower portion of the screen, keeping the edit visible and the human element present. No camera movement — static framing, shallow depth of field.
+This clip is used as the LEFT panel in the `01_split_screen_hook` split composition.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: Dark home office, monitor-lit
+- Background: Dark home office / desk environment
 - Grid lines: N/A (live-action footage)
 
 ### Chart/Visual Elements
 
 **Camera**
-- Framing: Medium-close — hands on keyboard + lower half of monitor showing code
-- Movement: Static, no movement
-- Depth of field: Shallow, f/1.8 — keyboard sharp, background softly blurred
-- Angle: Slight downward angle, desk-level POV
+- Framing: Close-up on hands and keyboard, with monitor visible in background, then medium shot showing face + screen
+- Movement: Subtle drift right, settling on monitor content
+- Depth of field: Moderate, f/2.8 — keyboard sharp, monitor slightly soft initially
+- Angle: Eye-level, slightly angled to show both hands and screen
 
 **Lighting**
-- Key light: Cool blue-white monitor glow `#C8D6E5`
-- Fill: Minimal dark ambient `#0D1117` at 0.1
-- Rim: Faint backlight edge on hands from secondary screen or desk lamp
-- Overall tone: Cool, clean, modern — desaturated slightly
+- Key light: Cool blue-white monitor glow `#B8C9E0`
+- Fill: Faint warm ambient from desk lamp `#3D2F1F` at 0.1
+- Rim: Subtle edge light on hands from keyboard backlight `#4A90D9` at 0.15
+- Overall tone: Modern, clean, competent
 
 **Subject**
-- Developer: mid-30s, hands visible on mechanical keyboard
-- Monitor: dark-theme IDE with code, AI suggestion ghost-text visible
-- Key action: AI suggestion appears → accepted with single keystroke → edit lands
-
-**Key Moments**
-- 0-3s: Hands typing. Code visible on screen. IDE dark theme.
-- 3-5s: AI suggestion ghost-text appears inline in the editor.
-- 5-7s: Developer presses Tab/Enter. Suggestion accepted. Edit inserts cleanly.
-- 7-8s: Brief hold on the completed edit. Cursor blinks at end of new line.
+- Developer: Confident, mid-20s to mid-30s, casual attire
+- Action: Types briefly, accepts an AI inline suggestion, watches code update
+- Expression: Focused satisfaction — the edit was clean
+- Screen content: Dark-themed IDE (VS Code / Cursor style), inline AI suggestion ghost text appearing
 
 ### Animation Sequence
-1. **Frame 0-90 (0-3s):** Developer typing, code on screen.
-2. **Frame 90-150 (3-5s):** AI ghost-text suggestion appears.
-3. **Frame 150-210 (5-7s):** Suggestion accepted. Edit lands.
-4. **Frame 210-240 (7-8s):** Hold on completed edit.
+1. **Frame 0-60 (0-2s):** Close-up on hands typing. Keyboard clicks. Monitor glow illuminates fingers.
+2. **Frame 60-120 (2-4s):** Pull slightly wider. AI suggestion appears as ghost text on screen. Developer's hand moves to accept.
+3. **Frame 120-180 (4-6s):** The edit lands. Green diff highlight. Clean function. Developer leans back slightly — satisfaction.
 
 ### Typography
 - None (pure B-roll footage)
 
 ### Easing
-- Hard cut in: instant
-- All motion is natural/in-camera
+- Camera drift: natural handheld micro-movement
+- Hard cut in and out (used within split composition)
 
 ### Veo Prompt
 
 ```
-Close-up shot of a software developer's hands on a mechanical keyboard, typing code. A large monitor displays a dark-theme code editor with syntax-highlighted code. The developer types confidently and a line of code appears. Cool blue-white monitor glow illuminates the hands and keyboard. Dark home office background, shallow depth of field. Static camera, slightly downward angle from desk level. Cinematic, 24fps, subtle film grain. The mood is skilled competence and modern efficiency.
+Close-up shot of a software developer's hands on a mechanical keyboard, typing code. A large monitor in the background shows a dark-themed code editor with syntax-highlighted code. The developer accepts an inline AI code suggestion — ghost text appears and solidifies into real code. Cool blue-white monitor glow illuminates the hands and keyboard. Dim modern home office environment. Subtle camera drift from hands toward the monitor. Shallow depth of field, cinematic, 24fps. The mood is quiet competence and modern efficiency.
 ```
 
 ## Narration Sync
-> "If you use Cursor or Copilot or Claude Code, you're getting really good at darning socks."
+> "If you use Cursor, or Claude Code, or Copilot..."
 
-Segment: `cold_open_001`, `cold_open_002`
+Segment: `cold_open_001`
 
-- **0:00** ("If you use Cursor"): Developer typing, IDE visible
-- **0:03** ("you're getting really good"): AI suggestion appears and is accepted
-- **0:05** ("darning socks"): Edit complete, clean result visible
+- **0:00** ("If you use Cursor"): Hands on keyboard, typing
+- **0:02** ("Claude Code"): AI suggestion appears on screen
+- **0:04** ("Copilot"): Edit accepted, code looks clean
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={240}>
+<Sequence from={0} durationInFrames={180}>
   <VeoClip
     clipId="developer_ai_edit"
     src="/clips/developer_ai_edit.mp4"
     fit="cover"
   />
-  <ColorGrade color="#4A90D9" opacity={0.04} />
-  <Vignette edgeColor="#000510" edgeOpacity={0.2} />
 </Sequence>
 ```
 
@@ -93,28 +85,27 @@ Segment: `cold_open_001`, `cold_open_002`
   "type": "veo_clip",
   "clipId": "developer_ai_edit",
   "camera": {
-    "framing": "medium_close_hands_and_screen",
-    "movement": "static",
-    "dof": "shallow",
-    "aperture": "f/1.8",
-    "angle": "slight_downward_desk_level"
+    "framing": "close_up_hands_to_medium",
+    "movement": "subtle_drift_right",
+    "dof": "moderate",
+    "aperture": "f/2.8",
+    "angle": "eye_level"
   },
   "lighting": {
-    "key": { "color": "#C8D6E5", "position": "front_monitor", "type": "screen_glow" },
-    "fill": { "color": "#0D1117", "opacity": 0.1, "type": "ambient" },
-    "rim": "faint_backlight_edge",
-    "grade": "cool_clean_modern"
+    "key": { "color": "#B8C9E0", "position": "front_monitor", "type": "screen_glow" },
+    "fill": { "color": "#3D2F1F", "opacity": 0.1, "type": "desk_lamp" },
+    "rim": { "color": "#4A90D9", "opacity": 0.15, "type": "keyboard_backlight" },
+    "grade": "cool_modern"
   },
   "characters": [
     {
       "id": "developer",
       "label": "Developer",
-      "referencePrompt": "Software developer, mid-30s, hands visible on mechanical keyboard, wearing casual professional attire. Lit by cool blue-white monitor glow in a dark home office. Large monitor with dark-theme IDE visible."
+      "referencePrompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office."
     }
   ],
-  "narrationSegments": ["cold_open_001", "cold_open_002"],
-  "parentSplit": "01_split_screen_hook",
-  "panelPosition": "left"
+  "usedIn": "01_split_screen_hook (left panel)",
+  "narrationSegments": ["cold_open_001"]
 }
 ```
 

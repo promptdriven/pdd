@@ -1,168 +1,151 @@
 [Remotion]
 
-# Section 1.4: Context Window Shrink — The AI Blindspot
+# Section 1.5: Context Window Shrink — The Coverage Collapse
 
 **Tool:** Remotion
 **Duration:** ~30s (900 frames @ 30fps)
-**Timestamp:** 3:57 - 4:27
+**Timestamp:** 2:38 - 3:08
 
 ## Visual Description
 
-The chart dissolves and is replaced by a new spatial visualization. A glowing rectangular "context window" appears over a small codebase represented as a 4x4 grid of code blocks. The window covers most of the grid (~80%). This looks good — AI can see almost everything.
+A new visualization morphs from the code cost chart. A glowing rectangular "context window" appears over a small codebase represented as a 4×4 grid of code blocks. The window covers most of the grid (~80%). Then the grid grows: 4×4 → 8×8 → 16×16 → 32×32, while the context window stays the SAME SIZE. A counter shows coverage dropping: 80% → 40% → 10% → 2%.
 
-Then the codebase grid grows in stages: 4x4 → 8x8 → 16x16 → 32x32. The context window stays THE SAME SIZE. A counter animates: "Context coverage: 80% → 40% → 10% → 2%". The window becomes a tiny rectangle over a massive grid.
+After the grid reaches 32×32, a detail view highlights the problem: inside the tiny window, some blocks are red (irrelevant code the AI grabbed), while outside the window, green-highlighted blocks show the code that was actually needed but couldn't be seen.
 
-Inside the tiny window, some blocks highlight red (irrelevant code the AI grabbed). Outside the window, green blocks highlight (the code that was actually needed but couldn't be seen). This creates a visceral sense of the AI's blindspot growing.
-
-A small inset graph appears in the lower-right: "Performance vs. Context Length" showing a line that drops steadily, labeled with the EMNLP 2025 citation.
+This animation makes the abstract problem of context rot viscerally visual.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0D1117`
-- Grid area: centered, 800x800 at maximum extent
-- Inset graph: 320x200, positioned at bottom-right (1540, 820)
+- Background: `#0A0F1A` (deep navy-black)
+- No grid lines (the code blocks ARE the grid)
 
 ### Chart/Visual Elements
 
-#### Codebase Grid
-- Initial: 4x4 grid of 120x120px blocks, 8px gap
-- Each block: rounded rect, `#1A2332` fill, `#334155` 1px border at 0.3
-- Block content: 3-4 lines of faux code, JetBrains Mono 6px, `#94A3B8` at 0.15
-- Growth stages: 4x4 → 8x8 → 16x16 → 32x32 (blocks shrink to maintain overall size)
+#### Code Block Grid
+- Individual block size: starts at 60×60px (4×4 grid), shrinks proportionally as grid grows
+- Block color: `#1E293B` at 0.6, 1px border `#334155` at 0.3
+- Block internal: faint horizontal lines suggesting code — `#334155` at 0.15
+- Grid centered at (960, 540)
 
 #### Context Window Overlay
-- Glowing rectangle: `#4A90D9` 2px border at 0.6, with 8px outer glow `#4A90D9` at 0.12
-- Interior tint: `#4A90D9` at 0.04
-- SIZE STAYS FIXED throughout all grid stages (approximately 480x480px area)
+- Fixed size: 260×260px
+- Border: 2px, `#4A90D9` at 0.7
+- Corner markers: small L-shapes at each corner, `#4A90D9` at 0.9
+- Inner glow: `#4A90D9` at 0.06
+- Label: "Context Window" — Inter, 10px, `#4A90D9` at 0.6, above the rectangle
 
 #### Coverage Counter
-- Position: top-right (1580, 100)
+- Position: upper-right corner (1600, 120)
 - "Context coverage:" — Inter, 12px, `#94A3B8` at 0.5
-- Percentage: Inter, 28px, bold, animated color transition:
-  - 80%: `#5AAA6E` (green — healthy)
-  - 40%: `#D9C44A` (yellow — concerning)
-  - 10%: `#D9944A` (amber — problematic)
-  - 2%: `#E74C3C` (red — critical)
+- Percentage: JetBrains Mono, 36px, bold, color transitions from `#4ADE80` (80%) → `#FBBF24` (40%) → `#EF4444` (10%) → `#DC2626` (2%)
 
-#### Red Highlight Blocks (Inside Window — Irrelevant)
-- 3-4 blocks inside the window highlighted: `#E74C3C` at 0.15, red border at 0.3
-- Small "✗" icon at corner
+#### Grid Size Stages
+- 4×4: 16 blocks, 60×60px each = 240×240px total — window covers ~80%
+- 8×8: 64 blocks, 30×30px each = 240×240px total grid area grows to 480×480
+- 16×16: 256 blocks, 15×15px each = grid 480×480, window now tiny relative
+- 32×32: 1024 blocks, 7.5×7.5px each = grid 480×480, window is a speck
 
-#### Green Highlight Blocks (Outside Window — Needed)
-- 5-6 blocks outside the window highlighted: `#5AAA6E` at 0.15, green border at 0.3
-- Small "✓" icon at corner
-- Subtle pulsing glow — calling for attention but unreachable
-
-#### Inset Performance Graph
-- Mini chart: "Performance vs. Context Length"
-- X-axis: context length (tokens), unlabeled but implied
-- Y-axis: performance (0-100%)
-- Single declining line: `#E74C3C`, 2px
-- Citation: "EMNLP, 2025" — Inter, 8px, `#94A3B8` at 0.3
-- Range label: "−14% to −85%" — Inter, 10px, `#E74C3C` at 0.6
-- Border: `#334155` at 0.15, rounded
+#### Retrieval Error Highlights (at 32×32 stage)
+- Inside window: 3-4 blocks highlighted `#EF4444` at 0.4 (irrelevant code grabbed)
+- Outside window: 5-6 blocks highlighted `#4ADE80` at 0.4 (needed code invisible)
+- Red label: "Irrelevant" — Inter, 9px, `#EF4444` at 0.6
+- Green label: "Needed but invisible" — Inter, 9px, `#4ADE80` at 0.6
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Previous chart fades out. Dark background.
-2. **Frame 30-90 (1-3s):** 4x4 grid fades in. Context window overlay appears. Counter: "80%". Window covers most of the grid. Warm, capable feeling.
-3. **Frame 90-180 (3-6s):** Grid morphs to 8x8 — blocks shrink and multiply. Context window stays fixed. Counter animates to "40%". Coverage visibly reduced.
-4. **Frame 180-270 (6-9s):** Grid morphs to 16x16. Counter: "10%". Window is now a small rectangle in a large grid.
-5. **Frame 270-360 (9-12s):** Grid morphs to 32x32. Counter: "2%" in red. Window is tiny. The grid fills the frame.
-6. **Frame 360-480 (12-16s):** Red highlights appear inside window (irrelevant code). Green highlights appear outside window (needed code). The AI's blindspot is visceral.
-7. **Frame 480-600 (16-20s):** Inset performance graph draws in the lower-right. Line drops. "−14% to −85%" label appears.
-8. **Frame 600-900 (20-30s):** Hold for narration. Context window pulses faintly. Green blocks outside pulse with unreachable urgency.
+1. **Frame 0-60 (0-2s):** Previous chart morphs — lines dissolve, a 4×4 grid of code blocks fades in at center. Context window rectangle appears, covering ~80% of the grid.
+2. **Frame 60-90 (2-3s):** Coverage counter appears: "80%". Green color. Brief hold — AI covers everything.
+3. **Frame 90-210 (3-7s):** Grid transitions to 8×8 — blocks subdivide and spread. Context window stays SAME SIZE. Counter animates: 80% → 40%. Color shifts to yellow.
+4. **Frame 210-360 (7-12s):** Grid grows to 16×16. Window is now clearly smaller relative to grid. Counter: 40% → 10%. Color shifts to red.
+5. **Frame 360-510 (12-17s):** Grid grows to 32×32 — a massive field of tiny blocks. Window is a tiny rectangle. Counter: 10% → 2%. Deep red.
+6. **Frame 510-660 (17-22s):** Zoom into the 32×32 grid. Red-highlighted blocks appear inside the window. Green-highlighted blocks appear outside. Labels appear.
+7. **Frame 660-900 (22-30s):** Hold on the complete visualization. The contrast between what the AI sees and what it needs is stark.
 
 ### Typography
+- Context window label: Inter, 10px, `#4A90D9` at 0.6
 - Coverage counter label: Inter, 12px, `#94A3B8` at 0.5
-- Coverage percentage: Inter, 28px, bold, color-animated
-- Block faux code: JetBrains Mono, 6px, `#94A3B8` at 0.15
-- Inset graph title: Inter, 10px, bold, `#E2E8F0` at 0.5
-- Inset citation: Inter, 8px, `#94A3B8` at 0.3
+- Coverage percentage: JetBrains Mono, 36px, bold, color-coded
+- Retrieval error labels: Inter, 9px, respective colors at 0.6
 
 ### Easing
-- Grid growth morphs: `easeInOut(cubic)` over 40 frames each
-- Counter number change: `easeOut(quad)` over 15 frames (interpolated)
-- Counter color change: `easeInOut(quad)` over 20 frames
-- Red/green highlights: `easeOut(quad)` staggered fade-in, 5 frames apart
-- Inset graph draw: `linear` line draw over 30 frames
-- Green block pulse: `easeInOut(sine)` on 45-frame cycle, glow opacity 0.15 → 0.25 → 0.15
+- Grid morph/subdivide: `easeInOut(cubic)` over 60 frames
+- Counter number change: `easeOut(quad)` over 30 frames
+- Counter color transition: `easeOut(quad)` over 20 frames
+- Red/green highlight appear: `easeOut(quad)` over 15 frames
+- Zoom into grid: `easeInOut(cubic)` over 40 frames
 
 ## Narration Sync
-> "When your codebase is small, AI tools are brilliant. The context window — what the model can actually see — covers almost everything."
-> "But codebases grow. And that window? It stays the same size. A typical enterprise codebase spans millions of tokens. Even the largest context windows hold a fraction of that."
-> "So now the AI has to guess what's relevant. Tools like Cursor use embeddings. Claude Code uses agentic search — grep, file by file."
-> "And it gets worse. A 2025 EMNLP study proved that even when the model retrieves the right information, performance still degrades — fourteen to eighty-five percent."
+> "But there's a second kind of debt hiding in there. One that's specific to AI-assisted development."
+> "When your codebase is small, AI tools are brilliant. The context window covers almost everything."
+> "But codebases grow. And that window? It stays the same size."
+> "So now the AI has to guess what's relevant. Tools like Cursor use embeddings. Claude Code uses agentic search."
 
 Segments: `part1_economics_017`, `part1_economics_018`, `part1_economics_019`, `part1_economics_020`
 
-- **3:57** ("codebase is small"): 4x4 grid appears, context window covers 80%
-- **4:03** ("codebases grow"): Grid expands through 8x8, 16x16, 32x32
-- **4:10** ("AI has to guess"): Red/green highlights appear — wrong code inside, right code outside
-- **4:18** ("EMNLP study"): Inset performance graph draws in
+- **2:38** ("second kind of debt"): Chart begins morphing into grid
+- **2:44** ("codebase is small"): 4×4 grid with window covering 80%
+- **2:56** ("codebases grow"): Grid expands through stages, coverage counter drops
+- **3:08** ("AI has to guess"): Red/green highlights appear showing retrieval errors
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={900}>
-  <AbsoluteFill style={{ backgroundColor: '#0D1117' }}>
-    {/* Codebase grid with morphing stages */}
-    <Sequence from={30}>
-      <CodebaseGrid
-        stages={[
-          { frame: 0, gridSize: 4, coverage: 0.80 },
-          { frame: 60, gridSize: 8, coverage: 0.40 },
-          { frame: 150, gridSize: 16, coverage: 0.10 },
-          { frame: 240, gridSize: 32, coverage: 0.02 }
-        ]}
-        blockColor="#1A2332"
-        blockBorder="#334155"
-        morphDuration={40}
-      />
-    </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
 
-    {/* Fixed-size context window overlay */}
-    <Sequence from={30}>
-      <ContextWindow
-        width={480} height={480}
-        borderColor="#4A90D9" borderWidth={2}
-        glowColor="#4A90D9" glowRadius={8} glowOpacity={0.12}
-        tintColor="#4A90D9" tintOpacity={0.04}
-      />
-    </Sequence>
+    {/* Code block grid — morphs through stages */}
+    <CodeBlockGrid
+      stages={[
+        { size: 4, blockPx: 60, startFrame: 0 },
+        { size: 8, blockPx: 30, startFrame: 90 },
+        { size: 16, blockPx: 15, startFrame: 210 },
+        { size: 32, blockPx: 7.5, startFrame: 360 }
+      ]}
+      blockColor="#1E293B" blockOpacity={0.6}
+      borderColor="#334155" borderOpacity={0.3}
+      center={[960, 540]}
+      morphDuration={60} />
+
+    {/* Fixed-size context window */}
+    <ContextWindowOverlay
+      width={260} height={260}
+      center={[960, 540]}
+      borderColor="#4A90D9" borderOpacity={0.7}
+      glowColor="#4A90D9" glowOpacity={0.06}
+      cornerMarkers label="Context Window" />
 
     {/* Coverage counter */}
-    <Sequence from={30}>
+    <Sequence from={60}>
       <CoverageCounter
+        position={[1600, 120]}
         stages={[
-          { value: 80, color: "#5AAA6E" },
-          { value: 40, color: "#D9C44A" },
-          { value: 10, color: "#D9944A" },
-          { value: 2, color: "#E74C3C" }
+          { value: 80, color: '#4ADE80', frame: 0 },
+          { value: 40, color: '#FBBF24', frame: 90 },
+          { value: 10, color: '#EF4444', frame: 210 },
+          { value: 2, color: '#DC2626', frame: 360 }
         ]}
-        x={1580} y={100}
-      />
+        font="JetBrains Mono" size={36}
+        labelFont="Inter" labelSize={12} />
     </Sequence>
 
-    {/* Red/green highlights */}
-    <Sequence from={360}>
-      <BlockHighlights
-        inside={{ color: "#E74C3C", count: 4, icon: "✗" }}
-        outside={{ color: "#5AAA6E", count: 6, icon: "✓" }}
-        staggerDelay={5}
-      />
-    </Sequence>
-
-    {/* Inset performance graph */}
-    <Sequence from={480}>
-      <InsetGraph
-        title="Performance vs. Context Length"
-        data={performanceDecline}
-        lineColor="#E74C3C"
-        citation="EMNLP, 2025"
-        rangeLabel="−14% to −85%"
-        x={1540} y={820} width={320} height={200}
-      />
+    {/* Retrieval error highlights */}
+    <Sequence from={510}>
+      <RetrievalErrors
+        insideWindow={[
+          { row: 14, col: 15, type: 'irrelevant' },
+          { row: 15, col: 14, type: 'irrelevant' },
+          { row: 16, col: 16, type: 'irrelevant' }
+        ]}
+        outsideWindow={[
+          { row: 3, col: 5, type: 'needed' },
+          { row: 8, col: 28, type: 'needed' },
+          { row: 22, col: 10, type: 'needed' },
+          { row: 27, col: 20, type: 'needed' },
+          { row: 30, col: 4, type: 'needed' }
+        ]}
+        irrelevantColor="#EF4444"
+        neededColor="#4ADE80"
+        opacity={0.4} />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -171,34 +154,23 @@ Segments: `part1_economics_017`, `part1_economics_018`, `part1_economics_019`, `
 ## Data Points JSON
 ```json
 {
-  "type": "spatial_visualization",
-  "chartType": "context_window_shrink",
-  "gridStages": [
-    { "size": 4, "coverage": 0.80, "coverageColor": "#5AAA6E" },
-    { "size": 8, "coverage": 0.40, "coverageColor": "#D9C44A" },
-    { "size": 16, "coverage": 0.10, "coverageColor": "#D9944A" },
-    { "size": 32, "coverage": 0.02, "coverageColor": "#E74C3C" }
+  "type": "animated_diagram",
+  "diagramId": "context_window_shrink",
+  "stages": [
+    { "gridSize": 4, "blockPx": 60, "coveragePercent": 80, "color": "#4ADE80" },
+    { "gridSize": 8, "blockPx": 30, "coveragePercent": 40, "color": "#FBBF24" },
+    { "gridSize": 16, "blockPx": 15, "coveragePercent": 10, "color": "#EF4444" },
+    { "gridSize": 32, "blockPx": 7.5, "coveragePercent": 2, "color": "#DC2626" }
   ],
-  "contextWindow": {
-    "fixedSize": { "width": 480, "height": 480 },
-    "borderColor": "#4A90D9",
-    "glowColor": "#4A90D9"
+  "contextWindow": { "width": 260, "height": 260, "color": "#4A90D9" },
+  "retrievalErrors": {
+    "irrelevantInside": 3,
+    "neededOutside": 5,
+    "irrelevantColor": "#EF4444",
+    "neededColor": "#4ADE80"
   },
-  "highlights": {
-    "irrelevantInsideWindow": { "count": 4, "color": "#E74C3C" },
-    "neededOutsideWindow": { "count": 6, "color": "#5AAA6E" }
-  },
-  "insetGraph": {
-    "title": "Performance vs. Context Length",
-    "citation": "EMNLP, 2025",
-    "degradationRange": "14% to 85%",
-    "lineColor": "#E74C3C"
-  },
-  "backgroundColor": "#0D1117",
-  "narrationSegments": [
-    "part1_economics_017", "part1_economics_018",
-    "part1_economics_019", "part1_economics_020"
-  ]
+  "backgroundColor": "#0A0F1A",
+  "narrationSegments": ["part1_economics_017", "part1_economics_018", "part1_economics_019", "part1_economics_020"]
 }
 ```
 

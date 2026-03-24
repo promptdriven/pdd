@@ -223,13 +223,13 @@
     "references": [
       {
         "id": "chip_engineer",
-        "label": "Chip Engineer",
+        "label": "1980s Chip Engineer",
         "imagePath": "outputs/veo/references/chip_engineer.png",
         "sections": [
           "part2_paradigm_shift"
         ],
-        "referencePrompt": "Male engineer, 30s-40s, dress shirt with rolled sleeves, 1980s electronics lab, hunched over drafting desk drawing circuit schematics by hand",
-        "prompt": "Male engineer, 30s-40s, dress shirt with rolled sleeves, 1980s electronics lab, hunched over drafting desk drawing circuit schematics by hand",
+        "referencePrompt": "Electronics engineer, male, 30s-40s, short-sleeve button-down shirt, 1980s style. Hunched over drafting desk drawing circuits with mechanical pencil under fluorescent lighting.",
+        "prompt": "Electronics engineer, male, 30s-40s, short-sleeve button-down shirt, 1980s style. Hunched over drafting desk drawing circuits with mechanical pencil under fluorescent lighting.",
         "source": "stage6-inferred"
       },
       {
@@ -238,7 +238,6 @@
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
           "cold_open",
-          "part1_economics",
           "part3_mold_three_parts",
           "part5_compound_returns"
         ],
@@ -256,6 +255,17 @@
         ],
         "referencePrompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
         "prompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "grandmother_darner",
+        "label": "Grandmother",
+        "imagePath": "outputs/veo/references/grandmother_darner.png",
+        "sections": [
+          "part1_economics"
+        ],
+        "referencePrompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight",
+        "prompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight",
         "source": "stage6-inferred"
       }
     ],
