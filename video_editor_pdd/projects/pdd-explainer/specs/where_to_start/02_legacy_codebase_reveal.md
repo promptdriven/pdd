@@ -1,123 +1,124 @@
 [Remotion]
 
-# Section 6.2: Legacy Codebase Reveal — The Brownfield Reality
+# Section 6.2: Legacy Codebase Reveal
 
 **Tool:** Remotion
-**Duration:** ~5s (150 frames @ 30fps)
-**Timestamp:** 23:19 - 23:24
+**Duration:** ~7s (210 frames @ 30fps)
+**Timestamp:** 0:03 - 0:10
 
 ## Visual Description
 
-A large, dense codebase visualization fills the frame. It's rendered as an interconnected file-tree / dependency graph — dozens of rectangular file blocks arranged in clusters, connected by thin dependency lines. The codebase is intentionally intimidating: tightly packed, layered, with visible entropy.
+A dense, intimidating codebase fills the screen. Rows of monospaced code scroll slowly upward — grays and muted blues. Interspersed throughout are the telltale signs of legacy software: comment lines reading `// don't touch`, `// here be dragons`, `// TODO: fix this someday`, `// nobody knows why this works`. These warning comments glow faintly in amber, standing out from the gray code mass.
 
-Scattered across the code blocks are red-tinted annotations that appear one by one:
-- `// don't touch` on one block
-- `// here be dragons` on another
-- `// legacy — nobody knows what this does` on a third
-- `// temporary fix (2019)` on a fourth
+The codebase is not one file — it's a mosaic of overlapping file panels, slightly offset, suggesting dozens of interconnected modules. File tabs along the top show names like `auth_handler.py`, `payment_processor.py`, `user_service.py`, `legacy_router.py`. The overall feeling is weight and complexity — real software, not a toy example.
 
-The overall color is a warm gray with accumulating red tint — the visual language established in Part 1 for patched code carrying technical debt. The codebase pulses faintly with a red glow suggesting accumulated complexity. This is the viewer's reality — validated, not dismissed.
+A faint line count indicator in the bottom-right reads "~47,000 lines" in dim gray, reinforcing scale.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
+- Grid lines: none
 
 ### Chart/Visual Elements
 
-#### File Blocks (code modules)
-- 35-45 rectangular blocks, arranged in 5-6 cluster groups
-- Block sizes vary: 60×40px to 120×60px (suggesting different module sizes)
-- Block fill: `#1E293B` with subtle red tint accumulating — ranges from `#1E293B` (clean) to `#2A1F1F` (heavy debt)
-- Block border: `#334155` at 0.3, 1px
-- ~30% of blocks have `#D9944A` at 0.06 debt glow
-- Spread across 1600×800px area, centered
+#### Code Panels (layered)
+- 5 overlapping code panels, each 600x700px, staggered with 30px offsets
+- Panel background: `#111827` at 0.9
+- Panel border: 1px `#1E293B` at 0.3
+- Panel border-radius: 8px
+- Code text: JetBrains Mono, 11px, `#64748B` at 0.6 (generic code lines)
+- Line numbers: JetBrains Mono, 11px, `#334155` at 0.3, left gutter 40px
 
-#### Dependency Lines
-- Thin connecting lines between blocks, `#334155` at 0.15, 1px
-- ~60 connections forming a tangled web
-- Some lines cross each other (visual complexity)
+#### Warning Comments (highlighted)
+- `// don't touch` — JetBrains Mono, 11px, `#D9944A` at 0.8
+- `// here be dragons` — JetBrains Mono, 11px, `#D9944A` at 0.8
+- `// TODO: fix this someday` — JetBrains Mono, 11px, `#D9944A` at 0.7
+- `// nobody knows why this works` — JetBrains Mono, 11px, `#D9944A` at 0.7
+- Each has a subtle glow: 6px blur, `#D9944A` at 0.1
 
-#### Annotation Callouts
-- `// don't touch` — JetBrains Mono, 10px, `#EF4444` at 0.5, positioned at (380, 320)
-- `// here be dragons` — JetBrains Mono, 10px, `#EF4444` at 0.5, positioned at (1100, 250)
-- `// legacy` — JetBrains Mono, 10px, `#EF4444` at 0.4, positioned at (720, 580)
-- `// temporary fix (2019)` — JetBrains Mono, 10px, `#EF4444` at 0.4, positioned at (1350, 650)
+#### File Tabs
+- 5 tabs across top of frontmost panel
+- Tab background: `#1E293B` at 0.8
+- Active tab: `#1F2937` with 2px top border `#60A5FA`
+- Tab text: JetBrains Mono, 10px, `#94A3B8`
+- Tab names: `auth_handler.py`, `payment_processor.py`, `user_service.py`, `legacy_router.py`, `config.py`
 
-#### Ambient Pulse
-- Entire codebase area: radial glow `#EF4444` at 0.02, pulsing on 60-frame cycle
+#### Line Count Indicator
+- "~47,000 lines" — Inter, 13px, `#475569` at 0.3, positioned at (1780, 1040)
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Codebase blocks fade in from center outward, staggered by cluster. Dependency lines draw between them.
-2. **Frame 30-60 (1-2s):** Red tint accumulates on ~30% of blocks — color shifts from neutral to warm. Dependency lines reach full density.
-3. **Frame 60-80 (2-2.67s):** First annotation `// don't touch` fades in with a slight jitter.
-4. **Frame 80-95 (2.67-3.17s):** `// here be dragons` fades in.
-5. **Frame 95-110 (3.17-3.67s):** `// legacy` and `// temporary fix (2019)` fade in simultaneously.
-6. **Frame 110-150 (3.67-5s):** Hold. Ambient red pulse breathes. The codebase sits there — massive, tangled, real.
+1. **Frame 0-30 (0-1s):** Panels fade in from black, layered front-to-back. Slight parallax — back panels appear first. `easeOutCubic`.
+2. **Frame 30-60 (1-2s):** Code begins slow upward scroll (0.5px/frame). File tabs appear along top.
+3. **Frame 60-90 (2-3s):** First warning comment `// don't touch` scrolls into view, glowing amber. Slight pulse.
+4. **Frame 90-120 (3-4s):** `// here be dragons` appears in another panel. More amber warnings emerge.
+5. **Frame 120-150 (4-5s):** Line count indicator fades in at bottom-right.
+6. **Frame 150-210 (5-7s):** Hold. Code continues scrolling. Warning comments accumulate — the codebase feels alive, heavy, daunting.
 
 ### Typography
-- Annotations: JetBrains Mono, 10px, `#EF4444` at 0.4-0.5
-- All annotations italic
+- Code: JetBrains Mono, 11px, `#64748B` at 0.6
+- Warning comments: JetBrains Mono, 11px, `#D9944A` at 0.7-0.8
+- Line numbers: JetBrains Mono, 11px, `#334155` at 0.3
+- File tabs: JetBrains Mono, 10px, `#94A3B8`
+- Line count: Inter, 13px, `#475569` at 0.3
 
 ### Easing
-- Block stagger: `easeOut(quad)`, 2 frames per block
-- Dependency draw: `easeOut(cubic)` over 25 frames
-- Red tint shift: `easeInOut(quad)` over 20 frames
-- Annotation fade: `easeOut(quad)` over 12 frames, with 2px random jitter on position
-- Ambient pulse: `easeInOut(sine)` on 60-frame cycle
+- Panel fade-in: `easeOut(cubic)` over 30 frames, staggered 5 frames apart
+- Code scroll: `linear` at 0.5px/frame
+- Warning comment glow: `easeInOut(sine)` pulse on 40-frame cycle
+- Line count fade: `easeOut(quad)` over 20 frames
 
 ## Narration Sync
-> "Now — you don't work on a greenfield project. Nobody does."
+> "Now — you don't work on a greenfield project. Nobody does. PDD can create prompts from existing code."
 
 Segment: `where_to_start_001`
 
-- **23:19** (continuation from title card): Codebase blocks appearing
-- **23:20** ("Nobody does."): Full codebase visible, annotations appearing
-- **23:22** (beat): All annotations visible, the brownfield reality established
+- **0:03** ("you don't work on a greenfield"): Legacy codebase panels fade in
+- **0:05** ("Nobody does"): Warning comments begin glowing
+- **0:07** ("PDD can create prompts"): Full codebase visible, line count shown — stage set for the transformation
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={150}>
+<Sequence from={0} durationInFrames={210}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Ambient debt pulse */}
-    <PulseGlow color="#EF4444" opacity={0.02}
-      radius={600} period={60} center={[960, 540]} />
+    {/* Layered code panels */}
+    {panels.map((panel, i) => (
+      <Sequence from={i * 5} key={i}>
+        <FadeIn duration={30}>
+          <CodePanel
+            x={panel.x} y={panel.y}
+            width={600} height={700}
+            bgColor="#111827" borderColor="#1E293B"
+            code={panel.lines}
+            warningComments={panel.warnings}
+            warningColor="#D9944A"
+            scrollSpeed={0.5}
+            lineNumberColor="#334155"
+          />
+        </FadeIn>
+      </Sequence>
+    ))}
 
-    {/* File blocks — staggered appearance */}
-    <Sequence from={0}>
-      <CodebaseGraph
-        blocks={fileBlocks} edges={dependencyEdges}
-        blockFill="#1E293B" debtTint="#2A1F1F"
-        debtRatio={0.3} debtGlow={{ color: '#D9944A', opacity: 0.06 }}
-        borderColor="#334155" borderOpacity={0.3}
-        edgeColor="#334155" edgeOpacity={0.15}
-        staggerPerBlock={2} edgeDrawDuration={25}
-        area={{ x: 160, y: 140, width: 1600, height: 800 }}
-      />
+    {/* File tabs */}
+    <Sequence from={30}>
+      <FadeIn duration={20}>
+        <FileTabs
+          tabs={["auth_handler.py", "payment_processor.py",
+                 "user_service.py", "legacy_router.py", "config.py"]}
+          activeIndex={0}
+          activeColor="#60A5FA"
+          bgColor="#1E293B"
+          textColor="#94A3B8"
+        />
+      </FadeIn>
     </Sequence>
 
-    {/* Annotations */}
-    <Sequence from={60}>
-      <FadeIn duration={12}>
-        <CodeComment text="// don't touch" color="#EF4444"
-          opacity={0.5} position={[380, 320]} jitter={2} />
-      </FadeIn>
-    </Sequence>
-    <Sequence from={80}>
-      <FadeIn duration={12}>
-        <CodeComment text="// here be dragons" color="#EF4444"
-          opacity={0.5} position={[1100, 250]} jitter={2} />
-      </FadeIn>
-    </Sequence>
-    <Sequence from={95}>
-      <FadeIn duration={12}>
-        <CodeComment text="// legacy" color="#EF4444"
-          opacity={0.4} position={[720, 580]} jitter={2} />
-      </FadeIn>
-      <FadeIn duration={12}>
-        <CodeComment text="// temporary fix (2019)" color="#EF4444"
-          opacity={0.4} position={[1350, 650]} jitter={2} />
+    {/* Line count */}
+    <Sequence from={120}>
+      <FadeIn duration={20}>
+        <Text text="~47,000 lines" font="Inter" size={13}
+          color="#475569" opacity={0.3} x={1780} y={1040} align="right" />
       </FadeIn>
     </Sequence>
   </AbsoluteFill>
@@ -127,21 +128,23 @@ Segment: `where_to_start_001`
 ## Data Points JSON
 ```json
 {
-  "type": "codebase_visualization",
-  "blockCount": 40,
-  "edgeCount": 60,
-  "debtRatio": 0.3,
-  "annotations": [
-    { "text": "// don't touch", "position": [380, 320] },
-    { "text": "// here be dragons", "position": [1100, 250] },
-    { "text": "// legacy", "position": [720, 580] },
-    { "text": "// temporary fix (2019)", "position": [1350, 650] }
+  "type": "code_visualization",
+  "chartId": "legacy_codebase_reveal",
+  "panels": 5,
+  "fileNames": [
+    "auth_handler.py",
+    "payment_processor.py",
+    "user_service.py",
+    "legacy_router.py",
+    "config.py"
   ],
-  "colorScheme": {
-    "clean": "#1E293B",
-    "debt": "#2A1F1F",
-    "annotation": "#EF4444"
-  },
+  "warningComments": [
+    "// don't touch",
+    "// here be dragons",
+    "// TODO: fix this someday",
+    "// nobody knows why this works"
+  ],
+  "lineCount": "~47,000",
   "backgroundColor": "#0A0F1A",
   "narrationSegments": ["where_to_start_001"]
 }

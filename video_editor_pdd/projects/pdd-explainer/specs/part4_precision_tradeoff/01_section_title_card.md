@@ -1,93 +1,91 @@
 [title:]
 
-# Section 4.1: Part 4 Title Card — The Precision Tradeoff
+# Section 4.1: The Precision Tradeoff — Section Title Card
 
 **Tool:** Title
-**Duration:** ~4s (120 frames @ 30fps)
-**Timestamp:** 18:30 - 18:34
+**Duration:** ~7s (199 frames @ 30fps)
+**Timestamp:** 0:00 - 0:07
 
 ## Visual Description
 
-A clean section title card announces Part 4. "THE PRECISION" appears first in large bold weight, then "TRADEOFF" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines. Behind the text, two abstract ghost shapes diverge — a dense coordinate grid (left, gray) representing the 3D printer's exhaustive specification, and a clean rectangular mold outline with bold wall lines (right, amber) representing injection molding's constraint-based precision.
+A section title card introducing the precision tradeoff concept. "THE PRECISION" appears first in large bold weight, then "TRADEOFF" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
 
-The ghost grid has dozens of tiny dots at intersections, suggesting coordinate-by-coordinate placement. The ghost mold has only four thick wall segments, suggesting economy. The visual tension between "many points" and "few walls" foreshadows the section's argument. Background is deep navy-black with a subtle engineering-blueprint grid pattern.
+Behind the text, a faint ghost illustration sits at low opacity — on the left, a stylized 3D printer nozzle tracing a precise path, and on the right, a mold outline with flowing liquid. Both at very low opacity, previewing the central metaphor. The 3D printer side is drawn with precise dotted coordinate lines; the mold side has smooth flowing curves. Background is deep navy-black, consistent with Parts 1-3.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Blueprint grid: 60px spacing, `#1E293B` at 0.05, cross-hatch pattern
+- Blueprint grid: 60px spacing, `#1E293B` at 0.05
 
 ### Chart/Visual Elements
 
 #### Title Text
 - "THE PRECISION" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
 - "TRADEOFF" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
-- Horizontal rule: 200px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+- Horizontal rule: 240px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
 #### Section Number
 - "PART 4" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
-#### Background Shapes (ghost elements)
-- Coordinate grid: 8×8 dot matrix at (560, 480), dots `#94A3B8` at 0.03, 4px diameter, 12px spacing
-  - Label: "EVERY POINT" — Inter, 8px, `#94A3B8` at 0.03, centered below
-- Mold outline: rectangular with 4 thick wall segments at (1360, 480), `#D9944A` at 0.04, 3px stroke
-  - Label: "WALLS ONLY" — Inter, 8px, `#D9944A` at 0.03, centered below
-- Both have 8px Gaussian blur glow at respective colors, 0.02 opacity
+#### Background Ghost (dual illustration)
+- 3D printer nozzle (left): stylized triangular nozzle at (380, 540), dotted line path below it, `#60A5FA` at 0.04, 2px stroke
+- Coordinate grid (left): 5×5 grid of dots below nozzle at (300-460, 480-640), `#60A5FA` at 0.03
+- Mold outline (right): rectangular mold shape at (1540, 540), `#D9944A` at 0.04, 2px stroke
+- Flow curves (right): 3 wavy curves inside mold representing liquid, `#A78BFA` at 0.03
 
 ### Animation Sequence
 1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
-2. **Frame 15-40 (0.5-1.33s):** "PART 4" fades in. Ghost shapes begin drawing — dots populate one by one (left), wall segments draw (right).
-3. **Frame 40-60 (1.33-2s):** "THE PRECISION" types on character-by-character (3 frames per character).
+2. **Frame 15-40 (0.5-1.33s):** "PART 4" label fades in. Ghost illustrations draw with stroke-dashoffset.
+3. **Frame 40-60 (1.33-2s):** "THE PRECISION" types on character-by-character (2 frames per character).
 4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
 5. **Frame 70-90 (2.33-3s):** "TRADEOFF" fades in with 10px upward slide.
-6. **Frame 90-120 (3-4s):** Hold. Ghost shapes finish drawing. The dot grid pulses (too many) while the mold walls glow steadily (just enough).
+6. **Frame 90-140 (3-4.67s):** Ghost printer nozzle pulses blue, then ghost mold pulses amber. Sequential emphasis.
+7. **Frame 140-199 (4.67-6.63s):** Hold. Subtle overall pulse on both ghost illustrations.
 
 ### Typography
 - Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
 - Title words: Inter, 72px, bold (700), `#E2E8F0`
 - Rule: `#334155` at 0.5
-- Ghost labels: Inter, 8px, respective colors at 0.03
 
 ### Easing
 - Text fade-in: `easeOut(quad)` over 20 frames
 - "TRADEOFF" slide-up: `easeOut(cubic)` over 20 frames
 - Rule draw: `easeInOut(quad)` over 10 frames
-- Dot populate: stagger `easeOut(quad)`, 1 frame per dot
-- Wall draw: `easeInOut(cubic)` over 40 frames
-- Ghost pulse: `easeInOut(sine)` on 30-frame cycle
+- Ghost illustration draw: `easeInOut(cubic)` over 30 frames
+- Region pulses: `easeInOut(sine)` on 30-frame intervals
+- Hold pulse: `easeInOut(sine)` on 60-frame cycle
 
 ## Narration Sync
-> "Let's talk about precision. Because there's a subtle tradeoff that changes how you think about prompts."
+> "Let's talk about precision, because there's a subtle tradeoff that changes how you think about prompts."
 
 Segment: `part4_precision_tradeoff_001`
 
-- **0.0s** ("Let's talk about precision"): Title card begins fade-in
-- **2.08s** ("because there's a subtle tradeoff"): "THE PRECISION" typing on screen
-- **5.12s** ("how you think about prompts"): "TRADEOFF" revealed, hold
+- **0:00** ("Let's talk about precision"): Title card begins fade-in
+- **1.33s** ("precision"): "THE PRECISION" typing on screen
+- **2.33s** ("tradeoff"): "TRADEOFF" revealed
+- **4.67s** ("changes how you think"): Ghost illustrations pulsing
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={120}>
+<Sequence from={0} durationInFrames={199}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
     <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
-    {/* Ghost shapes — precision paradigms foreshadowed */}
+    {/* Ghost 3D printer illustration */}
     <Sequence from={15}>
-      <StaggerDots
-        position={[560, 480]} rows={8} cols={8}
-        dotSize={4} spacing={12} color="#94A3B8"
-        opacity={0.03} staggerFrames={1}
-        glow={{ blur: 8, opacity: 0.02 }}>
-        <GhostLabel text="EVERY POINT" color="#94A3B8" opacity={0.03} />
-      </StaggerDots>
-      <StrokeDraw duration={40}>
-        <MoldOutline position={[1360, 480]} color="#D9944A"
-          opacity={0.04} strokeWidth={3}
-          glow={{ blur: 8, opacity: 0.02 }}>
-          <GhostLabel text="WALLS ONLY" color="#D9944A" opacity={0.03} />
-        </MoldOutline>
+      <StrokeDraw duration={30}>
+        <PrinterNozzle cx={380} cy={540} color="#60A5FA" opacity={0.04} strokeWidth={2} />
+        <CoordinateGrid x={300} y={480} cols={5} rows={5} color="#60A5FA" opacity={0.03} />
+      </StrokeDraw>
+    </Sequence>
+
+    {/* Ghost mold illustration */}
+    <Sequence from={15}>
+      <StrokeDraw duration={30}>
+        <MoldOutline cx={1540} cy={540} color="#D9944A" opacity={0.04} strokeWidth={2} />
+        <FlowCurves cx={1540} cy={540} color="#A78BFA" opacity={0.03} />
       </StrokeDraw>
     </Sequence>
 
@@ -104,12 +102,12 @@ Segment: `part4_precision_tradeoff_001`
     <Sequence from={40}>
       <TypeWriter text="THE PRECISION" font="Inter" size={72}
         weight={700} color="#E2E8F0"
-        charDelay={3} x={960} y={460} align="center" />
+        charDelay={2} x={960} y={460} align="center" />
     </Sequence>
 
     {/* Horizontal rule */}
     <Sequence from={60}>
-      <DrawLine from={[860, 505]} to={[1060, 505]}
+      <DrawLine from={[840, 505]} to={[1080, 505]}
         color="#334155" opacity={0.5} width={2}
         drawDuration={10} fromCenter />
     </Sequence>
@@ -123,6 +121,12 @@ Segment: `part4_precision_tradeoff_001`
             x={975} y={545} align="center" />
         </FadeIn>
       </SlideUp>
+    </Sequence>
+
+    {/* Sequential ghost pulses */}
+    <Sequence from={90}>
+      <RegionPulse region="printer" color="#60A5FA" startFrame={0} duration={25} />
+      <RegionPulse region="mold" color="#D9944A" startFrame={25} duration={25} />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -138,20 +142,13 @@ Segment: `part4_precision_tradeoff_001`
   "titleLine2": "TRADEOFF",
   "backgroundColor": "#0A0F1A",
   "ghostElements": [
-    { "shape": "dot_matrix", "color": "#94A3B8", "component": "coordinate_precision" },
-    { "shape": "mold_outline", "color": "#D9944A", "component": "wall_precision" }
+    { "shape": "printer_nozzle", "color": "#60A5FA", "side": "left" },
+    { "shape": "coordinate_grid", "color": "#60A5FA", "side": "left" },
+    { "shape": "mold_outline", "color": "#D9944A", "side": "right" },
+    { "shape": "flow_curves", "color": "#A78BFA", "side": "right" }
   ],
   "narrationSegments": ["part4_precision_tradeoff_001"]
 }
 ```
 
 ---
-
-<!-- ANNOTATION_UPDATE_START: 844c64b8-7df5-4e24-921f-7570060205f2 -->
-## Annotation Update
-Requested change: All required elements are present and the animation phase (Frame 260-300) is correct — all three stages visible, timeline filling, callout text shown. However, the three stage columns are clustered in the left ~65% of the canvas rather than distributed evenly across the full width. The spec places columns at approximately x: 160, 710, and 1260 (spanning the full 1920px width with even spacing). The render places them at roughly x: 120, 540, and 955, compressing them into less than two-thirds of 
-Technical assessment: The three stage columns (DAY 1, MONTH 1, MONTH 6) are horizontally compressed into the left ~65% of the 1920px canvas. The spec defines column x-positions at 160, 710, and 1260 (evenly spanning the full width with ~550px spacing), but the render places them at approximately x:120, 540, and 955 (~415px spacing). This compresses the three-column layout into less than two-thirds of the frame, leaving ~900px of empty space on the right side. The timeline bar at the bottom extends further right than the columns, creating a visible misalignment. All content elements (headers, prompt documents, molds, labels, arrows, callout text) are present and correct — only the horizontal distribution is wrong. This is a Remotion layout issue with the StageColumn x-position props.
-- Update the StageColumn x prop values to match the spec: Stage 1 x=160, Stage 2 x=710, Stage 3 x=1260
-- Adjust the connecting arrow endpoints accordingly: Arrow 1→2 from ~(470,350) to ~(650,350), Arrow 2→3 from ~(1020,350) to ~(1200,350)
-- Verify the timeline bar markers align with the updated column x-positions at 160, 710, and 1260
-<!-- ANNOTATION_UPDATE_END: 844c64b8-7df5-4e24-921f-7570060205f2 -->

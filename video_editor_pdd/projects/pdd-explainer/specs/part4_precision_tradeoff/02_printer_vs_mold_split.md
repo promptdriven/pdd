@@ -1,168 +1,171 @@
 [split:]
 
-# Section 4.2: 3D Printer vs Injection Mold — Two Precision Paradigms
+# Section 4.2: 3D Printer vs Injection Mold — Split Screen
 
 **Tool:** Split
-**Duration:** ~20s (600 frames @ 30fps)
-**Timestamp:** 18:34 - 18:54
+**Duration:** ~20s (601 frames @ 30fps)
+**Timestamp:** 0:07 - 0:27
 
 ## Visual Description
 
-A vertical split screen contrasts two manufacturing paradigms. LEFT panel (labeled "3D PRINTING") shows a top-down view of a 3D printer nozzle depositing material point-by-point on a coordinate grid. Each deposited point requires an explicit coordinate — the grid is dense, and every intersection must be addressed. A counter shows "Points specified: N" incrementing rapidly. The nozzle moves methodically, leaving nothing to chance.
+A vertical split screen establishing the central metaphor. The split persists across three narration beats: the initial comparison, the 3D printer focus, and the injection mold focus.
 
-RIGHT panel (labeled "INJECTION MOLDING") shows a cross-section of a mold cavity. Liquid material flows in from a nozzle at the top and spreads freely — chaotically even — until it hits the amber wall boundaries. The walls do all the precision work. The liquid doesn't need coordinates; it just fills the space defined by constraints. A counter shows "Walls defined: 4" and stays constant.
+**LEFT — "3D PRINTING":** A stylized top-down view of a 3D printer nozzle depositing material layer by layer. A coordinate grid overlays the scene — every deposited point is precisely addressed with (x, y, z) coordinates. Dotted guide lines connect each deposited point to the axes. The nozzle moves methodically, slowly. A label reads "Every point must be specified." During the focus beat, the grid brightens and coordinate labels appear: individual (x, y) markers at each deposited point.
 
-The visual contrast is stark: the left side is exhaustive and effortful (specify everything), the right side is economical and elegant (specify only boundaries). Below the split, a single line emphasizes the point: "Precision through specification vs. precision through constraint."
+**RIGHT — "INJECTION MOLDING":** A cross-section of a mold with liquid flowing in from a nozzle at the top. The liquid flows freely — chaotic, organic, spreading — until it hits the hard walls of the mold. The walls constrain the shape. A label reads "Walls do the precision work." During the focus beat, the walls glow amber and the liquid settles into its final constrained shape.
+
+The contrast is immediate: left side = explicit precision at every point; right side = emergent precision from constraints.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#000000` (true black)
-- Split line: 2px vertical divider at x=960, color `#334155` at 0.25
+- Background: `#0A0F1A` (deep navy-black)
+- Split line: 2px vertical divider at x: 960, color `#334155` at 0.15
 
 ### Chart/Visual Elements
 
-#### Panel Headers
-- LEFT: "3D PRINTING" — Inter, 14px, semi-bold (600), `#94A3B8` at 0.5, letter-spacing 2px, centered at y: 40
-- RIGHT: "INJECTION MOLDING" — Inter, 14px, semi-bold (600), `#D9944A` at 0.5, letter-spacing 2px, centered at y: 40
+#### Left Panel — 3D Printing
+- Header: "3D PRINTING" — Inter, 20px, bold, `#60A5FA` at 0.7, centered at y: 80
+- Nozzle: inverted triangle (20×15px), `#60A5FA` at 0.8, starts at (240, 200)
+- Deposited material: series of small rectangles (6×3px) forming layers, `#60A5FA` at 0.6
+- Coordinate grid: dashed lines at 40px intervals, `#60A5FA` at 0.08
+- Axis labels: x-axis (0-200) and y-axis (0-200), Inter, 9px, `#60A5FA` at 0.3
+- Coordinate markers: (x,y) labels at deposited points, JetBrains Mono, 8px, `#60A5FA` at 0.4
+- Caption: "Every point must be specified" — Inter, 14px, `#60A5FA` at 0.5, centered at y: 950
 
-#### Left Panel — 3D Printer (x: 0 to x: 958)
-- Background: `#0F172A`
-- **Coordinate grid:** 20×20 grid, 36px spacing, centered in panel
-  - Grid lines: `#1E293B` at 0.15, 1px
-  - Intersection dots: `#334155` at 0.3, 3px — these are potential placement points
-  - Active dots: `#4A90D9` (blue) at 0.8, 5px — deposited material
-  - Nozzle icon: inverted triangle, `#E2E8F0` at 0.6, 12px, moves across grid
-- **Counter:** "Points specified:" followed by incrementing number, Inter, 14px, `#94A3B8`, bottom of panel at y: 900
-- **Annotation:** "Every point must be specified" — Inter, 11px, `#64748B` at 0.4, below counter
-
-#### Right Panel — Injection Mold (x: 962 to x: 1920)
-- Background: `#0A0F1A`
-- **Mold cross-section:** 400×500px centered rectangle
-  - Walls: 6px solid lines, `#D9944A` (amber) at 0.8
-  - Wall labels: "WALL" in Inter, 8px, `#D9944A` at 0.4, rotated along each wall
-  - Interior: initially empty, fills with `#4A90D9` (blue) at 0.2 as liquid flows in
-  - Nozzle: top-center, funnel shape, `#94A3B8` at 0.5
-- **Liquid fill animation:** Organic, fluid simulation — blue material enters from top, spreads chaotically, hits walls, fills cavity
-- **Counter:** "Walls defined: 4" — Inter, 14px, `#D9944A`, bottom of panel at y: 900 (static)
-- **Annotation:** "Precision comes from the walls" — Inter, 11px, `#D9944A` at 0.4, below counter
-
-#### Bottom Callout (y: 980)
-- "Precision through specification vs. precision through constraint" — Inter, 14px, `#E2E8F0` at 0.6
-- "specification" in `#94A3B8`, "constraint" in `#D9944A`
+#### Right Panel — Injection Molding
+- Header: "INJECTION MOLDING" — Inter, 20px, bold, `#D9944A` at 0.7, centered at y: 80
+- Mold walls: thick rectangular outline (300×400px), centered at (1440, 500), `#D9944A` at 0.6, 4px stroke
+- Internal wall shapes: 3 irregular step shapes inside mold, `#D9944A` at 0.5, 3px stroke
+- Liquid: amorphous blob shape, `#A78BFA` at 0.4, flowing from top nozzle
+- Nozzle (top): tapered shape pointing into mold top, `#94A3B8` at 0.5
+- Caption: "Walls do the precision work" — Inter, 14px, `#D9944A` at 0.5, centered at y: 950
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Split line draws. Panel headers fade in.
-2. **Frame 20-60 (0.67-2s):** LEFT: Grid appears. Nozzle starts at top-left. RIGHT: Mold walls draw in.
-3. **Frame 60-180 (2-6s):** LEFT: Nozzle traverses grid row by row. Each intersection it passes lights up blue. Counter increments: 1... 5... 20... 50... RIGHT: Liquid begins entering from nozzle. Flows downward, spreading freely.
-4. **Frame 180-300 (6-10s):** LEFT: Nozzle at ~50% through grid. Counter: 100... 150... Still going. RIGHT: Liquid hits first wall, stops. Redirects. Flows along wall to next boundary. The constraint is visible.
-5. **Frame 300-400 (10-13.3s):** LEFT: Nozzle at ~75%. Grid increasingly dense with blue dots. Counter: 200... 250... RIGHT: Mold cavity ~80% filled. Liquid conforms to wall shape perfectly. Still flowing.
-6. **Frame 400-480 (13.3-16s):** LEFT: Grid fully populated. Counter: "400 points". Nozzle stops. RIGHT: Cavity fully filled. Clean shape. Counter still reads "Walls defined: 4".
-7. **Frame 480-540 (16-18s):** Both panels hold. The contrast is stark: 400 specifications vs 4 constraints, same result.
-8. **Frame 540-600 (18-20s):** Bottom callout fades in. "specification" and "constraint" highlighted in respective colors.
+1. **Frame 0-15 (0-0.5s):** Split line fades in. Both headers appear.
+2. **Frame 15-90 (0.5-3s):** LEFT: Coordinate grid draws in. Nozzle appears and begins depositing first layer of material, point by point. RIGHT: Mold walls draw in with stroke animation.
+3. **Frame 90-210 (3-7s):** LEFT: Nozzle continues depositing — 3 layers built up. Each deposited point gets a brief coordinate label flash. Grid brightens. RIGHT: Liquid begins flowing from nozzle into mold. Chaotic, organic flow animation.
+4. **Frame 210-390 (7-13s):** LEFT: Focus beat — coordinate grid becomes more prominent. Individual (x,y) labels appear at each deposited point sequentially. Nozzle slows to emphasize precision. RIGHT: Liquid spreads until it hits walls. Walls glow amber on impact. Liquid settles into constrained shape.
+5. **Frame 390-510 (13-17s):** LEFT: Grid pulses. All coordinate markers visible. Caption appears. RIGHT: Final shape complete. Walls glowing. Caption appears.
+6. **Frame 510-601 (17-20s):** Hold. Both sides complete. Gentle pulse on key elements.
 
 ### Typography
-- Panel headers: Inter, 14px, semi-bold (600), respective colors, letter-spacing 2px
-- Counters: Inter, 14px, respective colors
-- Annotations: Inter, 11px, respective colors at 0.4
-- Callout: Inter, 14px, `#E2E8F0` at 0.6, keywords colored
+- Headers: Inter, 20px, bold (700), respective panel color at 0.7
+- Coordinate labels: JetBrains Mono, 8px, `#60A5FA` at 0.4
+- Axis labels: Inter, 9px, `#60A5FA` at 0.3
+- Captions: Inter, 14px, respective panel color at 0.5
 
 ### Easing
-- Split line draw: `easeOut(cubic)` over 15 frames
-- Nozzle movement: `linear` (mechanical, deliberate)
-- Dot activation: `easeOut(quad)`, 3 frames scale-up
-- Liquid flow: physics-based fluid simulation, `easeOut(cubic)` for leading edge
-- Wall draw: `easeInOut(cubic)` over 30 frames
-- Counter increment: `linear`
-- Callout fade: `easeOut(quad)` over 20 frames
+- Split line: `easeOut(quad)` over 15 frames
+- Grid draw: `easeInOut(cubic)` over 40 frames
+- Nozzle deposit: linear for each point, `easeOut(quad)` for layer transitions
+- Liquid flow: `easeInOut(sine)` with noise offset for organic feel
+- Wall glow on impact: `easeOut(cubic)` over 15 frames
+- Coordinate label flash: `easeOut(quad)` over 10 frames, staggered 3 frames apart
+- Caption appear: `easeOut(quad)` over 20 frames
 
 ## Narration Sync
 > "In 3D printing, there's no mold. The machine must know exactly where to place every single point of material. The specification must be extremely precise."
-> "In injection molding, precision comes from the walls. The material just flows until it's constrained."
+> "So, injection molding, precision comes from the walls. The material just flows until it's constrained."
 
 Segments: `part4_precision_tradeoff_002`, `part4_precision_tradeoff_003`
 
-- **8.21s** ("In 3D printing, there's no mold"): Left panel grid appears, nozzle starts
-- **11.8s** ("The machine must know exactly where to place"): Nozzle actively depositing, counter incrementing
-- **17.06s** ("The specification must be extremely precise"): Grid densely populated
-- **20.9s** ("injection molding, precision comes from the walls"): Right panel mold filling
-- **24.3s** ("The material just flows until it's constrained"): Liquid hitting walls, conforming to shape
+- **0:07** ("In 3D printing"): Split screen appears, both sides begin building
+- **0:10** ("machine must know exactly"): Left side — nozzle depositing, coordinate grid brightening
+- **0:15** ("every single point"): Left side — coordinate labels appearing at deposited points
+- **0:20** ("extremely precise"): Left side fully built, grid prominent
+- **0:21** ("injection molding"): Focus shifts right — liquid begins flowing
+- **0:23** ("material just flows"): Liquid spreading chaotically
+- **0:25** ("until it's constrained"): Liquid hits walls, walls glow amber, shape constrained
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={600}>
-  <AbsoluteFill style={{ backgroundColor: '#000000' }}>
+<Sequence from={0} durationInFrames={601}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
     {/* Left panel — 3D Printing */}
     <Panel x={0} width={958}>
-      <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
-        <PanelHeader text="3D PRINTING" color="#94A3B8"
-          opacity={0.5} letterSpacing={2} y={40} />
+      <FadeIn duration={15}>
+        <Text text="3D PRINTING" font="Inter" size={20}
+          weight={700} color="#60A5FA" opacity={0.7}
+          x={479} y={80} align="center" />
+      </FadeIn>
 
-        <Sequence from={20}>
-          <CoordinateGrid rows={20} cols={20} spacing={36}
-            gridColor="#1E293B" dotColor="#334155"
-            activeDotColor="#4A90D9" center={[480, 460]} />
-          <PrinterNozzle
-            grid={{ rows: 20, cols: 20, spacing: 36 }}
-            center={[480, 460]}
-            traverseDuration={380}
-            nozzleColor="#E2E8F0" nozzleSize={12} />
-        </Sequence>
+      {/* Coordinate grid */}
+      <Sequence from={15}>
+        <StrokeDraw duration={40}>
+          <CoordinateGrid x={140} y={180} width={320} height={320}
+            spacing={40} color="#60A5FA" opacity={0.08} dashed />
+        </StrokeDraw>
+      </Sequence>
 
-        <Counter label="Points specified:" color="#94A3B8"
-          font="Inter" size={14} position={[480, 900]}
-          maxValue={400} duration={380} startFrame={60} />
-        <Text text="Every point must be specified" font="Inter"
-          size={11} color="#64748B" opacity={0.4}
-          x={480} y={930} align="center" />
-      </AbsoluteFill>
+      {/* Nozzle and depositing */}
+      <Sequence from={30}>
+        <PrinterNozzle startX={240} startY={200}
+          layers={DEPOSIT_LAYERS} pointSize={6}
+          color="#60A5FA" depositRate={5} />
+      </Sequence>
+
+      {/* Coordinate labels */}
+      <Sequence from={210}>
+        {DEPOSIT_POINTS.map((pt, i) => (
+          <Sequence from={i * 3} key={pt.id}>
+            <FadeIn duration={10}>
+              <Text text={`(${pt.x},${pt.y})`} font="JetBrains Mono" size={8}
+                color="#60A5FA" opacity={0.4}
+                x={pt.screenX} y={pt.screenY - 12} />
+            </FadeIn>
+          </Sequence>
+        ))}
+      </Sequence>
+
+      {/* Caption */}
+      <Sequence from={390}>
+        <FadeIn duration={20}>
+          <Text text="Every point must be specified" font="Inter" size={14}
+            color="#60A5FA" opacity={0.5} x={479} y={950} align="center" />
+        </FadeIn>
+      </Sequence>
     </Panel>
 
     {/* Split divider */}
-    <SplitLine x={960} color="#334155" opacity={0.25}
-      drawDuration={15} />
+    <FadeIn duration={15}>
+      <SplitLine x={960} color="#334155" opacity={0.15} width={2} />
+    </FadeIn>
 
     {/* Right panel — Injection Molding */}
     <Panel x={962} width={958}>
-      <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-        <PanelHeader text="INJECTION MOLDING" color="#D9944A"
-          opacity={0.5} letterSpacing={2} y={40} />
-
-        <Sequence from={20}>
-          <MoldCrossSection
-            center={[480, 460]} size={[400, 500]}
-            wallColor="#D9944A" wallWidth={6}
-            wallDrawDuration={30} />
-        </Sequence>
-
-        <Sequence from={60}>
-          <FluidFill
-            moldBounds={{ x: 280, y: 210, w: 400, h: 500 }}
-            fillColor="#4A90D9" fillOpacity={0.2}
-            nozzlePosition={[480, 210]}
-            fillDuration={340}
-            wallCollisionBounce={true} />
-        </Sequence>
-
-        <Text text="Walls defined: 4" font="Inter" size={14}
-          color="#D9944A" x={480} y={900} align="center" />
-        <Text text="Precision comes from the walls" font="Inter"
-          size={11} color="#D9944A" opacity={0.4}
-          x={480} y={930} align="center" />
-      </AbsoluteFill>
-    </Panel>
-
-    {/* Bottom callout */}
-    <Sequence from={540}>
-      <FadeIn duration={20}>
-        <RichText x={960} y={980} align="center" font="Inter" size={14}
-          color="#E2E8F0" opacity={0.6}>
-          Precision through <Span color="#94A3B8">specification</Span>
-          {' '}vs. precision through <Span color="#D9944A">constraint</Span>
-        </RichText>
+      <FadeIn duration={15}>
+        <Text text="INJECTION MOLDING" font="Inter" size={20}
+          weight={700} color="#D9944A" opacity={0.7}
+          x={479} y={80} align="center" />
       </FadeIn>
-    </Sequence>
+
+      {/* Mold walls */}
+      <Sequence from={15}>
+        <StrokeDraw duration={40}>
+          <MoldWalls cx={479} cy={500} width={300} height={400}
+            color="#D9944A" opacity={0.6} strokeWidth={4}
+            internalShapes={WALL_SHAPES} />
+        </StrokeDraw>
+      </Sequence>
+
+      {/* Liquid flow */}
+      <Sequence from={210}>
+        <LiquidFlow nozzleY={200} moldBounds={MOLD_BOUNDS}
+          color="#A78BFA" opacity={0.4}
+          flowDuration={120} wallGlowColor="#D9944A"
+          wallGlowOnImpact={true} />
+      </Sequence>
+
+      {/* Caption */}
+      <Sequence from={390}>
+        <FadeIn duration={20}>
+          <Text text="Walls do the precision work" font="Inter" size={14}
+            color="#D9944A" opacity={0.5} x={479} y={950} align="center" />
+        </FadeIn>
+      </Sequence>
+    </Panel>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -174,21 +177,28 @@ Segments: `part4_precision_tradeoff_002`, `part4_precision_tradeoff_003`
   "layout": "vertical_split",
   "splitPosition": 960,
   "leftPanel": {
-    "label": "3D PRINTING",
-    "concept": "Specify every point — exhaustive precision",
-    "grid": { "rows": 20, "cols": 20, "totalPoints": 400 },
-    "background": "#0F172A",
-    "accentColor": "#94A3B8"
+    "header": "3D PRINTING",
+    "headerColor": "#60A5FA",
+    "elements": [
+      { "type": "coordinate_grid", "spacing": 40, "color": "#60A5FA" },
+      { "type": "printer_nozzle", "layers": 3, "pointsPerLayer": 8 },
+      { "type": "coordinate_labels", "font": "JetBrains Mono", "size": 8 }
+    ],
+    "caption": "Every point must be specified",
+    "thematicRole": "explicit_precision"
   },
   "rightPanel": {
-    "label": "INJECTION MOLDING",
-    "concept": "Define walls — constraint-based precision",
-    "wallCount": 4,
-    "background": "#0A0F1A",
-    "accentColor": "#D9944A"
+    "header": "INJECTION MOLDING",
+    "headerColor": "#D9944A",
+    "elements": [
+      { "type": "mold_walls", "strokeWidth": 4, "color": "#D9944A" },
+      { "type": "liquid_flow", "color": "#A78BFA" },
+      { "type": "wall_glow_on_impact", "glowColor": "#D9944A" }
+    ],
+    "caption": "Walls do the precision work",
+    "thematicRole": "emergent_precision"
   },
-  "callout": "Precision through specification vs. precision through constraint",
-  "backgroundColor": "#000000",
+  "backgroundColor": "#0A0F1A",
   "narrationSegments": ["part4_precision_tradeoff_002", "part4_precision_tradeoff_003"]
 }
 ```

@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-Frame sampled at 77.5% progress (frame 92/120) falls within animation phase 5 (frames 66-120: particle continues upward, fading; ghost triangle holds). The near-black background (~#060A12) is correct. Three faint triangle vertex nodes are barely perceptible at their expected positions (upper-center blue/PROMPT, lower-left orange/TESTS, lower-right green/GROUNDING) at approximately 0.06 opacity — matching the 'barely there' ghost state. Triangle edges at 0.08 opacity on this dark background are effectively invisible, consistent with the spec's intent that the triangle is 'barely perceptible.' A faint particle is visible drifting upward past center, now fading as expected at this late stage. Vignette darkens frame edges. No text, no glow, no competing animation — the deliberate emptiness and anticipatory stillness are achieved as specified.

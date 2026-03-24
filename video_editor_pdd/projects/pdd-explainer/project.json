@@ -237,12 +237,10 @@
         "label": "Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
-          "cold_open",
-          "part3_mold_three_parts",
-          "part5_compound_returns"
+          "cold_open"
         ],
-        "referencePrompt": "Modern software developer at desk with large monitor, dark room lit by screen glow, mechanical keyboard, minimal home office setup",
-        "prompt": "Modern software developer at desk with large monitor, dark room lit by screen glow, mechanical keyboard, minimal home office setup",
+        "referencePrompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office.",
+        "prompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office.",
         "source": "stage6-inferred"
       },
       {
@@ -250,11 +248,10 @@
         "label": "Great-Grandmother",
         "imagePath": "outputs/veo/references/grandmother.png",
         "sections": [
-          "cold_open",
-          "part5_compound_returns"
+          "cold_open"
         ],
-        "referencePrompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
-        "prompt": "Elderly woman with weathered hands, 1950s domestic setting, warm amber lamplight, same character from cold open darning sequence",
+        "referencePrompt": "Elderly woman in her 70s-80s, weathered hands with visible age spots, seated in a wooden chair. 1950s domestic attire. Lit by warm amber lamplight. Darning a wool sock over a wooden darning egg.",
+        "prompt": "Elderly woman in her 70s-80s, weathered hands with visible age spots, seated in a wooden chair. 1950s domestic attire. Lit by warm amber lamplight. Darning a wool sock over a wooden darning egg.",
         "source": "stage6-inferred"
       },
       {
@@ -262,7 +259,8 @@
         "label": "Grandmother",
         "imagePath": "outputs/veo/references/grandmother_darner.png",
         "sections": [
-          "part1_economics"
+          "part1_economics",
+          "part5_compound_returns"
         ],
         "referencePrompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight",
         "prompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight",

@@ -1,186 +1,165 @@
 [Remotion]
 
-# Section 5.4: Diverging Cost Curves — The Compounding Gap
+# Section 5.4: Diverging Cost Curves — Patching vs PDD
 
 **Tool:** Remotion
-**Duration:** ~14s (420 frames @ 30fps)
-**Timestamp:** 21:30 - 21:44
+**Duration:** ~20s (600 frames @ 30fps)
+**Timestamp:** 0:42 - 1:02
 
 ## Visual Description
 
-THE KEY VISUAL of Part 5 — the emotional climax of the economic argument. Two curves draw themselves from a shared origin at Year 0, then diverge dramatically over 10 years. The "Patching" curve (amber) sweeps exponentially upward — each patch adds debt, debt generates more debt, and costs accelerate. The "PDD" curve (blue) stays flat with a gentle downward trend — each regeneration cycle resets debt to zero, and accumulated tests make future generations cheaper.
+Two dramatically diverging curves dominate the screen. The amber "Patching" curve grows exponentially upward — each patch adds debt, debt generates more debt. The green "PDD" curve stays flat near the bottom — cost resets each regeneration cycle.
 
-As the curves diverge, the gap between them fills with a pulsing gradient — this gap IS the argument. An annotation appears on each side: "Each patch adds debt" (amber, pointing to the rising curve) and "Each test constrains all future generations" (blue, pointing to the flat curve). A central label materializes in the growing gap: "The compounding gap."
+The gap between them widens over time, becoming a massive visual gulf. Faint annotations appear at intervals: on the patching side, small "+debt" labels accumulate; on the PDD side, small "+test" labels accumulate. The message is clear: one compounds against you, the other compounds for you.
 
-This is the screenshot moment — the single image that summarizes the entire video's thesis.
+A key transition happens mid-visual: the narration pivots from costs to returns. At that moment, the green PDD line develops small upward tick marks representing accumulated tests — each test constrains future generations. These ticks stack, showing compound returns growing.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0F172A` (dark navy)
-- Grid lines: horizontal at 80px intervals, `#1E293B` at 0.05; vertical at year markers, `#1E293B` at 0.05
+- Background: `#0A0F1A` (deep navy-black)
+- Grid lines: horizontal, `#1A2540` at 0.06, every 120px
 
 ### Chart/Visual Elements
 
 #### Axes
-- X-axis: positioned at y: 820, `#475569` at 0.4, 2px
-  - Labels: "Year 0", "Year 2", "Year 4", "Year 6", "Year 8", "Year 10" — Inter, 12px, `#64748B` at 0.4
-- Y-axis: positioned at x: 180, `#475569` at 0.4, 2px
-  - Label: "Cumulative Cost" — Inter, 12px, `#64748B` at 0.4, rotated -90°
+- X-axis: "Time" — abstract marks: "Now", "6 months", "1 year", "2 years", "5 years"
+  - Line: 1.5px, `#334155`
+  - Labels: Inter, 12px, `#64748B` at 0.6
+- Y-axis: "Cost / Value" — abstract scale
+  - Line: 1.5px, `#334155`
 
-#### Patching Curve (exponential)
-- Color: `#D9944A` (warm amber), 3.5px stroke
-- Path: starts at (180, 780) — gentle rise to (600, 650) — accelerating to (1000, 400) — steep to (1400, 200) — nearly vertical to (1700, 100)
-- Glow: 8px Gaussian blur, `#D9944A` at 0.1
-- Endpoint label: "PATCHING" — Inter, 16px, bold (700), `#D9944A`, at curve endpoint
+#### Patching Curve (Exponential Up)
+- Color: `#F59E0B` (amber)
+- Stroke: 3px
+- Fill below: `#F59E0B` at 0.08
+- Grows exponentially — visually dramatic steepening
+- Label: "Patching" — Inter, 18px, bold (700), `#F59E0B`
+- Small "+debt" annotations: Inter, 10px, `#F59E0B` at 0.4, scattered along curve
 
-#### PDD Curve (flat/declining)
-- Color: `#4A90D9` (cool blue), 3.5px stroke
-- Path: starts at (180, 780) — flat to (600, 750) — gentle decline to (1000, 740) — continuing flat to (1700, 720)
-- Glow: 8px Gaussian blur, `#4A90D9` at 0.1
-- Endpoint label: "PDD" — Inter, 16px, bold (700), `#4A90D9`, at curve endpoint
+#### PDD Curve (Flat with Return Ticks)
+- Color: `#4ADE80` (green)
+- Stroke: 3px
+- Stays near baseline — flat cost
+- Label: "PDD" — Inter, 18px, bold (700), `#4ADE80`
+- After pivot: small upward tick marks along line, each labeled "+test"
+  - Ticks: 2px wide, 12-20px tall, `#4ADE80` at 0.6
+  - Each tick represents a test constraining future generations
+  - Ticks accumulate and grow slightly taller over time
 
-#### Shared Origin
-- Position: (180, 780) — both curves start here
-- Circle: 6px radius, `#E2E8F0` at 0.6
-- Label: "Today" — Inter, 11px, `#E2E8F0` at 0.4
+#### Gap Visualization
+- The space between curves fills with a subtle gradient
+- Color: `#F59E0B` at 0.03 (faint amber wash showing the growing cost)
+- At 5-year mark: gap is enormous
 
-#### Gap Fill
-- Area between the two curves fills with gradient: `#D9944A` at 0.03 (top) to `#4A90D9` at 0.03 (bottom)
-- Subtle pulsing animation on opacity: 0.02 → 0.04 → 0.02 over 60-frame cycle
-
-#### Annotations
-- Upper annotation: "Each patch adds debt" — Inter, 13px, italic, `#D9944A` at 0.6
-  - Positioned at (1100, 280), thin leader line to patching curve
-  - Small upward arrow glyph before text
-- Lower annotation: "Each test constrains all future generations" — Inter, 13px, italic, `#4A90D9` at 0.6
-  - Positioned at (1100, 760), thin leader line to PDD curve
-  - Small lock/checkmark glyph before text
-
-#### Gap Label
-- "The compounding gap" — Inter, 22px, semi-bold (600), `#E2E8F0`
-- Positioned at (960, 480) — centered in the gap
-- Background pill: `#1E293B` at 0.3, rounded 10px, padding 14px
-- Thin vertical double-arrow connecting both curves at x: 960
+#### Narration Pivot Marker
+- At approximately frame 300 (10s), a thin vertical dashed line
+- Label: "Tests accrue compound returns" — Inter, 14px, italic, `#4ADE80` at 0.7
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Axes draw in. "Today" origin point appears.
-2. **Frame 30-60 (1-2s):** Both curves begin drawing from the shared origin. They're nearly identical for the first year.
-3. **Frame 60-180 (2-6s):** Curves diverge. The patching curve bends upward, the PDD curve stays flat. The divergence accelerates — by Year 5, the gap is visible. By Year 8, it's dramatic. By Year 10, it's enormous.
-4. **Frame 180-240 (6-8s):** Gap fill animates in — gradient between curves. Pulsing begins. Endpoint labels "PATCHING" and "PDD" appear.
-5. **Frame 240-300 (8-10s):** Annotations slide in on both sides. Upper: "Each patch adds debt." Lower: "Each test constrains all future generations."
-6. **Frame 300-360 (10-12s):** Gap label "The compounding gap" fades in at center, with vertical double-arrow connecting curves.
-7. **Frame 360-420 (12-14s):** Hold. The image speaks for itself.
+1. **Frame 0-30 (0-1s):** Axes visible. Both curves start from origin at same point.
+2. **Frame 30-120 (1-4s):** Both curves begin drawing rightward. Patching starts curving upward. PDD stays flat. "+debt" labels appear on patching curve.
+3. **Frame 120-210 (4-7s):** Gap widens dramatically. Patching curve steepens. More "+debt" labels.
+4. **Frame 210-270 (7-9s):** Narration pivots. "PDD" label emphasizes. Vertical dashed pivot line appears.
+5. **Frame 270-390 (9-13s):** "+test" tick marks begin appearing along PDD line. Each tick pops in with a small bounce. Ticks accumulate, growing slightly taller.
+6. **Frame 390-480 (13-16s):** "Tests accrue compound returns" annotation fades in. Gap between curves is at maximum.
+7. **Frame 480-540 (16-18s):** Hold on final state. The contrast is complete.
+8. **Frame 540-600 (18-20s):** Gentle fade transition to next visual.
 
 ### Typography
-- Axis labels: Inter, 12px, `#64748B` at 0.4
-- Curve labels: Inter, 16px, bold (700), respective colors
-- Annotations: Inter, 13px, italic, respective colors at 0.6
-- Gap label: Inter, 22px, semi-bold (600), `#E2E8F0`
-- Origin label: Inter, 11px, `#E2E8F0` at 0.4
+- Curve labels: Inter, 18px, bold (700)
+- "+debt" / "+test" annotations: Inter, 10px, regular (400), at 0.4
+- Pivot annotation: Inter, 14px, italic, `#4ADE80` at 0.7
+- Axis labels: Inter, 12px, regular (400), `#64748B`
 
 ### Easing
-- Axis draw: `easeOut(quad)` over 20 frames
-- Curve draw: `easeInOut(cubic)` over 150 frames (both curves)
-- Gap fill: `easeOut(quad)` over 30 frames
-- Gap pulse: `easeInOut(sine)` on 60-frame cycle
-- Annotations slide: `easeOut(cubic)` from respective sides, 25 frames
-- Gap label fade: `easeOut(quad)` over 20 frames
-- Double-arrow draw: `easeInOut(cubic)` over 20 frames
+- Curve draw: `easeIn(quad)` for patching (accelerating), `linear` for PDD (steady)
+- "+debt" appear: `easeOut(quad)` over 10 frames each
+- "+test" ticks: `easeOut(back)` over 12 frames each (small bounce)
+- Pivot line: `easeOut(quad)` over 20 frames
+- Gap fill: `linear` opacity increase
 
 ## Narration Sync
-> "Patching accrues compound costs. Each patch adds debt. Debt generates more debt."
-> "But the mold works the other way. Each test you write constrains every future generation. Today's. Next month's. Next year's. Tests accrue compound returns."
+> "Patching accrues compound costs. Each patch adds debt. Debt generates more debt. But the mold works the other way. Each test you write constrains every future generation. Today's. Next month's. Next year's. Tests accrue compound returns."
 
-Segment: `part5_004`
+Segments: `part5_compound_returns_004`, `part5_compound_returns_005`
 
-- **21:30** ("Patching accrues compound costs"): Both curves begin drawing, divergence starts
-- **21:33** ("Each patch adds debt"): Patching curve accelerates upward, upper annotation appears
-- **21:35** ("But the mold works the other way"): PDD curve remains flat, lower annotation appears
-- **21:38** ("Each test you write constrains every future generation"): Gap label appears
-- **21:42** ("Tests accrue compound returns"): Hold on complete divergence
+- **0:42** ("Patching accrues compound costs"): Both curves begin drawing, patching curves upward
+- **0:45** ("Each patch adds debt"): "+debt" labels appear on patching curve
+- **0:49** ("the mold works the other way"): Pivot — focus shifts to PDD line
+- **0:53** ("Each test you write constrains"): "+test" ticks begin appearing on PDD line
+- **0:57** ("Today's. Next month's. Next year's."): Ticks accumulate rapidly
+- **1:00** ("compound returns"): Full chart visible, gap at maximum
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={420}>
-  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
-    {/* Grid and axes */}
-    <Sequence from={0}>
-      <ChartGrid hSpacing={80} vSpacing={0}
-        color="#1E293B" opacity={0.05} />
-      <ChartAxes
-        xLabels={['Year 0','Year 2','Year 4','Year 6','Year 8','Year 10']}
-        yLabel="Cumulative Cost"
-        axisColor="#475569" axisOpacity={0.4}
-        drawDuration={20}
-      />
-      <OriginPoint position={[180, 780]} radius={6}
-        color="#E2E8F0" opacity={0.6} label="Today" />
-    </Sequence>
+<Sequence from={0} durationInFrames={600}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <HorizontalGrid spacing={120} color="#1A2540" opacity={0.06} />
+    <Axes xLabels={["Now", "6 months", "1 year", "2 years", "5 years"]}
+      yLabel="Cost / Value" color="#334155" />
 
-    {/* Both curves draw from shared origin */}
+    {/* Patching curve — exponential */}
     <Sequence from={30}>
       <AnimatedCurve
-        data={patchingCurveData}
-        color="#D9944A" width={3.5}
-        drawDuration={150}
-        glow={{ blur: 8, opacity: 0.1 }}
-        endLabel={{ text: "PATCHING", size: 16, weight: 700 }}
-      />
+        path={patchingExponential}
+        color="#F59E0B" strokeWidth={3}
+        fillBelow="#F59E0B0A"
+        drawDuration={450} easing="easeInQuad" />
+      <CurveLabel text="Patching" color="#F59E0B"
+        font="Inter" size={18} weight={700} />
+    </Sequence>
+
+    {/* +debt annotations */}
+    <Sequence from={90}>
+      <StaggeredAnnotations
+        texts={["+debt", "+debt", "+debt", "+debt", "+debt"]}
+        positions={debtPositions}
+        color="#F59E0B" opacity={0.4}
+        staggerDelay={30} />
+    </Sequence>
+
+    {/* PDD curve — flat */}
+    <Sequence from={30}>
       <AnimatedCurve
-        data={pddCurveData}
-        color="#4A90D9" width={3.5}
-        drawDuration={150}
-        glow={{ blur: 8, opacity: 0.1 }}
-        endLabel={{ text: "PDD", size: 16, weight: 700 }}
-      />
+        path={pddFlat}
+        color="#4ADE80" strokeWidth={3}
+        drawDuration={450} easing="linear" />
+      <CurveLabel text="PDD" color="#4ADE80"
+        font="Inter" size={18} weight={700} />
     </Sequence>
 
-    {/* Gap gradient fill */}
-    <Sequence from={180}>
-      <PulsingGradientFill
-        topColor="#D9944A" bottomColor="#4A90D9"
-        baseOpacity={0.03} pulseRange={[0.02, 0.04]}
-        pulseCycle={60}
-        clipBetween={[patchingCurveData, pddCurveData]}
-        fadeDuration={30}
-      />
+    {/* Gap fill */}
+    <Sequence from={120}>
+      <GapFill upper={patchingExponential} lower={pddFlat}
+        color="#F59E0B" opacity={0.03} />
     </Sequence>
 
-    {/* Annotations */}
-    <Sequence from={240}>
-      <SlideIn direction="left" distance={20} duration={25}>
-        <Annotation
-          text="Each patch adds debt"
-          icon="arrow_up" color="#D9944A" opacity={0.6}
-          position={[1100, 280]} leaderTo={patchingCurveAt5}
-          font="Inter" size={13} italic
-        />
-      </SlideIn>
-      <SlideIn direction="left" distance={20} duration={25}>
-        <Annotation
-          text="Each test constrains all future generations"
-          icon="lock" color="#4A90D9" opacity={0.6}
-          position={[1100, 760]} leaderTo={pddCurveAt5}
-          font="Inter" size={13} italic
-        />
-      </SlideIn>
-    </Sequence>
-
-    {/* Gap label with double-arrow */}
-    <Sequence from={300}>
+    {/* Pivot marker */}
+    <Sequence from={210}>
       <FadeIn duration={20}>
-        <DoubleArrow
-          from={[960, patchingYAt5]} to={[960, pddYAt5]}
-          color="#E2E8F0" opacity={0.3} drawDuration={20}
-        />
-        <PillLabel
-          text="The compounding gap"
-          font="Inter" size={22} weight={600}
-          color="#E2E8F0" bgColor="#1E293B" bgOpacity={0.3}
-          x={960} y={480}
-        />
+        <DashedLine vertical x={pivotX}
+          color="#4ADE80" opacity={0.3} />
+      </FadeIn>
+    </Sequence>
+
+    {/* +test ticks */}
+    <Sequence from={270}>
+      <StaggeredTicks
+        positions={testTickPositions}
+        color="#4ADE80" opacity={0.6}
+        heights={[12, 14, 15, 16, 17, 18, 19, 20]}
+        staggerDelay={15} easing="easeOutBack" />
+    </Sequence>
+
+    {/* Compound returns annotation */}
+    <Sequence from={390}>
+      <FadeIn duration={20}>
+        <Text text="Tests accrue compound returns"
+          font="Inter" size={14} weight={400}
+          style="italic" color="#4ADE80" opacity={0.7}
+          x={pivotX + 20} y={600} />
       </FadeIn>
     </Sequence>
   </AbsoluteFill>
@@ -192,47 +171,27 @@ Segment: `part5_004`
 {
   "type": "animated_chart",
   "chartId": "diverging_cost_curves",
-  "xAxis": { "label": "Time (years)", "range": [0, 10] },
-  "yAxis": { "label": "Cumulative Cost", "range": [0, 25] },
-  "series": [
+  "curves": [
     {
-      "name": "Patching",
-      "color": "#D9944A",
-      "pattern": "exponential",
-      "dataPoints": [
-        { "x": 0, "y": 1.0 },
-        { "x": 1, "y": 1.5 },
-        { "x": 2, "y": 2.3 },
-        { "x": 3, "y": 3.5 },
-        { "x": 4, "y": 5.5 },
-        { "x": 5, "y": 8.5 },
-        { "x": 6, "y": 12.0 },
-        { "x": 7, "y": 16.0 },
-        { "x": 8, "y": 20.0 },
-        { "x": 10, "y": 24.0 }
-      ],
-      "annotation": "Each patch adds debt"
+      "id": "patching_exponential",
+      "label": "Patching",
+      "color": "#F59E0B",
+      "type": "exponential",
+      "direction": "up",
+      "annotations": ["+debt", "+debt", "+debt", "+debt", "+debt"]
     },
     {
-      "name": "PDD",
-      "color": "#4A90D9",
-      "pattern": "flat_declining",
-      "dataPoints": [
-        { "x": 0, "y": 1.0 },
-        { "x": 1, "y": 1.1 },
-        { "x": 2, "y": 1.0 },
-        { "x": 3, "y": 0.95 },
-        { "x": 5, "y": 0.85 },
-        { "x": 7, "y": 0.8 },
-        { "x": 10, "y": 0.75 }
-      ],
-      "annotation": "Each test constrains all future generations"
+      "id": "pdd_flat",
+      "label": "PDD",
+      "color": "#4ADE80",
+      "type": "flat",
+      "annotations": ["+test", "+test", "+test", "+test", "+test", "+test", "+test", "+test"]
     }
   ],
-  "gapLabel": "The compounding gap",
-  "origin": { "x": 0, "y": 1.0, "label": "Today" },
-  "backgroundColor": "#0F172A",
-  "narrationSegments": ["part5_004"]
+  "xAxis": ["Now", "6 months", "1 year", "2 years", "5 years"],
+  "pivotLabel": "Tests accrue compound returns",
+  "backgroundColor": "#0A0F1A",
+  "narrationSegments": ["part5_compound_returns_004", "part5_compound_returns_005"]
 }
 ```
 

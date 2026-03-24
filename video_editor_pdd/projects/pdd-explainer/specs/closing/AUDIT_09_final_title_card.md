@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame is sampled at frame 219/240 (91.7% progress) during the final hold phase (frames 150-240). All required elements are fully visible and correctly rendered: (1) Title 'Prompt-Driven Development' is centered, large, bold, in light color against the near-black background. (2) Command block with darker background card contains both lines — '$ uv tool install pdd-cli' and '$ pdd update your_module.py' — with correct syntax highlighting (blue for pdd/pdd-cli keywords, muted gray for $ prompts, light gray for command text). (3) URL 'pdd.dev' is visible below the command block in blue. (4) Ghost triangle watermark is barely perceptible behind everything, as specified. Background is clean near-black with no extraneous elements. Layout is centered and vertically balanced. The composition reads as clean, still, and confident — matching the spec's intent for the final hold.

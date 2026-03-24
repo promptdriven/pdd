@@ -1,159 +1,156 @@
 [Remotion]
 
-# Section 5.3: Compound Debt Curve — The Math of Accumulation
+# Section 5.3: Compound Debt Curve — Debt × (1 + Rate)^Time
 
 **Tool:** Remotion
-**Duration:** ~12s (360 frames @ 30fps)
-**Timestamp:** 21:18 - 21:30
+**Duration:** ~17s (510 frames @ 30fps)
+**Timestamp:** 0:24 - 0:41
 
 ## Visual Description
 
-The donut chart from the previous beat morphs into a mathematical visualization. An exponential curve draws itself across the screen — labeled with the compound interest formula `Debt × (1 + Rate)^Time`. The curve starts gently but accelerates upward with alarming steepness. Below it, a flat line with a sawtooth pattern represents regeneration cost — each "tooth" shows cost spiking briefly during a regeneration cycle, then resetting to near-zero. The sawtooth resets visualize PDD's key insight: debt doesn't accumulate because code is thrown away and rebuilt.
+The pie chart from the previous visual morphs into an exponential growth curve. The amber maintenance slice stretches and reshapes into an exponentially growing line labeled "Debt × (1 + Rate)^Time". The area under this curve fills with a warm amber gradient, conveying the crushing weight of compound debt.
 
-A CISQ research callout appears: "$1.52 trillion/year" in large type, anchoring the abstract curve to a concrete, staggering number. The callout is positioned in the growing gap between the two lines.
+A second line appears — flat and green — labeled "Regeneration cost (debt resets each cycle)". It hugs the x-axis. The contrast between the runaway exponential and the flat line is dramatic and immediate.
+
+A large stat callout appears: "$1.52 TRILLION annually — CISQ" to quantify the scale.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0F172A` (dark navy)
-- Grid lines: horizontal at 100px intervals, `#1E293B` at 0.06; vertical at 150px intervals, `#1E293B` at 0.06
+- Background: `#0A0F1A` (deep navy-black)
+- Grid lines: horizontal only, `#1A2540` at 0.06, every 100px
 
 ### Chart/Visual Elements
 
 #### Axes
-- X-axis: "Time" — positioned at y: 800, `#475569` at 0.5, 2px
-  - Labels: "Year 1", "Year 3", "Year 5", "Year 7", "Year 10" — Inter, 11px, `#64748B` at 0.4
-- Y-axis: "Cost" — positioned at x: 200, `#475569` at 0.5, 2px
-  - Labels: "$", "$$", "$$$", "$$$$" (relative scale) — Inter, 11px, `#64748B` at 0.4
+- X-axis: "Time" — years 0–10 (abstract)
+  - Line: 1.5px, `#334155`
+  - Labels: Inter, 12px, `#64748B` at 0.6
+- Y-axis: "Cost" — abstract scale
+  - Line: 1.5px, `#334155`
+  - Labels: Inter, 12px, `#64748B` at 0.6
 
 #### Exponential Debt Curve
-- Color: `#D9944A` (warm amber), 3px stroke
-- Path: starts at (200, 720), curves exponentially to (1700, 200)
-- Formula label: `Debt × (1 + Rate)^Time` — JetBrains Mono, 14px, `#D9944A` at 0.6, positioned at (1200, 250), following curve angle
-- Glow trail: 6px Gaussian blur, `#D9944A` at 0.08, behind the line as it draws
+- Formula: y = base × (1 + 0.25)^x (visual representation)
+- Color: `#F59E0B` (amber)
+- Stroke: 3px
+- Fill below: linear gradient from `#F59E0B` at 0.15 (bottom) to `#F59E0B` at 0.04 (top)
+- Label: "Debt × (1 + Rate)^Time" — Inter, 16px, bold (700), `#F59E0B` at 0.9
+- Label position: along curve, upper right
 
-#### Regeneration Sawtooth Line
-- Color: `#4A90D9` (cool blue), 2px stroke
-- Path: flat baseline at y: 700, with 5 sawtooth peaks rising to y: 650 then resetting
-  - Each tooth spans ~300px horizontally, representing one regeneration cycle
-  - Peaks are sharp triangles: rise over 30px, fall back over 10px
-- Label: "Regeneration cost (resets each cycle)" — Inter, 12px, `#4A90D9` at 0.5, positioned at line endpoint
-- Subtle dashed vertical lines at each reset point, `#4A90D9` at 0.08
+#### Flat Regeneration Line
+- Formula: y = constant (low value)
+- Color: `#4ADE80` (green)
+- Stroke: 2.5px, dashed (8px dash, 4px gap)
+- Label: "Regeneration cost (debt resets each cycle)" — Inter, 14px, semi-bold (600), `#4ADE80` at 0.8
+- Label position: right end of line
 
-#### CISQ Callout
-- Position: centered in the gap between curves at (1100, 450)
-- "$1.52T" — Inter, 48px, bold (700), `#E2E8F0`
-- "/year in US tech debt" — Inter, 16px, `#94A3B8` at 0.5
-- "CISQ, 2022" — Inter, 10px, `#64748B` at 0.3
-- Background: subtle `#1E293B` at 0.2, rounded 12px, padding 20px
-- The number sits in the visual gap — the gap *is* the cost
+#### CISQ Stat
+- "$1.52T" — Inter, 48px, bold (800), `#F59E0B` at 0.9
+- "annually — CISQ" — Inter, 16px, regular (400), `#94A3B8` at 0.6
+- Position: upper-left area, (200, 180)
+- Background: `#1A2540` at 0.4, rounded 12px, padding 20px
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Axes draw in. Grid lines fade in. "Time" and "Cost" axis labels appear.
-2. **Frame 30-150 (1-5s):** Exponential curve draws from left to right. Starts gentle, then accelerates dramatically upward. Glow trail follows the drawing point. Formula label types in at frame 120.
-3. **Frame 90-210 (3-7s):** Sawtooth line begins drawing simultaneously (offset start). Each tooth rises and resets. The contrast with the exponential curve above is stark.
-4. **Frame 210-270 (7-9s):** Gap between curves fills with subtle gradient — `#D9944A` at 0.02 on top fading to `#4A90D9` at 0.02 on bottom. CISQ callout fades in within the gap.
-5. **Frame 270-300 (9-10s):** "$1.52T" scales up with emphasis bounce. The number anchors the abstraction.
-6. **Frame 300-360 (10-12s):** Hold. The exponential vs. flat pattern is self-evident.
+1. **Frame 0-60 (0-2s):** Pie chart morphs: the amber slice stretches rightward, reshaping into the exponential curve. The green slice compresses into the flat line. Axes fade in.
+2. **Frame 60-150 (2-5s):** Exponential curve draws rightward with accelerating steepness. Area fill follows. The growth feels relentless.
+3. **Frame 150-210 (5-7s):** "Debt × (1 + Rate)^Time" label fades in along the curve.
+4. **Frame 210-270 (7-9s):** Flat green dashed line draws from left to right. Label appears.
+5. **Frame 270-360 (9-12s):** CISQ stat fades in with scale-up. "$1.52T" is large and impactful.
+6. **Frame 360-450 (12-15s):** Hold. The exponential continues to creep slightly upward (subtle animation).
+7. **Frame 450-510 (15-17s):** Transition — chart elements begin repositioning for the next visual.
 
 ### Typography
-- Axis labels: Inter, 11px, `#64748B` at 0.4
-- Formula: JetBrains Mono, 14px, `#D9944A` at 0.6
-- Line labels: Inter, 12px, respective colors at 0.5
-- CISQ number: Inter, 48px, bold (700), `#E2E8F0`
-- CISQ subtitle: Inter, 16px, `#94A3B8` at 0.5
-- CISQ source: Inter, 10px, `#64748B` at 0.3
+- Curve label: Inter, 16px, bold (700), `#F59E0B`
+- Flat line label: Inter, 14px, semi-bold (600), `#4ADE80`
+- CISQ value: Inter, 48px, bold (800), `#F59E0B`
+- CISQ source: Inter, 16px, regular (400), `#94A3B8`
+- Axis labels: Inter, 12px, regular (400), `#64748B`
 
 ### Easing
-- Axis draw: `easeOut(quad)` over 20 frames
-- Exponential curve draw: `easeIn(cubic)` over 120 frames (starts slow, accelerates — matching the math)
-- Sawtooth draw: `linear` for flat segments, `easeOut(quad)` for peaks
-- Gap gradient fill: `easeOut(quad)` over 30 frames
-- CISQ callout fade: `easeOut(quad)` over 20 frames
-- "$1.52T" scale emphasis: `easeOut(back(1.4))` over 15 frames
+- Morph transition: `easeInOut(cubic)` over 60 frames
+- Curve draw: `easeIn(quad)` over 90 frames (accelerating steepness)
+- Label fade: `easeOut(quad)` over 20 frames
+- Flat line draw: `easeOut(quad)` over 40 frames
+- CISQ scale-up: `easeOut(back)` over 25 frames
 
 ## Narration Sync
 > "And those costs compound — literally. Technical debt follows a compound interest curve. CISQ puts the US total at one-point-five-two trillion dollars annually. That's not a metaphor. It's the math of accumulation."
 
-Segment: `part5_003`
+Segment: `part5_compound_returns_003`
 
-- **21:18** ("And those costs compound"): Exponential curve begins drawing
-- **21:21** ("Technical debt follows a compound interest curve"): Curve accelerates upward, formula label appears
-- **21:24** ("CISQ puts the US total"): CISQ callout begins fading in
-- **21:26** ("one-point-five-two trillion"): "$1.52T" scales up with emphasis
-- **21:28** ("It's the math of accumulation"): Hold on complete visualization
+- **0:24** ("costs compound — literally"): Pie chart begins morphing into exponential curve
+- **0:28** ("compound interest curve"): Curve draws with accelerating steepness
+- **0:32** ("CISQ puts"): $1.52T stat appears
+- **0:36** ("not a metaphor"): Green flat line draws for contrast
+- **0:41** ("math of accumulation"): Hold on complete chart
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={360}>
-  <AbsoluteFill style={{ backgroundColor: '#0F172A' }}>
-    {/* Grid and axes */}
-    <Sequence from={0}>
-      <ChartGrid hSpacing={100} vSpacing={150}
-        color="#1E293B" opacity={0.06} />
-      <ChartAxes
-        xLabel="Time" yLabel="Cost"
-        xLabels={['Year 1','Year 3','Year 5','Year 7','Year 10']}
-        yLabels={['$','$$','$$$','$$$$']}
-        axisColor="#475569" drawDuration={20}
-      />
+<Sequence from={0} durationInFrames={510}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <HorizontalGrid spacing={100} color="#1A2540" opacity={0.06} />
+
+    {/* Morph from pie chart */}
+    <Sequence from={0} durationInFrames={60}>
+      <MorphTransition
+        from="pie_chart" to="exponential_curve"
+        duration={60} easing="easeInOutCubic" />
     </Sequence>
 
-    {/* Exponential debt curve */}
+    {/* Axes */}
     <Sequence from={30}>
-      <AnimatedCurve
-        data={exponentialDebtData}
-        color="#D9944A" width={3}
-        drawDuration={120} easing="easeIn(cubic)"
-        glow={{ blur: 6, opacity: 0.08 }}
-      />
-      <Sequence from={90}>
-        <TypeWriter
-          text="Debt × (1 + Rate)^Time"
-          font="JetBrains Mono" size={14}
-          color="#D9944A" opacity={0.6}
-          position={[1200, 250]}
-        />
-      </Sequence>
-    </Sequence>
-
-    {/* Regeneration sawtooth */}
-    <Sequence from={90}>
-      <SawtoothLine
-        baseline={700} peakHeight={50}
-        teeth={5} color="#4A90D9" width={2}
-        drawDuration={120}
-        label="Regeneration cost (resets each cycle)"
-      />
-    </Sequence>
-
-    {/* Gap gradient fill */}
-    <Sequence from={210}>
-      <GradientFill
-        topColor="#D9944A" bottomColor="#4A90D9"
-        opacity={0.02} fadeDuration={30}
-        clipBetween={[exponentialDebtData, sawtoothData]}
-      />
-    </Sequence>
-
-    {/* CISQ callout */}
-    <Sequence from={210}>
-      <FadeIn duration={20}>
-        <CalloutCard position={[1100, 450]} padding={20}
-          bgColor="#1E293B" bgOpacity={0.2} borderRadius={12}>
-          <Sequence from={60}>
-            <ScaleEmphasis easing="easeOut(back(1.4))" duration={15}>
-              <Text text="$1.52T" font="Inter" size={48}
-                weight={700} color="#E2E8F0" align="center" />
-            </ScaleEmphasis>
-          </Sequence>
-          <Text text="/year in US tech debt" font="Inter" size={16}
-            color="#94A3B8" opacity={0.5} align="center" />
-          <Text text="CISQ, 2022" font="Inter" size={10}
-            color="#64748B" opacity={0.3} align="center" />
-        </CalloutCard>
+      <FadeIn duration={30}>
+        <Axes xLabel="Time" yLabel="Cost"
+          color="#334155" labelColor="#64748B" />
       </FadeIn>
+    </Sequence>
+
+    {/* Exponential curve */}
+    <Sequence from={60}>
+      <DrawLine
+        path={exponentialPath} color="#F59E0B"
+        strokeWidth={3} duration={90}
+        fillBelow={{ gradient: ['#F59E0B26', '#F59E0B0A'] }} />
+    </Sequence>
+
+    {/* Curve label */}
+    <Sequence from={150}>
+      <FadeIn duration={20}>
+        <Text text="Debt × (1 + Rate)^Time"
+          font="Inter" size={16} weight={700}
+          color="#F59E0B" opacity={0.9}
+          x={1400} y={200} />
+      </FadeIn>
+    </Sequence>
+
+    {/* Flat regeneration line */}
+    <Sequence from={210}>
+      <DrawLine
+        path={flatPath} color="#4ADE80"
+        strokeWidth={2.5} dashed={[8, 4]} duration={40} />
+      <FadeIn duration={20}>
+        <Text text="Regeneration cost (debt resets each cycle)"
+          font="Inter" size={14} weight={600}
+          color="#4ADE80" opacity={0.8}
+          x={1300} y={720} />
+      </FadeIn>
+    </Sequence>
+
+    {/* CISQ stat */}
+    <Sequence from={270}>
+      <ScaleIn from={0.8} to={1.0} duration={25}>
+        <FadeIn duration={25}>
+          <StatCard x={200} y={180}
+            bg="#1A2540" bgOpacity={0.4} radius={12}>
+            <Text text="$1.52T" font="Inter" size={48}
+              weight={800} color="#F59E0B" />
+            <Text text="annually — CISQ" font="Inter" size={16}
+              weight={400} color="#94A3B8" />
+          </StatCard>
+        </FadeIn>
+      </ScaleIn>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -164,36 +161,30 @@ Segment: `part5_003`
 {
   "type": "animated_chart",
   "chartId": "compound_debt_curve",
+  "morphFrom": "maintenance_cost_pie",
   "curves": [
     {
-      "name": "Technical Debt (exponential)",
-      "color": "#D9944A",
-      "formula": "Debt × (1 + Rate)^Time",
-      "dataPoints": [
-        { "x": 1, "y": 1.0 },
-        { "x": 2, "y": 1.4 },
-        { "x": 3, "y": 2.1 },
-        { "x": 5, "y": 4.2 },
-        { "x": 7, "y": 8.5 },
-        { "x": 10, "y": 24.0 }
-      ]
+      "id": "debt_exponential",
+      "formula": "base * (1 + 0.25)^x",
+      "color": "#F59E0B",
+      "strokeWidth": 3,
+      "label": "Debt × (1 + Rate)^Time",
+      "fill": true
     },
     {
-      "name": "Regeneration cost (sawtooth)",
-      "color": "#4A90D9",
-      "pattern": "sawtooth",
-      "baseline": 1.0,
-      "peakHeight": 1.5,
-      "resetCycles": 5
+      "id": "regeneration_flat",
+      "formula": "constant",
+      "color": "#4ADE80",
+      "strokeWidth": 2.5,
+      "dashed": true,
+      "label": "Regeneration cost (debt resets each cycle)"
     }
   ],
-  "callout": {
-    "stat": "$1.52T",
-    "context": "annual US tech debt cost",
-    "source": "CISQ, 2022"
-  },
-  "backgroundColor": "#0F172A",
-  "narrationSegments": ["part5_003"]
+  "stats": [
+    { "value": "$1.52T", "label": "annually", "source": "CISQ", "color": "#F59E0B" }
+  ],
+  "backgroundColor": "#0A0F1A",
+  "narrationSegments": ["part5_compound_returns_003"]
 }
 ```
 

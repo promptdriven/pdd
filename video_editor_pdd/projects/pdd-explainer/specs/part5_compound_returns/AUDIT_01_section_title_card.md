@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame is sampled at frame 104/120 (87.5% progress), within the hold phase (frames 90-120). All critical elements are present and correctly rendered: deep navy-black background with subtle ledger grid, 'PART 5' section label in muted gray with letter-spacing, 'COMPOUND' in large bold white centered text, 'RETURNS' below in matching style with approximate center/slight-right positioning. Ghost curves are faintly visible behind the text in the upper-right region at very low opacity, consistent with the spec's 0.04 opacity. The horizontal rule between the two title words is absent, but the audit hints explicitly classify 'Missing horizontal rule' as a decorative element that may vary without failing. The overall composition reads as intended — a clean, centered section title card with economic visual language.

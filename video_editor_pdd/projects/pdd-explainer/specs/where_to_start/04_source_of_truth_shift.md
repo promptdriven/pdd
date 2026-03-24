@@ -1,178 +1,139 @@
 [Remotion]
 
-# Section 6.4: Source of Truth Shift — Code Grays, Prompt Glows
+# Section 6.4: Source of Truth Shift
 
 **Tool:** Remotion
-**Duration:** ~6s (180 frames @ 30fps)
-**Timestamp:** 23:32 - 23:38
+**Duration:** ~5s (150 frames @ 30fps)
+**Timestamp:** 0:15 - 0:20
 
 ## Visual Description
 
-A focused two-panel composition shows the critical moment of value migration. On the left, the original `auth_handler.py` code block — previously the authoritative artifact — visually desaturates, its border fading from neutral to gray, its content dimming. On the right, the `auth_handler.prompt` document glows brighter, its blue aura intensifying.
+The view zooms out slightly from the single highlighted module to show the broader codebase. The `auth_handler.py` module is now clearly split into two visual states: the original code file (gray, muted, labeled "artifact") and the new prompt file beside it (glowing blue, labeled "source of truth"). A thin connecting arrow links them — prompt → code — showing the generation direction.
 
-Between them, a subtle animated arrow reverses direction: originally pointing code → prompt (extraction), it now points prompt → code (generation). A label materializes below: **"The prompt is your new source of truth."**
+A second module now begins the same transformation. `payment_processor.py` highlights, a brief terminal flash shows `pdd update payment_processor.py`, and its own prompt file materializes. The code file grays out. The pattern is established — this isn't a one-time trick, it's a repeatable workflow.
 
-Below the prompt document, three small amber wall icons appear — test constraints. A terminal in the corner shows: `pdd test auth_handler → 3/3 passing`. The regenerated code passes all tests, confirming the prompt is sufficient.
-
-This visual callback to the "Brownfield Absorption" motif (#10 from the design notes) makes the value migration concrete and personal for the viewer.
+A small workflow diagram begins to form in the lower-right: `module → prompt → tests → regenerate → compare`. Each step appears as a node in a horizontal flow, connected by thin arrows. This diagram stays subtle — it's a mental model reinforcement, not the main visual.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
+- Grid lines: none
 
 ### Chart/Visual Elements
 
-#### Code Block (left, desaturating)
-- Position: (480, 400), size: 300×200px
-- Editor window with title bar: `auth_handler.py`
-- Content: 15 lines of code, JetBrains Mono, 9px
-- Initial state: `#94A3B8` at 0.5 (visible)
-- Final state: `#64748B` at 0.2 (grayed out)
-- Border fades from `#334155` at 0.3 to `#334155` at 0.1
-- Label below: "artifact" — Inter, 11px, `#64748B` at 0.3, italic
+#### Module Pair: auth_handler (already transformed)
+- Code panel: `#111827` at 0.3, grayscale(0.8), positioned at (300, 250)
+- Prompt icon: `#60A5FA` glow, positioned at (420, 250)
+- Arrow: thin, 1px, `#60A5FA` at 0.3, from prompt to code
+- Label "artifact": Inter, 9px, `#64748B` at 0.25, below code
+- Label "source of truth": Inter, 9px, `#60A5FA` at 0.4, below prompt
 
-#### Prompt Document (right, glowing)
-- Position: (1120, 380), size: 300×220px
-- Editor window with title bar: `auth_handler.prompt`
-- Content: 12 lines of natural language, Inter, 9px, `#CBD5E1` at 0.7
-- Blue ambient glow: intensifies from `#4A90D9` at 0.06 to `#4A90D9` at 0.12
-- Border: `#4A90D9` at 0.3, 2px
-- Label below: "source of truth" — Inter, 11px, `#4A90D9` at 0.6, bold
+#### Module Pair: payment_processor (transforming)
+- Code panel: starts at full brightness `#111827` at 0.9, positioned at (300, 480)
+- Prompt icon: materializes at (420, 480) with `#60A5FA` glow
+- Arrow: draws from prompt to code
+- Same label pattern as auth_handler
 
-#### Direction Arrow
-- Curved arrow between the two panels
-- Initial: points left → right (code to prompt, extraction)
-- Reverses to right → left (prompt to code, generation)
-- Arrow color: `#4A90D9` at 0.4
-- Arrow head: 8px, filled
+#### Remaining Modules (background)
+- 6-8 dimmed code panels scattered across canvas
+- Each: `#111827` at 0.15, code text invisible
+- File names barely legible: `#475569` at 0.2
 
-#### Test Walls (below prompt)
-- 3 small rectangular wall icons, 8×24px each, `#D9944A` at 0.5
-- Positioned below prompt document in a row, spaced 20px apart
-- Labels below walls: "JWT verify", "expiry check", "null safety" — JetBrains Mono, 7px, `#D9944A` at 0.3
-
-#### Callout Text (centered, bottom)
-- "The prompt is your new source of truth." — Inter, 16px, `#E2E8F0` at 0.6
-- "source of truth" emphasized in `#4A90D9` at 0.8
-- Centered at y: 880
-
-#### Terminal (bottom-right corner)
-- Position: (1400, 900), size: 360×80px
-- `$ pdd test auth_handler` → `✓ 3/3 passing`
-- Success color: `#5AAA6E` at 0.5
+#### Workflow Diagram (lower-right)
+- Position: (1200, 920) to (1820, 970)
+- 5 nodes in horizontal flow:
+  - "module" — rounded rect, `#334155` at 0.4, 10px text
+  - "prompt" — rounded rect, `#60A5FA` at 0.3, 10px text
+  - "tests" — rounded rect, `#D9944A` at 0.3, 10px text
+  - "regenerate" — rounded rect, `#A78BFA` at 0.3, 10px text
+  - "compare" — rounded rect, `#4ADE80` at 0.3, 10px text
+- Connecting arrows: 1px, `#475569` at 0.3
+- All text: Inter, 10px, `#94A3B8` at 0.5
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Both panels visible from previous shot. Arrow points left → right (extraction direction from prior animation).
-2. **Frame 30-70 (1-2.33s):** Code block desaturates — content fades, border dims. Simultaneously, prompt glow intensifies. The visual weight shifts right.
-3. **Frame 70-100 (2.33-3.33s):** Arrow reverses direction with a smooth rotation. Now points right → left (generation direction). The relationship has inverted.
-4. **Frame 100-120 (3.33-4s):** "artifact" label fades in below code. "source of truth" label fades in below prompt. Three test wall icons appear below prompt.
-5. **Frame 120-140 (4-4.67s):** Terminal shows test results: `✓ 3/3 passing`.
-6. **Frame 140-180 (4.67-6s):** Callout text appears at bottom. Hold on the complete composition.
+1. **Frame 0-20 (0-0.67s):** Camera eases out slightly. Auth_handler pair already in transformed state. Background modules visible but dimmed.
+2. **Frame 20-40 (0.67-1.33s):** `payment_processor.py` highlights with selection glow. Brief terminal flash overlay: `pdd update payment_processor.py`.
+3. **Frame 40-70 (1.33-2.33s):** Prompt file materializes for payment_processor. Code panel grays out. Arrow draws. Labels appear.
+4. **Frame 70-110 (2.33-3.67s):** Workflow diagram nodes appear sequentially, left to right, 8 frames apart. Arrows draw between nodes.
+5. **Frame 110-150 (3.67-5s):** Hold. Both transformed pairs pulse gently. Workflow diagram is complete and subtle.
 
 ### Typography
-- Panel labels: Inter, 11px, respective colors
-- Callout: Inter, 16px, `#E2E8F0` at 0.6
-- Test wall labels: JetBrains Mono, 7px, `#D9944A` at 0.3
-- Terminal: JetBrains Mono, 10px, `#94A3B8` at 0.5
+- Module labels: Inter, 9px, respective colors
+- File names: JetBrains Mono, 10px, `#94A3B8` at 0.5
+- Workflow nodes: Inter, 10px, `#94A3B8` at 0.5
+- Terminal flash: JetBrains Mono, 11px, `#E2E8F0` at 0.7
 
 ### Easing
-- Code desaturation: `easeInOut(quad)` over 40 frames
-- Prompt glow intensify: `easeInOut(quad)` over 40 frames
-- Arrow reverse: `easeInOut(cubic)` rotation over 30 frames
-- Label fade-in: `easeOut(quad)` over 15 frames
-- Wall icons: `easeOut(cubic)` scale 0 → 1, staggered 5 frames apart
-- Callout fade: `easeOut(quad)` over 20 frames
+- Zoom out: `easeInOut(cubic)` over 20 frames
+- Module highlight: `easeOut(cubic)` over 15 frames
+- Prompt materialize: `easeOut(back)` over 20 frames
+- Code desaturate: `easeInOut(quad)` over 20 frames
+- Workflow node appear: `easeOut(quad)` over 12 frames each
+- Glow pulse: `easeInOut(sine)` on 30-frame cycle
 
 ## Narration Sync
-> "When the regenerated version passes all tests, the prompt is your new source of truth for that module."
+> "One module at a time. No big bang. No rewrite."
 
 Segment: `where_to_start_002`
 
-- **23:32** ("When the regenerated version"): Code begins desaturating, prompt begins glowing
-- **23:34** ("passes all tests"): Test walls appear, terminal shows passing
-- **23:36** ("the prompt is your new source of truth"): Arrow reversed, callout text appears
-- **23:38** ("for that module"): Hold on complete composition
+- **0:15** ("One module at a time"): Second module begins transformation
+- **0:17** ("No big bang"): Prompt materializes, code grays
+- **0:19** ("No rewrite"): Workflow diagram assembles — the process is incremental
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={180}>
+<Sequence from={0} durationInFrames={150}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Code block — desaturating */}
-    <AnimateOpacity from={0.5} to={0.2} duration={40} startFrame={30}>
-      <EditorWindow position={[330, 300]} size={[300, 200]}
-        filename="auth_handler.py"
-        titleBarColor="#1E293B" editorBg="#0F172A">
-        <CodeLines lines={authHandlerCode}
-          font="JetBrains Mono" fontSize={9} color="#94A3B8" />
-      </EditorWindow>
-    </AnimateOpacity>
-    <Sequence from={100}>
-      <FadeIn duration={15}>
-        <Text text="artifact" font="Inter" size={11}
-          color="#64748B" opacity={0.3} italic
-          x={480} y={520} align="center" />
-      </FadeIn>
+    {/* Auth handler — already transformed */}
+    <ModulePair
+      name="auth_handler.py"
+      codePosition={[300, 250]}
+      promptPosition={[420, 250]}
+      codeOpacity={0.3}
+      codeGrayscale={0.8}
+      promptGlow={{ color: "#60A5FA", blur: 16, opacity: 0.12 }}
+      arrowColor="#60A5FA"
+      labels={true}
+    />
+
+    {/* Payment processor — transforming */}
+    <Sequence from={20}>
+      <ModuleTransform
+        name="payment_processor.py"
+        codePosition={[300, 480]}
+        promptPosition={[420, 480]}
+        highlightDuration={15}
+        highlightColor="#60A5FA"
+        terminalFlash="pdd update payment_processor.py"
+        transformDelay={20}
+        transformDuration={30}
+      />
     </Sequence>
 
-    {/* Direction arrow — reverses */}
-    <DirectionArrow
-      from={[640, 420]} to={[960, 420]}
-      color="#4A90D9" opacity={0.4} headSize={8}
-      reverseAtFrame={70} reverseDuration={30} />
+    {/* Background dimmed modules */}
+    <DimmedModules
+      modules={["user_service.py", "legacy_router.py", "config.py",
+                "db_connector.py", "email_sender.py", "cache_layer.py"]}
+      opacity={0.15}
+    />
 
-    {/* Prompt document — intensifying glow */}
-    <AnimateGlow from={0.06} to={0.12} duration={40}
-      startFrame={30} color="#4A90D9" blur={16}>
-      <EditorWindow position={[970, 270]} size={[300, 220]}
-        filename="auth_handler.prompt"
-        titleBarColor="#1E293B" editorBg="#0F172A"
-        border={{ color: '#4A90D9', opacity: 0.3, width: 2 }}>
-        <TextLines lines={promptContent}
-          font="Inter" fontSize={9} color="#CBD5E1" opacity={0.7} />
-      </EditorWindow>
-    </AnimateGlow>
-    <Sequence from={100}>
-      <FadeIn duration={15}>
-        <Text text="source of truth" font="Inter" size={11}
-          color="#4A90D9" opacity={0.6} weight={700}
-          x={1120} y={510} align="center" />
-      </FadeIn>
-    </Sequence>
-
-    {/* Test walls */}
-    <Sequence from={100}>
-      <StaggeredScaleIn stagger={5} duration={12}>
-        <WallIcon label="JWT verify" color="#D9944A"
-          position={[1060, 550]} />
-        <WallIcon label="expiry check" color="#D9944A"
-          position={[1120, 550]} />
-        <WallIcon label="null safety" color="#D9944A"
-          position={[1180, 550]} />
-      </StaggeredScaleIn>
-    </Sequence>
-
-    {/* Terminal */}
-    <Sequence from={120}>
-      <FadeIn duration={10}>
-        <Terminal position={[1400, 900]} size={[360, 80]}>
-          <Text text="$ pdd test auth_handler → ✓ 3/3 passing"
-            font="JetBrains Mono" size={10} color="#5AAA6E"
-            opacity={0.5} />
-        </Terminal>
-      </FadeIn>
-    </Sequence>
-
-    {/* Callout */}
-    <Sequence from={140}>
-      <FadeIn duration={20}>
-        <RichText x={960} y={880} align="center" font="Inter" size={16}
-          color="#E2E8F0" opacity={0.6}>
-          The prompt is your new{' '}
-          <Span color="#4A90D9" opacity={0.8}>source of truth</Span>.
-        </RichText>
-      </FadeIn>
+    {/* Workflow diagram */}
+    <Sequence from={70}>
+      <WorkflowDiagram
+        x={1200} y={920}
+        nodes={[
+          { label: "module", color: "#334155" },
+          { label: "prompt", color: "#60A5FA" },
+          { label: "tests", color: "#D9944A" },
+          { label: "regenerate", color: "#A78BFA" },
+          { label: "compare", color: "#4ADE80" }
+        ]}
+        nodeDelay={8}
+        arrowColor="#475569"
+        textColor="#94A3B8"
+      />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -181,25 +142,17 @@ Segment: `where_to_start_002`
 ## Data Points JSON
 ```json
 {
-  "type": "value_migration",
-  "before": {
-    "sourceOfTruth": "auth_handler.py",
-    "role": "code",
-    "state": "active"
-  },
-  "after": {
-    "sourceOfTruth": "auth_handler.prompt",
-    "role": "specification",
-    "state": "glowing"
-  },
-  "tests": [
-    { "name": "JWT verify", "status": "passing" },
-    { "name": "expiry check", "status": "passing" },
-    { "name": "null safety", "status": "passing" }
+  "type": "code_transformation",
+  "chartId": "source_of_truth_shift",
+  "transformedModules": [
+    { "name": "auth_handler.py", "state": "complete" },
+    { "name": "payment_processor.py", "state": "animating" }
   ],
-  "terminalCommand": "pdd test auth_handler",
-  "terminalResult": "3/3 passing",
-  "callout": "The prompt is your new source of truth.",
+  "pendingModules": [
+    "user_service.py", "legacy_router.py", "config.py",
+    "db_connector.py", "email_sender.py", "cache_layer.py"
+  ],
+  "workflow": ["module", "prompt", "tests", "regenerate", "compare"],
   "backgroundColor": "#0A0F1A",
   "narrationSegments": ["where_to_start_002"]
 }
