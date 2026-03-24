@@ -69,8 +69,8 @@ Segment: `closing_001` (tail) → `closing_002` (start)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
   <VeoClip
-    clipId="developer_regenerate_clip"
-    src="/clips/developer_regenerate_clip.mp4"
+    clipId="code_regenerate_closing"
+    src="/clips/code_regenerate_closing.mp4"
     fit="cover"
   />
   <Sequence from={0} durationInFrames={10}>
@@ -86,7 +86,7 @@ Segment: `closing_001` (tail) → `closing_002` (start)
 ```json
 {
   "type": "veo_clip",
-  "clipId": "developer_regenerate_clip",
+  "clipId": "code_regenerate_closing",
   "camera": {
     "framing": "over_the_shoulder",
     "movement": "static_with_drift",

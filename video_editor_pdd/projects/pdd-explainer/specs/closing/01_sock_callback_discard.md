@@ -69,8 +69,8 @@ Segment: `closing_001`
 ```typescript
 <Sequence from={0} durationInFrames={78}>
   <VeoClip
-    clipId="sock_callback_discard"
-    src="/clips/sock_callback_discard.mp4"
+    clipId="sock_discard_closing"
+    src="/clips/sock_discard_closing.mp4"
     fit="cover"
   />
   <Sequence from={0} durationInFrames={10}>
@@ -86,7 +86,7 @@ Segment: `closing_001`
 ```json
 {
   "type": "veo_clip",
-  "clipId": "sock_callback_discard",
+  "clipId": "sock_discard_closing",
   "camera": {
     "framing": "medium_close_up",
     "movement": "static",
