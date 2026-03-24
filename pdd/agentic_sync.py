@@ -805,6 +805,7 @@ def run_agentic_sync(
         prompt = prompt_template.format(
             issue_content=issue_content,
             architecture_json=safe_arch_json,
+            issue_number=issue_number,
         )
 
         if not quiet:

@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -3387,3 +3387,196 @@ def test_orchestrator_populates_impacted_tests_context(mock_dependencies, temp_c
     assert "test_agentic_bug_orchestrator" in step13_prompt, (
         f"Step 13 prompt should contain impacted test file paths. Got: {step13_prompt}"
     )
+
+# ---------------------------------------------------------------------------
+# BUG: _review_loop_no_issues doesn't exist yet — the review loop uses a
+# brittle exact-match ("No Issues Found" in s11_output) that misses
+# semantic variants the LLM commonly produces, causing 4 wasted iterations.
+# These tests define the correct behavior for the function we need to create.
+# ---------------------------------------------------------------------------
+
+class TestReviewLoopNoIssues:
+    """Tests for _review_loop_no_issues: must detect the exact phrase AND
+    common semantic variants, case-insensitively."""
+
+    def test_exact_phrase(self):
+        assert _review_loop_no_issues("No Issues Found") is True
+
+    def test_case_insensitive(self):
+        assert _review_loop_no_issues("no issues found") is True
+        assert _review_loop_no_issues("NO ISSUES FOUND") is True
+
+    def test_embedded_in_markdown(self):
+        output = "## Step 11: Issue Identification\n\n**Status:** No Issues Found\n\n### Review Summary"
+        assert _review_loop_no_issues(output) is True
+
+    def test_variant_no_issues_identified(self):
+        assert _review_loop_no_issues("After review, no issues identified in the codebase.") is True
+
+    def test_variant_no_issues_detected(self):
+        assert _review_loop_no_issues("No issues detected during this iteration.") is True
+
+    def test_variant_all_checks_passed(self):
+        assert _review_loop_no_issues("All checks passed. The code looks correct.") is True
+
+    def test_variant_everything_looks_good(self):
+        assert _review_loop_no_issues("Everything looks good — no changes needed.") is True
+
+    def test_variant_no_problems_found(self):
+        assert _review_loop_no_issues("No problems found in the modified files.") is True
+
+    def test_variant_no_issues_remain(self):
+        assert _review_loop_no_issues("No issues remain after the previous fixes.") is True
+
+    def test_variant_no_remaining_issues(self):
+        assert _review_loop_no_issues("There are no remaining issues to address.") is True
+
+    def test_variant_no_issues_to_fix(self):
+        assert _review_loop_no_issues("No issues to fix in this iteration.") is True
+
+    def test_issues_found_returns_false(self):
+        assert _review_loop_no_issues("Issues Found: syntax error on line 42") is False
+
+    def test_issues_present_returns_false(self):
+        assert _review_loop_no_issues("There are 3 issues that need fixing.") is False
+
+    def test_empty_output_returns_false(self):
+        assert _review_loop_no_issues("") is False
+
+
+class TestReviewLoopEarlyExit:
+    """BUG: the review loop currently uses exact-match and misses variant
+    phrases, running all 5 iterations. After the fix, a variant phrase like
+    "no issues identified" must cause early exit (2 calls, not 10)."""
+
+    def test_exits_on_variant_phrase(self, mock_dependencies_dict, tmp_path):
+        mocks = mock_dependencies_dict
+        existing_state = {
+            "last_completed_step": 10,
+            "step_outputs": {str(i): "out" for i in range(1, 11)},
+            "worktree_path": str(tmp_path / "wt"),
+        }
+        existing_state["step_outputs"]["9"] = "FILES_CREATED: foo.prompt"
+        mocks["load"].return_value = (existing_state, 123)
+
+        # Step 11 returns a variant phrase — should trigger early exit
+        responses = [
+            (True, "After thorough review, no issues identified.", 0.1, "gpt-4"),  # step11_iter1
+            (True, "PR Created", 0.1, "gpt-4"),  # step13
+        ]
+        mocks["run"].side_effect = responses
+
+        with patch("pathlib.Path.exists", return_value=True):
+            success, msg, cost, model, files = run_agentic_change_orchestrator(
+                issue_url="http://issue", issue_content="Fix bug",
+                repo_owner="owner", repo_name="repo", issue_number=1,
+                issue_author="me", issue_title="Bug Fix", cwd=tmp_path, quiet=True,
+            )
+
+        assert success is True
+        # Only 2 calls: step11_iter1 (no issues) + step13 (PR)
+        assert mocks["run"].call_count == 2
+        labels = [c.kwargs.get("label") for c in mocks["run"].call_args_list]
+        assert "step11_iter1" in labels
+        assert "step13" in labels
+        assert "step12_iter1" not in labels
+
+
+# ---------------------------------------------------------------------------
+# BUG: _setup_worktree destroys the remote branch on re-runs, losing
+# changes from prior runs that the current run doesn't rediscover.
+# These tests define the correct behavior: fetch and reuse remote branch.
+# ---------------------------------------------------------------------------
+
+class TestSetupWorktreePreservesRemote:
+    """Tests that _setup_worktree reuses remote branch content when available,
+    instead of always creating a fresh branch from HEAD."""
+
+    def test_creates_from_remote_when_available(self, tmp_path):
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        calls = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_list = cmd if isinstance(cmd, list) else cmd.split()
+            cmd_str = " ".join(cmd_list)
+            calls.append(cmd_str)
+            m = MagicMock()
+            m.stdout = str(tmp_path)
+            m.returncode = 0
+
+            # git rev-parse --show-toplevel
+            if "rev-parse" in cmd_str and "--show-toplevel" in cmd_str:
+                m.stdout = str(tmp_path)
+                return m
+            # git fetch origin change/issue-99
+            if "fetch" in cmd_str and "change/issue-99" in cmd_str:
+                return m
+            # git show-ref --verify refs/remotes/origin/change/issue-99
+            if "show-ref" in cmd_str and "remotes" in cmd_str:
+                return m  # remote exists
+            # git show-ref --verify refs/heads/change/issue-99 (local branch check)
+            if "show-ref" in cmd_str and "refs/heads" in cmd_str:
+                raise subprocess.CalledProcessError(1, cmd)  # no local branch
+            # git worktree add -b ... origin/change/issue-99
+            if "worktree" in cmd_str and "add" in cmd_str:
+                wt_dir = None
+                for i, c in enumerate(cmd_list):
+                    if c == "-b" and i + 2 < len(cmd_list):
+                        wt_dir = cmd_list[i + 2]
+                        break
+                if wt_dir:
+                    Path(wt_dir).mkdir(parents=True, exist_ok=True)
+                return m
+            return m
+
+        with patch("subprocess.run", side_effect=mock_subprocess_run):
+            wt_path, err = _setup_worktree(tmp_path, 99, quiet=True)
+
+        assert err is None
+        # Verify the worktree was created from the remote ref, not HEAD
+        worktree_add_calls = [c for c in calls if "worktree" in c and "add" in c]
+        assert len(worktree_add_calls) == 1
+        assert "origin/change/issue-99" in worktree_add_calls[0]
+
+    def test_creates_from_head_when_no_remote(self, tmp_path):
+        from pdd.agentic_change_orchestrator import _setup_worktree
+
+        calls = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_list = cmd if isinstance(cmd, list) else cmd.split()
+            cmd_str = " ".join(cmd_list)
+            calls.append(cmd_str)
+            m = MagicMock()
+            m.stdout = str(tmp_path)
+            m.returncode = 0
+
+            if "rev-parse" in cmd_str and "--show-toplevel" in cmd_str:
+                m.stdout = str(tmp_path)
+                return m
+            # git fetch fails — no remote branch
+            if "fetch" in cmd_str:
+                raise subprocess.CalledProcessError(1, cmd)
+            # No local branch either
+            if "show-ref" in cmd_str and "refs/heads" in cmd_str:
+                raise subprocess.CalledProcessError(1, cmd)
+            if "worktree" in cmd_str and "add" in cmd_str:
+                wt_dir = None
+                for i, c in enumerate(cmd_list):
+                    if c == "-b" and i + 2 < len(cmd_list):
+                        wt_dir = cmd_list[i + 2]
+                        break
+                if wt_dir:
+                    Path(wt_dir).mkdir(parents=True, exist_ok=True)
+                return m
+            return m
+
+        with patch("subprocess.run", side_effect=mock_subprocess_run):
+            wt_path, err = _setup_worktree(tmp_path, 99, quiet=True)
+
+        assert err is None
+        worktree_add_calls = [c for c in calls if "worktree" in c and "add" in c]
+        assert len(worktree_add_calls) == 1
+        # Must NOT use origin/change/issue-99 (no remote branch to reuse)
+        assert "origin/change/issue-99" not in worktree_add_calls[0]

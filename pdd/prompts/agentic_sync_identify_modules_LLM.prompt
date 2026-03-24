@@ -1,7 +1,20 @@
+<pdd-reason>LLM prompt that identifies which PDD modules need syncing from GitHub issue content and validates dependency graphs.</pdd-reason>
+
+<pdd-interface>
+{{
+  "type": "module",
+  "module": {{
+    "functions": [
+      {{"name": "identify_modules", "signature": "(issue_content, architecture_json)", "returns": "MODULES_TO_SYNC list and DEPS_VALID boolean"}}
+    ]
+  }}
+}}
+</pdd-interface>
+
 You are analyzing a GitHub issue to determine which PDD modules need to be synced,
 and validating the architecture.json dependency graph.
 
-## Issue
+## Issue #{issue_number}
 {issue_content}
 
 ## Architecture (architecture.json)
@@ -15,10 +28,66 @@ Focus on modules whose origin matches the current issue, plus their transitive d
 Based on the issue description, identify which modules (by basename) need `pdd sync`.
 A basename is the module name without the language suffix (e.g., "llm_invoke" for "llm_invoke_python.prompt").
 
-Consider:
-- Modules directly mentioned or affected by the issue
+### Section Prioritization
+Long issue bodies (e.g., from `pdd generate` or `pdd change` workflows) contain both high-signal and low-signal sections. Focus your extraction as follows:
+
+**HIGH-PRIORITY (scan these first):**
+1. Modules whose `origin` field in architecture.json matches the current issue number
+2. Step outputs that reference prompt files or basenames (e.g., "Step 6: Dev Units", "Step 8: Prompt Changes", "Step 9: Implement Changes")
+3. Sections with markers like "FILES_MODIFIED:", "FILES_CREATED:", "Dev Units to MODIFY", "Dev Units to CREATE"
+4. `pdd generate`, `pdd change`, or `pdd sync` command references that name specific modules
+5. Issue title and first paragraph (often contains the intent)
+
+**SKIP (low-signal noise):**
+- Bot-generated comments (e.g., "Job Queued!", progress links, cost summaries)
+- CI/CD logs, test output, and status badges
+- Quoted or nested markdown that repeats earlier content
+- General discussion that doesn't name specific modules
+
+### Extraction Heuristics
+Look for these patterns anywhere in the issue body:
+- Explicit prompt filenames: e.g., `some_module_Python.prompt`, `api_orders_Python.prompt`
+- Basenames in backticks or plain text: e.g., `user_service`, `agentic_sync`
+- `pdd generate <basename>`, `pdd sync <basename>`, `pdd change` references
+- FILES_MODIFIED / FILES_CREATED lines listing prompt paths (extract basenames from these)
+- Architecture.json entries whose `origin` matches the current issue URL or number
+
+**When in doubt, include the module.** False positives are low-cost because downstream dry-run validation and fingerprint filtering will skip modules that don't actually need syncing. False negatives cause user frustration.
+
+### Fallback
+If no specific modules can be identified from the issue content, but architecture.json entries have an `origin` field matching the current issue number, include ALL modules with that matching origin.
+
+### Module Identification Rules
+- Modules directly mentioned or affected by the issue (by basename or prompt filename)
 - Transitive dependencies: if module A depends on B, and B needs sync, A may also need sync
 - Only include modules that exist in the architecture.json
+
+### Few-Shot Examples
+
+**Example 1: `pdd generate` issue**
+Issue body contains:
+> Step 6: Dev Units Identified
+> Dev Units to CREATE: user_service_Python.prompt, order_api_Python.prompt
+> ...
+> Step 9: FILES_CREATED: prompts/user_service_Python.prompt, prompts/order_api_Python.prompt
+
+Answer: MODULES_TO_SYNC: ["user_service", "order_api"]
+
+**Example 2: `pdd change` issue**
+Issue body contains:
+> Step 8: Prompt Change Analysis
+> Prompt Modifications: agentic_sync_identify_modules_LLM.prompt
+> ...
+> Step 9: FILES_MODIFIED: pdd/prompts/agentic_sync_identify_modules_LLM.prompt
+
+Answer: MODULES_TO_SYNC: ["agentic_sync_identify_modules_LLM"]
+
+**Example 3: Long PRD issue with origin matching**
+Issue body is a long PRD with no explicit module names. But architecture.json contains:
+> {{"billing_service": {{"origin": "https://github.com/org/repo/issues/42", ...}},
+>  "payment_gateway": {{"origin": "https://github.com/org/repo/issues/42", ...}}}}
+
+If the current issue is #42, answer: MODULES_TO_SYNC: ["billing_service", "payment_gateway"]
 
 ## Task 2: Validate Dependencies
 Review the `dependencies` field for each identified module in architecture.json.
