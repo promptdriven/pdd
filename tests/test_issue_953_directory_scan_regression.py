@@ -106,9 +106,9 @@ class TestDirectoryScanDoesNotTriggerWhenFilesFound:
         assert "tests/test_agentic_bug_orchestrator.py" in result
         # Should NOT have all 52 — both directory scan and sibling scan
         # are suppressed (sibling scan capped at 10 files per directory)
-        assert len(result) < 10, (
-            f"Expected only changed files, got {len(result)}. "
-            f"Sibling or directory scan likely triggered incorrectly."
+        assert len(result) == 1, (
+            f"Expected only the 1 changed file, got {len(result)}. "
+            f"Sibling or directory scan likely triggered incorrectly. Files: {result}"
         )
 
     def test_hash_detection_found_prevents_directory_scan(self, large_test_dir):
@@ -132,9 +132,9 @@ class TestDirectoryScanDoesNotTriggerWhenFilesFound:
 
         assert "tests/test_agentic_bug_orchestrator.py" in result
         # Should NOT have all 52 files
-        assert len(result) < 10, (
-            f"Expected only hash-detected files, got {len(result)}. "
-            f"Directory scan likely triggered incorrectly."
+        assert len(result) == 1, (
+            f"Expected only the 1 hash-detected file, got {len(result)}. "
+            f"Directory scan likely triggered incorrectly. Files: {result}"
         )
 
 

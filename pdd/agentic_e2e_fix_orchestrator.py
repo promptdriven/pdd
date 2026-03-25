@@ -416,7 +416,10 @@ def _extract_test_files(
                 continue
             glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
             for test_py in sorted(glob_fn("test_*.py")):
-                rel = str(test_py.relative_to(cwd))
+                try:
+                    rel = str(test_py.relative_to(cwd))
+                except ValueError:
+                    continue
                 if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
                     continue
                 _add(rel)
