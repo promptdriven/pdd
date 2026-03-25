@@ -202,6 +202,8 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/divider|rule/i);
     expect(ghostBlock).toMatch(/codebase_tree/);
     expect(ghostBlock).toMatch(/mold_shell|mold_walls|mold_nozzle|mold_material/);
+    expect(ghostBlock).toMatch(/quadratic_curve/);
+    expect(ghostBlock).toMatch(/crossing_point/);
     expect(titleBlock).toMatch(/resolvedTitleLines\[0\]/);
     expect(titleBlock).toMatch(/resolvedTitleLines\[1\]/);
   });
@@ -233,6 +235,19 @@ describe("shared generated contract renderer", () => {
     expect(quoteBlock).toMatch(/secondaryText/);
     expect(quoteBlock).toMatch(/Georgia/);
     expect(quoteBlock).toMatch(/width:\s*2/);
+    expect(quoteBlock).toMatch(/usesMinimalQuoteLayout/);
+    expect(quoteBlock).toMatch(/textAlign:\s*["']center["']/);
+  });
+
+  it("supports contract-first pie and compound-debt charts from structured data instead of relying on stale bespoke components", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const chartBlock = extractBlock(source, "const ChartVisual", "const SplitVisual");
+
+    expect(chartBlock).toMatch(/maintenance_cost_pie/);
+    expect(chartBlock).toMatch(/callouts/);
+    expect(chartBlock).toMatch(/compound_debt_curve/);
+    expect(chartBlock).toMatch(/dashed|strokeDasharray/);
+    expect(chartBlock).toMatch(/stats/);
   });
 
   it("renders transition cards without the old debug title and center divider artifact", () => {

@@ -1,3 +1,27 @@
+## v0.0.187 (2026-03-24)
+
+### Feat
+
+- FAST_TRACK for pre-diagnosed issues + 8 pdd-sync fixes (#836)
+- use real investigation data as Step 8 test inputs (#916)
+- Update video compositions and audit reports, including a fix for an incorrect asset rendering.
+- Add new audit specifications for the pdd-explainer video project and update Remotion compositions, generation scripts, and related tests.
+
+### Fix
+
+- improve contract-first renderer fidelity
+- harden contract-first audit rendering
+- improve contract-driven preview routing
+- tighten contract renderer selection
+- prefer contract-driven visual rendering
+- cross-validate Step 9 test count against Step 8 plan (#924) (#926)
+- harden manifest-driven preview and fallback rendering
+- include LLM module analysis cost in sync progress comment (#745) (#748)
+- align closing visuals with authored specs
+- align closing clip ids with staged media
+- make manifest-driven visuals render end to end
+- make compositions use anchor-based timelines
+
 ## v0.0.186 (2026-03-23)
 
 ### Feat

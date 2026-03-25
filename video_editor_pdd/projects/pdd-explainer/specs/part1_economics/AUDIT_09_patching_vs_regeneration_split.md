@@ -1,10 +1,23 @@
 ## Verdict
-warn
+fail
 ## Summary
-The frame is at 90.9% progress (frame 599/660, animation phase 8: hold on complete split), and the overall composition is correct: two-panel side-by-side split with 'AGENTIC PATCHING' (red) on left and 'PDD REGENERATION' (green) on right, panel headers present, token counters visible, bottom comparison stats showing '~5%' vs '~95%', legend labels present, and 'Room to think' label visible in right panel. However, there are two notable discrepancies:
+The frame is at ~90.9% progress (frame 599/660, phase 540-660: hold on complete split). The overall side-by-side layout is present and the compositional intent is recognizable, but the left panel deviates significantly from the spec in its visual representation of the 'cluttered context window' concept.
 
-1. **Left panel content representation**: The spec calls for dense rows of faux syntax-highlighted code blocks with red-highlighted irrelevant sections (~80% of space) and tiny green relevant blocks (~5% of space), creating a 'cluttered and anxious' feel. The render instead shows actual readable code (a Python function with line numbers) where only a few lines are highlighted in red/green. The box is mostly empty space below the code, which undermines the intended 'crammed with 15,000 tokens' visual. The spec envisions the context window box being densely packed to convey overwhelming clutter — the render shows ~10 lines of code occupying only ~25% of the box.
+**Left Panel Issues:**
+1. The spec calls for dense rows of faux syntax-highlighted code blocks with red-highlighted irrelevant blocks (~80% of space) and tiny green relevant blocks (~5% of space). Instead, the left panel shows a literal code listing (10 numbered lines of Python code) with some lines colored red/green, but the box is mostly EMPTY below line 10. The visual should feel 'crammed' and 'chaotic' with 12-15 irrelevant blocks filling the space. Currently it reads as a sparse code editor, not a densely packed context window.
+2. The token counter '~15,000 tokens' is present and correctly positioned (top-right, red).
+3. Legend labels ('Red = irrelevant code retrieved' and 'Green = actually needed') are present at the bottom of the box.
 
-2. **Right panel token counter truncation**: The '~2,500 tokens' label in the top-right of the right panel appears cut off at the right edge, showing '~2,500 to' instead of the full text.
+**Right Panel — Mostly correct:**
+1. Panel header 'PDD REGENERATION' is present in green, correctly positioned.
+2. Token counter '~2,500 to...' appears truncated/clipped at the right edge — the text is cut off.
+3. Clean layered sections are present: Prompt (~300 tokens, blue), Tests (~2,000 tokens, amber), Grounding (~200 tokens, green). The grounding label says '~200 tokens' but spec says just 'Grounding example' — minor label difference.
+4. 'Room to think' label is visible and correctly placed in empty space.
 
-**Correct elements**: Panel headers with correct colors and letter-spacing, split divider present, right panel clean layered sections (Prompt/Tests/Grounding with correct color coding and token counts), 'Room to think' label, legend labels ('Red = irrelevant code retrieved' / 'Green = actually needed'), bottom comparison stats with correct colors, dark background, code-editor aesthetic.
+**Bottom Stats:** Both 'Context utilization: ~5%' (red, left) and 'Context utilization: ~95%' (green, right) are present and correct.
+
+**Split line/divider:** A clear vertical separation exists between the two panels, consistent with the spec.
+
+**Background:** Dark background consistent with spec.
+
+**Key failures:** (1) Left panel lacks the dense, cluttered block visualization — it shows sparse actual code instead of abstract token blocks. (2) Right panel token counter is clipped.

@@ -22,8 +22,6 @@ import { Part3MoldThreeParts02MoldCrossSection } from "./Part3MoldThreeParts02Mo
 import { Part3MoldThreeParts10ThreeComponentsTable } from "./Part3MoldThreeParts10ThreeComponentsTable";
 import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "./Part4PrecisionTradeoff03PrecisionTradeoffCurve";
 import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "./Part4PrecisionTradeoff08PromptCodeSpectrum";
-import { Part5CompoundReturns02MaintenancePieChart } from "./Part5CompoundReturns02MaintenancePieChart";
-import { Part5CompoundReturns03CompoundDebtCurve } from "./Part5CompoundReturns03CompoundDebtCurve";
 import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
 import { Part5CompoundReturns07EconomicsCrossingCallback } from "./Part5CompoundReturns07EconomicsCrossingCallback";
@@ -463,14 +461,14 @@ const Part5CompoundReturns01SectionTitleCardPreview: React.FC = () => (
 const Part5CompoundReturns02MaintenancePieChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
-      <Part5CompoundReturns02MaintenancePieChart />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns03CompoundDebtCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:03_compound_debt_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:03_compound_debt_curve"] ?? null}>
-      <Part5CompoundReturns03CompoundDebtCurve />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );

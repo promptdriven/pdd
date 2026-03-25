@@ -119,6 +119,61 @@ const splitQuoteIntoLines = (quote: string, maxLines = 3): string[] => {
   return lines.slice(0, maxLines);
 };
 
+const parsePercentRangeMidpoint = (value: unknown): number | null => {
+  const raw = asString(value);
+  if (!raw) {
+    return null;
+  }
+
+  const matches = raw.match(/\d+(?:\.\d+)?/g);
+  if (!matches || matches.length === 0) {
+    return null;
+  }
+
+  const numbers = matches.map(Number).filter((entry) => Number.isFinite(entry));
+  if (numbers.length === 0) {
+    return null;
+  }
+
+  if (numbers.length === 1) {
+    return numbers[0];
+  }
+
+  return (numbers[0] + numbers[1]) / 2;
+};
+
+const polarToCartesian = (
+  cx: number,
+  cy: number,
+  radius: number,
+  angleDeg: number
+) => {
+  const radians = ((angleDeg - 90) * Math.PI) / 180;
+  return {
+    x: cx + radius * Math.cos(radians),
+    y: cy + radius * Math.sin(radians),
+  };
+};
+
+const describePieSlicePath = (
+  cx: number,
+  cy: number,
+  radius: number,
+  startAngle: number,
+  endAngle: number
+) => {
+  const start = polarToCartesian(cx, cy, radius, endAngle);
+  const end = polarToCartesian(cx, cy, radius, startAngle);
+  const largeArcFlag = endAngle - startAngle <= 180 ? 0 : 1;
+
+  return [
+    `M ${cx} ${cy}`,
+    `L ${start.x} ${start.y}`,
+    `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
+    "Z",
+  ].join(" ");
+};
+
 const titleCase = (value: string): string => {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -581,6 +636,55 @@ const GhostElements: React.FC<{
     );
   }
 
+  if (ghostShapes.includes("quadratic_curve") || ghostShapes.includes("crossing_point")) {
+    const descendingGhost = ghosts.find(
+      (ghost) =>
+        asString(ghost.shape) === "quadratic_curve" &&
+        asString(ghost.component) === "descending_cost"
+    );
+    const ascendingGhost = ghosts.find(
+      (ghost) =>
+        asString(ghost.shape) === "quadratic_curve" &&
+        asString(ghost.component) === "ascending_cost"
+    );
+    const thresholdGhost = ghosts.find(
+      (ghost) => asString(ghost.shape) === "crossing_point"
+    );
+    const crossingX = width * 0.547;
+    const crossingY = height * 0.463;
+
+    return (
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0, opacity: 0.92 }}
+      >
+        <path
+          d={`M ${width * 0.1} ${height * 0.31} Q ${width * 0.31} ${height * 0.44} ${crossingX} ${crossingY}`}
+          fill="none"
+          stroke={asString(descendingGhost?.color) ?? "#D9944A"}
+          strokeWidth={2}
+          opacity={0.18}
+        />
+        <path
+          d={`M ${width * 0.1} ${height * 0.68} Q ${width * 0.31} ${height * 0.51} ${crossingX} ${crossingY}`}
+          fill="none"
+          stroke={asString(ascendingGhost?.color) ?? "#4A90D9"}
+          strokeWidth={2}
+          opacity={0.18}
+        />
+        <circle
+          cx={crossingX}
+          cy={crossingY}
+          r={4}
+          fill={asString(thresholdGhost?.color) ?? "#E2E8F0"}
+          opacity={0.16}
+        />
+      </svg>
+    );
+  }
+
   if (hasCodebaseTree) {
     const treeGhost = ghosts.find((ghost) => asString(ghost.shape) === "codebase_tree");
     const treeColor = asString(treeGhost?.color) ?? "#334155";
@@ -896,6 +1000,12 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
       !quoteLine2 &&
       !secondaryText
   );
+  const usesMinimalCalloutLayout = Boolean(
+    quoteLine1 &&
+      quoteLine2 &&
+      secondaryText &&
+      !attribution
+  );
 
   if (usesMinimalQuoteLayout) {
     return (
@@ -965,6 +1075,72 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
             }}
           >
             {`- ${attribution}`}
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  if (usesMinimalCalloutLayout) {
+    return (
+      <AbsoluteFill
+        style={{
+          padding: "120px 120px 110px",
+          justifyContent: "center",
+          alignItems: "center",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 18,
+            maxWidth: 1080,
+          }}
+        >
+          <div
+            style={{
+              color: "#E2E8F0",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 44,
+              fontWeight: 700,
+              lineHeight: 1.15,
+            }}
+          >
+            {quoteLine1}
+          </div>
+          <div
+            style={{
+              color: quoteLine2Color,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 44,
+              fontWeight: 700,
+              lineHeight: 1.15,
+            }}
+          >
+            {quoteLine2}
+          </div>
+          <div
+            style={{
+              width: 160,
+              height: 1.5,
+              borderRadius: 999,
+              backgroundColor: "rgba(51, 65, 85, 0.4)",
+              marginTop: 8,
+            }}
+          />
+          <div
+            style={{
+              color: "rgba(148, 163, 184, 0.78)",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 20,
+              fontWeight: 400,
+              lineHeight: 1.35,
+            }}
+          >
+            {secondaryText}
           </div>
         </div>
       </AbsoluteFill>
@@ -1117,6 +1293,17 @@ const ChartVisual: React.FC<{
 }> = ({ data, width, height, frame }) => {
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
+  const chartId = asString(data.chartId);
+  const callouts = Array.isArray(data.callouts)
+    ? data.callouts
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const stats = Array.isArray(data.stats)
+    ? data.stats
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
   const series = normalizeSeries(data);
   const threshold = asRecord(data.threshold);
   const debtShading = asRecord(data.debtShading);
@@ -1151,6 +1338,314 @@ const ChartVisual: React.FC<{
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
+
+  if (chartId === "maintenance_cost_pie") {
+    const slices = Array.isArray(data.slices)
+      ? data.slices
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const centerX = width * 0.44;
+    const centerY = height * 0.5;
+    const baseRadius = 220;
+    let startAngle = -90;
+    const resolvedSlices = slices.map((slice, index) => {
+      const value = parsePercentRangeMidpoint(slice.range) ?? (index === 0 ? 85 : 15);
+      const sweep = (value / 100) * 360;
+      const pullOut = asNumber(slice.pullOut) ?? 0;
+      const midAngle = startAngle + sweep / 2;
+      const offset = polarToCartesian(0, 0, pullOut, midAngle);
+      const segment = {
+        path: describePieSlicePath(
+          centerX + offset.x,
+          centerY + offset.y,
+          baseRadius,
+          startAngle,
+          startAngle + sweep
+        ),
+        label: asString(slice.label) ?? `Slice ${index + 1}`,
+        valueText: asString(slice.range) ?? `${Math.round(value)}%`,
+        color: asString(slice.color) ?? (index === 0 ? "#F59E0B" : "#4ADE80"),
+        midAngle,
+        cx: centerX + offset.x,
+        cy: centerY + offset.y,
+      };
+      startAngle += sweep;
+      return segment;
+    });
+
+    return (
+      <AbsoluteFill>
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+          {resolvedSlices.map((slice) => (
+            <path
+              key={slice.label}
+              d={slice.path}
+              fill={slice.color}
+              opacity={0.96}
+              filter="drop-shadow(0 4px 20px rgba(0,0,0,0.3))"
+            />
+          ))}
+          {resolvedSlices.map((slice, index) => {
+            const labelAnchor = polarToCartesian(
+              slice.cx,
+              slice.cy,
+              baseRadius + 72,
+              slice.midAngle
+            );
+            const edgeAnchor = polarToCartesian(
+              slice.cx,
+              slice.cy,
+              baseRadius + 8,
+              slice.midAngle
+            );
+            return (
+              <g key={`${slice.label}-label`}>
+                <line
+                  x1={edgeAnchor.x}
+                  y1={edgeAnchor.y}
+                  x2={labelAnchor.x}
+                  y2={labelAnchor.y}
+                  stroke={slice.color}
+                  strokeWidth={2}
+                  opacity={0.55}
+                />
+                <text
+                  x={labelAnchor.x}
+                  y={labelAnchor.y - 10}
+                  fill={slice.color}
+                  fontSize={14}
+                  fontWeight={600}
+                  textAnchor={labelAnchor.x > slice.cx ? "start" : "end"}
+                >
+                  {slice.label}
+                </text>
+                <text
+                  x={labelAnchor.x}
+                  y={labelAnchor.y + 18}
+                  fill={slice.color}
+                  fontSize={index === 0 ? 28 : 20}
+                  fontWeight={700}
+                  textAnchor={labelAnchor.x > slice.cx ? "start" : "end"}
+                >
+                  {slice.valueText}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+        <div
+          style={{
+            position: "absolute",
+            left: width * 0.66,
+            top: height * 0.32,
+            display: "flex",
+            flexDirection: "column",
+            gap: 22,
+            width: 360,
+          }}
+        >
+          {callouts.slice(0, 2).map((callout, index) => (
+            <div
+              key={`callout-${index}`}
+              style={{
+                display: "flex",
+                gap: 14,
+                alignItems: "stretch",
+              }}
+            >
+              <div
+                style={{
+                  width: 3,
+                  borderRadius: 999,
+                  backgroundColor: `${asString(callout.color) ?? "#F59E0B"}99`,
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div
+                  style={{
+                    color: "#E2E8F0",
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: 16,
+                    fontWeight: 400,
+                  }}
+                >
+                  {asString(callout.text) ?? ""}
+                </div>
+                <div
+                  style={{
+                    color: "rgba(148, 163, 184, 0.72)",
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: 12,
+                    fontWeight: 400,
+                  }}
+                >
+                  {`—${asString(callout.source) ?? ""}`}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  if (chartId === "compound_debt_curve") {
+    const debtCurve = Array.isArray(data.curves)
+      ? data.curves
+          .map((entry) => asRecord(entry))
+          .find((entry) => asString(entry?.id) === "debt_exponential")
+      : null;
+    const regenerationCurve = Array.isArray(data.curves)
+      ? data.curves
+          .map((entry) => asRecord(entry))
+          .find((entry) => asString(entry?.id) === "regeneration_flat")
+      : null;
+    const chartLeft = width * 0.14;
+    const chartTop = height * 0.24;
+    const curveWidth = width * 0.66;
+    const curveHeight = height * 0.5;
+    const debtColor = asString(debtCurve?.color) ?? "#F59E0B";
+    const flatColor = asString(regenerationCurve?.color) ?? "#4ADE80";
+    const debtPoints = Array.from({ length: 6 }, (_, pointIndex) => {
+      const x = pointIndex / 5;
+      return {
+        x,
+        px: chartLeft + curveWidth * x,
+        py: chartTop + curveHeight * (0.86 - Math.pow(1.58, pointIndex) / 13),
+      };
+    });
+    const debtPath = debtPoints
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.px} ${point.py}`)
+      .join(" ");
+    const debtAreaPath = `${debtPath} L ${chartLeft + curveWidth} ${chartTop + curveHeight} L ${chartLeft} ${chartTop + curveHeight} Z`;
+    const flatY = chartTop + curveHeight * 0.8;
+    const stat = stats[0];
+
+    return (
+      <AbsoluteFill>
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+          <defs>
+            <linearGradient id="compoundDebtFill" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.15" />
+              <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.04" />
+            </linearGradient>
+          </defs>
+          {Array.from({ length: 4 }).map((_, index) => {
+            const y = chartTop + ((index + 1) / 5) * curveHeight;
+            return (
+              <line
+                key={`grid-${index}`}
+                x1={chartLeft}
+                y1={y}
+                x2={chartLeft + curveWidth}
+                y2={y}
+                stroke="rgba(26, 37, 64, 0.5)"
+                strokeWidth={1}
+              />
+            );
+          })}
+          <line
+            x1={chartLeft}
+            y1={chartTop}
+            x2={chartLeft}
+            y2={chartTop + curveHeight}
+            stroke="#334155"
+            strokeWidth={1.5}
+          />
+          <line
+            x1={chartLeft}
+            y1={chartTop + curveHeight}
+            x2={chartLeft + curveWidth}
+            y2={chartTop + curveHeight}
+            stroke="#334155"
+            strokeWidth={1.5}
+          />
+          <path d={debtAreaPath} fill="url(#compoundDebtFill)" />
+          <path
+            d={debtPath}
+            fill="none"
+            stroke={debtColor}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <line
+            x1={chartLeft}
+            y1={flatY}
+            x2={chartLeft + curveWidth}
+            y2={flatY}
+            stroke={flatColor}
+            strokeWidth={2.5}
+            strokeDasharray={asNumber(regenerationCurve?.strokeWidth) ? "8 4" : "8 4"}
+          />
+        </svg>
+        <div
+          style={{
+            position: "absolute",
+            left: chartLeft + curveWidth * 0.68,
+            top: chartTop + 8,
+            color: debtColor,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 16,
+            fontWeight: 700,
+          }}
+        >
+          {asString(debtCurve?.label) ?? "Debt × (1 + Rate)^Time"}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: chartLeft + curveWidth * 0.62,
+            top: flatY + 14,
+            color: flatColor,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {asString(regenerationCurve?.label) ?? "Regeneration cost (debt resets each cycle)"}
+        </div>
+        {stat ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 200,
+              top: 180,
+              padding: "20px 22px",
+              borderRadius: 12,
+              backgroundColor: "rgba(26, 37, 64, 0.4)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <div
+              style={{
+                color: asString(stat.color) ?? debtColor,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 48,
+                fontWeight: 800,
+                lineHeight: 1,
+              }}
+            >
+              {asString(stat.value) ?? "$1.52T"}
+            </div>
+            <div
+              style={{
+                color: "rgba(148, 163, 184, 0.72)",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 16,
+                fontWeight: 400,
+              }}
+            >
+              {`${asString(stat.label) ?? "annually"} — ${asString(stat.source) ?? "CISQ"}`}
+            </div>
+          </div>
+        ) : null}
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill>

@@ -1303,6 +1303,11 @@ CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
     'verilog_synthesis_triple',
 }
 
+CONTRACT_FIRST_EXACT_OVERRIDE_CHART_IDS = {
+    'compound_debt_curve',
+    'maintenance_cost_pie',
+}
+
 
 def _is_structured_title_card(data_points: Dict[str, Any]) -> bool:
     visual_type = data_points.get('type')
@@ -1355,6 +1360,12 @@ def _should_prefer_generated_contract_renderer(
         if isinstance(diagram_id, str) and diagram_id.strip()
         else None
     )
+    chart_id = data_points.get('chartId')
+    normalized_chart_id = (
+        chart_id.strip().lower()
+        if isinstance(chart_id, str) and chart_id.strip()
+        else None
+    )
 
     if normalized_type == 'split_screen':
         return True
@@ -1363,6 +1374,7 @@ def _should_prefer_generated_contract_renderer(
         return (
             normalized_type in CONTRACT_FIRST_EXACT_OVERRIDE_TYPES
             or normalized_diagram_id in CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS
+            or normalized_chart_id in CONTRACT_FIRST_EXACT_OVERRIDE_CHART_IDS
         )
 
     if normalized_type in CONTRACT_FIRST_VISUAL_TYPES:

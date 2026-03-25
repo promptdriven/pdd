@@ -1,4 +1,4 @@
 ## Verdict
 warn
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (metr, codebase), so the frame does not support a hard missing-text failure.
+OCR confirmed visible text tokens in the rendered frame (codebase, cost, metr, every, patch), so the frame does not support a hard missing-text failure.
