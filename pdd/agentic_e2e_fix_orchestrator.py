@@ -373,19 +373,43 @@ def _extract_test_files(
     # aren't in markers, changed_files, or hash detection (e.g., when
     # initial_file_hashes is None or the files were committed before the hash
     # snapshot was taken).
-    count_before_git = len(test_files)
     committed_files = _get_modified_and_untracked(cwd)
     for f in committed_files:
         basename = Path(f).name
         if basename.startswith("test_") and basename.endswith(".py"):
             _add(f)
 
+    # Sibling scan: when files were already discovered but hash detection is
+    # disabled, scan the parent directories of discovered test files for
+    # additional test_*.py siblings. This catches committed test files that
+    # escaped _get_modified_and_untracked() (e.g., when merge-base lookup
+    # failed because HEAD is on the base branch or git is not available).
+    # Cap: skip directories with >10 test files to avoid pulling in the
+    # entire test suite — same problem as #953.
+    if test_files and initial_file_hashes is None:
+        scanned_dirs: set = set()
+        for f in list(test_files):  # copy: _add() may modify test_files
+            parent = (cwd / f).parent
+            if parent in scanned_dirs:
+                continue
+            scanned_dirs.add(parent)
+            siblings = sorted(parent.glob("test_*.py"))
+            if len(siblings) > 10:
+                continue
+            for test_py in siblings:
+                try:
+                    rel = str(test_py.relative_to(cwd))
+                except ValueError:
+                    continue
+                if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
+                    continue
+                _add(rel)
+
     # Ultimate fallback: directory scan for test_*.py files on disk.
-    # Only runs when git-based discovery didn't add any new files, to avoid
+    # Only runs when NO discovery path found ANY files, to avoid
     # pulling the entire test suite into verification (slow + timeouts).
     # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
-    git_found_nothing_new = len(test_files) == count_before_git
-    if git_found_nothing_new:
+    if not test_files:
         scan_dirs = [cwd / "tests", cwd]
         for scan_dir in scan_dirs:
             if not scan_dir.is_dir():
