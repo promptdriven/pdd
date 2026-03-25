@@ -775,7 +775,9 @@ def run_agentic_bug_orchestrator(
     if "step7_output" in context:
         s7_out = context["step7_output"]
         prompt_fixed = _parse_changed_files(s7_out, "PROMPT_FIXED")
-        changed_files.extend(prompt_fixed)
+        created = _parse_changed_files(s7_out, "FILES_CREATED")
+        modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
+        changed_files.extend(prompt_fixed + created + modified)
 
     # Step 9
     if "step9_output" in context:
