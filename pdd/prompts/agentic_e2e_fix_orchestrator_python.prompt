@@ -151,5 +151,15 @@ Empty dev-units short-circuit: when Step 5 yields no dev-units, the orchestrator
 
 Per-cycle file-hash comparison: compare file hashes each cycle so unchanged files are not mistaken for fresh changes; use per-cycle file-hash snapshots to decide whether dev-units or code actually moved.
 
+% Convergence Requirements
+The orchestrator must implement an empty dev-units short-circuit:
+- If Step 5 reports `DEV_UNITS_IDENTIFIED: 0`, skip Steps 6-8 for that cycle.
+- Continue directly to verification and loop-control handling.
+
+The orchestrator must implement a per-cycle file-hash comparison:
+- Capture a file-hash snapshot at the start and end of each cycle.
+- If no file hashes changed for the cycle, treat it as convergence and stop the loop.
+- This per-cycle file-hash comparison prevents infinite retry loops when no edits are produced.
+
 This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory`
 so tests can assert the orchestrator prompt documents these behaviors.
