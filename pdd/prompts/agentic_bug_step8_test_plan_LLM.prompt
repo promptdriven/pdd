@@ -149,3 +149,19 @@ Your test plan must verify **observable behavior**, not code structure.
 - **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones.
 - **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
 - Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Machine-Readable Output (REQUIRED)
+
+After your GitHub comment, you MUST output this line with the total number of tests you planned:
+
+```
+PLANNED_TEST_COUNT: <number>
+```
+
+Count every `#### Test N:` entry in your plan. For example, if you planned Test 1, Test 2, and Test 3, output:
+
+```
+PLANNED_TEST_COUNT: 3
+```
+
+⚠️ IMPORTANT: This line must be the last thing you output. Do not add any text after it.

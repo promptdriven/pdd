@@ -183,6 +183,10 @@ When incorporating reproduction tests:
 - Keep them as separate test functions (don't merge into your fix-detection tests)
 - Add a comment above each marking it as a reproduction test from Step 5
 
+% Test Count Verification
+
+Step 8 planned {planned_test_count} tests. You MUST generate exactly that many `def test_` (or `async def test_`) functions with real assertions. Before finishing, count your test functions and verify the count matches. Do NOT generate stub functions that contain only `pass`, `...`, or a docstring with no assertions.
+
 % Your Task
 
 1. **Review the test plan and implement Step 8's test strategy**

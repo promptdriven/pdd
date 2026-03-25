@@ -83,6 +83,17 @@ Before Step 9 runs, snapshot the current modified/untracked files via `_get_modi
 
 Helper: `_get_modified_and_untracked(cwd: Path) -> List[str]` — returns modified tracked files (`git diff --name-only HEAD`) plus untracked files (`git ls-files --others --exclude-standard`).
 
+% Step 9 Cross-Validation Against Step 8 Test Plan
+After Step 9 completes and files are extracted, cross-validate the generated tests against Step 8's test plan:
+
+1. **Count planned tests from Step 8**: Parse `PLANNED_TEST_COUNT: N` marker from step8_output (emitted by Step 8 prompt). Falls back to counting `#### Test N:` headers if marker is absent (backward compat).
+2. **Count generated tests from Step 9**: For each extracted test file, count `def test_` / `async def test_` functions via regex. Also detect stubs (functions whose body is only docstring/pass/ellipsis) and subtract from the count.
+3. **Compare counts**: If real (non-stub) generated tests < planned count, retry Step 9 with a focused prompt stating how many tests were generated vs planned.
+4. **Single retry**: Only retry once. If still short, log a warning and proceed.
+
+Helper: `_count_planned_tests(step8_output: str) -> int` — parse PLANNED_TEST_COUNT marker, fallback to header count.
+Helper: `_count_generated_tests(file_paths: List[str], cwd: Path) -> Tuple[int, int]` — return (total_test_functions, stub_count) via regex.
+
 % Early Exit Conditions (Hard Stops)
 
 The orchestrator must parse step output to detect stop conditions:

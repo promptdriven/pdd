@@ -299,6 +299,46 @@ def _verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]:
     return not any_setup_error, "\n".join(all_outputs)
 
 
+def _count_planned_tests(step8_output: str) -> int:
+    """Count planned tests from Step 8's PLANNED_TEST_COUNT marker.
+
+    Falls back to counting '#### Test N:' headers if marker is absent.
+    """
+    match = re.search(r"PLANNED_TEST_COUNT:\s*(\d+)", step8_output)
+    if match:
+        return int(match.group(1))
+    # Fallback: count markdown headers (for older runs without marker)
+    return len(re.findall(r"####\s+Test\s+\d+:", step8_output))
+
+
+def _count_generated_tests(file_paths: List[str], cwd: Path) -> Tuple[int, int]:
+    """Count test functions in files on disk.
+
+    Returns (total_test_functions, stub_count).
+    A stub is a test function whose body is only a docstring, pass, or ellipsis.
+    Uses regex heuristic — no AST parsing needed.
+    """
+    # Matches def test_xxx(...): followed by lines that are only
+    # whitespace, docstrings, pass, or ... (i.e. a stub body)
+    stub_pattern = re.compile(
+        r"(?:async\s+)?def\s+test_\w+\s*\([^)]*\)[^:]*:\s*\n"
+        r"(?:\s*(?:#[^\n]*)?\n)*"                # optional blank/comment lines
+        r'(?:\s*(?:"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')\s*\n)?'  # optional docstring
+        r"(?:\s*(?:pass|\.\.\.)\s*\n?)*"          # only pass/... remaining
+        r"\s*(?=\n\S|\n*$)",                      # followed by dedent or EOF
+    )
+    total = 0
+    stubs = 0
+    for fpath in file_paths:
+        abs_path = (cwd / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+        if not abs_path.exists():
+            continue
+        content = abs_path.read_text()
+        total += len(re.findall(r"(?:async\s+)?def\s+test_", content))
+        stubs += len(stub_pattern.findall(content))
+    return total, stubs
+
+
 def _parse_changed_files(output: str, marker: str) -> List[str]:
     """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
@@ -987,6 +1027,11 @@ def run_agentic_bug_orchestrator(
                         context["files_to_stage"] = ", ".join(changed_files)
                         files_extracted = True
 
+        if step_num == 8:
+            # Parse planned test count for Step 9 prompt injection
+            planned = _count_planned_tests(step_output)
+            context["planned_test_count"] = str(planned) if planned > 0 else "all"
+
         if step_num == 9:
             created = _parse_changed_files(step_output, "FILES_CREATED")
             modified = _parse_changed_files(step_output, "FILES_MODIFIED")
@@ -1004,6 +1049,7 @@ def run_agentic_bug_orchestrator(
 
             # Structural test guard: scan generated files for banned patterns
             file_violations: dict = {}  # fpath -> [violations]
+            retry_extracted: List[str] = []
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
@@ -1155,6 +1201,69 @@ def run_agentic_bug_orchestrator(
                     # Update step output to the retry output
                     step_output = retry_output
                     context["step9_output"] = retry_output
+
+            # Cross-validation: compare Step 8 planned test count vs Step 9 generated count
+            step8_output = context.get("step8_output", "")
+            planned_count = _count_planned_tests(step8_output)
+            if planned_count > 0:
+                all_extracted = list(set(extracted + retry_extracted))
+                total_generated, stub_count = _count_generated_tests(all_extracted, current_work_dir)
+                real_count = total_generated - stub_count
+
+                if real_count < planned_count:
+                    if not quiet:
+                        detail = f"{total_generated} tests" if stub_count == 0 else f"{real_count} real tests ({stub_count} stubs)"
+                        console.print(
+                            f"[yellow]  → Cross-validation: generated {detail} "
+                            f"but Step 8 planned {planned_count}, retrying[/yellow]"
+                        )
+
+                    missing_addendum = (
+                        f"\n\n% IMPORTANT: Your previous attempt only generated {real_count} "
+                        f"of {planned_count} planned tests. Re-read the Step 8 plan above and "
+                        f"generate ALL {planned_count} tests with real assertions. "
+                        f"Do NOT generate stub functions with only pass or ellipsis."
+                    )
+
+                    cv_success, cv_output, cv_cost, cv_model = run_agentic_task(
+                        instruction=formatted_prompt + missing_addendum,
+                        cwd=current_work_dir,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label="step9",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += cv_cost
+                    model_used = cv_model
+                    state["total_cost"] = total_cost
+                    state["model_used"] = model_used
+
+                    cv_extracted: List[str] = []
+                    if cv_success:
+                        cv_created = _parse_changed_files(cv_output, "FILES_CREATED")
+                        cv_modified = _parse_changed_files(cv_output, "FILES_MODIFIED")
+                        cv_extracted = cv_created + cv_modified
+                        if not cv_extracted:
+                            post_files = _get_modified_and_untracked(current_work_dir)
+                            cv_extracted = [f for f in post_files if f not in pre_step7_files]
+                        if cv_extracted:
+                            changed_files.extend(cv_extracted)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+
+                        step_output = cv_output
+                        context["step9_output"] = cv_output
+
+                    # Log final count (whether retry helped or not)
+                    final_all = list(set(all_extracted + cv_extracted))
+                    final_total, final_stubs = _count_generated_tests(final_all, current_work_dir)
+                    final_real = final_total - final_stubs
+                    if final_real < planned_count and not quiet:
+                        console.print(
+                            f"[yellow]  → After retry: {final_real} of "
+                            f"{planned_count} tests (proceeding with warning)[/yellow]"
+                        )
 
         if step_num == 10:
             # Check for E2E classification marker in step output.

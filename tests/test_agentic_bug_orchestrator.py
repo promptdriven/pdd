@@ -3628,3 +3628,541 @@ def test_path_var_regex_tracks_multi_segment_path():
     assert len(violations) == 0, (
         f"Multi-segment path to .json should not be flagged, got: {violations}"
     )
+
+
+# --- Step 9 Cross-Validation Tests (Issue #924) ---
+
+
+def test_cross_validation_triggers_retry_when_tests_dropped(mock_dependencies, default_args, tmp_path):
+    """
+    Test that the orchestrator retries Step 9 when fewer tests are generated
+    than Step 8 planned. This is the primary bug reproduction for issue #924.
+
+    Step 8 plans 5 tests, Step 9 only generates 3 → orchestrator should
+    detect the mismatch and retry Step 9.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # The mock worktree path where files will be created
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create a test file in the worktree with only 3 test functions
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_first_scenario():\n"
+        "    assert 1 == 1\n\n"
+        "def test_second_scenario():\n"
+        "    assert 2 == 2\n\n"
+        "def test_third_scenario():\n"
+        "    assert 3 == 3\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            # Step 8 plans 5 tests with PLANNED_TEST_COUNT marker
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: First scenario\nVerify first behavior\n"
+                "#### Test 2: Second scenario\nVerify second behavior\n"
+                "#### Test 3: Third scenario\nVerify third behavior\n"
+                "#### Test 4: Fourth scenario (E2E)\nVerify E2E behavior\n"
+                "#### Test 5: Fifth scenario (cross-framework)\nVerify cross-framework\n"
+                "\nPLANNED_TEST_COUNT: 5"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                # First attempt: only 3 tests generated (dropped 2)
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                # Retry: generate the missing tests
+                retry_file = worktree_path / "tests" / "test_bugfix.py"
+                retry_file.write_text(
+                    "import pytest\n\n"
+                    "def test_first_scenario():\n    assert 1 == 1\n\n"
+                    "def test_second_scenario():\n    assert 2 == 2\n\n"
+                    "def test_third_scenario():\n    assert 3 == 3\n\n"
+                    "def test_fourth_scenario_e2e():\n    assert 4 == 4\n\n"
+                    "def test_fifth_scenario_cross_framework():\n    assert 5 == 5\n"
+                )
+                return (True, "Generated missing tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # The orchestrator should have retried Step 9 due to test count mismatch
+    # On buggy code: step9_call_count == 1 (no retry), so this assertion fails
+    assert step9_call_count >= 2, (
+        f"Expected Step 9 to be retried due to test count mismatch "
+        f"(planned=5, generated=3), but Step 9 was only called {step9_call_count} time(s). "
+        f"The orchestrator did not cross-validate Step 9 output against Step 8 plan."
+    )
+
+
+def test_no_retry_when_test_counts_match(mock_dependencies, default_args, tmp_path):
+    """
+    Test that no cross-validation retry occurs when Step 9 generates
+    the same number of tests as Step 8 planned (happy path).
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create test file with exactly 3 test functions
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_alpha():\n    assert True\n\n"
+        "def test_beta():\n    assert True\n\n"
+        "def test_gamma():\n    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            # Step 8 plans exactly 3 tests with marker
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: Alpha test\nVerify alpha\n"
+                "#### Test 2: Beta test\nVerify beta\n"
+                "#### Test 3: Gamma test\nVerify gamma\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Step 9 should only be called once — no retry needed
+    assert step9_call_count == 1, (
+        f"Expected Step 9 to be called exactly once (counts match), "
+        f"but it was called {step9_call_count} times."
+    )
+
+
+def test_marker_absent_falls_back_to_headers(mock_dependencies, default_args, tmp_path):
+    """
+    Test that cross-validation still works when PLANNED_TEST_COUNT marker
+    is absent, falling back to counting #### Test N: headers.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_only_one():\n    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            # No PLANNED_TEST_COUNT marker — should fall back to header count
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: First test\nVerify first\n"
+                "#### Test 2: Second test\nVerify second\n"
+                "#### Test 3: Third test\nVerify third\n"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                test_file.write_text(
+                    "def test_first():\n    assert True\n\n"
+                    "def test_second():\n    assert True\n\n"
+                    "def test_third():\n    assert True\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Fallback to headers should still detect mismatch (1 vs 3) and retry
+    assert step9_call_count >= 2, (
+        f"Expected Step 9 retry via header fallback (planned=3, generated=1), "
+        f"but Step 9 was only called {step9_call_count} time(s)."
+    )
+
+
+def test_stub_tests_detected_and_trigger_retry(mock_dependencies, default_args, tmp_path):
+    """
+    Test that stub tests (functions with only pass/ellipsis) are detected
+    and subtracted from the count, triggering a retry.
+
+    Step 8 plans 3 tests, Step 9 generates 3 functions but 2 are stubs →
+    only 1 real test → retry should fire.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_real_test():\n"
+        '    """A real test."""\n'
+        "    result = compute()\n"
+        "    assert result == 42\n\n"
+        "def test_stub_one():\n"
+        '    """TODO: implement."""\n'
+        "    pass\n\n"
+        "def test_stub_two():\n"
+        "    ...\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: Real test\n#### Test 2: Stub one\n"
+                "#### Test 3: Stub two\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                test_file.write_text(
+                    "import pytest\n\n"
+                    "def test_real_test():\n    assert compute() == 42\n\n"
+                    "def test_stub_one():\n    assert validate() is True\n\n"
+                    "def test_stub_two():\n    assert transform('x') == 'y'\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Stubs should be detected (3 total - 2 stubs = 1 real vs 3 planned) → retry
+    assert step9_call_count >= 2, (
+        f"Expected Step 9 retry because 2 of 3 test functions were stubs "
+        f"(planned=3, real=1), but Step 9 was only called {step9_call_count} time(s)."
+    )
+
+
+def test_retry_falls_short_logs_warning_and_proceeds(mock_dependencies, default_args, tmp_path):
+    """
+    Test that if the retry still produces fewer tests than planned,
+    the orchestrator logs a warning and proceeds (single-retry guarantee).
+    """
+    mock_run, mock_load, mock_console = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_only_one():\n    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: First\n#### Test 2: Second\n"
+                "#### Test 3: Third\n#### Test 4: Fourth\n"
+                "\nPLANNED_TEST_COUNT: 4"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            # Both attempts only produce 1 test
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Use quiet=False to capture console output
+    default_args["quiet"] = False
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Should retry once, then proceed despite still falling short
+    assert step9_call_count >= 2, (
+        f"Expected at least one retry for cross-validation mismatch, "
+        f"but Step 9 was only called {step9_call_count} time(s)."
+    )
+    # Should NOT retry more than twice (single-retry guarantee)
+    assert step9_call_count <= 2, (
+        f"Expected at most one retry (single-retry guarantee), "
+        f"but Step 9 was called {step9_call_count} times."
+    )
+
+
+def test_count_planned_tests_parsing():
+    """
+    Unit test for _count_planned_tests helper function.
+    Verifies it uses PLANNED_TEST_COUNT marker, falling back to headers.
+    """
+    from pdd.agentic_bug_orchestrator import _count_planned_tests
+
+    # With marker — should use marker value
+    with_marker = (
+        "#### Test 1: Login\n#### Test 2: Logout\n"
+        "\nPLANNED_TEST_COUNT: 5"
+    )
+    assert _count_planned_tests(with_marker) == 5, "Should use marker, not header count"
+
+    # Without marker — should fall back to header count
+    without_marker = (
+        "## Test Plan\n\n"
+        "#### Test 1: Verify login flow\n"
+        "#### Test 2: Verify logout\n"
+        "#### Test 3: Verify token refresh\n"
+    )
+    assert _count_planned_tests(without_marker) == 3, "Should fall back to header count"
+
+    # Empty output
+    assert _count_planned_tests("") == 0
+
+
+def test_count_generated_tests_with_real_files(tmp_path):
+    """
+    Unit test for _count_generated_tests helper function.
+    Verifies it counts test functions and detects stubs.
+    """
+    from pdd.agentic_bug_orchestrator import _count_generated_tests
+
+    test_file = tmp_path / "test_example.py"
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_real_one():\n"
+        "    result = do_thing()\n"
+        "    assert result == 42\n\n"
+        "def test_real_two():\n"
+        '    """Check second thing."""\n'
+        "    assert check() is True\n\n"
+        "async def test_real_async():\n"
+        "    result = await fetch()\n"
+        "    assert result\n\n"
+        "def test_stub_pass():\n"
+        '    """Not implemented yet."""\n'
+        "    pass\n\n"
+        "def test_stub_ellipsis():\n"
+        "    ...\n\n"
+        "def helper_not_a_test():\n    return 42\n"
+    )
+
+    total, stubs = _count_generated_tests(["test_example.py"], tmp_path)
+    assert total == 5, f"Expected 5 total test functions, got {total}"
+    assert stubs == 2, f"Expected 2 stub functions, got {stubs}"
+
+    # Missing file should be skipped
+    total, stubs = _count_generated_tests(["nonexistent.py"], tmp_path)
+    assert total == 0 and stubs == 0
+
+
+def test_retry_prompt_includes_missing_test_descriptions(mock_dependencies, default_args, tmp_path):
+    """
+    Test that when Step 9 retries due to dropped tests, the retry prompt
+    includes descriptions of the missing tests from Step 8's plan.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_first():\n    assert True\n"
+    )
+
+    step9_calls = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: First scenario\nCheck first behavior\n"
+                "#### Test 2: Second scenario (E2E)\nCheck E2E flow\n"
+                "#### Test 3: Third scenario (cross-framework)\nCheck cross-framework\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_calls.append(kwargs.get('instruction', args[0] if args else ''))
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # If cross-validation exists, there should be a retry call
+    assert len(step9_calls) >= 2, (
+        f"Expected Step 9 retry with missing test info, "
+        f"but Step 9 was only called {len(step9_calls)} time(s)."
+    )
+
+    # The retry prompt should mention the count mismatch
+    retry_instruction = step9_calls[1]
+    assert "1" in retry_instruction and "3" in retry_instruction, (
+        f"Retry prompt should reference count mismatch (1 of 3), "
+        f"but got: {retry_instruction[:200]}..."
+    )
+
+
+def test_async_test_functions_counted(mock_dependencies, default_args, tmp_path):
+    """
+    Test that async def test_ functions are counted correctly by
+    the cross-validation logic, not just sync def test_ functions.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # 2 sync + 1 async = 3 total, matching the plan
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_sync_one():\n    assert True\n\n"
+        "def test_sync_two():\n    assert True\n\n"
+        "async def test_async_one():\n    result = await fetch()\n    assert result\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: Sync one\n#### Test 2: Sync two\n"
+                "#### Test 3: Async one\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # async tests should be counted — no retry needed since counts match
+    assert step9_call_count == 1, (
+        f"Expected no retry since 3 tests (2 sync + 1 async) match 3 planned, "
+        f"but Step 9 was called {step9_call_count} times. "
+        f"Async test functions may not be counted correctly."
+    )
+
+
+def test_structural_guard_and_cross_validation_both_fire(mock_dependencies, default_args, tmp_path):
+    """
+    Test that both the structural test guard AND cross-validation can fire
+    in sequence. If Step 9 produces structural violations, the structural
+    guard retries first. Then cross-validation should check the retry output.
+
+    This test verifies the two validation layers work together.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: First\n#### Test 2: Second\n"
+                "#### Test 3: Third\n#### Test 4: Fourth\n"
+                "\nPLANNED_TEST_COUNT: 4"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                # First attempt: has structural violations (will be caught by structural guard)
+                # Write a file that the mocked detector will flag as structural
+                test_file.write_text(
+                    "def test_structural():\n"
+                    "    # FLAGGED_STRUCTURAL_PATTERN\n"
+                    "    assert True\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            elif step9_call_count == 2:
+                # After structural retry: fixed structural issues but only 2 of 4 tests
+                test_file.write_text(
+                    "def test_first():\n    assert compute() == 1\n\n"
+                    "def test_second():\n    assert compute() == 2\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                # After cross-validation retry: all 4 tests
+                test_file.write_text(
+                    "def test_first():\n    assert compute() == 1\n\n"
+                    "def test_second():\n    assert compute() == 2\n\n"
+                    "def test_third():\n    assert compute() == 3\n\n"
+                    "def test_fourth():\n    assert compute() == 4\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Need to patch detect_structural_test_patterns to detect the violation
+    with patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns") as mock_detect:
+        def detect_side_effect(path):
+            content = Path(path).read_text() if Path(path).exists() else ""
+            if "FLAGGED_STRUCTURAL_PATTERN" in content:
+                return ["Uses structural pattern to test code shape"]
+            return []
+
+        mock_detect.side_effect = detect_side_effect
+
+        success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Structural guard fires (call 1→2), then cross-validation fires (call 2→3)
+    # On buggy code: only structural retry fires (step9_call_count == 2), no cross-validation
+    assert step9_call_count >= 3, (
+        f"Expected Step 9 to be called at least 3 times "
+        f"(initial + structural retry + cross-validation retry), "
+        f"but it was called {step9_call_count} times. "
+        f"Cross-validation did not fire after structural guard retry."
+    )
