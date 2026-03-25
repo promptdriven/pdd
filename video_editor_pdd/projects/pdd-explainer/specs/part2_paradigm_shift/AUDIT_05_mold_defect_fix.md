@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (parts, 10000, future, inherit, defect), so the frame does not support a hard missing-text failure.
+Frame sampled at 85.3% (frame 434, phase 6: frames 360-510). Most elements are correct for this phase: the counter shows '10000+' in green matching the accelerated production spec, the mold cross-section with amber walls is visible, blue parts populate the conveyor, and the background matches the navy-black palette. Two minor discrepancies: (1) The red defective part is still visible on the conveyor at frame 434, but the spec indicates it should have faded into a discard bin during phase 5 (frames 270-360). (2) The counter is rendered inside a descriptive info panel ('All future parts inherit the fix' / 'defect found → fix mold → every new part is correct') rather than as a minimal 'Parts produced:' label + value in the upper-right corner. The info panel text is editorially reasonable but departs from the spec's minimal counter design. The conveyor belt is rendered as a simple line rather than with hash marks, but this is a very subtle decorative difference.

@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (prompt, detailed, required, precision, tradeoff), so the frame does not support a hard missing-text failure.
+The frame is sampled at Phase 7 (540-601, hold state) and shows the core graph structure correctly: inverse curve shape, dot at right end, both annotations at reduced opacity, axes with labels and ticks. However, both annotations are significantly simplified compared to the spec. The left annotation lacks the dense 50-line prompt document (~12 visible text lines), file label ('parser_v1.prompt — 50 lines'), and dashed connector line. The right annotation lacks the terminal block ('pdd test parser → 47 tests passing ✓'), file label ('parser_v2.prompt — 10 lines'), and dashed connector lines. The test wall icons are present but the terminal is entirely missing — this is a critical narrative element showing the test result. Additionally, there is a conspicuous dark rectangle in the upper-right area that appears to be a rendering artifact or mispositioned container. The X-axis last tick reads '60' instead of the spec's '50+'.
