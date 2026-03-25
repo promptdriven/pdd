@@ -1769,6 +1769,42 @@ def test_step1b_complex_without_force_exits(mock_dependencies, base_args):
     assert not any("step2" in l for l in labels), "Step 2 should not run after complex exit"
 
 
+def test_step1b_complex_emits_stop_condition_to_stdout_issue_671(
+    mock_dependencies, base_args, capsys
+):
+    """Issue #671: complexity split must emit STOP_CONDITION to stdout.
+
+    The PDD Cloud executor captures subprocess stdout to detect stop
+    conditions. Rich console.print goes to stderr. Without an explicit
+    print() to stdout, the executor can't detect the split and creates
+    a junk PR instead of posting guidance.
+    """
+    mocks = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: COMPLEX\nScore: 8/14.\nSub-issues created.", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is False
+
+    # The critical assertion: STOP_CONDITION must appear in stdout
+    captured = capsys.readouterr()
+    assert "STOP_CONDITION:" in captured.out, (
+        "Issue #671: complexity split must emit 'STOP_CONDITION:' to stdout "
+        "so the PDD Cloud executor can detect it. Rich console.print goes to "
+        f"stderr and is invisible to the executor. stdout was: {captured.out!r}"
+    )
+    assert "sub-issue" in captured.out.lower(), (
+        "STOP_CONDITION message should mention sub-issues for executor guidance"
+    )
+
+
 def test_step1b_complex_with_force_continues(mock_dependencies, base_args):
     """Test that force_single=True overrides complexity check and continues."""
     mocks = mock_dependencies
