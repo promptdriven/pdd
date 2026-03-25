@@ -1772,12 +1772,12 @@ def test_step1b_complex_without_force_exits(mock_dependencies, base_args):
 def test_step1b_complex_emits_stop_condition_to_stdout_issue_671(
     mock_dependencies, base_args, capsys
 ):
-    """Issue #671: complexity split must emit STOP_CONDITION to stdout.
+    """Issue #671: complexity split must emit STOP_CONDITION tag to stdout.
 
-    The PDD Cloud executor captures subprocess stdout to detect stop
-    conditions. Rich console.print goes to stderr. Without an explicit
-    print() to stdout, the executor can't detect the split and creates
-    a junk PR instead of posting guidance.
+    The PDD Cloud executor's extract_stop_condition() searches for the
+    STOP_CONDITION: tag pattern. The Rich console.print lines don't contain
+    this tag, so without an explicit print() the executor can't detect
+    the split and creates a junk PR instead of posting guidance.
     """
     mocks = mock_dependencies
 
@@ -1796,9 +1796,9 @@ def test_step1b_complex_emits_stop_condition_to_stdout_issue_671(
     # The critical assertion: STOP_CONDITION must appear in stdout
     captured = capsys.readouterr()
     assert "STOP_CONDITION:" in captured.out, (
-        "Issue #671: complexity split must emit 'STOP_CONDITION:' to stdout "
-        "so the PDD Cloud executor can detect it. Rich console.print goes to "
-        f"stderr and is invisible to the executor. stdout was: {captured.out!r}"
+        "Issue #671: complexity split must emit 'STOP_CONDITION:' tag to stdout "
+        "so the PDD Cloud executor's extract_stop_condition() can detect it. "
+        f"stdout was: {captured.out!r}"
     )
     assert "sub-issue" in captured.out.lower(), (
         "STOP_CONDITION message should mention sub-issues for executor guidance"
