@@ -83,11 +83,7 @@ class TestDirectoryScanDoesNotTriggerWhenFilesFound:
         assert "tests/test_concurrent_label_race.py" in result
 
     def test_changed_files_found_prevents_directory_scan(self, large_test_dir):
-        """When changed_files contains test files, directory scan must not trigger.
-
-        The sibling scan is also capped (>10 files skips the directory), so
-        with 52 files in tests/ only the 1 changed file is returned.
-        """
+        """When changed_files contains test files, directory scan must not trigger."""
         with patch(
             "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
             return_value=[],
@@ -100,11 +96,10 @@ class TestDirectoryScanDoesNotTriggerWhenFilesFound:
             )
 
         assert "tests/test_agentic_bug_orchestrator.py" in result
-        # Should NOT have all 52 — both directory scan and sibling scan
-        # are suppressed (sibling scan capped at 10 files per directory)
+        # Should NOT have all 52 — directory scan is suppressed
         assert len(result) == 1, (
             f"Expected only the 1 changed file, got {len(result)}. "
-            f"Sibling or directory scan likely triggered incorrectly. Files: {result}"
+            f"Directory scan likely triggered incorrectly. Files: {result}"
         )
 
     def test_hash_detection_found_prevents_directory_scan(self, large_test_dir):
