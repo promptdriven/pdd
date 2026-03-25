@@ -94,6 +94,25 @@ const resolveTitle = (data: Record<string, unknown>): string => {
   );
 };
 
+const resolveExplicitTitle = (data: Record<string, unknown>): string | null => {
+  const title = asString(data.title);
+  if (title) return title;
+
+  const quote = asString(data.quote);
+  if (quote) return quote;
+
+  const challenge = asString(data.challenge);
+  if (challenge) return challenge;
+
+  const line1 = asString(data.titleLine1);
+  const line2 = asString(data.titleLine2);
+  if (line1 || line2) {
+    return [line1, line2].filter(Boolean).join("\n");
+  }
+
+  return null;
+};
+
 const resolveTitleLines = (data: Record<string, unknown>): string[] => {
   const line1 = asString(data.titleLine1);
   const line2 = asString(data.titleLine2);
@@ -134,18 +153,28 @@ const resolveSubtitleLines = (data: Record<string, unknown>): string[] => {
 
 const resolveEyebrow = (data: Record<string, unknown>): string => {
   const sectionLabel = asString(data.sectionLabel);
-  const sectionNumber = data.sectionNumber;
-  const sectionNumberText =
-    typeof sectionNumber === "number" || typeof sectionNumber === "string"
-      ? String(sectionNumber)
-      : null;
-  if (sectionLabel && sectionNumberText && !sectionLabel.includes(sectionNumberText)) {
-    return `${sectionLabel}`;
+  if (sectionLabel) {
+    return sectionLabel;
   }
-  return (
-    sectionLabel ??
-    asString(data.sectionId) ??
-    titleCase(asString(data.type) ?? "Generated Visual")
+
+  const sectionNumber = data.sectionNumber;
+  if (typeof sectionNumber === "number" && Number.isFinite(sectionNumber)) {
+    return `PART ${sectionNumber}`;
+  }
+
+  const sectionNumberText = asString(sectionNumber);
+  if (sectionNumberText && /^[0-9]+$/.test(sectionNumberText)) {
+    return `PART ${sectionNumberText}`;
+  }
+
+  return "";
+};
+
+const hasExplicitHeaderCopy = (data: Record<string, unknown>): boolean => {
+  return Boolean(
+    resolveExplicitTitle(data) ||
+      resolveEyebrow(data) ||
+      resolveSubtitleLines(data).length > 0
   );
 };
 
@@ -172,6 +201,108 @@ const buildPath = (
     .join(" ");
 };
 
+const buildDegradationSeries = (
+  record: Record<string, unknown>
+): SeriesEntry | null => {
+  const degradationRange = asRecord(record.degradationRange);
+  const minValue = asNumber(degradationRange?.min);
+  const maxValue = asNumber(degradationRange?.max);
+  if (minValue === null || maxValue === null) {
+    return null;
+  }
+
+  const points = [
+    { x: 0, y: maxValue },
+    { x: 1, y: maxValue * 0.92 },
+    { x: 2, y: (maxValue + minValue) / 2 },
+    { x: 3, y: minValue * 1.18 },
+    { x: 4, y: minValue },
+  ];
+
+  return {
+    label: asString(record.label) ?? asString(record.id) ?? "Series",
+    color: asString(record.color) ?? "#EF4444",
+    points,
+    style: asString(record.style),
+  };
+};
+
+const buildEventSeries = (data: Record<string, unknown>): SeriesEntry[] => {
+  const chartId = asString(data.chartId);
+  if (chartId === "code_cost_triple_line") {
+    return [
+      {
+        label: "Cost to generate",
+        color: "#4A90D9",
+        points: [
+          { x: 0, y: 82 },
+          { x: 1, y: 78 },
+          { x: 2, y: 58 },
+          { x: 3, y: 36 },
+          { x: 4, y: 18 },
+        ],
+      },
+      {
+        label: "Immediate patch cost",
+        color: "#D9944A",
+        points: [
+          { x: 0, y: 42 },
+          { x: 1, y: 38 },
+          { x: 2, y: 31 },
+          { x: 3, y: 24 },
+          { x: 4, y: 20 },
+        ],
+      },
+      {
+        label: "Total cost (with debt)",
+        color: "#FBBF24",
+        points: [
+          { x: 0, y: 58 },
+          { x: 1, y: 59 },
+          { x: 2, y: 60 },
+          { x: 3, y: 60 },
+          { x: 4, y: 61 },
+        ],
+        style: "dashed",
+      },
+    ];
+  }
+
+  const crossings = Array.isArray(data.crossings)
+    ? data.crossings
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  if (crossings.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      label: "Primary trend",
+      color: "#60A5FA",
+      points: [
+        { x: 0, y: 80 },
+        { x: 1, y: 60 },
+        { x: 2, y: 42 },
+        { x: 3, y: 28 },
+        { x: 4, y: 18 },
+      ],
+    },
+    {
+      label: "Reference line",
+      color: "#D9944A",
+      points: [
+        { x: 0, y: 44 },
+        { x: 1, y: 38 },
+        { x: 2, y: 31 },
+        { x: 3, y: 25 },
+        { x: 4, y: 21 },
+      ],
+    },
+  ];
+};
+
 const normalizeSeries = (data: Record<string, unknown>): SeriesEntry[] => {
   const series = Array.isArray(data.series) ? data.series : [];
   const curves = Array.isArray(data.curves) ? data.curves : [];
@@ -179,14 +310,18 @@ const normalizeSeries = (data: Record<string, unknown>): SeriesEntry[] => {
 
   const fromCollections = [series, forks]
     .flat()
-    .map((entry) => {
-      const record = asRecord(entry);
-      if (!record) return null;
-      const points = Array.isArray(record.dataPoints)
-        ? record.dataPoints
-            .map((point) => {
-              const item = asRecord(point);
-              const x = asNumber(item?.x);
+        .map((entry) => {
+          const record = asRecord(entry);
+          if (!record) return null;
+          const degradationSeries = buildDegradationSeries(record);
+          if (degradationSeries) {
+            return degradationSeries;
+          }
+          const points = Array.isArray(record.dataPoints)
+            ? record.dataPoints
+                .map((point) => {
+                  const item = asRecord(point);
+                  const x = asNumber(item?.x);
               const y = asNumber(item?.y);
               return x === null || y === null ? null : { x, y };
             })
@@ -204,6 +339,11 @@ const normalizeSeries = (data: Record<string, unknown>): SeriesEntry[] => {
 
   if (fromCollections.length > 0) {
     return fromCollections;
+  }
+
+  const eventSeries = buildEventSeries(data);
+  if (eventSeries.length > 0) {
+    return eventSeries;
   }
 
   return curves
@@ -238,6 +378,11 @@ const HeaderBlock: React.FC<{
 }> = ({ data, accent, title }) => {
   const subtitleLines = resolveSubtitleLines(data);
   const eyebrow = resolveEyebrow(data);
+  const explicitTitle = resolveExplicitTitle(data);
+
+  if (!hasExplicitHeaderCopy(data) || (!eyebrow && !explicitTitle && subtitleLines.length === 0)) {
+    return null;
+  }
 
   return (
     <div
@@ -252,30 +397,34 @@ const HeaderBlock: React.FC<{
         zIndex: 10,
       }}
     >
-      <div
-        style={{
-          color: `${accent}D9`,
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 18,
-          fontWeight: 700,
-          letterSpacing: 2,
-          textTransform: "uppercase",
-        }}
-      >
-        {eyebrow}
-      </div>
-      <div
-        style={{
-          color: "#F8FAFC",
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 48,
-          fontWeight: 700,
-          lineHeight: 1.05,
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {title}
-      </div>
+      {eyebrow ? (
+        <div
+          style={{
+            color: `${accent}D9`,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 18,
+            fontWeight: 700,
+            letterSpacing: 2,
+            textTransform: "uppercase",
+          }}
+        >
+          {eyebrow}
+        </div>
+      ) : null}
+      {explicitTitle ? (
+        <div
+          style={{
+            color: "#F8FAFC",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 48,
+            fontWeight: 700,
+            lineHeight: 1.05,
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {title}
+        </div>
+      ) : null}
       {subtitleLines.length > 0 ? (
         <div
           style={{
@@ -336,7 +485,8 @@ const TitleCardVisual: React.FC<{
   height: number;
 }> = ({ data, width, height }) => {
   const accent = resolveAccentColor(data);
-  const titleLines = resolveTitleLines(data);
+  const explicitTitle = resolveExplicitTitle(data);
+  const titleLines = explicitTitle ? resolveTitleLines(data) : [];
   const subtitleLines = resolveSubtitleLines(data);
   const commands = asStringArray(data.commands);
   const style = asString(data.style);
@@ -344,6 +494,11 @@ const TitleCardVisual: React.FC<{
   const eyebrow = resolveEyebrow(data);
   const titleColor = asString(data.titleColor) ?? "#E2E8F0";
   const ruleColor = "rgba(51, 65, 85, 0.4)";
+  const subtitleColor = asString(data.subtitleColor) ?? "#CBD5E1";
+  const hasCodeUnderlay = Boolean(data.codeUnderlay);
+
+  const resolvedTitleLines =
+    isStillnessBeat && !explicitTitle ? [] : titleLines;
 
   return (
     <AbsoluteFill
@@ -359,10 +514,26 @@ const TitleCardVisual: React.FC<{
           inset: 0,
           backgroundImage:
             "linear-gradient(rgba(30, 41, 59, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(30, 41, 59, 0.08) 1px, transparent 1px)",
-          backgroundSize: "60px 60px",
+          backgroundSize: "80px 80px",
           opacity: isStillnessBeat ? 0.3 : 0.45,
         }}
       />
+      {hasCodeUnderlay ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: "8% 14% auto 10%",
+            color: "rgba(148, 163, 184, 0.14)",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 20,
+            lineHeight: 1.45,
+            whiteSpace: "pre-wrap",
+            transform: "rotate(-6deg)",
+          }}
+        >
+          {`def regenerate(module):\n    tests = load_accumulated_tests(module)\n    prompt = load_prompt(module)\n    return pdd.generate(prompt, tests)\n\n# prompt-driven development`}
+        </div>
+      ) : null}
       <GhostElements data={data} />
       <div
         style={{
@@ -375,18 +546,20 @@ const TitleCardVisual: React.FC<{
           textAlign: "center",
         }}
       >
-        <div
-          style={{
-            color: isStillnessBeat ? "#94A3B8" : "#64748B",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: isStillnessBeat ? 14 : 18,
-            fontWeight: 700,
-            letterSpacing: isStillnessBeat ? 4 : 2.4,
-            textTransform: "uppercase",
-          }}
-        >
-          {eyebrow}
-        </div>
+        {eyebrow ? (
+          <div
+            style={{
+              color: isStillnessBeat ? "#94A3B8" : "#64748B",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: isStillnessBeat ? 14 : 18,
+              fontWeight: 700,
+              letterSpacing: isStillnessBeat ? 4 : 2.4,
+              textTransform: "uppercase",
+            }}
+          >
+            {eyebrow}
+          </div>
+        ) : null}
         {isStillnessBeat ? (
           <div
             style={{
@@ -397,27 +570,29 @@ const TitleCardVisual: React.FC<{
             }}
           />
         ) : null}
-        <div
-          style={{
-            color: titleColor,
-            fontFamily: "'Inter', sans-serif",
-            fontSize: isStillnessBeat ? 18 : width > 1400 ? 76 : 64,
-            fontWeight: 700,
-            lineHeight: isStillnessBeat ? 1.15 : 1.03,
-            letterSpacing: isStillnessBeat ? 4 : 1,
-            whiteSpace: "pre-wrap",
-            maxWidth: width * 0.76,
-            textTransform: isStillnessBeat ? "uppercase" : undefined,
-            opacity: isStillnessBeat ? 0.72 : 1,
-          }}
-        >
-          {titleLines.join("\n")}
-        </div>
+        {resolvedTitleLines.length > 0 ? (
+          <div
+            style={{
+              color: titleColor,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: isStillnessBeat ? 18 : width > 1400 ? 76 : 64,
+              fontWeight: 700,
+              lineHeight: isStillnessBeat ? 1.15 : 1.03,
+              letterSpacing: isStillnessBeat ? 4 : 1,
+              whiteSpace: "pre-wrap",
+              maxWidth: width * 0.76,
+              textTransform: isStillnessBeat ? "uppercase" : undefined,
+              opacity: isStillnessBeat ? 0.72 : 1,
+            }}
+          >
+            {resolvedTitleLines.join("\n")}
+          </div>
+        ) : null}
         {subtitleLines.map((line, index) => (
           <div
             key={`${line}-${index}`}
             style={{
-              color: index === 0 ? "#CBD5E1" : "#94A3B8",
+              color: index === 0 ? subtitleColor : "#94A3B8",
               fontFamily: "'Inter', sans-serif",
               fontSize: index === 0 ? 26 : 22,
               fontWeight: index === 0 ? 500 : 400,
@@ -602,6 +777,26 @@ const ChartVisual: React.FC<{
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
   const series = normalizeSeries(data);
+  const threshold = asRecord(data.threshold);
+  const debtShading = asRecord(data.debtShading);
+  const crossings = Array.isArray(data.crossings)
+    ? data.crossings
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const causalChain = asStringArray(data.causalChain);
+  const keyDates = Array.isArray(data.keyDates)
+    ? data.keyDates
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const debtResetNote = asString(data.debtResetNote);
+  const eventLabel = asString(data.label) ?? asString(asRecord(data.takeaway)?.line1);
+  const eventSubLabel =
+    debtResetNote ??
+    asString(data.newAnnotation) ??
+    asString(asRecord(data.takeaway)?.line2);
+  const showInsetCallout = data.type === "inset_chart" && causalChain.length > 0;
   const chartWidth = width * 0.72;
   const chartHeight = height * 0.5;
   const reveal = interpolate(frame, [0, 24], [0.25, 1], {
@@ -640,6 +835,27 @@ const ChartVisual: React.FC<{
               />
             );
           })}
+          {debtShading ? (
+            <rect
+              x={chartWidth * 0.18}
+              y={chartHeight * 0.22}
+              width={chartWidth * 0.56}
+              height={chartHeight * 0.5}
+              fill="rgba(217, 148, 74, 0.08)"
+            />
+          ) : null}
+          {showInsetCallout ? (
+            <rect
+              x={chartWidth * 0.52}
+              y={chartHeight * 0.18}
+              width={chartWidth * 0.34}
+              height={chartHeight * 0.58}
+              rx={28}
+              fill="rgba(2, 6, 23, 0.22)"
+              stroke="rgba(148, 163, 184, 0.22)"
+              strokeWidth={2}
+            />
+          ) : null}
           {series.map((entry) => (
             <path
               key={entry.label}
@@ -652,6 +868,60 @@ const ChartVisual: React.FC<{
               strokeLinejoin="round"
               opacity={reveal}
             />
+          ))}
+          {threshold ? (
+            <g>
+              <circle
+                cx={chartWidth * 0.32}
+                cy={chartHeight * 0.54}
+                r={10}
+                fill="rgba(226, 232, 240, 0.18)"
+                stroke="#E2E8F0"
+                strokeWidth={3}
+              />
+              <text
+                x={chartWidth * 0.32 + 18}
+                y={chartHeight * 0.54 - 14}
+                fill="#E2E8F0"
+                fontSize="22"
+                fontWeight="700"
+              >
+                {asString(threshold.label) ?? "Threshold"}
+              </text>
+            </g>
+          ) : null}
+          {crossings.map((crossing, index) => (
+            <g key={`crossing-${index}`}>
+              <circle
+                cx={chartWidth * (0.58 + index * 0.16)}
+                cy={chartHeight * (0.42 + index * 0.1)}
+                r={asNumber(crossing.radius) ?? 10}
+                fill="rgba(96, 165, 250, 0.18)"
+                stroke="#60A5FA"
+                strokeWidth={3}
+              />
+            </g>
+          ))}
+          {keyDates.slice(0, 4).map((entry, index) => (
+            <g key={`key-date-${index}`}>
+              <line
+                x1={chartWidth * (0.12 + index * 0.17)}
+                y1={chartHeight - 32}
+                x2={chartWidth * (0.12 + index * 0.17)}
+                y2={chartHeight - 14}
+                stroke="rgba(148, 163, 184, 0.45)"
+                strokeWidth={2}
+              />
+              <text
+                x={chartWidth * (0.12 + index * 0.17)}
+                y={chartHeight - 4}
+                textAnchor="middle"
+                fill="#94A3B8"
+                fontSize="16"
+              >
+                {asString(entry.label) ?? ""}
+              </text>
+            </g>
           ))}
         </svg>
         <div
@@ -689,6 +959,68 @@ const ChartVisual: React.FC<{
             </div>
           ))}
         </div>
+        {showInsetCallout ? (
+          <div
+            style={{
+              position: "absolute",
+              left: chartWidth * 0.56,
+              top: chartHeight * 0.24,
+              width: chartWidth * 0.26,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            {causalChain.slice(0, 3).map((item, index) => (
+              <div
+                key={`${item}-${index}`}
+                style={{
+                  color: index === 2 ? "#EF4444" : "#E2E8F0",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 22,
+                  fontWeight: 700,
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {eventLabel ? (
+          <div
+            style={{
+              position: "absolute",
+              right: 28,
+              bottom: 64,
+              maxWidth: chartWidth * 0.34,
+              color: "#E2E8F0",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 24,
+              fontWeight: 700,
+              textAlign: "right",
+            }}
+          >
+            {eventLabel}
+          </div>
+        ) : null}
+        {eventSubLabel ? (
+          <div
+            style={{
+              position: "absolute",
+              right: 28,
+              bottom: 30,
+              maxWidth: chartWidth * 0.42,
+              color: "#94A3B8",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 18,
+              fontWeight: 500,
+              textAlign: "right",
+              lineHeight: 1.3,
+            }}
+          >
+            {eventSubLabel}
+          </div>
+        ) : null}
       </div>
     </AbsoluteFill>
   );
@@ -1111,18 +1443,147 @@ const CodeVisual: React.FC<{
 }> = ({ data, width, height }) => {
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
+  const visualType = asString(data.type);
   const fileNames = [
     asString(data.highlightedModule),
     asString(data.promptFile),
     ...asStringArray(data.fileNames),
   ].filter((item): item is string => Boolean(item));
   const workflow = asStringArray(data.workflow);
+  const warningComments = asStringArray(data.warningComments);
+  const lineCount = asString(data.lineCount);
   const terminalLines = [
     asString(data.terminalCommand),
     asString(data.terminalOutput),
     ...workflow,
     ...asStringArray(data.terminalCommands),
   ].filter((item): item is string => Boolean(item));
+
+  if (visualType === "code_visualization") {
+    const panels = Math.max(3, asNumber(data.panels) ?? fileNames.length ?? 5);
+    const panelNames =
+      fileNames.length > 0
+        ? fileNames
+        : Array.from({ length: panels }, (_, index) => `module_${index + 1}.py`);
+
+    return (
+      <AbsoluteFill style={{ padding: "92px 96px 80px" }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at center, rgba(15, 23, 42, 0.18) 0%, rgba(10, 15, 26, 0) 60%)",
+          }}
+        />
+        <div
+          style={{
+            position: "relative",
+            width,
+            height,
+          }}
+        >
+          {panelNames.slice(0, panels).map((name, index) => (
+            <div
+              key={`${name}-${index}`}
+              style={{
+                position: "absolute",
+                left: 120 + index * 90,
+                top: 60 + (index % 2) * 24,
+                width: 520,
+                height: 680,
+                borderRadius: 24,
+                backgroundColor: "rgba(2, 6, 23, 0.9)",
+                border: "1px solid rgba(71, 85, 105, 0.44)",
+                boxShadow: "0 24px 80px rgba(2, 6, 23, 0.36)",
+                overflow: "hidden",
+                transform: `rotate(${(index - 2) * 1.6}deg)`,
+              }}
+            >
+              <div
+                style={{
+                  height: 48,
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "0 18px",
+                  backgroundColor: "rgba(15, 23, 42, 0.96)",
+                  color: "#CBD5E1",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 15,
+                }}
+              >
+                {name}
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "52px 1fr",
+                  rowGap: 8,
+                  padding: "18px 18px 20px",
+                }}
+              >
+                {Array.from({ length: 16 }).map((_, lineIndex) => {
+                  const comment =
+                    warningComments[(lineIndex + index) % Math.max(1, warningComments.length)];
+                  const showComment = Boolean(comment) && [2, 6, 11].includes(lineIndex);
+                  return (
+                    <React.Fragment key={`viz-line-${index}-${lineIndex}`}>
+                      <div
+                        style={{
+                          color: "rgba(148, 163, 184, 0.55)",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 14,
+                        }}
+                      >
+                        {lineIndex + 1}
+                      </div>
+                      <div
+                        style={{
+                          color: showComment ? "#FCA5A5" : "#94A3B8",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 15,
+                          whiteSpace: "pre",
+                        }}
+                      >
+                        {showComment
+                          ? comment
+                          : lineIndex % 4 === 0
+                            ? "def legacy_handler(user, state):"
+                            : lineIndex % 4 === 1
+                              ? "    payload = adapter.load(state)"
+                              : lineIndex % 4 === 2
+                                ? "    if payload is None: return cache_fallback()"
+                                : "    return transform(payload, user)"}
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {lineCount ? (
+            <div
+              style={{
+                position: "absolute",
+                right: 120,
+                bottom: 68,
+                padding: "12px 18px",
+                borderRadius: 999,
+                backgroundColor: "rgba(2, 6, 23, 0.82)",
+                border: subtleBorder,
+                color: accent,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 22,
+                fontWeight: 700,
+              }}
+            >
+              {lineCount}
+            </div>
+          ) : null}
+        </div>
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill>
@@ -1637,6 +2098,12 @@ const AnimatedDiagramVisual: React.FC<{
   const phases = Array.isArray(data.phases)
     ? data.phases.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
+  const panels = Array.isArray(data.panels)
+    ? data.panels.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const scenarios = Array.isArray(data.scenarios)
+    ? data.scenarios.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
   const branches = Array.isArray(data.branches)
     ? data.branches.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
@@ -1648,11 +2115,23 @@ const AnimatedDiagramVisual: React.FC<{
     : [];
   const limitations = asStringArray(data.limitations);
   const table = asRecord(data.table);
+  const document = asRecord(data.document);
+  const codeBlock = asRecord(data.codeBlock);
+  const annotations = asRecord(data.annotations);
   const embeddedCodeBlocks = Array.isArray(data.embeddedCodeBlocks)
     ? data.embeddedCodeBlocks.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
   const ratchetMetaphor = asRecord(data.ratchetMetaphor);
   const statusDelay = asNumber(data.statusDelay);
+  const bottomLabel = asString(data.bottomLabel);
+  const promptDocument = asRecord(data.promptDocument);
+  const testSuite = asRecord(data.testSuite);
+  const reviewLabel = asString(data.reviewLabel);
+  const moldAnimation = asRecord(data.moldAnimation);
+  const netlists = Array.isArray(data.netlists)
+    ? data.netlists.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const equivalenceLabel = asString(data.equivalenceLabel);
   const takeaways = [
     ...asStringArray(data.causalChain),
     ...asStringArray(data.terminalCommands),
@@ -1661,7 +2140,76 @@ const AnimatedDiagramVisual: React.FC<{
   ].slice(0, 5);
 
   let body: React.ReactNode;
-  if (diagramId === "prompt_ratio") {
+  if (diagramId === "code_generation_comparison" && scenarios.length > 0) {
+    const takeaway = asRecord(data.takeaway);
+    body = (
+      <div
+        style={{
+          width: width * 0.82,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 24,
+        }}
+      >
+        {scenarios.slice(0, 2).map((scenario, index) => {
+          const preferred = Boolean(scenario.preferred);
+          const promptLines = asNumber(scenario.promptLines) ?? 0;
+          const testCount = asNumber(scenario.testCount) ?? 0;
+          return (
+            <div
+              key={`scenario-${index}`}
+              style={{
+                borderRadius: 28,
+                backgroundColor: subtleSurface,
+                border: preferred ? "1px solid rgba(74, 222, 128, 0.55)" : subtleBorder,
+                padding: "26px 28px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 18,
+              }}
+            >
+              <div style={{ color: preferred ? "#4ADE80" : "#94A3B8", fontSize: 18, fontWeight: 700 }}>
+                {asString(scenario.side)?.toUpperCase() ?? `SIDE ${index + 1}`}
+              </div>
+              <div style={{ color: "#E2E8F0", fontFamily: "'JetBrains Mono', monospace", fontSize: 18 }}>
+                {asString(scenario.promptFile) ?? `prompt_v${index + 1}.md`}
+              </div>
+              <div style={{ display: "flex", gap: 14 }}>
+                <div style={{ flex: 1, padding: "14px 16px", borderRadius: 18, backgroundColor: "rgba(96, 165, 250, 0.14)" }}>
+                  <div style={{ color: "#60A5FA", fontSize: 16, fontWeight: 700 }}>Prompt</div>
+                  <div style={{ color: "#F8FAFC", fontSize: 34, fontWeight: 700 }}>{promptLines}</div>
+                </div>
+                <div style={{ flex: 1, padding: "14px 16px", borderRadius: 18, backgroundColor: "rgba(217, 148, 74, 0.14)" }}>
+                  <div style={{ color: "#D9944A", fontSize: 16, fontWeight: 700 }}>Tests</div>
+                  <div style={{ color: "#F8FAFC", fontSize: 34, fontWeight: 700 }}>{testCount}</div>
+                </div>
+              </div>
+              <div style={{ color: preferred ? "#4ADE80" : "#CBD5E1", fontSize: 22, fontWeight: 700 }}>
+                {asString(scenario.result) ?? "correct"}
+              </div>
+            </div>
+          );
+        })}
+        <div
+          style={{
+            gridColumn: "1 / -1",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
+            marginTop: 8,
+          }}
+        >
+          <div style={{ color: "#E2E8F0", fontSize: 34, fontWeight: 700 }}>
+            {asString(takeaway?.line1) ?? "More tests, less prompt."}
+          </div>
+          <div style={{ color: "#94A3B8", fontSize: 24, fontWeight: 600 }}>
+            {asString(takeaway?.line2) ?? "The walls do the precision work."}
+          </div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "prompt_ratio") {
     body = (
       <div
         style={{
@@ -1695,8 +2243,52 @@ const AnimatedDiagramVisual: React.FC<{
         </div>
       </div>
     );
+  } else if (diagramId === "verilog_synthesis_triple" && netlists.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.84,
+          display: "grid",
+          gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+          gap: 18,
+        }}
+      >
+        {netlists.slice(0, 3).map((netlist, index) => (
+          <div
+            key={`netlist-${index}`}
+            style={{
+              borderRadius: 24,
+              backgroundColor: subtleSurface,
+              border: `1px solid ${(asString(netlist.color) ?? "#60A5FA")}66`,
+              padding: "22px 20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+            }}
+          >
+            <div style={{ color: "#94A3B8", fontSize: 16, fontWeight: 700 }}>
+              {`RUN ${index + 1}`}
+            </div>
+            <div style={{ color: "#E2E8F0", fontFamily: "'JetBrains Mono', monospace", fontSize: 15, whiteSpace: "pre-wrap" }}>
+              {`module chip_${index + 1}(...);\n  assign y = a & b;\nendmodule`}
+            </div>
+            <div
+              style={{
+                height: 170,
+                borderRadius: 18,
+                background: `linear-gradient(135deg, ${(asString(netlist.color) ?? "#60A5FA")}22, rgba(15, 23, 42, 0.92))`,
+                border: `1px solid ${(asString(netlist.color) ?? "#60A5FA")}44`,
+              }}
+            />
+            <div style={{ color: asString(netlist.color) ?? "#4ADE80", fontSize: 18, fontWeight: 700 }}>
+              {equivalenceLabel ?? "Functionally equivalent"}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   } else if (diagramId === "five_generations") {
-    const generations = phases.length > 0 ? phases : steps;
+    const generations = panels.length > 0 ? panels : phases.length > 0 ? phases : steps;
     body = (
       <div
         style={{
@@ -1718,20 +2310,40 @@ const AnimatedDiagramVisual: React.FC<{
               display: "flex",
               flexDirection: "column",
               justifyContent: "space-between",
-              minHeight: 280,
+              minHeight: 320,
             }}
           >
             <div style={{ color: asString(entry.color) ?? "#60A5FA", fontSize: 18, fontWeight: 700 }}>
               {asString(entry.label) ?? `Generation ${index + 1}`}
             </div>
-            <div style={{ color: "#E2E8F0", fontSize: 24, lineHeight: 1.2 }}>
+            <div
+              style={{
+                flex: 1,
+                borderRadius: 16,
+                backgroundColor: "rgba(2, 6, 23, 0.72)",
+                border: "1px solid rgba(71, 85, 105, 0.24)",
+                padding: "14px 16px",
+                color: "#94A3B8",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14,
+                lineHeight: 1.45,
+              }}
+            >
+              {`def candidate_${index + 1}(user_id):\n    return normalize(user_id)\n\n# ${asString(entry.status) ?? "candidate"}`}
+            </div>
+            <div style={{ color: "#E2E8F0", fontSize: 24, lineHeight: 1.2, marginTop: 14 }}>
               {asString(entry.detail) ?? asString(entry.text) ?? asString(entry.status) ?? ""}
             </div>
           </div>
         ))}
       </div>
     );
-  } else if (diagramId === "embedded_code_document" && embeddedCodeBlocks.length > 0) {
+  } else if (
+    diagramId === "embedded_code_document" &&
+    (embeddedCodeBlocks.length > 0 || document || codeBlock || annotations || bottomLabel)
+  ) {
+    const nlLabel = asString(annotations?.nlLabel) ?? "Natural language";
+    const codeLabel = asString(annotations?.codeLabel) ?? "Critical algorithm";
     body = (
       <div
         style={{
@@ -1741,11 +2353,20 @@ const AnimatedDiagramVisual: React.FC<{
           gap: 24,
         }}
       >
-        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px" }}>
-          {embeddedCodeBlocks.slice(0, 3).map((block, index) => (
-            <div key={`code-block-${index}`} style={{ marginBottom: 18 }}>
+        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px", display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ padding: "14px 18px", borderRadius: 18, backgroundColor: "rgba(45, 212, 191, 0.12)", borderLeft: "4px solid #2DD4BF", color: "#CCFBF1", fontSize: 18 }}>
+            {`${nlLabel}\n\nIntent, constraints, and architecture live here.`}
+          </div>
+          <div style={{ padding: "16px 18px", borderRadius: 18, backgroundColor: "rgba(96, 165, 250, 0.12)", borderLeft: "4px solid #60A5FA" }}>
+            <div style={{ color: "#60A5FA", fontSize: 18, fontWeight: 700 }}>{codeLabel}</div>
+            <div style={{ color: "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: 8, whiteSpace: "pre-wrap" }}>
+              {`def ${asString(codeBlock?.function) ?? "hash_id"}(user_id):\n    return sha256(user_id.encode()).hexdigest()[:12]`}
+            </div>
+          </div>
+          {embeddedCodeBlocks.slice(0, 2).map((block, index) => (
+            <div key={`code-block-${index}`} style={{ marginBottom: 8 }}>
               <div style={{ color: "#2DD4BF", fontSize: 18, fontWeight: 700 }}>{asString(block.title) ?? asString(block.label) ?? `Block ${index + 1}`}</div>
-              <div style={{ color: "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: 8 }}>
+              <div style={{ color: "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: 8, whiteSpace: "pre-wrap" }}>
                 {asString(block.code) ?? asString(block.content) ?? ""}
               </div>
             </div>
@@ -1757,6 +2378,16 @@ const AnimatedDiagramVisual: React.FC<{
               {item}
             </div>
           ))}
+          {document ? (
+            <div style={{ color: "#94A3B8", fontSize: 18, marginTop: 10 }}>
+              {`${asNumber(document.totalLines) ?? 18} total lines • ${asNumber(document.codeLines) ?? 4} code`}
+            </div>
+          ) : null}
+          {bottomLabel ? (
+            <div style={{ color: "#E2E8F0", fontSize: 22, fontWeight: 700, marginTop: 18 }}>
+              {bottomLabel}
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -1898,13 +2529,69 @@ const AnimatedDiagramVisual: React.FC<{
         </div>
       </div>
     );
+  } else if (diagramId === "prompt_replaces_review" && promptDocument && testSuite) {
+    body = (
+      <div
+        style={{
+          width: width * 0.8,
+          display: "grid",
+          gridTemplateColumns: "0.9fr 1.2fr 0.9fr",
+          gap: 18,
+          alignItems: "center",
+        }}
+      >
+        <div style={{ borderRadius: 24, backgroundColor: subtleSurface, border: `1px solid ${(asString(promptDocument.glowColor) ?? "#4ADE80")}55`, padding: "22px 24px" }}>
+          <div style={{ color: asString(promptDocument.glowColor) ?? "#4ADE80", fontSize: 18, fontWeight: 700 }}>
+            {asString(promptDocument.label) ?? "PROMPT"}
+          </div>
+          <div style={{ color: "#E2E8F0", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: 12, whiteSpace: "pre-wrap" }}>
+            {`- intent\n- requirements\n- constraints\n- edge cases`}
+          </div>
+        </div>
+        <div style={{ position: "relative", height: 320, borderRadius: 28, backgroundColor: "rgba(2, 6, 23, 0.48)", overflow: "hidden" }}>
+          <div style={{ position: "absolute", left: "50%", top: 36, bottom: 36, width: 220, transform: "translateX(-50%)", borderRadius: 120, backgroundColor: "rgba(148, 163, 184, 0.12)" }} />
+          <div style={{ position: "absolute", left: 70, right: 70, top: 54, height: 14, borderRadius: 999, backgroundColor: asString(moldAnimation?.wallColor) ?? "#D9944A" }} />
+          <div style={{ position: "absolute", left: 70, right: 70, bottom: 54, height: 14, borderRadius: 999, backgroundColor: asString(moldAnimation?.wallColor) ?? "#D9944A" }} />
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div
+              key={`code-stream-${index}`}
+              style={{
+                position: "absolute",
+                left: 320 + index * 48,
+                top: 74 + index * 36,
+                width: 180,
+                height: 16,
+                borderRadius: 999,
+                backgroundColor: asString(moldAnimation?.codeColor) ?? "#94A3B8",
+                opacity: 0.9 - index * 0.12,
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ borderRadius: 24, backgroundColor: subtleSurface, border: "1px solid rgba(217, 148, 74, 0.55)", padding: "22px 24px" }}>
+          <div style={{ color: "#D9944A", fontSize: 18, fontWeight: 700 }}>
+            {asString(testSuite.label) ?? "TESTS"}
+          </div>
+          <div style={{ color: "#E2E8F0", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: 12 }}>
+            {Array.from({ length: asNumber(testSuite.testCount) ?? 6 }).slice(0, 6).map((_, index) => (
+              <div key={`test-${index}`}>{`✓ test_case_${index + 1}`}</div>
+            ))}
+          </div>
+          {reviewLabel ? (
+            <div style={{ color: "#CBD5E1", fontSize: 18, marginTop: 16 }}>
+              {reviewLabel}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
   } else if (promptNozzle || promptText.length > 0 || nozzleLabels.length > 0) {
     body = (
       <div
         style={{
-          width: width * 0.78,
+          width: width * 0.82,
           display: "grid",
-          gridTemplateColumns: "0.85fr 1.15fr",
+          gridTemplateColumns: "0.75fr 1.05fr 0.95fr",
           gap: 24,
         }}
       >
@@ -1931,11 +2618,16 @@ const AnimatedDiagramVisual: React.FC<{
                 fontSize: 18,
                 fontWeight: 700,
               }}
-            >
-              {label}
-            </div>
-          ))}
-        </div>
+              >
+                {label}
+              </div>
+            ))}
+            {asString(data.promptFile) ? (
+              <div style={{ color: "#94A3B8", fontFamily: "'JetBrains Mono', monospace", fontSize: 16 }}>
+                {asString(data.promptFile)}
+              </div>
+            ) : null}
+          </div>
         <div
           style={{
             borderRadius: 28,
@@ -1960,6 +2652,36 @@ const AnimatedDiagramVisual: React.FC<{
               {line}
             </div>
           ))}
+        </div>
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "24px 28px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div style={{ color: "#2DD4BF", fontSize: 18, fontWeight: 700 }}>Dual generation</div>
+          {Boolean(data.dualGeneration)
+            ? ["A", "B"].map((variant) => (
+                <div key={variant} style={{ padding: "12px 14px", borderRadius: 16, backgroundColor: "rgba(2, 6, 23, 0.72)" }}>
+                  <div style={{ color: "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 15 }}>
+                    {`$ pdd generate ${asString(data.promptFile) ?? "user_parser.prompt"}`}
+                  </div>
+                  <div style={{ color: "#4ADE80", fontSize: 16, fontWeight: 700, marginTop: 8 }}>
+                    {`✓ All tests passing (${variant})`}
+                  </div>
+                </div>
+              ))
+            : null}
+          {Boolean(data.dualGeneration) ? (
+            <div style={{ color: "#E2E8F0", fontSize: 18, fontWeight: 700, marginTop: 8 }}>
+              Same prompt. Different code. Same behavior.
+            </div>
+          ) : null}
         </div>
       </div>
     );

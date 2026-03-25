@@ -3640,10 +3640,12 @@ class TestDigitPrefixedIdentifiers:
             project_dir=str(project_dir),
         )
 
-        assert 'import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";' in tsx
-        assert '"08_final_title_card": Closing09FinalTitleCard,' in tsx
+        assert 'import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";' not in tsx
+        assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' in tsx
+        assert '"08_final_title_card": {"specBaseName": "08_final_title_card"' in tsx
+        assert "<GeneratedContractVisual />" in tsx
 
-    def test_generate_root_tsx_uses_logical_preview_id_when_import_name_drifts(self, tmp_path):
+    def test_generate_root_tsx_uses_generated_contract_preview_for_structured_title_cards(self, tmp_path):
         project_dir = tmp_path
         remotion_dir = tmp_path / "remotion"
         remotion_src = remotion_dir / "src" / "remotion"
@@ -3687,8 +3689,10 @@ class TestDigitPrefixedIdentifiers:
             project_dir=str(project_dir),
         )
 
-        assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' in root
+        assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' not in root
+        assert 'import { GeneratedContractVisual } from "./_shared/GeneratedContractVisual";' in root
         assert 'id="closing08-final-title-card"' in root
+        assert 'component={Closing08FinalTitleCardPreview}' in root
 
     def test_generate_root_tsx_registers_fallback_preview_for_manifest_component_without_import(self, tmp_path):
         project_dir = tmp_path
@@ -4888,6 +4892,19 @@ class TestContractFirstVisualResolution:
             has_exact_component=False,
         )
 
+    def test_prefers_generated_contract_for_structured_title_cards_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "title_card",
+                    "sectionLabel": "PART 1",
+                    "titleLine1": "THE ECONOMICS",
+                    "titleLine2": "OF DARNING",
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_prefers_generated_contract_for_stillness_beats(self):
         assert _should_prefer_generated_contract_renderer(
             {
@@ -4898,6 +4915,41 @@ class TestContractFirstVisualResolution:
                 }
             },
             has_exact_component=False,
+        )
+
+    def test_prefers_generated_contract_for_code_visualization_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "code_visualization",
+                    "chartId": "legacy_codebase_reveal",
+                    "fileNames": ["auth_handler.py"],
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_chart_events_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "chart_event",
+                    "chartId": "code_cost_triple_line",
+                    "event": "crossing_moment",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_supported_diagram_ids_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "animated_diagram",
+                    "diagramId": "prompt_replaces_review",
+                }
+            },
+            has_exact_component=True,
         )
 
     def test_prefers_generated_contract_for_animated_diagrams(self):

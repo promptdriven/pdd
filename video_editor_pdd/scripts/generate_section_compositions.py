@@ -1246,14 +1246,38 @@ MEDIA_DRIVEN_VISUAL_TYPES = {
 
 CONTRACT_FIRST_VISUAL_TYPES = {
     'animated_diagram',
+    'animated_chart',
     'annotation_overlay',
+    'chart_callback',
+    'chart_event',
     'code_transformation',
     'code_visualization',
     'dual_meter_animation',
+    'forking_chart',
     'inset_chart',
     'network_graph',
+    'pie_chart',
     'text_overlay_with_morph',
     'transition',
+}
+
+CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
+    'animated_chart',
+    'chart_callback',
+    'chart_event',
+    'code_visualization',
+    'forking_chart',
+    'inset_chart',
+    'pie_chart',
+}
+
+CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
+    'code_generation_comparison',
+    'embedded_code_document',
+    'five_generations',
+    'prompt_nozzle',
+    'prompt_replaces_review',
+    'verilog_synthesis_triple',
 }
 
 
@@ -1279,9 +1303,6 @@ def _should_prefer_generated_contract_renderer(
     if not isinstance(data_points, dict):
         return False
 
-    if has_exact_component:
-        return False
-
     if _is_structured_title_card(data_points):
         return True
 
@@ -1290,11 +1311,24 @@ def _should_prefer_generated_contract_renderer(
         return False
 
     normalized_type = visual_type.strip().lower()
-    if normalized_type in CONTRACT_FIRST_VISUAL_TYPES:
-        return True
+    diagram_id = data_points.get('diagramId')
+    normalized_diagram_id = (
+        diagram_id.strip().lower()
+        if isinstance(diagram_id, str) and diagram_id.strip()
+        else None
+    )
 
     if normalized_type == 'split_screen':
         return not has_exact_component
+
+    if has_exact_component:
+        return (
+            normalized_type in CONTRACT_FIRST_EXACT_OVERRIDE_TYPES
+            or normalized_diagram_id in CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS
+        )
+
+    if normalized_type in CONTRACT_FIRST_VISUAL_TYPES:
+        return True
 
     return False
 

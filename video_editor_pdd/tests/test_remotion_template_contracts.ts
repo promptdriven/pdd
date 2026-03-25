@@ -186,6 +186,7 @@ describe("shared generated contract renderer", () => {
 
     expect(source).toMatch(/style === ["']stillness_beat["']/);
     expect(source).toMatch(/sectionLabel/);
+    expect(source).toMatch(/titleLine1|titleLine2|subtitle|tagline/);
     expect(source).toMatch(/ghostElements/);
     expect(source).toMatch(/divider|rule/i);
   });
@@ -195,7 +196,7 @@ describe("shared generated contract renderer", () => {
 
     expect(source).not.toContain("Generated from visual contract");
     expect(source).toMatch(/diagramId/);
-    expect(source).toMatch(/promptNozzle|prompt_ratio|ratchet|five_generations|embedded_code_document/i);
+    expect(source).toMatch(/promptNozzle|prompt_ratio|ratchet|five_generations|embedded_code_document|prompt_replaces_review|verilog_synthesis_triple/i);
     expect(source).toMatch(/echoes/);
   });
 
@@ -204,7 +205,14 @@ describe("shared generated contract renderer", () => {
 
     expect(source).toMatch(/headerColor/);
     expect(source).toMatch(/tokenCount|scope|multiplier/);
-    expect(source).toMatch(/codeComments|terminalCommands|workflow/);
+    expect(source).toMatch(/codeComments|warningComments|lineCount|terminalCommands|workflow/);
+  });
+
+  it("supports contract-driven chart variants beyond the original line-series happy path", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/degradationRange|causalChain|crossings|debtResetNote/);
+    expect(source).toMatch(/threshold|keyDates|debtShading/);
   });
 });
 
