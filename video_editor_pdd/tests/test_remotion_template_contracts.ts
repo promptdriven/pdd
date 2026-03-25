@@ -189,6 +189,7 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/titleLine1|titleLine2|subtitle|tagline/);
     expect(source).toMatch(/ghostElements/);
     expect(source).toMatch(/divider|rule/i);
+    expect(source).toMatch(/resolvedTitleLines\.length > 1/);
   });
 
   it("renders transitions and contract-first diagrams without the old placeholder badge", () => {
@@ -213,6 +214,18 @@ describe("shared generated contract renderer", () => {
 
     expect(source).toMatch(/degradationRange|causalChain|crossings|debtResetNote/);
     expect(source).toMatch(/threshold|keyDates|debtShading/);
+    expect(source).toMatch(/computeSeriesBounds/);
+    expect(source).toMatch(/trapArrow|annotations/);
+  });
+
+  it("supports the remaining animated-diagram families that were still falling back to placeholders", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/diagramId === "context_compression"/);
+    expect(source).toMatch(/diagramId === "mold_defect_fix"/);
+    expect(source).toMatch(/diagramId === "bug_add_wall"/);
+    expect(source).toMatch(/diagramId === "grounding_feedback_loop"/);
+    expect(source).toMatch(/diagramId === "ratchet_timelapse"/);
   });
 });
 

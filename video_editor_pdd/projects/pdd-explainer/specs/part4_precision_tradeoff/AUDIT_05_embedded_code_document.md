@@ -1,4 +1,4 @@
 ## Verdict
 warn
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (prompt, natural, language, code, total), so the frame does not support a hard missing-text failure.
+OCR confirmed visible text tokens in the rendered frame (natural, language, user, architecture, intent), so the frame does not support a hard missing-text failure.

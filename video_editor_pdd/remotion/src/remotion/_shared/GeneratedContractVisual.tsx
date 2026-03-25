@@ -12,13 +12,11 @@ import {
   useVisualContractData,
   useVisualMediaAssetSrc,
 } from "./visual-runtime";
-
-type SeriesEntry = {
-  label: string;
-  color: string;
-  points: { x: number; y: number }[];
-  style?: string | null;
-};
+import {
+  buildChartPath,
+  computeSeriesBounds,
+  type SeriesEntry,
+} from "./chart-utils";
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -176,29 +174,6 @@ const hasExplicitHeaderCopy = (data: Record<string, unknown>): boolean => {
       resolveEyebrow(data) ||
       resolveSubtitleLines(data).length > 0
   );
-};
-
-const buildPath = (
-  points: { x: number; y: number }[],
-  width: number,
-  height: number
-): string => {
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const spanX = Math.max(1, maxX - minX);
-  const spanY = Math.max(1, maxY - minY);
-
-  return points
-    .map((point, index) => {
-      const x = ((point.x - minX) / spanX) * width;
-      const y = height - ((point.y - minY) / spanY) * height;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
 };
 
 const buildDegradationSeries = (
@@ -560,13 +535,14 @@ const TitleCardVisual: React.FC<{
             {eyebrow}
           </div>
         ) : null}
-        {isStillnessBeat ? (
+        {isStillnessBeat || resolvedTitleLines.length > 1 ? (
           <div
             style={{
               width: 300,
-              height: 1,
+              height: 2,
               backgroundColor: ruleColor,
               borderRadius: 999,
+              opacity: resolvedTitleLines.length > 1 ? 0.9 : 1,
             }}
           />
         ) : null}
@@ -791,6 +767,12 @@ const ChartVisual: React.FC<{
         .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
   const debtResetNote = asString(data.debtResetNote);
+  const annotations = Array.isArray(data.annotations)
+    ? data.annotations
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const trapArrow = asRecord(data.trapArrow);
   const eventLabel = asString(data.label) ?? asString(asRecord(data.takeaway)?.line1);
   const eventSubLabel =
     debtResetNote ??
@@ -799,6 +781,7 @@ const ChartVisual: React.FC<{
   const showInsetCallout = data.type === "inset_chart" && causalChain.length > 0;
   const chartWidth = width * 0.72;
   const chartHeight = height * 0.5;
+  const seriesBounds = computeSeriesBounds(series);
   const reveal = interpolate(frame, [0, 24], [0.25, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
@@ -859,7 +842,7 @@ const ChartVisual: React.FC<{
           {series.map((entry) => (
             <path
               key={entry.label}
-              d={buildPath(entry.points, chartWidth, chartHeight)}
+              d={buildChartPath(entry.points, chartWidth, chartHeight, seriesBounds)}
               fill="none"
               stroke={entry.color}
               strokeWidth={4}
@@ -1019,6 +1002,72 @@ const ChartVisual: React.FC<{
             }}
           >
             {eventSubLabel}
+          </div>
+        ) : null}
+        {annotations.length > 0 ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 28,
+              bottom: 28,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              maxWidth: chartWidth * 0.42,
+            }}
+          >
+            {annotations.slice(0, 2).map((entry, index) => (
+              <div
+                key={`annotation-${index}`}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 16,
+                  backgroundColor: "rgba(2, 6, 23, 0.8)",
+                  border: `1px solid ${(asString(entry.color) ?? "#60A5FA")}44`,
+                }}
+              >
+                <div
+                  style={{
+                    color: asString(entry.color) ?? "#60A5FA",
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: 16,
+                    fontWeight: 700,
+                  }}
+                >
+                  {asString(entry.header) ?? asString(entry.text) ?? "Annotation"}
+                </div>
+                <div
+                  style={{
+                    color: "#CBD5E1",
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: 15,
+                    marginTop: 4,
+                  }}
+                >
+                  {asString(entry.source) ?? asString(entry.detail) ?? ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {trapArrow ? (
+          <div
+            style={{
+              position: "absolute",
+              left: chartWidth * 0.3,
+              top: chartHeight * 0.18,
+              transform: "translateX(-50%)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              color: asString(trapArrow.color) ?? "#D9944A",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 18,
+              fontWeight: 700,
+            }}
+          >
+            <span>{asString(trapArrow.label) ?? "Trap"}</span>
+            <span style={{ fontSize: 24 }}>↓</span>
           </div>
         ) : null}
       </div>
@@ -2391,45 +2440,365 @@ const AnimatedDiagramVisual: React.FC<{
         </div>
       </div>
     );
+  } else if (diagramId === "context_compression") {
+    const moduleCount = Math.max(8, asNumber(data.moduleCount) ?? 20);
+    const overflowCount = Math.max(0, asNumber(data.overflowCount) ?? 0);
+    const ratio = asString(data.compressionRatio) ?? "5-10×";
+    body = (
+      <div
+        style={{
+          width: width * 0.84,
+          display: "grid",
+          gridTemplateColumns: "1.05fr 0.95fr",
+          gap: 24,
+          alignItems: "center",
+        }}
+      >
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "28px 30px",
+            display: "grid",
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+            gap: 14,
+            minHeight: 420,
+          }}
+        >
+          {Array.from({ length: moduleCount }).map((_, index) => (
+            <div
+              key={`module-${index}`}
+              style={{
+                height: 82,
+                borderRadius: 16,
+                backgroundColor: index < moduleCount - overflowCount ? "rgba(74, 144, 217, 0.16)" : "rgba(239, 68, 68, 0.16)",
+                border: `1px solid ${index < moduleCount - overflowCount ? "rgba(74, 144, 217, 0.44)" : "rgba(239, 68, 68, 0.44)"}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: index < moduleCount - overflowCount ? "#BFDBFE" : "#FCA5A5",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14,
+              }}
+            >
+              {`mod_${index + 1}`}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "28px 30px",
+            minHeight: 420,
+            position: "relative",
+          }}
+        >
+          <div
+            style={{
+              width: asNumber(asRecord(data.contextWindow)?.width) ?? 600,
+              maxWidth: "100%",
+              height: asNumber(asRecord(data.contextWindow)?.height) ?? 500,
+              maxHeight: 320,
+              margin: "0 auto",
+              borderRadius: 24,
+              border: "2px solid rgba(74, 144, 217, 0.65)",
+              boxShadow: "0 0 0 1px rgba(74, 144, 217, 0.18) inset",
+              padding: 22,
+              display: "grid",
+              gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+              gap: 10,
+            }}
+          >
+            {Array.from({ length: Math.max(8, moduleCount - overflowCount) }).map((_, index) => (
+              <div
+                key={`prompt-${index}`}
+                style={{
+                  height: 34,
+                  borderRadius: 12,
+                  backgroundColor: "rgba(45, 212, 191, 0.18)",
+                  border: "1px solid rgba(45, 212, 191, 0.4)",
+                }}
+              />
+            ))}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: 34,
+              top: 34,
+              padding: "10px 16px",
+              borderRadius: 999,
+              backgroundColor: "rgba(45, 212, 191, 0.14)",
+              color: "#2DD4BF",
+              fontSize: 28,
+              fontWeight: 700,
+            }}
+          >
+            {ratio}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: 34,
+              bottom: 30,
+              color: "#E2E8F0",
+              fontSize: 24,
+              fontWeight: 700,
+            }}
+          >
+            {asString(data.resultLabel) ?? "Same system. More fits."}
+          </div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "mold_defect_fix") {
+    const elements = asRecord(data.elements);
+    const counter = asRecord(elements?.counter);
+    body = (
+      <div
+        style={{
+          width: width * 0.84,
+          display: "grid",
+          gridTemplateColumns: "1.2fr 0.8fr",
+          gap: 24,
+          alignItems: "center",
+        }}
+      >
+        <div
+          style={{
+            position: "relative",
+            minHeight: 420,
+            borderRadius: 32,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ position: "absolute", left: 60, right: 60, top: 220, height: 10, backgroundColor: "rgba(148, 163, 184, 0.35)" }} />
+          <div style={{ position: "absolute", left: 120, top: 100, width: 320, height: 180, borderRadius: 28, border: "2px solid rgba(217, 148, 74, 0.7)" }} />
+          {Array.from({ length: 5 }).map((_, index) => (
+            <div
+              key={`part-${index}`}
+              style={{
+                position: "absolute",
+                left: 560 + index * 72,
+                top: index === 1 ? 196 : 176,
+                width: 52,
+                height: 52,
+                borderRadius: 16,
+                backgroundColor: index === 1 ? "#EF4444" : "#4A90D9",
+                boxShadow: index === 1 ? "0 0 18px rgba(239, 68, 68, 0.4)" : undefined,
+              }}
+            />
+          ))}
+          <div
+            style={{
+              position: "absolute",
+              left: 380,
+              top: 76,
+              width: 64,
+              height: 64,
+              borderRadius: 999,
+              border: "3px solid rgba(251, 191, 36, 0.8)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#FBBF24",
+              fontSize: 28,
+              fontWeight: 700,
+            }}
+          >
+            🔧
+          </div>
+        </div>
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "28px 30px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 16,
+          }}
+        >
+          <div style={{ color: "#4ADE80", fontSize: 48, fontWeight: 800 }}>
+            {asString(counter?.maxValue) ?? "10000+"}
+          </div>
+          <div style={{ color: "#E2E8F0", fontSize: 28, fontWeight: 700 }}>
+            All future parts inherit the fix
+          </div>
+          <div style={{ color: "#94A3B8", fontSize: 20, lineHeight: 1.4 }}>
+            defect found → fix mold → every new part is correct
+          </div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "bug_add_wall") {
+    body = (
+      <div
+        style={{
+          width: width * 0.84,
+          display: "grid",
+          gridTemplateColumns: "1.05fr 0.95fr",
+          gap: 24,
+        }}
+      >
+        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 26px" }}>
+          <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 700, letterSpacing: 1.6 }}>CODE</div>
+          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "48px 1fr", rowGap: 8 }}>
+            {Array.from({ length: 10 }).map((_, index) => (
+              <React.Fragment key={`bug-line-${index}`}>
+                <div style={{ color: "#475569", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}>{index + 1}</div>
+                <div style={{ color: index === 4 ? "#FCA5A5" : "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 16 }}>
+                  {index === 4 ? "if user_id is None: return None" : "normalize_user(user_id)"}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, minHeight: 240, position: "relative" }}>
+            <div style={{ position: "absolute", left: 44, right: 44, top: 52, height: 18, borderRadius: 999, backgroundColor: "rgba(45, 212, 191, 0.4)" }} />
+            <div style={{ position: "absolute", left: 44, right: 44, bottom: 52, height: 18, borderRadius: 999, backgroundColor: "rgba(217, 148, 74, 0.7)" }} />
+            <div style={{ position: "absolute", right: 120, top: 84, bottom: 84, width: 16, borderRadius: 999, backgroundColor: "#D9944A", boxShadow: "0 0 18px rgba(217, 148, 74, 0.4)" }} />
+          </div>
+          <div style={{ borderRadius: 24, backgroundColor: "rgba(2, 6, 23, 0.82)", border: subtleBorder, padding: "20px 22px" }}>
+            {asStringArray(data.terminalCommands).slice(0, 3).map((line, index) => (
+              <div key={`${line}-${index}`} style={{ color: index === 0 ? "#E2E8F0" : "#4ADE80", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: index === 0 ? 0 : 8 }}>
+                {index === 0 ? `$ ${line}` : `✓ ${line}`}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
   } else if (diagramId === "ratchet_timelapse") {
     body = (
       <div
         style={{
-          width: width * 0.78,
+          width: width * 0.84,
           display: "grid",
-          gridTemplateColumns: "1.15fr 0.85fr",
+          gridTemplateColumns: "1.1fr 0.9fr",
           gap: 24,
         }}
       >
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 14 }}>
-          {(timeline.length > 0 ? timeline : Array.from({ length: 6 }, (_, index) => ({ count: index + 1 }))).slice(0, 6).map((entry, index) => {
-            const count = asNumber(asRecord(entry)?.count) ?? index + 1;
-            return (
+        <div
+          style={{
+            position: "relative",
+            minHeight: 420,
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ position: "absolute", left: 110, right: 110, top: 70, bottom: 70, border: "2px solid rgba(148, 163, 184, 0.28)", borderRadius: 28 }} />
+          {Array.from({ length: 25 }).map((_, index) => (
+            <div
+              key={`wall-${index}`}
+              style={{
+                position: "absolute",
+                left: 150 + (index % 5) * 72,
+                top: 120 + Math.floor(index / 5) * 44,
+                width: 20,
+                height: 34,
+                borderRadius: 999,
+                backgroundColor: "rgba(217, 148, 74, 0.92)",
+                boxShadow: "0 0 12px rgba(217, 148, 74, 0.5)",
+              }}
+            />
+          ))}
+          <div style={{ position: "absolute", right: 42, top: 36, color: "#D9944A", fontSize: 64, fontWeight: 800 }}>25</div>
+          <div style={{ position: "absolute", left: 46, bottom: 36, right: 46, color: "#E2E8F0", fontSize: 22, fontWeight: 700 }}>
+            Tests only accumulate. The mold only gets more precise.
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px" }}>
+            <div style={{ color: "#D9944A", fontSize: 18, fontWeight: 700 }}>
+              Ratchet effect
+            </div>
+            <div style={{ color: "#E2E8F0", fontSize: 24, marginTop: 12 }}>
+              Walls accumulate. They do not disappear.
+            </div>
+          </div>
+          <div style={{ borderRadius: 24, backgroundColor: "rgba(2, 6, 23, 0.82)", border: subtleBorder, padding: "20px 22px" }}>
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div key={`test-${index}`} style={{ color: "#4ADE80", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: index === 0 ? 0 : 8 }}>
+                {`✓ test_case_${index + 21}`}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "grounding_feedback_loop") {
+    const pipeline = phases.find((phase) => asString(phase.id) === "pipeline");
+    const stages = asStringArray(pipeline?.stages);
+    const pathPhase = phases.find((phase) => asString(phase.id) === "dual_grounding");
+    const paths = Array.isArray(pathPhase?.paths)
+      ? pathPhase.paths.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    body = (
+      <div
+        style={{
+          width: width * 0.84,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 24,
+          alignItems: "center",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          {paths.slice(0, 2).map((entry, index) => (
+            <div
+              key={`path-${index}`}
+              style={{
+                padding: "24px 26px",
+                borderRadius: 24,
+                backgroundColor: subtleSurface,
+                border: `1px solid ${(asString(entry.color) ?? (index === 0 ? "#4A90D9" : "#4ADE80"))}55`,
+              }}
+            >
+              <div style={{ color: asString(entry.color) ?? (index === 0 ? "#4A90D9" : "#4ADE80"), fontSize: 20, fontWeight: 700 }}>
+                {asString(entry.label) ?? `Path ${index + 1}`}
+              </div>
+              <div style={{ color: "#CBD5E1", fontSize: 18, marginTop: 10 }}>
+                {asString(entry.style) ?? "grounding path"}
+              </div>
+            </div>
+          ))}
+          <div style={{ padding: "18px 22px", borderRadius: 20, backgroundColor: "rgba(167, 139, 250, 0.12)", border: "1px solid rgba(167, 139, 250, 0.35)", color: "#E9D5FF", fontSize: 20, fontWeight: 700 }}>
+            {asString(asRecord(phases.find((phase) => asString(phase.id) === "feedback"))?.flow) ?? "(prompt, code) → Grounding Database"}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 14, alignItems: "center", justifyContent: "space-between" }}>
+          {(stages.length > 0 ? stages : ["Prompt", "Grounding", "Mold", "Test Walls", "Code"]).slice(0, 5).map((stage, index, allStages) => (
+            <React.Fragment key={stage}>
               <div
-                key={`ratchet-${index}`}
                 style={{
                   flex: 1,
-                  height: 120 + count * 22,
-                  borderRadius: 18,
-                  backgroundColor: "rgba(217, 148, 74, 0.24)",
-                  border: "1px solid rgba(217, 148, 74, 0.5)",
+                  padding: "22px 12px",
+                  borderRadius: 22,
+                  backgroundColor: subtleSurface,
+                  border: `1px solid ${index === 0 ? "rgba(45, 212, 191, 0.44)" : index === 1 ? "rgba(167, 139, 250, 0.44)" : index === 2 ? "rgba(96, 165, 250, 0.44)" : index === 3 ? "rgba(217, 148, 74, 0.44)" : "rgba(74, 222, 128, 0.44)"}`,
+                  color: "#E2E8F0",
+                  fontSize: 18,
+                  fontWeight: 700,
+                  textAlign: "center",
                 }}
-              />
-            );
-          })}
-        </div>
-        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px" }}>
-          <div style={{ color: "#D9944A", fontSize: 18, fontWeight: 700 }}>
-            {asString(ratchetMetaphor?.label) ?? "Ratchet effect"}
-          </div>
-          <div style={{ color: "#E2E8F0", fontSize: 24, marginTop: 12 }}>
-            {asString(ratchetMetaphor?.summary) ?? "Walls accumulate. They do not disappear."}
-          </div>
-          {statusDelay !== null ? (
-            <div style={{ color: "#94A3B8", fontSize: 18, marginTop: 16 }}>
-              {`Status delay: ${statusDelay} frames`}
-            </div>
-          ) : null}
+              >
+                {stage}
+              </div>
+              {index < allStages.length - 1 ? (
+                <div style={{ color: "#94A3B8", fontSize: 28, fontWeight: 700 }}>→</div>
+              ) : null}
+            </React.Fragment>
+          ))}
         </div>
       </div>
     );

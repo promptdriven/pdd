@@ -3,15 +3,18 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
+import { Part2ParadigmShift01SectionTitleCard } from "../Part2ParadigmShift01SectionTitleCard";
 import { Part2ParadigmShift08SynopsysPddEquivalence } from "../Part2ParadigmShift08SynopsysPddEquivalence";
 import { Part2ParadigmShift09AbstractionStaircase } from "../Part2ParadigmShift09AbstractionStaircase";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
+  "01_section_title_card": Part2ParadigmShift01SectionTitleCard,
   "11_synopsys_pdd_equivalence": Part2ParadigmShift08SynopsysPddEquivalence,
   "12_abstraction_staircase": Part2ParadigmShift09AbstractionStaircase,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_section_title_card": 120,
   "11_synopsys_pdd_equivalence": 390,
   "12_abstraction_staircase": 480,
 };

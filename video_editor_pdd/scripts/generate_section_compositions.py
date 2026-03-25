@@ -1262,13 +1262,8 @@ CONTRACT_FIRST_VISUAL_TYPES = {
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
-    'animated_chart',
-    'chart_callback',
-    'chart_event',
+    'code_transformation',
     'code_visualization',
-    'forking_chart',
-    'inset_chart',
-    'pie_chart',
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
@@ -1304,7 +1299,7 @@ def _should_prefer_generated_contract_renderer(
         return False
 
     if _is_structured_title_card(data_points):
-        return True
+        return not has_exact_component
 
     visual_type = data_points.get('type')
     if not isinstance(visual_type, str):

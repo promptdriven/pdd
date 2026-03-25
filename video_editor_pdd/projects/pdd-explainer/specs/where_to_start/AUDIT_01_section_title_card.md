@@ -1,4 +1,10 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame is sampled at frame 62 of 90 (~69% progress), which falls within the hold phase (frames 50-75). At this point, the spec expects all elements to be fully visible and static. The frame shows: (1) 'PART 6' label centered above the title in a muted gray tone consistent with #64748B at reduced opacity, with wide letter-spacing — matches spec. (2) 'WHERE TO START' in large, bold, white/light text centered below the section label — matches spec for Inter bold ~72px in #E2E8F0. (3) Deep navy-black background (#0A0F1A) — matches spec. (4) Both text elements are horizontally centered and vertically positioned near the vertical center of the frame, with 'PART 6' above and 'WHERE TO START' below — consistent with the spec's y:440 and y:500 layout intent. (5) The blueprint grid at 0.04 opacity and ghost codebase tree at 0.03-0.04 opacity are specified as extremely faint decorative elements; they are not visibly discernible in the rendered frame, which is expected given their near-invisible opacity values. (6) No subtitle is present, matching the spec's note that this title card has no tagline. The vertical positioning of the text block appears slightly above vertical center, which is consistent with the spec's y:440/y:500 placement (slightly above the 540 midpoint). Overall the frame reads as intended.
+Two significant issues are visible in the rendered frame:
+
+1. **Title text is truncated**: The main title reads "WHERE TO" instead of "WHERE TO START". The word "START" is completely missing. At frame 62/90 (69.4% progress, within the hold phase at frames 50-75), the full title should be completely visible and static.
+
+2. **Section number label is wrong**: The smaller text above the title reads "WHERE TO START" instead of the spec-required "PART 6". It appears the section label is displaying the full title text, while the main title element is being truncated or is showing only part of the text.
+
+The background (deep navy-black), blueprint grid dots, centered layout, typography styling, and letter-spacing all appear correct. The ghost codebase tree elements are present at very low opacity as expected. The overall composition and positioning are correct — the issue is purely in the text content mapping.

@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (cost, here, debt, resets), so the frame does not support a hard missing-text failure.
+The rendered frame shows the wrong chart entirely. The spec calls for a code cost chart with three lines (blue 'generate', amber dashed 'total cost', amber solid 'immediate patch') showing crossing points where the blue generate line drops below both amber lines, with 'We are here.' label, 'Debt resets with each generation.' annotation, and 'Small modules. Clear prompts. Always fits in context.' annotation. Instead, the frame displays what appears to be the fork/codebase size chart (from section AUDIT_08) with lines labeled 'Large codebase' and 'Small codebase', a red line, green line, blue line, and an amber dashed line, along with annotations like 'Same tools. Different codebase sizes.' and 'METR: 2025: experienced devs 18% slower'. This is a completely different visual from what the spec requires. None of the critical spec elements are present: no crossing circles with glow, no 'We are here.' label, no debt reset annotation, no generate line emphasis annotation.

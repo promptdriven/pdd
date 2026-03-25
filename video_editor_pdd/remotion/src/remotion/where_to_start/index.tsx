@@ -3,16 +3,16 @@ import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { WhereToStart04SourceOfTruthShift } from "../WhereToStart04SourceOfTruthShift";
+import { WhereToStart01SectionTitleCard } from "../WhereToStart01SectionTitleCard";
 import { WhereToStart07NoBigBangCallout } from "../WhereToStart07NoBigBangCallout";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "04_source_of_truth_shift": WhereToStart04SourceOfTruthShift,
+  "01_section_title_card": WhereToStart01SectionTitleCard,
   "06_no_big_bang_callout": WhereToStart07NoBigBangCallout,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "04_source_of_truth_shift": 180,
+  "01_section_title_card": 90,
   "06_no_big_bang_callout": 90,
 };
 

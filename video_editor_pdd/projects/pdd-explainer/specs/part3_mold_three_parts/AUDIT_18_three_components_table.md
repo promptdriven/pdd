@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (tests, when, conflict, always, encodes), so the frame does not support a hard missing-text failure.
+Several layout and content discrepancies between the rendered frame and spec. (1) The table is positioned in the upper-right quadrant rather than visually centered on the canvas as specified. (2) Row accent styling uses colored dot indicators instead of the specified 3px left accent bars. (3) Priority hierarchy arrows (Tests → Prompt → Grounding with 'overrides' labels) are entirely missing — this is a critical element for the 300-360 phase that should be fully visible by frame 389. (4) Code block is at bottom-left instead of specified bottom-right. (5) Mold icon/diagram is at center-left instead of bottom-left, and 'The mold is what matters.' text appears truncated to just 'The Mold'. (6) Grounding row color reads as green rather than the specified purple (#A78BFA). (7) No visible glow enhancement on the Tests row. The table content itself (text, column structure) is correct, and the priority line text and amber coloring are accurate.
