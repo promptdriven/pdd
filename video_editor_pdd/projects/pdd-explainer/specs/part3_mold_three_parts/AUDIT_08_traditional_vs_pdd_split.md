@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (patch, found, code, similar, elsewhere), so the frame does not support a hard missing-text failure.
+The rendered frame shows a completely different visual than the spec requires. The spec calls for a vertical split screen comparing 'Traditional' vs 'PDD' bug-fix workflows — a left panel with red-tinted cascading cards (Bug found → Patch code → Similar bug elsewhere → etc.) and a right panel with green-tinted cards (Bug found → Add test → Regenerate → Bug impossible forever), separated by a vertical divider at center. Instead, the frame displays what appears to be a different scene entirely: a mold/test-wall visualization with a grid of orange pill shapes labeled '25', text reading 'Tests only accumulate. The mold only gets more precise.', and a right-side panel showing 'Ratchet effect' with a list of test_case_21 through test_case_25 in green. There is no split-screen bug-fix comparison, no 'TRADITIONAL' or 'PDD' headers, no red/green flow cards, no connecting arrows, no lock icon, and no vertical divider. This is the wrong visual entirely for this spec — it appears to be rendering content from a different section (likely the test-walls or ratchet-effect scene).

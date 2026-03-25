@@ -705,6 +705,12 @@ def _extract_data_point_media_aliases(
             if resolved is not None:
                 break
         if resolved is None:
+            resolved = _resolve_contextual_video_static_path(
+                json.dumps(data_points, ensure_ascii=False),
+                raw_value,
+                remotion_public,
+            )
+        if resolved is None:
             return
         if alias_name:
             aliases.setdefault(alias_name, resolved)
@@ -1290,6 +1296,21 @@ def _is_structured_title_card(data_points: Dict[str, Any]) -> bool:
     )
 
 
+def _should_keep_exact_title_card_component(data_points: Dict[str, Any]) -> bool:
+    commands = data_points.get('commands')
+    if isinstance(commands, list) and any(
+        isinstance(command, str) and command.strip()
+        for command in commands
+    ):
+        return True
+
+    chart_id = data_points.get('chartId')
+    if isinstance(chart_id, str) and chart_id.strip().lower() == 'final_title_card':
+        return True
+
+    return False
+
+
 def _should_prefer_generated_contract_renderer(
     visual_contract: Dict[str, Any],
     has_exact_component: bool,
@@ -1299,7 +1320,7 @@ def _should_prefer_generated_contract_renderer(
         return False
 
     if _is_structured_title_card(data_points):
-        return not has_exact_component
+        return not (has_exact_component and _should_keep_exact_title_card_component(data_points))
 
     visual_type = data_points.get('type')
     if not isinstance(visual_type, str):
@@ -1314,7 +1335,7 @@ def _should_prefer_generated_contract_renderer(
     )
 
     if normalized_type == 'split_screen':
-        return not has_exact_component
+        return True
 
     if has_exact_component:
         return (
@@ -2690,6 +2711,7 @@ def generate_root_tsx(
                 visual['id']: {
                     'specBaseName': visual.get('specBaseName'),
                     'dataPoints': visual.get('dataPoints'),
+                    'mediaAliases': visual.get('mediaAliases'),
                     'overlayConfig': visual.get('overlayConfig'),
                     'renderMode': visual.get('renderMode'),
                 }
@@ -2744,6 +2766,10 @@ def generate_root_tsx(
         for comp_id in preview_visual_ids:
             media = visual_media_manifest.get(comp_id)
             contract = contract_visuals.get(comp_id)
+            if not media and isinstance(contract, dict):
+                contract_media = contract.get('mediaAliases')
+                if isinstance(contract_media, dict) and contract_media:
+                    media = contract_media
             wrapper_key = f'{section["id"]}:{comp_id}'
             export_name = section_component_lookup.get(section['id'], {}).get(comp_id)
             logical_name = export_name or resolve_logical_component_name(comp_id, section['id'])

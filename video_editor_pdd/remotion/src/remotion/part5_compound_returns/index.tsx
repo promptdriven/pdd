@@ -3,7 +3,6 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part5CompoundReturns01SectionTitleCard } from "../Part5CompoundReturns01SectionTitleCard";
 import { Part5CompoundReturns02MaintenancePieChart } from "../Part5CompoundReturns02MaintenancePieChart";
 import { Part5CompoundReturns03CompoundDebtCurve } from "../Part5CompoundReturns03CompoundDebtCurve";
 import { Part5CompoundReturns04DivergingCostCurves } from "../Part5CompoundReturns04DivergingCostCurves";
@@ -12,7 +11,6 @@ import { Part5CompoundReturns07EconomicsCrossingCallback } from "../Part5Compoun
 import { Part5CompoundReturns08ContrarianQuoteCard } from "../Part5CompoundReturns08ContrarianQuoteCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "01_section_title_card": Part5CompoundReturns01SectionTitleCard,
   "02_maintenance_pie_chart": Part5CompoundReturns02MaintenancePieChart,
   "03_compound_debt_curve": Part5CompoundReturns03CompoundDebtCurve,
   "04_diverging_cost_curves": Part5CompoundReturns04DivergingCostCurves,
@@ -22,7 +20,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "01_section_title_card": 120,
   "02_maintenance_pie_chart": 420,
   "03_compound_debt_curve": 360,
   "04_diverging_cost_curves": 420,

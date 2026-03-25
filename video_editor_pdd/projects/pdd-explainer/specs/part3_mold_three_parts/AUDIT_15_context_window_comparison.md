@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (context, dense, code, prompt, blocks), so the frame does not support a hard missing-text failure.
+The rendered frame shows a stock photo/video of hands typing on a keyboard with a monitor displaying code in the background. This is entirely wrong. The spec calls for a split-screen data visualization with two context windows side by side (left: dense raw code, right: clean prompt blocks), a '10×' multiplier between them, token count labels, scope labels, and bottom statement text — all on a deep navy-black background (#0A0F1A). At 90.7% progress (frame 734 of 810, animation phase 660-810), the frame should show: left panel dimmed to 0.3 opacity, right panel brightened, the '10×' multiplier visible at center with glow, and the bottom statement text visible. None of these elements are present. The entire visual is a stock footage clip rather than the specified programmatic split-screen comparison graphic.

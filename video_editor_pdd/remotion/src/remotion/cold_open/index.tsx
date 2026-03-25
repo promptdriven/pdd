@@ -3,23 +3,18 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
-import { ColdOpen01SplitScreenHook } from "../ColdOpen01SplitScreenHook";
+import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { ColdOpen06CodeBlinkPatched } from "../ColdOpen06CodeBlinkPatched";
 import { ColdOpen07CodeRegeneration } from "../ColdOpen07CodeRegeneration";
-import { ColdOpen07PddTitleCard } from "../ColdOpen07PddTitleCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "01_split_screen_hook": ColdOpen01SplitScreenHook,
   "05_code_blink_patched": ColdOpen06CodeBlinkPatched,
   "06_code_regeneration": ColdOpen07CodeRegeneration,
-  "07_pdd_title_card": ColdOpen07PddTitleCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "01_split_screen_hook": 240,
   "05_code_blink_patched": 150,
   "06_code_regeneration": 270,
-  "07_pdd_title_card": 150,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {

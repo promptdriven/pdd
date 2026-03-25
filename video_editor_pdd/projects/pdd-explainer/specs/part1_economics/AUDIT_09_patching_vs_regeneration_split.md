@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (context, window, cluttered, clean, tokens), so the frame does not support a hard missing-text failure.
+The rendered frame shows stock photography of people typing at computers in a split-screen layout, rather than the specified data visualization. The spec requires a diagrammatic comparison with: (1) a left panel containing a context window box filled with dense red-highlighted irrelevant code blocks and tiny green relevant blocks with a '~15,000 tokens' counter, (2) a right panel containing a clean context window box with layered prompt/tests/grounding sections and a '~2,500 tokens' counter, (3) bottom comparison stats showing '~5% utilization' vs '~95% utilization', and (4) panel headers 'AGENTIC PATCHING' and 'PDD REGENERATION'. The actual frame has the panel header labels visible at the bottom ('AGENTIC PATCHING' on the left, 'PDD REGENERATION' on the right), and a vertical split divider is present, but the entire interior content is stock photography rather than the specified code-editor-aesthetic token visualization diagram. None of the critical chart elements (context window boxes, token counters, colored code blocks, layered sections, comparison stats, legend labels) are present.

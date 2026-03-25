@@ -3607,7 +3607,7 @@ class TestDigitPrefixedIdentifiers:
                 "",
                 "## Data Points JSON",
                 "```json",
-                '{"type":"title_card","title":"Prompt-Driven Development"}',
+                '{"type":"title_card","title":"Prompt-Driven Development","commands":["uv tool install pdd-cli"]}',
                 "```",
             ]),
             encoding="utf-8",
@@ -3662,7 +3662,7 @@ class TestDigitPrefixedIdentifiers:
                 "",
                 "## Data Points JSON",
                 "```json",
-                '{"type":"title_card","title":"Prompt-Driven Development"}',
+                '{"type":"title_card","title":"Prompt-Driven Development","commands":["uv tool install pdd-cli"]}',
                 "```",
             ]),
             encoding="utf-8",
@@ -3691,6 +3691,107 @@ class TestDigitPrefixedIdentifiers:
         assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' in root
         assert 'id="closing08-final-title-card"' in root
         assert 'component={Closing09FinalTitleCardPreview}' in root
+
+    def test_generate_root_tsx_includes_preview_media_and_contract_aliases_from_visual_contract_manifest(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        component_dir = remotion_src / "Part1Economics12DeveloperDarningSplit"
+        section_dir = remotion_src / "part1_economics"
+
+        component_dir.mkdir(parents=True)
+        section_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+        (remotion_public / "veo").mkdir()
+
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "grandmother_darning_lamplight.mp4").write_text("stub", encoding="utf-8")
+
+        (component_dir / "index.ts").write_text(
+            "export const Part1Economics12DeveloperDarningSplit = () => null;\n"
+            "export default Part1Economics12DeveloperDarningSplit;\n",
+            encoding="utf-8",
+        )
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "12_developer_darning_split", desc: "split", lane: 0 }];',
+            encoding="utf-8",
+        )
+        (specs_dir / "12_developer_darning_split.md").write_text(
+            "\n".join([
+                "[split:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "split_screen",
+                        "leftPanel": {"label": "CURSOR"},
+                        "rightPanel": {"label": "DARNING NEEDLE"},
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "13_developer_cursor_coding.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "veo_clip",
+                        "clipId": "developer_cursor_coding",
+                        "embeddedIn": "12_developer_darning_split",
+                        "panel": "left",
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "14_grandmother_darning_expert.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "veo_clip",
+                        "clipId": "grandmother_darning_expert",
+                        "embeddedIn": "12_developer_darning_split",
+                        "panel": "right",
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "part1_economics",
+                "compositionId": "Part1EconomicsSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "part1_economics",
+                "compositions": ["12_developer_darning_split"],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert '"part1_economics:12_developer_darning_split": { leftSrc: "veo/developer_cursor_edit.mp4"' in root
+        assert 'rightSrc: "veo/grandmother_darning_lamplight.mp4"' in root
+        assert '"mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4"' in root
+        assert '"revealSrc": "veo/grandmother_darning_lamplight.mp4"' in root
 
     def test_generate_root_tsx_registers_fallback_preview_for_manifest_component_without_import(self, tmp_path):
         project_dir = tmp_path
@@ -4474,6 +4575,67 @@ class TestVisualMediaManifestContextualClipResolution:
         assert manifest["04_liquid_hits_wall"]["defaultSrc"] == "veo/bug_adds_wall.mp4"
         assert manifest["16_grounding_material"]["defaultSrc"] == "veo/grounding_material_flow.mp4"
 
+    def test_resolves_structured_split_panel_clip_ids_contextually(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "grandmother_darning_lamplight.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "12_developer_darning_split.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "# Section 1.12: Developer Darning Split",
+                    "",
+                    "## Visual Description",
+                    "Split screen with developer hands at a Cursor editor on the left and a grandmother darning a sock on the right.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "split_screen",
+                            "leftPanel": {
+                                "clipId": "developer_cursor_coding",
+                                "label": "CURSOR",
+                            },
+                            "rightPanel": {
+                                "clipId": "grandmother_darning_expert",
+                                "label": "DARNING NEEDLE",
+                            },
+                            "embeddedVeoClips": [
+                                "developer_cursor_coding",
+                                "grandmother_darning_expert",
+                            ],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "part1_economics",
+                "specDir": "part1_economics",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert manifest["12_developer_darning_split"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
+        assert manifest["12_developer_darning_split"]["rightSrc"] == "veo/grandmother_darning_lamplight.mp4"
+
 
 class TestWrapperTemplateComponentMediaFiltering:
     """The generated section wrapper must NOT pass Veo media to
@@ -4890,14 +5052,26 @@ class TestContractFirstVisualResolution:
             has_exact_component=False,
         )
 
-    def test_keeps_exact_component_for_structured_title_cards_when_available(self):
-        assert not _should_prefer_generated_contract_renderer(
+    def test_prefers_generated_contract_for_standard_structured_title_cards_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "title_card",
                     "sectionLabel": "PART 1",
                     "titleLine1": "THE ECONOMICS",
                     "titleLine2": "OF DARNING",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_command_driven_title_cards_when_available(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "title_card",
+                    "title": "Prompt-Driven Development",
+                    "commands": ["uv tool install pdd-cli"],
                 }
             },
             has_exact_component=True,
@@ -4971,8 +5145,8 @@ class TestContractFirstVisualResolution:
             has_exact_component=False,
         )
 
-    def test_keeps_exact_split_component_when_one_exists(self):
-        assert not _should_prefer_generated_contract_renderer(
+    def test_prefers_generated_contract_for_split_even_when_exact_component_exists(self):
+        assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "split_screen",
