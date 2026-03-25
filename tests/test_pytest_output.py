@@ -326,6 +326,28 @@ def test_run_pytest_and_capture_output_nonzero_returncode_never_looks_passing(tm
     assert (results.get("failures", 0) + results.get("errors", 0)) > 0
 
 
+def test_run_pytest_exit_code_5_no_tests_collected_is_not_failure(tmp_path) -> None:
+    """
+    Exit code 5 means 'no tests collected' — the file has no test functions.
+    This is benign, not a failure. The safety net should not convert it to errors=1.
+    """
+    test_file = tmp_path / "test_data.py"
+    test_file.write_text("# Utility module, no test functions\nclass TestDataMixin:\n    pass\n", encoding="utf-8")
+
+    import subprocess
+
+    fake_completed = subprocess.CompletedProcess(
+        args=["pytest"], returncode=5, stdout="no tests ran in 0.00s", stderr=""
+    )
+    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+        result = run_pytest_and_capture_output(str(test_file))
+
+    results = result.get("test_results", [{}])[0]
+    assert results.get("return_code") == 5
+    assert results.get("failures", 0) == 0, "Exit code 5 should not produce failures"
+    assert results.get("errors", 0) == 0, "Exit code 5 should not produce errors"
+
+
 # ============================================================================
 # Regression Tests - PDD Project Structure (Cross-Directory Imports)
 # ============================================================================

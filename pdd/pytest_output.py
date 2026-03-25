@@ -234,7 +234,8 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
             errors = 1
         # Safety net: if parsing missed failures due to formatting (e.g., ANSI colors),
         # never report a passing result on a non-zero return code.
-        if return_code != 0 and failures == 0 and errors == 0:
+        # Exit code 5 means "no tests collected" — benign, not a failure.
+        if return_code not in (0, 5) and failures == 0 and errors == 0:
             if return_code == 1:
                 failures = 1
             else:

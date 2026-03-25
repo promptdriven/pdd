@@ -356,13 +356,10 @@ def _extract_test_files(
         if _is_test_file(f):
             _add(f)
 
-    # Scan issue content for inline test file references
-    # Match Python test files (test_*.py) and TypeScript test files (*.test.ts/tsx, *.spec.ts/tsx)
-    for match in _re.finditer(
-        r'((?:[\w/._-]+/)*(?:test_[\w.-]+\.py|[\w.-]+\.(?:test|spec)\.(?:tsx|ts)))',
-        issue_content,
-    ):
-        _add(match.group(1))
+    # NOTE: Inline regex scan of issue content was removed (issue #633).
+    # The regex matched file paths mentioned as *examples* in narrative text,
+    # pulling unrelated tests into verification. The four remaining discovery
+    # paths (markers, changed_files, disk hashes, git modified) are sufficient.
 
     # Detect test files actually created/modified on disk during workflow
     if initial_file_hashes is not None:

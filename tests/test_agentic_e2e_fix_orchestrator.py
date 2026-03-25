@@ -2274,10 +2274,15 @@ class TestIssue797TypeScriptTestFiles:
 
         assert "e2e/tests/login.spec.ts" in result
 
-    # ── _extract_test_files: inline regex (line 197) ──
+    # ── _extract_test_files: inline regex removed (issue #633) ──
 
-    def test_extract_test_files_inline_regex_matches_tsx_test_files(self, tmp_path):
-        """Inline references to .test.tsx files in issue content should be found."""
+    def test_extract_test_files_narrative_mentions_not_extracted(self, tmp_path):
+        """Inline references in issue narrative should NOT be extracted.
+
+        The inline regex was removed because it picked up files mentioned as
+        examples, not just files to verify. Files should be discovered via
+        markers, changed_files, or disk/git detection instead.
+        """
         test_dir = tmp_path / "src" / "__test__"
         test_dir.mkdir(parents=True)
         (test_dir / "Button.test.tsx").touch()
@@ -2286,7 +2291,31 @@ class TestIssue797TypeScriptTestFiles:
 
         result = _extract_test_files(issue_content, [], tmp_path)
 
-        assert "src/__test__/Button.test.tsx" in result
+        assert "src/__test__/Button.test.tsx" not in result
+
+    def test_extract_test_files_does_not_match_narrative_examples(self, tmp_path):
+        """Files mentioned as examples in issue narrative should NOT be extracted.
+
+        Issue #633 mentioned link-github-save-navigation.spec.ts as an example
+        of a broken test, and the regex incorrectly picked it up for verification.
+        The inline regex should only match files from markers or changed_files,
+        not from unstructured narrative text.
+        """
+        # The example file exists on disk (as it would in a real project)
+        e2e_dir = tmp_path / "frontend" / "e2e" / "tests" / "settings"
+        e2e_dir.mkdir(parents=True)
+        (e2e_dir / "link-github-save-navigation.spec.ts").touch()
+
+        issue_content = (
+            "## Problem\n\n"
+            "PDD bug step 11 generates Playwright E2E tests that look correct but contain subtle bugs.\n\n"
+            "**Concrete example**: PR #627 generated `frontend/e2e/tests/settings/link-github-save-navigation.spec.ts` with 3 bugs.\n\n"
+            "## Fix\n\nUpdate the step 11 prompt."
+        )
+
+        result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert "frontend/e2e/tests/settings/link-github-save-navigation.spec.ts" not in result
 
     # ── _verify_tests_independently: runner dispatch ──
 
