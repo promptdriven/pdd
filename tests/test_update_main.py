@@ -1,12 +1,17 @@
 import pytest
 import sys
 import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 import click
 from click.testing import CliRunner
+import git
 
-# Import the function under test from the pdd package (module named the same as the function).
-from pdd.update_main import update_main
+from pdd.update_main import (
+    _included_docs_for_drift_report,
+    find_and_resolve_all_pairs,
+    update_main,
+)
 
 @pytest.fixture
 def mock_ctx():
@@ -318,10 +323,54 @@ def test_update_main_handles_unexpected_exception_gracefully(
 
 # --- Tests for --repo functionality ---
 
-import os
-from pathlib import Path
-import git
-from pdd.update_main import find_and_resolve_all_pairs
+
+def test_included_docs_for_drift_report_counts_all_prompts_referencing_doc(tmp_path, monkeypatch):
+    """Doc rows show how many scan-wide prompts include each doc, not only drifted count."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "README.md").write_text("# hi\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "api.md").write_text("api", encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    p = tmp_path / "prompts" / "m_python.prompt"
+    p.write_text(
+        "<include>../README.md</include>\n<include>../docs/api.md</include>\n",
+        encoding="utf-8",
+    )
+    p2 = tmp_path / "prompts" / "n_python.prompt"
+    p2.write_text("<include>../README.md</include>\n", encoding="utf-8")
+    all_prompts = [str(p), str(p2)]
+    # Only m_python is drifted; README is still included by 2 prompts in the scan.
+    agg = _included_docs_for_drift_report(str(tmp_path), all_prompts, [str(p)])
+    by_name = {rel: c for rel, c in agg}
+    assert by_name.get("README.md") == 2
+    assert by_name.get("docs/api.md") == 1
+
+
+def test_estimate_dry_run_cost_range_is_flat_per_pair(tmp_path, monkeypatch):
+    """Dry-run estimate is a flat $0.50–$1.00 per drifted pair."""
+    from pdd.update_main import _estimate_dry_run_cost_range
+
+    repo = git.Repo.init(tmp_path)
+    (tmp_path / "small.py").write_text("a")
+    (tmp_path / "prompts").mkdir()
+    sp = tmp_path / "prompts" / "small_python.prompt"
+    sp.write_text("prompt")
+    repo.index.add([str(tmp_path / "small.py"), str(sp)])
+    repo.index.commit("init")
+    monkeypatch.chdir(tmp_path)
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {}
+    small_items = [(str(sp), str(tmp_path / "small.py"), "r")]
+
+    lo_s, hi_s = _estimate_dry_run_cost_range(ctx, repo, True, small_items)
+    assert lo_s == 0.5
+    assert hi_s == 1.0
+
+    lo_0, hi_0 = _estimate_dry_run_cost_range(ctx, repo, True, [])
+    assert lo_0 == 0.0
+    assert hi_0 == 0.0
+
 
 @pytest.fixture
 def mock_get_language_for_repo(monkeypatch):
@@ -561,6 +610,91 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_cha
 
     assert result is not None
     assert result[0] == "Repository update complete."
+
+
+@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
+@patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.update_main.update_file_pair')
+def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
+    """Repo mode should stop processing new files once budget cap is reached."""
+    costs = iter([0.60, 0.60, 0.60])  # 3 changed pairs in fixture
+
+    def mock_update_logic(prompt_file, code_file, ctx, repo, simple=False):
+        return {
+            "prompt_file": prompt_file,
+            "status": "✅ Success",
+            "cost": next(costs),
+            "model": "mock_model",
+            "error": "",
+        }
+
+    mock_update_file_pair.side_effect = mock_update_logic
+
+    ctx = click.Context(click.Command('update'))
+    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+    result = update_main(
+        ctx=ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        use_git=False,
+        repo=True,
+        budget=1.0,
+    )
+
+    # First two updates run (0.6 + 0.6), then cap is reached and third is skipped.
+    assert mock_update_file_pair.call_count == 2
+    captured = capsys.readouterr()
+    assert "budget cap reached" in captured.out.lower()
+    assert result is not None
+    assert result[1] == pytest.approx(1.2)
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "no fingerprint, file in git changed set"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_update_main_repo_mode_dry_run_skips_work(
+    mock_ensure_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+):
+    """Repository-wide dry run must not call update_file_pair or ensure_pddrc_for_scan."""
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+    result = update_main(
+        ctx=ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        use_git=False,
+        repo=True,
+        dry_run=True,
+    )
+
+    mock_update_file_pair.assert_not_called()
+    mock_ensure_pddrc.assert_not_called()
+    captured = capsys.readouterr()
+    assert "Repository drift report" in captured.out
+    assert "Changed files:" in captured.out
+    assert "Estimated cost:" in captured.out
+    assert "Drifted modules:" in captured.out
+    assert "Included docs that may need updating:" in captured.out
+    assert "Repository Update Summary" not in captured.out
+    assert result is not None
+    assert result[1] == 0.0
+    assert "would be updated" in result[0].lower()
+    assert result[2] == "N/A"
 
 
 # --- Tests for .pddrc prompts_dir configuration (GitHub Issue #86) ---
