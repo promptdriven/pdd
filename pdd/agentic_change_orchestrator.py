@@ -1115,7 +1115,7 @@ def run_agentic_change_orchestrator(
     file_list = [f.strip() for f in files_to_stage_str.split(",") if f.strip()]
     modified_modules: Set[str] = set()
     for file_path in file_list:
-        if file_path.startswith("prompts/") and file_path.endswith(".prompt"):
+        if file_path.endswith(".prompt") and ("/prompts/" in file_path or file_path.startswith("prompts/")):
             module = extract_module_from_include(file_path)
             if module: modified_modules.add(module)
 
@@ -1133,19 +1133,14 @@ def run_agentic_change_orchestrator(
                     # Generate clean command list for PR body (not full bash script)
                     sync_order_list = "\n".join([f"pdd sync {m}" for m in affected])
 
-                    # Write script to user's CWD (accessible after workflow completes)
-                    user_script_path = cwd / "sync_order.sh"
+                    # Write change-specific script to .pdd/ (NOT sync_order.sh which
+                    # may contain the full repo module list — overwriting it destroys
+                    # the original, as seen in issue #571).
+                    pdd_dir = cwd / ".pdd"
+                    pdd_dir.mkdir(parents=True, exist_ok=True)
+                    user_script_path = pdd_dir / "sync_order_change.sh"
                     generate_sync_order_script(affected, user_script_path, worktree_path=None)
                     sync_order_script = str(user_script_path)
-
-                    # Also generate in worktree for Step 13 to commit
-                    worktree_script_path = worktree_path / "sync_order.sh"
-                    generate_sync_order_script(affected, worktree_script_path, worktree_path=None)
-
-                    # Ensure sync_order.sh is staged by step 13
-                    if "sync_order.sh" not in changed_files:
-                        changed_files.append("sync_order.sh")
-                    context["files_to_stage"] = ", ".join(changed_files)
 
                     if not quiet:
                         console.print(f"\n[bold]Sync commands (run after merge):[/bold]")

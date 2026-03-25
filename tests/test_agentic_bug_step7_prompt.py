@@ -225,6 +225,7 @@ The caller should use `k=5` to match the callee's signature.
     "step6_output": "Fix: Change line 45 from `search_similar_examples(query, limit=count)` to `search_similar_examples(query, k=count)`",
     "step7_output": "DEFECT_TYPE: code\nThis is a code bug - the caller is using the wrong parameter name.",
     "step5_reproduction_tests": "",
+    "planned_test_count": "2",
     "step8_output": """
 ### Test Location
 **File:** tests/test_recommendations.py (new)

@@ -1184,6 +1184,84 @@ class TestFilterInvalidBasenames:
 
         assert valid == ["mod_b", "mod_a", "mod_c"]
 
+    def test_accepts_path_qualified_basenames_from_branch_diff(self):
+        """Bug #571: _detect_modules_from_branch_diff returns basenames with
+        directory prefixes like 'frontend/app/settings/github/page', but
+        architecture.json only has 'page' (from 'page_TypescriptReact.prompt').
+        The filter must accept path-qualified basenames when their tail matches."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+            {"filename": "BoardConfigPanel_TypescriptReact.prompt"},
+        ]
+        modules = [
+            "frontend/app/settings/github/page",
+            "frontend/components/github/BoardConfigPanel",
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "frontend/app/settings/github/page" in valid, (
+            "Bug #571: path-qualified 'page' rejected despite 'page' being a known basename"
+        )
+        assert "frontend/components/github/BoardConfigPanel" in valid
+        assert invalid == []
+
+    def test_rejects_path_qualified_basenames_that_dont_match(self):
+        """Path-qualified basenames where the tail doesn't match should still be rejected."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+        ]
+        modules = ["frontend/app/settings/github/nonexistent"]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert valid == []
+        assert "frontend/app/settings/github/nonexistent" in invalid
+
+    def test_mixed_exact_and_path_qualified_basenames(self):
+        """Both exact basenames and path-qualified basenames should be accepted."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+            {"filename": "agentic_bug_orchestrator_python.prompt"},
+        ]
+        modules = [
+            "agentic_bug_orchestrator",                    # exact match
+            "frontend/app/settings/github/page",           # path-qualified
+            "hallucinated_module",                          # invalid
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "agentic_bug_orchestrator" in valid
+        assert "frontend/app/settings/github/page" in valid
+        assert "hallucinated_module" in invalid
+        assert len(valid) == 2
+        assert len(invalid) == 1
+
+    def test_rejects_ambiguous_tail_match(self):
+        """When multiple architecture entries share the same basename (e.g.
+        commands/auth and server/routes/auth both extract to 'auth'),
+        a path-qualified name like 'commands/auth' must NOT tail-match
+        because it's ambiguous which module it refers to."""
+        architecture = [
+            {"filename": "auth_python.prompt"},   # could be commands/auth
+            {"filename": "auth_python.prompt"},   # could be server/routes/auth
+            {"filename": "cli_python.prompt"},    # unique basename
+        ]
+        modules = [
+            "commands/auth",        # ambiguous — 'auth' appears twice
+            "core/cli",             # unambiguous — 'cli' appears once
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "commands/auth" in invalid, (
+            "Ambiguous tail-match should be rejected when basename appears multiple times"
+        )
+        assert "core/cli" in valid, (
+            "Unambiguous tail-match should still be accepted"
+        )
+
 
 # ---------------------------------------------------------------------------
 # BUG: The identify-modules prompt references "the current issue number" but

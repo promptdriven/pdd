@@ -115,8 +115,11 @@ def _filter_invalid_basenames(
     if architecture is None:
         return modules, []
 
-    # Build set of known basenames from architecture.json filenames
-    known_basenames: set[str] = set()
+    # Build basename counts from architecture.json filenames.
+    # A count > 1 means the basename is ambiguous (e.g. "auth" from both
+    # commands/auth_python.prompt and server/routes/auth_python.prompt).
+    from collections import Counter
+    basename_counts: Counter = Counter()
     for entry in architecture:
         if not isinstance(entry, dict):
             continue
@@ -126,7 +129,7 @@ def _filter_invalid_basenames(
         # Try standard extraction (handles _python.prompt, _typescript.prompt, etc.)
         basename = extract_module_from_include(filename)
         if basename:
-            known_basenames.add(basename)
+            basename_counts[basename] += 1
         else:
             # Fallback for LLM prompts (_LLM.prompt) and other non-standard suffixes:
             # strip .prompt extension, then remove trailing _LLM if present
@@ -136,10 +139,29 @@ def _filter_invalid_basenames(
                     stem = stem[: -len(suffix)]
                     break
             if stem:
-                known_basenames.add(stem)
+                basename_counts[stem] += 1
 
-    valid = [m for m in modules if m in known_basenames]
-    invalid = [m for m in modules if m not in known_basenames]
+    known_basenames = set(basename_counts.keys())
+
+    valid = []
+    invalid = []
+    for m in modules:
+        if m in known_basenames:
+            # Exact match (e.g. "agentic_bug_orchestrator")
+            valid.append(m)
+        elif "/" in m:
+            tail = m.rsplit("/", 1)[-1]
+            if tail in known_basenames and basename_counts[tail] == 1:
+                # Unambiguous tail match: path-qualified basename from branch
+                # diff (e.g. "frontend/app/settings/github/page" where "page"
+                # appears exactly once in architecture.json).
+                valid.append(m)
+            else:
+                # Either tail not found, or ambiguous (multiple entries share
+                # the same basename — can't determine which module is meant).
+                invalid.append(m)
+        else:
+            invalid.append(m)
     return valid, invalid
 
 

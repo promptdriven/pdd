@@ -103,6 +103,7 @@ The orchestrator must parse step output to detect stop conditions:
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
 | 3 | Needs more info from author | Output contains "Needs More Info" |
+| 3 | Issue pre-diagnosed (fast-track) | Output contains "FAST_TRACK:" marker — skip Steps 4-5, inject provided root cause into step outputs 4 and 5 |
 | 7 | Prompt defect needs human review | Output contains "PROMPT_REVIEW:" marker |
 | 9 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output AND no new files detected on disk (filesystem fallback) |
 | 10 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
@@ -130,6 +131,17 @@ After Step 7, parse output for:
 
 **Soft failures (continue):**
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+
+% Step 3 Fast-Track Handling
+After Step 3, parse output for "FAST_TRACK:" marker. When detected:
+1. Extract the root cause summary (text after "FAST_TRACK:" on the same line)
+2. Inject skip messages into step outputs:
+   - `context["step4_output"] = "Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"`
+   - `context["step5_output"] = "Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"`
+3. Set `last_completed_step` to 5 (so state persistence reflects the skip)
+4. Save workflow state with updated step outputs
+5. Skip Steps 4 and 5 by continuing the loop (check `step_num in (4, 5)` and continue if fast-track is active)
+This follows the existing marker-based control flow pattern (STOP_CONDITION, PROMPT_REVIEW, E2E_SKIP).
 
 % Consecutive Provider Failure Abort
 Track consecutive steps where the output contains "All agent providers failed". If 3 consecutive such failures occur, save state and return early with an abort message. Reset the counter on any success or non-provider failure.

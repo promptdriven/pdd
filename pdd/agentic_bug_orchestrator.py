@@ -1005,6 +1005,24 @@ def run_agentic_bug_orchestrator(
         # Store output in context
         context[f"step{str(step_num)}_output"] = step_output
 
+        # FAST_TRACK: skip Steps 4-5 when issue is pre-diagnosed (issue #836)
+        if step_num == 3 and "FAST_TRACK:" in step_output:
+            fast_track_match = re.search(r"FAST_TRACK:\s*(.+)", step_output)
+            fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
+            skip_msg = f"Step {{}} skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            context["step4_output"] = skip_msg.format(4)
+            context["step5_output"] = skip_msg.format(5)
+            state["step_outputs"]["4"] = context["step4_output"]
+            state["step_outputs"]["5"] = context["step5_output"]
+            state["last_completed_step"] = 5
+            last_completed_step = 5
+            # Recalculate start_step so the loop skips 4 and 5
+            start_step = 6
+            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if not quiet:
+                console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
+            continue
+
         files_extracted = False
 
         # Step-specific handling

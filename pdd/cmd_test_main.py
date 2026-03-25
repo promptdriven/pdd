@@ -117,8 +117,13 @@ def cmd_test_main(
     # explore the project and determine the correct test setup.
     # For Python with agentic_mode=True, we also use agentic test generation for consistency.
     agentic_mode = ctx.obj.get("agentic_mode", False)
-    use_agentic_tests = (detected_language and detected_language.lower() != 'python') or agentic_mode
-
+    # For Python test_extend (merge=True), use native path which properly
+    # merges with existing tests. The agentic path ignores existing_tests
+    # and merge, overwriting the file entirely — destroying coverage.
+    use_agentic_tests = (
+        ((detected_language and detected_language.lower() != 'python') or agentic_mode)
+        and not (detected_language and detected_language.lower() == 'python' and merge)
+    )
     if use_agentic_tests:
         from .agentic_test_generate import run_agentic_test_generate
 
