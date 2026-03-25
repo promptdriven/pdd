@@ -144,6 +144,72 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
     return None
 
 
+# Patterns that indicate "code not written / can't load" rather than "code wrong".
+# Used by _classify_verification_failure as deterministic detection.
+# All patterns anchored to pytest ^E traceback format to avoid false positives
+# from log lines, print statements, or assertion messages.
+# Since _verify_tests_independently runs pytest, all exceptions surface as ^E lines.
+_IMPORT_ERROR_PATTERNS = [
+    # Python — pytest ^E traceback format only
+    _re.compile(r"^E\s+ImportError:", _re.MULTILINE),
+    _re.compile(r"^E\s+ModuleNotFoundError:", _re.MULTILINE),
+    _re.compile(r"^E\s+NameError:", _re.MULTILINE),
+    _re.compile(r"^E\s+AttributeError:", _re.MULTILINE),
+    _re.compile(r"^E\s+SyntaxError:", _re.MULTILINE),
+    # JS/TS — pytest ^E format or test runner line-start errors
+    _re.compile(r"^E\s+Cannot find module", _re.MULTILINE),
+    _re.compile(r"^E\s+Module not found", _re.MULTILINE),
+    _re.compile(r"^E\s+ReferenceError:", _re.MULTILINE),
+    # Test runner unavailable (from _verify_tests_independently itself)
+    _re.compile(r"FAILED \(no test runner available\)"),
+]
+
+
+def _classify_verification_failure(output: str) -> str:
+    """Classify verification failure via deterministic pattern matching.
+
+    Checks for common error signatures (ImportError, ModuleNotFoundError,
+    NameError, etc.) that indicate code was not written or can't compile.
+    Unrecognized patterns default to test_failure (conservative — no LLM call).
+
+    Returns:
+        'import_error' if code was not written, can't compile, or fails to load.
+        'test_failure' if code exists and loads but produces wrong results.
+    """
+    for pattern in _IMPORT_ERROR_PATTERNS:
+        if pattern.search(output):
+            return "import_error"
+
+    return "test_failure"
+
+
+def _handle_verification_failure(
+    verify_output: str,
+    import_error_retries: int,
+    console: "Console",
+) -> Tuple[str, int, bool]:
+    """Classify verification failure and determine retry action.
+
+    Centralizes the classify-then-retry logic used at all 4 verification
+    call sites. Returns whether the caller should retry from Step 1.
+
+    Args:
+        verify_output: Raw output from _verify_tests_independently.
+        import_error_retries: Global retry count (max 1 across all cycles).
+        console: Rich Console for logging.
+
+    Returns:
+        (failure_type, updated_import_error_retries, should_retry)
+        should_retry is True if caller should set last_completed_step=0 and break.
+    """
+    failure_type = _classify_verification_failure(verify_output)
+    if failure_type == "import_error" and import_error_retries < 1:
+        console.print("[yellow][VERIFICATION] Failure classified as import_error — retrying from Step 1[/yellow]")
+        return failure_type, import_error_retries + 1, True
+    console.print(f"[yellow][VERIFICATION] Failure classified as {failure_type} — proceeding with fallback workflow[/yellow]")
+    return failure_type, import_error_retries, False
+
+
 def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
     """Check if the executor environment has E2E test infrastructure.
 
@@ -955,15 +1021,17 @@ def run_agentic_e2e_fix_orchestrator(
     success = False
     final_message = ""
     consecutive_provider_failures = 0
+    import_error_retries = 0  # Global budget: max 1 retry across all cycles
+    verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
-        
+
         while current_cycle <= max_cycles:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
-            
+
             # Snapshot file hashes at cycle start for convergence detection (5b)
             cycle_start_hashes = _get_file_hashes(cwd)
             
@@ -998,12 +1066,19 @@ def run_agentic_e2e_fix_orchestrator(
                         if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
-                                verified, _ = _verify_tests_independently(test_files, cwd)
+                                verified, verify_output = _verify_tests_independently(test_files, cwd)
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
                                     final_message = "All tests passed (Step 1 verified, Step 2 skipped)."
                                     break
+                                else:
+                                    _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
+                                    step_outputs[str(step_num)] = f"FAILED: VERIFICATION_FAILED: {verify_output}"
+                                    if should_retry:
+                                        verification_failure_context = verify_output
+                                        last_completed_step = 0
+                                        break
                             else:
                                 console.print("[green]ALL_TESTS_PASS (Step 1) — Step 2 skipped, no test files for verification. Exiting early.[/green]")
                                 success = True
@@ -1035,12 +1110,19 @@ def run_agentic_e2e_fix_orchestrator(
                         if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
-                                verified, _ = _verify_tests_independently(test_files, cwd)
+                                verified, verify_output = _verify_tests_independently(test_files, cwd)
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
                                     final_message = "All tests passed (Step 1 verified, Step 2 skipped)."
                                     break
+                                else:
+                                    _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
+                                    step_outputs[str(step_num)] = f"FAILED: VERIFICATION_FAILED: {verify_output}"
+                                    if should_retry:
+                                        verification_failure_context = verify_output
+                                        last_completed_step = 0
+                                        break
                             else:
                                 console.print("[green]ALL_TESTS_PASS (Step 1) — Step 2 skipped, no test files for verification. Exiting early.[/green]")
                                 success = True
@@ -1105,6 +1187,16 @@ def run_agentic_e2e_fix_orchestrator(
                     prev_output = step_outputs.get(str(prev_step), "")
                     if prev_output.startswith("E2E_SKIP:"):
                         formatted_prompt += f"\n\nNote: Step {prev_step} was skipped — {prev_output}"
+
+                # Inject verification failure context on Step 1 retry
+                if step_num == 1 and verification_failure_context:
+                    formatted_prompt += (
+                        "\n\nPREVIOUS ATTEMPT FAILED: Independent verification found the "
+                        "following errors after you claimed ALL_TESTS_PASS. You MUST write "
+                        "all required code to disk before claiming tests pass:\n"
+                        f"{verification_failure_context}"
+                    )
+                    verification_failure_context = ""  # Clear after use
 
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
@@ -1230,8 +1322,13 @@ def run_agentic_e2e_fix_orchestrator(
                             break
                         else:
                             console.print("[bold red]LLM claimed ALL_TESTS_PASS but independent verification FAILED.[/bold red]")
+                            _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
                             step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
                             step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                            if should_retry:
+                                verification_failure_context = verify_output
+                                last_completed_step = 0
+                                break
                             last_completed_step = step_num - 1
                     else:
                         console.print("[yellow]No test files found for independent verification. Trusting LLM output.[/yellow]")
@@ -1282,8 +1379,13 @@ def run_agentic_e2e_fix_orchestrator(
                                 break
                             else:
                                 console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
+                                _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
                                 step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
                                 step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                                if should_retry:
+                                    verification_failure_context = verify_output
+                                    last_completed_step = 0
+                                    break
                                 last_completed_step = step_num - 1
                                 # Don't break — fall through to cycle increment
                         else:

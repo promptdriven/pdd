@@ -48,6 +48,12 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 8. On failure/incomplete: Post final status comment to GitHub via `post_final_comment`.
 9. Include `<include>context/agentic_e2e_fix_orchestrator_example.py</include>` for orchestration patterns and `<include>context/ci_validation_example.py</include>` for CI loop integration.
 10. After successful commit/push (step 9 exit), run CI validation (step 10): poll external CI via `run_ci_validation_loop()`, iterate on failures up to `ci_retries` attempts, post PR comment on max retries exhausted.
+11. When `_verify_tests_independently` fails, use `_handle_verification_failure(output, retries, console)` to classify and act:
+    - `"import_error"` (code not written/broken — missing modules, unresolved imports, compilation failures, undefined names, syntax errors in any language): retry from Step 1 (max 1 retry total via global `import_error_retries` counter). On retry, inject verification failure output into the Step 1 prompt so the LLM knows what it missed.
+    - `"test_failure"` (code exists but produces wrong results): fall through to Steps 3-9 as normal.
+    - Classification is deterministic pattern matching only (no LLM call): all patterns anchored to pytest `^E` traceback format (`^E\s+ImportError:`, etc.) for ImportError, ModuleNotFoundError, NameError, AttributeError, SyntaxError, Cannot find module, Module not found, ReferenceError. Bare line-start patterns are NOT matched to avoid false positives from log/print lines. Unrecognized patterns default to `"test_failure"`.
+    - Applied at all verification call sites: Step 2 early exit (main path), Step 2 skipped via skipped_steps, Step 2 skipped first-time, and Step 9 verification.
+    - All call sites must set `step_outputs` to reflect the verification failure before breaking on retry, ensuring consistent orchestrator state.
 
 % Helper Functions
 - `_classify_step_output(output: str, step_num: int) -> Optional[str]`: Step-aware control token classification using shared `detect_control_token` (tiers 1-3) with fail-before-pass priority and `VERIFICATION_FAILED` override. Returns token string or None.
@@ -55,6 +61,8 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 - `_is_test_file(filename: str) -> bool`: Identify Python (`test_*.py`) and TS/JS (`*.test.ts`, `*.spec.ts`) test files.
 - `_extract_test_files(...) -> List[str]`: Find relevant test files from issue content and changed files.
 - `_verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]`: Run `pytest` and capture output.
+- `_classify_verification_failure(output: str) -> str`: Deterministic verification failure classification via pytest `^E` traceback format patterns only (ImportError, ModuleNotFoundError, NameError, AttributeError, SyntaxError, Cannot find module, Module not found, ReferenceError). Returns `"import_error"` or `"test_failure"`. Defaults to `"test_failure"` if no pattern matches (no LLM call).
+- `_handle_verification_failure(output, retries, console) -> Tuple[str, int, bool]`: Centralizes classify-then-retry logic. Returns `(failure_type, updated_retries, should_retry)`. Caller sets `last_completed_step=0` and breaks when `should_retry` is True.
 - `_is_intermediate_file(filepath: str) -> bool`: Filter out `_fixed`, `.bak`, `.tmp`, `error_output*.txt`, `.pdd/` (except state).
 - `_commit_and_push(...) -> Tuple[bool, str]`: Stage hash-detected changes, commit (`fix: {title}\n\nFixes #{number}`), and push with retry.
 
