@@ -77,6 +77,7 @@ You are working on step 8 of 12 in an agentic bug investigation workflow. Previo
    - Primary test: reproduces the exact bug (always required)
    - Edge cases: related scenarios that should also work (use your judgement)
    - Regression prevention: ensure the fix doesn't break other behavior (use your judgement)
+   - **Use real data from investigation as test inputs**: When Steps 2/6 uncovered exact strings, patterns, or values relevant to the bug — prompt template output formats, config values, API responses, log messages — use those verbatim as test inputs instead of inventing generic placeholders. Real-world inputs are the highest-fidelity test cases and catch issues that paraphrased inputs miss.
 
 % Output
 
