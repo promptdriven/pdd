@@ -754,6 +754,102 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("derives audit hints from structured Data Points JSON for chart-heavy visuals", () => {
+    const hints = resolveSpecAuditHints([
+      "# Precision Tradeoff Curve",
+      "",
+      "## Animation Sequence",
+      "1. **Frame 0-45 (0-1.5s):** Intro text fades in and out",
+      "2. **Frame 450-540 (15-18s):** Both annotations visible at reduced opacity",
+      "",
+      "## Data Points JSON",
+      "```json",
+      "{",
+      '  "type": "animated_chart",',
+      '  "chartId": "precision_tradeoff_curve",',
+      '  "axes": {',
+      '    "x": { "label": "Number of Tests", "ticks": ["0", "10", "20", "30", "40", "50+"] },',
+      '    "y": { "label": "Required Prompt Precision", "ticks": ["Low", "Medium", "High"] }',
+      "  },",
+      '  "annotations": {',
+      '    "left": { "label": "parser_v1.prompt — 50 lines", "description": "Dense prompt, few tests" },',
+      '    "right": { "label": "parser_v2.prompt — 10 lines", "description": "Minimal prompt, 47 tests", "testCount": 47 }',
+      "  },",
+      '  "introText": "This maps directly to PDD."',
+      "}",
+      "```",
+    ].join("\n"));
+
+    expect(hints.criticalElements).toEqual(
+      expect.arrayContaining([
+        "Number of Tests",
+        "Required Prompt Precision",
+        "parser_v1.prompt — 50 lines",
+        "Dense prompt, few tests",
+        "parser_v2.prompt — 10 lines",
+        "Minimal prompt, 47 tests",
+        "This maps directly to PDD.",
+      ])
+    );
+    expect(hints.criticalElements).not.toEqual(
+      expect.arrayContaining([
+        "Frame 0-45 (0-1.5s):",
+        "Frame 450-540 (15-18s):",
+      ])
+    );
+    expect(hints.transitionWindows).toEqual([
+      {
+        startFrame: 0,
+        endFrame: 45,
+        description: "Intro text fades in and out",
+      },
+      {
+        startFrame: 450,
+        endFrame: 540,
+        description: "Both annotations visible at reduced opacity",
+      },
+    ]);
+  });
+
+  it("ignores narration timestamps and captures structured command-style audit hints", () => {
+    const hints = resolveSpecAuditHints([
+      "# Module Highlight",
+      "",
+      "## Narration Sync",
+      '- **0:10** ("Start with one module"): auth_handler.py highlights',
+      '- **0:13** ("Generate its prompt"): terminal output appears',
+      "",
+      "## Data Points JSON",
+      "```json",
+      "{",
+      '  "type": "code_transformation",',
+      '  "highlightedModule": "auth_handler.py",',
+      '  "terminalCommand": "pdd update auth_handler.py",',
+      '  "terminalOutput": "\\u2713 Prompt generated: auth_handler.prompt.md",',
+      '  "promptFile": "auth_handler.prompt.md",',
+      '  "transformation": {',
+      '    "code": { "role": "artifact" },',
+      '    "prompt": { "role": "source of truth" }',
+      "  }",
+      "}",
+      "```",
+    ].join("\n"));
+
+    expect(hints.criticalElements).toEqual(
+      expect.arrayContaining([
+        "auth_handler.py",
+        "pdd update auth_handler.py",
+        "✓ Prompt generated: auth_handler.prompt.md",
+        "auth_handler.prompt.md",
+        "artifact",
+        "source of truth",
+      ])
+    );
+    expect(hints.criticalElements).not.toEqual(
+      expect.arrayContaining(["0:10", "0:13"])
+    );
+  });
+
   it("sequentializes overlapping spec windows instead of collapsing later visuals into one-frame slots", () => {
     const specDir = path.join(tmpDir, "specs", "animation_section");
     fs.mkdirSync(specDir, { recursive: true });

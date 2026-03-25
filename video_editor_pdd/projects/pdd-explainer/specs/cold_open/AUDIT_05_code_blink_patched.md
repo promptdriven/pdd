@@ -1,4 +1,4 @@
 ## Verdict
-pass
+warn
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (function, return, processuserinput, const, else), so the frame does not support a hard missing-text failure.
+OCR confirmed visible text tokens in the rendered frame (return, function, processuserinput, const, replace), so the frame does not support a hard missing-text failure.

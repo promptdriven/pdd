@@ -1,14 +1,16 @@
 ## Verdict
 pass
 ## Summary
-The frame at ~69% progress (frame 62 of 90) falls within the hold phase (frames 50-75), which matches expectations. All key elements are present and correctly rendered:
+The frame at ~69% progress (frame 62/90) falls within the hold phase (frames 50-75), which matches the spec expectation. All critical elements are present and correct:
 
-1. **Background:** Deep navy-black background consistent with `#0A0F1A`.
-2. **"PART 6":** Visible above the title in a muted slate color consistent with `#64748B` at reduced opacity, with wide letter-spacing. Horizontally centered.
-3. **"WHERE TO START":** Large, bold, white/light text (`#E2E8F0`) with visible letter-spacing, horizontally centered and positioned below "PART 6". Typography appears to be Inter bold at the expected large size.
-4. **Ghost codebase tree:** A faint vertical trunk line and horizontal branch lines are visible behind the text at very low opacity, consistent with the spec's `#334155` at 0.03-0.04 opacity. Small endpoint rectangles (file icons) are faintly visible at branch tips.
-5. **Blueprint grid:** Faintly visible in the background at very low opacity, consistent with the spec.
-6. **Layout:** Both text elements and the ghost tree are centered on the canvas. The vertical positioning of "PART 6" above "WHERE TO START" matches the spec's y:440 / y:500 intent.
-7. **Animation phase:** At frame 62, we are in the hold phase. Both text elements are fully opaque and the ghost tree is at its steady-state appearance — correct for this sample point.
+1. **"PART 6"** — Visible, centered horizontally, positioned above the main title in a muted gray tone consistent with the spec's `#64748B` at reduced opacity. Letter-spacing appears wide as specified (4px). Font appears small/semi-bold as expected (14px, 600 weight).
 
-No missing elements, no material layout drift, no color or typography mismatches.
+2. **"WHERE TO START"** — Prominently displayed in large, bold white/light typography consistent with `#E2E8F0` at 0.95. Centered horizontally, positioned below "PART 6". The text is fully opaque and at full scale (1.0), consistent with the hold phase after the scale-in animation has completed.
+
+3. **Background** — Deep navy-black (`#0A0F1A`) as specified. No blueprint grid is overtly visible, which is expected given its very low opacity (0.04).
+
+4. **Ghost codebase tree** — Faintly visible behind the text: a vertical trunk line runs through the center with horizontal branch lines extending left and right, and small rectangular shapes at branch endpoints. The very low opacity (0.03-0.04) makes this appropriately ghostly and subtle, matching the spec's intent.
+
+5. **Layout** — Both text elements are horizontally centered. The vertical positioning places "PART 6" above "WHERE TO START" with appropriate spacing, closely matching the spec's y:440 and y:500 targets relative to the 1080px height.
+
+6. **Animation phase** — At 69.4% progress, the frame is in the hold phase (50-75), where everything should be fully visible and stable. This matches the rendered frame perfectly.

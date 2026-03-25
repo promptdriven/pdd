@@ -897,13 +897,33 @@ const TitleCardVisual: React.FC<{
   const style = asString(data.style);
   const isStillnessBeat = style === "stillness_beat";
   const eyebrow = resolveEyebrow(data);
+  const sectionNumber = asNumber(data.sectionNumber);
   const titleColor = asString(data.titleColor) ?? "#E2E8F0";
   const ruleColor = "rgba(51, 65, 85, 0.4)";
   const subtitleColor = asString(data.subtitleColor) ?? "#CBD5E1";
   const hasCodeUnderlay = Boolean(data.codeUnderlay);
+  const hideEyebrow =
+    (sectionNumber !== null && sectionNumber <= 0) ||
+    eyebrow.trim().toLowerCase() === "cold open";
+  const displayedEyebrow = hideEyebrow ? "" : eyebrow;
+  const prefersSingleLineTitle =
+    hasCodeUnderlay &&
+    !isStillnessBeat &&
+    explicitTitle !== null &&
+    !asString(data.titleLine1) &&
+    !asString(data.titleLine2);
+  const subtitleFontStyle = hasCodeUnderlay && commands.length === 0 ? "italic" : "normal";
 
   const resolvedTitleLines =
-    isStillnessBeat && !explicitTitle ? [] : titleLines;
+    isStillnessBeat && !explicitTitle
+      ? []
+      : prefersSingleLineTitle && explicitTitle
+        ? [explicitTitle]
+        : titleLines;
+  const showSingleTitleRule =
+    !isStillnessBeat &&
+    resolvedTitleLines.length === 1 &&
+    subtitleLines.length > 0;
 
   return (
     <AbsoluteFill
@@ -951,7 +971,7 @@ const TitleCardVisual: React.FC<{
           textAlign: "center",
         }}
       >
-        {eyebrow ? (
+        {displayedEyebrow ? (
           <div
             style={{
               color: isStillnessBeat ? "#94A3B8" : "#64748B",
@@ -962,7 +982,7 @@ const TitleCardVisual: React.FC<{
               textTransform: "uppercase",
             }}
           >
-            {eyebrow}
+            {displayedEyebrow}
           </div>
         ) : null}
         {isStillnessBeat ? (
@@ -1041,6 +1061,17 @@ const TitleCardVisual: React.FC<{
             {resolvedTitleLines.join("\n")}
           </div>
         ) : null}
+        {showSingleTitleRule ? (
+          <div
+            style={{
+              width: 140,
+              height: 2,
+              backgroundColor: titleColor === "#E2E8F0" ? ruleColor : `${titleColor}44`,
+              borderRadius: 999,
+              opacity: 0.9,
+            }}
+          />
+        ) : null}
         {subtitleLines.map((line, index) => (
           <div
             key={`${line}-${index}`}
@@ -1048,7 +1079,8 @@ const TitleCardVisual: React.FC<{
               color: index === 0 ? subtitleColor : "#94A3B8",
               fontFamily: "'Inter', sans-serif",
               fontSize: index === 0 ? 26 : 22,
-              fontWeight: index === 0 ? 500 : 400,
+              fontWeight: index === 0 ? 300 : 400,
+              fontStyle: subtitleFontStyle,
               lineHeight: 1.35,
               maxWidth: width * 0.62,
             }}
@@ -1433,6 +1465,7 @@ const ChartVisual: React.FC<{
         .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
   const debtResetNote = asString(data.debtResetNote);
+  const annotationRecord = asRecord(data.annotations);
   const annotations = Array.isArray(data.annotations)
     ? data.annotations
         .map((entry) => asRecord(entry))
@@ -1474,6 +1507,372 @@ const ChartVisual: React.FC<{
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
+
+  if (chartId === "precision_tradeoff_curve") {
+    const axes = asRecord(data.axes);
+    const xAxis = asRecord(axes?.x);
+    const yAxis = asRecord(axes?.y);
+    const leftAnnotation = asRecord(annotationRecord?.left);
+    const rightAnnotation = asRecord(annotationRecord?.right);
+    const curveColor = asString(asRecord(data.curve)?.color) ?? "#2DD4BF";
+    const chartLeft = width * 0.14;
+    const chartTop = height * 0.22;
+    const curveWidth = width * 0.66;
+    const curveHeight = height * 0.52;
+    const chartBottom = chartTop + curveHeight;
+    const xTicks = asStringArray(xAxis?.ticks);
+    const yTicks = asStringArray(yAxis?.ticks);
+    const resolvedXTicks = xTicks.length > 0 ? xTicks : ["0", "10", "20", "30", "40", "50+"];
+    const resolvedYTicks = yTicks.length > 0 ? yTicks : ["Low", "Medium", "High"];
+    const densePromptLines = buildDenseCodePreviewLines("dense").slice(0, 8);
+    const minimalPromptLines = buildDenseCodePreviewLines("clean").slice(0, 4);
+    const introText = asString(data.introText) ?? "This maps directly to PDD.";
+    const rightTestCount = asNumber(rightAnnotation?.testCount) ?? 47;
+    const pointForTestCount = (testCount: number) => {
+      const clamped = Math.max(0, Math.min(50, testCount));
+      const x = chartLeft + (clamped / 50) * curveWidth;
+      const normalizedPrecision = 1 / (1 + 0.08 * clamped);
+      const y = chartBottom - curveHeight * normalizedPrecision;
+      return { x, y };
+    };
+    const curvePoints = Array.from({ length: 41 }, (_, index) =>
+      pointForTestCount((index / 40) * 50)
+    );
+    const curvePath = curvePoints
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+      .join(" ");
+    const areaPath = `${curvePath} L ${chartLeft + curveWidth} ${chartBottom} L ${chartLeft} ${chartBottom} Z`;
+    const dotProgress = interpolate(frame, [300, 450], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const dotPoint = pointForTestCount(dotProgress * 50);
+    const leftPoint = pointForTestCount(3.5);
+    const rightPoint = pointForTestCount(45);
+    const leftOpacity = interpolate(frame, [180, 220, 320, 450], [0, 1, 1, 0.42], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const rightOpacity = interpolate(frame, [300, 340, 450], [0, 1, 0.64], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const introOpacity =
+      frame <= 45
+        ? interpolate(frame, [0, 15, 30, 45], [0, 0.85, 0.85, 0], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          })
+        : 0;
+
+    return (
+      <AbsoluteFill>
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+          <defs>
+            <linearGradient id="precisionTradeoffFill" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stopColor={curveColor} stopOpacity="0.03" />
+              <stop offset="100%" stopColor={curveColor} stopOpacity="0.14" />
+            </linearGradient>
+          </defs>
+          {Array.from({ length: 8 }).map((_, index) => {
+            const x = chartLeft + index * (curveWidth / 7);
+            return (
+              <line
+                key={`precision-v-${index}`}
+                x1={x}
+                y1={chartTop}
+                x2={x}
+                y2={chartBottom}
+                stroke="rgba(30, 41, 59, 0.35)"
+                strokeWidth={1}
+              />
+            );
+          })}
+          {Array.from({ length: 6 }).map((_, index) => {
+            const y = chartTop + index * (curveHeight / 5);
+            return (
+              <line
+                key={`precision-h-${index}`}
+                x1={chartLeft}
+                y1={y}
+                x2={chartLeft + curveWidth}
+                y2={y}
+                stroke="rgba(30, 41, 59, 0.32)"
+                strokeWidth={1}
+              />
+            );
+          })}
+          <line
+            x1={chartLeft}
+            y1={chartBottom}
+            x2={chartLeft + curveWidth}
+            y2={chartBottom}
+            stroke="#334155"
+            strokeWidth={2}
+          />
+          <line
+            x1={chartLeft}
+            y1={chartTop}
+            x2={chartLeft}
+            y2={chartBottom}
+            stroke="#334155"
+            strokeWidth={2}
+          />
+          <path d={areaPath} fill="url(#precisionTradeoffFill)" opacity={0.9} />
+          <path d={curvePath} fill="none" stroke={curveColor} strokeWidth={4} opacity={0.92} />
+          <circle cx={dotPoint.x} cy={dotPoint.y} r={12} fill={curveColor} opacity={0.92} />
+          <circle cx={dotPoint.x} cy={dotPoint.y} r={24} fill={`${curveColor}33`} />
+          <line
+            x1={leftPoint.x}
+            y1={leftPoint.y}
+            x2={chartLeft + curveWidth * 0.22}
+            y2={chartTop + curveHeight * 0.12}
+            stroke={`${curveColor}66`}
+            strokeWidth={2}
+            strokeDasharray="8 8"
+            opacity={leftOpacity}
+          />
+          <line
+            x1={rightPoint.x}
+            y1={rightPoint.y}
+            x2={chartLeft + curveWidth * 0.82}
+            y2={chartTop + curveHeight * 0.68}
+            stroke={`${curveColor}66`}
+            strokeWidth={2}
+            strokeDasharray="8 8"
+            opacity={rightOpacity}
+          />
+          {resolvedXTicks.map((tick, index) => {
+            const x =
+              chartLeft +
+              (index / Math.max(1, resolvedXTicks.length - 1)) * curveWidth;
+            return (
+              <g key={`precision-x-tick-${tick}`}>
+                <line
+                  x1={x}
+                  y1={chartBottom}
+                  x2={x}
+                  y2={chartBottom + 10}
+                  stroke="#64748B"
+                  strokeWidth={1.5}
+                />
+                <text
+                  x={x}
+                  y={chartBottom + 34}
+                  fill="#64748B"
+                  fontSize={14}
+                  textAnchor="middle"
+                  fontFamily="'Inter', sans-serif"
+                >
+                  {tick}
+                </text>
+              </g>
+            );
+          })}
+          {resolvedYTicks.map((tick, index) => {
+            const y =
+              chartBottom -
+              (index / Math.max(1, resolvedYTicks.length - 1)) * curveHeight;
+            return (
+              <text
+                key={`precision-y-tick-${tick}`}
+                x={chartLeft - 18}
+                y={y + 5}
+                fill="#64748B"
+                fontSize={14}
+                textAnchor="end"
+                fontFamily="'Inter', sans-serif"
+              >
+                {tick}
+              </text>
+            );
+          })}
+          <text
+            x={chartLeft + curveWidth / 2}
+            y={chartBottom + 72}
+            fill="#94A3B8"
+            fontSize={18}
+            fontWeight={600}
+            textAnchor="middle"
+            fontFamily="'Inter', sans-serif"
+          >
+            {`${asString(xAxis?.label) ?? "Number of Tests"} →`}
+          </text>
+          <text
+            x={chartLeft - 92}
+            y={chartTop + curveHeight / 2}
+            fill="#94A3B8"
+            fontSize={18}
+            fontWeight={600}
+            textAnchor="middle"
+            fontFamily="'Inter', sans-serif"
+            transform={`rotate(-90 ${chartLeft - 92} ${chartTop + curveHeight / 2})`}
+          >
+            {`${asString(yAxis?.label) ?? "Required Prompt Precision"} →`}
+          </text>
+          <text
+            x={width / 2}
+            y={height * 0.17}
+            fill="#E2E8F0"
+            fontSize={32}
+            fontWeight={700}
+            textAnchor="middle"
+            fontFamily="'Inter', sans-serif"
+            opacity={introOpacity}
+          >
+            {introText}
+          </text>
+        </svg>
+        <div
+          style={{
+            position: "absolute",
+            left: chartLeft + curveWidth * 0.05,
+            top: chartTop + 24,
+            width: 318,
+            padding: "18px 20px",
+            borderRadius: 20,
+            backgroundColor: "rgba(15, 30, 30, 0.92)",
+            border: `1px solid ${curveColor}55`,
+            boxShadow: "0 16px 42px rgba(2, 6, 23, 0.45)",
+            opacity: leftOpacity,
+          }}
+        >
+          <div
+            style={{
+              color: curveColor,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 13,
+              fontWeight: 700,
+              letterSpacing: 0.2,
+            }}
+          >
+            {asString(leftAnnotation?.label) ?? "parser_v1.prompt — 50 lines"}
+          </div>
+          <div
+            style={{
+              color: "#99F6E4",
+              fontSize: 14,
+              marginTop: 8,
+              marginBottom: 10,
+            }}
+          >
+            {asString(leftAnnotation?.description) ?? "Dense prompt, few tests"}
+          </div>
+          {densePromptLines.map((line, index) => (
+            <div
+              key={`precision-dense-line-${index}`}
+              style={{
+                color: "rgba(45, 212, 191, 0.56)",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 11,
+                lineHeight: 1.38,
+                marginTop: index === 0 ? 0 : 5,
+              }}
+            >
+              {line}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: chartLeft + curveWidth * 0.67,
+            top: chartTop + curveHeight * 0.46,
+            width: 332,
+            padding: "18px 20px",
+            borderRadius: 20,
+            backgroundColor: "rgba(15, 30, 30, 0.92)",
+            border: `1px solid ${curveColor}55`,
+            boxShadow: "0 16px 42px rgba(2, 6, 23, 0.45)",
+            opacity: rightOpacity,
+          }}
+        >
+          <div
+            style={{
+              color: curveColor,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 13,
+              fontWeight: 700,
+              letterSpacing: 0.2,
+            }}
+          >
+            {asString(rightAnnotation?.label) ?? "parser_v2.prompt — 10 lines"}
+          </div>
+          <div
+            style={{
+              color: "#99F6E4",
+              fontSize: 14,
+              marginTop: 8,
+              marginBottom: 10,
+            }}
+          >
+            {asString(rightAnnotation?.description) ?? "Minimal prompt, 47 tests"}
+          </div>
+          <div
+            style={{
+              borderRadius: 14,
+              backgroundColor: "rgba(2, 6, 23, 0.72)",
+              border: `1px solid ${curveColor}44`,
+              padding: "12px 14px",
+            }}
+          >
+            {minimalPromptLines.map((line, index) => (
+              <div
+                key={`precision-clean-line-${index}`}
+                style={{
+                  color: "rgba(45, 212, 191, 0.58)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 11,
+                  lineHeight: 1.38,
+                  marginTop: index === 0 ? 0 : 5,
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              marginTop: 12,
+              padding: "10px 12px",
+              borderRadius: 14,
+              backgroundColor: "rgba(30, 41, 59, 0.85)",
+              border: "1px solid rgba(74, 222, 128, 0.36)",
+              color: "#86EFAC",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 12,
+              lineHeight: 1.4,
+            }}
+          >
+            <div>$ pdd test parser</div>
+            <div>{`${rightTestCount} tests passing ✓`}</div>
+          </div>
+          <div
+            style={{
+              marginTop: 14,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            {Array.from({ length: 12 }).map((_, index) => (
+              <div
+                key={`precision-wall-${index}`}
+                style={{
+                  width: 12,
+                  height: 20,
+                  borderRadius: 4,
+                  backgroundColor: "rgba(217, 148, 74, 0.5)",
+                  border: "1px solid rgba(217, 148, 74, 0.82)",
+                  opacity: 0.88 - index * 0.03,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
 
   if (chartId === "maintenance_cost_pie") {
     const slices = Array.isArray(data.slices)
@@ -2077,13 +2476,18 @@ const SplitVisual: React.FC<{
   height: number;
 }> = ({ data, width, height }) => {
   const frame = useCurrentFrame();
+  const splitVisualId = React.useId().replace(/:/g, "");
   const left = asRecord(data.leftPanel) ?? asRecord(data.left) ?? {};
   const right = asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
   const leftSrc = useVisualMediaAssetSrc("leftSrc");
   const rightSrc = useVisualMediaAssetSrc("rightSrc");
   const multiplier = asString(data.multiplier);
 
-  const renderPanelInterior = (panel: Record<string, unknown>, accent: string) => {
+  const renderPanelInterior = (
+    panel: Record<string, unknown>,
+    accent: string,
+    panelKey: "left" | "right"
+  ) => {
     const content = asString(panel.content);
     const tokenCount = formatApproxTokenCount(panel.tokenCount);
     const elements = Array.isArray(panel.elements)
@@ -2299,6 +2703,7 @@ const SplitVisual: React.FC<{
       }
 
       if (isMoldPanel) {
+        const moldFlowClipId = `${splitVisualId}-${panelKey}-mold-flow-clip`;
         return (
           <div
             style={{
@@ -2310,6 +2715,11 @@ const SplitVisual: React.FC<{
             }}
           >
             <svg width="100%" height="100%" viewBox="0 0 420 520" preserveAspectRatio="none">
+              <defs>
+                <clipPath id={moldFlowClipId}>
+                  <rect x={108} y={98} width={204} height={278} rx={18} />
+                </clipPath>
+              </defs>
               <path d="M 180 42 L 210 92 L 240 42 Z" fill="rgba(148, 163, 184, 0.72)" />
               <rect
                 x={104}
@@ -2330,20 +2740,39 @@ const SplitVisual: React.FC<{
               />
               <path
                 d="M 208 94
-                   C 178 138, 154 188, 160 246
-                   C 168 304, 214 330, 262 316
-                   C 292 308, 302 280, 294 246
-                   C 286 208, 246 178, 232 142
-                   C 226 126, 222 110, 208 94 Z"
+                   C 188 130, 168 176, 172 224
+                   C 176 270, 214 306, 252 302
+                   C 276 298, 290 272, 286 234
+                   C 282 204, 254 178, 236 146
+                   C 228 130, 220 112, 208 94 Z"
                 fill="rgba(167, 139, 250, 0.36)"
                 stroke="rgba(217, 148, 74, 0.32)"
                 strokeWidth={2}
+                clipPath={`url(#${moldFlowClipId})`}
               />
-              <circle cx={258} cy={238} r={36} fill="rgba(217, 148, 74, 0.16)" />
+              <circle
+                cx={258}
+                cy={238}
+                r={36}
+                fill="rgba(217, 148, 74, 0.16)"
+                clipPath={`url(#${moldFlowClipId})`}
+              />
               {hasImpactGlow ? (
                 <>
-                  <circle cx={258} cy={238} r={48} fill="rgba(250, 204, 21, 0.12)" />
-                  <circle cx={258} cy={238} r={22} fill="rgba(250, 204, 21, 0.22)" />
+                  <circle
+                    cx={258}
+                    cy={238}
+                    r={48}
+                    fill="rgba(250, 204, 21, 0.12)"
+                    clipPath={`url(#${moldFlowClipId})`}
+                  />
+                  <circle
+                    cx={258}
+                    cy={238}
+                    r={22}
+                    fill="rgba(250, 204, 21, 0.22)"
+                    clipPath={`url(#${moldFlowClipId})`}
+                  />
                 </>
               ) : null}
             </svg>
@@ -2622,7 +3051,8 @@ const SplitVisual: React.FC<{
   const renderPanel = (
     panel: Record<string, unknown>,
     accent: string,
-    src: string | null
+    src: string | null,
+    panelKey: "left" | "right"
   ) => {
     const rawLabel = asString(panel.label);
     const labelLooksLikeHeader =
@@ -2654,7 +3084,11 @@ const SplitVisual: React.FC<{
     const steps = Array.isArray(panel.steps)
       ? panel.steps.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
-    const interior = renderPanelInterior(panel, accent);
+    const interior = renderPanelInterior(
+      panel,
+      accent,
+      panelKey
+    );
     const usagePercent =
       typeof panel.relevantPercent === "number" || typeof panel.relevantPercent === "string"
         ? `Context utilization: ~${panel.relevantPercent}%`
@@ -2862,8 +3296,8 @@ const SplitVisual: React.FC<{
           gap: 20,
         }}
       >
-        {renderPanel(left, "#60A5FA", leftSrc)}
-        {renderPanel(right, "#D9944A", rightSrc)}
+        {renderPanel(left, "#60A5FA", leftSrc, "left")}
+        {renderPanel(right, "#D9944A", rightSrc, "right")}
       </div>
       <div
         style={{
@@ -3158,6 +3592,7 @@ const CodeVisual: React.FC<{
   const lineCount = asString(data.lineCount);
   const generatedLines = Math.max(8, asNumber(data.generatedLines) ?? 14);
   const deletedLines = Math.max(0, asNumber(data.deletedLines) ?? 0);
+  const chartId = asString(data.chartId);
   const terminal = asRecord(data.terminal);
   const terminalLines = [
     asString(terminal?.command),
@@ -3168,6 +3603,15 @@ const CodeVisual: React.FC<{
     ...asStringArray(data.terminalCommands),
   ].filter((item): item is string => Boolean(item));
   const terminalPosition = asString(terminal?.position) ?? "bottom_right";
+  const transformedModules = Array.isArray(data.transformedModules)
+    ? data.transformedModules
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const pendingModules = asStringArray(data.pendingModules);
+
+  const derivePromptFileName = (moduleName: string): string =>
+    moduleName.replace(/\.[a-z0-9]+$/i, ".prompt.md");
 
   if (visualType === "code_visualization") {
     const panels = Math.max(3, asNumber(data.panels) ?? fileNames.length ?? 5);
@@ -3430,6 +3874,346 @@ const CodeVisual: React.FC<{
               {`✓ ${terminalResult}`}
             </div>
           </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  const supportsSourceOfTruthShift =
+    visualType === "code_transformation" &&
+    (chartId === "source_of_truth_shift" ||
+      (transformedModules.length >= 2 &&
+        pendingModules.length > 0 &&
+        workflow.length >= 3));
+
+  if (supportsSourceOfTruthShift) {
+    const modulePairs =
+      transformedModules.length >= 2
+        ? transformedModules.slice(0, 2)
+        : [
+            { name: "auth_handler.py", state: "complete" },
+            { name: "payment_processor.py", state: "animating" },
+          ];
+    const workflowStages =
+      workflow.length > 0
+        ? workflow
+        : ["module", "prompt", "tests", "regenerate", "compare"];
+    const backgroundModuleNames =
+      pendingModules.length > 0
+        ? pendingModules
+        : [
+            "user_service.py",
+            "legacy_router.py",
+            "config.py",
+            "db_connector.py",
+            "email_sender.py",
+            "cache_layer.py",
+          ];
+
+    return (
+      <AbsoluteFill style={{ padding: "72px 82px 76px" }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at 78% 22%, rgba(96, 165, 250, 0.08), transparent 28%), radial-gradient(circle at 18% 18%, rgba(45, 212, 191, 0.06), transparent 26%)",
+          }}
+        />
+        {backgroundModuleNames.slice(0, 6).map((moduleName, index) => {
+          const column = index % 3;
+          const row = Math.floor(index / 3);
+          return (
+            <div
+              key={`background-module-${moduleName}`}
+              style={{
+                position: "absolute",
+                left: 760 + column * 220 + (row % 2) * 28,
+                top: 130 + row * 190,
+                width: 188,
+                height: 106,
+                borderRadius: 18,
+                backgroundColor: "rgba(17, 24, 39, 0.18)",
+                border: "1px solid rgba(71, 85, 105, 0.18)",
+                boxShadow: "0 12px 32px rgba(2, 6, 23, 0.18)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: 26,
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "0 12px",
+                  backgroundColor: "rgba(15, 23, 42, 0.35)",
+                  color: "rgba(71, 85, 105, 0.7)",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 10,
+                }}
+              >
+                {moduleName}
+              </div>
+            </div>
+          );
+        })}
+        {modulePairs.map((moduleEntry, index) => {
+          const moduleName = asString(moduleEntry.name) ?? `module_${index + 1}.py`;
+          const moduleState = asString(moduleEntry.state) ?? (index === 0 ? "complete" : "animating");
+          const codeTop = 178 + index * 242;
+          const codeLeft = 220;
+          const promptLeft = 452;
+          const promptFileName = derivePromptFileName(moduleName);
+          const promptGlow =
+            moduleState === "animating"
+              ? "0 0 26px rgba(96, 165, 250, 0.34)"
+              : "0 0 18px rgba(96, 165, 250, 0.24)";
+
+          return (
+            <React.Fragment key={`transform-pair-${moduleName}`}>
+              <div
+                style={{
+                  position: "absolute",
+                  left: codeLeft,
+                  top: codeTop,
+                  width: 170,
+                  height: 114,
+                  borderRadius: 20,
+                  backgroundColor:
+                    moduleState === "animating"
+                      ? "rgba(17, 24, 39, 0.36)"
+                      : "rgba(17, 24, 39, 0.28)",
+                  border: "1px solid rgba(71, 85, 105, 0.34)",
+                  boxShadow: "0 18px 44px rgba(2, 6, 23, 0.22)",
+                  overflow: "hidden",
+                  filter: "grayscale(0.72)",
+                }}
+              >
+                <div
+                  style={{
+                    height: 30,
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "0 12px",
+                    backgroundColor: "rgba(15, 23, 42, 0.72)",
+                    color: "#94A3B8",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 11,
+                  }}
+                >
+                  {moduleName}
+                </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "20px 1fr",
+                    rowGap: 5,
+                    padding: "10px 12px 0",
+                  }}
+                >
+                  {Array.from({ length: 5 }).map((_, lineIndex) => (
+                    <React.Fragment key={`${moduleName}-line-${lineIndex}`}>
+                      <div
+                        style={{
+                          color: "rgba(100, 116, 139, 0.55)",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 9,
+                        }}
+                      >
+                        {lineIndex + 1}
+                      </div>
+                      <div
+                        style={{
+                          color: "rgba(148, 163, 184, 0.45)",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 10,
+                        }}
+                      >
+                        {lineIndex === 0
+                          ? "def handle(input):"
+                          : lineIndex === 1
+                            ? "    return prompt.generate()"
+                            : "    # artifact"}
+                      </div>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+              <div
+                style={{
+                  position: "absolute",
+                  left: promptLeft,
+                  top: codeTop + 8,
+                  width: 72,
+                  height: 92,
+                  borderRadius: 18,
+                  backgroundColor: "rgba(96, 165, 250, 0.18)",
+                  border: "1px solid rgba(96, 165, 250, 0.62)",
+                  boxShadow: promptGlow,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <div
+                  style={{
+                    width: 46,
+                    height: 58,
+                    borderRadius: 12,
+                    border: "1px solid rgba(96, 165, 250, 0.72)",
+                    backgroundColor: "rgba(96, 165, 250, 0.16)",
+                    color: "#BFDBFE",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 8,
+                    lineHeight: 1.3,
+                    display: "flex",
+                    alignItems: "flex-end",
+                    justifyContent: "center",
+                    paddingBottom: 10,
+                    textAlign: "center",
+                  }}
+                >
+                  {".prompt.md"}
+                </div>
+              </div>
+              <div
+                style={{
+                  position: "absolute",
+                  left: codeLeft + 170,
+                  top: codeTop + 54,
+                  width: 62,
+                  height: 2,
+                  backgroundColor: "rgba(96, 165, 250, 0.28)",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  left: codeLeft + 168,
+                  top: codeTop + 49,
+                  width: 0,
+                  height: 0,
+                  borderTop: "6px solid transparent",
+                  borderBottom: "6px solid transparent",
+                  borderRight: "10px solid rgba(96, 165, 250, 0.34)",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  left: codeLeft + 8,
+                  top: codeTop + 124,
+                  color: "rgba(100, 116, 139, 0.72)",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 11,
+                  letterSpacing: 0.2,
+                }}
+              >
+                artifact
+              </div>
+              <div
+                style={{
+                  position: "absolute",
+                  left: promptLeft - 8,
+                  top: codeTop + 124,
+                  color: "rgba(96, 165, 250, 0.84)",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 11,
+                  letterSpacing: 0.2,
+                }}
+              >
+                source of truth
+              </div>
+              <div
+                style={{
+                  position: "absolute",
+                  left: promptLeft - 18,
+                  top: codeTop + 108,
+                  width: 126,
+                  color: "#60A5FA",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 10,
+                  textAlign: "center",
+                }}
+              >
+                {promptFileName}
+              </div>
+              {moduleState === "animating" ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 206,
+                    top: codeTop - 44,
+                    padding: "8px 12px",
+                    borderRadius: 14,
+                    backgroundColor: "rgba(2, 6, 23, 0.84)",
+                    border: "1px solid rgba(96, 165, 250, 0.3)",
+                    color: "#E2E8F0",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 11,
+                  }}
+                >
+                  {`$ pdd update ${moduleName}`}
+                </div>
+              ) : null}
+            </React.Fragment>
+          );
+        })}
+        <div
+          style={{
+            position: "absolute",
+            left: width - 660,
+            right: 88,
+            bottom: 78,
+            display: "grid",
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+            alignItems: "center",
+            columnGap: 12,
+          }}
+        >
+          {workflowStages.slice(0, 5).map((stage, index) => (
+            <React.Fragment key={`workflow-stage-${stage}`}>
+              <div
+                style={{
+                  borderRadius: 999,
+                  border: `1px solid ${index === 1 ? "rgba(96, 165, 250, 0.46)" : index === 2 ? "rgba(217, 148, 74, 0.46)" : index === 3 ? "rgba(167, 139, 250, 0.46)" : index === 4 ? "rgba(74, 222, 128, 0.46)" : "rgba(51, 65, 85, 0.56)"}`,
+                  backgroundColor:
+                    index === 1
+                      ? "rgba(96, 165, 250, 0.14)"
+                      : index === 2
+                        ? "rgba(217, 148, 74, 0.14)"
+                        : index === 3
+                          ? "rgba(167, 139, 250, 0.14)"
+                          : index === 4
+                            ? "rgba(74, 222, 128, 0.14)"
+                            : "rgba(51, 65, 85, 0.28)",
+                  color: "#94A3B8",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  textAlign: "center",
+                  padding: "9px 8px",
+                }}
+              >
+                {stage}
+              </div>
+              {index < workflowStages.slice(0, 5).length - 1 ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: width - 660 + (index + 0.74) * ((width - 660 - 88) / 5),
+                    right: undefined,
+                    bottom: 101,
+                    width: 34,
+                    color: "rgba(71, 85, 105, 0.75)",
+                    fontSize: 20,
+                    textAlign: "center",
+                  }}
+                >
+                  →
+                </div>
+              ) : null}
+            </React.Fragment>
+          ))}
         </div>
       </AbsoluteFill>
     );

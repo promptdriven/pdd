@@ -180,6 +180,78 @@ const AUDIT_HINT_METADATA_LABELS = new Set([
   "background",
   "easing",
 ]);
+const DATA_POINTS_JSON_RE =
+  /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
+const AUDIT_HINT_STRUCTURED_TEXT_KEYS = new Set([
+  "annotation",
+  "attribution",
+  "bottomlabel",
+  "caption",
+  "command",
+  "challenge",
+  "challengetext",
+  "description",
+  "eyebrow",
+  "file",
+  "filename",
+  "header",
+  "headerlabel",
+  "highlightedmodule",
+  "insighttext",
+  "introtext",
+  "label",
+  "line1",
+  "line2",
+  "module",
+  "output",
+  "promptfile",
+  "priorityrule",
+  "quote",
+  "role",
+  "sectionlabel",
+  "sharedlabel",
+  "statement",
+  "subtitle",
+  "subtext",
+  "summary",
+  "tagline",
+  "terminalcommand",
+  "terminaloutput",
+  "text",
+  "title",
+  "titleline1",
+  "titleline2",
+]);
+const AUDIT_HINT_STRUCTURED_STRING_LIST_KEYS = new Set([
+  "columns",
+  "headers",
+  "labels",
+  "stages",
+  "supportingtext",
+  "ticks",
+]);
+const AUDIT_HINT_STRUCTURED_SKIP_KEYS = new Set([
+  "accentcolor",
+  "backgroundcolor",
+  "cardid",
+  "chartid",
+  "color",
+  "diagramid",
+  "event",
+  "flowduration",
+  "glowcolor",
+  "id",
+  "layout",
+  "narrationsegments",
+  "position",
+  "renderingmode",
+  "shape",
+  "source",
+  "stroke",
+  "strokewidth",
+  "style",
+  "type",
+]);
 
 function requiresCompositedMediaAudit(content: string): boolean {
   if (!GENERIC_MEDIA_RE.test(content)) {
@@ -230,6 +302,90 @@ function pushUnique(values: string[], nextValue: string): void {
   values.push(trimmed);
 }
 
+function normalizeAuditHintKey(value: string): string {
+  return value.replace(/[^a-z0-9]+/gi, "").toLowerCase();
+}
+
+function isTimestampLikeAuditLabel(value: string): boolean {
+  return /^(?:\d{1,2}:)?\d{1,2}:\d{2}(?:\.\d+)?$/.test(value.trim());
+}
+
+function extractDataPointsJson(content: string): Record<string, unknown> | null {
+  const match = DATA_POINTS_JSON_RE.exec(content);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(match[1]);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectStructuredAuditHintStrings(
+  value: unknown,
+  criticalElements: string[],
+  pathSegments: string[] = []
+): void {
+  const currentKey = pathSegments[pathSegments.length - 1]
+    ? normalizeAuditHintKey(pathSegments[pathSegments.length - 1]!)
+    : "";
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || AUDIT_HINT_STRUCTURED_SKIP_KEYS.has(currentKey)) {
+      return;
+    }
+
+    if (
+      AUDIT_HINT_STRUCTURED_TEXT_KEYS.has(currentKey) ||
+      currentKey.endsWith("label")
+    ) {
+      pushUnique(criticalElements, trimmed);
+    }
+    return;
+  }
+
+  if (typeof value === "number") {
+    if (currentKey === "testcount" && Number.isFinite(value)) {
+      pushUnique(criticalElements, `${Math.round(value)} tests`);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (AUDIT_HINT_STRUCTURED_STRING_LIST_KEYS.has(currentKey)) {
+      for (const entry of value) {
+        if (typeof entry === "string" && entry.trim()) {
+          pushUnique(criticalElements, entry);
+        }
+      }
+      return;
+    }
+
+    for (const entry of value) {
+      collectStructuredAuditHintStrings(entry, criticalElements, pathSegments);
+    }
+    return;
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    collectStructuredAuditHintStrings(
+      nestedValue,
+      criticalElements,
+      [...pathSegments, key]
+    );
+  }
+}
+
 export function resolveSpecAuditHints(content: string): AuditHints {
   const criticalElements: string[] = [];
   const decorativeElements: string[] = [];
@@ -245,6 +401,9 @@ export function resolveSpecAuditHints(content: string): AuditHints {
 
     const normalizedLabel = label.toLowerCase();
     if (AUDIT_HINT_METADATA_LABELS.has(normalizedLabel)) {
+      continue;
+    }
+    if (/^frame\s+\d+/i.test(label) || isTimestampLikeAuditLabel(label)) {
       continue;
     }
 
@@ -276,6 +435,11 @@ export function resolveSpecAuditHints(content: string): AuditHints {
       endFrame,
       description,
     });
+  }
+
+  const dataPoints = extractDataPointsJson(content);
+  if (dataPoints) {
+    collectStructuredAuditHintStrings(dataPoints, criticalElements);
   }
 
   return {
@@ -451,8 +615,6 @@ function resolveSpecMediaInfo(
 }
 
 const SPLIT_MARKER_RE = /^\s*\[split:[^\]]*\]/i;
-const DATA_POINTS_JSON_RE =
-  /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
 
 function collectEmbeddedCompanionIds(
   projectDir: string,
@@ -478,13 +640,8 @@ function collectEmbeddedCompanionIds(
 
     if (!SPLIT_MARKER_RE.test(content)) continue;
 
-    const match = DATA_POINTS_JSON_RE.exec(content);
-    if (!match?.[1]) continue;
-
-    let dataPoints: Record<string, unknown>;
-    try {
-      dataPoints = JSON.parse(match[1]);
-    } catch {
+    const dataPoints = extractDataPointsJson(content);
+    if (!dataPoints) {
       continue;
     }
 

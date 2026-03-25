@@ -217,6 +217,30 @@ describe("shared generated contract renderer", () => {
     expect(titleBlock).toMatch(/resolvedTitleLines\[1\]/);
   });
 
+  it("keeps code-underlay thesis cards on one title line and suppresses the cold-open eyebrow", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/const hideEyebrow/);
+    expect(source).toMatch(/sectionNumber/);
+    expect(source).toMatch(/cold open/i);
+    expect(source).toMatch(/const prefersSingleLineTitle/);
+    expect(source).toMatch(/hasCodeUnderlay/);
+    expect(source).toMatch(/fontStyle:\s*subtitleFontStyle/);
+  });
+
+  it("renders multi-module code-transformation layouts from structured contracts instead of the generic placeholder panel", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/chartId === ["']source_of_truth_shift["']/);
+    expect(source).toMatch(/transformedModules/);
+    expect(source).toMatch(/pendingModules/);
+    expect(source).toMatch(/source of truth/);
+    expect(source).toMatch(/artifact/);
+    expect(source).toMatch(/payment_processor\.py/);
+    expect(source).toMatch(/prompt\.md/);
+    expect(source).toMatch(/workflowStages/);
+  });
+
   it("renders transitions and contract-first diagrams without the old placeholder badge", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
@@ -232,6 +256,18 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/headerColor/);
     expect(source).toMatch(/tokenCount|scope|multiplier/);
     expect(source).toMatch(/codeComments|warningComments|lineCount|terminalCommands|workflow/);
+  });
+
+  it("supports precision-tradeoff chart annotations and constrains mold-flow panels inside the mold walls", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/chartId === "precision_tradeoff_curve"/);
+    expect(source).toMatch(/parser_v1\.prompt/);
+    expect(source).toMatch(/parser_v2\.prompt/);
+    expect(source).toMatch(/pdd test parser/);
+    expect(source).toMatch(/tests passing/);
+    expect(source).toMatch(/50\+/);
+    expect(source).toMatch(/clipPath/);
   });
 
   it("supports contract-authored quote cards instead of collapsing them into a generic quote fallback", () => {

@@ -3,16 +3,13 @@ import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "../Part4PrecisionTradeoff03PrecisionTradeoffCurve";
 import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "../Part4PrecisionTradeoff08PromptCodeSpectrum";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "03_precision_tradeoff_curve": Part4PrecisionTradeoff03PrecisionTradeoffCurve,
   "06_prompt_code_spectrum": Part4PrecisionTradeoff08PromptCodeSpectrum,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "03_precision_tradeoff_curve": 450,
   "06_prompt_code_spectrum": 360,
 };
 

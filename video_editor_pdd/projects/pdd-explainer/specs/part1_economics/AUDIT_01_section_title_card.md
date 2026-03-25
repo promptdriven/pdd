@@ -1,14 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame at 87.5% progress (frame 104/120, hold phase) matches the spec well. All critical elements are present and correctly rendered:
-
-1. **Background**: Deep navy-black background consistent with `#0A0F1A`. Blueprint grid is faintly visible.
-2. **"PART 1" label**: Visible centered above the title in small, muted text with letter-spacing, matching the spec's Inter 14px semi-bold `#64748B` description.
-3. **"THE ECONOMICS"**: Large bold white text centered horizontally, matching Inter 72px bold `#E2E8F0`.
-4. **Horizontal rule**: A thin horizontal line is visible between the two title lines, centered, matching the spec's 240px wide rule at `#334155`.
-5. **"OF DARNING"**: Large bold white text below the rule, centered. The spec calls for a 15px offset-right — the text appears very close to centered which is within acceptable tolerance.
-6. **Ghost cost curves**: Two faint curves are visible in the left portion of the frame — one warm-toned (descending, orange-ish) and one cool-toned (ascending, blue-ish) — matching the spec's `#D9944A` and `#4A90D9` at 0.04 opacity. They cross in the left-center area. The spec says the crossing point should be near center-right, but the curves are positioned more left-of-center. At 0.04 opacity these are extremely subtle background elements and their exact positioning is decorative.
-7. **Animation phase**: At frame 104 we are in the hold phase (frame 90-120), which is correct — all elements are fully revealed and static.
-
-The overall composition reads as intended: a clean section title card with faint economic curve imagery behind centered typography.
+The frame at 87.5% progress (hold phase, frame 104/120) matches the spec requirements well. All critical text elements are present and correctly rendered: 'PART 1' appears as a small, muted label centered above the title (correct semi-bold, letter-spaced styling in slate-gray). 'THE ECONOMICS' is displayed in large bold white text, centered. A thin horizontal rule is visible between the two title lines. 'OF DARNING' appears in large bold white text below the rule. The background is deep navy-black as specified. Two ghost cost curves are faintly visible in the left portion of the frame at very low opacity — one warm-toned (descending) and one cool-toned (ascending) — consistent with the spec's ghost curve description, though they appear shifted somewhat to the left rather than crossing near center-right. At this very low opacity (spec calls for 0.04), the exact positioning is difficult to judge precisely, and the curves are present as intended background texture. The blueprint grid is not prominently visible but at 0.05 opacity it would be nearly imperceptible, which is acceptable. The overall composition is centered and reads correctly for the hold phase. Text sizing, weight, color, and vertical stacking all match the intended layout.

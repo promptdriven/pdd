@@ -5572,8 +5572,8 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
-    def test_keeps_exact_component_for_specialized_chart_when_available(self):
-        assert not _should_prefer_generated_contract_renderer(
+    def test_prefers_generated_contract_for_precision_tradeoff_curve_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "animated_chart",

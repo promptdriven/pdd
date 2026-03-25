@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (userparser, class, import, none, test), so the frame does not support a hard missing-text failure.
+The frame is in the correct animation phase (phase 6: hold on clean state) and conveys the intended narrative — clean regenerated code with all tests passing. However, there are three discrepancies: (1) The test named 'test_edge_case' specified in the spec is absent; instead, 5 different test names appear in a separate right-side panel. (2) The layout uses a two-panel arrangement (code left, tests right) rather than the spec's single code editor with tests appearing 'below the code' inline. (3) The terminal's 'All tests passing' line lacks the '✓' checkmark character specified in the spec; checkmarks appear only in the test panel. The overall visual message is preserved — you constrain the mold and regenerate — and the terminal sequence, clean code state, and green pass indicators all read correctly during playback.

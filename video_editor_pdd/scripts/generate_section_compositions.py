@@ -1309,6 +1309,7 @@ CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
 CONTRACT_FIRST_EXACT_OVERRIDE_CHART_IDS = {
     'compound_debt_curve',
     'maintenance_cost_pie',
+    'precision_tradeoff_curve',
 }
 
 

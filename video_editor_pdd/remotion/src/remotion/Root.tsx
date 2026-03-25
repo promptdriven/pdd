@@ -16,7 +16,6 @@ import { Part1Economics05ContextWindowShrink } from "./Part1Economics05ContextWi
 import { Part2ParadigmShift09AbstractionStaircase } from "./Part2ParadigmShift09AbstractionStaircase";
 import { Part3MoldThreeParts02MoldCrossSection } from "./Part3MoldThreeParts02MoldCrossSection";
 import { Part3MoldThreeParts10ThreeComponentsTable } from "./Part3MoldThreeParts10ThreeComponentsTable";
-import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "./Part4PrecisionTradeoff03PrecisionTradeoffCurve";
 import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "./Part4PrecisionTradeoff08PromptCodeSpectrum";
 import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
@@ -406,7 +405,7 @@ const Part4PrecisionTradeoff02PrinterVsMoldSplitPreview: React.FC = () => (
 const Part4PrecisionTradeoff03PrecisionTradeoffCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
-      <Part4PrecisionTradeoff03PrecisionTradeoffCurve />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
