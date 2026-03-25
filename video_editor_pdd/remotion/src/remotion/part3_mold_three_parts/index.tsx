@@ -21,7 +21,7 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "16_grounding_material": { defaultSrc: "veo/grounding_material_flow.mp4", backgroundSrc: "veo/grounding_material_flow.mp4", outputSrc: "veo/grounding_material_flow.mp4", baseSrc: "veo/grounding_material_flow.mp4" },
 };
 
-const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
+const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {
 };
 
 const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {

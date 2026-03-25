@@ -1288,11 +1288,13 @@ CONTRACT_FIRST_VISUAL_TYPES = {
 
 CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
     'annotation_overlay',
+    'chart_callback',
     'chart_event',
     'code_regeneration',
     'code_transformation',
     'code_visualization',
     'quote_card',
+    'text_overlay_with_morph',
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
@@ -1865,6 +1867,28 @@ def _extract_visual_overlay_config(spec_content: str) -> Optional[Dict[str, Any]
             position = counter.get('position')
             if isinstance(position, str) and position.strip():
                 config['counterPosition'] = position.strip()
+
+    fade_in_match = re.search(
+        r'frame\s+(\d+)\s*-\s*(\d+)[^\n]*fade\s+in(?:\s+from\s+black)?',
+        spec_content,
+        flags=re.IGNORECASE,
+    )
+    if fade_in_match:
+        start_frame = int(fade_in_match.group(1))
+        end_frame = int(fade_in_match.group(2))
+        if end_frame > start_frame:
+            config['fadeInFrames'] = end_frame - start_frame
+
+    fade_out_match = re.search(
+        r'frame\s+(\d+)\s*-\s*(\d+)[^\n]*fade\s+(?:out|to\s+black)',
+        spec_content,
+        flags=re.IGNORECASE,
+    )
+    if fade_out_match:
+        start_frame = int(fade_out_match.group(1))
+        end_frame = int(fade_out_match.group(2))
+        if end_frame > start_frame:
+            config['fadeOutFrames'] = end_frame - start_frame
 
     return config or None
 
@@ -2476,12 +2500,14 @@ def generate_generated_timeline_wrapper(
         lines.append(f'  "{visual_id}": {{ {alias_parts} }},')
     lines.append('};')
     lines.append('')
-    lines.append('const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {')
+    lines.append('const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {')
     for visual_id, config in visual_overlay_manifest.items():
         overlay_parts: List[str] = []
         for key, value in config.items():
             if isinstance(value, bool):
                 serialized = 'true' if value else 'false'
+            elif isinstance(value, (int, float)):
+                serialized = json.dumps(value)
             else:
                 serialized = json.dumps(str(value))
             overlay_parts.append(f'{key}: {serialized}')

@@ -41,20 +41,20 @@ export const BEATS = {
 
 export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 0 },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_sock_price_chart", desc: "02 sock price chart", lane: 0 },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_sock_price_chart", desc: "02 sock price chart", lane: 1 },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_code_cost_chart", desc: "03 code cost chart", lane: 0 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_research_annotations", desc: "04 research annotations", lane: 0 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_context_window_shrink", desc: "05 context window shrink", lane: 0 },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_performance_vs_context", desc: "06 performance vs context", lane: 0 },
-  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_two_by_two_grid", desc: "07 two by two grid", lane: 0 },
+  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_two_by_two_grid", desc: "07 two by two grid", lane: 1 },
   { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_fork_codebase_size", desc: "08 fork codebase size", lane: 0 },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_patching_vs_regeneration_split", desc: "09 patching vs regeneration split", lane: 0 },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_patching_vs_regeneration_split", desc: "09 patching vs regeneration split", lane: 1 },
   { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "10_context_compression", desc: "10 context compression", lane: 0 },
   { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "11_crossing_lines_moment", desc: "11 crossing lines moment", lane: 0 },
-  { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "16_double_meter_insight", desc: "16 double meter insight", lane: 0 },
-  { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "12_developer_darning_split", desc: "12 developer darning split", lane: 0 },
+  { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "16_double_meter_insight", desc: "16 double meter insight", lane: 1 },
+  { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "12_developer_darning_split", desc: "12 developer darning split", lane: 1 },
   { start: BEATS.VISUAL_13_START, end: BEATS.VISUAL_13_END, id: "15_key_insight_stillness", desc: "15 key insight stillness", lane: 0 },
-  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "17_try_it_yourself", desc: "17 try it yourself", lane: 0 },
+  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "17_try_it_yourself", desc: "17 try it yourself", lane: 1 },
 ];
 
 export const Part1EconomicsSectionProps = z.object({

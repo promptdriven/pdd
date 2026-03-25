@@ -1,12 +1,18 @@
 import React from "react";
-import { AbsoluteFill, OffthreadVideo, useVideoConfig } from "remotion";
+import {
+  AbsoluteFill,
+  OffthreadVideo,
+  interpolate,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
 
 import {
   useVisualContractData,
   useVisualMediaAssetSrc,
 } from "./visual-runtime";
 
-type GeneratedMediaVisualConfig = Record<string, string | boolean>;
+type GeneratedMediaVisualConfig = Record<string, string | boolean | number>;
 
 type PanelMetadata = {
   label: string | null;
@@ -54,11 +60,12 @@ function resolveCounterValue(contract: Record<string, unknown> | null): number |
 export const GeneratedMediaVisual: React.FC<{
   config?: GeneratedMediaVisualConfig | null;
 }> = ({ config }) => {
+  const frame = useCurrentFrame();
   const src = useVisualMediaAssetSrc("defaultSrc");
   const leftSrc = useVisualMediaAssetSrc("leftSrc");
   const rightSrc = useVisualMediaAssetSrc("rightSrc");
   const contract = useVisualContractData<Record<string, unknown>>();
-  const { width, height } = useVideoConfig();
+  const { width, height, durationInFrames } = useVideoConfig();
   const layout = lowerThirdLayout(width, height);
   const gradientOverlay = config?.gradientOverlay;
   const lowerThirdText =
@@ -67,6 +74,14 @@ export const GeneratedMediaVisual: React.FC<{
   const counterOverlay = config?.counterOverlay === true;
   const counterPosition =
     typeof config?.counterPosition === "string" ? config.counterPosition : "lower_right";
+  const fadeInFrames =
+    typeof config?.fadeInFrames === "number" && Number.isFinite(config.fadeInFrames)
+      ? Math.max(0, Math.floor(config.fadeInFrames))
+      : 0;
+  const fadeOutFrames =
+    typeof config?.fadeOutFrames === "number" && Number.isFinite(config.fadeOutFrames)
+      ? Math.max(0, Math.floor(config.fadeOutFrames))
+      : 0;
   const splitDividerWidth = Math.max(2, Math.round(width * 0.0012));
   const splitLabelInset = Math.max(32, width * 0.025);
   const splitLabelBottom = Math.max(32, height * 0.06);
@@ -95,6 +110,31 @@ export const GeneratedMediaVisual: React.FC<{
   const leftPanel = resolvePanelMetadata("left");
   const rightPanel = resolvePanelMetadata("right");
   const isSplitVisual = Boolean(leftSrc && rightSrc);
+  const fadeInOpacity =
+    fadeInFrames > 0
+      ? interpolate(frame, [0, fadeInFrames], [0, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        })
+      : 1;
+  const fadeOutStartFrame =
+    fadeOutFrames > 0
+      ? Math.max(0, durationInFrames - fadeOutFrames)
+      : durationInFrames;
+  const fadeOutResolvedOpacity =
+    fadeOutFrames > 0
+      ? interpolate(frame, [fadeOutStartFrame, durationInFrames], [1, 0], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        })
+      : 1;
+  const mediaOpacity = fadeInOpacity * fadeOutResolvedOpacity;
+  const mediaStyle = {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover" as const,
+    opacity: mediaOpacity,
+  };
 
   const renderSplitMetadata = (
     side: "left" | "right",
@@ -251,7 +291,7 @@ export const GeneratedMediaVisual: React.FC<{
           >
             <OffthreadVideo
               src={leftSrc!}
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              style={mediaStyle}
             />
           </div>
           <div
@@ -266,7 +306,7 @@ export const GeneratedMediaVisual: React.FC<{
           >
             <OffthreadVideo
               src={rightSrc!}
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              style={mediaStyle}
             />
           </div>
           <div
@@ -287,7 +327,7 @@ export const GeneratedMediaVisual: React.FC<{
       ) : src ? (
         <OffthreadVideo
           src={src}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          style={mediaStyle}
         />
       ) : null}
 

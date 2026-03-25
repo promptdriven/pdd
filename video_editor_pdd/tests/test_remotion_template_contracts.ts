@@ -40,6 +40,15 @@ describe("shared generated media renderer", () => {
     expect(source).toMatch(/Math\.max\(\s*18|Math\.max\(\s*20/);
   });
 
+  it("supports authored fade windows for raw-media callback specs instead of rendering clips at full opacity for the entire slot", () => {
+    const source = fs.readFileSync(generatedMediaVisualPath, "utf8");
+
+    expect(source).toMatch(/fadeInFrames|fadeOutFrames/);
+    expect(source).toMatch(/useCurrentFrame/);
+    expect(source).toMatch(/opacity/);
+    expect(source).toMatch(/interpolate\(/);
+  });
+
   it("uses asset-resolved media hooks in generated components that pass Veo sources directly to video elements", () => {
     const directVideoComponents = [
       path.join(
@@ -250,6 +259,16 @@ describe("shared generated contract renderer", () => {
     expect(chartBlock).toMatch(/stats/);
   });
 
+  it("supports contract-first callback charts with the current label set instead of stale exact-component copy", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    expect(source).toMatch(/code_cost_triple_line/);
+    expect(source).toMatch(/Immediate patch/);
+    expect(source).toMatch(/Total cost of patching/);
+    expect(source).toMatch(/Generate new/);
+    expect(source).toMatch(/We are here\./);
+    expect(source).toMatch(/When economics change, rational behavior changes\./);
+  });
+
   it("renders transition cards without the old debug title and center divider artifact", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
     const transitionBlock = extractBlock(source, "const TransitionVisual", "const ChartVisual");
@@ -274,6 +293,17 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/Every token is author-curated\./);
     expect(source).toMatch(/No retrieval guessing\. No wasted space\./);
     expect(source).toMatch(/The entire context window is devoted to your problem\./);
+  });
+
+  it("keeps context-window panels centered and uses the authored clean-panel labels", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/width:\s*420/);
+    expect(source).toMatch(/left:\s*["']50%["']/);
+    expect(source).toMatch(/transform:\s*["']translateX\(-50%\)["']/);
+    expect(source).toMatch(/normalizedLabel === "prompt"/);
+    expect(source).toMatch(/normalizedLabel === "tests"/);
+    expect(source).toMatch(/Grounding example/);
   });
 
   it("supports media-backed split reveals and element-driven precision panels from structured contracts", () => {
@@ -314,6 +344,15 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/diagramId === "bug_add_wall"/);
     expect(source).toMatch(/diagramId === "grounding_feedback_loop"/);
     expect(source).toMatch(/diagramId === "ratchet_timelapse"/);
+  });
+
+  it("renders permanent-wall bug diagrams with the authored label, test checks, and permanence caption", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/That wall is permanent\. That bug can never occur again\./);
+    expect(source).toMatch(/handles_null_userid/);
+    expect(source).toMatch(/All tests passing/);
+    expect(source).toMatch(/✓/);
   });
 
   it("supports the remaining high-fidelity morph and mold families from the authored contracts", () => {

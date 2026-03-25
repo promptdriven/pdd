@@ -62,6 +62,29 @@ const formatApproxTokenCount = (value: unknown): string | null => {
   return `${prefix}${numeric.toLocaleString()} tokens`;
 };
 
+const formatExactTokenCount = (value: unknown): string | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `${Math.round(value).toLocaleString()} tokens`;
+  }
+
+  const raw = asString(value);
+  if (!raw) {
+    return null;
+  }
+
+  const digitsOnly = raw.replace(/[^0-9]/g, "");
+  if (!digitsOnly) {
+    return raw.toLowerCase().includes("token") ? raw : `${raw} tokens`;
+  }
+
+  const numeric = Number(digitsOnly);
+  if (!Number.isFinite(numeric)) {
+    return raw;
+  }
+
+  return `${numeric.toLocaleString()} tokens`;
+};
+
 const buildDenseCodePreviewLines = (variant: "dense" | "cluttered" | "clean"): string[] => {
   if (variant === "clean") {
     return [
@@ -433,7 +456,7 @@ const buildEventSeries = (data: Record<string, unknown>): SeriesEntry[] => {
   if (chartId === "code_cost_triple_line") {
     return [
       {
-        label: "Cost to generate",
+        label: "Generate new",
         color: "#4A90D9",
         points: [
           { x: 0, y: 82 },
@@ -444,7 +467,7 @@ const buildEventSeries = (data: Record<string, unknown>): SeriesEntry[] => {
         ],
       },
       {
-        label: "Immediate patch cost",
+        label: "Immediate patch",
         color: "#D9944A",
         points: [
           { x: 0, y: 42 },
@@ -455,7 +478,7 @@ const buildEventSeries = (data: Record<string, unknown>): SeriesEntry[] => {
         ],
       },
       {
-        label: "Total cost (with debt)",
+        label: "Total cost of patching",
         color: "#FBBF24",
         points: [
           { x: 0, y: 58 },
@@ -1384,6 +1407,7 @@ const ChartVisual: React.FC<{
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
   const chartId = asString(data.chartId);
+  const event = asString(data.event);
   const callouts = Array.isArray(data.callouts)
     ? data.callouts
         .map((entry) => asRecord(entry))
@@ -1415,10 +1439,32 @@ const ChartVisual: React.FC<{
         .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
   const trapArrow = asRecord(data.trapArrow);
+  const isCodeCostCallback =
+    chartId === "code_cost_triple_line" &&
+    (data.type === "chart_callback" || event === "crossing_reprise");
+  const resolvedThreshold =
+    threshold ??
+    (isCodeCostCallback
+      ? {
+          label: "We are here.",
+        }
+      : null);
+  const resolvedCrossings =
+    crossings.length > 0
+      ? crossings
+      : isCodeCostCallback
+        ? [
+            asRecord(data.crossingPoint) ?? {
+              radius: 12,
+              glowRadius: 24,
+            },
+          ]
+        : [];
   const eventLabel = asString(data.label) ?? asString(asRecord(data.takeaway)?.line1);
   const eventSubLabel =
     debtResetNote ??
     asString(data.newAnnotation) ??
+    (isCodeCostCallback ? "When economics change, rational behavior changes." : null) ??
     asString(asRecord(data.takeaway)?.line2);
   const showInsetCallout = data.type === "inset_chart" && causalChain.length > 0;
   const chartWidth = width * 0.72;
@@ -1802,7 +1848,7 @@ const ChartVisual: React.FC<{
               opacity={reveal}
             />
           ))}
-          {threshold ? (
+          {resolvedThreshold ? (
             <g>
               <circle
                 cx={chartWidth * 0.32}
@@ -1814,16 +1860,16 @@ const ChartVisual: React.FC<{
               />
               <text
                 x={chartWidth * 0.32 + 18}
-                y={chartHeight * 0.54 - 14}
-                fill="#E2E8F0"
-                fontSize="22"
-                fontWeight="700"
-              >
-                {asString(threshold.label) ?? "Threshold"}
-              </text>
-            </g>
-          ) : null}
-          {crossings.map((crossing, index) => (
+                  y={chartHeight * 0.54 - 14}
+                  fill="#E2E8F0"
+                  fontSize="22"
+                  fontWeight="700"
+                >
+                  {asString(resolvedThreshold.label) ?? "Threshold"}
+                </text>
+              </g>
+            ) : null}
+          {resolvedCrossings.map((crossing, index) => (
             <g key={`crossing-${index}`}>
               <circle
                 cx={chartWidth * (0.58 + index * 0.16)}
@@ -2312,7 +2358,12 @@ const SplitVisual: React.FC<{
         <div
           style={{
             position: "absolute",
-            inset: "86px 24px 92px",
+            left: "50%",
+            top: 86,
+            bottom: 92,
+            width: 420,
+            maxWidth: "calc(100% - 48px)",
+            transform: "translateX(-50%)",
             borderRadius: 20,
             backgroundColor: "rgba(2, 6, 23, 0.8)",
             border: "1px solid rgba(239, 68, 68, 0.22)",
@@ -2399,7 +2450,12 @@ const SplitVisual: React.FC<{
         <div
           style={{
             position: "absolute",
-            inset: "86px 24px 92px",
+            left: "50%",
+            top: 86,
+            bottom: 92,
+            width: 420,
+            maxWidth: "calc(100% - 48px)",
+            transform: "translateX(-50%)",
             borderRadius: 20,
             backgroundColor: "rgba(2, 6, 23, 0.72)",
             border: "1px solid rgba(74, 222, 128, 0.24)",
@@ -2412,7 +2468,15 @@ const SplitVisual: React.FC<{
           {tokenCount ? renderInsetTokenBadge(tokenCount, "#4ADE80") : null}
           {sections.slice(0, 3).map((section, index) => {
             const color = asString(section.color) ?? (index === 0 ? "#4A90D9" : index === 1 ? "#D9944A" : "#5AAA6E");
-            const tokens = formatApproxTokenCount(section.tokens);
+            const tokens = formatExactTokenCount(section.tokens);
+            const rawLabel = asString(section.label) ?? `Section ${index + 1}`;
+            const normalizedLabel = rawLabel.toLowerCase();
+            const title =
+              normalizedLabel === "grounding"
+                ? "Grounding example"
+                : tokens && (normalizedLabel === "prompt" || normalizedLabel === "tests")
+                  ? `${rawLabel} (${tokens})`
+                  : rawLabel;
             return (
               <div
                 key={`section-${index}`}
@@ -2424,9 +2488,9 @@ const SplitVisual: React.FC<{
                 }}
               >
                 <div style={{ color, fontSize: 14, fontWeight: 800, letterSpacing: 1 }}>
-                  {asString(section.label) ?? `Section ${index + 1}`}
+                  {title}
                 </div>
-                {tokens ? (
+                {tokens && normalizedLabel !== "prompt" && normalizedLabel !== "tests" && normalizedLabel !== "grounding" ? (
                   <div style={{ color: "#E2E8F0", fontSize: 12, marginTop: 4 }}>{tokens}</div>
                 ) : null}
               </div>
@@ -5361,6 +5425,7 @@ const AnimatedDiagramVisual: React.FC<{
       </div>
     );
   } else if (diagramId === "bug_add_wall") {
+    const terminalLines = asStringArray(data.terminalCommands);
     body = (
       <div
         style={{
@@ -5372,12 +5437,22 @@ const AnimatedDiagramVisual: React.FC<{
       >
         <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 26px" }}>
           <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 700, letterSpacing: 1.6 }}>CODE</div>
-          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "48px 1fr", rowGap: 8 }}>
+          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "48px 1fr auto", rowGap: 8, columnGap: 10 }}>
             {Array.from({ length: 10 }).map((_, index) => (
               <React.Fragment key={`bug-line-${index}`}>
                 <div style={{ color: "#475569", fontFamily: "'JetBrains Mono', monospace", fontSize: 14 }}>{index + 1}</div>
                 <div style={{ color: index === 4 ? "#FCA5A5" : "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 16 }}>
                   {index === 4 ? "if user_id is None: return None" : "normalize_user(user_id)"}
+                </div>
+                <div
+                  style={{
+                    color: index >= 6 ? "#4ADE80" : "transparent",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 16,
+                    fontWeight: 700,
+                  }}
+                >
+                  ✓
                 </div>
               </React.Fragment>
             ))}
@@ -5388,13 +5463,65 @@ const AnimatedDiagramVisual: React.FC<{
             <div style={{ position: "absolute", left: 44, right: 44, top: 52, height: 18, borderRadius: 999, backgroundColor: "rgba(45, 212, 191, 0.4)" }} />
             <div style={{ position: "absolute", left: 44, right: 44, bottom: 52, height: 18, borderRadius: 999, backgroundColor: "rgba(217, 148, 74, 0.7)" }} />
             <div style={{ position: "absolute", right: 120, top: 84, bottom: 84, width: 16, borderRadius: 999, backgroundColor: "#D9944A", boxShadow: "0 0 18px rgba(217, 148, 74, 0.4)" }} />
+            <div
+              style={{
+                position: "absolute",
+                right: 82,
+                top: "50%",
+                transform: "translateY(-50%)",
+                padding: "8px 12px",
+                borderRadius: 999,
+                border: "1px solid rgba(217, 148, 74, 0.55)",
+                backgroundColor: "rgba(217, 148, 74, 0.16)",
+                color: "#FBBF24",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 13,
+                fontWeight: 700,
+              }}
+            >
+              handles_null_userid
+            </div>
           </div>
           <div style={{ borderRadius: 24, backgroundColor: "rgba(2, 6, 23, 0.82)", border: subtleBorder, padding: "20px 22px" }}>
-            {asStringArray(data.terminalCommands).slice(0, 3).map((line, index) => (
-              <div key={`${line}-${index}`} style={{ color: index === 0 ? "#E2E8F0" : "#4ADE80", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: index === 0 ? 0 : 8 }}>
-                {index === 0 ? `$ ${line}` : `✓ ${line}`}
-              </div>
-            ))}
+            {(terminalLines.length >= 2
+              ? [
+                  `$ ${terminalLines[0]}`,
+                  "Creating failing test... ✓",
+                  `$ ${terminalLines[1]}`,
+                  "All tests passing ✓",
+                ]
+              : terminalLines
+            ).map((line, index) => {
+              const isCommand = line.startsWith("$ ");
+              const isSuccess = line.includes("✓");
+              return (
+                <div
+                  key={`${line}-${index}`}
+                  style={{
+                    color: isCommand ? "#E2E8F0" : isSuccess ? "#4ADE80" : "#94A3B8",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 16,
+                    marginTop: index === 0 ? 0 : 8,
+                  }}
+                >
+                  {line}
+                </div>
+              );
+            })}
+          </div>
+          <div
+            style={{
+              borderRadius: 24,
+              backgroundColor: "rgba(217, 148, 74, 0.12)",
+              border: "1px solid rgba(217, 148, 74, 0.32)",
+              padding: "18px 20px",
+              color: "#FBBF24",
+              fontSize: 20,
+              fontWeight: 700,
+              lineHeight: 1.3,
+            }}
+          >
+            That wall is permanent. That bug can never occur again.
           </div>
         </div>
       </div>

@@ -21,7 +21,7 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "04_sock_toss": { defaultSrc: "veo/sock_toss.mp4", backgroundSrc: "veo/sock_toss.mp4", outputSrc: "veo/sock_toss.mp4", baseSrc: "veo/sock_toss.mp4" },
 };
 
-const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
+const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {
   "03_grandmother_darning": { gradientOverlay: "bottom" },
 };
 

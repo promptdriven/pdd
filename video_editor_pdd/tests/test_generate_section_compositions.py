@@ -57,6 +57,7 @@ from generate_section_compositions import (
     generate_root_tsx,
     update_root_tsx,
     _merge_root_tsx,
+    _extract_visual_overlay_config,
     _should_prefer_generated_contract_renderer,
     resolve_section_component_records,
     emit_progress,
@@ -2513,9 +2514,72 @@ class TestGeneratedTimelineWrapper:
         )
 
         assert 'import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";' in tsx
-        assert 'const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {' in tsx
+        assert 'const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {' in tsx
         assert '"02_veo_ocean_broll": { gradientOverlay: "bottom", lowerThirdText: "This is the second section of the integration test video."' in tsx
         assert '<GeneratedMediaVisual config={visualOverlayConfig} />' in tsx
+
+    def test_generated_timeline_serializes_numeric_overlay_values_as_numbers(self, tmp_path):
+        project_dir = tmp_path
+        remotion_src = tmp_path
+        remotion_public = tmp_path / "public"
+        section_dir = remotion_src / "callback_section"
+        specs_dir = project_dir / "specs" / "callback_section"
+
+        section_dir.mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (section_dir / "constants.ts").write_text(
+            "\n".join(
+                [
+                    "export const VISUAL_SEQUENCE = [",
+                    '  { start: 0, end: 180, id: "01_callback_clip", desc: "Callback clip" },',
+                    "];",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (specs_dir / "01_callback_clip.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "### Animation Sequence",
+                    "1. **Frame 0-15 (0-0.5s):** Fade in from black.",
+                    "2. **Frame 15-150 (0.5-5s):** Hold.",
+                    "3. **Frame 150-180 (5-6s):** Gentle fade to black.",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "developer_cursor_callback" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "developer_cursor_callback.mp4").write_bytes(b"\x00" * 32)
+
+        section = {
+            "id": "callback_section",
+            "compositionId": "CallbackSection",
+            "durationSeconds": 6,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "callback_section",
+            "compositions": [],
+        }
+
+        tsx = generate_section_component(
+            section,
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {' in tsx
+        assert '"01_callback_clip": { fadeInFrames: 15, fadeOutFrames: 30 }' in tsx
+        assert '"01_callback_clip": { fadeInFrames: "15", fadeOutFrames: "30" }' not in tsx
 
     def test_generated_timeline_uses_structured_data_points_for_split_media_aliases(self, tmp_path):
         project_dir = tmp_path
@@ -5472,6 +5536,30 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_prefers_generated_contract_for_chart_callbacks_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "chart_callback",
+                    "chartId": "code_cost_triple_line",
+                    "event": "crossing_reprise",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_text_overlay_with_morph_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "text_overlay_with_morph",
+                    "diagramId": "synopsys_pdd_equivalence",
+                    "sharedLabel": "Same architecture",
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_prefers_generated_contract_for_code_regeneration_even_with_exact_component(self):
         assert _should_prefer_generated_contract_renderer(
             {
@@ -5527,6 +5615,30 @@ class TestContractFirstVisualResolution:
             },
             has_exact_component=True,
         )
+
+
+class TestExtractVisualOverlayConfig:
+    def test_extracts_authored_fade_windows_from_media_specs(self):
+        spec = "\n".join(
+            [
+                "[veo:]",
+                "",
+                "### Animation Sequence",
+                "1. **Frame 0-15 (0-0.5s):** Fade in from black.",
+                "2. **Frame 15-150 (0.5-5s):** Hold.",
+                "3. **Frame 150-180 (5-6s):** Gentle fade to black.",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{ "type": "veo_clip", "clipId": "developer_cursor_callback" }',
+                "```",
+            ]
+        )
+
+        assert _extract_visual_overlay_config(spec) == {
+            "fadeInFrames": 15,
+            "fadeOutFrames": 30,
+        }
 
     def test_prefers_generated_contract_for_animated_diagrams(self):
         assert _should_prefer_generated_contract_renderer(

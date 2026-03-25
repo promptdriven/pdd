@@ -1,22 +1,18 @@
 ## Verdict
 pass
 ## Summary
-The frame at ~68.7% progress (frame 329, within the 240-420 hold phase) shows all required elements correctly rendered and visible:
+The frame at ~68.7% progress (frame 329/480, animation phase 240-420 'hold with all elements visible') matches the spec well. Key observations:
 
-1. **Pie chart**: Present and centered in the composition. Two slices are visible — a dominant amber/orange maintenance slice and a smaller green-teal initial development slice. The proportions visually read as ~85%/15%, matching the spec.
+1. **Pie Chart**: Present and centered, with a dominant amber/warm maintenance slice and a smaller green-teal initial development slice. The proportions visually read as ~85/15 split, consistent with the 80-90% / 10-20% spec. The maintenance slice appears slightly pulled out from center as specified.
 
-2. **Maintenance slice**: Amber color (#F59E0B range), labeled "Maintenance" in amber text with "80-90%" value below it in bold amber. The slice appears slightly pulled out from center as specified.
+2. **Background**: Deep navy-black (#0A0F1A range), correct.
 
-3. **Initial Development slice**: Green-teal color (#4ADE80 range), labeled "Initial Development" in green text with "10-20%" value below, positioned outside the slice with a connecting line.
+3. **Labels & Values**: 'Maintenance' label in amber with '80-90%' value displayed prominently. 'Initial Development' label in green-teal with '10-20%' value. Both have connecting lines to their respective slices. Colors match spec (amber #F59E0B for maintenance, green-teal #4ADE80 for development).
 
-4. **McKinsey callout**: Visible on the right side — "40% more on maintenance" in light text with "—McKinsey" attribution below in muted gray. Has an amber left-border accent line.
+4. **Stat Callouts**: Both McKinsey ('40% more on maintenance' / '—McKinsey') and Stripe ('⅓ of dev time on debt' / '—Stripe') callouts are visible on the right side with amber left-border accents. Text appears in light colors consistent with #E2E8F0 for main text and #94A3B8 for source attribution.
 
-5. **Stripe callout**: Visible below McKinsey — "⅓ of dev time on debt" in light text with "—Stripe" attribution below in muted gray. Has an amber left-border accent line.
+5. **Animation Phase**: At frame 329, we are in the 240-420 hold phase where all elements should be fully visible. This matches — pie chart is fully drawn, labels are visible, both callouts are displayed, no fade/morph transition has begun.
 
-6. **Background**: Deep navy-black (#0A0F1A range), consistent with spec.
+6. **Layout**: The pie chart is roughly centered in the frame (slightly left of absolute center to accommodate the right-side callouts), which is a reasonable compositional choice preserving the centered intent.
 
-7. **Animation phase**: Frame 329 falls within the 240-420 hold phase where all elements should be fully visible and static. This matches — all elements are present and appear at full opacity.
-
-8. **Typography and layout**: Labels, values, and callouts use appropriate sizing hierarchy. The composition is centered with callouts positioned to the right of the chart.
-
-All critical elements are present, correctly colored, properly labeled, and in the correct animation phase. Minor layout differences (exact label positions, precise font sizes) are within acceptable tolerance.
+All critical elements are present and correctly rendered for this animation phase.

@@ -33,16 +33,16 @@ export const BEATS = {
 
 export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 0 },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_double_meter_insight", desc: "02 double meter insight", lane: 0 },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_double_meter_insight", desc: "02 double meter insight", lane: 1 },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_factory_floor_intro", desc: "03 factory floor intro", lane: 0 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_injection_molding_process", desc: "04 injection molding process", lane: 0 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_mold_defect_fix", desc: "05 mold defect fix", lane: 0 },
-  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_craftsman_vs_mold", desc: "06 craftsman vs mold", lane: 0 },
+  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_craftsman_vs_mold", desc: "06 craftsman vs mold", lane: 1 },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "09_1980s_chip_lab", desc: "09 1980s chip lab", lane: 0 },
-  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "10_verilog_synthesis_triple", desc: "10 verilog synthesis triple", lane: 0 },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "10_verilog_synthesis_triple", desc: "10 verilog synthesis triple", lane: 1 },
   { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "11_synopsys_pdd_equivalence", desc: "11 synopsys pdd equivalence", lane: 0 },
   { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "12_abstraction_staircase", desc: "12 abstraction staircase", lane: 0 },
-  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "13_prompt_replaces_review", desc: "13 prompt replaces review", lane: 0 },
+  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "13_prompt_replaces_review", desc: "13 prompt replaces review", lane: 1 },
 ];
 
 export const Part2ParadigmShiftSectionProps = z.object({
