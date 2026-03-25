@@ -2,7 +2,21 @@
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
-TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+# Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
+# (used by the STANDARD group for slow tasks). SKIP_INDEX causes the SPOT
+# group to skip one index so effective indices stay contiguous.
+if [ -n "${FIXED_TASK_INDEX:-}" ]; then
+    TASK_INDEX="${FIXED_TASK_INDEX}"
+elif [ -n "${SKIP_INDEX:-}" ]; then
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
+        TASK_INDEX=$((_RAW + 1))
+    else
+        TASK_INDEX="${_RAW}"
+    fi
+else
+    TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+fi
 RESULTS_DIR="/mnt/disks/results"
 SOURCE_DIR="/mnt/disks/source"
 WORK_DIR="/workspace"

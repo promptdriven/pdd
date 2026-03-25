@@ -55,44 +55,61 @@ gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
 rm /tmp/pdd-source.tar.gz
 echo "Uploaded to ${SOURCE_GCS}"
 
-# ── Prepare job template ──────────────────────────────────────────────────
-echo "=== Preparing job template ==="
+# ── Prepare job templates ─────────────────────────────────────────────────
+echo "=== Preparing job templates ==="
 RESULTS_GCS_PATH="${BUCKET}/${JOB_RUN_ID}/results"
 SOURCE_GCS_PATH="${BUCKET}/${JOB_RUN_ID}/source"
 
-sed \
-    -e "s|{{PROJECT_ID}}|${PROJECT_ID}|g" \
-    -e "s|{{REGION}}|${REGION}|g" \
-    -e "s|{{RESULTS_GCS_PATH}}|${RESULTS_GCS_PATH}|g" \
-    -e "s|{{SOURCE_GCS_PATH}}|${SOURCE_GCS_PATH}|g" \
-    "${SCRIPT_DIR}/job-template.json" > /tmp/pdd-batch-job.json
+_render_template() {
+    sed \
+        -e "s|{{PROJECT_ID}}|${PROJECT_ID}|g" \
+        -e "s|{{REGION}}|${REGION}|g" \
+        -e "s|{{RESULTS_GCS_PATH}}|${RESULTS_GCS_PATH}|g" \
+        -e "s|{{SOURCE_GCS_PATH}}|${SOURCE_GCS_PATH}|g" \
+        "$1" > "$2"
+}
 
-# ── Submit job ────────────────────────────────────────────────────────────
-echo "=== Submitting Cloud Batch job: ${JOB_NAME} ==="
-gcloud batch jobs submit "${JOB_NAME}" \
+_render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-spot.json
+_render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json
+
+# ── Submit jobs ───────────────────────────────────────────────────────────
+# Main SPOT job (74 tasks — everything except the slow sync_regression case_1)
+JOB_NAME_SPOT="${JOB_NAME}"
+echo "=== Submitting SPOT job: ${JOB_NAME_SPOT} (74 tasks) ==="
+gcloud batch jobs submit "${JOB_NAME_SPOT}" \
     --project="${PROJECT_ID}" \
     --location="${REGION}" \
-    --config=/tmp/pdd-batch-job.json
+    --config=/tmp/pdd-batch-job-spot.json
 
-rm /tmp/pdd-batch-job.json
+# STANDARD job for the slow task (sync_regression case_1, immune to preemption)
+JOB_NAME_STD="${JOB_NAME}-std"
+echo "=== Submitting STANDARD job: ${JOB_NAME_STD} (1 task) ==="
+gcloud batch jobs submit "${JOB_NAME_STD}" \
+    --project="${PROJECT_ID}" \
+    --location="${REGION}" \
+    --config=/tmp/pdd-batch-job-std.json
 
-# ── Poll for completion ───────────────────────────────────────────────────
+rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json
+
+# ── Poll for completion (both jobs) ───────────────────────────────────────
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
 trap 'rm -rf "${STREAMING_DIR}"' EXIT
 
-TOTAL=$(gcloud batch jobs describe "${JOB_NAME}" \
-    --project="${PROJECT_ID}" --location="${REGION}" \
-    --format="value(taskGroups[0].taskCount)" 2>/dev/null || echo "72")
-TOTAL=${TOTAL:-72}
+TOTAL=75  # 74 (spot) + 1 (standard)
 STREAM_FAILURES=0
 
-while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
-    STATUS=$(_with_timeout 15 gcloud batch jobs describe "${JOB_NAME}" \
+_job_status() {
+    _with_timeout 15 gcloud batch jobs describe "$1" \
         --project="${PROJECT_ID}" \
         --location="${REGION}" \
-        --format="value(status.state)" 2>/dev/null || echo "UNKNOWN")
+        --format="value(status.state)" 2>/dev/null || echo "UNKNOWN"
+}
+
+while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
+    STATUS_SPOT=$(_job_status "${JOB_NAME_SPOT}")
+    STATUS_STD=$(_job_status "${JOB_NAME_STD}")
 
     # ── Stream completed task results ─────────────────────────────────
     _with_timeout 15 gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
@@ -124,35 +141,45 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
 
     # ── Progress line ─────────────────────────────────────────────────
     if [ "${STREAM_FAILURES}" -gt 0 ]; then
-        echo "[$(date +%H:%M:%S)] Job: ${STATUS} | ${COMPLETED}/${TOTAL} complete (${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
+        echo "[$(date +%H:%M:%S)] SPOT: ${STATUS_SPOT} | STD: ${STATUS_STD} | ${COMPLETED}/${TOTAL} complete (${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
     else
-        echo "[$(date +%H:%M:%S)] Job: ${STATUS} | ${COMPLETED}/${TOTAL} complete (${ELAPSED}s elapsed)"
+        echo "[$(date +%H:%M:%S)] SPOT: ${STATUS_SPOT} | STD: ${STATUS_STD} | ${COMPLETED}/${TOTAL} complete (${ELAPSED}s elapsed)"
     fi
 
-    case "${STATUS}" in
-        SUCCEEDED)
-            echo "=== Job completed successfully ==="
+    # ── Check terminal states ─────────────────────────────────────────
+    # Both jobs must reach a terminal state before we exit
+    _is_terminal() { [[ "$1" == "SUCCEEDED" || "$1" == "FAILED" ]]; }
+
+    if _is_terminal "${STATUS_SPOT}" && _is_terminal "${STATUS_STD}"; then
+        if [ "${STATUS_SPOT}" = "SUCCEEDED" ] && [ "${STATUS_STD}" = "SUCCEEDED" ]; then
+            echo "=== Both jobs completed successfully ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_SPOT}" "${JOB_NAME_STD}"
             exit 0
-            ;;
-        FAILED)
-            echo "=== Job FAILED ==="
+        else
+            echo "=== Job(s) FAILED (spot=${STATUS_SPOT}, std=${STATUS_STD}) ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_SPOT}" "${JOB_NAME_STD}"
             exit 1
-            ;;
-        DELETION_IN_PROGRESS|STATE_UNSPECIFIED)
-            echo "=== Job in unexpected state: ${STATUS} ==="
-            exit 1
-            ;;
-    esac
+        fi
+    fi
+
+    # Bail on unexpected states
+    for _s in "${STATUS_SPOT}" "${STATUS_STD}"; do
+        case "${_s}" in
+            DELETION_IN_PROGRESS|STATE_UNSPECIFIED)
+                echo "=== Job in unexpected state: ${_s} ==="
+                exit 1
+                ;;
+        esac
+    done
 
     sleep "${POLL_INTERVAL}"
     ELAPSED=$((ELAPSED + POLL_INTERVAL))
 done
 
 echo "=== TIMEOUT after ${POLL_TIMEOUT}s ==="
-echo "Job ${JOB_NAME} is still running. Check manually:"
-echo "  gcloud batch jobs describe ${JOB_NAME} --project=${PROJECT_ID} --location=${REGION}"
+echo "Jobs still running. Check manually:"
+echo "  gcloud batch jobs describe ${JOB_NAME_SPOT} --project=${PROJECT_ID} --location=${REGION}"
+echo "  gcloud batch jobs describe ${JOB_NAME_STD} --project=${PROJECT_ID} --location=${REGION}"
 exit 1

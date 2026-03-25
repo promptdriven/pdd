@@ -2,10 +2,11 @@
 set -euo pipefail
 
 # ── Arguments ──────────────────────────────────────────────────────────────
-PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID JOB_NAME}"
+PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID JOB_NAME_SPOT [JOB_NAME_STD]}"
 BUCKET="${2:?}"
 JOB_RUN_ID="${3:?}"
-JOB_NAME="${4:?}"
+JOB_NAME="${4:?}"           # primary (spot) job
+JOB_NAME_STD="${5:-}"       # optional standard job
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -36,12 +37,22 @@ PASSED=0
 FAILED=0
 ERRORS=0
 
-# Derive task count from the Cloud Batch job (avoids hardcoding)
-TOTAL=$(gcloud batch jobs describe "${JOB_NAME}" \
-    --project="${PROJECT_ID}" \
-    --location="${GCP_REGION:-us-central1}" \
-    --format="value(taskGroups[0].taskCount)" 2>/dev/null || echo "64")
-TOTAL=${TOTAL:-64}
+# Derive task count from Cloud Batch job(s) (sum across spot + standard)
+_job_task_count() {
+    gcloud batch jobs describe "$1" \
+        --project="${PROJECT_ID}" \
+        --location="${GCP_REGION:-us-central1}" \
+        --format="value(taskGroups[0].taskCount)" 2>/dev/null || echo "0"
+}
+TOTAL_SPOT=$(_job_task_count "${JOB_NAME}")
+TOTAL_SPOT=${TOTAL_SPOT:-0}
+TOTAL_STD=0
+if [ -n "${JOB_NAME_STD}" ]; then
+    TOTAL_STD=$(_job_task_count "${JOB_NAME_STD}")
+    TOTAL_STD=${TOTAL_STD:-0}
+fi
+TOTAL=$((TOTAL_SPOT + TOTAL_STD))
+[ "${TOTAL}" -eq 0 ] && TOTAL=75
 
 # Parse all JSON results
 TABLE_ROWS=()
@@ -93,7 +104,7 @@ done
 {
     echo "# Cloud Batch Test Results"
     echo ""
-    echo "- **Job**: ${JOB_NAME}"
+    echo "- **Job**: ${JOB_NAME}${JOB_NAME_STD:+ + ${JOB_NAME_STD}}"
     echo "- **Commit**: ${COMMIT_SHA}"
     echo "- **Timestamp**: ${TIMESTAMP}"
     echo ""
