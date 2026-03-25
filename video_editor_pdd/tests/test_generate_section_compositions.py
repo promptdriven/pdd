@@ -57,6 +57,8 @@ from generate_section_compositions import (
     generate_root_tsx,
     update_root_tsx,
     _merge_root_tsx,
+    _should_prefer_generated_contract_renderer,
+    resolve_section_component_records,
     emit_progress,
     main,
 )
@@ -3779,7 +3781,7 @@ class TestDigitPrefixedIdentifiers:
         assert 'visualContract?.renderMode === "component" ? (' in tsx
         assert '<GeneratedContractVisual />' in tsx
 
-    def test_generate_section_component_reuses_existing_component_when_name_drift_is_semantic_not_exact(self, tmp_path):
+    def test_generate_section_component_prefers_generated_contract_when_name_drift_is_semantic_not_exact(self, tmp_path):
         project_dir = tmp_path
         remotion_dir = tmp_path / "remotion"
         remotion_src = remotion_dir / "src" / "remotion"
@@ -3830,9 +3832,9 @@ class TestDigitPrefixedIdentifiers:
             project_dir=str(project_dir),
         )
 
-        assert 'import { WhereToStart03ModuleHighlightUpdate } from "../WhereToStart03ModuleHighlightUpdate";' in tsx
-        assert '"03_module_highlight_terminal": WhereToStart03ModuleHighlightUpdate,' in tsx
-        assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' not in tsx
+        assert 'import { WhereToStart03ModuleHighlightUpdate } from "../WhereToStart03ModuleHighlightUpdate";' not in tsx
+        assert '"03_module_highlight_terminal": WhereToStart03ModuleHighlightUpdate,' not in tsx
+        assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' in tsx
 
     def test_generate_section_component_serializes_contract_media_aliases_for_component_visuals(self, tmp_path):
         project_dir = tmp_path
@@ -4747,6 +4749,98 @@ class TestVisualContractManifestNewFields:
         assert visual["startAnchor"] == {"type": "absolute", "seconds": 4.25}
         assert visual["endAnchor"] == {"type": "sectionEnd"}
 
+    def test_build_visual_contract_manifest_synthesizes_split_media_aliases_from_child_panels(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        veo_dir = remotion_public / "veo"
+        specs_dir.mkdir(parents=True)
+        veo_dir.mkdir(parents=True)
+
+        (veo_dir / "developer_cursor_edit.mp4").write_text("stub", encoding="utf-8")
+        (veo_dir / "grandmother_darning_lamplight.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "12_developer_darning_split.md").write_text(
+            "\n".join([
+                "[split:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "split_screen",
+                        "leftPanel": {"label": "CURSOR"},
+                        "rightPanel": {"label": "DARNING NEEDLE"},
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "13_developer_cursor_coding.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "veo_clip",
+                        "clipId": "developer_cursor_coding",
+                        "embeddedIn": "12_developer_darning_split",
+                        "panel": "left",
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "14_grandmother_darning_expert.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "veo_clip",
+                        "clipId": "grandmother_darning_expert",
+                        "embeddedIn": "12_developer_darning_split",
+                        "panel": "right",
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "part1_economics",
+            "compositionId": "Part1EconomicsSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "part1_economics",
+            "compositions": [
+                "12_developer_darning_split",
+                "13_developer_cursor_coding",
+                "14_grandmother_darning_expert",
+            ],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+        visuals_by_id = {
+            visual["id"]: visual for visual in manifest["sections"][0]["visuals"]
+        }
+
+        split_visual = visuals_by_id["12_developer_darning_split"]
+        assert split_visual["mediaAliases"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
+        assert split_visual["mediaAliases"]["rightSrc"] == "veo/grandmother_darning_lamplight.mp4"
+
     def test_legacy_manifest_without_new_fields_loads_without_error(self, tmp_path):
         """Loading a manifest built without new fields still works."""
         # Build a manifest that omits coverSegments/parentId/children/laneHint
@@ -4779,3 +4873,114 @@ class TestVisualContractManifestNewFields:
         assert visual.get("parentId") is None
         assert visual.get("children") is None
         assert visual.get("laneHint") is None
+
+
+class TestContractFirstVisualResolution:
+    def test_prefers_generated_contract_for_structured_title_cards(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "title_card",
+                    "sectionLabel": "PART 6",
+                    "title": "WHERE TO START",
+                }
+            },
+            has_exact_component=False,
+        )
+
+    def test_prefers_generated_contract_for_stillness_beats(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "title_card",
+                    "style": "stillness_beat",
+                    "sectionLabel": "THE KEY INSIGHT",
+                }
+            },
+            has_exact_component=False,
+        )
+
+    def test_prefers_generated_contract_for_animated_diagrams(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "animated_diagram",
+                    "diagramId": "ratchet_timelapse",
+                }
+            },
+            has_exact_component=False,
+        )
+
+    def test_keeps_exact_split_component_when_one_exists(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "split_screen",
+                    "layout": "vertical_split",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_split_without_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "split_screen",
+                    "layout": "vertical_split",
+                }
+            },
+            has_exact_component=False,
+        )
+
+    def test_resolve_section_component_records_prefers_generated_contract_over_fuzzy_component_reuse(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        remotion_src = project_dir / "remotion" / "src" / "remotion"
+        specs_dir = project_dir / "specs" / "where_to_start"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+        legacy_component_dir = remotion_src / "WhereToStart03ModuleHighlightUpdate"
+        legacy_component_dir.mkdir(parents=True)
+        (legacy_component_dir / "index.tsx").write_text(
+            "export const WhereToStart03ModuleHighlightUpdate = () => null;\n",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "05_module_glow_spread.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "network_graph",
+                        "chartId": "module_glow_spread",
+                        "migrationSequence": [],
+                        "unmigrated": [],
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "where_to_start",
+            "compositionId": "WhereToStartSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "where_to_start",
+            "compositions": [],
+        }
+
+        records = resolve_section_component_records(
+            section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        )
+
+        assert records == []

@@ -180,6 +180,32 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/useVisualMediaAssetSrc\(\s*["']rightSrc["']\s*\)/);
     expect(source).toMatch(/OffthreadVideo/);
   });
+
+  it("supports structured title cards and stillness beats without collapsing them into generic centered text", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/style === ["']stillness_beat["']/);
+    expect(source).toMatch(/sectionLabel/);
+    expect(source).toMatch(/ghostElements/);
+    expect(source).toMatch(/divider|rule/i);
+  });
+
+  it("renders transitions and contract-first diagrams without the old placeholder badge", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).not.toContain("Generated from visual contract");
+    expect(source).toMatch(/diagramId/);
+    expect(source).toMatch(/promptNozzle|prompt_ratio|ratchet|five_generations|embedded_code_document/i);
+    expect(source).toMatch(/echoes/);
+  });
+
+  it("supports richer split and code contract layouts using panel metadata instead of only a caption block", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/headerColor/);
+    expect(source).toMatch(/tokenCount|scope|multiplier/);
+    expect(source).toMatch(/codeComments|terminalCommands|workflow/);
+  });
 });
 
 describe("reusable animation template defaults", () => {

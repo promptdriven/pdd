@@ -4,8 +4,6 @@ import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Part2ParadigmShift01SectionTitleCard } from "../Part2ParadigmShift01SectionTitleCard";
-import { Part1Economics10DoubleMeterInsight } from "../Part1Economics10DoubleMeterInsight";
-import { Part2ParadigmShift04DefectFixTheMold } from "../Part2ParadigmShift04DefectFixTheMold";
 import { Part2ParadigmShift07VerilogSynthesisTriple } from "../Part2ParadigmShift07VerilogSynthesisTriple";
 import { Part2ParadigmShift08SynopsysPddEquivalence } from "../Part2ParadigmShift08SynopsysPddEquivalence";
 import { Part2ParadigmShift09AbstractionStaircase } from "../Part2ParadigmShift09AbstractionStaircase";
@@ -13,8 +11,6 @@ import { Part2ParadigmShift11PromptReplacesReview } from "../Part2ParadigmShift1
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "01_section_title_card": Part2ParadigmShift01SectionTitleCard,
-  "02_double_meter_insight": Part1Economics10DoubleMeterInsight,
-  "05_mold_defect_fix": Part2ParadigmShift04DefectFixTheMold,
   "10_verilog_synthesis_triple": Part2ParadigmShift07VerilogSynthesisTriple,
   "11_synopsys_pdd_equivalence": Part2ParadigmShift08SynopsysPddEquivalence,
   "12_abstraction_staircase": Part2ParadigmShift09AbstractionStaircase,
@@ -23,8 +19,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_section_title_card": 120,
-  "02_double_meter_insight": 750,
-  "05_mold_defect_fix": 420,
   "10_verilog_synthesis_triple": 540,
   "11_synopsys_pdd_equivalence": 390,
   "12_abstraction_staircase": 480,

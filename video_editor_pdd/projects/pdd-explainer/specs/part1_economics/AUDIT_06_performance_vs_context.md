@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (context, inset, chart, performance), so the frame does not support a hard missing-text failure.
+The rendered frame at 88.9% progress (frame 479/540, animation phase 420-540) is critically wrong. At this point in the animation, the spec requires: (1) the inset graph dimmed to 0.3 opacity, (2) the context rot annotation 'Faster patching → faster growth → faster rot' displayed prominently at center with 'rot' pulsing red, and (3) the performance line, shaded degradation area, degradation label, and source citation all visible (dimmed) within the inset. Instead, the frame shows: a debug/placeholder rendering with 'INSET CHART' label in blue caps and 'performance_vs_context' as a raw identifier in the upper-left, a large empty rounded-rectangle container centered on screen with faint horizontal grid lines but no chart content whatsoever — no performance line, no axes labels, no degradation label, no source citation, and no context rot annotation. The component appears to be rendering a fallback or stub rather than the actual chart visualization.

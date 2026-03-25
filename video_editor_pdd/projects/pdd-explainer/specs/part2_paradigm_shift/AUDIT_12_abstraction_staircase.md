@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-At frame 674 (93.7% progress, within the 630-720 phase), the rendered frame should show the code diff scrolling phase — the staircase should have compressed to the left at frames 450-540, a chip layout should have appeared and zoomed in (540-630), then dissolved to reveal a scrolling code diff (630-720). Instead, the staircase remains in its original uncompressed layout spanning the full frame diagonally. There is a small dark panel above step 5 that may be an early attempt at the chip layout, but it does not fill the right half of the screen as specified. The critical animation phases 6-8 (staircase compression, chip layout zoom, code diff scroll) appear to not be implemented or are not triggered at the correct timing. Additionally, step 5 lacks the specified pulsing green border/glow effect.
+OCR confirmed visible text tokens in the rendered frame (transistors, schematics, verilog, behavioral, code), so the frame does not support a hard missing-text failure.

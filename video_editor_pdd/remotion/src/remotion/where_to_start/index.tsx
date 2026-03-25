@@ -5,14 +5,12 @@ import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from 
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { WhereToStart01SectionTitleCard } from "../WhereToStart01SectionTitleCard";
 import { WhereToStart02LegacyCodebaseReveal } from "../WhereToStart02LegacyCodebaseReveal";
-import { WhereToStart03ModuleHighlightUpdate } from "../WhereToStart03ModuleHighlightUpdate";
 import { WhereToStart04SourceOfTruthShift } from "../WhereToStart04SourceOfTruthShift";
 import { WhereToStart07NoBigBangCallout } from "../WhereToStart07NoBigBangCallout";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "01_section_title_card": WhereToStart01SectionTitleCard,
   "02_legacy_codebase_reveal": WhereToStart02LegacyCodebaseReveal,
-  "03_module_highlight_terminal": WhereToStart03ModuleHighlightUpdate,
   "04_source_of_truth_shift": WhereToStart04SourceOfTruthShift,
   "06_no_big_bang_callout": WhereToStart07NoBigBangCallout,
 };
@@ -20,7 +18,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_section_title_card": 90,
   "02_legacy_codebase_reveal": 150,
-  "03_module_highlight_terminal": 240,
   "04_source_of_truth_shift": 180,
   "06_no_big_bang_callout": 90,
 };

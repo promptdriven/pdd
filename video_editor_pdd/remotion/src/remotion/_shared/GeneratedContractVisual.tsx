@@ -94,6 +94,27 @@ const resolveTitle = (data: Record<string, unknown>): string => {
   );
 };
 
+const resolveTitleLines = (data: Record<string, unknown>): string[] => {
+  const line1 = asString(data.titleLine1);
+  const line2 = asString(data.titleLine2);
+  if (line1 || line2) {
+    return [line1, line2].filter((line): line is string => Boolean(line));
+  }
+
+  const title = asString(data.title);
+  if (!title) {
+    return [resolveTitle(data)];
+  }
+
+  if (title.length > 18 && title.includes(" ")) {
+    const words = title.split(/\s+/).filter(Boolean);
+    const midpoint = Math.ceil(words.length / 2);
+    return [words.slice(0, midpoint).join(" "), words.slice(midpoint).join(" ")];
+  }
+
+  return [title];
+};
+
 const resolveSubtitleLines = (data: Record<string, unknown>): string[] => {
   const candidates = [
     asString(data.subtitle),
@@ -109,6 +130,23 @@ const resolveSubtitleLines = (data: Record<string, unknown>): string[] => {
   ].filter((line): line is string => Boolean(line));
 
   return [...candidates, ...asStringArray(data.supportingText)].slice(0, 5);
+};
+
+const resolveEyebrow = (data: Record<string, unknown>): string => {
+  const sectionLabel = asString(data.sectionLabel);
+  const sectionNumber = data.sectionNumber;
+  const sectionNumberText =
+    typeof sectionNumber === "number" || typeof sectionNumber === "string"
+      ? String(sectionNumber)
+      : null;
+  if (sectionLabel && sectionNumberText && !sectionLabel.includes(sectionNumberText)) {
+    return `${sectionLabel}`;
+  }
+  return (
+    sectionLabel ??
+    asString(data.sectionId) ??
+    titleCase(asString(data.type) ?? "Generated Visual")
+  );
 };
 
 const buildPath = (
@@ -199,10 +237,7 @@ const HeaderBlock: React.FC<{
   title: string;
 }> = ({ data, accent, title }) => {
   const subtitleLines = resolveSubtitleLines(data);
-  const eyebrow =
-    asString(data.sectionLabel) ??
-    asString(data.sectionId) ??
-    titleCase(asString(data.type) ?? "Generated Visual");
+  const eyebrow = resolveEyebrow(data);
 
   return (
     <div
@@ -301,9 +336,14 @@ const TitleCardVisual: React.FC<{
   height: number;
 }> = ({ data, width, height }) => {
   const accent = resolveAccentColor(data);
-  const title = resolveTitle(data);
+  const titleLines = resolveTitleLines(data);
   const subtitleLines = resolveSubtitleLines(data);
   const commands = asStringArray(data.commands);
+  const style = asString(data.style);
+  const isStillnessBeat = style === "stillness_beat";
+  const eyebrow = resolveEyebrow(data);
+  const titleColor = asString(data.titleColor) ?? "#E2E8F0";
+  const ruleColor = "rgba(51, 65, 85, 0.4)";
 
   return (
     <AbsoluteFill
@@ -313,6 +353,16 @@ const TitleCardVisual: React.FC<{
         overflow: "hidden",
       }}
     >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage:
+            "linear-gradient(rgba(30, 41, 59, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(30, 41, 59, 0.08) 1px, transparent 1px)",
+          backgroundSize: "60px 60px",
+          opacity: isStillnessBeat ? 0.3 : 0.45,
+        }}
+      />
       <GhostElements data={data} />
       <div
         style={{
@@ -321,37 +371,47 @@ const TitleCardVisual: React.FC<{
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 18,
+          gap: isStillnessBeat ? 14 : 18,
           textAlign: "center",
         }}
       >
         <div
           style={{
-            color: "#94A3B8",
+            color: isStillnessBeat ? "#94A3B8" : "#64748B",
             fontFamily: "'Inter', sans-serif",
-            fontSize: 18,
+            fontSize: isStillnessBeat ? 14 : 18,
             fontWeight: 700,
-            letterSpacing: 2.4,
+            letterSpacing: isStillnessBeat ? 4 : 2.4,
             textTransform: "uppercase",
           }}
         >
-          {[asString(data.sectionNumber), asString(data.sectionLabel)]
-            .filter(Boolean)
-            .join(" ")}
+          {eyebrow}
         </div>
+        {isStillnessBeat ? (
+          <div
+            style={{
+              width: 300,
+              height: 1,
+              backgroundColor: ruleColor,
+              borderRadius: 999,
+            }}
+          />
+        ) : null}
         <div
           style={{
-            color: asString(data.titleColor) ?? "#E2E8F0",
+            color: titleColor,
             fontFamily: "'Inter', sans-serif",
-            fontSize: width > 1400 ? 76 : 64,
+            fontSize: isStillnessBeat ? 18 : width > 1400 ? 76 : 64,
             fontWeight: 700,
-            lineHeight: 1.03,
-            letterSpacing: 1,
+            lineHeight: isStillnessBeat ? 1.15 : 1.03,
+            letterSpacing: isStillnessBeat ? 4 : 1,
             whiteSpace: "pre-wrap",
             maxWidth: width * 0.76,
+            textTransform: isStillnessBeat ? "uppercase" : undefined,
+            opacity: isStillnessBeat ? 0.72 : 1,
           }}
         >
-          {title}
+          {titleLines.join("\n")}
         </div>
         {subtitleLines.map((line, index) => (
           <div
@@ -472,6 +532,7 @@ const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data })
   const echoes = Array.isArray(data.echoes)
     ? data.echoes.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
+  const title = resolveTitle(data);
 
   return (
     <AbsoluteFill
@@ -480,6 +541,14 @@ const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data })
         justifyContent: "center",
       }}
     >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(circle at center, rgba(15, 23, 42, 0.12) 0%, rgba(10, 15, 26, 0.0) 55%)",
+        }}
+      />
       {echoes.slice(0, 3).map((echo, index) => (
         <div
           key={`echo-${index}`}
@@ -496,20 +565,30 @@ const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data })
       ))}
       <div
         style={{
-          padding: "30px 40px",
-          borderRadius: 28,
-          backgroundColor: subtleSurface,
-          border: subtleBorder,
-          color: "#F8FAFC",
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 44,
-          fontWeight: 700,
-          lineHeight: 1.1,
-          textAlign: "center",
+          position: "absolute",
+          width: 640,
+          height: 2,
+          background: `linear-gradient(90deg, transparent, ${accent}55, transparent)`,
+          opacity: 0.4,
         }}
-      >
-        {resolveTitle(data)}
-      </div>
+      />
+      {title && title !== "Transition" ? (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 160,
+            color: "#94A3B8",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 18,
+            fontWeight: 600,
+            letterSpacing: 2.4,
+            textTransform: "uppercase",
+            opacity: 0.6,
+          }}
+        >
+          {title}
+        </div>
+      ) : null}
     </AbsoluteFill>
   );
 };
@@ -624,6 +703,7 @@ const SplitVisual: React.FC<{
   const right = asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
   const leftSrc = useVisualMediaAssetSrc("leftSrc");
   const rightSrc = useVisualMediaAssetSrc("rightSrc");
+  const multiplier = asString(data.multiplier);
 
   const renderPanel = (
     panel: Record<string, unknown>,
@@ -631,11 +711,18 @@ const SplitVisual: React.FC<{
     src: string | null
   ) => {
     const header = asString(panel.header) ?? asString(panel.label) ?? "Panel";
+    const headerColor = asString(panel.headerColor) ?? accent;
     const caption =
       asString(panel.caption) ??
       asString(panel.content) ??
       asString(panel.thematicRole) ??
       "Rendered from visual contract";
+    const tokenCount = panel.tokenCount;
+    const scope = asString(panel.scope);
+    const codeComments = asStringArray(panel.codeComments);
+    const steps = Array.isArray(panel.steps)
+      ? panel.steps.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
 
     return (
       <div
@@ -681,7 +768,7 @@ const SplitVisual: React.FC<{
             left: 30,
             right: 30,
             top: 28,
-            color: accent,
+            color: headerColor,
             fontFamily: "'Inter', sans-serif",
             fontSize: 24,
             fontWeight: 700,
@@ -696,6 +783,46 @@ const SplitVisual: React.FC<{
             left: 30,
             right: 30,
             bottom: 28,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {codeComments.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                color: "#FCA5A5",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 16,
+                opacity: 0.84,
+              }}
+            >
+              {codeComments.slice(0, 3).map((comment) => (
+                <div key={comment}>{comment}</div>
+              ))}
+            </div>
+          ) : null}
+          {steps.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                color: "#E2E8F0",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 18,
+              }}
+            >
+              {steps.slice(0, 3).map((step, index) => (
+                <div key={`step-${index}`}>{asString(step.label) ?? asString(step.text) ?? ""}</div>
+              ))}
+            </div>
+          ) : null}
+          <div
+            style={{
             color: "#F8FAFC",
             fontFamily: "'Inter', sans-serif",
             fontSize: 26,
@@ -704,6 +831,30 @@ const SplitVisual: React.FC<{
           }}
         >
           {caption}
+          </div>
+          {typeof tokenCount === "number" || typeof tokenCount === "string" ? (
+            <div
+              style={{
+                color: headerColor,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 18,
+                fontWeight: 700,
+              }}
+            >
+              {`${tokenCount} tokens`}
+            </div>
+          ) : null}
+          {scope ? (
+            <div
+              style={{
+                color: "#CBD5E1",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 17,
+              }}
+            >
+              {scope}
+            </div>
+          ) : null}
         </div>
       </div>
     );
@@ -722,6 +873,37 @@ const SplitVisual: React.FC<{
         {renderPanel(left, "#60A5FA", leftSrc)}
         {renderPanel(right, "#D9944A", rightSrc)}
       </div>
+      <div
+        style={{
+          position: "absolute",
+          top: 88,
+          bottom: 72,
+          left: "50%",
+          width: 2,
+          backgroundColor: "rgba(51, 65, 85, 0.35)",
+        }}
+      />
+      {multiplier ? (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            padding: "10px 18px",
+            borderRadius: 999,
+            backgroundColor: "rgba(2, 6, 23, 0.8)",
+            border: "1px solid rgba(45, 212, 191, 0.35)",
+            color: "#2DD4BF",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 42,
+            fontWeight: 700,
+            boxShadow: "0 0 28px rgba(45, 212, 191, 0.16)",
+          }}
+        >
+          {multiplier}
+        </div>
+      ) : null}
     </AbsoluteFill>
   );
 };
@@ -934,10 +1116,12 @@ const CodeVisual: React.FC<{
     asString(data.promptFile),
     ...asStringArray(data.fileNames),
   ].filter((item): item is string => Boolean(item));
+  const workflow = asStringArray(data.workflow);
   const terminalLines = [
     asString(data.terminalCommand),
     asString(data.terminalOutput),
-    ...asStringArray(data.workflow),
+    ...workflow,
+    ...asStringArray(data.terminalCommands),
   ].filter((item): item is string => Boolean(item));
 
   return (
@@ -1082,6 +1266,7 @@ const CodeVisual: React.FC<{
           >
             {asString(asRecord(data.transformation)?.prompt?.role) ??
               asString(data.resultLabel) ??
+              workflow[0] ??
               "Source of truth shifts from the artifact to the specification."}
           </div>
         </div>
@@ -1207,6 +1392,7 @@ const AnnotationVisual: React.FC<{
         .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
   const comparison = asRecord(data.comparison);
+  const emphasisLine = asString(data.emphasisLine);
 
   return (
     <AbsoluteFill>
@@ -1331,6 +1517,23 @@ const AnnotationVisual: React.FC<{
             })}
           </div>
         ) : null}
+        {emphasisLine ? (
+          <div
+            style={{
+              alignSelf: "center",
+              padding: "14px 18px",
+              borderRadius: 999,
+              backgroundColor: "rgba(167, 139, 250, 0.12)",
+              border: "1px solid rgba(167, 139, 250, 0.32)",
+              color: "#E9D5FF",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 22,
+              fontWeight: 700,
+            }}
+          >
+            {emphasisLine}
+          </div>
+        ) : null}
       </div>
     </AbsoluteFill>
   );
@@ -1421,6 +1624,8 @@ const AnimatedDiagramVisual: React.FC<{
 }> = ({ data, width, height }) => {
   const title = resolveTitle(data);
   const accent = resolveAccentColor(data);
+  const diagramId = asString(data.diagramId) ?? "";
+  const promptNozzle = diagramId === "prompt_nozzle";
   const walls = Array.isArray(data.walls)
     ? data.walls.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
@@ -1443,6 +1648,11 @@ const AnimatedDiagramVisual: React.FC<{
     : [];
   const limitations = asStringArray(data.limitations);
   const table = asRecord(data.table);
+  const embeddedCodeBlocks = Array.isArray(data.embeddedCodeBlocks)
+    ? data.embeddedCodeBlocks.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const ratchetMetaphor = asRecord(data.ratchetMetaphor);
+  const statusDelay = asNumber(data.statusDelay);
   const takeaways = [
     ...asStringArray(data.causalChain),
     ...asStringArray(data.terminalCommands),
@@ -1451,7 +1661,148 @@ const AnimatedDiagramVisual: React.FC<{
   ].slice(0, 5);
 
   let body: React.ReactNode;
-  if (table) {
+  if (diagramId === "prompt_ratio") {
+    body = (
+      <div
+        style={{
+          width: width * 0.78,
+          display: "grid",
+          gridTemplateColumns: "1fr 160px 1fr",
+          gap: 24,
+          alignItems: "center",
+        }}
+      >
+        <div style={{ padding: "26px 28px", borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder }}>
+          <div style={{ color: "#94A3B8", fontSize: 20, fontWeight: 700 }}>PROMPT</div>
+          <div style={{ color: "#E2E8F0", fontSize: 42, fontWeight: 700, marginTop: 12 }}>
+            {asString(data.promptSize) ?? "~12 lines"}
+          </div>
+          <div style={{ color: "#CBD5E1", fontSize: 22, marginTop: 12 }}>
+            {asString(asRecord(data.analogy)?.prompt) ?? "header file"}
+          </div>
+        </div>
+        <div style={{ color: "#2DD4BF", fontSize: 64, fontWeight: 700, textAlign: "center" }}>
+          {asString(data.ratio) ?? "1:5"}
+        </div>
+        <div style={{ padding: "26px 28px", borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder }}>
+          <div style={{ color: "#94A3B8", fontSize: 20, fontWeight: 700 }}>GENERATED CODE</div>
+          <div style={{ color: "#E2E8F0", fontSize: 42, fontWeight: 700, marginTop: 12 }}>
+            {asString(data.codeSize) ?? "~200 lines"}
+          </div>
+          <div style={{ color: "#CBD5E1", fontSize: 22, marginTop: 12 }}>
+            {asString(asRecord(data.analogy)?.code) ?? "OBJ file"}
+          </div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "five_generations") {
+    const generations = phases.length > 0 ? phases : steps;
+    body = (
+      <div
+        style={{
+          width: width * 0.82,
+          display: "flex",
+          alignItems: "stretch",
+          gap: 16,
+        }}
+      >
+        {generations.slice(0, 5).map((entry, index) => (
+          <div
+            key={`generation-${index}`}
+            style={{
+              flex: 1,
+              padding: "22px 18px",
+              borderRadius: 24,
+              backgroundColor: subtleSurface,
+              border: `1px solid ${(asString(entry.color) ?? "#60A5FA")}44`,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+              minHeight: 280,
+            }}
+          >
+            <div style={{ color: asString(entry.color) ?? "#60A5FA", fontSize: 18, fontWeight: 700 }}>
+              {asString(entry.label) ?? `Generation ${index + 1}`}
+            </div>
+            <div style={{ color: "#E2E8F0", fontSize: 24, lineHeight: 1.2 }}>
+              {asString(entry.detail) ?? asString(entry.text) ?? asString(entry.status) ?? ""}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  } else if (diagramId === "embedded_code_document" && embeddedCodeBlocks.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.78,
+          display: "grid",
+          gridTemplateColumns: "1.1fr 0.9fr",
+          gap: 24,
+        }}
+      >
+        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px" }}>
+          {embeddedCodeBlocks.slice(0, 3).map((block, index) => (
+            <div key={`code-block-${index}`} style={{ marginBottom: 18 }}>
+              <div style={{ color: "#2DD4BF", fontSize: 18, fontWeight: 700 }}>{asString(block.title) ?? asString(block.label) ?? `Block ${index + 1}`}</div>
+              <div style={{ color: "#CBD5E1", fontFamily: "'JetBrains Mono', monospace", fontSize: 16, marginTop: 8 }}>
+                {asString(block.code) ?? asString(block.content) ?? ""}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px" }}>
+          {takeaways.slice(0, 4).map((item, index) => (
+            <div key={`${item}-${index}`} style={{ color: "#E2E8F0", fontSize: 20, marginBottom: 12 }}>
+              {item}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  } else if (diagramId === "ratchet_timelapse") {
+    body = (
+      <div
+        style={{
+          width: width * 0.78,
+          display: "grid",
+          gridTemplateColumns: "1.15fr 0.85fr",
+          gap: 24,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 14 }}>
+          {(timeline.length > 0 ? timeline : Array.from({ length: 6 }, (_, index) => ({ count: index + 1 }))).slice(0, 6).map((entry, index) => {
+            const count = asNumber(asRecord(entry)?.count) ?? index + 1;
+            return (
+              <div
+                key={`ratchet-${index}`}
+                style={{
+                  flex: 1,
+                  height: 120 + count * 22,
+                  borderRadius: 18,
+                  backgroundColor: "rgba(217, 148, 74, 0.24)",
+                  border: "1px solid rgba(217, 148, 74, 0.5)",
+                }}
+              />
+            );
+          })}
+        </div>
+        <div style={{ borderRadius: 28, backgroundColor: subtleSurface, border: subtleBorder, padding: "24px 28px" }}>
+          <div style={{ color: "#D9944A", fontSize: 18, fontWeight: 700 }}>
+            {asString(ratchetMetaphor?.label) ?? "Ratchet effect"}
+          </div>
+          <div style={{ color: "#E2E8F0", fontSize: 24, marginTop: 12 }}>
+            {asString(ratchetMetaphor?.summary) ?? "Walls accumulate. They do not disappear."}
+          </div>
+          {statusDelay !== null ? (
+            <div style={{ color: "#94A3B8", fontSize: 18, marginTop: 16 }}>
+              {`Status delay: ${statusDelay} frames`}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  } else if (table) {
     body = <TableVisual data={data} width={width} />;
   } else if (walls.length > 0) {
     body = (
@@ -1547,7 +1898,7 @@ const AnimatedDiagramVisual: React.FC<{
         </div>
       </div>
     );
-  } else if (promptText.length > 0 || nozzleLabels.length > 0) {
+  } else if (promptNozzle || promptText.length > 0 || nozzleLabels.length > 0) {
     body = (
       <div
         style={{
@@ -1744,7 +2095,7 @@ const AnimatedDiagramVisual: React.FC<{
           gap: 18,
         }}
       >
-        {(takeaways.length > 0 ? takeaways : ["Generated from visual contract"]).map((item, index) => (
+        {(takeaways.length > 0 ? takeaways : ["Structured contract preview"]).map((item, index) => (
           <div
             key={`${item}-${index}`}
             style={{

@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame shows a placeholder/stub instead of the specified visual. At frame 659/720 (91.7% progress, animation phase 6: 'Hold'), the frame should display the full completed composition: a 3×3 module grid with connections, the center module glowing with amber-blue aura, 'PDD operates at the module level' label, red-tinted external connection labels ('race conditions', 'cascading failures', 'architectural mismatches'), and the bottom statement 'The mold makes each part precise. The assembly is still yours.' Instead, the frame shows only a debug/placeholder view with 'ANIMATED DIAGRAM' header, 'module_level_aside' title text, and a centered pill-shaped element reading 'Generated from visual contract'. None of the specified visual elements are present — no module grid, no glow, no labels, no bottom statement, no connections, no diagram of any kind.
+OCR confirmed visible text tokens in the rendered frame (module, parser, level, race, conditions), so the frame does not support a hard missing-text failure.

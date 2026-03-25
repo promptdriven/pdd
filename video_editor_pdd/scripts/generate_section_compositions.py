@@ -151,6 +151,7 @@ def _resolve_existing_comp_import(
     comp_id: str,
     section_id: str,
     remotion_src: str,
+    allow_fuzzy: bool = True,
 ) -> Optional[tuple[str, str]]:
     """Resolve an actual import target when a generated component exists on disk."""
     comp_pascal = to_pascal_case(comp_id)
@@ -212,6 +213,9 @@ def _resolve_existing_comp_import(
                 _resolve_component_export_name(import_path, remotion_src, fallback_export_name),
                 import_path,
             )
+
+    if not allow_fuzzy:
+        return None
 
     target_tokens = _normalize_component_tokens(comp_id)
     if not target_tokens:
@@ -1240,6 +1244,60 @@ MEDIA_DRIVEN_VISUAL_TYPES = {
     'raw_media',
 }
 
+CONTRACT_FIRST_VISUAL_TYPES = {
+    'animated_diagram',
+    'annotation_overlay',
+    'code_transformation',
+    'code_visualization',
+    'dual_meter_animation',
+    'inset_chart',
+    'network_graph',
+    'text_overlay_with_morph',
+    'transition',
+}
+
+
+def _is_structured_title_card(data_points: Dict[str, Any]) -> bool:
+    visual_type = data_points.get('type')
+    if not isinstance(visual_type, str) or visual_type.strip().lower() != 'title_card':
+        return False
+
+    if isinstance(data_points.get('style'), str) and data_points.get('style', '').strip().lower() == 'stillness_beat':
+        return True
+
+    return any(
+        isinstance(data_points.get(key), str) and data_points.get(key, '').strip()
+        for key in ('sectionLabel', 'sectionNumber', 'title', 'titleLine1', 'titleLine2')
+    )
+
+
+def _should_prefer_generated_contract_renderer(
+    visual_contract: Dict[str, Any],
+    has_exact_component: bool,
+) -> bool:
+    data_points = visual_contract.get('dataPoints')
+    if not isinstance(data_points, dict):
+        return False
+
+    if has_exact_component:
+        return False
+
+    if _is_structured_title_card(data_points):
+        return True
+
+    visual_type = data_points.get('type')
+    if not isinstance(visual_type, str):
+        return False
+
+    normalized_type = visual_type.strip().lower()
+    if normalized_type in CONTRACT_FIRST_VISUAL_TYPES:
+        return True
+
+    if normalized_type == 'split_screen':
+        return not has_exact_component
+
+    return False
+
 
 def _allows_inherited_visual_media(spec_content: str) -> bool:
     """Only media-driven visuals may inherit a prior clip implicitly.
@@ -1418,6 +1476,49 @@ def build_visual_contract_manifest(
                 if visual['id'] not in parent['children']:
                     parent['children'].append(visual['id'])
 
+        # Third pass: synthesize split-screen media aliases from embedded child clips.
+        for visual in visuals:
+            data_points = visual.get('dataPoints')
+            if not isinstance(data_points, dict):
+                continue
+            visual_type = data_points.get('type')
+            if not isinstance(visual_type, str) or visual_type.strip().lower() != 'split_screen':
+                continue
+
+            media_aliases = visual.setdefault('mediaAliases', {})
+            if not isinstance(media_aliases, dict):
+                media_aliases = {}
+                visual['mediaAliases'] = media_aliases
+
+            for child_id in visual.get('children', []):
+                child = id_to_visual.get(child_id)
+                if not child:
+                    continue
+                child_data = child.get('dataPoints')
+                child_aliases = child.get('mediaAliases')
+                if not isinstance(child_aliases, dict):
+                    continue
+                candidate_src = (
+                    child_aliases.get('defaultSrc')
+                    or child_aliases.get('backgroundSrc')
+                    or child_aliases.get('baseSrc')
+                )
+                if not isinstance(candidate_src, str) or not candidate_src:
+                    continue
+
+                panel = None
+                if isinstance(child_data, dict):
+                    for key in ('panel', 'side', 'slot'):
+                        raw_panel = child_data.get(key)
+                        if isinstance(raw_panel, str) and raw_panel.strip():
+                            panel = raw_panel.strip().lower()
+                            break
+
+                if panel == 'left':
+                    media_aliases.setdefault('leftSrc', candidate_src)
+                elif panel == 'right':
+                    media_aliases.setdefault('rightSrc', candidate_src)
+
         manifest_sections.append({
             'id': section['id'],
             'visuals': visuals,
@@ -1479,13 +1580,22 @@ def resolve_section_component_records(
     """
     resolved_records: List[tuple[str, str, str]] = []
     seen_visual_ids: set[str] = set()
+    contract_first_visual_ids: set[str] = set()
     section_id = str(section.get('id') or '')
 
-    def _add_record(visual_id: str, require_existing: bool) -> None:
+    def _has_exact_component(visual_id: str) -> bool:
+        return _resolve_existing_comp_import(
+            visual_id,
+            section_id,
+            remotion_src,
+            allow_fuzzy=False,
+        ) is not None
+
+    def _add_record(visual_id: str, require_existing: bool, allow_fuzzy: bool = True) -> None:
         if not visual_id or visual_id in seen_visual_ids:
             return
         resolved = (
-            _resolve_existing_comp_import(visual_id, section_id, remotion_src)
+            _resolve_existing_comp_import(visual_id, section_id, remotion_src, allow_fuzzy=allow_fuzzy)
             if require_existing
             else resolve_comp_import(visual_id, section_id, remotion_src)
         )
@@ -1502,10 +1612,23 @@ def resolve_section_component_records(
         for visual in section_entry.get('visuals', []) if section_entry else []:
             if visual.get('renderMode') != 'component':
                 continue
-            _add_record(str(visual.get('id') or ''), require_existing=True)
+            visual_id = str(visual.get('id') or '')
+            has_exact_component = _has_exact_component(visual_id)
+            if _should_prefer_generated_contract_renderer(visual, has_exact_component):
+                contract_first_visual_ids.add(visual_id)
+                continue
+            allow_fuzzy = True
+            data_points = visual.get('dataPoints')
+            if isinstance(data_points, dict):
+                visual_type = data_points.get('type')
+                if isinstance(visual_type, str) and visual_type.strip().lower() == 'split_screen' and not has_exact_component:
+                    allow_fuzzy = False
+            _add_record(visual_id, require_existing=True, allow_fuzzy=allow_fuzzy)
 
     for composition in section.get('compositions', []):
         comp_id = composition if isinstance(composition, str) else composition.get('id', '')
+        if str(comp_id or '') in contract_first_visual_ids:
+            continue
         _add_record(str(comp_id or ''), require_existing=require_existing)
 
     return resolved_records

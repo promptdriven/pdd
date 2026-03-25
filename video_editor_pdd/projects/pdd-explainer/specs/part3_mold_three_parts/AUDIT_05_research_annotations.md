@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame is a placeholder stub. Instead of the specified visual content, it shows only a debug label 'ANNOTATION OVERLAY' in blue at top-left, the component name 'research_annotations' in large white text, and a centered pill reading 'Generated from visual contract'. None of the spec'd elements are present: no mold cross-section background, no Card 1 (red-tinted 'AI code: 1.7× more issues' warning card), no Card 2 (green-tinted 'AI + strong tests = amplified delivery' card), no wall glow effect, no bottom annotation 'The walls aren't optional', and no terminal overlay with green checkmark test output. At frame 479/540 (88.9% progress, animation phase 420-540), all visual elements should be fully visible and holding. The frame is entirely unimplemented — it renders a generic placeholder rather than any actual content.
+OCR confirmed visible text tokens in the rendered frame (annotation, overlay, research, annotations, more), so the frame does not support a hard missing-text failure.

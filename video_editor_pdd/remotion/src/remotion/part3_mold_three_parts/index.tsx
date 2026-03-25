@@ -5,26 +5,17 @@ import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from 
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Part3MoldThreeParts01SectionTitleCard } from "../Part3MoldThreeParts01SectionTitleCard";
 import { Part3MoldThreeParts02MoldCrossSection } from "../Part3MoldThreeParts02MoldCrossSection";
-import { Part3MoldThreeParts04ResearchAnnotationsAiQuality } from "../Part3MoldThreeParts04ResearchAnnotationsAiQuality";
-import { Part5Compound08SplitPatchingVsPdd } from "../08-SplitPatchingVsPdd";
-import { Part3MoldThreeParts07FiveGenerationsZ3 } from "../Part3MoldThreeParts07FiveGenerationsZ3";
 import { Part3MoldThreeParts10ThreeComponentsTable } from "../Part3MoldThreeParts10ThreeComponentsTable";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "01_section_title_card": Part3MoldThreeParts01SectionTitleCard,
   "02_mold_cross_section": Part3MoldThreeParts02MoldCrossSection,
-  "05_research_annotations": Part3MoldThreeParts04ResearchAnnotationsAiQuality,
-  "08_traditional_vs_pdd_split": Part5Compound08SplitPatchingVsPdd,
-  "10_five_generations": Part3MoldThreeParts07FiveGenerationsZ3,
   "18_three_components_table": Part3MoldThreeParts10ThreeComponentsTable,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "01_section_title_card": 120,
   "02_mold_cross_section": 300,
-  "05_research_annotations": 450,
-  "08_traditional_vs_pdd_split": 360,
-  "10_five_generations": 540,
   "18_three_components_table": 480,
 };
 

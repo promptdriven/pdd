@@ -22,16 +22,12 @@ import { Part1Economics06TwoByTwoGrid } from "./Part1Economics06TwoByTwoGrid";
 import { Part1Economics09CrossingLinesMoment } from "./Part1Economics09CrossingLinesMoment";
 import { Part1Economics10DoubleMeterInsight } from "./Part1Economics10DoubleMeterInsight";
 import { Part2ParadigmShift01SectionTitleCard } from "./Part2ParadigmShift01SectionTitleCard";
-import { Part2ParadigmShift04DefectFixTheMold } from "./Part2ParadigmShift04DefectFixTheMold";
 import { Part2ParadigmShift07VerilogSynthesisTriple } from "./Part2ParadigmShift07VerilogSynthesisTriple";
 import { Part2ParadigmShift08SynopsysPddEquivalence } from "./Part2ParadigmShift08SynopsysPddEquivalence";
 import { Part2ParadigmShift09AbstractionStaircase } from "./Part2ParadigmShift09AbstractionStaircase";
 import { Part2ParadigmShift11PromptReplacesReview } from "./Part2ParadigmShift11PromptReplacesReview";
 import { Part3MoldThreeParts01SectionTitleCard } from "./Part3MoldThreeParts01SectionTitleCard";
 import { Part3MoldThreeParts02MoldCrossSection } from "./Part3MoldThreeParts02MoldCrossSection";
-import { Part3MoldThreeParts04ResearchAnnotationsAiQuality } from "./Part3MoldThreeParts04ResearchAnnotationsAiQuality";
-import { Part5Compound08SplitPatchingVsPdd } from "./08-SplitPatchingVsPdd";
-import { Part3MoldThreeParts07FiveGenerationsZ3 } from "./Part3MoldThreeParts07FiveGenerationsZ3";
 import { Part3MoldThreeParts10ThreeComponentsTable } from "./Part3MoldThreeParts10ThreeComponentsTable";
 import { Part4PrecisionTradeoff01SectionTitleCard } from "./Part4PrecisionTradeoff01SectionTitleCard";
 import { Part4PrecisionTradeoff02PrinterVsMoldSplit } from "./Part4PrecisionTradeoff02PrinterVsMoldSplit";
@@ -47,7 +43,6 @@ import { Part5CompoundReturns07EconomicsCrossingCallback } from "./Part5Compound
 import { Part5CompoundReturns08ContrarianQuoteCard } from "./Part5CompoundReturns08ContrarianQuoteCard";
 import { WhereToStart01SectionTitleCard } from "./WhereToStart01SectionTitleCard";
 import { WhereToStart02LegacyCodebaseReveal } from "./WhereToStart02LegacyCodebaseReveal";
-import { WhereToStart03ModuleHighlightUpdate } from "./WhereToStart03ModuleHighlightUpdate";
 import { WhereToStart04SourceOfTruthShift } from "./WhereToStart04SourceOfTruthShift";
 import { WhereToStart07NoBigBangCallout } from "./WhereToStart07NoBigBangCallout";
 import { Closing03CodeRegenerateWorkflow } from "./Closing03CodeRegenerateWorkflow";
@@ -272,10 +267,17 @@ const Part2ParadigmShift01SectionTitleCardPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift04DefectFixTheMoldPreview: React.FC = () => (
+const Part2ParadigmShift02DoubleMeterInsightPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:02_double_meter_insight"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:02_double_meter_insight"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift05MoldDefectFixPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:05_mold_defect_fix"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:05_mold_defect_fix"] ?? null}>
-      <Part2ParadigmShift04DefectFixTheMold />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -335,10 +337,10 @@ const Part3MoldThreeParts03TestWallsIlluminatePreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts04ResearchAnnotationsAiQualityPreview: React.FC = () => (
+const Part3MoldThreeParts05ResearchAnnotationsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:05_research_annotations"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:05_research_annotations"] ?? null}>
-      <Part3MoldThreeParts04ResearchAnnotationsAiQuality />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -356,10 +358,10 @@ const Part3MoldThreeParts07RatchetTimelapsePreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part5Compound08SplitPatchingVsPddPreview: React.FC = () => (
+const Part3MoldThreeParts08TraditionalVsPddSplitPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:08_traditional_vs_pdd_split"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:08_traditional_vs_pdd_split"] ?? null}>
-      <Part5Compound08SplitPatchingVsPdd />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -370,10 +372,10 @@ const Part3MoldThreeParts09BugForkDiagramPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts07FiveGenerationsZ3Preview: React.FC = () => (
+const Part3MoldThreeParts10FiveGenerationsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:10_five_generations"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:10_five_generations"] ?? null}>
-      <Part3MoldThreeParts07FiveGenerationsZ3 />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -538,10 +540,10 @@ const WhereToStart02LegacyCodebaseRevealPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const WhereToStart03ModuleHighlightUpdatePreview: React.FC = () => (
+const WhereToStart03ModuleHighlightTerminalPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:03_module_highlight_terminal"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:03_module_highlight_terminal"] ?? null}>
-      <WhereToStart03ModuleHighlightUpdate />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -838,7 +840,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part2-paradigm-shift02-double-meter-insight"
-        component={Part1Economics10DoubleMeterInsightPreview}
+        component={Part2ParadigmShift02DoubleMeterInsightPreview}
         durationInFrames={750}
         fps={30}
         width={1920}
@@ -846,7 +848,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part2-paradigm-shift05-mold-defect-fix"
-        component={Part2ParadigmShift04DefectFixTheMoldPreview}
+        component={Part2ParadigmShift05MoldDefectFixPreview}
         durationInFrames={420}
         fps={30}
         width={1920}
@@ -918,7 +920,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part3-mold-three-parts05-research-annotations"
-        component={Part3MoldThreeParts04ResearchAnnotationsAiQualityPreview}
+        component={Part3MoldThreeParts05ResearchAnnotationsPreview}
         durationInFrames={450}
         fps={30}
         width={1920}
@@ -942,7 +944,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part3-mold-three-parts08-traditional-vs-pdd-split"
-        component={Part5Compound08SplitPatchingVsPddPreview}
+        component={Part3MoldThreeParts08TraditionalVsPddSplitPreview}
         durationInFrames={360}
         fps={30}
         width={1920}
@@ -958,7 +960,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part3-mold-three-parts10-five-generations"
-        component={Part3MoldThreeParts07FiveGenerationsZ3Preview}
+        component={Part3MoldThreeParts10FiveGenerationsPreview}
         durationInFrames={540}
         fps={30}
         width={1920}
@@ -1150,7 +1152,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="where-to-start03-module-highlight-terminal"
-        component={WhereToStart03ModuleHighlightUpdatePreview}
+        component={WhereToStart03ModuleHighlightTerminalPreview}
         durationInFrames={240}
         fps={30}
         width={1920}

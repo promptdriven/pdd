@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame is a placeholder — it shows only the visual's internal name ('module_highlight_terminal'), a 'CODE TRANSFORMATION' section header, a 'Generated from visual contract' badge, and the composition label at bottom-left. None of the spec-required content is present. At frame 134/150 (90% progress, animation phase 6 'Hold'), the frame should show: (1) dimmed legacy codebase panels in the background, (2) a highlighted `auth_handler.py` module with blue selection glow, (3) a terminal window at bottom-center with the fully typed command `$ pdd update auth_handler.py` and green checkmark output `✓ Prompt generated: auth_handler.prompt.md`, (4) a glowing blue prompt file icon next to the module, (5) the original code panel desaturated to gray, and (6) 'source of truth' / 'artifact' labels. Instead, the entire visual is an unimplemented stub with a generic placeholder card.
+OCR confirmed visible text tokens in the rendered frame (terminal, prompt, update, auth, handler), so the frame does not support a hard missing-text failure.

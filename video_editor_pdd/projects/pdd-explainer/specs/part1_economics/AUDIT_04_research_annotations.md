@@ -1,14 +1,20 @@
 ## Verdict
-pass
+warn
 ## Summary
-The frame is at 90% progress (frame 1079/1200), which falls within animation phase 8 (frames 960-1200: hold — all four annotations visible). The chart background and lines are present and correct. Three annotation cards are visible on the right side, but the spec calls for four distinct annotation cards. Specific observations:
+The frame is sampled at 90% progress (frame 1079 of 1200), which falls in the final hold phase (frame 960-1200). At this point, all four annotations should be visible at balanced opacity. The frame shows three annotation cards stacked vertically on the right side of the chart, and the overall composition reads clearly. However, there are several discrepancies from the spec:
 
-1. **Annotation count/layout**: The spec requires four separate annotation cards. The rendered frame shows three cards stacked on the right. Annotations 3 ('Code churn: +44%') and 4 ('Refactoring: −60%') appear merged into a single card rather than being two separate cards. The spec places Annotation 3 at center-right and Annotation 4 at center-left, but the render combines them into one card at center-right.
+1. **Annotation count and layout**: The spec calls for four separate annotation cards at distinct positions (lower-right, upper-right, center-right, center-left). The render shows three cards stacked vertically on the right side. Annotations 3 (Code churn: +44%) and 4 (Refactoring: −60%) appear to be combined into a single card rather than appearing as two separate cards at center-right and center-left positions respectively.
 
-2. **Annotation 1 color**: The spec says the header 'Individual task: −55%' should be green (#4ADE80). The rendered frame shows this text in what appears to be orange/amber rather than green. This is a meaningful color mismatch — the green-vs-red contrast between annotations 1 and 2 is described as central to the visual storytelling ('makes the paradox viscerally clear').
+2. **Color of Annotation 1 header**: The spec specifies the 'Individual task: −55%' header should be green (#4ADE80). In the rendered frame, it appears in an orange/amber color rather than green.
 
-3. **Callout lines**: The spec describes thin callout lines connecting each card to the relevant chart element. No visible callout lines are present in the rendered frame.
+3. **Missing callout lines**: The spec describes thin callout lines from each card to the relevant chart element. No visible callout lines are present connecting cards to chart features.
 
-4. **Card positioning**: All three cards are stacked vertically on the right side. The spec places Annotation 4 at center-left, which is not reflected.
+4. **Annotation 1 text**: Spec says 'Individual task: −55%' but the render shows 'Individual task: -55%' — this is effectively the same content and reads correctly.
 
-5. **Overall throughput card**: Contains '+41% more bugs' in red text, which is additional detail not explicitly in the spec header but is acceptable as supplementary fine print. The spec fine print says '785 developers, one year' — the rendered text appears to read '785 devs, one year' which is a minor abbreviation.
+5. **Fine print discrepancy on Annotation 1**: Spec says '95 developers, one greenfield task'. The render shows 'GitHub, 2022 · 95 devs, one greenfield task' which combines the source line and fine print, a minor formatting difference.
+
+6. **Annotation 2 extra content**: The render includes '+41% more bugs' in red text below the source line, which is not specified in the annotation card spec (though it is mentioned in the narration). This is additional information not in the visual spec.
+
+7. **Chart line colors**: The spec references amber solid and dashed lines from the inherited 03 chart. The render shows a green solid line and an orange dashed line, which is a color deviation from the spec's 'amber' description (though this is inherited from the chart component).
+
+8. **Annotation 4 position**: Spec calls for center-left placement; instead it's merged into the bottom-right card.

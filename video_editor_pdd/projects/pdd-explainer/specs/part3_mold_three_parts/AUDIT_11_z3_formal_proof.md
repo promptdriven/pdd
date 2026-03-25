@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame is a placeholder stub. Instead of the specified Z3 formal proof comparison layout, the frame shows only a debug header ('ANNOTATION OVERLAY' / 'z3_formal_proof') and a centered pill reading 'Generated from visual contract'. None of the spec's required visual elements are present: no left chip die with Synopsys label, no right code module with PDD + Z3 label, no '≡' equivalence connector, no floating math symbols (∀, ∃, ⊢, ≡), no main annotation text, no emphasis line ('Not sampling. Mathematical proof.'), no domain label, no dashed connection lines, and no blueprint grid. At frame 644/720 (89.6% progress, animation phase 570-720 'Hold'), all elements should be fully visible and subtly pulsing. The component has not been implemented beyond a placeholder.
+OCR confirmed visible text tokens in the rendered frame (chip, verification, code, mathematical, proof), so the frame does not support a hard missing-text failure.

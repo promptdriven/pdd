@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The frame shows a placeholder state rather than the specified animation. At frame 569/600 (95% progress, animation phase 540-600 'Hold'), the render should display: (1) a context window rectangle with corner brackets, (2) twenty compact blue prompt blocks arranged in a 5×4 grid inside the window, (3) a 'Headroom' label with green checkmark, (4) the result label 'Same system. 5-10× more fits.' centered near y:850, and (5) prompt blocks gently pulsing blue. Instead, the frame shows only an 'ANIMATED DIAGRAM' tag, the title 'context_compression' in the upper-left corner, and a centered rounded-rectangle placeholder reading 'Generated from visual contract'. None of the spec's visual elements — context window, code/prompt blocks, labels, grid layout, color coding, or animations — are present in the rendered frame.
+OCR confirmed visible text tokens in the rendered frame (context, animated, diagram, compression, structured), so the frame does not support a hard missing-text failure.
