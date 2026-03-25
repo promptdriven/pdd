@@ -640,6 +640,79 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("uses preview compositions for contract-first visuals even when they carry media aliases", () => {
+    const specDir = path.join(tmpDir, "specs", "part1_economics");
+    const manifestDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "12_developer_darning_split.md"),
+      [
+        "[split:]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        JSON.stringify({
+          type: "split_screen",
+          leftPanel: { label: "CURSOR" },
+          rightPanel: { label: "DARNING NEEDLE" },
+        }),
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "visual-manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-03-25T00:00:00.000Z",
+          sections: [
+            {
+              id: "part1_economics",
+              visuals: [
+                {
+                  id: "12_developer_darning_split",
+                  specBaseName: "12_developer_darning_split",
+                  renderMode: "component",
+                  mediaAliases: {
+                    leftSrc: "veo/developer_cursor_edit.mp4",
+                    rightSrc: "veo/grandmother_darning_lamplight.mp4",
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const visuals = resolveSectionVisuals(
+      tmpDir,
+      {
+        id: "part1_economics",
+        specDir: "part1_economics",
+        durationSeconds: 14,
+        compositionId: "Part1EconomicsSection",
+      },
+      []
+    );
+
+    expect(visuals).toEqual([
+      expect.objectContaining({
+        id: "12_developer_darning_split",
+        hasComponent: true,
+        hasExplicitMedia: true,
+        previewCompositionId: "part1-economics12-developer-darning-split",
+        mediaReferences: [
+          "veo/developer_cursor_edit.mp4",
+          "veo/grandmother_darning_lamplight.mp4",
+        ],
+      }),
+    ]);
+  });
+
   it("derives general audit hints from spec structure for layout, effects, and animation phases", () => {
     const hints = resolveSpecAuditHints([
       "# Split Comparison",

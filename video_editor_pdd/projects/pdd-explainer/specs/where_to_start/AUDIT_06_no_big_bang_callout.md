@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (module, time, bang, rewrite), so the frame does not support a hard missing-text failure.
+The rendered frame shows completely wrong text content. The spec requires a two-line primary quote — 'You don't patch socks' (white/light) and 'because socks got cheap.' (amber #D9944A) — with a secondary line 'The economics made patching irrational.' Instead, the frame displays 'One module at a time.' as the primary line (in a muted gray, no bold white styling) and 'No big bang. No rewrite.' as the secondary line (also muted gray). There is no amber-colored text anywhere. A thin horizontal rule is present below the text, which matches the spec's structural layout, but the text content is entirely wrong — this appears to be rendering a different visual (likely a neighboring callout card) rather than the sock-metaphor callback specified in 06_no_big_bang_callout. The overall layout structure (centered text, horizontal rule, dark background) is correct, but the content is from a different composition entirely.

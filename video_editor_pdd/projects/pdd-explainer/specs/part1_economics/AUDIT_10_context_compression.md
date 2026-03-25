@@ -1,22 +1,16 @@
 ## Verdict
 fail
 ## Summary
-The frame at 95% progress (frame 569/600, animation phase 540-600 'Hold with pulsing prompt blocks') shows significant layout deviations from the spec:
+At frame 569 (95% progress, phase 540-600 'Hold with blue pulsing prompt blocks'), several issues are visible:
 
-1. **Layout is side-by-side instead of sequential/centered**: The spec describes a single centered context window (600×500px) where the transformation happens in-place. The render shows two panels side-by-side — the left panel displays all 20 code blocks in a 5×4 grid (the overflow/before state), and the right panel shows the compressed prompt blocks (the after state). The spec animation is a temporal transformation in a single centered rectangle, not a spatial before/after comparison.
+1. **Grid layout is wrong — should be 5×4 but renders as approximately 5×4 with mixed block states.** The spec calls for all 20 prompt blocks to be blue-tinted and uniformly compressed. The rendered frame shows the top ~8 blocks in a teal/blue-green color, while the bottom ~12 blocks appear in a reddish/maroon color. At this point in the animation (95%), the transformation should be fully complete — all 20 blocks should be uniformly blue prompt blocks fitting neatly inside the window.
 
-2. **Prompt blocks not in a 5×4 grid**: The right panel shows only ~8 small prompt blocks arranged in two incomplete rows (5 on top, 3 below), not the specified 20 blocks in a neat 5×4 grid. The spec requires all 20 prompt blocks visible inside the window.
+2. **Bottom blocks retain overflow/red styling.** The spec states that by frame 360-420 all blocks should have completed morphing into blue prompt blocks arranged in a 5×4 grid. At frame 569 the bottom two rows are still showing red/maroon coloring reminiscent of the overflow phase, rather than the blue prompt-block color (`#4A90D9` tint).
 
-3. **Missing 'Headroom' label**: The spec calls for a 'Headroom' label in green (#4ADE80) within the empty space of the context window. This is not visible.
+3. **'5-10×' badge appears inside the grid area** as a standalone block in the top-right of the grid. The spec does not call for this element inside the grid — it specifies the result label 'Same system. 5-10× more fits.' below the window, which IS present correctly.
 
-4. **Missing green checkmark**: The spec requires a green checkmark replacing the red × by this phase. Not visible.
+4. **Subtitle '8/20 modules now fit inside the same window'** appears below the result label. This text is not specified in the spec and contradicts the visual narrative — at this stage ALL 20 modules should fit as prompts. The text '8/20' suggests only 8 fit, which is the overflow-phase count, not the compressed-phase result.
 
-5. **'5-10×' badge misplaced**: A '5-10×' label appears as a floating badge in the upper-right of the right panel rather than being part of the result label below.
+5. **Context window is not centered on canvas** — it is positioned to the left-center rather than visually centered as specified.
 
-6. **Result label present but positioning differs**: 'Same system. 5-10× more fits.' appears below the right panel, which partially satisfies the spec, but it should be centered below a single centered window at y:850.
-
-7. **Code blocks show wrong naming**: Labels read 'mod_1' through 'mod_20' instead of 'module_01' through 'module_20' as specified.
-
-8. **No 'Context Window' label visible** above the rectangle.
-
-9. **Red-highlighted overflow blocks still visible at frame 569**: By this phase (540-600), only the compressed prompt blocks should be visible inside the window. The left panel still shows the overflow state with red-tinted blocks, which should have been replaced by the transformation.
+6. **'Headroom' label and green checkmark are present** (correct), and the result label 'Same system. 5-10× more fits.' is present (correct).

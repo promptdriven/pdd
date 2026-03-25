@@ -577,27 +577,29 @@ export function resolveSectionVisuals(
       continue;
     }
 
-    if (!mediaInfo.hasExplicitMedia) {
-      if (mediaInfo.contractRenderMode !== "component") {
-        continue;
-      }
-
+    if (mediaInfo.contractRenderMode === "component") {
       const contractVisualId = mediaInfo.contractId || specBaseName;
       resolvedVisuals.push({
         id: contractVisualId,
         specBaseName,
         specPath: path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`),
         hasComponent: true,
-        hasExplicitMedia: false,
-        requiresCompositedAudit: false,
+        hasExplicitMedia: mediaInfo.hasExplicitMedia,
+        requiresCompositedAudit: mediaInfo.requiresCompositedAudit,
         previewCompositionId: resolvePreviewCompositionId(
           contractVisualId,
           section.id
         ),
-        mediaReferences: [],
+        mediaReferences: mediaInfo.hasExplicitMedia
+          ? mediaInfo.mediaReferences
+          : [],
         stagedAssetPath: mediaInfo.stagedAssetPath,
         auditHints: mediaInfo.auditHints,
       });
+      continue;
+    }
+
+    if (!mediaInfo.hasExplicitMedia) {
       continue;
     }
 

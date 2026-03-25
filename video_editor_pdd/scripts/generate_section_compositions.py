@@ -351,19 +351,25 @@ PANEL_CONTEXT_ALIAS_MAP = {
     'base': 'baseSrc',
 }
 SOURCE_FIELD_KEYS = {
-    'source',
-    'sourcefile',
-    'videosource',
-    'videosrc',
-    'video',
-    'content',
-    'file',
-    'asset',
-    'assetfile',
+    'clipsource',
     'clip',
     'clipid',
     'leftclipid',
     'rightclipid',
+    'leftsrc',
+    'rightsrc',
+    'backgroundclip',
+    'backgroundsrc',
+    'baseclip',
+    'basesrc',
+    'revealclip',
+    'revealsrc',
+    'videosource',
+    'videosrc',
+    'video',
+    'outputsrc',
+    'outputfile',
+    'filename',
 }
 REFERENCE_SUFFIXES = (
     '_still',
@@ -664,6 +670,15 @@ def _resolve_contextual_video_static_path(
 def _iter_data_point_media_values(data_points: Any) -> List[str]:
     """Collect media-like string values inside structured Data Points JSON."""
     values: List[str] = []
+    embedded_clip_ids = _extract_embedded_veo_clip_ids(data_points)
+
+    def _is_explicit_media_value(value: str, key_hint: Optional[str]) -> bool:
+        if _is_media_reference_like(value):
+            return True
+        normalized_clip_id = _normalize_clip_identifier(value)
+        if normalized_clip_id in embedded_clip_ids:
+            return True
+        return key_hint in SOURCE_FIELD_KEYS and bool(value.strip())
 
     def _walk(value: Any, key_hint: Optional[str] = None) -> None:
         if isinstance(value, dict):
@@ -674,9 +689,7 @@ def _iter_data_point_media_values(data_points: Any) -> List[str]:
             for nested in value:
                 _walk(nested, key_hint)
             return
-        if isinstance(value, str) and (
-            _is_media_reference_like(value) or (key_hint in SOURCE_FIELD_KEYS and value.strip())
-        ):
+        if isinstance(value, str) and _is_explicit_media_value(value, key_hint):
             normalized = value.replace('\\', '/').lstrip('/')
             if normalized not in values:
                 values.append(normalized)
@@ -693,6 +706,14 @@ def _extract_data_point_media_aliases(
     """Resolve structured media aliases from Data Points JSON."""
     aliases: Dict[str, str] = {}
     embedded_clip_ids = _extract_embedded_veo_clip_ids(data_points)
+
+    def _is_explicit_media_value(value: str, key_hint: Optional[str]) -> bool:
+        if _is_media_reference_like(value):
+            return True
+        normalized_clip_id = _normalize_clip_identifier(value)
+        if normalized_clip_id in embedded_clip_ids:
+            return True
+        return key_hint in SOURCE_FIELD_KEYS and bool(value.strip())
 
     def _assign(alias_name: Optional[str], raw_value: str) -> None:
         resolved = None
@@ -722,9 +743,7 @@ def _extract_data_point_media_aliases(
                 key = str(raw_key).strip().lower().replace('_', '').replace('-', '')
                 next_context = PANEL_CONTEXT_ALIAS_MAP.get(key, context_alias)
                 alias_name = MEDIA_ALIAS_KEY_MAP.get(key)
-                if isinstance(nested, str) and (
-                    _is_media_reference_like(nested) or (key in SOURCE_FIELD_KEYS and nested.strip())
-                ):
+                if isinstance(nested, str) and _is_explicit_media_value(nested, key):
                     effective_alias = next_context or alias_name
                     _assign(effective_alias, nested)
                     continue
@@ -734,9 +753,7 @@ def _extract_data_point_media_aliases(
             for nested in value:
                 _walk(nested, context_alias)
             return
-        if isinstance(value, str) and (
-            _is_media_reference_like(value) or (context_alias is not None and value.strip())
-        ):
+        if isinstance(value, str) and _is_explicit_media_value(value, context_alias):
             _assign(context_alias, value)
 
     _walk(data_points)
@@ -1482,6 +1499,15 @@ def build_visual_contract_manifest(
                 overlay_manifest.get(visual_id),
                 has_component=has_component,
             )
+            if _should_prefer_generated_contract_renderer(
+                {
+                    'id': visual_id,
+                    'dataPoints': data_points,
+                    'renderMode': render_mode,
+                },
+                has_component,
+            ):
+                render_mode = 'component'
             if (
                 render_mode == 'component'
                 and not has_component

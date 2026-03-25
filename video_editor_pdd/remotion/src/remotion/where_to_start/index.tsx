@@ -1,5 +1,5 @@
 import React from "react";
-import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
@@ -14,7 +14,6 @@ const VISUAL_DURATIONS: Record<string, number> = {
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "07_transition_to_closing": { defaultSrc: "veo/sock_discard_closing.mp4", backgroundSrc: "veo/sock_discard_closing.mp4", outputSrc: "veo/sock_discard_closing.mp4", baseSrc: "veo/sock_discard_closing.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean>> = {
@@ -27,7 +26,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "04_source_of_truth_shift": {"specBaseName": "04_source_of_truth_shift", "dataPoints": {"type": "code_transformation", "chartId": "source_of_truth_shift", "transformedModules": [{"name": "auth_handler.py", "state": "complete"}, {"name": "payment_processor.py", "state": "animating"}], "pendingModules": ["user_service.py", "legacy_router.py", "config.py", "db_connector.py", "email_sender.py", "cache_layer.py"], "workflow": ["module", "prompt", "tests", "regenerate", "compare"], "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "network_graph", "chartId": "module_glow_spread", "totalModules": 14, "migrationSequence": [{"name": "auth_handler.py", "frame": 0, "position": [400, 350]}, {"name": "payment_processor.py", "frame": 0, "position": [600, 420]}, {"name": "user_service.py", "frame": 20, "position": [820, 310]}, {"name": "config.py", "frame": 45, "position": [350, 550]}, {"name": "db_connector.py", "frame": 65, "position": [650, 580]}, {"name": "email_sender.py", "frame": 85, "position": [1050, 400]}, {"name": "cache_layer.py", "frame": 105, "position": [900, 550]}], "unmigrated": ["legacy_router.py", "reporting.py", "webhook_handler.py", "session_manager.py", "rate_limiter.py", "notification_service.py", "data_exporter.py"], "counterSteps": [15, 22, 29, 36, 43, 50], "colors": {"migrated": "#60A5FA", "unmigrated": "#1E293B", "dependency_migrated": "#60A5FA", "dependency_unmigrated": "#334155"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "quote_card", "chartId": "no_big_bang_callout", "quoteLine1": "You don't patch socks", "quoteLine2": "because socks got cheap.", "quoteLine2Color": "#D9944A", "secondaryText": "The economics made patching irrational.", "callback": "sock_metaphor", "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "07_transition_to_closing": {"specBaseName": "07_transition_to_closing", "dataPoints": {"type": "transition", "transitionId": "where_to_start_to_closing", "echoes": [{"source": "no_big_bang_callout", "opacity": 0.06}, {"source": "sock_metaphor", "opacity": 0.05}], "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {"defaultSrc": "veo/sock_discard_closing.mp4", "backgroundSrc": "veo/sock_discard_closing.mp4", "outputSrc": "veo/sock_discard_closing.mp4", "baseSrc": "veo/sock_discard_closing.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "07_transition_to_closing": {"specBaseName": "07_transition_to_closing", "dataPoints": {"type": "transition", "transitionId": "where_to_start_to_closing", "echoes": [{"source": "no_big_bang_callout", "opacity": 0.06}, {"source": "sock_metaphor", "opacity": 0.05}], "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
 };
 
 export const WhereToStartSection: React.FC = () => {
@@ -64,12 +63,6 @@ export const WhereToStartSection: React.FC = () => {
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
                   <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
-            ) : visualMedia?.defaultSrc ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

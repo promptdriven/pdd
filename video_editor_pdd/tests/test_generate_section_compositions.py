@@ -3791,7 +3791,6 @@ class TestDigitPrefixedIdentifiers:
         assert '"part1_economics:12_developer_darning_split": { leftSrc: "veo/developer_cursor_edit.mp4"' in root
         assert 'rightSrc: "veo/grandmother_darning_lamplight.mp4"' in root
         assert '"mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4"' in root
-        assert '"revealSrc": "veo/grandmother_darning_lamplight.mp4"' in root
 
     def test_generate_root_tsx_registers_fallback_preview_for_manifest_component_without_import(self, tmp_path):
         project_dir = tmp_path
@@ -4635,6 +4634,243 @@ class TestVisualMediaManifestContextualClipResolution:
 
         assert manifest["12_developer_darning_split"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
         assert manifest["12_developer_darning_split"]["rightSrc"] == "veo/grandmother_darning_lamplight.mp4"
+
+    def test_does_not_treat_semantic_split_content_labels_as_media_sources(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part3_mold_three_parts"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "context_window_cluttered.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "context_window_clean.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "15_context_window_comparison.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "split_screen",
+                            "leftPanel": {
+                                "header": "RAW CODE",
+                                "content": "context_window_cluttered",
+                                "tokenCount": "~15,000",
+                            },
+                            "rightPanel": {
+                                "header": "PROMPT",
+                                "content": "context_window_clean",
+                                "tokenCount": "~2,500",
+                            },
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "part3_mold_three_parts",
+                "specDir": "part3_mold_three_parts",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert "15_context_window_comparison" not in manifest
+
+    def test_transition_echo_sources_do_not_resolve_media_aliases(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "where_to_start"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "sock_discard_closing.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "07_transition_to_closing.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "transition",
+                            "transitionId": "where_to_start_to_closing",
+                            "echoes": [
+                                {"source": "no_big_bang_callout", "opacity": 0.06},
+                                {"source": "sock_metaphor", "opacity": 0.05},
+                            ],
+                            "backgroundColor": "#0A0F1A",
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        media_manifest = build_visual_media_manifest(
+            {
+                "id": "where_to_start",
+                "specDir": "where_to_start",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+        )
+        contract_manifest = build_visual_contract_manifest(
+            [
+                {
+                    "id": "where_to_start",
+                    "specDir": "where_to_start",
+                    "durationSeconds": 8,
+                    "offsetSeconds": 0,
+                    "compositions": [],
+                }
+            ],
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        assert "07_transition_to_closing" not in media_manifest
+        visual = contract_manifest["sections"][0]["visuals"][0]
+        assert visual["id"] == "07_transition_to_closing"
+        assert visual["renderMode"] == "component"
+
+    def test_contract_first_split_with_media_aliases_stays_component_in_visual_contract_manifest(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "grandmother_darning_lamplight.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "12_developer_darning_split.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "split_screen",
+                            "leftPanel": {
+                                "content": "developer_cursor_coding",
+                                "label": "CURSOR",
+                            },
+                            "rightPanel": {
+                                "content": "grandmother_darning_expert",
+                                "label": "DARNING NEEDLE",
+                            },
+                            "embeddedVeoClips": [
+                                "developer_cursor_coding",
+                                "grandmother_darning_expert",
+                            ],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_contract_manifest(
+            [
+                {
+                    "id": "part1_economics",
+                    "specDir": "part1_economics",
+                    "durationSeconds": 8,
+                    "offsetSeconds": 0,
+                    "compositions": [],
+                }
+            ],
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        visual = manifest["sections"][0]["visuals"][0]
+        assert visual["mediaAliases"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
+        assert visual["mediaAliases"]["rightSrc"] == "veo/grandmother_darning_lamplight.mp4"
+        assert visual["renderMode"] == "component"
+
+    def test_animated_diagram_file_metadata_does_not_force_raw_media_render_mode(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "part3_mold_three_parts"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "defect_fix_the_mold.mp4").write_text("stub", encoding="utf-8")
+
+        (specs_dir / "09_bug_fork_diagram.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "animated_diagram",
+                            "diagramId": "bug_fork",
+                            "root": {"label": "Bug found", "color": "#EF4444"},
+                            "branches": [
+                                {
+                                    "id": "code_bug",
+                                    "label": "Code bug",
+                                    "file": "test_user_parser.py",
+                                },
+                                {
+                                    "id": "prompt_defect",
+                                    "label": "Prompt defect",
+                                    "file": "user_parser.prompt",
+                                },
+                            ],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_contract_manifest(
+            [
+                {
+                    "id": "part3_mold_three_parts",
+                    "specDir": "part3_mold_three_parts",
+                    "durationSeconds": 8,
+                    "offsetSeconds": 0,
+                    "compositions": [],
+                }
+            ],
+            str(project_dir),
+            str(remotion_public),
+        )
+
+        visual = manifest["sections"][0]["visuals"][0]
+        assert visual["mediaAliases"] == {}
+        assert visual["renderMode"] == "component"
 
 
 class TestWrapperTemplateComponentMediaFiltering:

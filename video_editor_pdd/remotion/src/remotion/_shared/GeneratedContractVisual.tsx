@@ -1080,6 +1080,7 @@ const SplitVisual: React.FC<{
   width: number;
   height: number;
 }> = ({ data, width, height }) => {
+  const frame = useCurrentFrame();
   const left = asRecord(data.leftPanel) ?? asRecord(data.left) ?? {};
   const right = asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
   const leftSrc = useVisualMediaAssetSrc("leftSrc");
@@ -1091,16 +1092,29 @@ const SplitVisual: React.FC<{
     accent: string,
     src: string | null
   ) => {
-    const header = asString(panel.header) ?? asString(panel.label) ?? "Panel";
+    const rawLabel = asString(panel.label);
+    const labelLooksLikeHeader =
+      Boolean(rawLabel) &&
+      rawLabel === rawLabel?.toUpperCase() &&
+      rawLabel.length <= 24;
+    const header = asString(panel.header) ?? (labelLooksLikeHeader ? rawLabel : null);
     const headerColor = asString(panel.headerColor) ?? accent;
     const caption =
       asString(panel.caption) ??
-      asString(panel.content) ??
-      asString(panel.thematicRole) ??
-      "Rendered from visual contract";
+      asString(panel.subLabel) ??
+      asString(panel.summary) ??
+      (!labelLooksLikeHeader ? rawLabel : null);
     const tokenCount = panel.tokenCount;
     const scope = asString(panel.scope);
     const codeComments = asStringArray(panel.codeComments);
+    const aura = asRecord(panel.aura);
+    const revealHint = asString(panel.zoomOutReveals);
+    const panelScale = revealHint
+      ? interpolate(frame, [0, 180], [1.14, 0.88], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        })
+      : 1;
     const steps = Array.isArray(panel.steps)
       ? panel.steps.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
@@ -1124,6 +1138,8 @@ const SplitVisual: React.FC<{
               height: "100%",
               objectFit: "cover",
               opacity: 0.88,
+              transform: `scale(${panelScale})`,
+              transformOrigin: "center center",
             }}
           />
         ) : (
@@ -1131,7 +1147,9 @@ const SplitVisual: React.FC<{
             style={{
               width: "100%",
               height: "100%",
-              background: `linear-gradient(135deg, ${accent}22, rgba(15, 23, 42, 0.92))`,
+              background: `linear-gradient(135deg, ${accent}2b, rgba(15, 23, 42, 0.96))`,
+              transform: `scale(${panelScale})`,
+              transformOrigin: "center center",
             }}
           />
         )}
@@ -1143,21 +1161,40 @@ const SplitVisual: React.FC<{
               "linear-gradient(180deg, rgba(2, 6, 23, 0.12) 0%, rgba(2, 6, 23, 0.28) 35%, rgba(2, 6, 23, 0.72) 100%)",
           }}
         />
-        <div
-          style={{
-            position: "absolute",
-            left: 30,
-            right: 30,
-            top: 28,
-            color: headerColor,
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 24,
-            fontWeight: 700,
-            letterSpacing: 1.6,
-          }}
-        >
-          {header}
-        </div>
+        {aura ? (
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              width: 260,
+              height: 260,
+              borderRadius: 999,
+              transform: "translate(-50%, -50%)",
+              boxShadow: `0 0 120px ${asString(aura.color) ?? accent}66`,
+              border: `2px solid ${asString(aura.color) ?? accent}55`,
+              opacity: 0.42,
+              pointerEvents: "none",
+            }}
+          />
+        ) : null}
+        {header ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 30,
+              right: 30,
+              top: 28,
+              color: headerColor,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 24,
+              fontWeight: 700,
+              letterSpacing: 1.6,
+            }}
+          >
+            {header}
+          </div>
+        ) : null}
         <div
           style={{
             position: "absolute",
@@ -1202,17 +1239,19 @@ const SplitVisual: React.FC<{
               ))}
             </div>
           ) : null}
-          <div
-            style={{
-            color: "#F8FAFC",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 26,
-            fontWeight: 600,
-            lineHeight: 1.2,
-          }}
-        >
-          {caption}
-          </div>
+          {caption ? (
+            <div
+              style={{
+                color: "#F8FAFC",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 26,
+                fontWeight: 600,
+                lineHeight: 1.2,
+              }}
+            >
+              {caption}
+            </div>
+          ) : null}
           {typeof tokenCount === "number" || typeof tokenCount === "string" ? (
             <div
               style={{
@@ -2444,91 +2483,76 @@ const AnimatedDiagramVisual: React.FC<{
     const moduleCount = Math.max(8, asNumber(data.moduleCount) ?? 20);
     const overflowCount = Math.max(0, asNumber(data.overflowCount) ?? 0);
     const ratio = asString(data.compressionRatio) ?? "5-10×";
+    const visiblePromptBlocks = Math.max(8, moduleCount - overflowCount);
     body = (
       <div
         style={{
-          width: width * 0.84,
-          display: "grid",
-          gridTemplateColumns: "1.05fr 0.95fr",
-          gap: 24,
-          alignItems: "center",
+          width: width * 0.76,
+          minHeight: height * 0.62,
+          borderRadius: 32,
+          backgroundColor: subtleSurface,
+          border: subtleBorder,
+          padding: "44px 52px 42px",
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
         }}
       >
         <div
           style={{
-            borderRadius: 28,
-            backgroundColor: subtleSurface,
-            border: subtleBorder,
-            padding: "28px 30px",
-            display: "grid",
-            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-            gap: 14,
-            minHeight: 420,
+            alignSelf: "center",
+            color: "#94A3B8",
+            fontSize: 20,
+            fontWeight: 700,
+            letterSpacing: 1.6,
+            textTransform: "uppercase",
+            marginBottom: 18,
           }}
         >
-          {Array.from({ length: moduleCount }).map((_, index) => (
-            <div
-              key={`module-${index}`}
-              style={{
-                height: 82,
-                borderRadius: 16,
-                backgroundColor: index < moduleCount - overflowCount ? "rgba(74, 144, 217, 0.16)" : "rgba(239, 68, 68, 0.16)",
-                border: `1px solid ${index < moduleCount - overflowCount ? "rgba(74, 144, 217, 0.44)" : "rgba(239, 68, 68, 0.44)"}`,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: index < moduleCount - overflowCount ? "#BFDBFE" : "#FCA5A5",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 14,
-              }}
-            >
-              {`mod_${index + 1}`}
-            </div>
-          ))}
+          Context Window
         </div>
         <div
           style={{
+            width: Math.min(width * 0.54, 760),
+            maxWidth: "100%",
+            height: Math.min(height * 0.46, 500),
             borderRadius: 28,
-            backgroundColor: subtleSurface,
-            border: subtleBorder,
-            padding: "28px 30px",
-            minHeight: 420,
+            border: "2px solid rgba(74, 144, 217, 0.65)",
+            boxShadow: "0 0 0 1px rgba(74, 144, 217, 0.18) inset",
+            padding: "22px 24px 64px",
+            display: "grid",
+            gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+            gap: 12,
             position: "relative",
           }}
         >
-          <div
-            style={{
-              width: asNumber(asRecord(data.contextWindow)?.width) ?? 600,
-              maxWidth: "100%",
-              height: asNumber(asRecord(data.contextWindow)?.height) ?? 500,
-              maxHeight: 320,
-              margin: "0 auto",
-              borderRadius: 24,
-              border: "2px solid rgba(74, 144, 217, 0.65)",
-              boxShadow: "0 0 0 1px rgba(74, 144, 217, 0.18) inset",
-              padding: 22,
-              display: "grid",
-              gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-              gap: 10,
-            }}
-          >
-            {Array.from({ length: Math.max(8, moduleCount - overflowCount) }).map((_, index) => (
+          {Array.from({ length: moduleCount }).map((_, index) => {
+            const visible = index < visiblePromptBlocks;
+            return (
               <div
                 key={`prompt-${index}`}
                 style={{
-                  height: 34,
+                  height: 42,
                   borderRadius: 12,
-                  backgroundColor: "rgba(45, 212, 191, 0.18)",
-                  border: "1px solid rgba(45, 212, 191, 0.4)",
+                  backgroundColor: visible
+                    ? "rgba(45, 212, 191, 0.18)"
+                    : "rgba(239, 68, 68, 0.14)",
+                  border: `1px solid ${
+                    visible
+                      ? "rgba(45, 212, 191, 0.4)"
+                      : "rgba(239, 68, 68, 0.36)"
+                  }`,
+                  opacity: visible ? 1 : 0.28,
                 }}
               />
-            ))}
-          </div>
+            );
+          })}
           <div
             style={{
               position: "absolute",
-              right: 34,
-              top: 34,
+              right: 28,
+              top: 22,
               padding: "10px 16px",
               borderRadius: 999,
               backgroundColor: "rgba(45, 212, 191, 0.14)",
@@ -2542,15 +2566,198 @@ const AnimatedDiagramVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              left: 34,
-              bottom: 30,
+              left: 24,
+              bottom: 18,
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                color: "#4ADE80",
+                fontSize: 28,
+                fontWeight: 800,
+              }}
+            >
+              ✓
+            </div>
+            <div
+              style={{
+                color: "#4ADE80",
+                fontSize: 20,
+                fontWeight: 700,
+              }}
+            >
+              Headroom
+            </div>
+          </div>
+        </div>
+        <div
+          style={{
+            alignSelf: "center",
+            marginTop: 26,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+            alignItems: "center",
+          }}
+        >
+          <div
+            style={{
               color: "#E2E8F0",
-              fontSize: 24,
+              fontSize: 26,
               fontWeight: 700,
             }}
           >
             {asString(data.resultLabel) ?? "Same system. More fits."}
           </div>
+          <div
+            style={{
+              color: "#94A3B8",
+              fontSize: 18,
+              fontWeight: 600,
+            }}
+          >
+            {`${visiblePromptBlocks}/${moduleCount} modules now fit inside the same window`}
+          </div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "bug_fork") {
+    const root = asRecord(data.root);
+    const convergence = asRecord(data.convergence);
+    body = (
+      <div
+        style={{
+          width: width * 0.82,
+          minHeight: height * 0.56,
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "14px 22px",
+            borderRadius: 999,
+            backgroundColor: "rgba(239, 68, 68, 0.16)",
+            border: "1px solid rgba(239, 68, 68, 0.4)",
+            color: asString(root?.color) ?? "#EF4444",
+            fontSize: 24,
+            fontWeight: 700,
+          }}
+        >
+          {asString(root?.label) ?? "Bug found"}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            top: 88,
+            left: "50%",
+            width: 2,
+            height: 70,
+            transform: "translateX(-50%)",
+            backgroundColor: "rgba(148, 163, 184, 0.38)",
+          }}
+        />
+        <div
+          style={{
+            width: "100%",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 28,
+            alignItems: "start",
+            marginTop: 120,
+          }}
+        >
+          {branches.slice(0, 2).map((branch, index) => {
+            const color = asString(branch.color) ?? (index === 0 ? "#D9944A" : "#2DD4BF");
+            return (
+              <div
+                key={`branch-${index}`}
+                style={{
+                  borderRadius: 28,
+                  backgroundColor: subtleSurface,
+                  border: `1px solid ${color}55`,
+                  padding: "24px 26px",
+                  minHeight: 260,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                }}
+              >
+                <div style={{ color, fontSize: 20, fontWeight: 700 }}>
+                  {asString(branch.label) ?? `Branch ${index + 1}`}
+                </div>
+                <div
+                  style={{
+                    color: "#94A3B8",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 16,
+                  }}
+                >
+                  {asString(branch.file) ?? ""}
+                </div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: "#E2E8F0",
+                    fontSize: 22,
+                    fontWeight: 600,
+                  }}
+                >
+                  {asString(branch.action) ?? "fix_specification"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: width * 0.25,
+            top: height * 0.52,
+            width: width * 0.25,
+            height: 2,
+            backgroundColor: "rgba(148, 163, 184, 0.32)",
+            transform: "rotate(18deg)",
+            transformOrigin: "left center",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            right: width * 0.25,
+            top: height * 0.52,
+            width: width * 0.25,
+            height: 2,
+            backgroundColor: "rgba(148, 163, 184, 0.32)",
+            transform: "rotate(-18deg)",
+            transformOrigin: "right center",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            bottom: 26,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "14px 22px",
+            borderRadius: 999,
+            backgroundColor: "rgba(74, 222, 128, 0.14)",
+            border: "1px solid rgba(74, 222, 128, 0.42)",
+            color: asString(convergence?.color) ?? "#4ADE80",
+            fontSize: 24,
+            fontWeight: 700,
+          }}
+        >
+          {asString(convergence?.label) ?? "Regenerate"}
         </div>
       </div>
     );

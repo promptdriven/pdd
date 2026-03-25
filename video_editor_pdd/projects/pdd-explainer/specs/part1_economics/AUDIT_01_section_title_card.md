@@ -1,18 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at frame 104/120, within the hold phase (90-120). Key observations:
-
-1. **PART 1 label**: Present, centered, correct muted color and letter-spacing. A horizontal rule appears above 'PART 1' rather than between the title lines — this is a layout discrepancy vs. the spec which calls for the rule centered between 'THE ECONOMICS' and 'OF DARNING' at y:505.
-
-2. **THE ECONOMICS**: Present, large bold white text, horizontally centered. Reads correctly.
-
-3. **OF DARNING**: Present, large bold white text, centered below 'THE ECONOMICS'. The spec calls for a 15px offset-right, but in the frame 'OF DARNING' appears visually centered (no noticeable rightward offset). This is a subtle discrepancy.
-
-4. **Horizontal rule**: Visible but placed above 'PART 1' rather than between the two title lines as specified. The spec says the rule should be at y:505 centered between the words. In the render it sits at approximately y:345, above the section label.
-
-5. **Background**: Dark navy-black, correct. No visible blueprint grid lines, though at 0.05 opacity they would be extremely faint and may not be discernible in the compressed PNG.
-
-6. **Ghost cost curves**: The spec calls for two faint quadratic bezier cost curves crossing near center-right at very low opacity (0.04). Instead, the frame shows large circular/arc shapes in the upper-right quadrant. These are visually different from the specified 'intersecting cost curves' — they read as overlapping circles rather than descending/ascending cost curves with a crossing point.
-
-7. **Background dark tone and overall composition**: Correct deep navy-black, centered text layout reads well.
+The frame is sampled at 87.5% progress (frame 104/120), which is in the final hold phase (frames 90-120). The core title card elements are all present and correctly rendered: 'PART 1' label is visible and centered, 'THE ECONOMICS' and 'OF DARNING' are displayed in large bold white text and centered. The background is the expected deep navy-black. A horizontal rule is visible above 'PART 1'. However, there are two discrepancies: (1) The background ghost element in the upper-right appears as overlapping circles/arcs rather than the specified intersecting cost curves (one descending, one ascending quadratic bezier). The spec calls for two crossing curves with an orange (#D9944A) descending curve and a blue (#4A90D9) ascending curve at very low opacity (0.04), but the render shows what looks like circular/spherical shapes instead of cost curves. (2) The horizontal rule appears above the 'PART 1' label rather than between 'THE ECONOMICS' and 'OF DARNING' at y:505 as specified. The spec places the rule centered between the two title lines, but in the render it appears as a decorative line associated with the 'PART 1' label. The 'OF DARNING' line appears centered rather than offset-right by 15px, but this is within acceptable tolerance for the composition intent.

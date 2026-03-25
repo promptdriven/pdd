@@ -209,6 +209,14 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/codeComments|warningComments|lineCount|terminalCommands|workflow/);
   });
 
+  it("does not leak internal split fallback labels or semantic content ids into rendered panel text", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).not.toMatch(/\?\?\s*["']Panel["']/);
+    expect(source).not.toMatch(/asString\(panel\.content\)/);
+    expect(source).not.toMatch(/asString\(panel\.thematicRole\)/);
+  });
+
   it("supports contract-driven chart variants beyond the original line-series happy path", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
@@ -222,6 +230,7 @@ describe("shared generated contract renderer", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
     expect(source).toMatch(/diagramId === "context_compression"/);
+    expect(source).toMatch(/diagramId === "bug_fork"/);
     expect(source).toMatch(/diagramId === "mold_defect_fix"/);
     expect(source).toMatch(/diagramId === "bug_add_wall"/);
     expect(source).toMatch(/diagramId === "grounding_feedback_loop"/);
