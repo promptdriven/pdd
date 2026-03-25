@@ -83,6 +83,36 @@ Playwright browsers (chromium) may or may not be pre-installed. If you write a P
 2. If installation fails or the dev server isn't running, still output `E2E_FILES_CREATED` with the test path
 3. Prefer self-contained Playwright tests that use `page.route()` to mock API responses rather than requiring a live backend
 
+% API Mocking Best Practices
+
+Before writing Playwright API mocks, read the actual API implementation in source code.
+- Find the real `fetch`/`axios`/API-client call path and read the implementation.
+- Use the exact HTTP method from source code; do not assume REST conventions.
+- Match the real request body shape and response shape from source, not plausible mock data.
+
+Playwright route handlers stack in LIFO order (last registered runs first), so route stacking can silently bypass earlier handlers.
+- Never register two `page.route()` handlers for the same URL pattern.
+- Use one handler per URL pattern and switch behavior by method inside that handler.
+
+Example method-switching pattern:
+```typescript
+await page.route("**/api/boards/**", async (route) => {
+  const method = route.request().method();
+  if (method === "GET") {
+    return route.fulfill({ status: 200, body: JSON.stringify({ boards: [] }) });
+  }
+  if (method === "POST") {
+    return route.fulfill({ status: 500, body: JSON.stringify({ message: "Save failed (500)" }) });
+  }
+  return route.continue();
+});
+```
+
+Trace error messages through catch blocks before writing assertions.
+- Follow thrown errors through catch block handling to the final UI text.
+- Verify exact text against source (for example what `setError` or `setState` receives).
+- Assert the exact UI text from source, not a guessed regex.
+
 % CRITICAL: Discover E2E Test Environment First
 
 Before writing any E2E test, you MUST understand the existing test infrastructure. First, identify the primary language of the repository, then search for language-appropriate configuration files.
