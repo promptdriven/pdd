@@ -166,6 +166,7 @@ class AsyncSyncRunner:
         verbose: bool = False,
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Path]] = None,
+        initial_cost: float = 0.0,
     ):
         self.basenames = basenames
         self.dep_graph = dep_graph
@@ -176,6 +177,7 @@ class AsyncSyncRunner:
         self.issue_url = issue_url
         self.project_root = Path.cwd()
         self.module_cwds = module_cwds or {}
+        self.initial_cost = initial_cost
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in basenames
@@ -304,7 +306,7 @@ class AsyncSyncRunner:
             Tuple of (all_success, summary_message, total_cost).
         """
         if not self.basenames:
-            return True, "No modules to sync", 0.0
+            return True, "No modules to sync", self.initial_cost
 
         if self._resumed_modules and not self.quiet:
             console.print(
@@ -389,7 +391,7 @@ class AsyncSyncRunner:
         self._update_github_comment()
 
         # Build summary
-        total_cost = sum(s.cost for s in self.module_states.values())
+        total_cost = self.initial_cost + sum(s.cost for s in self.module_states.values())
         succeeded = [b for b, s in self.module_states.items() if s.status == "success"]
         failed = [b for b, s in self.module_states.items() if s.status == "failed"]
         pending = [b for b, s in self.module_states.items() if s.status == "pending"]
@@ -755,7 +757,7 @@ class AsyncSyncRunner:
             "|--------|--------|-------|----------|------|",
         ]
 
-        total_cost = 0.0
+        total_cost = self.initial_cost
         completed = 0
         total = len(self.basenames)
 

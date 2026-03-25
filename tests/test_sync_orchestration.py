@@ -1741,7 +1741,9 @@ class TestCoverageTargetSelection:
         assert report.tests_passed == 1
         assert report.tests_failed == 0
         assert report.coverage == 100.0
-        assert seen_cov_args["value"] == ["--cov=pdd.my_module"]
+        # Dotted module path is collapsed to top-level package to avoid
+        # litellm/pydantic crash under coverage's import hook.
+        assert seen_cov_args["value"] == ["--cov=pdd"]
 
     def test_execute_tests_prefers_stem_when_test_imports_stem_even_if_packaged(self, tmp_path, monkeypatch):
         """
@@ -1799,6 +1801,72 @@ class TestCoverageTargetSelection:
         assert report.tests_failed == 0
         assert report.coverage == 100.0
         assert seen_cov_args["value"] == ["--cov=admin_get_users"]
+
+    def test_execute_tests_uses_package_for_dotted_cov_target(self, tmp_path, monkeypatch):
+        """
+        Regression test: litellm>=1.80.11 crashes under pytest-cov when the
+        --cov target is a dotted submodule (e.g. --cov=pdd.my_module). The
+        crash is a KeyError: 'pydantic.root_model' during collection because
+        coverage's import hook triggers litellm's pydantic RootModel generics
+        before sys.modules is fully populated.
+
+        Workaround: use the top-level package (e.g. --cov=pdd) instead of the
+        dotted module path. Coverage still reports per-file data.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        package_dir = tmp_path / "pdd"
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "__init__.py").write_text("", encoding="utf-8")
+
+        code_file = package_dir / "my_module.py"
+        code_file.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+
+        test_file = tmp_path / "tests" / "test_my_module.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "from pdd.my_module import add\ndef test_add():\n    assert add(1, 2) == 3\n",
+            encoding="utf-8",
+        )
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            # Simulate --cov=pdd output: per-file lines + TOTAL
+            stdout = (
+                "pdd/__init__.py           10     10     0%\n"
+                "pdd/my_module.py           4      0   100%\n"
+                "pdd/other.py              20     20     0%\n"
+                "TOTAL                     34     30    12%\n"
+                "1 passed in 0.01s\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="my_module",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        # Must use top-level package, NOT dotted module path
+        assert seen_cov_args["value"] == ["--cov=pdd"], (
+            f"Expected --cov=pdd (package) to avoid litellm/pydantic crash, "
+            f"got {seen_cov_args['value']}"
+        )
+        # Must extract per-module coverage (100%), not TOTAL (12%)
+        assert report.coverage == 100.0, (
+            f"Expected per-module coverage 100% for pdd/my_module.py, "
+            f"got {report.coverage}% (likely picked up TOTAL line instead)"
+        )
 
 
 # --- Run Report Update After Fix Regression Tests ---
@@ -1995,6 +2063,75 @@ class TestRunReportUpdateAfterFix:
             f"Expected exactly 1 fix operation, got {result['operations_completed'].count('fix')}. "
             "If more than 1, the infinite loop prevention may not be working."
         )
+
+
+    def test_fix_operation_runs_real_coverage_in_agentic_mode_python(self, orchestration_fixture, tmp_path):
+        """
+        Regression test: In agentic_mode=True for Python, the post-fix path
+        wrote a synthetic RunReport with coverage=0.0 instead of running real
+        pytest with coverage. This caused the coverage gate to fail even though
+        tests pass with 88%+ coverage.
+
+        Commit 86fe07dc1 fixed the test and test_extend operations but missed
+        the post-fix, post-crash, and post-verify synthetic reports.
+
+        The fix: for Python, always use _execute_tests_and_create_run_report
+        even in agentic mode, since Python has working coverage tools.
+        """
+        import os
+
+        os.chdir(tmp_path)
+
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file,
+        }
+
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests, \
+             patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report:
+            result = sync_orchestration(
+                basename="calc", language="python", agentic_mode=True
+            )
+
+        # In agentic mode for Python, post-fix must use real test execution,
+        # not a synthetic report with coverage=0.0
+        assert mock_exec_tests.called, (
+            "REGRESSION: post-fix path wrote synthetic coverage=0.0 report "
+            "instead of running _execute_tests_and_create_run_report for Python "
+            "in agentic mode. This causes the coverage gate to always fail."
+        )
+
+        # Verify no synthetic coverage=0.0 report was written for the fix operation
+        for call in mock_save_report.call_args_list:
+            report_data = call[0][0] if call[0] else call[1].get('report', {})
+            if isinstance(report_data, dict) and report_data.get('coverage') == 0.0:
+                assert report_data.get('tests_passed') != 1 or report_data.get('exit_code') != 0, (
+                    "REGRESSION: synthetic RunReport(tests_passed=1, coverage=0.0) "
+                    "was written for Python in agentic mode — this clobbers real coverage"
+                )
 
 
 # --- Multi-Language Test Execution Tests ---

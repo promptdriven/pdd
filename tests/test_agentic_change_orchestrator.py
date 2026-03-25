@@ -635,6 +635,68 @@ def test_sync_order_context_populated_before_step12(mock_dependencies, temp_cwd)
     assert "{sync_order_script}" not in instruction, "sync_order_script not substituted in context"
     assert "{sync_order_list}" not in instruction, "sync_order_list not substituted in context"
 
+def test_sync_order_detects_pdd_prompts_prefix(mock_dependencies, temp_cwd):
+    """
+    Test that sync order detection works when files are reported with
+    'pdd/prompts/' prefix (canonical path) instead of 'prompts/' (symlink).
+
+    Git reports files via real paths (pdd/prompts/...) not symlink paths
+    (prompts/...), so the filter must accept both prefixes.
+
+    Regression test for issue #836 where pdd-sync failed because the
+    startswith("prompts/") check missed pdd/prompts/ paths.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    # Step 9 reports modified prompt files with pdd/prompts/ prefix
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: pdd/prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+    mock_template_loader.return_value = "SYNC_SCRIPT:{sync_order_script}:SYNC_LIST:{sync_order_list}:END"
+
+    # Create worktree directory with prompt files
+    issue_number = 998
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+    prompts_dir = worktree_path / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
+    # Mock _setup_worktree to return the pre-created path without deleting it
+    with patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree_path, None)):
+        run_agentic_change_orchestrator(
+            issue_url="http://test",
+            issue_content="Test",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=issue_number,
+            issue_author="a",
+            issue_title="T",
+            cwd=temp_cwd,
+        )
+
+    # Find the step 13 call and verify sync_order was populated (not defaults)
+    step13_calls = [c for c in mock_run.call_args_list if c.kwargs.get("label") == "step13"]
+    assert step13_calls, "step13 should have been called"
+    instruction = step13_calls[-1].kwargs["instruction"]
+    assert "{sync_order_script}" not in instruction, "sync_order_script not substituted in context"
+    assert "{sync_order_list}" not in instruction, "sync_order_list not substituted in context"
+    # The sync_order_list should NOT be the default "No modules to sync"
+    assert "No modules to sync" not in instruction, (
+        "pdd/prompts/ prefix was not recognized — sync order was not generated"
+    )
+
+
 def test_sync_order_defaults_when_no_prompts_modified(mock_dependencies, temp_cwd):
     """
     Test sync_order has default values when no prompt files are modified.
@@ -731,9 +793,9 @@ def test_sync_order_script_written_to_cwd(mock_dependencies, temp_cwd):
             cwd=temp_cwd,
         )
 
-    # sync_order.sh should exist in the user's CWD
-    user_script = temp_cwd / "sync_order.sh"
-    assert user_script.exists(), "sync_order.sh not written to user's CWD"
+    # Change-specific sync script should be at .pdd/sync_order_change.sh (not sync_order.sh)
+    user_script = temp_cwd / ".pdd" / "sync_order_change.sh"
+    assert user_script.exists(), "sync_order_change.sh not written to user's .pdd/"
     content = user_script.read_text()
     assert "pdd sync" in content
     # Should NOT contain absolute temp directory paths
@@ -1105,8 +1167,8 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     mocks["gen_script"].assert_called()
 
 
-def test_sync_order_sh_included_in_changed_files(mock_dependencies_dict, tmp_path):
-    """sync_order.sh must appear in changed_files when sync order is generated."""
+def test_sync_order_sh_not_included_in_changed_files(mock_dependencies_dict, tmp_path):
+    """sync_order.sh must NOT appear in changed_files — committing it clobbers the repo-wide script (#571)."""
     mocks = mock_dependencies_dict
 
     worktree_dir = tmp_path / "wt"
@@ -1132,7 +1194,7 @@ def test_sync_order_sh_included_in_changed_files(mock_dependencies_dict, tmp_pat
         issue_title="Fix", cwd=tmp_path, quiet=True
     )
 
-    assert "sync_order.sh" in files
+    assert "sync_order.sh" not in files
 
 
 # -----------------------------------------------------------------------------
@@ -3214,6 +3276,117 @@ def test_fetch_issue_updated_at_called_on_clarification(mock_dependencies, temp_
         assert saved_state["issue_updated_at"] == "2026-03-08T12:00:00Z", (
             "Bug #784: issue_updated_at should be refreshed after clarification"
         )
+
+
+# -----------------------------------------------------------------------------
+# Bug #571: sync_order.sh clobber prevention
+# -----------------------------------------------------------------------------
+
+def test_sync_order_does_not_clobber_existing_sync_order_sh(mock_dependencies, temp_cwd):
+    """
+    Bug #571: The orchestrator must NOT overwrite an existing sync_order.sh in
+    the user's CWD. The repo-wide sync_order.sh may contain the full module list
+    (e.g. 94 modules). Writing only affected modules (e.g. 1 module) into that
+    file destroys the original.
+
+    The fix: write to .pdd/sync_order_change.sh instead.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    issue_number = 571
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+
+    # Pre-populate a repo-wide sync_order.sh with 94 modules
+    original_content = "#!/bin/bash\n# Full repo sync order (94 modules)\npdd sync module_1\npdd sync module_2\n"
+    existing_script = temp_cwd / "sync_order.sh"
+    existing_script.write_text(original_content, encoding="utf-8")
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/foo_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+        return (True, "Default", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+    mock_template_loader.return_value = "Mocked Prompt Template"
+
+    def mock_setup_worktree(cwd, issue_num, quiet):
+        prompts_dir = worktree_path / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        (prompts_dir / "foo_python.prompt").write_text(
+            "<include>prompts/bar_python.prompt</include>", encoding="utf-8"
+        )
+        (prompts_dir / "bar_python.prompt").write_text("% bar module", encoding="utf-8")
+        return worktree_path, None
+
+    with patch("pdd.agentic_change_orchestrator._setup_worktree", side_effect=mock_setup_worktree):
+        run_agentic_change_orchestrator(
+            issue_url="http://test",
+            issue_content="Test",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=issue_number,
+            issue_author="a",
+            issue_title="T",
+            cwd=temp_cwd,
+        )
+
+    # The original sync_order.sh must be UNTOUCHED
+    assert existing_script.read_text(encoding="utf-8") == original_content, (
+        "Bug #571: orchestrator clobbered the repo-wide sync_order.sh with affected-only modules"
+    )
+
+    # The change-specific script should be at .pdd/sync_order_change.sh
+    change_script = temp_cwd / ".pdd" / "sync_order_change.sh"
+    assert change_script.exists(), (
+        "Bug #571: change-specific sync script should be at .pdd/sync_order_change.sh"
+    )
+    change_content = change_script.read_text(encoding="utf-8")
+    assert "pdd sync" in change_content
+
+
+def test_sync_order_sh_not_staged_into_pr(mock_dependencies_dict, tmp_path):
+    """
+    Bug #571: sync_order.sh must NOT appear in the PR's changed_files list.
+    Committing it into the PR replaces the repo-wide script with an
+    affected-only stub.
+    """
+    mocks = mock_dependencies_dict
+
+    worktree_dir = tmp_path / "wt"
+    prompts_dir = worktree_dir / "prompts"
+    prompts_dir.mkdir(parents=True)
+    (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
+    existing_state = {
+        "last_completed_step": 12,
+        "step_outputs": {str(i): "out" for i in range(1, 13)},
+        "worktree_path": str(worktree_dir)
+    }
+    existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
+    mocks["load"].return_value = (existing_state, 123)
+
+    mocks["get_affected"].return_value = ["foo", "bar"]
+    mocks["gen_script"].return_value = "echo sync"
+    mocks["run"].return_value = (True, "PR: https://github.com/o/r/pull/1", 0.1, "gpt-4")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="http://issue", issue_content="Fix", repo_owner="o",
+        repo_name="r", issue_number=1, issue_author="me",
+        issue_title="Fix", cwd=tmp_path, quiet=True
+    )
+
+    assert "sync_order.sh" not in files, (
+        "Bug #571: sync_order.sh must not be staged into the PR — it clobbers the repo-wide script"
+    )
 
 
 # -----------------------------------------------------------------------------

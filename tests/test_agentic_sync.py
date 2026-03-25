@@ -323,7 +323,8 @@ class TestRunAgenticSync:
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
-        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        # Runner now includes initial_cost (0.05) + per-module (0.10) = 0.15
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.15)
         mock_runner_cls.return_value = mock_runner
 
         success, msg, cost, model = run_agentic_sync(
@@ -391,6 +392,54 @@ class TestRunAgenticSync:
         # Verify stripped basenames were passed to AsyncSyncRunner
         runner_kwargs = mock_runner_cls.call_args[1]
         assert sorted(runner_kwargs["basenames"]) == ["api_orders", "crm_models"]
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_initial_cost_passed_to_runner(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_runner_cls,
+    ):
+        """Issue #745: LLM module analysis cost must be passed as initial_cost to AsyncSyncRunner."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        # LLM module identification costs 0.07
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.07,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
+
+        # Verify initial_cost was passed to AsyncSyncRunner constructor
+        runner_kwargs = mock_runner_cls.call_args[1]
+        assert "initial_cost" in runner_kwargs
+        assert runner_kwargs["initial_cost"] == pytest.approx(0.07)
 
 
 # ---------------------------------------------------------------------------
@@ -1134,6 +1183,84 @@ class TestFilterInvalidBasenames:
         valid, invalid = _filter_invalid_basenames(modules, architecture)
 
         assert valid == ["mod_b", "mod_a", "mod_c"]
+
+    def test_accepts_path_qualified_basenames_from_branch_diff(self):
+        """Bug #571: _detect_modules_from_branch_diff returns basenames with
+        directory prefixes like 'frontend/app/settings/github/page', but
+        architecture.json only has 'page' (from 'page_TypescriptReact.prompt').
+        The filter must accept path-qualified basenames when their tail matches."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+            {"filename": "BoardConfigPanel_TypescriptReact.prompt"},
+        ]
+        modules = [
+            "frontend/app/settings/github/page",
+            "frontend/components/github/BoardConfigPanel",
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "frontend/app/settings/github/page" in valid, (
+            "Bug #571: path-qualified 'page' rejected despite 'page' being a known basename"
+        )
+        assert "frontend/components/github/BoardConfigPanel" in valid
+        assert invalid == []
+
+    def test_rejects_path_qualified_basenames_that_dont_match(self):
+        """Path-qualified basenames where the tail doesn't match should still be rejected."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+        ]
+        modules = ["frontend/app/settings/github/nonexistent"]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert valid == []
+        assert "frontend/app/settings/github/nonexistent" in invalid
+
+    def test_mixed_exact_and_path_qualified_basenames(self):
+        """Both exact basenames and path-qualified basenames should be accepted."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+            {"filename": "agentic_bug_orchestrator_python.prompt"},
+        ]
+        modules = [
+            "agentic_bug_orchestrator",                    # exact match
+            "frontend/app/settings/github/page",           # path-qualified
+            "hallucinated_module",                          # invalid
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "agentic_bug_orchestrator" in valid
+        assert "frontend/app/settings/github/page" in valid
+        assert "hallucinated_module" in invalid
+        assert len(valid) == 2
+        assert len(invalid) == 1
+
+    def test_rejects_ambiguous_tail_match(self):
+        """When multiple architecture entries share the same basename (e.g.
+        commands/auth and server/routes/auth both extract to 'auth'),
+        a path-qualified name like 'commands/auth' must NOT tail-match
+        because it's ambiguous which module it refers to."""
+        architecture = [
+            {"filename": "auth_python.prompt"},   # could be commands/auth
+            {"filename": "auth_python.prompt"},   # could be server/routes/auth
+            {"filename": "cli_python.prompt"},    # unique basename
+        ]
+        modules = [
+            "commands/auth",        # ambiguous — 'auth' appears twice
+            "core/cli",             # unambiguous — 'cli' appears once
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "commands/auth" in invalid, (
+            "Ambiguous tail-match should be rejected when basename appears multiple times"
+        )
+        assert "core/cli" in valid, (
+            "Unambiguous tail-match should still be accepted"
+        )
 
 
 # ---------------------------------------------------------------------------

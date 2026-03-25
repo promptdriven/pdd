@@ -2327,9 +2327,9 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 2. **Documentation check** - Review repo documentation to determine if this is a bug or user error. Posts comment with findings.
 
-3. **Triage** - Assess if enough information is provided to proceed. Posts comment requesting more info if needed.
+3. **Triage** - Assess if enough information is provided to proceed. If the issue already contains a detailed root cause analysis with file paths, line numbers, and causal explanation, fast-tracks to root cause analysis (skipping API research and reproduction). Posts comment requesting more info if needed.
 
-4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
+4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
 5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Posts comment explaining the root cause.
 
