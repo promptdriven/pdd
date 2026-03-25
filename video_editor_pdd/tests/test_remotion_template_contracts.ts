@@ -263,12 +263,29 @@ describe("shared generated contract renderer", () => {
 
     expect(source).toMatch(/context_window_cluttered/);
     expect(source).toMatch(/context_window_clean/);
+    expect(source).toMatch(/buildContextWindowTokenBlocks/);
+    expect(source).toMatch(/renderInsetTokenBadge/);
     expect(source).toMatch(/dense_code/);
     expect(source).toMatch(/prompt_blocks/);
     expect(source).toMatch(/quoteLine2Color/);
     expect(source).toMatch(/generatedLines/);
     expect(source).toMatch(/deletedLines/);
     expect(source).toMatch(/asRecord\(data\.terminal\)/);
+    expect(source).toMatch(/Every token is author-curated\./);
+    expect(source).toMatch(/No retrieval guessing\. No wasted space\./);
+    expect(source).toMatch(/The entire context window is devoted to your problem\./);
+  });
+
+  it("supports media-backed split reveals and element-driven precision panels from structured contracts", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/veo_clip_with_aura/);
+    expect(source).toMatch(/veo_clip_then_zoom_out/);
+    expect(source).toMatch(/coordinate_grid/);
+    expect(source).toMatch(/printer_nozzle/);
+    expect(source).toMatch(/mold_walls/);
+    expect(source).toMatch(/liquid_flow/);
+    expect(source).toMatch(/wall_glow_on_impact/);
   });
 
   it("does not leak internal split fallback labels or semantic content ids into rendered panel text", () => {
@@ -297,6 +314,40 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/diagramId === "bug_add_wall"/);
     expect(source).toMatch(/diagramId === "grounding_feedback_loop"/);
     expect(source).toMatch(/diagramId === "ratchet_timelapse"/);
+  });
+
+  it("supports the remaining high-fidelity morph and mold families from the authored contracts", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/diagramId === "synopsys_pdd_equivalence"/);
+    expect(source).toMatch(/diagramId === "test_walls_illuminate"/);
+    expect(source).toMatch(/chartId === "dissolve_regenerate_loop"/);
+    expect(source).toMatch(/diagramId === "research_annotations"/);
+    expect(source).toMatch(/diagramId === "three_components_table"/);
+    expect(source).toMatch(/Same architecture/);
+    expect(source).toMatch(/Each test is a constraint/);
+    expect(source).toMatch(/The walls aren't optional/);
+    expect(source).toMatch(/The mold is what matters\./);
+    expect(source).toMatch(/pdd generate/);
+  });
+
+  it("positions annotation overlays with chart-linked callout lines instead of stacking every card into a generic grid", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const annotationBlock = extractBlock(source, "const AnnotationVisual", "const TextMorphVisual");
+
+    expect(annotationBlock).toMatch(/chartId === "code_cost_triple_line"/);
+    expect(annotationBlock).toMatch(/targetPositions|annotationPositions/);
+    expect(annotationBlock).toMatch(/callout/);
+    expect(annotationBlock).toMatch(/debt_gap|debt_shading/);
+  });
+
+  it("supports dramatic long-quote cadence and attribution punctuation for minimal quote cards", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const quoteBlock = extractBlock(source, "const QuoteCardVisual", "const TransitionVisual");
+
+    expect(quoteBlock).toMatch(/splitDramaticQuoteLines/);
+    expect(quoteBlock).toMatch(/— \${attribution}|—\\s*\\$\\{attribution\\}/);
+    expect(quoteBlock).toMatch(/fontWeight:\s*index === primaryLines\.length - 1 \? 700 : 400/);
   });
 });
 

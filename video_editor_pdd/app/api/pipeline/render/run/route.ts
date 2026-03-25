@@ -20,6 +20,8 @@ import {
 import type { RenderProgress, SseSend } from "@/lib/types";
 
 const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+const RETRYABLE_PARALLEL_RENDER_ERROR_RE =
+  /\b(delayRender\(\)|write EPIPE|Could not extract frame from compositor|proxy\?src=)\b/i;
 
 /**
  * Update project.json with duration and recalculated offsets
@@ -67,44 +69,85 @@ async function renderSections(
 
   let updateChain: Promise<void> = Promise.resolve();
 
+  const isRetryableParallelRenderError = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    return RETRYABLE_PARALLEL_RENDER_ERROR_RE.test(message);
+  };
+
+  const renderSingleSection = async (section: typeof sectionsToRender[number]) => {
+    const outputPath = path.join(
+      projectDir,
+      "outputs",
+      "sections",
+      `${section.id}.mp4`
+    );
+
+    onLog(`Rendering section "${section.id}"...`);
+
+    await renderSection(
+      section.compositionId,
+      outputPath,
+      (progress: RenderProgress) => {
+        send({
+          type: "section-progress",
+          sectionId: section.id,
+          percent: progress.percent,
+        });
+      }
+    );
+
+    const duration = await getSectionDuration(outputPath);
+
+    updateChain = updateChain.then(() =>
+      updateProjectDurations(section.id, duration)
+    );
+    await updateChain;
+
+    onLog(
+      `Section "${section.id}" rendered. Duration: ${duration.toFixed(2)}s`
+    );
+  };
+
   for (let i = 0; i < sectionsToRender.length; i += maxParallel) {
     const batch = sectionsToRender.slice(i, i + maxParallel);
-
-    await Promise.all(
-      batch.map(async (section) => {
-        const outputPath = path.join(
-          projectDir,
-          "outputs",
-          "sections",
-          `${section.id}.mp4`
-        );
-
-        onLog(`Rendering section "${section.id}"...`);
-
-        await renderSection(
-          section.compositionId,
-          outputPath,
-          (progress: RenderProgress) => {
-            send({
-              type: "section-progress",
-              sectionId: section.id,
-              percent: progress.percent,
-            });
-          }
-        );
-
-        const duration = await getSectionDuration(outputPath);
-
-        updateChain = updateChain.then(() =>
-          updateProjectDurations(section.id, duration)
-        );
-        await updateChain;
-
-        onLog(
-          `Section "${section.id}" rendered. Duration: ${duration.toFixed(2)}s`
-        );
-      })
+    const results = await Promise.allSettled(
+      batch.map((section) => renderSingleSection(section))
     );
+    const failedSections = results
+      .map((result, index) =>
+        result.status === "rejected"
+          ? { section: batch[index], error: result.reason }
+          : null
+      )
+      .filter(
+        (
+          entry
+        ): entry is {
+          section: (typeof sectionsToRender)[number];
+          error: unknown;
+        } => Boolean(entry)
+      );
+
+    if (failedSections.length === 0) {
+      continue;
+    }
+
+    if (
+      batch.length > 1 &&
+      failedSections.every(({ error }) => isRetryableParallelRenderError(error))
+    ) {
+      onLog(
+        `Parallel render batch hit a Remotion media-proxy timeout; retrying ${failedSections
+          .map(({ section }) => `"${section.id}"`)
+          .join(", ")} serially.`
+      );
+      for (const { section } of failedSections) {
+        await renderSingleSection(section);
+      }
+      continue;
+    }
+
+    throw failedSections[0].error;
   }
 }
 

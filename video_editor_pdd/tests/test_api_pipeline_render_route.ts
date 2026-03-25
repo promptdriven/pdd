@@ -704,6 +704,38 @@ describe("render executor factory", () => {
     expect(maxConcurrent).toBeLessThanOrEqual(2);
   });
 
+  it("retries only the failed sections serially when a parallel batch hits a Remotion proxy timeout", async () => {
+    const config = mockProjectConfig();
+    config.render.maxParallelRenders = 2;
+    config.sections = config.sections.slice(0, 2);
+    mockLoadProject.mockReturnValue(config);
+
+    const attempts = new Map<string, number>();
+    mockRenderSection.mockImplementation(async (compositionId: string) => {
+      const nextAttempt = (attempts.get(compositionId) ?? 0) + 1;
+      attempts.set(compositionId, nextAttempt);
+
+      if (compositionId === "IntroComposition" && nextAttempt === 1) {
+        throw new Error(
+          'Render process for "IntroComposition" exited with code 1: Could not extract frame from compositor Error: write EPIPE A delayRender() "Fetching http://localhost:3000/proxy?src=http%3A%2F%2Flocalhost%3A3000%2Fpublic%2Fveo%2Fexample.mp4" was called but not cleared after 28000ms.'
+        );
+      }
+    });
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(onLog);
+
+    expect(mockRenderSection).toHaveBeenCalledTimes(3);
+    expect(attempts.get("IntroComposition")).toBe(2);
+    expect(attempts.get("MainComposition")).toBe(1);
+    expect(
+      onLog.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("retrying")
+      )
+    ).toBe(true);
+  });
+
   it("uses onLog to report rendering progress", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro

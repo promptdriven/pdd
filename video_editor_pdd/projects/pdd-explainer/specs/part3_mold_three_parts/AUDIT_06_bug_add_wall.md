@@ -1,4 +1,4 @@
 ## Verdict
-warn
+pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (code, user, parser, normalize, none), so the frame does not support a hard missing-text failure.
+OCR confirmed visible text tokens in the rendered frame (code, user, none, return, parser), so the frame does not support a hard missing-text failure.

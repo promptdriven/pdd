@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (synopsys, spec, specification, verified, hardware), so the frame does not support a hard missing-text failure.
+The rendered frame uses a pipeline flow diagram layout (two horizontal rows of icons connected by dashed arrows: Verilog spec → Synthesis → Hardware → FEC verified / Prompt spec → Generation → Software → Tests pass) instead of the spec's text overlay with morph animation. The spec calls for two typed-on text lines ('Synopsys: specification in → verified hardware out.' and 'PDD: prompt in → verified software out.') dimmed to 0.3 opacity, a connecting bracket with a yellow italic 'Same architecture' label, and three completed morph pairs below (Verilog→PROMPT document, checkmark→test suite, netlist→software code). None of these spec elements are present. The bottom caption 'Specification in → verified artifact out' partially echoes the spec's intent but is not specified. The conceptual narrative (Synopsys-PDD equivalence) is conveyed, but through an entirely different visual design.

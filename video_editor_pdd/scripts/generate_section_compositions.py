@@ -1287,6 +1287,7 @@ CONTRACT_FIRST_VISUAL_TYPES = {
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
+    'annotation_overlay',
     'chart_event',
     'code_regeneration',
     'code_transformation',
@@ -1606,6 +1607,14 @@ def build_visual_contract_manifest(
                         if isinstance(raw_panel, str) and raw_panel.strip():
                             panel = raw_panel.strip().lower()
                             break
+                    if panel is None:
+                        raw_parent_ref = child_data.get('usedIn')
+                        if isinstance(raw_parent_ref, str):
+                            normalized_parent_ref = raw_parent_ref.lower()
+                            if '(left panel)' in normalized_parent_ref:
+                                panel = 'left'
+                            elif '(right panel)' in normalized_parent_ref:
+                                panel = 'right'
 
                 if panel == 'left':
                     media_aliases.setdefault('leftSrc', candidate_src)

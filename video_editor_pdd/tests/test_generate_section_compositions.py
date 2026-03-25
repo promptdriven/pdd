@@ -5274,6 +5274,105 @@ class TestVisualContractManifestNewFields:
         assert visual.get("children") is None
         assert visual.get("laneHint") is None
 
+    def test_build_visual_contract_manifest_synthesizes_split_media_from_usedin_panel_reference(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "project"
+        spec_dir = project_dir / "specs" / "part2"
+        remotion_public = project_dir / "remotion-public"
+        (project_dir / "outputs" / "veo").mkdir(parents=True)
+        (project_dir / "outputs" / "compositions").mkdir(parents=True)
+        (remotion_public / "veo").mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        (remotion_public / "veo" / "craftsman_carving.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "mold_producing_parts.mp4").write_text("stub", encoding="utf-8")
+
+        (spec_dir / "06_craftsman_vs_mold.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "split_screen",
+                            "leftPanel": {"content": "veo_clip_with_aura"},
+                            "rightPanel": {"content": "veo_clip_with_aura"},
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (spec_dir / "07_craftsman_carving.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "veo_clip",
+                            "clipId": "craftsman_carving",
+                            "usedIn": "06_craftsman_vs_mold (left panel)",
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (spec_dir / "08_mold_producing_parts.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "veo_clip",
+                            "clipId": "mold_producing_parts",
+                            "usedIn": "06_craftsman_vs_mold (right panel)",
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "part2",
+            "compositionId": "Part2Section",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "part2",
+            "compositions": [
+                "06_craftsman_vs_mold",
+                "07_craftsman_carving",
+                "08_mold_producing_parts",
+            ],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+        visuals_by_id = {
+            visual["id"]: visual for visual in manifest["sections"][0]["visuals"]
+        }
+
+        split_visual = visuals_by_id["06_craftsman_vs_mold"]
+        assert split_visual["mediaAliases"]["leftSrc"] == "veo/craftsman_carving.mp4"
+        assert split_visual["mediaAliases"]["rightSrc"] == "veo/mold_producing_parts.mp4"
+
 
 class TestContractFirstVisualResolution:
     def test_prefers_generated_contract_for_structured_title_cards(self):
@@ -5296,6 +5395,18 @@ class TestContractFirstVisualResolution:
                     "sectionLabel": "PART 1",
                     "titleLine1": "THE ECONOMICS",
                     "titleLine2": "OF DARNING",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_annotation_overlays_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "annotation_overlay",
+                    "chartId": "code_cost_triple_line",
+                    "annotations": [{"header": "Code churn: +44%"}],
                 }
             },
             has_exact_component=True,

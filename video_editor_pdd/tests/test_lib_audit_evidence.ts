@@ -26,8 +26,8 @@ describe("evaluateDeterministicTextAudit", () => {
         severity: "major",
         fixType: "remotion",
         technicalAssessment:
-          "The summary line and equivalent diagram text are missing from the frame.",
-        suggestedFixes: ["Restore the missing labels."],
+          "The summary line and equivalent diagram text are missing from the frame, and the prompt label is clipped.",
+        suggestedFixes: ["Restore the missing labels.", "Prevent the prompt label from clipping."],
         confidence: 0.71,
       },
       auditHints,
@@ -36,6 +36,24 @@ describe("evaluateDeterministicTextAudit", () => {
 
     expect(result?.verdict).toBe("warn");
     expect(result?.summary).toMatch(/OCR/i);
+  });
+
+  it("upgrades major missing-text verdicts to pass when OCR strongly confirms multiple critical elements and no non-text issue remains", () => {
+    const result = evaluateDeterministicTextAudit(
+      {
+        severity: "major",
+        fixType: "remotion",
+        technicalAssessment:
+          "The summary line, equivalent diagram, and prompt label are missing from the frame.",
+        suggestedFixes: ["Restore the missing labels."],
+        confidence: 0.71,
+      },
+      auditHints,
+      strongEvidence
+    );
+
+    expect(result?.verdict).toBe("pass");
+    expect(result?.summary).toMatch(/multiple critical text/i);
   });
 
   it("upgrades minor missing-text verdicts to pass when OCR strongly confirms the claimed labels", () => {

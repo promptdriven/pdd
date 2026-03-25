@@ -1752,8 +1752,8 @@ Technical assessment: Previous review claimed it was at y≈410.
       severity: "major",
       fixType: "remotion",
       technicalAssessment:
-        "The summary line and prompt label are missing from the sampled frame.",
-      suggestedFixes: ["Restore the missing text."],
+        "The summary line is missing and the prompt label is clipped in the sampled frame.",
+      suggestedFixes: ["Restore the missing text.", "Prevent the prompt label from clipping."],
       confidence: 0.79,
     });
     mockCollectAuditImageEvidence.mockResolvedValue({
@@ -1777,6 +1777,59 @@ Technical assessment: Previous review claimed it was at y≈410.
     const content = mockWriteFileSync.mock.calls[0][1];
     expect(content).toContain("## Verdict\nwarn");
     expect(content).toContain("OCR confirmed multiple critical text labels");
+  });
+
+  it("writes 'pass' verdict when deterministic OCR evidence strongly disproves a text-only Claude fail", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (String(candidate).endsWith("visual.md")) {
+        return [
+          "# Demo",
+          "",
+          "**Timestamp:** 0:00 - 0:02",
+          "",
+          "### Chart/Visual Elements",
+          "- Summary line: concise payoff sentence",
+          "- Equivalent diagram: mirrored comparison block",
+          "- Prompt label: lower callout label",
+        ].join("\n");
+      }
+      return "";
+    });
+    mockRunClaudeAudit.mockResolvedValue({
+      severity: "major",
+      fixType: "remotion",
+      technicalAssessment:
+        "The summary line, equivalent diagram, and prompt label are missing from the sampled frame.",
+      suggestedFixes: ["Restore the missing text."],
+      confidence: 0.79,
+    });
+    mockCollectAuditImageEvidence.mockResolvedValue({
+      normalizedText:
+        "summary line equivalent diagram prompt label concise payoff sentence mirrored comparison block",
+      textTokenCount: 12,
+      contrastScore: 24,
+      ocrText:
+        "Summary line Equivalent diagram Prompt label concise payoff sentence mirrored comparison block",
+    });
+    mockEvaluateDeterministicTextAudit.mockReturnValue({
+      verdict: "pass",
+      summary:
+        "OCR confirmed multiple critical text elements in the rendered frame despite the initial Claude miss.",
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    const content = mockWriteFileSync.mock.calls[0][1];
+    expect(content).toContain("## Verdict\npass");
+    expect(content).toContain("OCR confirmed multiple critical text elements");
   });
 
   it("creates output directory with recursive flag", async () => {

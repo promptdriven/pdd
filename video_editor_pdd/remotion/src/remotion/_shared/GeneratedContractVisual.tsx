@@ -91,6 +91,74 @@ const buildDenseCodePreviewLines = (variant: "dense" | "cluttered" | "clean"): s
   return shared;
 };
 
+type ContextTokenBlock = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  tone: "danger" | "success" | "neutral";
+  opacity: number;
+};
+
+const buildContextWindowTokenBlocks = (
+  variant: "cluttered" | "dense"
+): ContextTokenBlock[] => {
+  if (variant === "cluttered") {
+    return [
+      { left: 4, top: 6, width: 80, height: 22, tone: "danger", opacity: 0.22 },
+      { left: 8, top: 13, width: 68, height: 18, tone: "danger", opacity: 0.18 },
+      { left: 18, top: 19, width: 62, height: 18, tone: "neutral", opacity: 0.12 },
+      { left: 5, top: 27, width: 84, height: 20, tone: "danger", opacity: 0.2 },
+      { left: 28, top: 34, width: 56, height: 17, tone: "danger", opacity: 0.2 },
+      { left: 9, top: 40, width: 72, height: 16, tone: "neutral", opacity: 0.12 },
+      { left: 12, top: 47, width: 76, height: 20, tone: "danger", opacity: 0.2 },
+      { left: 46, top: 54, width: 34, height: 14, tone: "success", opacity: 0.22 },
+      { left: 6, top: 59, width: 80, height: 16, tone: "danger", opacity: 0.18 },
+      { left: 22, top: 66, width: 61, height: 18, tone: "danger", opacity: 0.2 },
+      { left: 11, top: 72, width: 48, height: 13, tone: "success", opacity: 0.24 },
+      { left: 42, top: 77, width: 43, height: 14, tone: "danger", opacity: 0.2 },
+      { left: 6, top: 83, width: 74, height: 14, tone: "danger", opacity: 0.18 },
+      { left: 58, top: 88, width: 17, height: 10, tone: "success", opacity: 0.28 },
+    ];
+  }
+
+  return [
+    { left: 6, top: 8, width: 82, height: 10, tone: "neutral", opacity: 0.14 },
+    { left: 11, top: 16, width: 76, height: 9, tone: "neutral", opacity: 0.14 },
+    { left: 15, top: 24, width: 70, height: 10, tone: "neutral", opacity: 0.12 },
+    { left: 9, top: 32, width: 82, height: 9, tone: "neutral", opacity: 0.14 },
+    { left: 18, top: 40, width: 62, height: 10, tone: "neutral", opacity: 0.13 },
+    { left: 13, top: 48, width: 78, height: 9, tone: "neutral", opacity: 0.14 },
+    { left: 21, top: 56, width: 60, height: 10, tone: "neutral", opacity: 0.12 },
+    { left: 8, top: 64, width: 83, height: 9, tone: "neutral", opacity: 0.14 },
+    { left: 18, top: 72, width: 68, height: 10, tone: "neutral", opacity: 0.13 },
+    { left: 11, top: 80, width: 78, height: 9, tone: "neutral", opacity: 0.14 },
+  ];
+};
+
+const renderInsetTokenBadge = (tokenCount: string, color: string): React.ReactNode => {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 18,
+        right: 18,
+        padding: "6px 10px",
+        borderRadius: 999,
+        backgroundColor: "rgba(2, 6, 23, 0.86)",
+        border: `1px solid ${color}33`,
+        color,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 0.2,
+      }}
+    >
+      {tokenCount}
+    </div>
+  );
+};
+
 const splitQuoteIntoLines = (quote: string, maxLines = 3): string[] => {
   const trimmed = quote.trim();
   if (!trimmed) {
@@ -117,6 +185,28 @@ const splitQuoteIntoLines = (quote: string, maxLines = 3): string[] => {
     lines.push(words.slice(index, index + chunkSize).join(" "));
   }
   return lines.slice(0, maxLines);
+};
+
+const splitDramaticQuoteLines = (quote: string): string[] => {
+  const baseline = splitQuoteIntoLines(quote, 3);
+  const words = quote.trim().split(/\s+/).filter(Boolean);
+  if (words.length < 8) {
+    return baseline;
+  }
+
+  const finalWord = words[words.length - 1] ?? "";
+  const normalizedFinalWord = finalWord.replace(/[^a-z]/gi, "");
+  if (normalizedFinalWord.length < 10) {
+    return baseline;
+  }
+
+  const leadingWords = words.slice(0, -1);
+  const midpoint = Math.ceil(leadingWords.length / 2);
+  return [
+    leadingWords.slice(0, midpoint).join(" "),
+    leadingWords.slice(midpoint).join(" "),
+    finalWord,
+  ].filter(Boolean);
 };
 
 const parsePercentRangeMidpoint = (value: unknown): number | null => {
@@ -991,7 +1081,7 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
     quoteLine1 || quoteLine2
       ? [quoteLine1, quoteLine2].filter((line): line is string => Boolean(line))
       : quote
-        ? splitQuoteIntoLines(quote, 3)
+        ? splitDramaticQuoteLines(quote)
         : [resolveTitle(data)];
   const usesMinimalQuoteLayout = Boolean(
     quote &&
@@ -1074,7 +1164,7 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
               marginTop: 32,
             }}
           >
-            {`- ${attribution}`}
+            {`— ${attribution}`}
           </div>
         </div>
       </AbsoluteFill>
@@ -1949,12 +2039,275 @@ const SplitVisual: React.FC<{
 
   const renderPanelInterior = (panel: Record<string, unknown>, accent: string) => {
     const content = asString(panel.content);
+    const tokenCount = formatApproxTokenCount(panel.tokenCount);
+    const elements = Array.isArray(panel.elements)
+      ? panel.elements
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const elementTypes = new Set(
+      elements
+        .map((entry) => asString(entry.type))
+        .filter((entry): entry is string => Boolean(entry))
+    );
     const sections = Array.isArray(panel.sections)
       ? panel.sections.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
 
+    if (content === "veo_clip_with_aura") {
+      const auraColor =
+        asString(asRecord(panel.aura)?.color) ??
+        asString(panel.auraColor) ??
+        accent;
+      return (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              width: 280,
+              height: 280,
+              borderRadius: 999,
+              transform: "translate(-50%, -50%)",
+              boxShadow: `0 0 140px ${auraColor}66`,
+              border: `2px solid ${auraColor}66`,
+              opacity: 0.34,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              width: 180,
+              height: 180,
+              borderRadius: 999,
+              transform: "translate(-50%, -50%)",
+              background: `radial-gradient(circle, ${auraColor}24 0%, rgba(2, 6, 23, 0) 72%)`,
+              opacity: 0.72,
+            }}
+          />
+        </div>
+      );
+    }
+
+    if (content === "veo_clip_then_zoom_out") {
+      const revealHint = asString(panel.zoomOutReveals);
+      return (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            pointerEvents: "none",
+          }}
+        >
+          {revealHint?.includes("codebase") ? (
+            <div style={{ position: "absolute", inset: "24px 22px 24px 22px" }}>
+              {["// TODO", "// legacy", "// patch", "+ spec", "- debt"].map((label, index) => (
+                <div
+                  key={`${label}-${index}`}
+                  style={{
+                    position: "absolute",
+                    left: `${8 + (index % 2) * 46}%`,
+                    top: `${14 + index * 12}%`,
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    backgroundColor: "rgba(239, 68, 68, 0.16)",
+                    border: "1px solid rgba(239, 68, 68, 0.28)",
+                    color: "#FCA5A5",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 12,
+                    opacity: index < 2 ? 0.28 : 0.42,
+                  }}
+                >
+                  {label}
+                </div>
+              ))}
+              {Array.from({ length: 12 }).map((_, index) => (
+                <div
+                  key={`code-file-${index}`}
+                  style={{
+                    position: "absolute",
+                    left: `${4 + (index % 4) * 22}%`,
+                    top: `${54 + Math.floor(index / 4) * 12}%`,
+                    width: 72,
+                    height: 34,
+                    borderRadius: 10,
+                    backgroundColor: "rgba(15, 23, 42, 0.76)",
+                    border: "1px solid rgba(148, 163, 184, 0.16)",
+                    opacity: 0.38,
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
+          {revealHint?.includes("drawer_of_mended_garments") ? (
+            <div
+              style={{
+                position: "absolute",
+                inset: "56px 36px 48px 36px",
+                display: "grid",
+                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                gap: 14,
+              }}
+            >
+              {Array.from({ length: 12 }).map((_, index) => (
+                <div
+                  key={`garment-${index}`}
+                  style={{
+                    borderRadius: 16,
+                    backgroundColor:
+                      index % 3 === 0
+                        ? "rgba(217, 148, 74, 0.22)"
+                        : index % 3 === 1
+                          ? "rgba(148, 163, 184, 0.18)"
+                          : "rgba(120, 113, 108, 0.2)",
+                    border: "1px solid rgba(226, 232, 240, 0.14)",
+                    opacity: 0.42,
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (elements.length > 0) {
+      const isPrinterPanel =
+        elementTypes.has("coordinate_grid") || elementTypes.has("printer_nozzle");
+      const isMoldPanel =
+        elementTypes.has("mold_walls") ||
+        elementTypes.has("liquid_flow") ||
+        elementTypes.has("wall_glow_on_impact");
+      const hasImpactGlow = elementTypes.has("wall_glow_on_impact");
+
+      if (isPrinterPanel) {
+        return (
+          <div
+            style={{
+              position: "absolute",
+              inset: "86px 24px 92px",
+              borderRadius: 20,
+              border: "1px solid rgba(96, 165, 250, 0.22)",
+              overflow: "hidden",
+            }}
+          >
+            <svg width="100%" height="100%" viewBox="0 0 420 520" preserveAspectRatio="none">
+              {Array.from({ length: 9 }).map((_, index) => (
+                <line
+                  key={`grid-h-${index}`}
+                  x1={36}
+                  y1={60 + index * 40}
+                  x2={384}
+                  y2={60 + index * 40}
+                  stroke="rgba(96, 165, 250, 0.14)"
+                  strokeDasharray="4 8"
+                />
+              ))}
+              {Array.from({ length: 8 }).map((_, index) => (
+                <line
+                  key={`grid-v-${index}`}
+                  x1={52 + index * 40}
+                  y1={44}
+                  x2={52 + index * 40}
+                  y2={404}
+                  stroke="rgba(96, 165, 250, 0.14)"
+                  strokeDasharray="4 8"
+                />
+              ))}
+              <path d="M 170 104 L 210 140 L 250 104 Z" fill="rgba(96, 165, 250, 0.82)" />
+              {Array.from({ length: 3 }).flatMap((_, layer) =>
+                Array.from({ length: 8 }).map((__, point) => (
+                  <g key={`print-point-${layer}-${point}`}>
+                    <rect
+                      x={114 + point * 18}
+                      y={254 + layer * 18}
+                      width={10}
+                      height={6}
+                      rx={2}
+                      fill="rgba(96, 165, 250, 0.72)"
+                    />
+                    <text
+                      x={110 + point * 18}
+                      y={248 + layer * 18}
+                      fill="rgba(96, 165, 250, 0.42)"
+                      fontSize="7"
+                      fontFamily="JetBrains Mono, monospace"
+                    >
+                      ({point},{layer})
+                    </text>
+                  </g>
+                ))
+              )}
+            </svg>
+          </div>
+        );
+      }
+
+      if (isMoldPanel) {
+        return (
+          <div
+            style={{
+              position: "absolute",
+              inset: "86px 24px 92px",
+              borderRadius: 20,
+              border: "1px solid rgba(217, 148, 74, 0.24)",
+              overflow: "hidden",
+            }}
+          >
+            <svg width="100%" height="100%" viewBox="0 0 420 520" preserveAspectRatio="none">
+              <path d="M 180 42 L 210 92 L 240 42 Z" fill="rgba(148, 163, 184, 0.72)" />
+              <rect
+                x={104}
+                y={94}
+                width={212}
+                height={286}
+                rx={20}
+                fill="none"
+                stroke="rgba(217, 148, 74, 0.72)"
+                strokeWidth={4}
+              />
+              <path
+                d="M 138 132 L 170 132 L 170 186 L 204 186 L 204 238 L 256 238 L 256 186 L 292 186 L 292 132"
+                fill="none"
+                stroke="rgba(217, 148, 74, 0.56)"
+                strokeWidth={4}
+                strokeLinejoin="round"
+              />
+              <path
+                d="M 208 94
+                   C 178 138, 154 188, 160 246
+                   C 168 304, 214 330, 262 316
+                   C 292 308, 302 280, 294 246
+                   C 286 208, 246 178, 232 142
+                   C 226 126, 222 110, 208 94 Z"
+                fill="rgba(167, 139, 250, 0.36)"
+                stroke="rgba(217, 148, 74, 0.32)"
+                strokeWidth={2}
+              />
+              <circle cx={258} cy={238} r={36} fill="rgba(217, 148, 74, 0.16)" />
+              {hasImpactGlow ? (
+                <>
+                  <circle cx={258} cy={238} r={48} fill="rgba(250, 204, 21, 0.12)" />
+                  <circle cx={258} cy={238} r={22} fill="rgba(250, 204, 21, 0.22)" />
+                </>
+              ) : null}
+            </svg>
+          </div>
+        );
+      }
+    }
+
     if (content === "context_window_cluttered") {
-      const lines = buildDenseCodePreviewLines("cluttered");
+      const blocks = buildContextWindowTokenBlocks("cluttered");
       return (
         <div
           style={{
@@ -1967,38 +2320,60 @@ const SplitVisual: React.FC<{
             padding: "18px 18px 56px",
           }}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "42px 1fr", rowGap: 6 }}>
-            {lines.slice(0, 10).map((line, index) => {
-              const tone =
-                index === 2 || index === 3 || index === 6
-                  ? "#FCA5A5"
-                  : index === 4
-                    ? "#86EFAC"
+          {tokenCount ? renderInsetTokenBadge(tokenCount, "#EF4444") : null}
+          <div
+            style={{
+              position: "absolute",
+              inset: "52px 16px 56px",
+            }}
+          >
+            {blocks.map((block, index) => {
+              const blockColor =
+                block.tone === "danger"
+                  ? "#EF4444"
+                  : block.tone === "success"
+                    ? "#4ADE80"
                     : "#94A3B8";
               return (
-                <React.Fragment key={`${line}-${index}`}>
+                <div
+                  key={`context-block-${index}`}
+                  style={{
+                    position: "absolute",
+                    left: `${block.left}%`,
+                    top: `${block.top}%`,
+                    width: `${block.width}%`,
+                    height: block.height,
+                    borderRadius: 10,
+                    backgroundColor: `${blockColor}${block.tone === "neutral" ? "14" : "22"}`,
+                    border: `1px solid ${blockColor}44`,
+                    opacity: block.opacity,
+                    overflow: "hidden",
+                  }}
+                >
                   <div
                     style={{
-                      color: "rgba(148, 163, 184, 0.42)",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: 12,
+                      position: "absolute",
+                      left: 8,
+                      right: "22%",
+                      top: "50%",
+                      height: 2,
+                      transform: "translateY(-50%)",
+                      borderRadius: 999,
+                      backgroundColor: blockColor,
+                      opacity: 0.65,
                     }}
-                  >
-                    {index + 1}
-                  </div>
-                  <div
-                    style={{
-                      color: tone,
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: 13,
-                      whiteSpace: "pre",
-                    }}
-                  >
-                    {line}
-                  </div>
-                </React.Fragment>
+                  />
+                </div>
               );
             })}
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                boxShadow: "inset 0 0 90px rgba(239, 68, 68, 0.16)",
+                pointerEvents: "none",
+              }}
+            />
           </div>
           <div
             style={{
@@ -2028,12 +2403,13 @@ const SplitVisual: React.FC<{
             borderRadius: 20,
             backgroundColor: "rgba(2, 6, 23, 0.72)",
             border: "1px solid rgba(74, 222, 128, 0.24)",
-            padding: "18px 18px 18px",
+            padding: "52px 18px 18px",
             display: "flex",
             flexDirection: "column",
             gap: 12,
           }}
         >
+          {tokenCount ? renderInsetTokenBadge(tokenCount, "#4ADE80") : null}
           {sections.slice(0, 3).map((section, index) => {
             const color = asString(section.color) ?? (index === 0 ? "#4A90D9" : index === 1 ? "#D9944A" : "#5AAA6E");
             const tokens = formatApproxTokenCount(section.tokens);
@@ -2078,6 +2454,7 @@ const SplitVisual: React.FC<{
 
     if (content === "dense_code") {
       const lines = buildDenseCodePreviewLines("dense");
+      const blocks = buildContextWindowTokenBlocks("dense");
       return (
         <div
           style={{
@@ -2086,35 +2463,47 @@ const SplitVisual: React.FC<{
             borderRadius: 20,
             backgroundColor: "rgba(2, 6, 23, 0.82)",
             border: "1px solid rgba(148, 163, 184, 0.22)",
-            padding: "18px 18px 16px",
+            padding: "50px 18px 16px",
             overflow: "hidden",
           }}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "42px 1fr", rowGap: 6 }}>
-            {lines.slice(0, 10).map((line, index) => (
-              <React.Fragment key={`${line}-${index}`}>
-                <div
-                  style={{
-                    color: "rgba(148, 163, 184, 0.42)",
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 12,
-                  }}
-                >
-                  {index + 1}
-                </div>
-                <div
-                  style={{
-                    color: index % 4 === 0 ? "#93C5FD" : index % 3 === 0 ? "#E2E8F0" : "#CBD5E1",
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: 13,
-                    whiteSpace: "pre",
-                    opacity: 0.95 - index * 0.04,
-                  }}
-                >
-                  {line}
-                </div>
-              </React.Fragment>
+          {tokenCount ? renderInsetTokenBadge(tokenCount, accent) : null}
+          <div style={{ position: "absolute", inset: "52px 16px 16px" }}>
+            {blocks.map((block, index) => (
+              <div
+                key={`dense-block-${index}`}
+                style={{
+                  position: "absolute",
+                  left: `${block.left}%`,
+                  top: `${block.top}%`,
+                  width: `${block.width}%`,
+                  height: block.height,
+                  borderRadius: 10,
+                  backgroundColor: "rgba(148, 163, 184, 0.12)",
+                  border: "1px solid rgba(148, 163, 184, 0.14)",
+                  opacity: block.opacity,
+                }}
+              />
             ))}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", rowGap: 5 }}>
+              {lines
+                .concat(lines)
+                .slice(0, 14)
+                .map((line, index) => (
+                  <div
+                    key={`${line}-${index}`}
+                    style={{
+                      color: index % 4 === 0 ? "#93C5FD" : index % 3 === 0 ? "#E2E8F0" : "#CBD5E1",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 12,
+                      whiteSpace: "pre",
+                      opacity: 0.92 - index * 0.035,
+                    }}
+                  >
+                    {line}
+                  </div>
+                ))}
+            </div>
           </div>
         </div>
       );
@@ -2130,12 +2519,13 @@ const SplitVisual: React.FC<{
             borderRadius: 20,
             backgroundColor: "rgba(2, 6, 23, 0.72)",
             border: `1px solid ${accent}33`,
-            padding: "18px 18px 16px",
+            padding: "52px 18px 16px",
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
             gap: 12,
           }}
         >
+          {tokenCount ? renderInsetTokenBadge(tokenCount, accent) : null}
           {Array.from({ length: 10 }).map((_, index) => (
             <div
               key={`prompt-${index}`}
@@ -2177,12 +2567,16 @@ const SplitVisual: React.FC<{
       rawLabel.length <= 24;
     const header = asString(panel.header) ?? (labelLooksLikeHeader ? rawLabel : null);
     const headerColor = asString(panel.headerColor) ?? asString(panel.color) ?? accent;
+    const content = asString(panel.content);
     const caption =
       asString(panel.caption) ??
       asString(panel.subLabel) ??
       asString(panel.summary) ??
       (!labelLooksLikeHeader ? rawLabel : null);
     const tokenCount = formatApproxTokenCount(panel.tokenCount);
+    const usesInsetTokenBadge = ["context_window_cluttered", "context_window_clean", "dense_code", "prompt_blocks"].includes(
+      content ?? ""
+    );
     const scope = asString(panel.scope);
     const codeComments = asStringArray(panel.codeComments);
     const aura = asRecord(panel.aura);
@@ -2279,7 +2673,7 @@ const SplitVisual: React.FC<{
             {header}
           </div>
         ) : null}
-        {tokenCount ? (
+        {tokenCount && !usesInsetTokenBadge ? (
           <div
             style={{
               position: "absolute",
@@ -2390,6 +2784,9 @@ const SplitVisual: React.FC<{
     Boolean(asString(right.scope)) &&
     !left.relevantPercent &&
     !right.relevantPercent;
+  const usesPromptContextFooter =
+    asString(left.content) === "dense_code" &&
+    asString(right.content) === "prompt_blocks";
 
   return (
     <AbsoluteFill style={{ padding: "88px 72px 72px" }}>
@@ -2435,7 +2832,28 @@ const SplitVisual: React.FC<{
             {multiplier}
           </div>
         ) : null}
-      {hasScopeFooter ? (
+      {usesPromptContextFooter ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 120,
+            right: 120,
+            bottom: 24,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            alignItems: "center",
+            textAlign: "center",
+          }}
+        >
+          <div style={{ color: "#E2E8F0", fontSize: 16, opacity: 0.8 }}>
+            Every token is author-curated. No retrieval guessing. No wasted space.
+          </div>
+          <div style={{ color: "#2DD4BF", fontSize: 16, fontWeight: 700, opacity: 0.92 }}>
+            The entire context window is devoted to your problem.
+          </div>
+        </div>
+      ) : hasScopeFooter ? (
         <div
           style={{
             position: "absolute",
@@ -3215,6 +3633,8 @@ const AnnotationVisual: React.FC<{
 }> = ({ data, width, height }) => {
   const title = resolveTitle(data);
   const accent = resolveAccentColor(data);
+  const chartId = asString(data.chartId);
+  const diagramId = asString(data.diagramId) ?? "";
   const annotations = Array.isArray(data.annotations)
     ? data.annotations
         .map((entry) => asRecord(entry))
@@ -3222,6 +3642,169 @@ const AnnotationVisual: React.FC<{
     : [];
   const comparison = asRecord(data.comparison);
   const emphasisLine = asString(data.emphasisLine);
+  const annotationPositions: Record<
+    string,
+    { left: number; top: number; targetX: number; targetY: number; anchor: "left" | "right" }
+  > = {
+    immediate_patch_line: {
+      left: width * 0.72,
+      top: height * 0.47,
+      targetX: width * 0.67,
+      targetY: height * 0.58,
+      anchor: "left",
+    },
+    total_cost_line: {
+      left: width * 0.72,
+      top: height * 0.2,
+      targetX: width * 0.66,
+      targetY: height * 0.4,
+      anchor: "left",
+    },
+    debt_shading: {
+      left: width * 0.72,
+      top: height * 0.34,
+      targetX: width * 0.58,
+      targetY: height * 0.48,
+      anchor: "left",
+    },
+    debt_gap: {
+      left: width * 0.12,
+      top: height * 0.34,
+      targetX: width * 0.5,
+      targetY: height * 0.48,
+      anchor: "right",
+    },
+  };
+
+  if (diagramId === "research_annotations") {
+    const warning = annotations[0] ?? null;
+    const positive = annotations[1] ?? null;
+    return (
+      <AbsoluteFill>
+        <HeaderBlock data={data} accent={accent} title={title} />
+        <div
+          style={{
+            position: "absolute",
+            inset: `${height * 0.28}px 72px 72px`,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundImage:
+                "linear-gradient(rgba(30,41,59,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(30,41,59,0.14) 1px, transparent 1px)",
+              backgroundSize: "40px 40px",
+              opacity: 0.34,
+            }}
+          />
+          <svg
+            width="100%"
+            height="100%"
+            viewBox={`0 0 ${width - 144} ${height * 0.5}`}
+            style={{ position: "absolute", inset: 0 }}
+          >
+            <path d="M 420 54 L 490 112 L 560 54 Z" fill="rgba(148, 163, 184, 0.34)" />
+            <rect x="264" y="126" width="420" height="236" rx="24" fill="none" stroke="rgba(217, 148, 74, 0.22)" strokeWidth="3" />
+            <path d="M 326 182 L 396 182 L 396 236 L 474 236 L 474 296 L 554 296 L 554 236 L 624 236 L 624 182" fill="none" stroke="rgba(217, 148, 74, 0.44)" strokeWidth="5" strokeLinejoin="round" />
+            <path d="M 468 126 C 432 176, 394 242, 414 298 C 436 360, 526 372, 588 334 C 636 306, 644 244, 610 198 C 584 164, 528 144, 494 128 Z" fill="rgba(96, 165, 250, 0.08)" stroke="rgba(167, 139, 250, 0.14)" strokeWidth="2" />
+          </svg>
+          <div
+            style={{
+              position: "absolute",
+              left: width * 0.58,
+              top: height * 0.02,
+              width: 400,
+              padding: "18px 20px",
+              borderRadius: 12,
+              backgroundColor: "#1E1015",
+              border: "1px solid rgba(239, 68, 68, 0.3)",
+              boxShadow: "0 16px 36px rgba(2, 6, 23, 0.28)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ color: "#EF4444", fontSize: 18, fontWeight: 700 }}>▲</div>
+              <div style={{ color: "#EF4444", fontSize: 20, fontWeight: 700 }}>
+                {asString(warning?.text) ?? "AI code: 1.7× more issues"}
+              </div>
+            </div>
+            <div style={{ color: "#94A3B8", fontSize: 12 }}>
+              {asString(warning?.source) ?? "CodeRabbit, 2025"}
+            </div>
+            <div style={{ color: "rgba(239, 68, 68, 0.76)", fontSize: 11 }}>
+              {asString(warning?.detail) ?? "75% more logic errors · 8× more perf problems"}
+            </div>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: width * 0.58,
+              top: height * 0.19,
+              width: 400,
+              padding: "18px 20px",
+              borderRadius: 12,
+              backgroundColor: "#0F1E15",
+              border: "1px solid rgba(74, 222, 128, 0.3)",
+              boxShadow: "0 16px 36px rgba(2, 6, 23, 0.28)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ color: "#4ADE80", fontSize: 18, fontWeight: 700 }}>✓</div>
+              <div style={{ color: "#4ADE80", fontSize: 20, fontWeight: 700 }}>
+                {asString(positive?.text) ?? "AI + strong tests = amplified delivery"}
+              </div>
+            </div>
+            <div style={{ color: "#94A3B8", fontSize: 12 }}>
+              {asString(positive?.source) ?? "DORA, 2025"}
+            </div>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: 46,
+              bottom: 42,
+              width: 260,
+              padding: "16px 18px",
+              borderRadius: 18,
+              backgroundColor: "rgba(2, 6, 23, 0.78)",
+              border: "1px solid rgba(74, 222, 128, 0.24)",
+              color: "#4ADE80",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 12,
+              lineHeight: 1.45,
+            }}
+          >
+            <div>✓ test_null_handling</div>
+            <div>✓ test_unicode</div>
+            <div>✓ test_empty_string</div>
+            <div>✓ test_latency</div>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 10,
+              textAlign: "center",
+              color: "#E2E8F0",
+              fontSize: 16,
+              fontStyle: "italic",
+              opacity: 0.66,
+            }}
+          >
+            The walls aren't optional
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill>
@@ -3288,7 +3871,121 @@ const AnnotationVisual: React.FC<{
             </div>
           </div>
         ) : null}
-        {annotations.length > 0 ? (
+        {annotations.length > 0 && chartId === "code_cost_triple_line" ? (
+          <div
+            style={{
+              position: "relative",
+              minHeight: 470,
+              borderRadius: 28,
+              backgroundColor: "rgba(2, 6, 23, 0.42)",
+              border: "1px solid rgba(148, 163, 184, 0.14)",
+              overflow: "hidden",
+            }}
+          >
+            <svg
+              width="100%"
+              height="100%"
+              viewBox={`0 0 ${width - 144} ${Math.max(470, height * 0.42)}`}
+              style={{ position: "absolute", inset: 0 }}
+            >
+              <path
+                d={`M 110 320 C 270 302, 420 286, 700 270 C 860 256, 970 240, 1100 220`}
+                fill="none"
+                stroke="rgba(74, 144, 217, 0.72)"
+                strokeWidth={4}
+              />
+              <path
+                d={`M 110 240 C 280 238, 420 244, 690 256 C 870 262, 990 266, 1100 270`}
+                fill="none"
+                stroke="rgba(217, 148, 74, 0.72)"
+                strokeWidth={4}
+              />
+              <path
+                d={`M 110 208 C 280 210, 430 220, 700 234 C 880 244, 1000 250, 1100 254`}
+                fill="none"
+                stroke="rgba(217, 148, 74, 0.58)"
+                strokeWidth={3}
+                strokeDasharray="10 10"
+              />
+              <path
+                d={`M 710 244 C 820 250, 920 256, 1100 264 L 1100 312 C 930 304, 830 296, 710 286 Z`}
+                fill="rgba(217, 148, 74, 0.08)"
+                stroke="none"
+              />
+              {annotations.slice(0, 4).map((annotation, index) => {
+                const target = asString(annotation.target) ?? `annotation-${index}`;
+                const position =
+                  annotationPositions[target] ??
+                  ({
+                    left: width * 0.68,
+                    top: height * 0.28 + index * 82,
+                    targetX: width * 0.64,
+                    targetY: height * 0.34 + index * 36,
+                    anchor: "left",
+                  } as const);
+                const color = asString(annotation.color) ?? "#60A5FA";
+                const startX =
+                  position.anchor === "left" ? position.left - 24 : position.left + 260;
+                const startY = position.top + 58;
+                return (
+                  <g key={`callout-${index}`}>
+                    <line
+                      x1={startX}
+                      y1={startY}
+                      x2={position.targetX}
+                      y2={position.targetY}
+                      stroke={`${color}66`}
+                      strokeWidth={2}
+                    />
+                    <circle cx={position.targetX} cy={position.targetY} r={5} fill={`${color}AA`} />
+                  </g>
+                );
+              })}
+            </svg>
+            {annotations.slice(0, 4).map((annotation, index) => {
+              const target = asString(annotation.target) ?? `annotation-${index}`;
+              const position =
+                annotationPositions[target] ??
+                ({
+                  left: width * 0.68,
+                  top: height * 0.28 + index * 82,
+                  targetX: width * 0.64,
+                  targetY: height * 0.34 + index * 36,
+                  anchor: "left",
+                } as const);
+              const color = asString(annotation.color) ?? "#60A5FA";
+              return (
+                <div
+                  key={`annotation-${index}`}
+                  style={{
+                    position: "absolute",
+                    left: position.left,
+                    top: position.top,
+                    width: 260,
+                    padding: "18px 18px 16px",
+                    borderRadius: 18,
+                    backgroundColor: "rgba(15, 23, 42, 0.86)",
+                    border: `1px solid ${color}44`,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                    boxShadow: "0 10px 30px rgba(2, 6, 23, 0.32)",
+                  }}
+                >
+                  <div style={{ color, fontSize: 18, fontWeight: 700 }}>
+                    {asString(annotation.header) ?? asString(annotation.stat) ?? "Callout"}
+                  </div>
+                  <div style={{ color: "#94A3B8", fontSize: 12 }}>
+                    {asString(annotation.source) ?? ""}
+                  </div>
+                  <div style={{ color: "#64748B", fontSize: 11, lineHeight: 1.35 }}>
+                    {asString(annotation.finePrint) ?? asString(annotation.detail) ?? ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : annotations.length > 0 ? (
           <div
             style={{
               display: "grid",
@@ -3341,6 +4038,18 @@ const AnnotationVisual: React.FC<{
                   >
                     {asString(annotation.source) ?? ""}
                   </div>
+                  {asString(annotation.finePrint) ? (
+                    <div
+                      style={{
+                        color: "#64748B",
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: 15,
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {asString(annotation.finePrint)}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -3371,11 +4080,193 @@ const AnnotationVisual: React.FC<{
 const TextMorphVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
+  const diagramId = asString(data.diagramId) ?? "";
   const comparisons = Array.isArray(data.comparisons)
     ? data.comparisons
         .map((entry) => asRecord(entry))
         .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
+  const morphPairs = Array.isArray(data.morphPairs)
+    ? data.morphPairs
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+
+  if (diagramId === "synopsys_pdd_equivalence") {
+    const pairCards = morphPairs.length > 0 ? morphPairs : [
+      { from: "verilog_code", to: "prompt_document" },
+      { from: "synopsys_checkmark", to: "test_suite" },
+      { from: "gate_netlist", to: "software_code" },
+    ];
+
+    return (
+      <AbsoluteFill>
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 164,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 20,
+          }}
+        >
+          {comparisons.slice(0, 2).map((comparison, index) => {
+            const color = asString(comparison.domainColor) ?? (index === 0 ? "#4A90D9" : "#4ADE80");
+            const domain = asString(comparison.domain) ?? (index === 0 ? "Synopsys" : "PDD");
+            const input = asString(comparison.input) ?? "specification";
+            const output = asString(comparison.output) ?? "verified artifact";
+            return (
+              <div
+                key={`comparison-line-${index}`}
+                style={{
+                  color: "#E2E8F0",
+                  fontSize: 28,
+                  fontWeight: 700,
+                  letterSpacing: 0.1,
+                }}
+              >
+                <span style={{ color }}>{domain}</span>
+                {`: ${input} in `}
+                <span style={{ color: "#64748B", opacity: 0.72 }}>→</span>
+                {` ${output} out.`}
+              </div>
+            );
+          })}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 18,
+              marginTop: 8,
+            }}
+          >
+            <div
+              style={{
+                width: 1,
+                height: 64,
+                backgroundColor: "rgba(51, 65, 85, 0.7)",
+              }}
+            />
+            <div
+              style={{
+                color: "#FBBF24",
+                fontSize: 16,
+                fontStyle: "italic",
+                fontWeight: 600,
+              }}
+            >
+              {asString(data.sharedLabel) ?? "Same architecture"}
+            </div>
+          </div>
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: 120,
+            right: 120,
+            bottom: 120,
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 24,
+          }}
+        >
+          {pairCards.slice(0, 3).map((pair, index) => {
+            const from = asString(pair.from) ?? "source";
+            const to = asString(pair.to) ?? "target";
+            const cardColor = index === 0 ? "#4A90D9" : index === 1 ? "#4ADE80" : "#A78BFA";
+            return (
+              <div
+                key={`morph-pair-${index}`}
+                style={{
+                  borderRadius: 28,
+                  backgroundColor: subtleSurface,
+                  border: `1px solid ${cardColor}44`,
+                  padding: "24px 24px 22px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 16,
+                  minHeight: 250,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ color: "#94A3B8", fontSize: 14, fontWeight: 700, letterSpacing: 1.2 }}>
+                    MORPH PAIR
+                  </div>
+                  <div style={{ color: cardColor, fontSize: 18, fontWeight: 700 }}>
+                    {index === 0 ? "← →" : index === 1 ? "✓ → ✓✓✓" : "⊙ → ///"}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto 1fr", gap: 14, alignItems: "center" }}>
+                  <div
+                    style={{
+                      borderRadius: 18,
+                      backgroundColor: "rgba(15, 23, 42, 0.92)",
+                      border: "1px solid rgba(148, 163, 184, 0.22)",
+                      padding: "14px 16px",
+                      minHeight: 92,
+                    }}
+                  >
+                    <div style={{ color: "#94A3B8", fontSize: 12, fontWeight: 700, letterSpacing: 0.8 }}>
+                      {titleCase(from)}
+                    </div>
+                    <div
+                      style={{
+                        color: from === "verilog_code" ? "#C792EA" : from === "gate_netlist" ? "#4ADE80" : "#60A5FA",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 14,
+                        lineHeight: 1.35,
+                        marginTop: 10,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {from === "verilog_code"
+                        ? "module chip(...)\n  assign y = a & b;\nendmodule"
+                        : from === "gate_netlist"
+                          ? "o─●─o\n  ╲╱\n  ●"
+                          : "✓ verified"}
+                    </div>
+                  </div>
+                  <div style={{ color: "#64748B", fontSize: 24, fontWeight: 700 }}>→</div>
+                  <div
+                    style={{
+                      borderRadius: 18,
+                      backgroundColor: "rgba(15, 23, 42, 0.92)",
+                      border: `1px solid ${cardColor}44`,
+                      padding: "14px 16px",
+                      minHeight: 92,
+                    }}
+                  >
+                    <div style={{ color: cardColor, fontSize: 12, fontWeight: 700, letterSpacing: 0.8 }}>
+                      {titleCase(to)}
+                    </div>
+                    <div
+                      style={{
+                        color: "#E2E8F0",
+                        fontFamily: to === "software_code" ? "'JetBrains Mono', monospace" : "'Inter', sans-serif",
+                        fontSize: 14,
+                        lineHeight: 1.35,
+                        marginTop: 10,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {to === "prompt_document"
+                        ? "PROMPT\nintent + constraints"
+                        : to === "software_code"
+                          ? "def solve(x):\n    return mold(x)"
+                          : "Tests\n✓ unit\n✓ property\n✓ integration"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill>
@@ -3453,6 +4344,7 @@ const AnimatedDiagramVisual: React.FC<{
 }> = ({ data, width, height }) => {
   const title = resolveTitle(data);
   const accent = resolveAccentColor(data);
+  const chartId = asString(data.chartId) ?? "";
   const diagramId = asString(data.diagramId) ?? "";
   const promptNozzle = diagramId === "prompt_nozzle";
   const walls = Array.isArray(data.walls)
@@ -3508,7 +4400,367 @@ const AnimatedDiagramVisual: React.FC<{
   ].slice(0, 5);
 
   let body: React.ReactNode;
-  if (diagramId === "code_generation_comparison" && scenarios.length > 0) {
+  if (chartId === "dissolve_regenerate_loop") {
+    const cycleTints = asStringArray(data.cycleTints);
+    const tintColors =
+      cycleTints.length > 0 ? cycleTints : ["#60A5FA", "#4ADE80", "#D9944A"];
+    const terminal = asRecord(data.terminal);
+    const command = asString(terminal?.command) ?? "pdd generate";
+    const successIndicator = asString(terminal?.successIndicator) ?? "✓";
+    const codeVariants = [
+      [
+        "def build_user_parser(prompt, tests):",
+        "    grounding = fetch_examples(prompt)",
+        "    candidate = synthesize(prompt, grounding)",
+        "    return verify(candidate, tests)",
+      ],
+      [
+        "def generate_candidate(spec, tests):",
+        "    mold = build_mold(spec, tests)",
+        "    draft = regenerate(mold)",
+        "    return run_suite(draft, tests)",
+      ],
+      [
+        "def solve(intent, suite):",
+        "    grounded = hydrate(intent, suite)",
+        "    fresh_code = emit(grounded)",
+        "    return assert_valid(fresh_code, suite)",
+      ],
+    ];
+    body = (
+      <div
+        style={{
+          width: width * 0.78,
+          minHeight: height * 0.66,
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <svg
+          width="100%"
+          height="100%"
+          viewBox={`0 0 ${width * 0.78} ${height * 0.66}`}
+          preserveAspectRatio="none"
+          style={{ position: "absolute", inset: 0 }}
+        >
+          <path d={`M ${width * 0.39} 36 L ${width * 0.12} ${height * 0.54} L ${width * 0.66} ${height * 0.54} Z`} fill="none" stroke="rgba(51, 65, 85, 0.8)" strokeWidth={2} />
+        </svg>
+        {[
+          { label: "PROMPT", color: "#60A5FA", left: "50%", top: 28, transform: "translateX(-50%)" },
+          { label: "TESTS", color: "#4ADE80", left: 68, bottom: 94 },
+          { label: "GROUNDING", color: "#D9944A", right: 68, bottom: 94 },
+        ].map((node) => (
+          <div
+            key={node.label}
+            style={{
+              position: "absolute",
+              padding: "14px 18px",
+              borderRadius: 999,
+              backgroundColor: "rgba(2, 6, 23, 0.88)",
+              border: `1px solid ${node.color}55`,
+              color: node.color,
+              fontSize: 18,
+              fontWeight: 700,
+              boxShadow: `0 0 28px ${node.color}22`,
+              ...node,
+            }}
+          >
+            {node.label}
+          </div>
+        ))}
+        <div
+          style={{
+            width: 430,
+            height: 230,
+            borderRadius: 26,
+            backgroundColor: "rgba(15, 23, 42, 0.88)",
+            border: "1px solid rgba(51, 65, 85, 0.3)",
+            padding: "24px 26px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            boxShadow: "0 0 0 1px rgba(51, 65, 85, 0.08) inset",
+          }}
+        >
+          {codeVariants.map((variant, index) => (
+            <div key={`variant-${index}`} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {variant.map((line, lineIndex) => (
+                <div
+                  key={`${line}-${lineIndex}`}
+                  style={{
+                    color: "#E2E8F0",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 13,
+                    lineHeight: 1.3,
+                    opacity: index === codeVariants.length - 1 ? 0.86 : 0.42,
+                  }}
+                >
+                  {line}
+                </div>
+              ))}
+              {index < codeVariants.length - 1 ? (
+                <div
+                  style={{
+                    height: 1,
+                    backgroundColor: `${tintColors[index] ?? "#60A5FA"}55`,
+                    margin: "4px 0",
+                  }}
+                />
+              ) : null}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: 120,
+            right: 120,
+            bottom: 18,
+            display: "flex",
+            justifyContent: "center",
+            gap: 14,
+            color: "#64748B",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 13,
+          }}
+        >
+          {tintColors.slice(0, 3).map((color, index) => (
+            <div key={`ticker-${index}`} style={{ color: index === 2 ? "#4ADE80" : "#64748B" }}>
+              {`${command} → ${successIndicator}`}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  } else if (diagramId === "test_walls_illuminate") {
+    body = (
+      <div
+        style={{
+          width: width * 0.82,
+          minHeight: height * 0.62,
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: "14px 36px 40px",
+            backgroundImage:
+              "linear-gradient(rgba(30,41,59,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(30,41,59,0.18) 1px, transparent 1px)",
+            backgroundSize: "40px 40px",
+            opacity: 0.42,
+          }}
+        />
+        <svg
+          width="100%"
+          height="100%"
+          viewBox="0 0 1200 620"
+          preserveAspectRatio="none"
+          style={{ position: "absolute", inset: 0 }}
+        >
+          <path d="M 530 70 L 600 140 L 670 70 Z" fill="rgba(148, 163, 184, 0.72)" />
+          <rect x={360} y={150} width={480} height={320} rx={28} fill="none" stroke="rgba(217, 148, 74, 0.78)" strokeWidth={4} />
+          <path d="M 430 208 L 510 208 L 510 284 L 600 284 L 600 360 L 690 360 L 690 284 L 770 284 L 770 208" fill="none" stroke="rgba(217, 148, 74, 0.65)" strokeWidth={6} strokeLinejoin="round" />
+          <path d="M 590 150 C 544 212, 498 292, 520 360 C 544 432, 650 448, 720 404 C 778 368, 784 286, 736 232 C 702 194, 642 176, 614 154 Z" fill="rgba(96, 165, 250, 0.28)" stroke="rgba(167, 139, 250, 0.36)" strokeWidth={2} />
+          <circle cx={684} cy={318} r={56} fill="rgba(217, 148, 74, 0.14)" />
+          <circle cx={684} cy={318} r={28} fill="rgba(217, 148, 74, 0.22)" />
+        </svg>
+        {[
+          { label: "null → None", left: 170, top: 182 },
+          { label: "empty string → ''", left: 142, top: 266 },
+          { label: "handles unicode", left: 154, top: 352 },
+          { label: "latency < 100ms", right: 148, top: 182 },
+          { label: "no exceptions thrown", right: 114, top: 266 },
+          { label: "idempotent", right: 196, top: 352 },
+        ].map((wall, index) => (
+          <div
+            key={`wall-label-${index}`}
+            style={{
+              position: "absolute",
+              padding: "10px 12px",
+              borderRadius: 14,
+              backgroundColor: "rgba(2, 6, 23, 0.84)",
+              border: "1px solid rgba(217, 148, 74, 0.4)",
+              color: "#D9944A",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 13,
+              boxShadow: "0 0 18px rgba(217, 148, 74, 0.12)",
+              ...wall,
+            }}
+          >
+            {wall.label}
+          </div>
+        ))}
+        <div
+          style={{
+            position: "absolute",
+            bottom: 20,
+            left: 0,
+            right: 0,
+            textAlign: "center",
+            color: "#94A3B8",
+            fontSize: 16,
+            fontWeight: 600,
+          }}
+        >
+          Each test is a constraint
+        </div>
+      </div>
+    );
+  } else if (diagramId === "three_components_table" && table) {
+    const rows = Array.isArray(table.rows)
+      ? table.rows
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const hierarchyEntries =
+      asStringArray(data.hierarchy).length > 0
+        ? asStringArray(data.hierarchy)
+        : ["Tests", "Prompt", "Grounding"];
+    body = (
+      <div
+        style={{
+          width: width * 0.82,
+          minHeight: height * 0.66,
+          position: "relative",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "flex-start",
+        }}
+      >
+        <div
+          style={{
+            width: 700,
+            borderRadius: 24,
+            overflow: "hidden",
+            backgroundColor: "rgba(15, 23, 42, 0.88)",
+            border: subtleBorder,
+            boxShadow: "0 16px 40px rgba(2, 6, 23, 0.22)",
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1.1fr 1fr 0.8fr",
+              backgroundColor: "#1E293B",
+              color: "#94A3B8",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {(Array.isArray(table.columns) ? table.columns : ["Component", "Encodes", "Owner"]).map((column, index) => (
+              <div key={`header-${index}`} style={{ padding: "16px 20px" }}>
+                {asString(column) ?? `Column ${index + 1}`}
+              </div>
+            ))}
+          </div>
+          {rows.slice(0, 3).map((row, index) => {
+            const color = asString(row.color) ?? (index === 0 ? "#2DD4BF" : index === 1 ? "#A78BFA" : "#D9944A");
+            return (
+              <div
+                key={`row-${index}`}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1.1fr 1fr 0.8fr",
+                  borderTop: "1px solid rgba(51, 65, 85, 0.32)",
+                  minHeight: 60,
+                }}
+              >
+                <div style={{ padding: "18px 20px", borderLeft: `3px solid ${color}`, color, fontSize: 16, fontWeight: 700 }}>
+                  {asString(row.component) ?? `Component ${index + 1}`}
+                </div>
+                <div style={{ padding: "18px 20px", color: "#E2E8F0", fontSize: 14, opacity: 0.72 }}>
+                  {asString(row.encodes) ?? ""}
+                </div>
+                <div style={{ padding: "18px 20px", color: "#94A3B8", fontSize: 14, opacity: 0.66 }}>
+                  {asString(row.owner) ?? ""}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div
+          style={{
+            marginTop: 34,
+            color: "#D9944A",
+            fontSize: 22,
+            fontWeight: 700,
+            textAlign: "center",
+            textShadow: "0 0 18px rgba(217, 148, 74, 0.24)",
+          }}
+        >
+          {asString(data.priorityRule) ?? "When these conflict, tests win. Always."}
+        </div>
+        <div
+          style={{
+            marginTop: 18,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            color: "#64748B",
+            fontSize: 11,
+            letterSpacing: 0.4,
+          }}
+        >
+          {hierarchyEntries.map((entry, index) => (
+            <React.Fragment key={`hierarchy-${entry}`}>
+              <div style={{ color: index === 0 ? "#D9944A" : index === 1 ? "#2DD4BF" : "#A78BFA", fontWeight: 700 }}>
+                {entry}
+              </div>
+              {index < hierarchyEntries.length - 1 ? <div>overrides ↓</div> : null}
+            </React.Fragment>
+          ))}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: 88,
+            bottom: 26,
+            display: "flex",
+            alignItems: "center",
+            gap: 14,
+          }}
+        >
+          <div
+            style={{
+              width: 58,
+              height: 58,
+              borderRadius: 18,
+              background: "linear-gradient(135deg, rgba(45, 212, 191, 0.26), rgba(167, 139, 250, 0.24) 52%, rgba(217, 148, 74, 0.28))",
+              border: "1px solid rgba(226, 232, 240, 0.12)",
+              boxShadow: "0 0 24px rgba(217, 148, 74, 0.16)",
+            }}
+          />
+          <div style={{ color: "#E2E8F0", fontSize: 16, opacity: 0.6 }}>
+            The mold is what matters.
+          </div>
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            right: 88,
+            bottom: 22,
+            padding: "14px 16px",
+            borderRadius: 18,
+            backgroundColor: "rgba(2, 6, 23, 0.68)",
+            color: "#64748B",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 12,
+            opacity: 0.34,
+          }}
+        >
+          <div>def candidate(intent, tests):</div>
+          <div>    return regenerate(intent, tests)</div>
+        </div>
+      </div>
+    );
+  } else if (diagramId === "code_generation_comparison" && scenarios.length > 0) {
     const takeaway = asRecord(data.takeaway);
     body = (
       <div
