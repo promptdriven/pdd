@@ -3133,4 +3133,14 @@ describe("classifyAuditVerdict empty analysis handling", () => {
     expect(fnBody).toMatch(/!analysis/);
     expect(fnBody).toMatch(/skip/);
   });
+
+  it("writes a non-empty fallback summary when Claude returns no technical assessment", () => {
+    const summaryBlock = sourceCode.slice(
+      sourceCode.indexOf("let summary ="),
+      sourceCode.indexOf("writeAuditReport(auditPath, verdict, summary);")
+    );
+
+    expect(summaryBlock).toMatch(/technicalAssessment \?\?/);
+    expect(summaryBlock).toMatch(/Audit model returned no parseable assessment|Audit completed without a detailed technical assessment/);
+  });
 });

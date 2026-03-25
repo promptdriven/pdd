@@ -1,4 +1,4 @@
 ## Verdict
-pass
+warn
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (cost, patching, irrational, economics, generation), so the frame does not support a hard missing-text failure.
+OCR confirmed visible text tokens in the rendered frame (economics, cost, patching, generation), so the frame does not support a hard missing-text failure.

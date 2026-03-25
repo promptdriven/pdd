@@ -91,6 +91,34 @@ const buildDenseCodePreviewLines = (variant: "dense" | "cluttered" | "clean"): s
   return shared;
 };
 
+const splitQuoteIntoLines = (quote: string, maxLines = 3): string[] => {
+  const trimmed = quote.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const punctuationFirst = trimmed
+    .split(/(?<=[,.;:])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (punctuationFirst.length >= 2 && punctuationFirst.length <= maxLines) {
+    return punctuationFirst;
+  }
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length <= 6) {
+    return [trimmed];
+  }
+
+  const chunkSize = Math.ceil(words.length / Math.min(maxLines, 3));
+  const lines: string[] = [];
+  for (let index = 0; index < words.length; index += chunkSize) {
+    lines.push(words.slice(index, index + chunkSize).join(" "));
+  }
+  return lines.slice(0, maxLines);
+};
+
 const titleCase = (value: string): string => {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -475,10 +503,142 @@ const HeaderBlock: React.FC<{
   );
 };
 
-const GhostElements: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+const GhostElements: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
   const ghosts = Array.isArray(data.ghostElements)
     ? data.ghostElements.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
+  const ghostShapes = ghosts
+    .map((ghost) => asString(ghost.shape))
+    .filter((shape): shape is string => Boolean(shape));
+  const hasCodebaseTree = ghostShapes.includes("codebase_tree");
+  const hasMoldGhost = ghostShapes.some((shape) =>
+    ["mold_shell", "mold_walls", "mold_nozzle", "mold_material"].includes(shape)
+  );
+
+  if (hasMoldGhost) {
+    const shellGhost = ghosts.find((ghost) => asString(ghost.shape) === "mold_shell");
+    const wallGhost = ghosts.find((ghost) => asString(ghost.shape) === "mold_walls");
+    const nozzleGhost = ghosts.find((ghost) => asString(ghost.shape) === "mold_nozzle");
+    const materialGhost = ghosts.find((ghost) => asString(ghost.shape) === "mold_material");
+
+    return (
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0, opacity: 0.92 }}
+      >
+        <rect
+          x={width / 2 - 250}
+          y={height / 2 - 40}
+          width={500}
+          height={250}
+          rx={16}
+          fill="none"
+          stroke={asString(shellGhost?.color) ?? "#4A90D9"}
+          strokeWidth={2}
+          opacity={0.16}
+        />
+        {[0, 1, 2].map((index) => (
+          <line
+            key={`mold-wall-${index}`}
+            x1={width / 2 - 168 + index * 42}
+            y1={height / 2 - 24}
+            x2={width / 2 - 168 + index * 42}
+            y2={height / 2 + 150}
+            stroke={asString(wallGhost?.color) ?? "#D9944A"}
+            strokeWidth={2}
+            opacity={0.18}
+          />
+        ))}
+        <path
+          d={`M ${width / 2 - 46} ${height / 2 - 72} L ${width / 2} ${height / 2 - 8} L ${
+            width / 2 + 46
+          } ${height / 2 - 72} Z`}
+          fill="none"
+          stroke={asString(nozzleGhost?.color) ?? "#2DD4BF"}
+          strokeWidth={2}
+          opacity={0.18}
+        />
+        <path
+          d={`M ${width / 2 - 76} ${height / 2 + 74}
+              C ${width / 2 - 26} ${height / 2 + 4}, ${width / 2 + 46} ${height / 2 + 24}, ${
+                width / 2 + 88
+              } ${height / 2 + 92}
+              C ${width / 2 + 54} ${height / 2 + 138}, ${width / 2 - 6} ${height / 2 + 150}, ${
+                width / 2 - 82
+              } ${height / 2 + 118} Z`}
+          fill="none"
+          stroke={asString(materialGhost?.color) ?? "#A78BFA"}
+          strokeWidth={2}
+          opacity={0.15}
+        />
+      </svg>
+    );
+  }
+
+  if (hasCodebaseTree) {
+    const treeGhost = ghosts.find((ghost) => asString(ghost.shape) === "codebase_tree");
+    const treeColor = asString(treeGhost?.color) ?? "#334155";
+    const centerX = width / 2;
+    const trunkTop = height * 0.28;
+    const trunkBottom = height * 0.74;
+    const branchRows = [0.36, 0.44, 0.52, 0.6, 0.68];
+
+    return (
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0, opacity: 0.9 }}
+      >
+        <line
+          x1={centerX}
+          y1={trunkTop}
+          x2={centerX}
+          y2={trunkBottom}
+          stroke={treeColor}
+          strokeWidth={2}
+          opacity={0.18}
+        />
+        {branchRows.map((row, index) => {
+          const y = height * row;
+          const isLeft = index % 2 === 0;
+          const branchLength = 110 + (index % 3) * 26;
+          const branchEnd = centerX + (isLeft ? -branchLength : branchLength);
+          const fileX = branchEnd + (isLeft ? -10 : 2);
+          return (
+            <React.Fragment key={`branch-${index}`}>
+              <line
+                x1={centerX}
+                y1={y}
+                x2={branchEnd}
+                y2={y}
+                stroke={treeColor}
+                strokeWidth={2}
+                opacity={0.14}
+              />
+              <rect
+                x={fileX}
+                y={y - 8}
+                width={10}
+                height={14}
+                rx={2}
+                fill="none"
+                stroke={treeColor}
+                strokeWidth={1.5}
+                opacity={0.14}
+              />
+            </React.Fragment>
+          );
+        })}
+      </svg>
+    );
+  }
 
   return (
     <>
@@ -562,7 +722,7 @@ const TitleCardVisual: React.FC<{
           {`def regenerate(module):\n    tests = load_accumulated_tests(module)\n    prompt = load_prompt(module)\n    return pdd.generate(prompt, tests)\n\n# prompt-driven development`}
         </div>
       ) : null}
-      <GhostElements data={data} />
+      <GhostElements data={data} width={width} height={height} />
       <div
         style={{
           position: "relative",
@@ -588,18 +748,65 @@ const TitleCardVisual: React.FC<{
             {eyebrow}
           </div>
         ) : null}
-        {isStillnessBeat || resolvedTitleLines.length > 1 ? (
+        {isStillnessBeat ? (
           <div
             style={{
               width: 300,
               height: 2,
               backgroundColor: ruleColor,
               borderRadius: 999,
-              opacity: resolvedTitleLines.length > 1 ? 0.9 : 1,
+              opacity: 1,
             }}
           />
         ) : null}
-        {resolvedTitleLines.length > 0 ? (
+        {resolvedTitleLines.length === 2 && !isStillnessBeat ? (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 18,
+              maxWidth: width * 0.76,
+            }}
+          >
+            <div
+              style={{
+                color: titleColor,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: width > 1400 ? 76 : 64,
+                fontWeight: 700,
+                lineHeight: 1.03,
+                letterSpacing: 1,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {resolvedTitleLines[0]}
+            </div>
+            <div
+              style={{
+                width: 240,
+                height: 2,
+                backgroundColor: ruleColor,
+                borderRadius: 999,
+                opacity: 0.9,
+              }}
+            />
+            <div
+              style={{
+                color: titleColor,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: width > 1400 ? 76 : 64,
+                fontWeight: 700,
+                lineHeight: 1.03,
+                letterSpacing: 1,
+                whiteSpace: "pre-wrap",
+                transform: "translateX(15px)",
+              }}
+            >
+              {resolvedTitleLines[1]}
+            </div>
+          </div>
+        ) : resolvedTitleLines.length > 0 ? (
           <div
             style={{
               color: titleColor,
@@ -675,10 +882,94 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
   const secondaryText =
     asString(data.secondaryText) ?? asString(data.summary) ?? asString(data.subtext);
   const attribution = asString(data.attribution);
+  const quote = asString(data.quote);
   const primaryLines =
     quoteLine1 || quoteLine2
       ? [quoteLine1, quoteLine2].filter((line): line is string => Boolean(line))
-      : [resolveTitle(data)];
+      : quote
+        ? splitQuoteIntoLines(quote, 3)
+        : [resolveTitle(data)];
+  const usesMinimalQuoteLayout = Boolean(
+    quote &&
+      attribution &&
+      !quoteLine1 &&
+      !quoteLine2 &&
+      !secondaryText
+  );
+
+  if (usesMinimalQuoteLayout) {
+    return (
+      <AbsoluteFill
+        style={{
+          padding: "120px 140px 120px 180px",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 400,
+            top: "50%",
+            width: 2,
+            height: 120,
+            transform: "translateY(-20%)",
+            backgroundColor: `${accent}66`,
+            borderRadius: 999,
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: 840,
+            top: 310,
+            color: `${accent}33`,
+            fontFamily: "'Georgia', serif",
+            fontSize: 132,
+            lineHeight: 1,
+          }}
+        >
+          "
+        </div>
+        <div
+          style={{
+            maxWidth: 960,
+            margin: "0 auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            alignItems: "center",
+            textAlign: "center",
+          }}
+        >
+          {primaryLines.map((line, index) => (
+            <div
+              key={`${line}-${index}`}
+              style={{
+                color: "#E2E8F0",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 32,
+                fontWeight: index === primaryLines.length - 1 ? 700 : 400,
+                lineHeight: 1.28,
+                maxWidth: 900,
+              }}
+            >
+              {line}
+            </div>
+          ))}
+          <div
+            style={{
+              color: "rgba(148, 163, 184, 0.78)",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 16,
+              marginTop: 32,
+            }}
+          >
+            {`- ${attribution}`}
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
 
   return (
     <AbsoluteFill

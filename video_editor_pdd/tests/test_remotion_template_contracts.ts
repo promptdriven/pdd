@@ -192,13 +192,18 @@ describe("shared generated contract renderer", () => {
 
   it("supports structured title cards and stillness beats without collapsing them into generic centered text", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const ghostBlock = extractBlock(source, "const GhostElements", "const TitleCardVisual");
+    const titleBlock = extractBlock(source, "const TitleCardVisual", "const QuoteCardVisual");
 
     expect(source).toMatch(/style === ["']stillness_beat["']/);
     expect(source).toMatch(/sectionLabel/);
     expect(source).toMatch(/titleLine1|titleLine2|subtitle|tagline/);
     expect(source).toMatch(/ghostElements/);
     expect(source).toMatch(/divider|rule/i);
-    expect(source).toMatch(/resolvedTitleLines\.length > 1/);
+    expect(ghostBlock).toMatch(/codebase_tree/);
+    expect(ghostBlock).toMatch(/mold_shell|mold_walls|mold_nozzle|mold_material/);
+    expect(titleBlock).toMatch(/resolvedTitleLines\[0\]/);
+    expect(titleBlock).toMatch(/resolvedTitleLines\[1\]/);
   });
 
   it("renders transitions and contract-first diagrams without the old placeholder badge", () => {
@@ -226,6 +231,8 @@ describe("shared generated contract renderer", () => {
     expect(quoteBlock).toMatch(/quoteLine2/);
     expect(quoteBlock).toMatch(/quoteLine2Color/);
     expect(quoteBlock).toMatch(/secondaryText/);
+    expect(quoteBlock).toMatch(/Georgia/);
+    expect(quoteBlock).toMatch(/width:\s*2/);
   });
 
   it("renders transition cards without the old debug title and center divider artifact", () => {

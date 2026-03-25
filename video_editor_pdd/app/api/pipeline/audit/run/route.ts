@@ -749,7 +749,11 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
           onLog
         )) as AnnotationAnalysis);
     let verdict = classifyAuditVerdict(analysis, { auditHints });
-    let summary = analysis.technicalAssessment;
+    let summary =
+      analysis.technicalAssessment ??
+      (verdict === "skip"
+        ? "Audit model returned no parseable assessment for this frame."
+        : "Audit completed without a detailed technical assessment.");
     let deterministicGeometry: ReturnType<typeof evaluateDeterministicGeometryAudit> =
       null;
     let deterministicText = null;
@@ -776,6 +780,13 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
         verdict = deterministicText.verdict;
         summary = deterministicText.summary;
       }
+    }
+
+    if (!summary || !summary.trim()) {
+      summary =
+        verdict === "skip"
+          ? "Audit model returned no parseable assessment for this frame."
+          : "Audit completed without a detailed technical assessment.";
     }
 
     if (verdict === "pass") passCount++;

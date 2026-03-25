@@ -1,4 +1,18 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at 96.4% progress (frame 202/210), which falls in the final hold phase (frames 195-210). At this point the spec requires: all elements stable, code block visible in center, triangle glowing softly. The frame shows: (1) Triangle is fully drawn with all three vertices, edge lines, and vertex dots — correct. (2) All three vertex labels (PROMPT, TESTS, GROUNDING) are present with correct colors (blue, green, amber) — correct. (3) All three descriptor texts are visible ('encode intent' under PROMPT, 'preserve behavior' under TESTS, 'maintain style' under GROUNDING) — correct. (4) The 'encode intent' descriptor under PROMPT partially overlaps with the vertex dot, making it hard to read — minor layout issue. (5) Center code block: there are horizontal bar shapes in the center of the triangle that suggest code lines, but they appear as abstract gray bars rather than readable pseudocode text in JetBrains Mono. The spec calls for '8-10 lines of pseudocode, appearing line by line' with legible code text. The rendered bars are too abstract — they read as placeholder rectangles rather than code. (6) Background color appears correct (deep navy-black). (7) Triangle is centered on canvas — correct. (8) Vertex dot sizes and glow are present and appropriate. (9) The triangle does not appear to have a visible soft glow in the hold phase as specified, though this is subtle and decorative.
+The frame is sampled at 96.4% progress (frame 202/210), which is in the final hold phase (frames 195-210). At this point, the spec requires all elements stable, a code block visibly centered inside the triangle, and the triangle glowing softly. Findings:
+
+1. **Triangle structure**: PASS. An equilateral triangle is clearly visible with all three edge lines drawn, connecting PROMPT (top), TESTS (bottom-left), and GROUNDING (bottom-right). The triangle is roughly centered on the canvas. A subtle interior fill is present.
+
+2. **Vertex dots and colors**: PASS. PROMPT has a blue glowing circle at top. TESTS has a green glowing circle at bottom-left. GROUNDING has an amber/orange glowing circle at bottom-right. All are the correct colors per spec.
+
+3. **Vertex labels**: PASS. 'PROMPT' in blue above top vertex, 'TESTS' in green below bottom-left vertex, 'GROUNDING' in amber below bottom-right vertex. Colors and positioning match spec.
+
+4. **Descriptor text**: PASS. 'encode intent' is faintly visible below PROMPT (partially occluded by the dot). 'preserve behavior' is visible below TESTS. 'maintain style' is visible below GROUNDING. All use the correct vertex colors at reduced opacity.
+
+5. **Center code block**: MINOR ISSUE. There are horizontal lines/bars visible in the center of the triangle representing code, but they appear as generic gray placeholder bars rather than readable pseudocode text in JetBrains Mono. The spec calls for '8-10 lines of pseudocode' in monospace font. The current render shows approximately 5-6 short horizontal bars that read as abstract representations of code rather than actual code text. While the visual intent (code materializing in the center) is communicated, the fidelity is lower than specified.
+
+6. **Glow**: The vertex dots show glow effects. The triangle edges appear stable. The overall soft glow is subtle but present.
+
+7. **Layout and centering**: PASS. The triangle is centered on the canvas, composition matches spec intent.
