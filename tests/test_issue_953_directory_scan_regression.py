@@ -1,11 +1,11 @@
 """Regression tests for Issue #953 / #722: _extract_test_files() directory scan
-triggers even when regex (or other discovery paths) already found test files.
+triggers even when other discovery paths already found test files.
 
 Root cause: the guard checked `len(test_files) == count_before_git` (whether the
-git step added new files), not whether ANY files were already discovered. When
-regex found a file and git found the same file (deduplicated), the count didn't
-change, so the full directory scan triggered — pulling 241 files into
-_verify_tests_independently() and causing 4+ hour verification times.
+git step added new files), not whether ANY files were already discovered. When an
+earlier discovery path found a file and git found the same file (deduplicated),
+the count didn't change, so the full directory scan triggered — pulling 241 files
+into _verify_tests_independently() and causing 4+ hour verification times.
 
 Fix: changed the guard to `if not test_files` so the directory scan is a true
 last-resort fallback that only runs when all other discovery paths found nothing.
@@ -24,13 +24,13 @@ from pdd.agentic_e2e_fix_orchestrator import _extract_test_files
 def large_test_dir(tmp_path):
     """Create a project with 2 issue-specific test files and 50 unrelated ones.
 
-    Simulates a real repo where regex finds the issue-specific files but the
-    buggy guard would trigger a full scan of the tests/ directory.
+    Simulates a real repo where git discovery finds the issue-specific files
+    but the buggy guard would trigger a full scan of the tests/ directory.
     """
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
 
-    # The 2 files that regex should find from issue_content
+    # The 2 issue-specific test files
     (tests_dir / "test_agentic_bug_orchestrator.py").write_text(
         "def test_bug(): assert True\n"
     )
@@ -50,20 +50,16 @@ def large_test_dir(tmp_path):
 class TestDirectoryScanDoesNotTriggerWhenFilesFound:
     """The directory scan must only run when NO discovery path found ANY files."""
 
-    def test_regex_found_files_prevents_directory_scan(self, large_test_dir):
-        """When regex extracts test files from issue_content, the directory scan
-        must NOT trigger — even if git finds the same files (deduplicated).
+    def test_git_found_files_prevents_directory_scan(self, large_test_dir):
+        """When git discovery finds test files, the directory scan must NOT
+        trigger — this is the core fix for #953.
 
-        This is the exact bug from #953: regex found 1 file, git found the same
-        file, count didn't change, directory scan triggered, 241 files returned.
+        The exact bug: an earlier path found files, git found the same files
+        (deduplicated), count didn't change, directory scan triggered, 241
+        files returned.
         """
-        issue_content = (
-            "The fix modifies tests/test_agentic_bug_orchestrator.py "
-            "and tests/test_concurrent_label_race.py to address the race."
-        )
-
-        # Mock _get_modified_and_untracked to return the SAME files regex found
-        # (simulating git finding the same files → deduplication → count unchanged)
+        # Mock _get_modified_and_untracked to return the 2 issue-specific files
+        # (simulating git finding files → deduplication → count unchanged)
         with patch(
             "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
             return_value=[
@@ -72,7 +68,7 @@ class TestDirectoryScanDoesNotTriggerWhenFilesFound:
             ],
         ):
             result = _extract_test_files(
-                issue_content,
+                issue_content="",
                 changed_files=[],
                 cwd=large_test_dir,
                 initial_file_hashes=None,
