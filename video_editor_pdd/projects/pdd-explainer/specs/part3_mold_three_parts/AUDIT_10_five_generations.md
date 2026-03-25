@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame shows only a fallback/placeholder state: a dark background with the text 'ANIMATED DIAGRAM' (blue label) and 'five_generations' (white title) in the top-left corner. None of the specified visual content is present. At frame 479/540 (88.9% progress, animation phase 420-540 'Hold'), the frame should show: (1) five code panels arranged horizontally, (2) panels 1 and 3 with red X overlays, (3) panels 2 and 4 with yellow warning overlays and dimmed to 0.3 opacity, (4) panel 5 with green checkmark, glow effect, and scaled up to 1.05x, (5) main label 'Generate five. Pick the one that passes all tests.' centered near y:900, and (6) sub-label 'The walls don't care how many attempts it took.' centered near y:940. Instead, the entire canvas is empty except for the placeholder text, indicating the component has not been implemented or is rendering a fallback stub.
+OCR confirmed visible text tokens in the rendered frame (fail, warn, pass, generation), so the frame does not support a hard missing-text failure.

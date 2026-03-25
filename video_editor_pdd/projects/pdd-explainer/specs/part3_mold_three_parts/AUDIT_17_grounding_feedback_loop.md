@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (grounding, feedback, loop, diagram, animated), so the frame does not support a hard missing-text failure.
+The rendered frame shows only a dark background with a single rounded-rect element labeled 'Structured contract preview' centered vertically. At frame 599/660 (90.9% progress, animation phase 540-660), the spec requires the complete pipeline visible with all three components (Prompt → Grounding → Mold → Walls → Code) pulsing left to right, plus the bottom label 'Prompt plus tests plus grounding. Intent plus constraints plus style.' None of the specified visual content is present: no dual grounding paths, no code panels, no database cylinder, no cloud icon, no pipeline flow diagram, no connecting arrows, no component labels, and no bottom summary text. The frame appears to be rendering a placeholder/fallback element instead of the actual grounding feedback loop composition.

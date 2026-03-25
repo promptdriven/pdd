@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (correct, study, metr, quadrants, mixed), so the frame does not support a hard missing-text failure.
+The frame at 90.9% progress correctly shows the complete 2×2 grid visualization in the hold phase (frames 540-660). The core visual intent is achieved: green top-left quadrant with GitHub study +55%, red bottom-right quadrant with METR study −19%, two neutral quadrants with mixed labels, axis labels, and the primary summary text. However, the second summary line ('And most real enterprise work lives in the bottom-right.') which should appear as a separate centered line below the grid at y:835 is instead embedded as small text within the bottom-right quadrant cell ('Most enterprise work'). This repositioning changes the visual hierarchy specified. Additional elements not in the spec include a title/subtitle header, sub-labels in the data quadrants, a dashed circle in the bottom-right quadrant, and colored axis endpoint labels. The neutral quadrant labels read 'Mixed results' instead of 'Mixed'. These are additive embellishments that don't break the visual but deviate from spec.

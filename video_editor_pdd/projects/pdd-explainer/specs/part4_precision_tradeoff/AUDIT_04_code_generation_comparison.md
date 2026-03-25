@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The frame shows a fallback/placeholder render rather than the actual visual component. Instead of the specified side-by-side code generation comparison (or at this sample point at 94% progress, the takeaway callout text 'More tests, less prompt. / The walls do the precision work.'), the frame displays only a generic 'ANIMATED DIAGRAM' label in the upper-left, the component ID 'code_generation_comparison' as a heading, and a 'Structured contract preview' pill in the center. None of the spec's required visual elements are present: no prompt documents, no funnels, no test checkmarks/walls, no code blocks, no comparison bar, and no takeaway callout text. The sampled frame is at 94% through the visual (frame 480/511), which falls squarely in animation phase 7 (frames 450-511) — the takeaway hold phase where 'More tests, less prompt.' and 'The walls do the precision work.' should be visible and pulsing. Nothing from any animation phase is rendered.
+OCR confirmed visible text tokens in the rendered frame (left, right, prompt, correct, tests), so the frame does not support a hard missing-text failure.

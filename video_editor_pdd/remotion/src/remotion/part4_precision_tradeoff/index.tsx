@@ -3,25 +3,16 @@ import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part4PrecisionTradeoff01SectionTitleCard } from "../Part4PrecisionTradeoff01SectionTitleCard";
 import { Part4PrecisionTradeoff02PrinterVsMoldSplit } from "../Part4PrecisionTradeoff02PrinterVsMoldSplit";
-import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "../Part4PrecisionTradeoff03PrecisionTradeoffCurve";
-import { Part4PrecisionTradeoff07EmbeddedCodeDocument } from "../Part4PrecisionTradeoff07EmbeddedCodeDocument";
 import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "../Part4PrecisionTradeoff08PromptCodeSpectrum";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "01_section_title_card": Part4PrecisionTradeoff01SectionTitleCard,
   "02_printer_vs_mold_split": Part4PrecisionTradeoff02PrinterVsMoldSplit,
-  "03_precision_tradeoff_curve": Part4PrecisionTradeoff03PrecisionTradeoffCurve,
-  "05_embedded_code_document": Part4PrecisionTradeoff07EmbeddedCodeDocument,
   "06_prompt_code_spectrum": Part4PrecisionTradeoff08PromptCodeSpectrum,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "01_section_title_card": 120,
   "02_printer_vs_mold_split": 600,
-  "03_precision_tradeoff_curve": 450,
-  "05_embedded_code_document": 480,
   "06_prompt_code_spectrum": 360,
 };
 

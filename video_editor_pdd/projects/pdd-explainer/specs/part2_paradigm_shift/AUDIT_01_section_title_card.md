@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-The horizontal rule specified between 'THE PARADIGM' and 'SHIFT' (240px wide, 2px, #334155 at 0.5 opacity, centered at y:505) is not visible in the rendered frame. All other elements — background, blueprint grid, 'PART 2' label, 'THE PARADIGM' title, 'SHIFT' subtitle, and ghost mold silhouette — are present and correctly positioned. The rule is a decorative separator element; its absence is noticeable upon careful comparison but does not break the overall composition or readability of the title card.
+Two notable discrepancies: (1) The horizontal rule specified as 240px wide, 2px, #334155 at 0.5 opacity, centered between 'THE PARADIGM' and 'SHIFT' at y:505, is completely missing from the rendered frame. This is a critical element per the spec that should be clearly visible. (2) The ghost mold silhouette in the background does not match the spec description — the spec calls for a triangular nozzle pointing down into a rectangular mold cavity with straight walls (an injection mold cross-section), but the render shows overlapping circular/arc shapes in the upper-right quadrant instead. The ghost shape is wrong in both form and position (should be visually centered on canvas). Minor: 'SHIFT' does not appear to have the specified 15px right offset.

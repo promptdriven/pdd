@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (animated, diagram, wall, user, parser), so the frame does not support a hard missing-text failure.
+The rendered frame is fundamentally incomplete. At 88.9% progress (frame 479/540, animation phase 420-540), the spec requires: (1) a code editor panel on the left half showing fully regenerated code with test checkmarks, (2) a mold cross-section view on the right with a permanently glowing amber wall labeled with the bug condition, (3) a terminal overlay showing 'All tests passing ✓', and (4) a bottom label reading 'That wall is permanent. That bug can never occur again.' Instead, the frame shows only two centered rounded-rectangle bars containing the text 'pdd bug user_parser' and 'pdd fix user_parser' against a dark navy background. There is no code editor panel, no mold view, no glowing wall, no terminal overlay, no test checkmarks, no bottom label, and no blueprint grid. The rendering appears to be a fallback or placeholder that merely lists the two CLI commands rather than implementing the full visual composition.

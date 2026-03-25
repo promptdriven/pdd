@@ -3,18 +3,15 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part3MoldThreeParts01SectionTitleCard } from "../Part3MoldThreeParts01SectionTitleCard";
 import { Part3MoldThreeParts02MoldCrossSection } from "../Part3MoldThreeParts02MoldCrossSection";
 import { Part3MoldThreeParts10ThreeComponentsTable } from "../Part3MoldThreeParts10ThreeComponentsTable";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "01_section_title_card": Part3MoldThreeParts01SectionTitleCard,
   "02_mold_cross_section": Part3MoldThreeParts02MoldCrossSection,
   "18_three_components_table": Part3MoldThreeParts10ThreeComponentsTable,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "01_section_title_card": 120,
   "02_mold_cross_section": 300,
   "18_three_components_table": 480,
 };

@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The frame is sampled at 89.5% progress (frame 1019, phase 8: final hold). The overall composition conveys the intended narrative — same code, three different synthesis outputs, all functionally equivalent — but several spec requirements are not met. (1) The three netlists are all rendered in the same white/light color instead of using distinct colors (#4ADE80 green, #38BDF8 blue, #FBBF24 yellow) as specified. Color differentiation is a core visual element that makes the 'different outputs' point visceral. (2) Only one 'Functionally equivalent' label is visible (center netlist) instead of one beneath each of the three netlists. (3) The spec calls for three identical smaller Verilog code blocks with 'Run 1/2/3' labels, but the render shows a single shared code block with 'Same input' label — a reasonable design choice but diverges from spec. The gate-level circuit diagrams are well-rendered with recognizable logic gate symbols (AND, OR, NOT) and each netlist has a distinct layout, which is good. The green checkmarks are correctly placed over all three netlists. The dark background and syntax highlighting match spec intent.
+OCR confirmed visible text tokens in the rendered frame (module, chip, functionally, equivalent), so the frame does not support a hard missing-text failure.

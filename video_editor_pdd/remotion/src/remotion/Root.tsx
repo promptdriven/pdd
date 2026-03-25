@@ -14,42 +14,24 @@ import { ClosingSection } from "./closing";
 import { ColdOpen01SplitScreenHook } from "./ColdOpen01SplitScreenHook";
 import { ColdOpen06CodeBlinkPatched } from "./ColdOpen06CodeBlinkPatched";
 import { ColdOpen07CodeRegeneration } from "./ColdOpen07CodeRegeneration";
-import { ColdOpen07PddTitleCard } from "./ColdOpen07PddTitleCard";
-import { Part1Economics01SectionTitleCard } from "./Part1Economics01SectionTitleCard";
 import { Part1Economics04ResearchAnnotations } from "./Part1Economics04ResearchAnnotations";
 import { Part1Economics05ContextWindowShrink } from "./Part1Economics05ContextWindowShrink";
 import { Part1Economics06TwoByTwoGrid } from "./Part1Economics06TwoByTwoGrid";
-import { Part1Economics09CrossingLinesMoment } from "./Part1Economics09CrossingLinesMoment";
 import { Part1Economics10DoubleMeterInsight } from "./Part1Economics10DoubleMeterInsight";
-import { Part2ParadigmShift01SectionTitleCard } from "./Part2ParadigmShift01SectionTitleCard";
-import { Part2ParadigmShift07VerilogSynthesisTriple } from "./Part2ParadigmShift07VerilogSynthesisTriple";
 import { Part2ParadigmShift08SynopsysPddEquivalence } from "./Part2ParadigmShift08SynopsysPddEquivalence";
 import { Part2ParadigmShift09AbstractionStaircase } from "./Part2ParadigmShift09AbstractionStaircase";
-import { Part2ParadigmShift11PromptReplacesReview } from "./Part2ParadigmShift11PromptReplacesReview";
-import { Part3MoldThreeParts01SectionTitleCard } from "./Part3MoldThreeParts01SectionTitleCard";
 import { Part3MoldThreeParts02MoldCrossSection } from "./Part3MoldThreeParts02MoldCrossSection";
 import { Part3MoldThreeParts10ThreeComponentsTable } from "./Part3MoldThreeParts10ThreeComponentsTable";
-import { Part4PrecisionTradeoff01SectionTitleCard } from "./Part4PrecisionTradeoff01SectionTitleCard";
 import { Part4PrecisionTradeoff02PrinterVsMoldSplit } from "./Part4PrecisionTradeoff02PrinterVsMoldSplit";
-import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "./Part4PrecisionTradeoff03PrecisionTradeoffCurve";
-import { Part4PrecisionTradeoff07EmbeddedCodeDocument } from "./Part4PrecisionTradeoff07EmbeddedCodeDocument";
 import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "./Part4PrecisionTradeoff08PromptCodeSpectrum";
-import { Part5CompoundReturns01SectionTitleCard } from "./Part5CompoundReturns01SectionTitleCard";
-import { Part5CompoundReturns02MaintenancePieChart } from "./Part5CompoundReturns02MaintenancePieChart";
-import { Part5CompoundReturns03CompoundDebtCurve } from "./Part5CompoundReturns03CompoundDebtCurve";
-import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
-import { Part5CompoundReturns07EconomicsCrossingCallback } from "./Part5CompoundReturns07EconomicsCrossingCallback";
 import { Part5CompoundReturns08ContrarianQuoteCard } from "./Part5CompoundReturns08ContrarianQuoteCard";
-import { WhereToStart01SectionTitleCard } from "./WhereToStart01SectionTitleCard";
-import { WhereToStart02LegacyCodebaseReveal } from "./WhereToStart02LegacyCodebaseReveal";
 import { WhereToStart04SourceOfTruthShift } from "./WhereToStart04SourceOfTruthShift";
 import { WhereToStart07NoBigBangCallout } from "./WhereToStart07NoBigBangCallout";
 import { Closing03CodeRegenerateWorkflow } from "./Closing03CodeRegenerateWorkflow";
 import { Closing04PddTriangle } from "./Closing04PddTriangle";
 import { Closing05DissolveRegenerateLoop } from "./Closing05DissolveRegenerateLoop";
 import { Closing07TheBeat } from "./Closing07TheBeat";
-import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "cold_open:01_split_screen_hook": { leftSrc: "veo/developer_ai_edit.mp4", defaultSrc: "veo/developer_ai_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_ai_edit.mp4", outputSrc: "veo/developer_ai_edit.mp4", baseSrc: "veo/developer_ai_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
@@ -151,14 +133,14 @@ const ColdOpen07CodeRegenerationPreview: React.FC = () => (
 const ColdOpen07PddTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_pdd_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_pdd_title_card"] ?? null}>
-      <ColdOpen07PddTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:01_section_title_card"] ?? null}>
-      <Part1Economics01SectionTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -225,10 +207,10 @@ const Part1Economics10ContextCompressionPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part1Economics09CrossingLinesMomentPreview: React.FC = () => (
+const Part1Economics11CrossingLinesMomentPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:11_crossing_lines_moment"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:11_crossing_lines_moment"] ?? null}>
-      <Part1Economics09CrossingLinesMoment />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -263,7 +245,7 @@ const Part1Economics17TryItYourselfPreview: React.FC = () => (
 const Part2ParadigmShift01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:01_section_title_card"] ?? null}>
-      <Part2ParadigmShift01SectionTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -288,10 +270,10 @@ const Part2ParadigmShift06CraftsmanVsMoldPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift07VerilogSynthesisTriplePreview: React.FC = () => (
+const Part2ParadigmShift10VerilogSynthesisTriplePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:10_verilog_synthesis_triple"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:10_verilog_synthesis_triple"] ?? null}>
-      <Part2ParadigmShift07VerilogSynthesisTriple />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -309,17 +291,17 @@ const Part2ParadigmShift09AbstractionStaircasePreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift11PromptReplacesReviewPreview: React.FC = () => (
+const Part2ParadigmShift13PromptReplacesReviewPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:13_prompt_replaces_review"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:13_prompt_replaces_review"] ?? null}>
-      <Part2ParadigmShift11PromptReplacesReview />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldThreeParts01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:01_section_title_card"] ?? null}>
-      <Part3MoldThreeParts01SectionTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -431,7 +413,7 @@ const Part3MoldThreeParts10ThreeComponentsTablePreview: React.FC = () => (
 const Part4PrecisionTradeoff01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:01_section_title_card"] ?? null}>
-      <Part4PrecisionTradeoff01SectionTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -445,7 +427,7 @@ const Part4PrecisionTradeoff02PrinterVsMoldSplitPreview: React.FC = () => (
 const Part4PrecisionTradeoff03PrecisionTradeoffCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
-      <Part4PrecisionTradeoff03PrecisionTradeoffCurve />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -456,10 +438,10 @@ const Part4PrecisionTradeoff04CodeGenerationComparisonPreview: React.FC = () => 
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part4PrecisionTradeoff07EmbeddedCodeDocumentPreview: React.FC = () => (
+const Part4PrecisionTradeoff05EmbeddedCodeDocumentPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:05_embedded_code_document"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:05_embedded_code_document"] ?? null}>
-      <Part4PrecisionTradeoff07EmbeddedCodeDocument />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -473,28 +455,28 @@ const Part4PrecisionTradeoff08PromptCodeSpectrumPreview: React.FC = () => (
 const Part5CompoundReturns01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:01_section_title_card"] ?? null}>
-      <Part5CompoundReturns01SectionTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns02MaintenancePieChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
-      <Part5CompoundReturns02MaintenancePieChart />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns03CompoundDebtCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:03_compound_debt_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:03_compound_debt_curve"] ?? null}>
-      <Part5CompoundReturns03CompoundDebtCurve />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns04DivergingCostCurvesPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:04_diverging_cost_curves"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:04_diverging_cost_curves"] ?? null}>
-      <Part5CompoundReturns04DivergingCostCurves />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -505,10 +487,10 @@ const Part5CompoundReturns05InvestmentComparisonTablePreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part5CompoundReturns07EconomicsCrossingCallbackPreview: React.FC = () => (
+const Part5CompoundReturns08EconomicsCrossingCallbackPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
-      <Part5CompoundReturns07EconomicsCrossingCallback />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -529,14 +511,14 @@ const Part5CompoundReturns10TransitionOutPreview: React.FC = () => (
 const WhereToStart01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:01_section_title_card"] ?? null}>
-      <WhereToStart01SectionTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart02LegacyCodebaseRevealPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:02_legacy_codebase_reveal"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:02_legacy_codebase_reveal"] ?? null}>
-      <WhereToStart02LegacyCodebaseReveal />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -603,10 +585,10 @@ const Closing07TheBeatPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Closing09FinalTitleCardPreview: React.FC = () => (
+const Closing08FinalTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:08_final_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:08_final_title_card"] ?? null}>
-      <Closing09FinalTitleCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -792,7 +774,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part1-economics11-crossing-lines-moment"
-        component={Part1Economics09CrossingLinesMomentPreview}
+        component={Part1Economics11CrossingLinesMomentPreview}
         durationInFrames={750}
         fps={30}
         width={1920}
@@ -864,7 +846,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part2-paradigm-shift10-verilog-synthesis-triple"
-        component={Part2ParadigmShift07VerilogSynthesisTriplePreview}
+        component={Part2ParadigmShift10VerilogSynthesisTriplePreview}
         durationInFrames={540}
         fps={30}
         width={1920}
@@ -888,7 +870,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part2-paradigm-shift13-prompt-replaces-review"
-        component={Part2ParadigmShift11PromptReplacesReviewPreview}
+        component={Part2ParadigmShift13PromptReplacesReviewPreview}
         durationInFrames={360}
         fps={30}
         width={1920}
@@ -1056,7 +1038,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part4-precision-tradeoff05-embedded-code-document"
-        component={Part4PrecisionTradeoff07EmbeddedCodeDocumentPreview}
+        component={Part4PrecisionTradeoff05EmbeddedCodeDocumentPreview}
         durationInFrames={480}
         fps={30}
         width={1920}
@@ -1112,7 +1094,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part5-compound-returns08-economics-crossing-callback"
-        component={Part5CompoundReturns07EconomicsCrossingCallbackPreview}
+        component={Part5CompoundReturns08EconomicsCrossingCallbackPreview}
         durationInFrames={300}
         fps={30}
         width={1920}
@@ -1224,7 +1206,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="closing08-final-title-card"
-        component={Closing09FinalTitleCardPreview}
+        component={Closing08FinalTitleCardPreview}
         durationInFrames={240}
         fps={30}
         width={1920}
