@@ -1,4 +1,4 @@
 ## Verdict
 fail
 ## Summary
-The frame shows a placeholder/stub screen instead of the specified visual. At 91.7% progress (frame 494/540, animation phase 450-540), the spec requires: (1) a mold cross-section with highlighted nozzle region, (2) a dual-generation terminal in the bottom-right showing two code snippets from `pdd generate user_parser.prompt` with '✓ All tests passing', (3) the label 'Same prompt. Different code. Same behavior.', (4) flowing teal text in the cavity, (5) nozzle labels ('intent', 'requirements', 'constraints'), and (6) a file label `user_parser.prompt`. Instead, the frame displays only a dark background with an 'ANIMATED DIAGRAM' tag, the text 'prompt_nozzle' as a title, and a centered rounded-rectangle placeholder reading 'Generated from visual contract'. None of the specified visual elements are rendered.
+The frame file 13_prompt_nozzle_frame.png is entirely missing from the audit output directory. No rendered frame exists for section 3.13 (Prompt Nozzle). The directory contains frames 01-12 and 14-18 but skips 13 completely, indicating the frame was never extracted or the composition was not rendered for this audit sample window.

@@ -102,4 +102,9 @@ describe("shared Remotion runtime", () => {
   it("exposes a hook for reading structured visual contract data", () => {
     expect(source).toMatch(/useVisualContractData/);
   });
+
+  it("falls back to media aliases stored on the structured visual contract when no provider media is passed", () => {
+    expect(source).toMatch(/contract\?\.mediaAliases/);
+    expect(source).toMatch(/media\?\.\[key\].*contractMedia\?\.\[key\]/s);
+  });
 });

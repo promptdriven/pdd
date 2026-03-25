@@ -3522,6 +3522,25 @@ class TestDigitPrefixedIdentifiers:
         assert comp_pascal == "Part1Economics07StatCalloutGitclear"
         assert import_path == "07-StatCalloutGitclear"
 
+    def test_resolve_comp_import_reads_named_export_from_digit_prefixed_directory_index(self, tmp_path):
+        """Directory names can drift into invalid identifiers; import path and export name must stay separate."""
+        remotion_src = str(tmp_path)
+        component_dir = tmp_path / "08-SplitPatchingVsPdd"
+        component_dir.mkdir()
+        (component_dir / "index.ts").write_text(
+            'export { Part5Compound08SplitPatchingVsPdd } from "./Part5Compound08SplitPatchingVsPdd";\n'
+            'export { default } from "./Part5Compound08SplitPatchingVsPdd";\n',
+            encoding="utf-8",
+        )
+
+        comp_pascal, import_path = resolve_comp_import(
+            "08_patching_vs_pdd", "part5_compound_returns", remotion_src
+        )
+
+        assert comp_pascal == "Part5Compound08SplitPatchingVsPdd"
+        assert import_path == "08-SplitPatchingVsPdd"
+        assert not comp_pascal[0].isdigit()
+
     def test_resolve_comp_import_no_prefix_for_alpha_leading(self, tmp_path):
         """Non-digit-leading names are NOT prefixed."""
         remotion_src = str(tmp_path)
@@ -3535,7 +3554,13 @@ class TestDigitPrefixedIdentifiers:
     def test_resolve_comp_import_matches_unique_semantic_suffix_when_numbers_drift(self, tmp_path):
         """Unique section-scoped component matches should survive numbering drift."""
         remotion_src = str(tmp_path)
-        (tmp_path / "Closing09FinalTitleCard").mkdir()
+        component_dir = tmp_path / "Closing09FinalTitleCard"
+        component_dir.mkdir()
+        (component_dir / "index.ts").write_text(
+            'export const Closing09FinalTitleCard = () => null;\n'
+            'export default Closing09FinalTitleCard;\n',
+            encoding="utf-8",
+        )
         comp_pascal, import_path = resolve_comp_import(
             "08_final_title_card", "closing", remotion_src
         )
@@ -3753,6 +3778,124 @@ class TestDigitPrefixedIdentifiers:
         assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' in tsx
         assert 'visualContract?.renderMode === "component" ? (' in tsx
         assert '<GeneratedContractVisual />' in tsx
+
+    def test_generate_section_component_reuses_existing_component_when_name_drift_is_semantic_not_exact(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "where_to_start"
+        section_dir = remotion_src / "where_to_start"
+        existing_component_dir = remotion_src / "WhereToStart03ModuleHighlightUpdate"
+
+        section_dir.mkdir(parents=True)
+        existing_component_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+        (existing_component_dir / "index.ts").write_text(
+            'export const WhereToStart03ModuleHighlightUpdate = () => null;\n'
+            'export default WhereToStart03ModuleHighlightUpdate;\n',
+            encoding="utf-8",
+        )
+
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "03_module_highlight_terminal", desc: "module highlight", lane: 0 }];',
+            encoding="utf-8",
+        )
+        (specs_dir / "03_module_highlight_terminal.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{"type":"code_transformation","chartId":"module_highlight_terminal","narrationSegments":["where_to_start_001"]}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        tsx = generate_section_component(
+            {
+                "id": "where_to_start",
+                "compositionId": "WhereToStartSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "where_to_start",
+                "compositions": [],
+            },
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { WhereToStart03ModuleHighlightUpdate } from "../WhereToStart03ModuleHighlightUpdate";' in tsx
+        assert '"03_module_highlight_terminal": WhereToStart03ModuleHighlightUpdate,' in tsx
+        assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' not in tsx
+
+    def test_generate_section_component_serializes_contract_media_aliases_for_component_visuals(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        section_dir = remotion_src / "part1_economics"
+        component_dir = remotion_src / "Part1Economics12DeveloperDarningSplit"
+
+        section_dir.mkdir(parents=True)
+        component_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True)
+        (remotion_public / "veo").mkdir()
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "grandmother_darning_lamplight.mp4").write_text("stub", encoding="utf-8")
+
+        (section_dir / "constants.ts").write_text(
+            'export const VISUAL_SEQUENCE = [{ start: 0, end: 90, id: "12_developer_darning_split", desc: "split", lane: 0 }];',
+            encoding="utf-8",
+        )
+        (specs_dir / "12_developer_darning_split.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                '{',
+                '  "type": "split_screen",',
+                '  "leftSrc": "developer_cursor_edit.mp4",',
+                '  "rightSrc": "grandmother_darning_lamplight.mp4",',
+                '  "leftPanel": { "content": "developer_cursor_edit", "label": "CURSOR" },',
+                '  "rightPanel": { "content": "grandmother_darning_lamplight", "label": "DARNING" },',
+                '  "embeddedVeoClips": ["developer_cursor_edit", "grandmother_darning_lamplight"],',
+                '  "narrationSegments": ["part1_economics_001"]',
+                '}',
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        tsx = generate_section_component(
+            {
+                "id": "part1_economics",
+                "compositionId": "Part1EconomicsSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "part1_economics",
+                "compositions": ["12_developer_darning_split"],
+            },
+            30,
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+            project_dir=str(project_dir),
+        )
+
+        assert '"renderMode": "component"' in tsx
+        assert '"mediaAliases": {' in tsx
+        assert '"leftSrc": "veo/developer_cursor_edit.mp4"' in tsx
+        assert '"rightSrc": "veo/grandmother_darning_lamplight.mp4"' in tsx
 
     def test_section_wrapper_no_digit_leading_identifiers(self):
         """Section wrapper must not contain identifiers starting with digits."""
@@ -3997,6 +4140,90 @@ class TestBuildVisualMediaManifestComponentFiltering:
 
         assert manifest["03_injection_molding_process"]["defaultSrc"] == "veo/03_injection_molding_process.mp4"
         assert "04_1980s_chip_lab" not in manifest
+
+    def test_does_not_apply_section_fallback_video_to_non_media_remotion_visual(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "where_to_start"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "mold_glow_finale.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "05_module_glow_spread.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "network_graph", "chartId": "module_glow_spread" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "where_to_start",
+                "specDir": "where_to_start",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+            fallback_video_src="veo/mold_glow_finale.mp4",
+        )
+
+        assert "05_module_glow_spread" not in manifest
+
+    def test_applies_section_fallback_video_to_media_driven_visual_without_aliases(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "closing"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo").mkdir()
+        (remotion_public / "veo" / "sock_discard_closing.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+
+        (specs_dir / "07_transition_to_closing.md").write_text(
+            "\n".join(
+                [
+                    "[veo:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    '{ "type": "veo_clip", "clipId": "transition_to_closing" }',
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        manifest = build_visual_media_manifest(
+            {
+                "id": "closing",
+                "specDir": "closing",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "compositions": [],
+            },
+            str(project_dir),
+            str(remotion_public),
+            fallback_video_src="veo/sock_discard_closing.mp4",
+        )
+
+        assert manifest["07_transition_to_closing"]["defaultSrc"] == "veo/sock_discard_closing.mp4"
 
 
 class TestVisualContractManifestMediaDrivenRenderMode:

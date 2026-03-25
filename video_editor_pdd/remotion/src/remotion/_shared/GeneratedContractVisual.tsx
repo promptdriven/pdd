@@ -1,13 +1,24 @@
 import React from "react";
 import {
   AbsoluteFill,
+  OffthreadVideo,
   interpolate,
   spring,
   useCurrentFrame,
   useVideoConfig,
 } from "remotion";
 
-import { useVisualContractData } from "./visual-runtime";
+import {
+  useVisualContractData,
+  useVisualMediaAssetSrc,
+} from "./visual-runtime";
+
+type SeriesEntry = {
+  label: string;
+  color: string;
+  points: { x: number; y: number }[];
+  style?: string | null;
+};
 
 const asRecord = (value: unknown): Record<string, unknown> | null => {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -31,17 +42,30 @@ const asStringArray = (value: unknown): string[] => {
 
 const titleCase = (value: string): string => {
   return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (match) => match.toUpperCase());
 };
 
+const subtleSurface = "rgba(15, 23, 42, 0.84)";
+const subtleBorder = "1px solid rgba(148, 163, 184, 0.24)";
+
 const resolveBackgroundColor = (data: Record<string, unknown>): string => {
   return (
     asString(data.backgroundColor) ??
     asString(asRecord(data.colors)?.background) ??
     "#0A0F1A"
+  );
+};
+
+const resolveAccentColor = (data: Record<string, unknown>): string => {
+  return (
+    asString(data.titleColor) ??
+    asString(data.accentColor) ??
+    asString(asRecord(data.colors)?.primary) ??
+    "#60A5FA"
   );
 };
 
@@ -52,22 +76,18 @@ const resolveTitle = (data: Record<string, unknown>): string => {
   const quote = asString(data.quote);
   if (quote) return quote;
 
-  const line1 = asString(data.titleLine1);
-  const line2 = asString(data.titleLine2);
-  if (line1 || line2) {
-    return [line1, line2].filter(Boolean).join(" ");
-  }
-
   const challenge = asString(data.challenge);
   if (challenge) return challenge;
 
-  const sectionLabel = asString(data.sectionLabel);
-  if (sectionLabel) return sectionLabel;
+  const line1 = asString(data.titleLine1);
+  const line2 = asString(data.titleLine2);
+  if (line1 || line2) {
+    return [line1, line2].filter(Boolean).join("\n");
+  }
 
   return (
     asString(data.chartId) ??
     asString(data.diagramId) ??
-    asString(data.tableId) ??
     asString(data.cardId) ??
     asString(data.transitionId) ??
     titleCase(asString(data.type) ?? "Generated Visual")
@@ -79,105 +99,16 @@ const resolveSubtitleLines = (data: Record<string, unknown>): string[] => {
     asString(data.subtitle),
     asString(data.tagline),
     asString(data.summary),
-    asString(data.bottomLabel),
-    asString(asRecord(data.bottomLabel)?.line1),
-    asString(asRecord(data.bottomLabel)?.line2),
     asString(data.subtext),
     asString(data.url),
     asString(data.attribution),
+    asString(data.challengeText),
+    asString(data.insightText),
+    asString(data.sharedLabel),
+    asString(data.priorityRule),
   ].filter((line): line is string => Boolean(line));
 
-  return [...candidates, ...asStringArray(data.supportingText)].slice(0, 4);
-};
-
-const extractSeries = (data: Record<string, unknown>) => {
-  const series = Array.isArray(data.series) ? data.series : [];
-  const curves = Array.isArray(data.curves) ? data.curves : [];
-  const forks = Array.isArray(data.forks) ? data.forks : [];
-
-  const fromSeries = series
-    .map((entry) => {
-      const record = asRecord(entry);
-      if (!record) return null;
-      const points = Array.isArray(record.dataPoints)
-        ? record.dataPoints
-            .map((point) => {
-              const item = asRecord(point);
-              const x = asNumber(item?.x);
-              const y = asNumber(item?.y);
-              return x === null || y === null ? null : { x, y };
-            })
-            .filter((point): point is { x: number; y: number } => Boolean(point))
-        : [];
-      return points.length > 1
-        ? {
-            label: asString(record.label) ?? asString(record.id) ?? "Series",
-            color: asString(record.color) ?? "#60A5FA",
-            points,
-          }
-        : null;
-    })
-    .filter(
-      (entry): entry is { label: string; color: string; points: { x: number; y: number }[] } =>
-        Boolean(entry)
-    );
-
-  if (fromSeries.length > 0) return fromSeries;
-
-  const fromForks = forks
-    .map((entry) => {
-      const record = asRecord(entry);
-      if (!record) return null;
-      const points = Array.isArray(record.dataPoints)
-        ? record.dataPoints
-            .map((point) => {
-              const item = asRecord(point);
-              const x = asNumber(item?.x);
-              const y = asNumber(item?.y);
-              return x === null || y === null ? null : { x, y };
-            })
-            .filter((point): point is { x: number; y: number } => Boolean(point))
-        : [];
-      return points.length > 1
-        ? {
-            label: asString(record.label) ?? asString(record.id) ?? "Series",
-            color: asString(record.color) ?? "#60A5FA",
-            points,
-          }
-        : null;
-    })
-    .filter(
-      (entry): entry is { label: string; color: string; points: { x: number; y: number }[] } =>
-        Boolean(entry)
-    );
-
-  if (fromForks.length > 0) return fromForks;
-
-  return curves
-    .map((entry, index) => {
-      const record = asRecord(entry);
-      if (!record) return null;
-      const curveType = asString(record.type) ?? "curve";
-      const points = Array.from({ length: 6 }, (_, pointIndex) => {
-        const x = pointIndex;
-        if (curveType === "flat") {
-          return { x, y: 45 };
-        }
-        if (curveType === "exponential" || curveType === "up") {
-          return { x, y: 18 + pointIndex * pointIndex * 2.2 };
-        }
-        return { x, y: 80 - pointIndex * pointIndex * 2.3 };
-      });
-      return {
-        label: asString(record.label) ?? `Series ${index + 1}`,
-        color: asString(record.color) ?? "#60A5FA",
-        points,
-      };
-    })
-    .filter(
-      (entry): entry is { label: string; color: string; points: { x: number; y: number }[] } =>
-        Boolean(entry)
-    );
+  return [...candidates, ...asStringArray(data.supportingText)].slice(0, 5);
 };
 
 const buildPath = (
@@ -203,188 +134,595 @@ const buildPath = (
     .join(" ");
 };
 
+const normalizeSeries = (data: Record<string, unknown>): SeriesEntry[] => {
+  const series = Array.isArray(data.series) ? data.series : [];
+  const curves = Array.isArray(data.curves) ? data.curves : [];
+  const forks = Array.isArray(data.forks) ? data.forks : [];
+
+  const fromCollections = [series, forks]
+    .flat()
+    .map((entry) => {
+      const record = asRecord(entry);
+      if (!record) return null;
+      const points = Array.isArray(record.dataPoints)
+        ? record.dataPoints
+            .map((point) => {
+              const item = asRecord(point);
+              const x = asNumber(item?.x);
+              const y = asNumber(item?.y);
+              return x === null || y === null ? null : { x, y };
+            })
+            .filter((point): point is { x: number; y: number } => Boolean(point))
+        : [];
+      if (points.length < 2) return null;
+      return {
+        label: asString(record.label) ?? asString(record.id) ?? "Series",
+        color: asString(record.color) ?? "#60A5FA",
+        points,
+        style: asString(record.style),
+      } satisfies SeriesEntry;
+    })
+    .filter((entry): entry is SeriesEntry => Boolean(entry));
+
+  if (fromCollections.length > 0) {
+    return fromCollections;
+  }
+
+  return curves
+    .map((entry, index) => {
+      const record = asRecord(entry);
+      if (!record) return null;
+      const curveType = asString(record.type) ?? "curve";
+      const points = Array.from({ length: 6 }, (_, pointIndex) => {
+        const x = pointIndex;
+        if (curveType === "flat") {
+          return { x, y: 45 };
+        }
+        if (curveType === "exponential" || curveType === "up") {
+          return { x, y: 18 + pointIndex * pointIndex * 2.2 };
+        }
+        return { x, y: 80 - pointIndex * pointIndex * 2.3 };
+      });
+      return {
+        label: asString(record.label) ?? `Series ${index + 1}`,
+        color: asString(record.color) ?? "#60A5FA",
+        points,
+        style: asString(record.style),
+      } satisfies SeriesEntry;
+    })
+    .filter((entry): entry is SeriesEntry => Boolean(entry));
+};
+
+const HeaderBlock: React.FC<{
+  data: Record<string, unknown>;
+  accent: string;
+  title: string;
+}> = ({ data, accent, title }) => {
+  const subtitleLines = resolveSubtitleLines(data);
+  const eyebrow =
+    asString(data.sectionLabel) ??
+    asString(data.sectionId) ??
+    titleCase(asString(data.type) ?? "Generated Visual");
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 72,
+        top: 64,
+        display: "flex",
+        flexDirection: "column",
+        gap: 14,
+        maxWidth: 1180,
+        zIndex: 10,
+      }}
+    >
+      <div
+        style={{
+          color: `${accent}D9`,
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 18,
+          fontWeight: 700,
+          letterSpacing: 2,
+          textTransform: "uppercase",
+        }}
+      >
+        {eyebrow}
+      </div>
+      <div
+        style={{
+          color: "#F8FAFC",
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 48,
+          fontWeight: 700,
+          lineHeight: 1.05,
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {title}
+      </div>
+      {subtitleLines.length > 0 ? (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            color: "#CBD5E1",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 22,
+            fontWeight: 500,
+            lineHeight: 1.35,
+          }}
+        >
+          {subtitleLines.map((line, index) => (
+            <div key={`${line}-${index}`}>{line}</div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const GhostElements: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+  const ghosts = Array.isArray(data.ghostElements)
+    ? data.ghostElements.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+
+  return (
+    <>
+      {ghosts.slice(0, 4).map((ghost, index) => {
+        const color = asString(ghost.color) ?? "#334155";
+        const size = 180 + index * 80;
+        return (
+          <div
+            key={`ghost-${index}`}
+            style={{
+              position: "absolute",
+              right: 100 + index * 80,
+              top: 120 + index * 60,
+              width: size,
+              height: size,
+              borderRadius: 999,
+              border: `1px solid ${color}33`,
+              boxShadow: `0 0 80px ${color}22 inset`,
+              opacity: 0.45 - index * 0.08,
+              transform: `rotate(${index * 12}deg)`,
+            }}
+          />
+        );
+      })}
+    </>
+  );
+};
+
+const TitleCardVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const accent = resolveAccentColor(data);
+  const title = resolveTitle(data);
+  const subtitleLines = resolveSubtitleLines(data);
+  const commands = asStringArray(data.commands);
+
+  return (
+    <AbsoluteFill
+      style={{
+        padding: "80px 96px",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+    >
+      <GhostElements data={data} />
+      <div
+        style={{
+          position: "relative",
+          zIndex: 2,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 18,
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            color: "#94A3B8",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 18,
+            fontWeight: 700,
+            letterSpacing: 2.4,
+            textTransform: "uppercase",
+          }}
+        >
+          {[asString(data.sectionNumber), asString(data.sectionLabel)]
+            .filter(Boolean)
+            .join(" ")}
+        </div>
+        <div
+          style={{
+            color: asString(data.titleColor) ?? "#E2E8F0",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: width > 1400 ? 76 : 64,
+            fontWeight: 700,
+            lineHeight: 1.03,
+            letterSpacing: 1,
+            whiteSpace: "pre-wrap",
+            maxWidth: width * 0.76,
+          }}
+        >
+          {title}
+        </div>
+        {subtitleLines.map((line, index) => (
+          <div
+            key={`${line}-${index}`}
+            style={{
+              color: index === 0 ? "#CBD5E1" : "#94A3B8",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: index === 0 ? 26 : 22,
+              fontWeight: index === 0 ? 500 : 400,
+              lineHeight: 1.35,
+              maxWidth: width * 0.62,
+            }}
+          >
+            {line}
+          </div>
+        ))}
+      </div>
+      {commands.length > 0 ? (
+        <div
+          style={{
+            position: "absolute",
+            left: Math.max(80, width * 0.28),
+            right: Math.max(80, width * 0.28),
+            bottom: Math.max(80, height * 0.12),
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+            padding: "20px 24px",
+            borderRadius: 20,
+            backgroundColor: "rgba(2, 6, 23, 0.66)",
+            border: subtleBorder,
+          }}
+        >
+          {commands.slice(0, 2).map((command) => (
+            <div
+              key={command}
+              style={{
+                color: "#64748B",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 18,
+              }}
+            >
+              {command}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </AbsoluteFill>
+  );
+};
+
+const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+  const accent = resolveAccentColor(data);
+  const attribution = asString(data.attribution);
+
+  return (
+    <AbsoluteFill
+      style={{
+        padding: "120px 120px 96px",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          maxWidth: 1320,
+          margin: "0 auto",
+          padding: "52px 60px",
+          borderRadius: 36,
+          backgroundColor: subtleSurface,
+          border: subtleBorder,
+          boxShadow: `0 0 120px ${accent}22 inset`,
+          display: "flex",
+          flexDirection: "column",
+          gap: 28,
+        }}
+      >
+        <div
+          style={{
+            color: accent,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 24,
+            fontWeight: 700,
+            letterSpacing: 2,
+            textTransform: "uppercase",
+          }}
+        >
+          Quote
+        </div>
+        <div
+          style={{
+            color: "#F8FAFC",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 56,
+            fontWeight: 700,
+            lineHeight: 1.16,
+          }}
+        >
+          “{resolveTitle(data)}”
+        </div>
+        {attribution ? (
+          <div
+            style={{
+              color: "#CBD5E1",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 24,
+            }}
+          >
+            {attribution}
+          </div>
+        ) : null}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+  const accent = resolveAccentColor(data);
+  const echoes = Array.isArray(data.echoes)
+    ? data.echoes.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+
+  return (
+    <AbsoluteFill
+      style={{
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {echoes.slice(0, 3).map((echo, index) => (
+        <div
+          key={`echo-${index}`}
+          style={{
+            position: "absolute",
+            width: 820 - index * 120,
+            height: 340 - index * 36,
+            borderRadius: 32,
+            border: `1px solid ${accent}33`,
+            opacity: Number(echo.opacity ?? 0.08) + index * 0.04,
+            transform: `translateY(${index * 28}px) scale(${1 - index * 0.06})`,
+          }}
+        />
+      ))}
+      <div
+        style={{
+          padding: "30px 40px",
+          borderRadius: 28,
+          backgroundColor: subtleSurface,
+          border: subtleBorder,
+          color: "#F8FAFC",
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 44,
+          fontWeight: 700,
+          lineHeight: 1.1,
+          textAlign: "center",
+        }}
+      >
+        {resolveTitle(data)}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 const ChartVisual: React.FC<{
   data: Record<string, unknown>;
   width: number;
   height: number;
   frame: number;
 }> = ({ data, width, height, frame }) => {
-  const series = extractSeries(data);
-  const chartWidth = width * 0.7;
-  const chartHeight = height * 0.48;
+  const accent = resolveAccentColor(data);
+  const title = resolveTitle(data);
+  const series = normalizeSeries(data);
+  const chartWidth = width * 0.72;
+  const chartHeight = height * 0.5;
   const reveal = interpolate(frame, [0, 24], [0.25, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  if (series.length === 0) {
-    return (
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
       <div
         style={{
+          position: "absolute",
+          left: (width - chartWidth) / 2,
+          top: height * 0.28,
           width: chartWidth,
           height: chartHeight,
-          border: "1px solid rgba(148, 163, 184, 0.32)",
-          borderRadius: 28,
-          backgroundColor: "rgba(15, 23, 42, 0.82)",
+          borderRadius: 30,
+          border: subtleBorder,
+          backgroundColor: subtleSurface,
+          overflow: "hidden",
         }}
-      />
-    );
-  }
-
-  return (
-    <div
-      style={{
-        position: "relative",
-        width: chartWidth,
-        height: chartHeight,
-        borderRadius: 28,
-        backgroundColor: "rgba(15, 23, 42, 0.82)",
-        border: "1px solid rgba(148, 163, 184, 0.28)",
-        overflow: "hidden",
-      }}
-    >
-      <svg
-        width={chartWidth}
-        height={chartHeight}
-        viewBox={`0 0 ${chartWidth} ${chartHeight}`}
       >
-        {Array.from({ length: 4 }).map((_, index) => {
-          const y = ((index + 1) / 5) * chartHeight;
-          return (
-            <line
-              key={`grid-${index}`}
-              x1={0}
-              y1={y}
-              x2={chartWidth}
-              y2={y}
-              stroke="rgba(148, 163, 184, 0.12)"
-              strokeWidth={1}
-            />
-          );
-        })}
-        {series.map((entry) => {
-          return (
+        <svg width={chartWidth} height={chartHeight} viewBox={`0 0 ${chartWidth} ${chartHeight}`}>
+          {Array.from({ length: 5 }).map((_, index) => {
+            const y = ((index + 1) / 6) * chartHeight;
+            return (
+              <line
+                key={`grid-${index}`}
+                x1={0}
+                y1={y}
+                x2={chartWidth}
+                y2={y}
+                stroke="rgba(148, 163, 184, 0.14)"
+                strokeWidth={1}
+              />
+            );
+          })}
+          {series.map((entry) => (
             <path
               key={entry.label}
               d={buildPath(entry.points, chartWidth, chartHeight)}
               fill="none"
               stroke={entry.color}
               strokeWidth={4}
+              strokeDasharray={entry.style === "dashed" ? "16 10" : undefined}
               strokeLinecap="round"
               strokeLinejoin="round"
               opacity={reveal}
             />
-          );
-        })}
-      </svg>
-      <div
-        style={{
-          position: "absolute",
-          left: 24,
-          top: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-        }}
-      >
-        {series.slice(0, 3).map((entry) => (
-          <div
-            key={`legend-${entry.label}`}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              color: "#E2E8F0",
-              fontFamily: "'Inter', sans-serif",
-              fontSize: 18,
-              fontWeight: 600,
-            }}
-          >
+          ))}
+        </svg>
+        <div
+          style={{
+            position: "absolute",
+            left: 24,
+            top: 18,
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {series.slice(0, 4).map((entry) => (
             <div
+              key={`legend-${entry.label}`}
               style={{
-                width: 18,
-                height: 4,
-                borderRadius: 999,
-                backgroundColor: entry.color,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                color: "#E2E8F0",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 18,
+                fontWeight: 600,
               }}
-            />
-            {entry.label}
-          </div>
-        ))}
+            >
+              <div
+                style={{
+                  width: 18,
+                  height: 4,
+                  borderRadius: 999,
+                  backgroundColor: entry.color,
+                }}
+              />
+              {entry.label}
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </AbsoluteFill>
   );
 };
 
-const SplitVisual: React.FC<{ data: Record<string, unknown>; width: number; height: number }> = ({
-  data,
-  width,
-  height,
-}) => {
+const SplitVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
   const left = asRecord(data.leftPanel) ?? asRecord(data.left) ?? {};
   const right = asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
+  const leftSrc = useVisualMediaAssetSrc("leftSrc");
+  const rightSrc = useVisualMediaAssetSrc("rightSrc");
 
-  const renderPanel = (panel: Record<string, unknown>, accent: string) => (
-    <div
-      style={{
-        flex: 1,
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "space-between",
-        padding: 36,
-        borderRadius: 24,
-        backgroundColor: "rgba(15, 23, 42, 0.88)",
-        border: `1px solid ${accent}55`,
-      }}
-    >
+  const renderPanel = (
+    panel: Record<string, unknown>,
+    accent: string,
+    src: string | null
+  ) => {
+    const header = asString(panel.header) ?? asString(panel.label) ?? "Panel";
+    const caption =
+      asString(panel.caption) ??
+      asString(panel.content) ??
+      asString(panel.thematicRole) ??
+      "Rendered from visual contract";
+
+    return (
       <div
         style={{
-          color: accent,
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 24,
-          fontWeight: 700,
-          letterSpacing: 1.5,
+          position: "relative",
+          flex: 1,
+          overflow: "hidden",
+          borderRadius: 28,
+          backgroundColor: subtleSurface,
+          border: `1px solid ${accent}55`,
         }}
       >
-        {asString(panel.header) ?? asString(panel.label) ?? "Panel"}
+        {src ? (
+          <OffthreadVideo
+            src={src}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+              opacity: 0.88,
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              background: `linear-gradient(135deg, ${accent}22, rgba(15, 23, 42, 0.92))`,
+            }}
+          />
+        )}
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "linear-gradient(180deg, rgba(2, 6, 23, 0.12) 0%, rgba(2, 6, 23, 0.28) 35%, rgba(2, 6, 23, 0.72) 100%)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: 30,
+            right: 30,
+            top: 28,
+            color: accent,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 24,
+            fontWeight: 700,
+            letterSpacing: 1.6,
+          }}
+        >
+          {header}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: 30,
+            right: 30,
+            bottom: 28,
+            color: "#F8FAFC",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 26,
+            fontWeight: 600,
+            lineHeight: 1.2,
+          }}
+        >
+          {caption}
+        </div>
       </div>
-      <div
-        style={{
-          color: "#E2E8F0",
-          fontFamily: "'Inter', sans-serif",
-          fontSize: 26,
-          fontWeight: 600,
-          lineHeight: 1.25,
-          textAlign: "center",
-        }}
-      >
-        {asString(panel.caption) ??
-          asString(panel.content) ??
-          asString(panel.thematicRole) ??
-          "Rendered from visual contract"}
-      </div>
-      <div
-        style={{
-          height: 140,
-          borderRadius: 18,
-          background: `linear-gradient(135deg, ${accent}33, rgba(15, 23, 42, 0.25))`,
-        }}
-      />
-    </div>
-  );
+    );
+  };
 
   return (
-    <div
-      style={{
-        width: width * 0.82,
-        height: height * 0.52,
-        display: "flex",
-        gap: 28,
-      }}
-    >
-      {renderPanel(left, "#60A5FA")}
-      {renderPanel(right, "#D9944A")}
-    </div>
+    <AbsoluteFill style={{ padding: "88px 72px 72px" }}>
+      <div
+        style={{
+          width,
+          height,
+          display: "flex",
+          gap: 20,
+        }}
+      >
+        {renderPanel(left, "#60A5FA", leftSrc)}
+        {renderPanel(right, "#D9944A", rightSrc)}
+      </div>
+    </AbsoluteFill>
   );
 };
 
@@ -392,9 +730,14 @@ const TableVisual: React.FC<{ data: Record<string, unknown>; width: number }> = 
   data,
   width,
 }) => {
-  const columns = asStringArray(data.columns);
-  const rows = Array.isArray(data.rows)
-    ? data.rows.map((row) => asRecord(row)).filter((row): row is Record<string, unknown> => Boolean(row))
+  const table = asRecord(data.table) ?? data;
+  const tableColumns = asStringArray(table.columns);
+  const fallbackColumns = asStringArray(data.columns);
+  const columns = tableColumns.length > 0 ? tableColumns : fallbackColumns;
+  const rows = Array.isArray(table.rows)
+    ? table.rows
+        .map((row) => asRecord(row))
+        .filter((row): row is Record<string, unknown> => Boolean(row))
     : [];
 
   return (
@@ -403,8 +746,8 @@ const TableVisual: React.FC<{ data: Record<string, unknown>; width: number }> = 
         width: width * 0.76,
         borderRadius: 24,
         overflow: "hidden",
-        border: "1px solid rgba(148, 163, 184, 0.24)",
-        backgroundColor: "rgba(15, 23, 42, 0.82)",
+        border: subtleBorder,
+        backgroundColor: subtleSurface,
       }}
     >
       {columns.length > 0 ? (
@@ -431,9 +774,14 @@ const TableVisual: React.FC<{ data: Record<string, unknown>; width: number }> = 
           ))}
         </div>
       ) : null}
-      {rows.slice(0, 6).map((row, rowIndex) => {
+      {rows.slice(0, 8).map((row, rowIndex) => {
         const values = columns.length
-          ? columns.map((column) => asString(row[column.toLowerCase()]) ?? asString(row[column]) ?? "—")
+          ? columns.map(
+              (column) =>
+                asString(row[column.toLowerCase()]) ??
+                asString(row[column]) ??
+                "—"
+            )
           : Object.values(row).map((value) => asString(value) ?? "—");
         return (
           <div
@@ -441,7 +789,10 @@ const TableVisual: React.FC<{ data: Record<string, unknown>; width: number }> = 
             style={{
               display: "grid",
               gridTemplateColumns: `repeat(${Math.max(1, values.length)}, minmax(0, 1fr))`,
-              borderTop: rowIndex === 0 && columns.length === 0 ? "none" : "1px solid rgba(148, 163, 184, 0.12)",
+              borderTop:
+                rowIndex === 0 && columns.length === 0
+                  ? "none"
+                  : "1px solid rgba(148, 163, 184, 0.12)",
             }}
           >
             {values.map((value, valueIndex) => (
@@ -465,45 +816,942 @@ const TableVisual: React.FC<{ data: Record<string, unknown>; width: number }> = 
   );
 };
 
-const DiagramVisual: React.FC<{
+const DualMeterVisual: React.FC<{
   data: Record<string, unknown>;
   width: number;
+  height: number;
   frame: number;
-}> = ({ data, width, frame }) => {
-  const items = [
-    ...asStringArray(data.causalChain),
-    ...asStringArray(data.fileNames),
-    ...asStringArray(data.warningComments),
-    ...asStringArray(asRecord(data.takeaway)?.line1 ? [asRecord(data.takeaway)?.line1, asRecord(data.takeaway)?.line2] : []),
-  ]
-    .filter((item): item is string => Boolean(item))
-    .slice(0, 6);
-
-  const emphasis = spring({
-    fps: 30,
-    frame,
-    config: { damping: 14, stiffness: 120 },
-  });
+}> = ({ data, width, height, frame }) => {
+  const title = resolveTitle(data);
+  const accent = resolveAccentColor(data);
+  const meters = Array.isArray(data.meters)
+    ? data.meters
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
 
   return (
-    <div
-      style={{
-        width: width * 0.74,
-        display: "grid",
-        gridTemplateColumns: items.length >= 4 ? "repeat(2, minmax(0, 1fr))" : "1fr",
-        gap: 18,
-      }}
-    >
-      {items.length > 0 ? (
-        items.map((item, index) => (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
+      <div
+        style={{
+          position: "absolute",
+          left: width * 0.14,
+          right: width * 0.14,
+          top: height * 0.28,
+          bottom: height * 0.12,
+          display: "flex",
+          gap: 64,
+          alignItems: "flex-end",
+        }}
+      >
+        {meters.slice(0, 2).map((meter, index) => {
+          const fillGradient = Array.isArray(meter.fillGradient)
+            ? meter.fillGradient.map(asString).filter((value): value is string => Boolean(value))
+            : [];
+          const progress = interpolate(frame, [0, 60], [0.28, 0.95], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          });
+          return (
+            <div
+              key={`meter-${index}`}
+              style={{
+                flex: 1,
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                gap: 18,
+                justifyContent: "flex-end",
+              }}
+            >
+              <div
+                style={{
+                  color: "#E2E8F0",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 26,
+                  fontWeight: 700,
+                }}
+              >
+                {asString(meter.label) ?? `Meter ${index + 1}`}
+              </div>
+              <div
+                style={{
+                  position: "relative",
+                  flex: 1,
+                  minHeight: 360,
+                  borderRadius: 32,
+                  backgroundColor: subtleSurface,
+                  border: subtleBorder,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: `${progress * 100}%`,
+                    background:
+                      fillGradient.length >= 2
+                        ? `linear-gradient(180deg, ${fillGradient[0]}, ${fillGradient[1]})`
+                        : fillGradient[0] ?? "#60A5FA",
+                    opacity: 0.92,
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  color: "#94A3B8",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 18,
+                  fontWeight: 600,
+                }}
+              >
+                <div>{asString(meter.scaleMin) ?? asStringArray(meter.scale)?.[0] ?? "Low"}</div>
+                <div>{asString(meter.scaleMax) ?? asStringArray(meter.scale)?.slice(-1)[0] ?? "High"}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const CodeVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const accent = resolveAccentColor(data);
+  const title = resolveTitle(data);
+  const fileNames = [
+    asString(data.highlightedModule),
+    asString(data.promptFile),
+    ...asStringArray(data.fileNames),
+  ].filter((item): item is string => Boolean(item));
+  const terminalLines = [
+    asString(data.terminalCommand),
+    asString(data.terminalOutput),
+    ...asStringArray(data.workflow),
+  ].filter((item): item is string => Boolean(item));
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
+      <div
+        style={{
+          position: "absolute",
+          left: 72,
+          right: 72,
+          top: height * 0.28,
+          bottom: 72,
+          display: "grid",
+          gridTemplateColumns: "1.15fr 0.85fr",
+          gap: 28,
+        }}
+      >
+        <div
+          style={{
+            position: "relative",
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            overflow: "hidden",
+            padding: "22px 24px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              marginBottom: 18,
+            }}
+          >
+            {fileNames.slice(0, 5).map((name, index) => (
+              <div
+                key={`${name}-${index}`}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 14,
+                  backgroundColor: index === 0 ? "rgba(96, 165, 250, 0.2)" : "rgba(30, 41, 59, 0.9)",
+                  color: index === 0 ? "#E2E8F0" : "#94A3B8",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 16,
+                }}
+              >
+                {name}
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "56px 1fr",
+              rowGap: 8,
+            }}
+          >
+            {Array.from({ length: 14 }).map((_, index) => (
+              <React.Fragment key={`code-line-${index}`}>
+                <div
+                  style={{
+                    color: "#475569",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 16,
+                  }}
+                >
+                  {index + 1}
+                </div>
+                <div
+                  style={{
+                    color: index % 4 === 0 ? "#93C5FD" : index % 3 === 0 ? "#F8FAFC" : "#CBD5E1",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 18,
+                    opacity: index < 3 ? 0.55 : 1,
+                  }}
+                >
+                  {index % 4 === 0
+                    ? "def transform_module(input_data):"
+                    : index % 3 === 0
+                      ? "    return validate_against_prompt(input_data)"
+                      : "    # structured contract driven output"}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 22,
+          }}
+        >
+          <div
+            style={{
+              flex: 1,
+              borderRadius: 28,
+              backgroundColor: subtleSurface,
+              border: subtleBorder,
+              padding: "26px 28px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+            }}
+          >
+            <div
+              style={{
+                color: accent,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 22,
+                fontWeight: 700,
+              }}
+            >
+              Transformation
+            </div>
+            {terminalLines.slice(0, 5).map((line, index) => (
+              <div
+                key={`${line}-${index}`}
+                style={{
+                  color: index < 2 ? "#E2E8F0" : "#94A3B8",
+                  fontFamily:
+                    index < 2 ? "'JetBrains Mono', monospace" : "'Inter', sans-serif",
+                  fontSize: index < 2 ? 18 : 20,
+                  lineHeight: 1.35,
+                }}
+              >
+                {line}
+              </div>
+            ))}
+          </div>
+          <div
+            style={{
+              borderRadius: 28,
+              backgroundColor: subtleSurface,
+              border: subtleBorder,
+              padding: "22px 24px",
+              color: "#CBD5E1",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 20,
+              lineHeight: 1.35,
+            }}
+          >
+            {asString(asRecord(data.transformation)?.prompt?.role) ??
+              asString(data.resultLabel) ??
+              "Source of truth shifts from the artifact to the specification."}
+          </div>
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const NetworkGraphVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const title = resolveTitle(data);
+  const accent = resolveAccentColor(data);
+  const sequence = Array.isArray(data.migrationSequence)
+    ? data.migrationSequence
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const unmigrated = asStringArray(data.unmigrated);
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
+      <div
+        style={{
+          position: "absolute",
+          left: 72,
+          right: 72,
+          top: height * 0.26,
+          bottom: 72,
+          display: "grid",
+          gridTemplateColumns: "1.2fr 0.8fr",
+          gap: 24,
+        }}
+      >
+        <div
+          style={{
+            position: "relative",
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            overflow: "hidden",
+          }}
+        >
+          {sequence.slice(0, 10).map((entry, index) => {
+            const position = Array.isArray(entry.position) ? entry.position : [];
+            const left = asNumber(position[0]) ?? 240 + (index % 4) * 160;
+            const top = asNumber(position[1]) ?? 180 + Math.floor(index / 4) * 140;
+            return (
+              <div
+                key={`node-${index}`}
+                style={{
+                  position: "absolute",
+                  left,
+                  top,
+                  padding: "14px 18px",
+                  borderRadius: 16,
+                  backgroundColor: "rgba(96, 165, 250, 0.2)",
+                  border: "1px solid rgba(96, 165, 250, 0.5)",
+                  color: "#E2E8F0",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 16,
+                }}
+              >
+                {asString(entry.name) ?? `module_${index + 1}.py`}
+              </div>
+            );
+          })}
+        </div>
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "24px 28px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+          }}
+        >
+          <div
+            style={{
+              color: "#94A3B8",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 18,
+              fontWeight: 700,
+              letterSpacing: 1.4,
+              textTransform: "uppercase",
+            }}
+          >
+            Remaining
+          </div>
+          {unmigrated.slice(0, 8).map((name) => (
+            <div
+              key={name}
+              style={{
+                color: "#CBD5E1",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 18,
+              }}
+            >
+              {name}
+            </div>
+          ))}
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const AnnotationVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const title = resolveTitle(data);
+  const accent = resolveAccentColor(data);
+  const annotations = Array.isArray(data.annotations)
+    ? data.annotations
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const comparison = asRecord(data.comparison);
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
+      <div
+        style={{
+          position: "absolute",
+          left: 72,
+          right: 72,
+          top: height * 0.28,
+          bottom: 72,
+          display: "flex",
+          flexDirection: "column",
+          gap: 24,
+        }}
+      >
+        {comparison ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 180px 1fr",
+              gap: 24,
+              alignItems: "center",
+            }}
+          >
+            {[comparison.left, comparison.right].map((entry, index) => {
+              const side = asRecord(entry);
+              const color = asString(side?.color) ?? (index === 0 ? "#60A5FA" : "#4ADE80");
+              return (
+                <div
+                  key={`comparison-${index}`}
+                  style={{
+                    padding: "28px 30px",
+                    borderRadius: 28,
+                    backgroundColor: subtleSurface,
+                    border: `1px solid ${color}44`,
+                    color: "#F8FAFC",
+                    fontFamily: "'Inter', sans-serif",
+                    fontSize: 30,
+                    fontWeight: 700,
+                    lineHeight: 1.16,
+                  }}
+                >
+                  <div style={{ color, fontSize: 18, letterSpacing: 1.6, textTransform: "uppercase" }}>
+                    {asString(side?.domain) ?? asString(side?.label) ?? "Domain"}
+                  </div>
+                  <div style={{ marginTop: 16 }}>{asString(side?.input) ?? asString(side?.domain) ?? ""}</div>
+                  <div style={{ marginTop: 10, color: "#CBD5E1", fontSize: 22 }}>
+                    {asString(side?.output) ?? asString(side?.domain) ?? ""}
+                  </div>
+                </div>
+              );
+            })}
+            <div
+              style={{
+                justifySelf: "center",
+                color: asString(asRecord(comparison.equivalence)?.color) ?? "#A78BFA",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 120,
+                fontWeight: 700,
+              }}
+            >
+              {asString(asRecord(comparison.equivalence)?.symbol) ?? "≡"}
+            </div>
+          </div>
+        ) : null}
+        {annotations.length > 0 ? (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 18,
+            }}
+          >
+            {annotations.slice(0, 4).map((annotation, index) => {
+              const color = asString(annotation.color) ?? "#60A5FA";
+              return (
+                <div
+                  key={`annotation-${index}`}
+                  style={{
+                    padding: "22px 24px",
+                    borderRadius: 24,
+                    backgroundColor: subtleSurface,
+                    border: `1px solid ${color}44`,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <div
+                    style={{
+                      color,
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: 18,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {asString(annotation.header) ?? asString(annotation.stat) ?? asString(annotation.text) ?? "Callout"}
+                  </div>
+                  <div
+                    style={{
+                      color: "#F8FAFC",
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: 24,
+                      fontWeight: 600,
+                      lineHeight: 1.2,
+                    }}
+                  >
+                    {asString(annotation.text) ?? asString(annotation.detail) ?? ""}
+                  </div>
+                  <div
+                    style={{
+                      color: "#94A3B8",
+                      fontFamily: "'Inter', sans-serif",
+                      fontSize: 18,
+                    }}
+                  >
+                    {asString(annotation.source) ?? ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const TextMorphVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+  const accent = resolveAccentColor(data);
+  const title = resolveTitle(data);
+  const comparisons = Array.isArray(data.comparisons)
+    ? data.comparisons
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
+      <div
+        style={{
+          position: "absolute",
+          left: 72,
+          right: 72,
+          top: 280,
+          bottom: 72,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 24,
+        }}
+      >
+        {comparisons.slice(0, 2).map((comparison, index) => {
+          const color = asString(comparison.domainColor) ?? (index === 0 ? "#60A5FA" : "#4ADE80");
+          return (
+            <div
+              key={`comparison-${index}`}
+              style={{
+                padding: "28px 30px",
+                borderRadius: 28,
+                backgroundColor: subtleSurface,
+                border: `1px solid ${color}44`,
+                display: "flex",
+                flexDirection: "column",
+                gap: 14,
+              }}
+            >
+              <div
+                style={{
+                  color,
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 20,
+                  fontWeight: 700,
+                  letterSpacing: 1.6,
+                  textTransform: "uppercase",
+                }}
+              >
+                {asString(comparison.domain) ?? "Domain"}
+              </div>
+              <div
+                style={{
+                  color: "#E2E8F0",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 30,
+                  fontWeight: 700,
+                }}
+              >
+                {asString(comparison.input) ?? ""}
+              </div>
+              <div
+                style={{
+                  color: "#94A3B8",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 22,
+                }}
+              >
+                {asString(comparison.output) ?? ""}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const AnimatedDiagramVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const title = resolveTitle(data);
+  const accent = resolveAccentColor(data);
+  const walls = Array.isArray(data.walls)
+    ? data.walls.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const modules = Array.isArray(data.modules)
+    ? data.modules.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const promptText = asStringArray(data.promptText);
+  const nozzleLabels = asStringArray(data.nozzleLabels);
+  const phases = Array.isArray(data.phases)
+    ? data.phases.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const branches = Array.isArray(data.branches)
+    ? data.branches.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const steps = Array.isArray(data.steps)
+    ? data.steps.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const timeline = Array.isArray(data.wallTimeline)
+    ? data.wallTimeline.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+  const limitations = asStringArray(data.limitations);
+  const table = asRecord(data.table);
+  const takeaways = [
+    ...asStringArray(data.causalChain),
+    ...asStringArray(data.terminalCommands),
+    ...asStringArray(data.hierarchy),
+    ...asStringArray(data.priorityRule ? [data.priorityRule] : []),
+  ].slice(0, 5);
+
+  let body: React.ReactNode;
+  if (table) {
+    body = <TableVisual data={data} width={width} />;
+  } else if (walls.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.76,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 18,
+        }}
+      >
+        {walls.slice(0, 8).map((wall, index) => (
+          <div
+            key={`wall-${index}`}
+            style={{
+              padding: "20px 22px",
+              borderRadius: 22,
+              backgroundColor: subtleSurface,
+              border: `1px solid ${(asString(data.wallColor) ?? "#D9944A")}55`,
+              color: "#E2E8F0",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 18,
+              lineHeight: 1.3,
+            }}
+          >
+            {asString(wall.label) ?? asString(wall.id) ?? `Wall ${index + 1}`}
+          </div>
+        ))}
+      </div>
+    );
+  } else if (modules.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.76,
+          display: "grid",
+          gridTemplateColumns: "1.3fr 0.7fr",
+          gap: 22,
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 16,
+          }}
+        >
+          {modules.slice(0, 12).map((module, index) => (
+            <div
+              key={`module-${index}`}
+              style={{
+                padding: "20px 18px",
+                borderRadius: 20,
+                backgroundColor: asString(module.highlighted) === "true" || module.highlighted
+                  ? "rgba(96, 165, 250, 0.2)"
+                  : subtleSurface,
+                border:
+                  asString(module.highlighted) === "true" || module.highlighted
+                    ? "1px solid rgba(96, 165, 250, 0.6)"
+                    : subtleBorder,
+                color: "#E2E8F0",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 18,
+              }}
+            >
+              {asString(module.label) ?? asString(module.id) ?? `module_${index + 1}`}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            borderRadius: 24,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "20px 22px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {limitations.slice(0, 5).map((item) => (
+            <div
+              key={item}
+              style={{
+                color: "#CBD5E1",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 20,
+              }}
+            >
+              {item}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  } else if (promptText.length > 0 || nozzleLabels.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.78,
+          display: "grid",
+          gridTemplateColumns: "0.85fr 1.15fr",
+          gap: 24,
+        }}
+      >
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "26px 28px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          }}
+        >
+          {nozzleLabels.slice(0, 4).map((label) => (
+            <div
+              key={label}
+              style={{
+                padding: "10px 14px",
+                borderRadius: 999,
+                backgroundColor: "rgba(45, 212, 191, 0.18)",
+                color: "#CCFBF1",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 18,
+                fontWeight: 700,
+              }}
+            >
+              {label}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            borderRadius: 28,
+            backgroundColor: subtleSurface,
+            border: subtleBorder,
+            padding: "24px 28px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {promptText.slice(0, 6).map((line, index) => (
+            <div
+              key={`${line}-${index}`}
+              style={{
+                color: index === 0 ? "#E2E8F0" : "#CBD5E1",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 19,
+                lineHeight: 1.35,
+              }}
+            >
+              {line}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  } else if (branches.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.76,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 22,
+        }}
+      >
+        {branches.slice(0, 2).map((branch, index) => (
+          <div
+            key={`branch-${index}`}
+            style={{
+              padding: "24px 26px",
+              borderRadius: 28,
+              backgroundColor: subtleSurface,
+              border: `1px solid ${(asString(branch.color) ?? "#60A5FA")}44`,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <div
+              style={{
+                color: asString(branch.color) ?? "#60A5FA",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 22,
+                fontWeight: 700,
+              }}
+            >
+              {asString(branch.label) ?? `Branch ${index + 1}`}
+            </div>
+            <div
+              style={{
+                color: "#CBD5E1",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 18,
+              }}
+            >
+              {asString(branch.file) ?? asString(branch.action) ?? ""}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  } else if (steps.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.76,
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 18,
+        }}
+      >
+        {steps.slice(0, 6).map((step, index) => (
+          <div
+            key={`step-${index}`}
+            style={{
+              flex: 1,
+              height: 160 + index * 48,
+              borderRadius: 22,
+              backgroundColor: "rgba(15, 23, 42, 0.88)",
+              border: `1px solid ${(asString(step.color) ?? "#60A5FA")}44`,
+              padding: "18px 16px",
+              display: "flex",
+              alignItems: "flex-end",
+            }}
+          >
+            <div
+              style={{
+                color: "#F8FAFC",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 20,
+                fontWeight: 700,
+                lineHeight: 1.15,
+              }}
+            >
+              {asString(step.label) ?? ""}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  } else if (timeline.length > 0) {
+    body = (
+      <div
+        style={{
+          width: width * 0.76,
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 16,
+        }}
+      >
+        {timeline.slice(0, 7).map((entry, index) => {
+          const count = asNumber(entry.count) ?? index + 1;
+          return (
+            <div
+              key={`timeline-${index}`}
+              style={{
+                flex: 1,
+                height: 120 + count * 10,
+                borderRadius: 20,
+                backgroundColor: "rgba(217, 148, 74, 0.25)",
+                border: "1px solid rgba(217, 148, 74, 0.55)",
+                display: "flex",
+                alignItems: "flex-end",
+                justifyContent: "center",
+                paddingBottom: 18,
+                color: "#F8FAFC",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 18,
+                fontWeight: 700,
+              }}
+            >
+              {count}
+            </div>
+          );
+        })}
+      </div>
+    );
+  } else {
+    body = (
+      <div
+        style={{
+          width: width * 0.76,
+          display: "grid",
+          gridTemplateColumns: takeaways.length >= 4 ? "repeat(2, minmax(0, 1fr))" : "1fr",
+          gap: 18,
+        }}
+      >
+        {(takeaways.length > 0 ? takeaways : ["Generated from visual contract"]).map((item, index) => (
           <div
             key={`${item}-${index}`}
             style={{
               padding: "22px 24px",
               borderRadius: 22,
-              backgroundColor: "rgba(15, 23, 42, 0.82)",
+              backgroundColor: subtleSurface,
               border: "1px solid rgba(148, 163, 184, 0.22)",
-              transform: `scale(${0.98 + emphasis * 0.02})`,
               color: "#E2E8F0",
               fontFamily: "'Inter', sans-serif",
               fontSize: 22,
@@ -513,43 +1761,40 @@ const DiagramVisual: React.FC<{
           >
             {item}
           </div>
-        ))
-      ) : (
-        <div
-          style={{
-            padding: "26px 28px",
-            borderRadius: 24,
-            backgroundColor: "rgba(15, 23, 42, 0.82)",
-            border: "1px solid rgba(148, 163, 184, 0.24)",
-            color: "#CBD5E1",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 24,
-            fontWeight: 500,
-            textAlign: "center",
-          }}
-        >
-          Generated from visual contract
-        </div>
-      )}
-    </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent={accent} title={title} />
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          top: 280,
+          bottom: 72,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {body}
+      </div>
+    </AbsoluteFill>
   );
 };
 
 export const GeneratedContractVisual: React.FC = () => {
   const data = useVisualContractData<Record<string, unknown>>() ?? {};
   const frame = useCurrentFrame();
-  const { width, height, fps } = useVideoConfig();
+  const { width, height } = useVideoConfig();
   const backgroundColor = resolveBackgroundColor(data);
   const visualType = asString(data.type) ?? "generated_visual";
-  const title = resolveTitle(data);
-  const subtitleLines = resolveSubtitleLines(data);
-  const introOpacity = interpolate(frame, [0, 12], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-  const accent = asString(data.accentColor) ?? "#60A5FA";
 
-  let body: React.ReactNode = null;
+  let body: React.ReactNode;
   if (
     visualType === "animated_chart" ||
     visualType === "inset_chart" ||
@@ -562,9 +1807,36 @@ export const GeneratedContractVisual: React.FC = () => {
   } else if (visualType === "split_screen") {
     body = <SplitVisual data={data} width={width} height={height} />;
   } else if (visualType === "comparison_table") {
-    body = <TableVisual data={data} width={width} />;
+    body = (
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
+        <TableVisual data={data} width={width} />
+      </AbsoluteFill>
+    );
+  } else if (visualType === "title_card" || visualType === "beat") {
+    body = <TitleCardVisual data={data} width={width} height={height} />;
+  } else if (visualType === "quote_card") {
+    body = <QuoteCardVisual data={data} />;
+  } else if (visualType === "transition") {
+    body = <TransitionVisual data={data} />;
+  } else if (
+    visualType === "code_visualization" ||
+    visualType === "code_transformation" ||
+    visualType === "code_display" ||
+    visualType === "code_regeneration"
+  ) {
+    body = <CodeVisual data={data} width={width} height={height} />;
+  } else if (visualType === "network_graph") {
+    body = <NetworkGraphVisual data={data} width={width} height={height} />;
+  } else if (visualType === "dual_meter_animation" || visualType === "dual_meter") {
+    body = <DualMeterVisual data={data} width={width} height={height} frame={frame} />;
+  } else if (visualType === "annotation_overlay") {
+    body = <AnnotationVisual data={data} width={width} height={height} />;
+  } else if (visualType === "text_overlay_with_morph") {
+    body = <TextMorphVisual data={data} />;
+  } else if (visualType === "animated_diagram") {
+    body = <AnimatedDiagramVisual data={data} width={width} height={height} />;
   } else {
-    body = <DiagramVisual data={data} width={width} frame={frame} />;
+    body = <AnimatedDiagramVisual data={data} width={width} height={height} />;
   }
 
   return (
@@ -572,89 +1844,11 @@ export const GeneratedContractVisual: React.FC = () => {
       style={{
         backgroundColor,
         color: "#F8FAFC",
-        padding: "72px 88px",
+        overflow: "hidden",
         fontFamily: "'Inter', sans-serif",
-        justifyContent: "space-between",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 18,
-          opacity: introOpacity,
-        }}
-      >
-        <div
-          style={{
-            color: `${accent}CC`,
-            fontSize: 18,
-            fontWeight: 700,
-            letterSpacing: 2.2,
-            textTransform: "uppercase",
-          }}
-        >
-          {titleCase(visualType)}
-        </div>
-        <div
-          style={{
-            fontSize: visualType === "quote_card" ? 54 : 46,
-            fontWeight: 700,
-            lineHeight: 1.08,
-            maxWidth: width * 0.74,
-          }}
-        >
-          {title}
-        </div>
-        {subtitleLines.length > 0 ? (
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-              maxWidth: width * 0.68,
-              color: "#CBD5E1",
-              fontSize: 22,
-              fontWeight: 500,
-              lineHeight: 1.35,
-            }}
-          >
-            {subtitleLines.map((line, index) => (
-              <div key={`${line}-${index}`}>{line}</div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {body}
-      </div>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          color: "#94A3B8",
-          fontSize: 16,
-          letterSpacing: 1.4,
-          textTransform: "uppercase",
-          opacity: interpolate(frame, [fps * 2, fps * 2 + 12], [0, 0.85], {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-          }),
-        }}
-      >
-        <div>{asString(data.sectionId) ?? asString(data.chartId) ?? ""}</div>
-        <div>{subtitleLines.length > 0 ? subtitleLines[0] : ""}</div>
-      </div>
+      {body}
     </AbsoluteFill>
   );
 };

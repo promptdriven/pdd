@@ -6,9 +6,9 @@ describe("shared generated media renderer", () => {
     process.cwd(),
     "remotion/src/remotion/_shared/GeneratedMediaVisual.tsx"
   );
-  const veoSectionPath = path.join(
+  const compositionGeneratorPath = path.join(
     process.cwd(),
-    "remotion/src/remotion/veo_section/index.tsx"
+    "scripts/generate_section_compositions.py"
   );
 
   it("supports split media layouts from shared visual aliases instead of only a single defaultSrc", () => {
@@ -22,9 +22,12 @@ describe("shared generated media renderer", () => {
   });
 
   it("routes split media visuals through GeneratedMediaVisual when left/right aliases exist", () => {
-    const source = fs.readFileSync(veoSectionPath, "utf8");
+    const source = fs.readFileSync(compositionGeneratorPath, "utf8");
 
-    expect(source).toMatch(/visualOverlayConfig\s*\|\|\s*visualMedia\?\.leftSrc\s*\|\|\s*visualMedia\?\.rightSrc/);
+    expect(source).toMatch(/needs_generated_media_visual\s*=\s*any\(/);
+    expect(source).toMatch(/aliases\.get\('leftSrc'\)/);
+    expect(source).toMatch(/aliases\.get\('rightSrc'\)/);
+    expect(source).toMatch(/visualOverlayConfig \|\| visualMedia\?\.leftSrc \|\| visualMedia\?\.rightSrc/);
     expect(source).toMatch(/<GeneratedMediaVisual config=\{visualOverlayConfig\} \/>/);
   });
 
@@ -42,10 +45,6 @@ describe("shared generated media renderer", () => {
       path.join(
         process.cwd(),
         "remotion/src/remotion/ColdOpen01SplitScreenHook/ColdOpen01SplitScreenHook.tsx"
-      ),
-      path.join(
-        process.cwd(),
-        "remotion/src/remotion/Part2ParadigmShift04DefectFixTheMold/Part2ParadigmShift04DefectFixTheMold.tsx"
       ),
       path.join(
         process.cwd(),
@@ -150,6 +149,36 @@ describe("shared generated media renderer", () => {
     expect(pulsingGlowSource).toContain("export default PulsingGlow;");
     expect(constantsSource).toContain("export const ACTIVE_COLOR =");
     expect(constantsSource).toContain("export const PULSE_PERIOD =");
+  });
+});
+
+describe("shared generated contract renderer", () => {
+  const generatedContractVisualPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/_shared/GeneratedContractVisual.tsx"
+  );
+
+  it("supports typed contract renderers for the authored fallback visual families instead of collapsing them into the generic diagram placeholder", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/visualType === "title_card"/);
+    expect(source).toMatch(/visualType === "quote_card"/);
+    expect(source).toMatch(/visualType === "transition"/);
+    expect(source).toMatch(/visualType === "code_visualization"/);
+    expect(source).toMatch(/visualType === "code_transformation"/);
+    expect(source).toMatch(/visualType === "network_graph"/);
+    expect(source).toMatch(/visualType === "dual_meter_animation"/);
+    expect(source).toMatch(/visualType === "annotation_overlay"/);
+    expect(source).toMatch(/visualType === "text_overlay_with_morph"/);
+    expect(source).toMatch(/visualType === "animated_diagram"/);
+  });
+
+  it("can read split-panel media aliases from the visual contract runtime for contract-backed component fallbacks", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/useVisualMediaAssetSrc\(\s*["']leftSrc["']\s*\)/);
+    expect(source).toMatch(/useVisualMediaAssetSrc\(\s*["']rightSrc["']\s*\)/);
+    expect(source).toMatch(/OffthreadVideo/);
   });
 });
 

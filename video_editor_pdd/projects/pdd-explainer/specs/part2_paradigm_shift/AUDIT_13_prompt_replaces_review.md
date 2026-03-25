@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (spec, prompt, test, review, suite), so the frame does not support a hard missing-text failure.
+The rendered frame at 96.4% progress (frame 404/420, Phase 7 'Final hold') does not match the spec at all. The spec expects the completed mold metaphor: prompt document glowing on the far left, code lines streaming rightward filling a constrained space, and orange test walls (#D9944A) acting as vertical barriers. Instead, the frame shows a split-screen comparison layout with 'REVIEW THE CODE' (left, showing a code diff with a large red question mark overlay) vs 'REVIEW THE SPEC' (right, showing a prompt.md panel and test_suite.py panel), plus 'Cognitive load' meter bars at the bottom reading 'OVERLOADED' and 'MANAGEABLE'. This layout is not described anywhere in the animation phases of the spec. The entire visual composition is wrong — none of the Phase 5-7 elements (repositioned prompt, streaming code, test wall barriers, mold metaphor) are present.

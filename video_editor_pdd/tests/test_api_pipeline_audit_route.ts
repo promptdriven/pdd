@@ -39,10 +39,12 @@ jest.mock("@/lib/jobs", () => ({
 
 const mockRenderStill = jest.fn();
 const mockExtractFrameAtTime = jest.fn();
+const mockGetSectionDuration = jest.fn();
 
 jest.mock("@/lib/render", () => ({
   renderStill: (...args: unknown[]) => mockRenderStill(...args),
   extractFrameAtTime: (...args: unknown[]) => mockExtractFrameAtTime(...args),
+  getSectionDuration: (...args: unknown[]) => mockGetSectionDuration(...args),
 }));
 
 const mockRunClaudeAudit = jest.fn();
@@ -251,6 +253,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockRenderStill.mockReset();
   mockExtractFrameAtTime.mockReset();
+  mockGetSectionDuration.mockReset();
   mockRunClaudeAudit.mockReset();
   mockRunClaudeAuditWithTrace.mockReset();
   mockEvaluateDeterministicGeometryAudit.mockReset();
@@ -266,6 +269,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockResolvedValue("test-job-audit-001");
   mockRenderStill.mockResolvedValue(undefined);
   mockExtractFrameAtTime.mockResolvedValue(undefined);
+  mockGetSectionDuration.mockResolvedValue(60);
   mockRunClaudeAudit.mockResolvedValue({
     severity: "pass",
     fixType: "none",
@@ -1893,6 +1897,50 @@ Technical assessment: Previous review claimed it was at y≈410.
     );
   });
 
+  it("clears stale audit stills and traces for the section before rerunning", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]]; // intro
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "intro");
+    const auditDir = pathMod.join("/project-root", "outputs", "audit", "intro");
+    const traceDir = pathMod.join("/project-root", "outputs", "audit_traces", "intro");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === auditDir ||
+      candidate === traceDir ||
+      candidate.endsWith(".md") ||
+      candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return ["visual.md"];
+      }
+      if (candidate === auditDir) {
+        return ["stale.png", "notes.txt"];
+      }
+      if (candidate === traceDir) {
+        return ["old.json", "readme.txt"];
+      }
+      return [];
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["intro"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockUnlinkSync).toHaveBeenCalledWith(
+      pathMod.join(auditDir, "stale.png")
+    );
+    expect(mockUnlinkSync).toHaveBeenCalledWith(
+      pathMod.join(traceDir, "old.json")
+    );
+  });
+
   it("audit report path follows specs/{specDir}/AUDIT_{specName}.md", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[1]]; // main
@@ -2008,6 +2056,23 @@ Technical assessment: Previous review claimed it was at y≈410.
     await executor(jest.fn());
 
     expect(mockExtractFrameAtTime.mock.calls[0][1]).toBe(16.5);
+  });
+
+  it("clamps rendered-video audit sampling to the available media duration", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[1]]; // main
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockReadFileSync.mockReturnValue("**Timestamp:** 0:12 - 0:18\n");
+    mockGetSectionDuration.mockResolvedValue(8);
+
+    const executor = registerCallArgs.factory(
+      { sections: ["main"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockExtractFrameAtTime.mock.calls[0][1]).toBeCloseTo(7.999, 3);
   });
 
   it("falls back to animation-sequence frame ranges when timestamp metadata is missing", async () => {

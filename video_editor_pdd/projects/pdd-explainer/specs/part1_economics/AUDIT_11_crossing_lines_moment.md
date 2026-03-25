@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-The rendered frame shows the wrong chart entirely. The spec calls for the 'code cost chart' with three lines (generate/blue descending, total-cost/amber-dashed, immediate-patch/amber-solid) showing two crossing points where the blue 'generate' line crosses below both amber lines, with a 'We are here.' label, a 'Debt resets with each generation.' annotation in green, and a 'Small modules. Clear prompts. Always fits in context.' annotation in blue. Instead, the frame displays what appears to be the 'fork codebase size' chart (from section 08) showing 'Large codebase' (red), 'Small codebase' (green), a blue descending line, and an orange/amber rising line with labels like 'Same tools. Different codebase sizes.' and 'METR 2025' annotations. None of the spec's critical elements are present: no crossing circles with glows, no 'We are here.' label, no debt reset annotation, no generate line emphasis annotation. This is a completely wrong visual for this section.
+OCR confirmed visible text tokens in the rendered frame (2025, large, codebase, small, same), so the frame does not support a hard missing-text failure.

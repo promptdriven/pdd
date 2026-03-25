@@ -5,8 +5,8 @@ import {
   useCurrentFrame,
   interpolate,
   Easing,
-  staticFile,
 } from 'remotion';
+import { useVisualMediaAssetSrc } from '../_shared/visual-runtime';
 import { SplitPanel } from './SplitPanel';
 import { DividerGlow } from './DividerGlow';
 import {
@@ -60,9 +60,8 @@ export const ColdOpen01SplitScreenHook: React.FC = () => {
     easing: Easing.out(Easing.cubic),
   });
 
-  // Resolve video sources — assets are available in veo/ via staticFile
-  const leftVideoSrc = staticFile('veo/developer_ai_edit.mp4');
-  const rightVideoSrc = staticFile('veo/grandmother_darning.mp4');
+  const leftVideoSrc = useVisualMediaAssetSrc('leftSrc', 'veo/developer_ai_edit.mp4');
+  const rightVideoSrc = useVisualMediaAssetSrc('rightSrc', 'veo/grandmother_darning.mp4');
 
   return (
     <AbsoluteFill

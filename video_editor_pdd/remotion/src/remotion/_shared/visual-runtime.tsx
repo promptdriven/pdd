@@ -18,6 +18,7 @@ export type VisualMedia = {
 export type VisualContract = {
   specBaseName?: string;
   dataPoints?: Record<string, unknown> | null;
+  mediaAliases?: VisualMedia | null;
   overlayConfig?: Record<string, unknown> | null;
   renderMode?: "raw-media" | "generated-media" | "component";
 };
@@ -57,10 +58,22 @@ export const useVisualMediaSrc = (
   fallback?: string
 ): string | null => {
   const media = useContext(VisualMediaContext);
+  const contract = useContext(VisualContractContext);
+  const contractMedia =
+    contract?.mediaAliases && typeof contract.mediaAliases === "object"
+      ? contract.mediaAliases
+      : null;
   if (SPLIT_ONLY_KEYS.has(key)) {
-    return media?.[key] ?? fallback ?? null;
+    return media?.[key] ?? contractMedia?.[key] ?? fallback ?? null;
   }
-  return media?.[key] ?? media?.defaultSrc ?? fallback ?? null;
+  return (
+    media?.[key] ??
+    media?.defaultSrc ??
+    contractMedia?.[key] ??
+    contractMedia?.defaultSrc ??
+    fallback ??
+    null
+  );
 };
 
 export const useVisualMediaAssetSrc = (

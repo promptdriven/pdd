@@ -35,7 +35,7 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 455.530667,
+      "durationSeconds": 455.509333,
       "offsetSeconds": 17.621333,
       "compositions": [
         "01_section_title_card",
@@ -52,7 +52,7 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 227.562667,
-      "offsetSeconds": 473.152,
+      "offsetSeconds": 473.130666,
       "compositions": [
         "01_section_title_card"
       ],
@@ -66,7 +66,7 @@
       "remotionDir": "S03-Part3MoldThreeParts",
       "compositionId": "Part3MoldThreePartsSection",
       "durationSeconds": 344.213333,
-      "offsetSeconds": 700.714667,
+      "offsetSeconds": 700.693333,
       "compositions": [
         "01_section_title_card",
         "02_mold_cross_section"
@@ -81,7 +81,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 111.914667,
-      "offsetSeconds": 1044.9279999999999,
+      "offsetSeconds": 1044.906666,
       "compositions": [
         "01_section_title_card",
         "02_printer_vs_mold_split",
@@ -97,7 +97,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 115.157333,
-      "offsetSeconds": 1156.842667,
+      "offsetSeconds": 1156.821333,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -115,7 +115,7 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 32.149333,
-      "offsetSeconds": 1272,
+      "offsetSeconds": 1271.978666,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -131,7 +131,7 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 20.714667,
-      "offsetSeconds": 1304.149333,
+      "offsetSeconds": 1304.127999,
       "compositions": [
         "04_pdd_triangle",
         "05_dissolve_regenerate_loop",

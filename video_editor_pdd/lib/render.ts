@@ -329,6 +329,12 @@ export const extractFrameAtTime = async (
     `-vframes 1 -q:v 2 "${outputPath}"`;
 
   await execAsync(cmd);
+
+  if (!fs.existsSync(outputPath)) {
+    throw new Error(
+      `ffmpeg did not produce a frame for "${videoPath}" at ${safeTimeSeconds.toFixed(3)}s`
+    );
+  }
 };
 
 /**

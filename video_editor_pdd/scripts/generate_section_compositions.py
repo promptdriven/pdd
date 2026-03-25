@@ -66,6 +66,68 @@ def _normalize_component_lookup_key(value: str, section_id: str) -> str:
     return re.sub(r'[^a-z0-9]+', '', normalized.lower())
 
 
+def _normalize_component_tokens(value: str) -> List[str]:
+    """Normalize a component identifier into fuzzy-match tokens."""
+    normalized = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', value)
+    normalized = normalized.replace('_', ' ').replace('-', ' ')
+    normalized = re.sub(r'([0-9]+)', ' ', normalized)
+    tokens: List[str] = []
+    for raw_token in normalized.lower().split():
+        token = raw_token.strip()
+        if not token:
+            continue
+        if token.endswith('ing') and len(token) > 5:
+            token = token[:-3]
+        elif token.endswith('ed') and len(token) > 4:
+            token = token[:-2]
+        elif token.endswith('s') and len(token) > 4:
+            token = token[:-1]
+        tokens.append(token)
+    return tokens
+
+
+def _leading_component_index(value: str) -> Optional[str]:
+    """Return the leading numeric prefix from a component identifier, if any."""
+    match = re.match(r'^\D*?(\d+)', value.strip())
+    return match.group(1) if match else None
+
+
+def _resolve_component_export_name(
+    import_path: str,
+    remotion_src: str,
+    fallback_name: str,
+) -> str:
+    """Read the named export for an import path when the filesystem name is not a safe identifier."""
+    candidate_paths = [
+        os.path.join(remotion_src, import_path, 'index.ts'),
+        os.path.join(remotion_src, import_path, 'index.tsx'),
+        os.path.join(remotion_src, f'{import_path}.ts'),
+        os.path.join(remotion_src, f'{import_path}.tsx'),
+    ]
+    export_patterns = (
+        re.compile(r'export\s*\{\s*([A-Za-z_][A-Za-z0-9_]*)'),
+        re.compile(r'export\s+const\s+([A-Za-z_][A-Za-z0-9_]*)'),
+        re.compile(r'export\s+function\s+([A-Za-z_][A-Za-z0-9_]*)'),
+        re.compile(r'export\s+class\s+([A-Za-z_][A-Za-z0-9_]*)'),
+    )
+
+    for candidate_path in candidate_paths:
+        if not os.path.isfile(candidate_path):
+            continue
+        try:
+            source = _read_text_if_exists(candidate_path)
+        except OSError:
+            continue
+        if not source:
+            continue
+        for pattern in export_patterns:
+            match = pattern.search(source)
+            if match:
+                return match.group(1)
+
+    return fallback_name
+
+
 def _iter_component_import_candidates(remotion_src: str) -> List[tuple[str, str]]:
     """List importable component targets under remotion/src/remotion."""
     if not remotion_src or not os.path.isdir(remotion_src):
@@ -95,23 +157,33 @@ def _resolve_existing_comp_import(
     section_pascal = to_pascal_case(section_id)
     if comp_pascal and comp_pascal[0].isdigit():
         comp_pascal = section_pascal + comp_pascal
+    fallback_export_name = resolve_logical_component_name(comp_id, section_id)
 
     if not remotion_src:
         return None
 
     pascal_dir = os.path.join(remotion_src, comp_pascal)
     if os.path.isdir(pascal_dir):
-        return (comp_pascal, comp_pascal)
+        return (
+            _resolve_component_export_name(comp_pascal, remotion_src, fallback_export_name),
+            comp_pascal,
+        )
 
     parts = re.split(r'[_\-]', comp_id)
     kebab_name = parts[0] + '-' + ''.join(p.capitalize() for p in parts[1:] if p) if len(parts) > 1 else comp_id
     kebab_dir = os.path.join(remotion_src, kebab_name)
     if os.path.isdir(kebab_dir):
-        return (comp_pascal, kebab_name)
+        return (
+            _resolve_component_export_name(kebab_name, remotion_src, fallback_export_name),
+            kebab_name,
+        )
 
     flat_file = os.path.join(remotion_src, f'{comp_id}.tsx')
     if os.path.isfile(flat_file):
-        return (comp_pascal, comp_id)
+        return (
+            _resolve_component_export_name(comp_id, remotion_src, fallback_export_name),
+            comp_id,
+        )
 
     target_key = _normalize_component_lookup_key(comp_id, section_id)
     if not target_key:
@@ -122,18 +194,64 @@ def _resolve_existing_comp_import(
         for candidate in _iter_component_import_candidates(remotion_src)
         if _normalize_component_lookup_key(candidate[0], section_id) == target_key
     ]
-    if not matches:
+    if matches:
+        section_matches = [
+            candidate
+            for candidate in matches
+            if candidate[0].startswith(section_pascal)
+        ]
+        if len(section_matches) == 1:
+            _, import_path = section_matches[0]
+            return (
+                _resolve_component_export_name(import_path, remotion_src, fallback_export_name),
+                import_path,
+            )
+        if len(matches) == 1:
+            _, import_path = matches[0]
+            return (
+                _resolve_component_export_name(import_path, remotion_src, fallback_export_name),
+                import_path,
+            )
+
+    target_tokens = _normalize_component_tokens(comp_id)
+    if not target_tokens:
         return None
 
-    section_matches = [
-        candidate
-        for candidate in matches
-        if candidate[0].startswith(section_pascal)
-    ]
-    if len(section_matches) == 1:
-        return section_matches[0]
-    if len(matches) == 1:
-        return matches[0]
+    target_index = _leading_component_index(comp_id)
+    scored_matches: List[tuple[float, tuple[str, str]]] = []
+    for candidate in _iter_component_import_candidates(remotion_src):
+        candidate_name = candidate[0]
+        candidate_tokens = _normalize_component_tokens(candidate_name)
+        if not candidate_tokens:
+            continue
+
+        overlap = sum(1 for token in target_tokens if token in candidate_tokens) / len(target_tokens)
+        if overlap < 0.6:
+            continue
+
+        score = overlap
+        if candidate_name.startswith(section_pascal):
+            score += 0.1
+        if target_index and _leading_component_index(candidate_name) == target_index:
+            score += 0.15
+
+        scored_matches.append((score, candidate))
+
+    if not scored_matches:
+        return None
+
+    scored_matches.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_candidate = scored_matches[0]
+    if best_score < 0.8:
+        return None
+    if len(scored_matches) > 1 and scored_matches[1][0] >= best_score - 0.05:
+        return None
+    _, (_, import_path) = scored_matches[0]
+    return (
+        _resolve_component_export_name(import_path, remotion_src, fallback_export_name),
+        import_path,
+    )
+
     return None
 
 
@@ -1003,6 +1121,8 @@ def _extract_visual_media_aliases(
     explicit_sources: List[str] = []
     aliases: Dict[str, str] = {}
     explicit = False
+    data_points = _extract_data_points_json(spec_content)
+    media_driven = _is_media_driven_visual(spec_content, data_points)
 
     for key, rel_path in VISUAL_MEDIA_KEY_RE.findall(spec_content):
         resolved = _resolve_video_reference_static_path(
@@ -1019,7 +1139,6 @@ def _extract_visual_media_aliases(
         if alias_name:
             aliases[alias_name] = resolved
 
-    data_points = _extract_data_points_json(spec_content)
     if data_points is not None:
         structured_aliases = _extract_data_point_media_aliases(
             data_points,
@@ -1069,7 +1188,7 @@ def _extract_visual_media_aliases(
         if resolved not in explicit_sources:
             explicit_sources.append(resolved)
 
-    if not explicit_sources:
+    if media_driven and not explicit_sources:
         contextual_default = _resolve_contextual_video_static_path(
             spec_content,
             spec_base,
@@ -1080,7 +1199,7 @@ def _extract_visual_media_aliases(
             explicit_sources.append(contextual_default)
             aliases.setdefault('defaultSrc', contextual_default)
 
-    if not explicit_sources:
+    if media_driven and not explicit_sources:
         generated_default = _resolve_generated_spec_basename_video(
             spec_base,
             remotion_public,
@@ -1341,6 +1460,7 @@ def build_section_visual_contract_map(
         contracts[visual['id']] = {
             'specBaseName': visual.get('specBaseName'),
             'dataPoints': visual.get('dataPoints'),
+            'mediaAliases': visual.get('mediaAliases'),
             'overlayConfig': visual.get('overlayConfig'),
             'renderMode': visual.get('renderMode'),
         }
@@ -1447,7 +1567,14 @@ def build_visual_media_manifest(
                 'baseSrc': inherited_default,
             }
 
-        if not aliases and not saw_explicit_source and fallback_video_src is not None and not is_component:
+        if (
+            not aliases
+            and not saw_explicit_source
+            and fallback_video_src is not None
+            and not is_component
+            and spec_content
+            and _is_media_driven_visual(spec_content)
+        ):
             aliases = {
                 'defaultSrc': fallback_video_src,
                 'backgroundSrc': fallback_video_src,
@@ -2059,6 +2186,12 @@ def generate_generated_timeline_wrapper(
         project_dir,
         remotion_public,
     )
+    needs_generated_media_visual = any(
+        bool(visual_overlay_manifest.get(visual_id))
+        or bool(aliases.get('leftSrc'))
+        or bool(aliases.get('rightSrc'))
+        for visual_id, aliases in visual_media_manifest.items()
+    )
     needs_generated_contract_visual = any(
         contract.get('renderMode') == 'component' and visual_id not in component_visual_ids
         for visual_id, contract in visual_contract_map.items()
@@ -2090,7 +2223,7 @@ def generate_generated_timeline_wrapper(
     lines.append(f'import {{ {", ".join(remotion_imports)} }} from "remotion";')
     lines.append('import { VISUAL_SEQUENCE } from "./constants";')
     lines.append('import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";')
-    if visual_overlay_manifest:
+    if needs_generated_media_visual:
         lines.append('import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";')
     if needs_generated_contract_visual:
         lines.append('import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";')
@@ -2178,7 +2311,7 @@ def generate_generated_timeline_wrapper(
         lines.append('            ) : visualMedia?.defaultSrc ? (')
         lines.append('              <VisualContractProvider contract={visualContract}>')
         lines.append('                <VisualMediaProvider media={visualMedia}>')
-        if visual_overlay_manifest:
+        if needs_generated_media_visual:
             lines.append('                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (')
             lines.append('                  <GeneratedMediaVisual config={visualOverlayConfig} />')
             lines.append('                ) : (')

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
-import { extractFrameAtTime, renderStill } from "@/lib/render";
+import { extractFrameAtTime, getSectionDuration, renderStill } from "@/lib/render";
 import { runClaudeAudit, runClaudeAuditWithTrace } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
@@ -73,6 +73,7 @@ const GEOMETRY_DISCREPANCY_RE =
   /\b(center|centering|offset|drift|position|alignment|aligned|spacing|left|right|panel|split|x=|y=|undersized|oversized|size|width|height)\b/i;
 const MAX_RENDERABLE_FRAME_RE =
   /highest frame that can be rendered is (\d+)/i;
+const MEDIA_SAMPLE_EPSILON_SECONDS = 0.001;
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -170,6 +171,42 @@ function clearStaleAuditStill(outputStill: string): void {
   }
 }
 
+function clearSectionAuditArtifacts(sectionId: string): void {
+  const sectionAuditDir = path.join(
+    getProjectDir(),
+    "outputs",
+    "audit",
+    sectionId
+  );
+  const sectionTraceDir = path.join(
+    getProjectDir(),
+    "outputs",
+    "audit_traces",
+    sectionId
+  );
+
+  for (const [dirPath, suffix] of [
+    [sectionAuditDir, ".png"],
+    [sectionTraceDir, ".json"],
+  ] as const) {
+    if (!fs.existsSync(dirPath)) {
+      continue;
+    }
+
+    for (const entry of fs.readdirSync(dirPath)) {
+      if (!entry.endsWith(suffix)) {
+        continue;
+      }
+
+      try {
+        fs.unlinkSync(path.join(dirPath, entry));
+      } catch {
+        // Ignore cleanup errors; the fresh render path below will still run.
+      }
+    }
+  }
+}
+
 function extractMaxRenderableFrame(message: string): number | null {
   const match = message.match(MAX_RENDERABLE_FRAME_RE);
   if (!match) {
@@ -178,6 +215,31 @@ function extractMaxRenderableFrame(message: string): number | null {
 
   const frame = Number(match[1]);
   return Number.isFinite(frame) && frame >= 0 ? frame : null;
+}
+
+async function clampSampleTimeToMediaDuration(
+  mediaPath: string,
+  sampleSeconds: number,
+  onLog: (msg: string) => void
+): Promise<number> {
+  try {
+    const durationSeconds = await getSectionDuration(mediaPath);
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      return sampleSeconds;
+    }
+
+    if (sampleSeconds < durationSeconds) {
+      return sampleSeconds;
+    }
+
+    const clamped = Math.max(0, durationSeconds - MEDIA_SAMPLE_EPSILON_SECONDS);
+    onLog(
+      `[audit] Sample time ${sampleSeconds.toFixed(3)}s exceeded media duration ${durationSeconds.toFixed(3)}s; clamping to ${clamped.toFixed(3)}s`
+    );
+    return clamped;
+  } catch {
+    return sampleSeconds;
+  }
 }
 
 function shouldSaveAuditTraces(): boolean {
@@ -468,6 +530,7 @@ async function auditSection(
   const canRenderFreshStill =
     configuredCompositionIds.length > 0 && Boolean(section.compositionId);
   const renderedVideoPath = resolveSectionRenderedVideoPath(section);
+  clearSectionAuditArtifacts(section.id);
 
   let passCount = 0;
   let warnCount = 0;
@@ -591,9 +654,14 @@ async function auditSection(
         onLog(
           `[audit] Extracting standalone media frame for ${section.id} (${specName}) at ${sampleWindow.intrinsicSampleSeconds.toFixed(3)}s`
         );
-        await extractFrameAtTime(
+        const sampleSeconds = await clampSampleTimeToMediaDuration(
           renderSource.mediaPath,
           sampleWindow.intrinsicSampleSeconds,
+          onLog
+        );
+        await extractFrameAtTime(
+          renderSource.mediaPath,
+          sampleSeconds,
           outputStill
         );
       } else if (renderSource.kind === "section-composition") {
@@ -607,12 +675,17 @@ async function auditSection(
         );
         await renderStill(renderSource.compositionId, sampleFrame, outputStill);
       } else {
+        const sampleSeconds = await clampSampleTimeToMediaDuration(
+          renderSource.mediaPath,
+          sampleWindow.sampleSeconds,
+          onLog
+        );
         onLog(
-          `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleWindow.sampleSeconds.toFixed(3)}s from rendered video`
+          `[audit] Extracting frame for ${section.id} (${specName}) at ${sampleSeconds.toFixed(3)}s from rendered video`
         );
         await extractFrameAtTime(
           renderSource.mediaPath,
-          sampleWindow.sampleSeconds,
+          sampleSeconds,
           outputStill
         );
       }

@@ -657,6 +657,9 @@ describe("extractFrameAtTime — ffmpeg still extraction", () => {
   });
 
   it("runs ffmpeg with -ss, -vframes 1, and -q:v 2", async () => {
+    (fs.existsSync as jest.Mock).mockImplementation(
+      (candidate: string) => candidate === "/frames/frame.png"
+    );
     await extractFrameAtTime("/sections/intro.mp4", 1.5, "/frames/frame.png");
 
     const execCall = mockExecPromisified.mock.calls[0][0];
@@ -669,6 +672,9 @@ describe("extractFrameAtTime — ffmpeg still extraction", () => {
   });
 
   it("creates the output directory before extracting the frame", async () => {
+    (fs.existsSync as jest.Mock).mockImplementation(
+      (candidate: string) => candidate === "/output/frames/frame.png"
+    );
     await extractFrameAtTime("/sections/intro.mp4", 1.5, "/output/frames/frame.png");
 
     expect(fs.promises.mkdir).toHaveBeenCalledWith("/output/frames", {
@@ -677,10 +683,21 @@ describe("extractFrameAtTime — ffmpeg still extraction", () => {
   });
 
   it("clamps negative timestamps to zero", async () => {
+    (fs.existsSync as jest.Mock).mockImplementation(
+      (candidate: string) => candidate === "/frames/frame.png"
+    );
     await extractFrameAtTime("/sections/intro.mp4", -2, "/frames/frame.png");
 
     const execCall = mockExecPromisified.mock.calls[0][0];
     expect(execCall).toContain("-ss 0.000");
+  });
+
+  it("throws when ffmpeg exits successfully but no frame file was written", async () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+
+    await expect(
+      extractFrameAtTime("/sections/intro.mp4", 16.5, "/frames/frame.png")
+    ).rejects.toThrow(/did not produce a frame/i);
   });
 });
 
