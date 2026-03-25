@@ -38,6 +38,59 @@ const asStringArray = (value: unknown): string[] => {
     : [];
 };
 
+const formatApproxTokenCount = (value: unknown): string | null => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `~${Math.round(value).toLocaleString()} tokens`;
+  }
+
+  const raw = asString(value);
+  if (!raw) {
+    return null;
+  }
+
+  const digitsOnly = raw.replace(/[^0-9]/g, "");
+  if (!digitsOnly) {
+    return raw.toLowerCase().includes("token") ? raw : `${raw} tokens`;
+  }
+
+  const numeric = Number(digitsOnly);
+  if (!Number.isFinite(numeric)) {
+    return raw;
+  }
+
+  const prefix = raw.trim().startsWith("~") ? "~" : "~";
+  return `${prefix}${numeric.toLocaleString()} tokens`;
+};
+
+const buildDenseCodePreviewLines = (variant: "dense" | "cluttered" | "clean"): string[] => {
+  if (variant === "clean") {
+    return [
+      "intent: parse user ids from input",
+      "constraints: return None on failure",
+      "tests: malformed strings, unicode, whitespace",
+      "grounding: team style, naming, imports",
+      "room_to_think()",
+    ];
+  }
+
+  const shared = [
+    "def normalize_user(raw_input, state, cache):",
+    "    parser = resolver.lookup(current_module, raw_input)",
+    "    payload = maybe_decode(cache, state, fallback='legacy')",
+    "    if payload is None: return try_secondary_path(raw_input)",
+    "    return adapter.rebuild(parser, payload, state)",
+    "    # temporary fix from 2022",
+    "    # copied from webhook_router.py",
+    "    # TODO: reconcile cursor patch branch",
+  ];
+
+  if (variant === "cluttered") {
+    return [...shared, "    if state.flags.get('patched'): return legacy_fork()", "    return nested_callback(user, payload)"];
+  }
+
+  return shared;
+};
+
 const titleCase = (value: string): string => {
   return value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -616,7 +669,16 @@ const TitleCardVisual: React.FC<{
 
 const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
   const accent = resolveAccentColor(data);
+  const quoteLine1 = asString(data.quoteLine1);
+  const quoteLine2 = asString(data.quoteLine2);
+  const quoteLine2Color = asString(data.quoteLine2Color) ?? accent;
+  const secondaryText =
+    asString(data.secondaryText) ?? asString(data.summary) ?? asString(data.subtext);
   const attribution = asString(data.attribution);
+  const primaryLines =
+    quoteLine1 || quoteLine2
+      ? [quoteLine1, quoteLine2].filter((line): line is string => Boolean(line))
+      : [resolveTitle(data)];
 
   return (
     <AbsoluteFill
@@ -648,20 +710,54 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
             letterSpacing: 2,
             textTransform: "uppercase",
           }}
-        >
-          Quote
+          >
+            {attribution ? "Quote" : "Key idea"}
+          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {primaryLines.map((line, index) => (
+            <div
+              key={`${line}-${index}`}
+              style={{
+                color:
+                  index === 1 && quoteLine2
+                    ? quoteLine2Color
+                    : "#F8FAFC",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: primaryLines.length > 1 ? 60 : 56,
+                fontWeight: 700,
+                lineHeight: 1.1,
+                letterSpacing: -0.4,
+              }}
+            >
+              {quoteLine1 || quoteLine2 ? line : `“${line}”`}
+            </div>
+          ))}
         </div>
-        <div
-          style={{
-            color: "#F8FAFC",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 56,
-            fontWeight: 700,
-            lineHeight: 1.16,
-          }}
-        >
-          “{resolveTitle(data)}”
-        </div>
+        {secondaryText ? (
+          <div
+            style={{
+              width: 220,
+              height: 2,
+              borderRadius: 999,
+              backgroundColor: "rgba(148, 163, 184, 0.34)",
+              marginTop: 4,
+              marginBottom: 2,
+            }}
+          />
+        ) : null}
+        {secondaryText ? (
+          <div
+            style={{
+              color: "#CBD5E1",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 28,
+              lineHeight: 1.35,
+              maxWidth: 980,
+            }}
+          >
+            {secondaryText}
+          </div>
+        ) : null}
         {attribution ? (
           <div
             style={{
@@ -679,11 +775,15 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
 };
 
 const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+  const frame = useCurrentFrame();
   const accent = resolveAccentColor(data);
   const echoes = Array.isArray(data.echoes)
     ? data.echoes.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
-  const title = resolveTitle(data);
+  const fade = interpolate(frame, [0, 45, 90], [0.22, 0.12, 0.02], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
     <AbsoluteFill
@@ -709,37 +809,11 @@ const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data })
             height: 340 - index * 36,
             borderRadius: 32,
             border: `1px solid ${accent}33`,
-            opacity: Number(echo.opacity ?? 0.08) + index * 0.04,
+            opacity: (Number(echo.opacity ?? 0.08) + index * 0.04) * (1 - fade * 0.8),
             transform: `translateY(${index * 28}px) scale(${1 - index * 0.06})`,
           }}
         />
       ))}
-      <div
-        style={{
-          position: "absolute",
-          width: 640,
-          height: 2,
-          background: `linear-gradient(90deg, transparent, ${accent}55, transparent)`,
-          opacity: 0.4,
-        }}
-      />
-      {title && title !== "Transition" ? (
-        <div
-          style={{
-            position: "absolute",
-            bottom: 160,
-            color: "#94A3B8",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 18,
-            fontWeight: 600,
-            letterSpacing: 2.4,
-            textTransform: "uppercase",
-            opacity: 0.6,
-          }}
-        >
-          {title}
-        </div>
-      ) : null}
     </AbsoluteFill>
   );
 };
@@ -1087,6 +1161,224 @@ const SplitVisual: React.FC<{
   const rightSrc = useVisualMediaAssetSrc("rightSrc");
   const multiplier = asString(data.multiplier);
 
+  const renderPanelInterior = (panel: Record<string, unknown>, accent: string) => {
+    const content = asString(panel.content);
+    const sections = Array.isArray(panel.sections)
+      ? panel.sections.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+
+    if (content === "context_window_cluttered") {
+      const lines = buildDenseCodePreviewLines("cluttered");
+      return (
+        <div
+          style={{
+            position: "absolute",
+            inset: "86px 24px 92px",
+            borderRadius: 20,
+            backgroundColor: "rgba(2, 6, 23, 0.8)",
+            border: "1px solid rgba(239, 68, 68, 0.22)",
+            overflow: "hidden",
+            padding: "18px 18px 56px",
+          }}
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "42px 1fr", rowGap: 6 }}>
+            {lines.slice(0, 10).map((line, index) => {
+              const tone =
+                index === 2 || index === 3 || index === 6
+                  ? "#FCA5A5"
+                  : index === 4
+                    ? "#86EFAC"
+                    : "#94A3B8";
+              return (
+                <React.Fragment key={`${line}-${index}`}>
+                  <div
+                    style={{
+                      color: "rgba(148, 163, 184, 0.42)",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 12,
+                    }}
+                  >
+                    {index + 1}
+                  </div>
+                  <div
+                    style={{
+                      color: tone,
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 13,
+                      whiteSpace: "pre",
+                    }}
+                  >
+                    {line}
+                  </div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: 18,
+              bottom: 16,
+              display: "flex",
+              flexDirection: "column",
+              gap: 5,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 11,
+            }}
+          >
+            <div style={{ color: "#EF4444", opacity: 0.75 }}>Red = irrelevant code retrieved</div>
+            <div style={{ color: "#4ADE80", opacity: 0.82 }}>Green = actually needed</div>
+          </div>
+        </div>
+      );
+    }
+
+    if (content === "context_window_clean") {
+      return (
+        <div
+          style={{
+            position: "absolute",
+            inset: "86px 24px 92px",
+            borderRadius: 20,
+            backgroundColor: "rgba(2, 6, 23, 0.72)",
+            border: "1px solid rgba(74, 222, 128, 0.24)",
+            padding: "18px 18px 18px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          }}
+        >
+          {sections.slice(0, 3).map((section, index) => {
+            const color = asString(section.color) ?? (index === 0 ? "#4A90D9" : index === 1 ? "#D9944A" : "#5AAA6E");
+            const tokens = formatApproxTokenCount(section.tokens);
+            return (
+              <div
+                key={`section-${index}`}
+                style={{
+                  borderRadius: 14,
+                  backgroundColor: `${color}22`,
+                  border: `1px solid ${color}44`,
+                  padding: "14px 16px",
+                }}
+              >
+                <div style={{ color, fontSize: 14, fontWeight: 800, letterSpacing: 1 }}>
+                  {asString(section.label) ?? `Section ${index + 1}`}
+                </div>
+                {tokens ? (
+                  <div style={{ color: "#E2E8F0", fontSize: 12, marginTop: 4 }}>{tokens}</div>
+                ) : null}
+              </div>
+            );
+          })}
+          <div
+            style={{
+              flex: 1,
+              borderRadius: 14,
+              border: "1px dashed rgba(74, 222, 128, 0.28)",
+              backgroundColor: "rgba(15, 23, 42, 0.52)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#4ADE80",
+              fontSize: 16,
+              fontWeight: 700,
+            }}
+          >
+            Room to think
+          </div>
+        </div>
+      );
+    }
+
+    if (content === "dense_code") {
+      const lines = buildDenseCodePreviewLines("dense");
+      return (
+        <div
+          style={{
+            position: "absolute",
+            inset: "86px 24px 92px",
+            borderRadius: 20,
+            backgroundColor: "rgba(2, 6, 23, 0.82)",
+            border: "1px solid rgba(148, 163, 184, 0.22)",
+            padding: "18px 18px 16px",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "42px 1fr", rowGap: 6 }}>
+            {lines.slice(0, 10).map((line, index) => (
+              <React.Fragment key={`${line}-${index}`}>
+                <div
+                  style={{
+                    color: "rgba(148, 163, 184, 0.42)",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 12,
+                  }}
+                >
+                  {index + 1}
+                </div>
+                <div
+                  style={{
+                    color: index % 4 === 0 ? "#93C5FD" : index % 3 === 0 ? "#E2E8F0" : "#CBD5E1",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 13,
+                    whiteSpace: "pre",
+                    opacity: 0.95 - index * 0.04,
+                  }}
+                >
+                  {line}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    if (content === "prompt_blocks") {
+      const promptLines = buildDenseCodePreviewLines("clean");
+      return (
+        <div
+          style={{
+            position: "absolute",
+            inset: "86px 24px 92px",
+            borderRadius: 20,
+            backgroundColor: "rgba(2, 6, 23, 0.72)",
+            border: `1px solid ${accent}33`,
+            padding: "18px 18px 16px",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12,
+          }}
+        >
+          {Array.from({ length: 10 }).map((_, index) => (
+            <div
+              key={`prompt-${index}`}
+              style={{
+                borderRadius: 14,
+                backgroundColor: "rgba(45, 212, 191, 0.14)",
+                border: "1px solid rgba(45, 212, 191, 0.3)",
+                padding: "10px 12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                justifyContent: "center",
+              }}
+            >
+              <div style={{ color: "#CCFBF1", fontSize: 11, fontWeight: 800, letterSpacing: 0.6 }}>
+                {index === 0 ? "PROMPT" : index === 1 ? "TESTS" : index === 2 ? "GROUNDING" : `MODULE ${index + 1}`}
+              </div>
+              <div style={{ color: "#E2E8F0", fontSize: 11, lineHeight: 1.3 }}>
+                {promptLines[index % promptLines.length]}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return null;
+  };
+
   const renderPanel = (
     panel: Record<string, unknown>,
     accent: string,
@@ -1098,13 +1390,13 @@ const SplitVisual: React.FC<{
       rawLabel === rawLabel?.toUpperCase() &&
       rawLabel.length <= 24;
     const header = asString(panel.header) ?? (labelLooksLikeHeader ? rawLabel : null);
-    const headerColor = asString(panel.headerColor) ?? accent;
+    const headerColor = asString(panel.headerColor) ?? asString(panel.color) ?? accent;
     const caption =
       asString(panel.caption) ??
       asString(panel.subLabel) ??
       asString(panel.summary) ??
       (!labelLooksLikeHeader ? rawLabel : null);
-    const tokenCount = panel.tokenCount;
+    const tokenCount = formatApproxTokenCount(panel.tokenCount);
     const scope = asString(panel.scope);
     const codeComments = asStringArray(panel.codeComments);
     const aura = asRecord(panel.aura);
@@ -1118,6 +1410,11 @@ const SplitVisual: React.FC<{
     const steps = Array.isArray(panel.steps)
       ? panel.steps.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
+    const interior = renderPanelInterior(panel, accent);
+    const usagePercent =
+      typeof panel.relevantPercent === "number" || typeof panel.relevantPercent === "string"
+        ? `Context utilization: ~${panel.relevantPercent}%`
+        : null;
 
     return (
       <div
@@ -1182,19 +1479,40 @@ const SplitVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              left: 30,
-              right: 30,
-              top: 28,
+              left: 24,
+              right: 24,
+              top: 24,
               color: headerColor,
               fontFamily: "'Inter', sans-serif",
               fontSize: 24,
               fontWeight: 700,
               letterSpacing: 1.6,
+              textAlign: "center",
             }}
           >
             {header}
           </div>
         ) : null}
+        {tokenCount ? (
+          <div
+            style={{
+              position: "absolute",
+              top: 24,
+              right: 24,
+              padding: "8px 12px",
+              borderRadius: 999,
+              backgroundColor: "rgba(2, 6, 23, 0.78)",
+              border: `1px solid ${headerColor}33`,
+              color: headerColor,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 14,
+              fontWeight: 800,
+            }}
+          >
+            {tokenCount}
+          </div>
+        ) : null}
+        {interior}
         <div
           style={{
             position: "absolute",
@@ -1244,25 +1562,13 @@ const SplitVisual: React.FC<{
               style={{
                 color: "#F8FAFC",
                 fontFamily: "'Inter', sans-serif",
-                fontSize: 26,
-                fontWeight: 600,
-                lineHeight: 1.2,
-              }}
-            >
-              {caption}
-            </div>
-          ) : null}
-          {typeof tokenCount === "number" || typeof tokenCount === "string" ? (
-            <div
-              style={{
-                color: headerColor,
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 18,
-                fontWeight: 700,
-              }}
-            >
-              {`${tokenCount} tokens`}
-            </div>
+              fontSize: 26,
+              fontWeight: 600,
+              lineHeight: 1.2,
+            }}
+          >
+            {caption}
+          </div>
           ) : null}
           {scope ? (
             <div
@@ -1275,10 +1581,29 @@ const SplitVisual: React.FC<{
               {scope}
             </div>
           ) : null}
+          {usagePercent ? (
+            <div
+              style={{
+                color: headerColor,
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 15,
+                fontWeight: 700,
+                opacity: 0.82,
+              }}
+            >
+              {usagePercent}
+            </div>
+          ) : null}
         </div>
       </div>
     );
   };
+
+  const hasScopeFooter =
+    Boolean(asString(left.scope)) &&
+    Boolean(asString(right.scope)) &&
+    !left.relevantPercent &&
+    !right.relevantPercent;
 
   return (
     <AbsoluteFill style={{ padding: "88px 72px 72px" }}>
@@ -1303,25 +1628,47 @@ const SplitVisual: React.FC<{
           backgroundColor: "rgba(51, 65, 85, 0.35)",
         }}
       />
-      {multiplier ? (
+        {multiplier ? (
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              top: "50%",
+              transform: "translate(-50%, -50%)",
+              padding: "10px 18px",
+              borderRadius: 999,
+              backgroundColor: "rgba(2, 6, 23, 0.8)",
+              border: "1px solid rgba(45, 212, 191, 0.35)",
+              color: "#2DD4BF",
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 42,
+              fontWeight: 700,
+              boxShadow: "0 0 28px rgba(45, 212, 191, 0.16)",
+            }}
+          >
+            {multiplier}
+          </div>
+        ) : null}
+      {hasScopeFooter ? (
         <div
           style={{
             position: "absolute",
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-            padding: "10px 18px",
-            borderRadius: 999,
-            backgroundColor: "rgba(2, 6, 23, 0.8)",
-            border: "1px solid rgba(45, 212, 191, 0.35)",
-            color: "#2DD4BF",
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 42,
-            fontWeight: 700,
-            boxShadow: "0 0 28px rgba(45, 212, 191, 0.16)",
+            left: 120,
+            right: 120,
+            bottom: 26,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            alignItems: "center",
+            textAlign: "center",
           }}
         >
-          {multiplier}
+          <div style={{ color: "#E2E8F0", fontSize: 16, opacity: 0.78 }}>
+            {`${asString(left.scope)} vs ${asString(right.scope)}`}
+          </div>
+          <div style={{ color: "#2DD4BF", fontSize: 16, fontWeight: 700, opacity: 0.9 }}>
+            The right context is curated for the problem instead of retrieved from raw code.
+          </div>
         </div>
       ) : null}
     </AbsoluteFill>
@@ -1533,6 +1880,7 @@ const CodeVisual: React.FC<{
   const title = resolveTitle(data);
   const visualType = asString(data.type);
   const fileNames = [
+    asString(data.filename),
     asString(data.highlightedModule),
     asString(data.promptFile),
     ...asStringArray(data.fileNames),
@@ -1540,12 +1888,18 @@ const CodeVisual: React.FC<{
   const workflow = asStringArray(data.workflow);
   const warningComments = asStringArray(data.warningComments);
   const lineCount = asString(data.lineCount);
+  const generatedLines = Math.max(8, asNumber(data.generatedLines) ?? 14);
+  const deletedLines = Math.max(0, asNumber(data.deletedLines) ?? 0);
+  const terminal = asRecord(data.terminal);
   const terminalLines = [
+    asString(terminal?.command),
+    asString(terminal?.result),
     asString(data.terminalCommand),
     asString(data.terminalOutput),
     ...workflow,
     ...asStringArray(data.terminalCommands),
   ].filter((item): item is string => Boolean(item));
+  const terminalPosition = asString(terminal?.position) ?? "bottom_right";
 
   if (visualType === "code_visualization") {
     const panels = Math.max(3, asNumber(data.panels) ?? fileNames.length ?? 5);
@@ -1668,6 +2022,146 @@ const CodeVisual: React.FC<{
               {lineCount}
             </div>
           ) : null}
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  if (visualType === "code_regeneration") {
+    const terminalResult = asString(terminal?.result) ?? "Generated in 0.8s";
+    const regenerationLines = Array.from({ length: generatedLines }).map((_, index) => {
+      if (index === 0) return "from auth import normalize_user_id";
+      if (index === 1) return "from tests import ensure_user_contract";
+      if (index === 2) return "";
+      if (index === 3) return "def regenerate_auth_handler(user_input: str):";
+      if (index === 4) return "    normalized = normalize_user_id(user_input)";
+      if (index === 5) return "    if normalized is None:";
+      if (index === 6) return "        return None";
+      if (index === 7) return "    ensure_user_contract(normalized)";
+      if (index === 8) return "    payload = load_user_payload(normalized)";
+      if (index === 9) return "    if payload is None:";
+      if (index === 10) return "        return None";
+      if (index === 11) return "    return build_auth_response(payload)";
+      if (index === 12) return "";
+      if (index === 13) return "# generated from prompt + tests + grounding";
+      if (index === 14) return "RESULT = 'fresh module'";
+      return "return RESULT";
+    });
+
+    return (
+      <AbsoluteFill style={{ padding: "76px 88px 78px" }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at 72% 22%, rgba(74, 222, 128, 0.08), transparent 30%), radial-gradient(circle at 18% 18%, rgba(96, 165, 250, 0.10), transparent 32%)",
+          }}
+        />
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            borderRadius: 28,
+            backgroundColor: "rgba(2, 6, 23, 0.9)",
+            border: "1px solid rgba(71, 85, 105, 0.44)",
+            boxShadow: "0 28px 90px rgba(2, 6, 23, 0.42)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              height: 52,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0 20px",
+              backgroundColor: "rgba(15, 23, 42, 0.96)",
+              color: "#CBD5E1",
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 15,
+            }}
+          >
+            <div>{fileNames[0] ?? "auth_handler.py"}</div>
+            <div style={{ color: "#4ADE80" }}>{deletedLines > 0 ? `-${deletedLines} / +${generatedLines}` : `+${generatedLines} lines`}</div>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "58px 1fr",
+              rowGap: 8,
+              padding: "22px 24px 26px",
+            }}
+          >
+            {regenerationLines.map((line, index) => (
+              <React.Fragment key={`regen-line-${index}`}>
+                <div
+                  style={{
+                    color: "rgba(148, 163, 184, 0.48)",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 14,
+                  }}
+                >
+                  {index + 1}
+                </div>
+                <div
+                  style={{
+                    color:
+                      line.startsWith("from")
+                        ? "#C4B5FD"
+                        : line.startsWith("def")
+                          ? "#93C5FD"
+                          : line.startsWith("#")
+                            ? "#4ADE80"
+                            : line.includes("return")
+                              ? "#FCD34D"
+                              : "#E2E8F0",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 16,
+                    whiteSpace: "pre",
+                    opacity: 0.96,
+                  }}
+                >
+                  {line}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: terminalPosition === "bottom_right" ? 24 : undefined,
+              left: terminalPosition === "bottom_right" ? undefined : 24,
+              bottom: 24,
+              minWidth: 320,
+              padding: "14px 16px",
+              borderRadius: 18,
+              backgroundColor: "rgba(2, 6, 23, 0.86)",
+              border: "1px solid rgba(74, 222, 128, 0.36)",
+              boxShadow: "0 0 0 1px rgba(74, 222, 128, 0.12) inset",
+            }}
+          >
+            <div
+              style={{
+                color: "#94A3B8",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14,
+              }}
+            >
+              {asString(terminal?.command) ?? "pdd generate auth_handler"}
+            </div>
+            <div
+              style={{
+                color: "#4ADE80",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 18,
+                fontWeight: 800,
+                marginTop: 8,
+              }}
+            >
+              {`✓ ${terminalResult}`}
+            </div>
+          </div>
         </div>
       </AbsoluteFill>
     );
@@ -2481,9 +2975,7 @@ const AnimatedDiagramVisual: React.FC<{
     );
   } else if (diagramId === "context_compression") {
     const moduleCount = Math.max(8, asNumber(data.moduleCount) ?? 20);
-    const overflowCount = Math.max(0, asNumber(data.overflowCount) ?? 0);
     const ratio = asString(data.compressionRatio) ?? "5-10×";
-    const visiblePromptBlocks = Math.max(8, moduleCount - overflowCount);
     body = (
       <div
         style={{
@@ -2497,6 +2989,7 @@ const AnimatedDiagramVisual: React.FC<{
           display: "flex",
           flexDirection: "column",
           justifyContent: "center",
+          margin: "0 auto",
         }}
       >
         <div
@@ -2520,30 +3013,24 @@ const AnimatedDiagramVisual: React.FC<{
             borderRadius: 28,
             border: "2px solid rgba(74, 144, 217, 0.65)",
             boxShadow: "0 0 0 1px rgba(74, 144, 217, 0.18) inset",
-            padding: "22px 24px 64px",
+            padding: "22px 24px 22px",
             display: "grid",
             gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
             gap: 12,
             position: "relative",
+            margin: "0 auto",
           }}
         >
           {Array.from({ length: moduleCount }).map((_, index) => {
-            const visible = index < visiblePromptBlocks;
             return (
               <div
                 key={`prompt-${index}`}
                 style={{
                   height: 42,
                   borderRadius: 12,
-                  backgroundColor: visible
-                    ? "rgba(45, 212, 191, 0.18)"
-                    : "rgba(239, 68, 68, 0.14)",
-                  border: `1px solid ${
-                    visible
-                      ? "rgba(45, 212, 191, 0.4)"
-                      : "rgba(239, 68, 68, 0.36)"
-                  }`,
-                  opacity: visible ? 1 : 0.28,
+                  backgroundColor: index % 3 === 0 ? "rgba(74, 144, 217, 0.24)" : "rgba(96, 165, 250, 0.18)",
+                  border: "1px solid rgba(74, 144, 217, 0.42)",
+                  boxShadow: index % 5 === 0 ? "0 0 0 1px rgba(125, 211, 252, 0.18) inset" : undefined,
                 }}
               />
             );
@@ -2551,12 +3038,12 @@ const AnimatedDiagramVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              right: 28,
-              top: 22,
+              right: -10,
+              top: -18,
               padding: "10px 16px",
               borderRadius: 999,
-              backgroundColor: "rgba(45, 212, 191, 0.14)",
-              color: "#2DD4BF",
+              backgroundColor: "rgba(74, 144, 217, 0.16)",
+              color: "#93C5FD",
               fontSize: 28,
               fontWeight: 700,
             }}
@@ -2611,15 +3098,6 @@ const AnimatedDiagramVisual: React.FC<{
             }}
           >
             {asString(data.resultLabel) ?? "Same system. More fits."}
-          </div>
-          <div
-            style={{
-              color: "#94A3B8",
-              fontSize: 18,
-              fontWeight: 600,
-            }}
-          >
-            {`${visiblePromptBlocks}/${moduleCount} modules now fit inside the same window`}
           </div>
         </div>
       </div>

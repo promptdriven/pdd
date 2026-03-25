@@ -5337,6 +5337,42 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_prefers_generated_contract_for_quote_cards_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "quote_card",
+                    "quoteLine1": "You don't patch socks",
+                    "quoteLine2": "because socks got cheap.",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_chart_events_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "chart_event",
+                    "chartId": "code_cost_triple_line",
+                    "event": "crossing_moment",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_code_regeneration_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "code_regeneration",
+                    "filename": "auth_handler.py",
+                    "generatedLines": 16,
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_keeps_exact_component_for_specialized_chart_when_available(self):
         assert not _should_prefer_generated_contract_renderer(
             {

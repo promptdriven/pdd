@@ -1273,6 +1273,7 @@ CONTRACT_FIRST_VISUAL_TYPES = {
     'annotation_overlay',
     'chart_callback',
     'chart_event',
+    'code_regeneration',
     'code_transformation',
     'code_visualization',
     'dual_meter_animation',
@@ -1280,13 +1281,17 @@ CONTRACT_FIRST_VISUAL_TYPES = {
     'inset_chart',
     'network_graph',
     'pie_chart',
+    'quote_card',
     'text_overlay_with_morph',
     'transition',
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
+    'chart_event',
+    'code_regeneration',
     'code_transformation',
     'code_visualization',
+    'quote_card',
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {

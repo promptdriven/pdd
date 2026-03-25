@@ -157,6 +157,15 @@ describe("shared generated contract renderer", () => {
     process.cwd(),
     "remotion/src/remotion/_shared/GeneratedContractVisual.tsx"
   );
+  const extractBlock = (source: string, startMarker: string, endMarker: string) => {
+    const start = source.indexOf(startMarker);
+    const end = source.indexOf(endMarker, start + 1);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    return source.slice(start, end);
+  };
 
   it("supports typed contract renderers for the authored fallback visual families instead of collapsing them into the generic diagram placeholder", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
@@ -209,12 +218,43 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/codeComments|warningComments|lineCount|terminalCommands|workflow/);
   });
 
+  it("supports contract-authored quote cards instead of collapsing them into a generic quote fallback", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const quoteBlock = extractBlock(source, "const QuoteCardVisual", "const TransitionVisual");
+
+    expect(quoteBlock).toMatch(/quoteLine1/);
+    expect(quoteBlock).toMatch(/quoteLine2/);
+    expect(quoteBlock).toMatch(/quoteLine2Color/);
+    expect(quoteBlock).toMatch(/secondaryText/);
+  });
+
+  it("renders transition cards without the old debug title and center divider artifact", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const transitionBlock = extractBlock(source, "const TransitionVisual", "const ChartVisual");
+
+    expect(transitionBlock).not.toMatch(/resolveTitle\(data\)/);
+    expect(transitionBlock).not.toMatch(/width:\s*640/);
+  });
+
+  it("supports authored split-context interiors and code regeneration details from structured contracts", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/context_window_cluttered/);
+    expect(source).toMatch(/context_window_clean/);
+    expect(source).toMatch(/dense_code/);
+    expect(source).toMatch(/prompt_blocks/);
+    expect(source).toMatch(/quoteLine2Color/);
+    expect(source).toMatch(/generatedLines/);
+    expect(source).toMatch(/deletedLines/);
+    expect(source).toMatch(/asRecord\(data\.terminal\)/);
+  });
+
   it("does not leak internal split fallback labels or semantic content ids into rendered panel text", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
     expect(source).not.toMatch(/\?\?\s*["']Panel["']/);
-    expect(source).not.toMatch(/asString\(panel\.content\)/);
-    expect(source).not.toMatch(/asString\(panel\.thematicRole\)/);
+    expect(source).not.toMatch(/caption\s*\?\?\s*content/);
+    expect(source).not.toMatch(/caption\s*\?\?\s*thematicRole/);
   });
 
   it("supports contract-driven chart variants beyond the original line-series happy path", () => {

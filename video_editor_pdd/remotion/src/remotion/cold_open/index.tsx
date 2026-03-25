@@ -5,16 +5,13 @@ import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from 
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { ColdOpen06CodeBlinkPatched } from "../ColdOpen06CodeBlinkPatched";
-import { ColdOpen07CodeRegeneration } from "../ColdOpen07CodeRegeneration";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "05_code_blink_patched": ColdOpen06CodeBlinkPatched,
-  "06_code_regeneration": ColdOpen07CodeRegeneration,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "05_code_blink_patched": 150,
-  "06_code_regeneration": 270,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {

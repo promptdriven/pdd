@@ -7,14 +7,12 @@ import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Part1Economics04ResearchAnnotations } from "../Part1Economics04ResearchAnnotations";
 import { Part1Economics05ContextWindowShrink } from "../Part1Economics05ContextWindowShrink";
 import { Part1Economics06TwoByTwoGrid } from "../Part1Economics06TwoByTwoGrid";
-import { Part1Economics09CrossingLinesMoment } from "../Part1Economics09CrossingLinesMoment";
 import { Part1Economics10DoubleMeterInsight } from "../Part1Economics10DoubleMeterInsight";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "04_research_annotations": Part1Economics04ResearchAnnotations,
   "05_context_window_shrink": Part1Economics05ContextWindowShrink,
   "07_two_by_two_grid": Part1Economics06TwoByTwoGrid,
-  "11_crossing_lines_moment": Part1Economics09CrossingLinesMoment,
   "16_double_meter_insight": Part1Economics10DoubleMeterInsight,
 };
 
@@ -22,7 +20,6 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "04_research_annotations": 900,
   "05_context_window_shrink": 900,
   "07_two_by_two_grid": 750,
-  "11_crossing_lines_moment": 750,
   "16_double_meter_insight": 750,
 };
 

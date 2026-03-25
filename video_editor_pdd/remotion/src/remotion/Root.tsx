@@ -12,11 +12,9 @@ import { Part5CompoundReturnsSection } from "./part5_compound_returns";
 import { WhereToStartSection } from "./where_to_start";
 import { ClosingSection } from "./closing";
 import { ColdOpen06CodeBlinkPatched } from "./ColdOpen06CodeBlinkPatched";
-import { ColdOpen07CodeRegeneration } from "./ColdOpen07CodeRegeneration";
 import { Part1Economics04ResearchAnnotations } from "./Part1Economics04ResearchAnnotations";
 import { Part1Economics05ContextWindowShrink } from "./Part1Economics05ContextWindowShrink";
 import { Part1Economics06TwoByTwoGrid } from "./Part1Economics06TwoByTwoGrid";
-import { Part1Economics09CrossingLinesMoment } from "./Part1Economics09CrossingLinesMoment";
 import { Part1Economics10DoubleMeterInsight } from "./Part1Economics10DoubleMeterInsight";
 import { Part2ParadigmShift08SynopsysPddEquivalence } from "./Part2ParadigmShift08SynopsysPddEquivalence";
 import { Part2ParadigmShift09AbstractionStaircase } from "./Part2ParadigmShift09AbstractionStaircase";
@@ -29,8 +27,6 @@ import { Part5CompoundReturns03CompoundDebtCurve } from "./Part5CompoundReturns0
 import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
 import { Part5CompoundReturns07EconomicsCrossingCallback } from "./Part5CompoundReturns07EconomicsCrossingCallback";
-import { Part5CompoundReturns08ContrarianQuoteCard } from "./Part5CompoundReturns08ContrarianQuoteCard";
-import { WhereToStart07NoBigBangCallout } from "./WhereToStart07NoBigBangCallout";
 import { Closing03CodeRegenerateWorkflow } from "./Closing03CodeRegenerateWorkflow";
 import { Closing04PddTriangle } from "./Closing04PddTriangle";
 import { Closing05DissolveRegenerateLoop } from "./Closing05DissolveRegenerateLoop";
@@ -128,10 +124,10 @@ const ColdOpen06CodeBlinkPatchedPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen07CodeRegenerationPreview: React.FC = () => (
+const ColdOpen06CodeRegenerationPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:06_code_regeneration"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:06_code_regeneration"] ?? null}>
-      <ColdOpen07CodeRegeneration />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -212,10 +208,10 @@ const Part1Economics10ContextCompressionPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part1Economics09CrossingLinesMomentPreview: React.FC = () => (
+const Part1Economics11CrossingLinesMomentPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:11_crossing_lines_moment"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:11_crossing_lines_moment"] ?? null}>
-      <Part1Economics09CrossingLinesMoment />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -499,10 +495,10 @@ const Part5CompoundReturns07EconomicsCrossingCallbackPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part5CompoundReturns08ContrarianQuoteCardPreview: React.FC = () => (
+const Part5CompoundReturns09ContrarianQuoteCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
-      <Part5CompoundReturns08ContrarianQuoteCard />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -548,10 +544,10 @@ const WhereToStart05ModuleGlowSpreadPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const WhereToStart07NoBigBangCalloutPreview: React.FC = () => (
+const WhereToStart06NoBigBangCalloutPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:06_no_big_bang_callout"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:06_no_big_bang_callout"] ?? null}>
-      <WhereToStart07NoBigBangCallout />
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -683,7 +679,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="cold-open06-code-regeneration"
-        component={ColdOpen07CodeRegenerationPreview}
+        component={ColdOpen06CodeRegenerationPreview}
         durationInFrames={270}
         fps={30}
         width={1920}
@@ -779,7 +775,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part1-economics11-crossing-lines-moment"
-        component={Part1Economics09CrossingLinesMomentPreview}
+        component={Part1Economics11CrossingLinesMomentPreview}
         durationInFrames={750}
         fps={30}
         width={1920}
@@ -1107,7 +1103,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part5-compound-returns09-contrarian-quote-card"
-        component={Part5CompoundReturns08ContrarianQuoteCardPreview}
+        component={Part5CompoundReturns09ContrarianQuoteCardPreview}
         durationInFrames={300}
         fps={30}
         width={1920}
@@ -1163,7 +1159,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="where-to-start06-no-big-bang-callout"
-        component={WhereToStart07NoBigBangCalloutPreview}
+        component={WhereToStart06NoBigBangCalloutPreview}
         durationInFrames={90}
         fps={30}
         width={1920}

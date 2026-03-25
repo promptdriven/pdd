@@ -3,14 +3,11 @@ import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { WhereToStart07NoBigBangCallout } from "../WhereToStart07NoBigBangCallout";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "06_no_big_bang_callout": WhereToStart07NoBigBangCallout,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "06_no_big_bang_callout": 90,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
