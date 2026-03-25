@@ -77,6 +77,7 @@ You are working on step 8 of 12 in an agentic bug investigation workflow. Previo
    - Primary test: reproduces the exact bug (always required)
    - Edge cases: related scenarios that should also work (use your judgement)
    - Regression prevention: ensure the fix doesn't break other behavior (use your judgement)
+   - **Use real data from investigation as test inputs**: When Steps 2/6 uncovered exact strings, patterns, or values relevant to the bug — prompt template output formats, config values, API responses, log messages — use those verbatim as test inputs instead of inventing generic placeholders. Real-world inputs are the highest-fidelity test cases and catch issues that paraphrased inputs miss.
 
 % Output
 
@@ -149,3 +150,19 @@ Your test plan must verify **observable behavior**, not code structure.
 - **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones.
 - **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
 - Always post your findings as a GitHub comment before completing
+
+% CRITICAL: Machine-Readable Output (REQUIRED)
+
+After your GitHub comment, you MUST output this line with the total number of tests you planned:
+
+```
+PLANNED_TEST_COUNT: <number>
+```
+
+Count every `#### Test N:` entry in your plan. For example, if you planned Test 1, Test 2, and Test 3, output:
+
+```
+PLANNED_TEST_COUNT: 3
+```
+
+⚠️ IMPORTANT: This line must be the last thing you output. Do not add any text after it.

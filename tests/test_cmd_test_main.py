@@ -1511,3 +1511,58 @@ def test_agentic_python_test_gets_sys_path_preamble(mock_ctx_fixture, mock_files
         assert "sys.path.insert(0, str(project_root))" in generated_content
         # Original test code must still be present
         assert "def test_greet():" in generated_content
+
+
+def test_python_agentic_merge_uses_native_path(mock_ctx_fixture, mock_files_fixture):
+    """
+    Regression test: when agentic_mode=True for Python with merge=True
+    (i.e., test_extend), cmd_test_main must use the native Python test
+    generation path — NOT the agentic path.
+
+    The agentic path calls run_agentic_test_generate which ignores
+    existing_tests and merge, overwriting the existing test file entirely.
+    The native path properly handles merge by reading existing tests and
+    extending them.
+
+    This is the root cause of pdd-sync failing with 0% coverage on large
+    Python modules: test_extend overwrites 3600-line test files (88%
+    coverage) with small LLM-generated files (0% coverage).
+    """
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", side_effect=AssertionError(
+             "run_agentic_test_generate should NOT be called for Python merge"
+         )) as mock_agentic, \
+         patch("pdd.cmd_test_main.resolve_effective_config", return_value={
+             "strength": 0.5, "temperature": 0.0, "time": 0.25
+         }), \
+         patch("pdd.cmd_test_main.generate_test", return_value=(
+             "def test_new(): assert True", 0.05, "model"
+         )) as mock_generate:
+
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": mock_files_fixture["output"]},
+            "python"
+        )
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=[mock_files_fixture["output"]],
+            target_coverage=80.0,
+            merge=True,
+        )
+
+    # run_agentic_test_generate must NOT have been called
+    mock_agentic.assert_not_called()
+    # The native generate_test path must have been used instead
+    assert mock_generate.called, (
+        "Native generate_test should be called for Python merge (test_extend)"
+    )
