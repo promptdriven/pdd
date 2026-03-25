@@ -355,13 +355,11 @@ class TestStep11CurrentPromptLacksGuidance:
                 "The single page.route() mention should be the 'Prefer self-contained' line."
             )
 
-    def test_no_http_method_guidance_exists(
+    def test_http_method_guidance_exists(
         self, step11_prompt_content: str
     ) -> None:
         """
-        Confirm the prompt currently has NO guidance about HTTP methods in mocks.
-
-        After the fix, this test should be removed or updated.
+        Confirm the prompt now has explicit guidance about HTTP methods in mocks.
         """
         content_lower = step11_prompt_content.lower()
         has_http_method_guidance = any([
@@ -369,7 +367,6 @@ class TestStep11CurrentPromptLacksGuidance:
             "do not assume rest" in content_lower,
             "don't assume rest" in content_lower,
         ])
-        # This documents the current buggy state — should have NO guidance
-        assert not has_http_method_guidance, (
-            "Prompt already contains HTTP method guidance — bug may be partially fixed."
+        assert has_http_method_guidance, (
+            "Prompt should contain HTTP method guidance after the issue #633 fix."
         )

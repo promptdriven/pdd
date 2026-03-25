@@ -189,29 +189,51 @@ def change(
 
 @click.command()
 @click.argument("files", nargs=-1)
+@click.option(
+    "--all",
+    "all_",
+    is_flag=True,
+    default=False,
+    help="Repository-wide update (same as passing no file arguments).",
+)
 @click.option("--extensions", help="Comma-separated extensions for repo mode.")
 @click.option("--directory", help="Directory to scan for repo mode.")
 @click.option("--git", is_flag=True, help="Use git history for original code.")
 @click.option("--output", help="Output path for the updated prompt.")
 @click.option("--simple", is_flag=True, default=False, help="Use legacy simple update.")
 @click.option("--base-branch", type=str, default="main", help="Base branch for change detection in repo mode (default: main).")
+@click.option(
+    "--budget",
+    type=float,
+    default=None,
+    help="Repository-wide only: stop processing once total update cost reaches this cap.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Repository-wide only: show which prompts would be updated without calling the LLM or writing outputs.",
+)
 @click.pass_context
 @log_operation(operation="update", clears_run_report=True)
 @track_cost
 def update(
     ctx: click.Context,
     files: Tuple[str, ...],
+    all_: bool,
     extensions: Optional[str],
     directory: Optional[str],
     git: bool,
     output: Optional[str],
     simple: bool,
     base_branch: str,
+    budget: Optional[float],
+    dry_run: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Update the original prompt file based on code changes.
 
-    Repo-wide mode (no args): Scan entire repo.
+    Repo-wide mode (no args, or --all): Scan entire repo.
     Single-file mode (1 arg): Update prompt for specific code file.
     """
     ctx.ensure_object(dict)
@@ -227,10 +249,16 @@ def update(
         )
     if len(files) > 3:
         raise click.UsageError("Too many arguments. Max 3: <prompt> <modified_code> <original_code>")
+    if all_ and len(files) > 0:
+        raise click.UsageError(
+            "Cannot combine --all with file paths; use repository-wide mode with no arguments or only --all."
+        )
+    if budget is not None and budget <= 0:
+        raise click.UsageError("--budget must be a positive number")
 
     try:
         # Handle argument counts per modify_python.prompt spec (aligned with README)
-        if len(files) == 0:
+        if len(files) == 0 or all_:
             # Repo-wide mode
             is_repo_mode = True
             input_prompt_file = None
@@ -280,6 +308,14 @@ def update(
                 raise click.UsageError(
                     "--base-branch can only be used in repository-wide mode"
                 )
+            if dry_run:
+                raise click.UsageError(
+                    "--dry-run is only valid in repository-wide mode (no file arguments, or use --all)."
+                )
+            if budget is not None:
+                raise click.UsageError(
+                    "--budget is only valid in repository-wide mode (no file arguments, or use --all)."
+                )
 
         # Call update_main with correct parameters
         ret = update_main(
@@ -294,6 +330,8 @@ def update(
             directory=directory,
             simple=simple,
             base_branch=base_branch,
+            budget=budget,
+            dry_run=dry_run,
         )
 
         if ret is None:
