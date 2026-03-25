@@ -2039,6 +2039,9 @@ def sync_orchestration(
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
+                    # Drop any stale LLM trace for this operation key so failure paths only
+                    # attach pairs from the current attempt (success paths do not pop).
+                    pop_last_pair(operation)
                     with AtomicStateUpdate(basename, language) as atomic_state:
 
                         # --- Execute Operation ---
