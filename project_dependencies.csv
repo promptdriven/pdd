@@ -1,0 +1,11 @@
+full_path,file_summary,key_exports,dependencies,content_hash
+.env.example,Configuration file for API keys of various LLM providers and project paths.,[],[],737cd7ac80451973147fdcbd24a8d3e150f0b493ba55ff22a1d519b098dd0d55
+.github/workflows/notify-private.yml,Defines a GitHub Actions workflow that triggers a sync event to a private repository on pushes to the main branch.,[],[],bd3b201e292cd57e9adc978415888226187a59a37a70851041ecb91a87be262e
+.github/workflows/pdd-secrets-dispatch.yml,GitHub Actions workflow to encrypt and send repository secrets to a callback URL upon dispatch.,[],"[""os"", ""json"", ""base64"", ""secrets"", ""requests"", ""cryptography""]",426daed826ee00bb364fa9dc04fc59aca2dcc169b9a02558071651cb583065b5
+.github/workflows/unit-tests.yml,Defines a GitHub Actions workflow to run unit tests on pushes and pull requests to the main branch.,[],[],452a99d69da271bbd7a7950af6011fe68bb3751001481726d6c315e5da7f67c6
+.gitignore,"This file specifies patterns for Git to ignore various temporary files, caches, builds, and directories in a development project.",[],[],4fe6c5371c8411b0d76439cded6e7c0621c581154520a5d84c7c9d68e5c8a306
+.pddrc,Configures contexts and default settings for various components of the PDD CLI codebase.,[],[],3d43d7f7bf7666810230eefe09b53fc0bbb236882dddc56a8ae48985ce93aa77
+CHANGELOG.md,"Changelog documenting updates, features, fixes, and refactors for the Prompt-Driven Development (PDD) project across versions v0.0.179 to v0.0.23.",[],[],95de96a1931dfc0b880333b55e0f1efe5a5bbdb9ece05edf2499f96f51f235db
+CONTRIBUTING.md,"This file outlines guidelines for contributing to the PDD CLI project, covering setup, workflow, philosophy, and best practices.",[],[],1cf52ca8e1809a744674b676eeef94eebfc7bd9d940b1ddeb861943eb7bf9566
+LICENSE,"Grants permission to use, modify, and distribute the software under the MIT license with copyright notice.",[],[],92f4c99e7c4f55362518a498e1937593376627497145d356c60ba9681dbbcec5
+Makefile,"Makefile for the PDD project, providing targets for code generation, testing, building, publishing, and maintenance tasks.","[""help"", ""generate"", ""example"", ""run-examples"", ""test"", ""coverage"", ""regression"", ""sync-regression"", ""all-regression"", ""cloud-regression"", ""verify"", ""lint"", ""update"", ""fix"", ""crash""]",[],215a92c25a03ba5a6f60fb447fd14d7251e03aeb0d590e57552a472502f86cc1
