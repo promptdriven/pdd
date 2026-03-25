@@ -8,7 +8,6 @@ import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
-import json as _json
 
 # --- Configure Standard Python Logging ---
 logger = logging.getLogger("pdd.llm_invoke")
