@@ -373,7 +373,6 @@ def _extract_test_files(
     # aren't in markers, changed_files, or hash detection (e.g., when
     # initial_file_hashes is None or the files were committed before the hash
     # snapshot was taken).
-    count_before_git = len(test_files)
     committed_files = _get_modified_and_untracked(cwd)
     for f in committed_files:
         basename = Path(f).name
@@ -381,18 +380,20 @@ def _extract_test_files(
             _add(f)
 
     # Ultimate fallback: directory scan for test_*.py files on disk.
-    # Only runs when git-based discovery didn't add any new files, to avoid
+    # Only runs when NO discovery path found ANY files, to avoid
     # pulling the entire test suite into verification (slow + timeouts).
     # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
-    git_found_nothing_new = len(test_files) == count_before_git
-    if git_found_nothing_new:
+    if not test_files:
         scan_dirs = [cwd / "tests", cwd]
         for scan_dir in scan_dirs:
             if not scan_dir.is_dir():
                 continue
             glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
             for test_py in sorted(glob_fn("test_*.py")):
-                rel = str(test_py.relative_to(cwd))
+                try:
+                    rel = str(test_py.relative_to(cwd))
+                except ValueError:
+                    continue
                 if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
                     continue
                 _add(rel)
