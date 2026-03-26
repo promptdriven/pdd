@@ -168,6 +168,10 @@
       "closing": {
         "startSegment": "closing_001",
         "endSegment": "closing_005"
+      },
+      "part3_mold_parts": {
+        "startSegment": "part3_mold_parts_001",
+        "endSegment": "part3_mold_parts_022"
       }
     },
     "silenceGapDefault": 0.3
