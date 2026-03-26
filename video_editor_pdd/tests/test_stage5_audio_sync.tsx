@@ -207,6 +207,10 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/\[\s*validationSummary\s*,\s*setValidationSummary\s*\]/);
   });
 
+  it("tracks audio-sync artifact freshness state", () => {
+    expect(sourceCode).toMatch(/\[\s*artifactState\s*,\s*setArtifactState\s*\]/);
+  });
+
   it("tracks per-segment rerender job IDs", () => {
     expect(sourceCode).toMatch(/\[\s*validationJobIds\s*,\s*setValidationJobIds\s*\]/);
   });
@@ -297,6 +301,18 @@ describe("timestamp loading", () => {
     expect(sourceCode).toMatch(/setValidationSummary\s*\(\s*data\?\.validation\?\.summary/);
   });
 
+  it("reads artifactState from the timestamps response", () => {
+    expect(sourceCode).toMatch(/data\?\.artifactState/);
+    expect(sourceCode).toMatch(/setArtifactState\s*\(\s*nextArtifactState\s*\)/);
+  });
+
+  it("clears stale timestamps and validation rows when audio sync data is stale", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*nextArtifactState\.stale\s*\)/);
+    expect(sourceCode).toMatch(/setTimestamps\s*\(\s*\[\]\s*\)/);
+    expect(sourceCode).toMatch(/setValidationRows\s*\(\s*\[\]\s*\)/);
+    expect(sourceCode).toMatch(/setValidationSummary\s*\(\s*EMPTY_VALIDATION_SUMMARY\s*\)/);
+  });
+
   it("tracks loading state for timestamps", () => {
     expect(sourceCode).toMatch(/setLoadingTimestamps\s*\(\s*true\s*\)/);
     expect(sourceCode).toMatch(/setLoadingTimestamps\s*\(\s*false\s*\)/);
@@ -322,6 +338,11 @@ describe("timestamp loading", () => {
 describe("transcript validation panel", () => {
   it("renders a flagged transcript mismatch section", () => {
     expect(sourceCode).toMatch(/Flagged Transcript Mismatches/);
+  });
+
+  it("renders a stale audio-sync warning when sync outputs are older than TTS audio", () => {
+    expect(sourceCode).toMatch(/Audio sync data is stale relative to the current TTS audio/);
+    expect(sourceCode).toMatch(/artifactState\.stale/);
   });
 
   it("filters validation rows to warn/fail mismatches", () => {
@@ -381,9 +402,8 @@ describe("transcript audio preview action", () => {
 
   it("uses the preview audio element ref for the segment wav route", () => {
     expect(sourceCode).toMatch(/const\s+audio\s*=\s*previewAudioRef\.current/);
-    expect(sourceCode).toMatch(/audio\.src\s*=\s*`\/api\/audio\/tts\/\$\{segmentId\}\.wav/);
-    expect(sourceCode).toMatch(/audio\.load\s*\(\s*\)/);
-    expect(sourceCode).toMatch(/await\s+audio\.play\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/loadSegmentPreviewAudio\s*\(/);
+    expect(sourceCode).toMatch(/previewAudioObjectUrlRef/);
   });
 
   it("toggles stop/play based on the active segment", () => {
@@ -394,6 +414,10 @@ describe("transcript audio preview action", () => {
   it("renders a hidden audio element for preview playback", () => {
     expect(sourceCode).toMatch(/<audio[\s\S]*?ref=\{previewAudioRef\}/);
     expect(sourceCode).toMatch(/preload="auto"/);
+  });
+
+  it("cleans up preview audio blob URLs on teardown", () => {
+    expect(sourceCode).toMatch(/resetSegmentPreviewAudio\s*\(/);
   });
 });
 

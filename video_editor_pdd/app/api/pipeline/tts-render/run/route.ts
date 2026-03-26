@@ -57,10 +57,10 @@ async function runRenderProcess(
     cwd: getProjectDir(),
     env: {
       ...python.env,
-      // Prefer Qwen when it works, but allow the script to fall back to Edge TTS
-      // so downstream audio-sync still receives real WAV files in local dev/test envs.
+      // Fail closed by default so we do not silently overwrite segment audio
+      // with deterministic fallback tones when the real TTS stack is unavailable.
       RENDER_TTS_ALLOW_EDGE_FALLBACK:
-        process.env.RENDER_TTS_ALLOW_EDGE_FALLBACK ?? "1",
+        process.env.RENDER_TTS_ALLOW_EDGE_FALLBACK ?? "0",
     },
   });
 

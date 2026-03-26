@@ -20,7 +20,7 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 17.621333,
+      "durationSeconds": 0,
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_hook",
@@ -30,13 +30,13 @@
     },
     {
       "id": "part1_economics",
-      "label": "Part 1: The Economics of Darning",
+      "label": "Part 1: Economics of Darning",
       "videoFile": "part1_economics.mp4",
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 455.530667,
-      "offsetSeconds": 17.621333,
+      "durationSeconds": 0,
+      "offsetSeconds": 0,
       "compositions": [
         "01_section_title_card",
         "04_research_annotations",
@@ -51,22 +51,22 @@
       "specDir": "part2_paradigm_shift",
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
-      "durationSeconds": 227.562667,
-      "offsetSeconds": 473.152,
+      "durationSeconds": 0,
+      "offsetSeconds": 0,
       "compositions": [
         "01_section_title_card"
       ],
       "timelineSource": "generated"
     },
     {
-      "id": "part3_mold_has_three_parts",
+      "id": "part3_mold_parts",
       "label": "Part 3: The Mold Has Three Parts",
-      "videoFile": "part3_mold_has_three_parts.mp4",
-      "specDir": "part3_mold_has_three_parts",
-      "remotionDir": "S03-Part3MoldHasThreeParts",
-      "compositionId": "Part3MoldHasThreePartsSection",
-      "durationSeconds": 0.085333,
-      "offsetSeconds": 700.714667
+      "videoFile": "part3_mold_parts.mp4",
+      "specDir": "part3_mold_parts",
+      "remotionDir": "S03-Part3MoldParts",
+      "compositionId": "Part3MoldPartsSection",
+      "durationSeconds": 0,
+      "offsetSeconds": 0
     },
     {
       "id": "part4_precision_tradeoff",
@@ -75,8 +75,8 @@
       "specDir": "part4_precision_tradeoff",
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
-      "durationSeconds": 111.914667,
-      "offsetSeconds": 700.8,
+      "durationSeconds": 0,
+      "offsetSeconds": 0,
       "compositions": [
         "01_section_title_card",
         "02_printer_vs_mold_split",
@@ -91,8 +91,8 @@
       "specDir": "part5_compound_returns",
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
-      "durationSeconds": 115.157333,
-      "offsetSeconds": 812.714667,
+      "durationSeconds": 0,
+      "offsetSeconds": 0,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -109,8 +109,8 @@
       "specDir": "where_to_start",
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
-      "durationSeconds": 32.149333,
-      "offsetSeconds": 927.872,
+      "durationSeconds": 0,
+      "offsetSeconds": 0,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal"
@@ -124,8 +124,8 @@
       "specDir": "closing",
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 20.714667,
-      "offsetSeconds": 960.0213329999999,
+      "durationSeconds": 0,
+      "offsetSeconds": 0,
       "compositions": [
         "04_pdd_triangle",
         "05_dissolve_regenerate_loop",

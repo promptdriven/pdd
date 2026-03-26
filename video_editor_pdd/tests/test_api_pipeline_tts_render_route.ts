@@ -778,13 +778,35 @@ describe("executor — spawn command", () => {
     });
   });
 
-  it("enables Edge TTS fallback by default in the child environment", async () => {
+  it("fails closed by default instead of enabling TTS fallback audio", async () => {
     mockExistsSync.mockReturnValue(false);
     mockReaddirSync.mockReturnValue([]);
 
     const executor = registerCallArgs.factory({}, jest.fn());
     await executor(jest.fn());
     await flushPromises();
+
+    const [, , options] = mockSpawn.mock.calls[0];
+    expect(options.env.RENDER_TTS_ALLOW_EDGE_FALLBACK).toBe("0");
+  });
+
+  it("honors an explicit TTS fallback override in the child environment", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+    const previous = process.env.RENDER_TTS_ALLOW_EDGE_FALLBACK;
+    process.env.RENDER_TTS_ALLOW_EDGE_FALLBACK = "1";
+
+    try {
+      const executor = registerCallArgs.factory({}, jest.fn());
+      await executor(jest.fn());
+      await flushPromises();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.RENDER_TTS_ALLOW_EDGE_FALLBACK;
+      } else {
+        process.env.RENDER_TTS_ALLOW_EDGE_FALLBACK = previous;
+      }
+    }
 
     const [, , options] = mockSpawn.mock.calls[0];
     expect(options.env.RENDER_TTS_ALLOW_EDGE_FALLBACK).toBe("1");

@@ -7,6 +7,10 @@ import {
   normalizeAudioSyncSectionGroups,
   toSegmentRangeSectionGroups,
 } from './_lib/audio-sync-automation';
+import {
+  loadSegmentPreviewAudio,
+  resetSegmentPreviewAudio,
+} from './_lib/segment-audio-preview';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
@@ -39,11 +43,23 @@ interface SegmentValidationSummary {
   skipCount: number;
 }
 
+interface AudioSyncArtifactState {
+  stale: boolean;
+  message: string | null;
+  latestAudioUpdatedAtMs?: number;
+  syncUpdatedAtMs?: number;
+}
+
 const EMPTY_VALIDATION_SUMMARY: SegmentValidationSummary = {
   passCount: 0,
   warnCount: 0,
   failCount: 0,
   skipCount: 0,
+};
+
+const FRESH_AUDIO_SYNC_ARTIFACT_STATE: AudioSyncArtifactState = {
+  stale: false,
+  message: null,
 };
 
 const ROW_HEIGHT = 32;
@@ -67,6 +83,9 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [validationSummary, setValidationSummary] = useState<SegmentValidationSummary>(
     EMPTY_VALIDATION_SUMMARY
   );
+  const [artifactState, setArtifactState] = useState<AudioSyncArtifactState>(
+    FRESH_AUDIO_SYNC_ARTIFACT_STATE
+  );
   const [loadingTimestamps, setLoadingTimestamps] = useState(false);
   const [search, setSearch] = useState('');
   const [validationJobIds, setValidationJobIds] = useState<Record<string, string | null>>({});
@@ -77,6 +96,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [scrollTop, setScrollTop] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewAudioObjectUrlRef = useRef<string | null>(null);
 
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
@@ -140,14 +160,40 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         if (!active) return;
         // API returns { words: [...] } or a raw array
         const list = Array.isArray(data) ? data : (Array.isArray(data?.words) ? data.words : []);
-        setTimestamps(list);
-        setValidationRows(Array.isArray(data?.validation?.segments) ? data.validation.segments : []);
-        setValidationSummary(data?.validation?.summary ?? EMPTY_VALIDATION_SUMMARY);
+        const nextArtifactState: AudioSyncArtifactState =
+          data?.artifactState && typeof data.artifactState === 'object'
+            ? {
+                stale: data.artifactState.stale === true,
+                message:
+                  typeof data.artifactState.message === 'string'
+                    ? data.artifactState.message
+                    : null,
+                latestAudioUpdatedAtMs:
+                  typeof data.artifactState.latestAudioUpdatedAtMs === 'number'
+                    ? data.artifactState.latestAudioUpdatedAtMs
+                    : undefined,
+                syncUpdatedAtMs:
+                  typeof data.artifactState.syncUpdatedAtMs === 'number'
+                    ? data.artifactState.syncUpdatedAtMs
+                    : undefined,
+              }
+            : FRESH_AUDIO_SYNC_ARTIFACT_STATE;
+        setArtifactState(nextArtifactState);
+        if (nextArtifactState.stale) {
+          setTimestamps([]);
+          setValidationRows([]);
+          setValidationSummary(EMPTY_VALIDATION_SUMMARY);
+        } else {
+          setTimestamps(list);
+          setValidationRows(Array.isArray(data?.validation?.segments) ? data.validation.segments : []);
+          setValidationSummary(data?.validation?.summary ?? EMPTY_VALIDATION_SUMMARY);
+        }
       } catch (err) {
         if (!active) return;
         setTimestamps([]);
         setValidationRows([]);
         setValidationSummary(EMPTY_VALIDATION_SUMMARY);
+        setArtifactState(FRESH_AUDIO_SYNC_ARTIFACT_STATE);
       } finally {
         if (active) setLoadingTimestamps(false);
       }
@@ -161,9 +207,10 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     return () => {
       const audio = previewAudioRef.current;
       if (audio) {
-        audio.pause();
-        audio.removeAttribute('src');
-        audio.load();
+        previewAudioObjectUrlRef.current = resetSegmentPreviewAudio(
+          audio,
+          previewAudioObjectUrlRef.current
+        );
       }
     };
   }, []);
@@ -345,18 +392,20 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       }
 
       if (playingSegmentId === segmentId) {
-        audio.pause();
-        audio.currentTime = 0;
+        previewAudioObjectUrlRef.current = resetSegmentPreviewAudio(
+          audio,
+          previewAudioObjectUrlRef.current
+        );
         setPlayingSegmentId(null);
         return;
       }
 
-      audio.pause();
-      audio.currentTime = 0;
-      audio.src = `/api/audio/tts/${segmentId}.wav?v=${Date.now()}`;
-      audio.load();
       setDetectError(null);
-      await audio.play();
+      previewAudioObjectUrlRef.current = await loadSegmentPreviewAudio({
+        audio,
+        segmentId,
+        previousObjectUrl: previewAudioObjectUrlRef.current,
+      });
       setPlayingSegmentId(segmentId);
     } catch (err: any) {
       setDetectError(err?.message ?? 'Failed to play segment audio');
@@ -393,8 +442,24 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         ref={previewAudioRef}
         className="hidden"
         preload="auto"
-        onEnded={() => setPlayingSegmentId(null)}
+        onEnded={() => {
+          const audio = previewAudioRef.current;
+          if (audio) {
+            previewAudioObjectUrlRef.current = resetSegmentPreviewAudio(
+              audio,
+              previewAudioObjectUrlRef.current
+            );
+          }
+          setPlayingSegmentId(null);
+        }}
         onError={() => {
+          const audio = previewAudioRef.current;
+          if (audio) {
+            previewAudioObjectUrlRef.current = resetSegmentPreviewAudio(
+              audio,
+              previewAudioObjectUrlRef.current
+            );
+          }
           setPlayingSegmentId(null);
           setDetectError('Failed to load segment audio');
         }}
@@ -528,6 +593,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         <div className="text-xs text-slate-400 mb-2">
           {loadingTimestamps ? 'Loading timestamps…' : ''}
         </div>
+        {artifactState.stale && (
+          <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            {artifactState.message ?? 'Audio sync data is stale relative to the current TTS audio. Re-run audio sync for this section.'}
+          </div>
+        )}
 
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-950/60 p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">

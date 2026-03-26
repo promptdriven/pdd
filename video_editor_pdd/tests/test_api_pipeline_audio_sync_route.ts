@@ -72,13 +72,19 @@ jest.mock("@/lib/projects", () => ({
 
 // Mock fs/promises for timestamps route
 const mockReadFile = jest.fn();
+const mockReaddir = jest.fn();
+const mockStat = jest.fn();
 
 jest.mock("fs/promises", () => ({
   __esModule: true,
   default: {
     readFile: (...args: unknown[]) => mockReadFile(...args),
+    readdir: (...args: unknown[]) => mockReaddir(...args),
+    stat: (...args: unknown[]) => mockStat(...args),
   },
   readFile: (...args: unknown[]) => mockReadFile(...args),
+  readdir: (...args: unknown[]) => mockReaddir(...args),
+  stat: (...args: unknown[]) => mockStat(...args),
 }));
 
 // Import after mocking
@@ -162,6 +168,8 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockLoadProject.mockReset();
   mockReadFile.mockReset();
+  mockReaddir.mockReset();
+  mockStat.mockReset();
   mockResolvePythonRunSpec.mockClear();
   mockResolvePythonRunSpec.mockReturnValue({
     command: "python3",
@@ -180,6 +188,8 @@ beforeEach(() => {
 
   // Default: runPipelineStage resolves with a job ID
   mockRunPipelineStage.mockResolvedValue("test-job-id-1234");
+  mockReaddir.mockResolvedValue([]);
+  mockStat.mockResolvedValue({ mtimeMs: 1000 });
 
   // Default: spawn completes successfully
   mockSpawn.mockImplementation(() => {
@@ -1022,6 +1032,81 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
       matchRatio: 0.82,
     });
     expect(body.validation.summary.warnCount).toBe(1);
+  });
+
+  it("returns stale artifact metadata when section audio is newer than sync outputs", async () => {
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[{"word":"hello","start":0,"end":0.5,"segmentId":"intro_001"}]}';
+      }
+
+      return JSON.stringify({
+        segments: [],
+        summary: { passCount: 0, warnCount: 0, failCount: 0, skipCount: 0 },
+      });
+    });
+    mockReaddir.mockResolvedValue(["intro_001.wav", "ignore.txt"]);
+    mockStat.mockImplementation(async (filePath: string) => {
+      if (String(filePath).endsWith("intro_001.wav")) {
+        return { mtimeMs: 5000 };
+      }
+      return { mtimeMs: 1000 };
+    });
+
+    const response = await GET(makeGetRequest("intro") as any);
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body.artifactState).toMatchObject({
+      stale: true,
+      latestAudioUpdatedAtMs: 5000,
+      syncUpdatedAtMs: 1000,
+    });
+    expect(body.artifactState.message).toMatch(/stale relative to the current TTS audio/i);
+  });
+
+  it("prefers newer failed audio-sync artifacts over stale accepted ones", async () => {
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.failed.json")) {
+        return '{"words":[{"word":"fresh","start":0,"end":0.5,"segmentId":"intro_001"}]}';
+      }
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[{"word":"stale","start":0,"end":0.5,"segmentId":"intro_001"}]}';
+      }
+      if (filePath.includes("segment_validation.failed.json")) {
+        return JSON.stringify({
+          segments: [{ segmentId: "intro_001", expectedText: "fresh", actualText: "fresh", status: "pass" }],
+          summary: { passCount: 1, warnCount: 0, failCount: 0, skipCount: 0 },
+        });
+      }
+      return JSON.stringify({
+        segments: [{ segmentId: "intro_001", expectedText: "stale", actualText: "stale", status: "warn" }],
+        summary: { passCount: 0, warnCount: 1, failCount: 0, skipCount: 0 },
+      });
+    });
+    mockReaddir.mockResolvedValue(["intro_001.wav"]);
+    mockStat.mockImplementation(async (filePath: string) => {
+      const normalized = String(filePath);
+      if (normalized.endsWith("word_timestamps.failed.json") || normalized.endsWith("segment_validation.failed.json")) {
+        return { mtimeMs: 5000 };
+      }
+      if (normalized.endsWith("word_timestamps.json") || normalized.endsWith("segment_validation.json")) {
+        return { mtimeMs: 1000 };
+      }
+      if (normalized.endsWith("intro_001.wav")) {
+        return { mtimeMs: 4000 };
+      }
+      return { mtimeMs: 1000 };
+    });
+
+    const response = await GET(makeGetRequest("intro") as any);
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body.words[0].word).toBe("fresh");
+    expect(body.validation.summary.passCount).toBe(1);
+    expect(body.artifactState.source).toBe("failed");
+    expect(body.artifactState.stale).toBe(false);
   });
 
   it("returns empty validation when segment_validation.json is missing", async () => {
