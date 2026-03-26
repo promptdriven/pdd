@@ -2331,11 +2331,11 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Posts comment explaining the root cause.
+5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
 
 5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels and all distinct code paths (first-run, resume, retry, error recovery) to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
 
 7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
