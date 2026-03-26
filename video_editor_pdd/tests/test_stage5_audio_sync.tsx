@@ -219,6 +219,16 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/\[\s*validationSyncJobIds\s*,\s*setValidationSyncJobIds\s*\]/);
   });
 
+  it("tracks threshold percent and max-retry state for batch transcript retries", () => {
+    expect(sourceCode).toMatch(/\[\s*retryMatchThresholdPercent\s*,\s*setRetryMatchThresholdPercent\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*retryMaxAttempts\s*,\s*setRetryMaxAttempts\s*\]/);
+  });
+
+  it("tracks batch retry job IDs", () => {
+    expect(sourceCode).toMatch(/\[\s*batchValidationRerenderJobId\s*,\s*setBatchValidationRerenderJobId\s*\]/);
+    expect(sourceCode).toMatch(/\[\s*batchValidationSyncJobId\s*,\s*setBatchValidationSyncJobId\s*\]/);
+  });
+
   it("tracks playingSegmentId state for validation audio preview", () => {
     expect(sourceCode).toMatch(/\[\s*playingSegmentId\s*,\s*setPlayingSegmentId\s*\]/);
   });
@@ -361,6 +371,13 @@ describe("transcript validation panel", () => {
   it("renders a Play Audio action", () => {
     expect(sourceCode).toMatch(/Play Audio/);
   });
+
+  it("renders controls for batch retry threshold and retry count", () => {
+    expect(sourceCode).toMatch(/Retry Below Match %/);
+    expect(sourceCode).toMatch(/Max Retries/);
+    expect(sourceCode).toMatch(/Retry Flagged Segments/);
+    expect(sourceCode).toMatch(/Retry Across All Sections/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -388,6 +405,18 @@ describe("transcript rerender action", () => {
 
   it("renders an SseLogPanel for follow-up audio sync jobs", () => {
     expect(sourceCode).toMatch(/<SseLogPanel[\s\S]*?jobId=\{validationSyncJobIds\[row\.segmentId\] \?\? null\}/);
+  });
+
+  it("delegates batch retries to the shared retry helper", () => {
+    expect(sourceCode).toMatch(/runFlaggedTranscriptRerenderRetries/);
+    expect(sourceCode).toMatch(/collectFlaggedSegmentsBelowThreshold/);
+    expect(sourceCode).toMatch(/runFlaggedTranscriptRerenderRetriesAcrossSections/);
+    expect(sourceCode).toMatch(/collectFlaggedSegmentsBelowThresholdBySection/);
+  });
+
+  it("renders SseLogPanels for batch rerender and batch audio-sync jobs", () => {
+    expect(sourceCode).toMatch(/<SseLogPanel[\s\S]*?jobId=\{batchValidationRerenderJobId\}/);
+    expect(sourceCode).toMatch(/<SseLogPanel[\s\S]*?jobId=\{batchValidationSyncJobId\}/);
   });
 });
 

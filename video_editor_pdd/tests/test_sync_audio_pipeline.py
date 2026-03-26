@@ -320,6 +320,166 @@ class TestLoadSectionGroups:
             ]
         }
 
+    def test_prunes_obsolete_section_groups_even_when_stale_wavs_still_exist(self, tmp_path):
+        project = {
+            "sections": [
+                {
+                    "id": "part3_mold_parts",
+                    "specDir": "part3_mold_parts",
+                }
+            ],
+            "audioSync": {
+                "sectionGroups": {
+                    "part3_mold_has_three_parts": {
+                        "startSegment": "part3_mold_has_three_parts_001",
+                        "endSegment": "part3_mold_has_three_parts_002",
+                    },
+                    "part3_mold_parts": {
+                        "startSegment": "part3_mold_parts_001",
+                        "endSegment": "part3_mold_parts_002",
+                    },
+                }
+            },
+        }
+        (tmp_path / "project.json").write_text(json.dumps(project), encoding="utf-8")
+
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        (output_dir / "segments.json").write_text(
+            json.dumps(
+                {
+                    "segments": [
+                        {
+                            "id": "part3_mold_parts_001",
+                            "sectionId": "part3_mold_parts",
+                            "cleanText": "First line.",
+                        },
+                        {
+                            "id": "part3_mold_parts_002",
+                            "sectionId": "part3_mold_parts",
+                            "cleanText": "Second line.",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        _create_dummy_wav(str(output_dir / "part3_mold_parts_001.wav"))
+        _create_dummy_wav(str(output_dir / "part3_mold_parts_002.wav"))
+        _create_dummy_wav(str(output_dir / "part3_mold_has_three_parts_001.wav"))
+        _create_dummy_wav(str(output_dir / "part3_mold_has_three_parts_002.wav"))
+
+        section_groups = load_section_groups(str(tmp_path), str(output_dir))
+
+        assert section_groups == {
+            "part3_mold_parts": [
+                "part3_mold_parts_001",
+                "part3_mold_parts_002",
+            ]
+        }
+
+    def test_drops_unresolved_obsolete_section_groups_instead_of_returning_empty_sections(self, tmp_path):
+        project = {
+            "sections": [
+                {
+                    "id": "part3_mold_parts",
+                    "specDir": "part3_mold_parts",
+                }
+            ],
+            "audioSync": {
+                "sectionGroups": {
+                    "part3_mold_has_three_parts": {
+                        "startSegment": "part3_mold_has_three_parts_001",
+                        "endSegment": "part3_mold_has_three_parts_030",
+                    },
+                    "part3_mold_parts": {
+                        "startSegment": "part3_mold_parts_001",
+                        "endSegment": "part3_mold_parts_022",
+                    },
+                }
+            },
+        }
+        (tmp_path / "project.json").write_text(json.dumps(project), encoding="utf-8")
+
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        (output_dir / "segments.json").write_text(
+            json.dumps(
+                {
+                    "segments": [
+                        {
+                            "id": "part3_mold_parts_001",
+                            "sectionId": "part3_mold_parts",
+                            "cleanText": "First line.",
+                        },
+                        {
+                            "id": "part3_mold_parts_022",
+                            "sectionId": "part3_mold_parts",
+                            "cleanText": "Last line.",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        _create_dummy_wav(str(output_dir / "part3_mold_parts_001.wav"))
+        _create_dummy_wav(str(output_dir / "part3_mold_parts_022.wav"))
+
+        section_groups = load_section_groups(str(tmp_path), str(output_dir))
+
+        assert "part3_mold_has_three_parts" not in section_groups
+        assert "part3_mold_parts" in section_groups
+
+    def test_prefers_most_similar_manifest_section_over_broader_numeric_overlap(self, tmp_path):
+        project = {
+            "sections": [
+                {"id": "part1_economics", "specDir": "part1_economics"},
+                {"id": "part3_mold_parts", "specDir": "part3_mold_parts"},
+            ],
+            "audioSync": {
+                "sectionGroups": {
+                    "part3_mold_has_three_parts": {
+                        "startSegment": "part3_mold_has_three_parts_001",
+                        "endSegment": "part3_mold_has_three_parts_030",
+                    }
+                }
+            },
+        }
+        (tmp_path / "project.json").write_text(json.dumps(project), encoding="utf-8")
+
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        segments = []
+        for i in range(1, 29):
+            segments.append(
+                {
+                    "id": f"part1_economics_{i:03d}",
+                    "sectionId": "part1_economics",
+                    "cleanText": f"Part 1 line {i}.",
+                }
+            )
+            _create_dummy_wav(str(output_dir / f"part1_economics_{i:03d}.wav"))
+        for i in range(1, 23):
+            segments.append(
+                {
+                    "id": f"part3_mold_parts_{i:03d}",
+                    "sectionId": "part3_mold_parts",
+                    "cleanText": f"Part 3 line {i}.",
+                }
+            )
+            _create_dummy_wav(str(output_dir / f"part3_mold_parts_{i:03d}.wav"))
+
+        (output_dir / "segments.json").write_text(
+            json.dumps({"segments": segments}),
+            encoding="utf-8",
+        )
+
+        section_groups = load_section_groups(str(tmp_path), str(output_dir))
+
+        assert list(section_groups.keys()) == ["part3_mold_parts"]
+        assert section_groups["part3_mold_parts"][0] == "part3_mold_parts_001"
+        assert section_groups["part3_mold_parts"][-1] == "part3_mold_parts_022"
+
     def test_section_groups_not_dict_raises(self, tmp_path):
         (tmp_path / "project.json").write_text('{"sectionGroups": ["a", "b"]}')
         with pytest.raises(ValueError, match="dictionary"):
@@ -1081,6 +1241,12 @@ class TestSegmentValidation:
     def test_normalize_transcript_text_normalizes_numeric_variants(self):
         assert normalize_transcript_text("Fifteen lines, 200 bugs, 55%!") == "num lines num bugs num"
 
+    def test_normalize_transcript_text_collapses_multi_word_number_phrases(self):
+        assert (
+            normalize_transcript_text("Two hundred lines of generated code.")
+            == "num lines of generated code"
+        )
+
     def test_build_segment_validation_report_marks_random_speech_as_fail(self, tmp_path):
         output_dir = tmp_path / "outputs" / "tts"
         output_dir.mkdir(parents=True)
@@ -1155,6 +1321,35 @@ class TestSegmentValidation:
         )
 
         assert report["segments"][0]["status"] == "pass"
+        assert report["summary"]["failCount"] == 0
+
+    def test_build_segment_validation_report_treats_spelled_out_and_numeric_counts_as_match(
+        self,
+        tmp_path,
+    ):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        manifest = {
+            "segments": [
+                {"id": "intro_001", "cleanText": "Two hundred lines of generated code."},
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["intro_001"],
+            str(output_dir),
+            [
+                {"word": "200", "start": 0.0, "end": 0.2, "segmentId": "intro_001"},
+                {"word": "lines", "start": 0.2, "end": 0.3, "segmentId": "intro_001"},
+                {"word": "of", "start": 0.3, "end": 0.4, "segmentId": "intro_001"},
+                {"word": "generated", "start": 0.4, "end": 0.5, "segmentId": "intro_001"},
+                {"word": "code", "start": 0.5, "end": 0.6, "segmentId": "intro_001"},
+            ],
+        )
+
+        assert report["segments"][0]["status"] == "pass"
+        assert report["segments"][0]["matchRatio"] == 1.0
         assert report["summary"]["failCount"] == 0
 
     def test_build_segment_validation_report_uses_token_level_similarity(self, tmp_path):
@@ -1501,8 +1696,10 @@ class TestMainJsonOutput:
         with mock.patch("sys.argv", ["sync_audio_pipeline.py"]):
             with mock.patch("sync_audio_pipeline.load_project") as mock_load:
                 mock_load.return_value = {"sectionGroups": {}}
-                with pytest.raises(SystemExit):
-                    main()
+                with mock.patch("sync_audio_pipeline.load_section_groups") as mock_groups:
+                    mock_groups.return_value = {}
+                    with pytest.raises(SystemExit):
+                        main()
 
         captured = capsys.readouterr()
         data = json.loads(captured.out.strip())

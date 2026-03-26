@@ -197,7 +197,7 @@ def _resolve_manifest_section_alias(
     raw_norm = _normalize_section_key(section_id)
     requested_set = set(requested_numbers)
     best_candidate: Optional[str] = None
-    best_score: Tuple[int, float] = (-1, 0.0)
+    best_score: Tuple[float, int] = (0.0, -1)
 
     for candidate in candidates:
         candidate_norm = _normalize_section_key(candidate)
@@ -208,7 +208,7 @@ def _resolve_manifest_section_alias(
             if index is not None
         }
         overlap = len(requested_set & candidate_numbers) if requested_set else 0
-        score = (overlap, similarity)
+        score = (similarity, overlap)
         if score > best_score:
             best_candidate = candidate
             best_score = score
@@ -216,7 +216,7 @@ def _resolve_manifest_section_alias(
     if best_candidate is None:
         return None
 
-    overlap, similarity = best_score
+    similarity, overlap = best_score
     if requested_set and overlap <= 0:
         return None
     if similarity < 0.65:
@@ -596,9 +596,11 @@ def normalize_transcript_text(text: str) -> str:
     collapsed = text.lower()
     collapsed = re.sub(r"\b\d+(?:\.\d+)?\s*%", " num ", collapsed)
     collapsed = collapsed.replace("%", " percent ")
+    collapsed = re.sub(r"(?<=\w)[-–](?=\w)", " ", collapsed)
     collapsed = re.sub(r"[\u2018\u2019']", "", collapsed)
     collapsed = NUMBER_NORMALIZATION_PATTERN.sub(" num ", collapsed)
     collapsed = re.sub(r"[^a-z0-9\s]", " ", collapsed)
+    collapsed = re.sub(r"\bnum(?:\s+(?:and\s+)?num)+\b", " num ", collapsed)
     return re.sub(r"\s+", " ", collapsed).strip()
 
 

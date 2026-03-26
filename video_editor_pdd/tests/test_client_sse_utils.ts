@@ -1,4 +1,8 @@
-import { extractJobIdFromSse, readSseStartResult } from "../lib/client/sse-utils";
+import {
+  extractJobIdFromSse,
+  readSseStartResult,
+  waitForJobCompletion,
+} from "../lib/client/sse-utils";
 
 describe("lib/client/sse-utils", () => {
   it("extracts a jobId from an SSE stream", async () => {
@@ -65,5 +69,51 @@ describe("lib/client/sse-utils", () => {
       jobId: null,
       errorMessage: "Spec generation failed",
     });
+  });
+
+  it("waits until a job reaches done status", async () => {
+    const fetchImpl = jest
+      .fn<Promise<Response>, [string]>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "running", error: null }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "done", error: null }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    const sleepImpl = jest.fn<Promise<void>, [number]>().mockResolvedValue();
+
+    await expect(
+      waitForJobCompletion("job-123", {
+        fetchImpl,
+        sleepImpl,
+        pollIntervalMs: 1,
+        timeoutMs: 100,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, "/api/jobs/job-123");
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, "/api/jobs/job-123");
+    expect(sleepImpl).toHaveBeenCalledWith(1);
+  });
+
+  it("throws with the job error when a job reaches error status", async () => {
+    const fetchImpl = jest.fn<Promise<Response>, [string]>().mockResolvedValue(
+      new Response(JSON.stringify({ status: "error", error: "render failed" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      waitForJobCompletion("job-999", {
+        fetchImpl,
+        sleepImpl: jest.fn(),
+        pollIntervalMs: 1,
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow("render failed");
   });
 });
