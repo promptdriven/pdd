@@ -45,7 +45,22 @@ function createSseStream() {
 registerExecutor("audio-sync", (params, send: SseSend) => {
   return async (onLog) => {
     const project = loadProject();
-    const allSectionGroups = project.audioSync?.sectionGroups ?? {};
+    const configuredSectionIds = new Set(
+      Array.isArray(project.sections)
+        ? project.sections
+            .map((section) => section?.id)
+            .filter((sectionId): sectionId is string => typeof sectionId === "string")
+        : []
+    );
+    const rawSectionGroups = project.audioSync?.sectionGroups ?? {};
+    const allSectionGroups =
+      configuredSectionIds.size > 0
+        ? Object.fromEntries(
+            Object.entries(rawSectionGroups).filter(([sectionId]) =>
+              configuredSectionIds.has(sectionId)
+            )
+          )
+        : rawSectionGroups;
     const requestedSections = Array.isArray(params.sections)
       ? params.sections.filter((sectionId): sectionId is string => typeof sectionId === "string")
       : [];

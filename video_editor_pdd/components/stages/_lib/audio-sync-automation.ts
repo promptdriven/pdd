@@ -142,6 +142,59 @@ export function fillMissingAudioSyncSectionGroups(options: {
   };
 }
 
+const areSegmentListsEqual = (left: string[], right: string[]): boolean =>
+  left.length === right.length && left.every((segmentId, index) => segmentId === right[index]);
+
+export function reconcileAudioSyncSectionGroups(options: {
+  sections: Section[];
+  existingGroups: Record<string, string[]>;
+  segments: DetectableSegment[];
+}): {
+  groups: Record<string, string[]>;
+  filledSections: string[];
+  removedSections: string[];
+  unmatchedSegments: string[];
+  changed: boolean;
+} {
+  const { sections, existingGroups, segments } = options;
+  const { grouped, unmatchedSegments } = inferSectionGroupsFromSegments(
+    sections,
+    segments
+  );
+  const currentSectionIds = new Set(sections.map((section) => section.id));
+  const filledSections: string[] = [];
+  const removedSections = Object.keys(existingGroups).filter(
+    (sectionId) => !currentSectionIds.has(sectionId)
+  );
+  const nextGroups: Record<string, string[]> = {};
+
+  for (const section of sections) {
+    const sectionId = section.id;
+    const manifestSegments = [...(grouped[sectionId] ?? [])].sort();
+    const existing = [...(existingGroups[sectionId] ?? [])];
+
+    if (manifestSegments.length > 0) {
+      nextGroups[sectionId] = manifestSegments;
+      if (!areSegmentListsEqual(existing, manifestSegments)) {
+        filledSections.push(sectionId);
+      }
+      continue;
+    }
+
+    if (existing.length > 0) {
+      nextGroups[sectionId] = existing;
+    }
+  }
+
+  return {
+    groups: nextGroups,
+    filledSections,
+    removedSections,
+    unmatchedSegments,
+    changed: filledSections.length > 0 || removedSections.length > 0,
+  };
+}
+
 export function toSegmentRangeSectionGroups(
   sectionGroups: Record<string, string[]>
 ): Record<string, SegmentRange> {
@@ -165,6 +218,7 @@ export async function prepareAudioSyncAutomation(
 ): Promise<{
   changed: boolean;
   filledSections: string[];
+  removedSections: string[];
   unmatchedSegments: string[];
 }> {
   const projectResponse = await fetchImpl("/api/project");
@@ -177,13 +231,8 @@ export async function prepareAudioSyncAutomation(
   const existingGroups = normalizeAudioSyncSectionGroups(
     project.audioSync?.sectionGroups ?? {}
   );
-
-  const missingSectionIds = sections
-    .map((section) => section.id)
-    .filter((sectionId) => (existingGroups[sectionId] ?? []).length === 0);
-
-  if (missingSectionIds.length === 0) {
-    return { changed: false, filledSections: [], unmatchedSegments: [] };
+  if (sections.length === 0) {
+    return { changed: false, filledSections: [], removedSections: [], unmatchedSegments: [] };
   }
 
   const segmentsResponse = await fetchImpl("/api/pipeline/tts-render/segments");
@@ -198,15 +247,20 @@ export async function prepareAudioSyncAutomation(
       ? rawSegments.segments
       : [];
 
-  const { groups, filledSections, unmatchedSegments, changed } =
-    fillMissingAudioSyncSectionGroups({
+  const { groups, filledSections, removedSections, unmatchedSegments, changed } =
+    reconcileAudioSyncSectionGroups({
       sections,
       existingGroups,
       segments,
     });
 
   if (!changed) {
-    return { changed: false, filledSections: [], unmatchedSegments };
+    return {
+      changed: false,
+      filledSections: [],
+      removedSections: [],
+      unmatchedSegments,
+    };
   }
 
   const saveResponse = await fetchImpl("/api/project", {
@@ -227,6 +281,7 @@ export async function prepareAudioSyncAutomation(
   return {
     changed: true,
     filledSections,
+    removedSections,
     unmatchedSegments,
   };
 }

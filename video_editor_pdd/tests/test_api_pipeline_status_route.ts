@@ -24,6 +24,11 @@ const mockAll = jest.fn();
 const mockPrepare = jest.fn(() => ({ all: mockAll }));
 const mockGetDb = jest.fn(() => ({ prepare: mockPrepare }));
 const mockIsCompositionArtifactSetStale = jest.fn();
+const mockExistsSync = jest.fn();
+const mockReadFileSync = jest.fn();
+const mockReaddirSync = jest.fn();
+const mockStatSync = jest.fn();
+const mockLoadProject = jest.fn();
 
 jest.mock("@/lib/db", () => ({
   getDb: (...args: unknown[]) => mockGetDb(...args),
@@ -32,6 +37,28 @@ jest.mock("@/lib/db", () => ({
 jest.mock("@/app/api/pipeline/_lib/composition-manifest", () => ({
   isCompositionArtifactSetStale: (...args: unknown[]) =>
     mockIsCompositionArtifactSetStale(...args),
+}));
+
+jest.mock("fs", () => ({
+  __esModule: true,
+  default: {
+    existsSync: (...args: unknown[]) => mockExistsSync(...args),
+    readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+    readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+    statSync: (...args: unknown[]) => mockStatSync(...args),
+  },
+  existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+  statSync: (...args: unknown[]) => mockStatSync(...args),
+}));
+
+jest.mock("@/lib/projects", () => ({
+  getProjectDir: () => "/test/project",
+}));
+
+jest.mock("@/lib/project", () => ({
+  loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
 // Import after mocking
@@ -76,6 +103,13 @@ beforeEach(() => {
   mockPrepare.mockReturnValue({ all: mockAll });
   mockGetDb.mockReturnValue({ prepare: mockPrepare });
   mockIsCompositionArtifactSetStale.mockReturnValue(false);
+  mockExistsSync.mockReturnValue(false);
+  mockReadFileSync.mockReset();
+  mockReaddirSync.mockReturnValue([]);
+  mockStatSync.mockReset();
+  mockLoadProject.mockReturnValue({
+    sections: [],
+  });
   // Suppress console.error during tests
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -215,6 +249,98 @@ describe("GET /api/pipeline/status — all stages in DB", () => {
     const { body } = await parseResponse(response);
 
     expect(body.stages["compositions"].stale).toBe(true);
+  });
+
+  it("marks tts-render stale when the current manifest has segments without WAV outputs", async () => {
+    mockAll.mockReturnValue([
+      {
+        stage: "tts-render",
+        status: "done",
+        lastJobId: "job-tts",
+        error: null,
+        updatedAt: "2026-03-25T20:00:00.000Z",
+      },
+    ]);
+    mockExistsSync.mockImplementation((filePath: string) =>
+      filePath.endsWith("/outputs/tts/segments.json")
+    );
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (filePath.endsWith("/outputs/tts/segments.json")) {
+        return JSON.stringify({
+          segments: [{ id: "part3_mold_parts_001", text: "First line." }],
+        });
+      }
+      return "";
+    });
+    mockStatSync.mockImplementation((filePath: string) => {
+      if (filePath.endsWith("/outputs/tts/segments.json")) {
+        return { mtimeMs: 2000 };
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+
+    const response = await GET();
+    const { body } = await parseResponse(response);
+
+    expect(body.stages["tts-render"].stale).toBe(true);
+  });
+
+  it("marks audio-sync stale when section audio is newer than sync artifacts", async () => {
+    mockAll.mockReturnValue([
+      {
+        stage: "audio-sync",
+        status: "done",
+        lastJobId: "job-sync",
+        error: null,
+        updatedAt: "2026-03-25T20:00:00.000Z",
+      },
+    ]);
+    mockLoadProject.mockReturnValue({
+      sections: [{ id: "part1_economics" }],
+    });
+    mockExistsSync.mockImplementation((filePath: string) =>
+      filePath.endsWith("/outputs/tts/segments.json")
+    );
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (filePath.endsWith("/outputs/tts/segments.json")) {
+        return JSON.stringify({
+          segments: [
+            {
+              id: "part1_economics_001",
+              sectionId: "part1_economics",
+              text: "Line one.",
+            },
+          ],
+        });
+      }
+      return "";
+    });
+    mockReaddirSync.mockImplementation((dirPath: string) => {
+      if (dirPath.endsWith("/outputs/tts")) {
+        return ["part1_economics_001.wav"];
+      }
+      return [];
+    });
+    mockStatSync.mockImplementation((filePath: string) => {
+      if (filePath.endsWith("/outputs/tts/segments.json")) {
+        return { mtimeMs: 1000 };
+      }
+      if (filePath.endsWith("/outputs/tts/part1_economics_001.wav")) {
+        return { mtimeMs: 3000 };
+      }
+      if (
+        filePath.endsWith("/outputs/tts/part1_economics/word_timestamps.json") ||
+        filePath.endsWith("/outputs/tts/part1_economics/segment_validation.json")
+      ) {
+        return { mtimeMs: 2000 };
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+
+    const response = await GET();
+    const { body } = await parseResponse(response);
+
+    expect(body.stages["audio-sync"].stale).toBe(true);
   });
 });
 
@@ -483,7 +609,7 @@ describe("app/api/pipeline/status/route.ts source structure", () => {
   let sourceCode: string;
 
   beforeAll(() => {
-    const fs = require("fs");
+    const fs = jest.requireActual("fs");
     const path = require("path");
     sourceCode = fs.readFileSync(
       path.join(

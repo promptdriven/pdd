@@ -3,6 +3,7 @@ import {
   fillMissingAudioSyncSectionGroups,
   normalizeAudioSyncSectionGroups,
   prepareAudioSyncAutomation,
+  reconcileAudioSyncSectionGroups,
   toSegmentRangeSectionGroups,
 } from "@/components/stages/_lib/audio-sync-automation";
 
@@ -70,6 +71,58 @@ describe("fillMissingAudioSyncSectionGroups", () => {
 
     expect(result.groups.part1_economics).toEqual(["part1_economics_001"]);
     expect(result.groups.part1).toBeUndefined();
+  });
+});
+
+describe("reconcileAudioSyncSectionGroups", () => {
+  const sections = [
+    { id: "cold_open", label: "Cold Open" },
+    { id: "part3_mold_parts", label: "Part 3" },
+  ] as any;
+
+  it("prunes obsolete groups and replaces them with manifest-derived current groups", () => {
+    const result = reconcileAudioSyncSectionGroups({
+      sections,
+      existingGroups: {
+        cold_open: ["cold_open_001", "cold_open_002"],
+        part3_mold_has_three_parts: [
+          "part3_mold_has_three_parts_001",
+          "part3_mold_has_three_parts_002",
+        ],
+      },
+      segments: [
+        { id: "cold_open_001" },
+        { id: "cold_open_002" },
+        { id: "part3_mold_parts_001" },
+        { id: "part3_mold_parts_002" },
+      ],
+    });
+
+    expect(result.groups).toEqual({
+      cold_open: ["cold_open_001", "cold_open_002"],
+      part3_mold_parts: ["part3_mold_parts_001", "part3_mold_parts_002"],
+    });
+    expect(result.filledSections).toEqual(["part3_mold_parts"]);
+    expect(result.removedSections).toEqual(["part3_mold_has_three_parts"]);
+    expect(result.changed).toBe(true);
+  });
+
+  it("preserves current groups when no manifest segments are available for that section", () => {
+    const result = reconcileAudioSyncSectionGroups({
+      sections,
+      existingGroups: {
+        cold_open: ["cold_open_001"],
+        part3_mold_parts: ["part3_mold_parts_001", "part3_mold_parts_002"],
+      },
+      segments: [{ id: "cold_open_001" }],
+    });
+
+    expect(result.groups).toEqual({
+      cold_open: ["cold_open_001"],
+      part3_mold_parts: ["part3_mold_parts_001", "part3_mold_parts_002"],
+    });
+    expect(result.removedSections).toEqual([]);
+    expect(result.changed).toBe(false);
   });
 });
 
@@ -151,6 +204,79 @@ describe("prepareAudioSyncAutomation", () => {
               part1_economics: {
                 startSegment: "part1_economics_001",
                 endSegment: "part1_economics_002",
+              },
+            },
+            silenceGapDefault: 0.3,
+          },
+        }),
+      })
+    );
+  });
+
+  it("reconciles stale section groups to the current project sections before Stage 5 automation runs", async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          sections: [
+            { id: "cold_open", label: "Cold Open" },
+            { id: "part3_mold_parts", label: "Part 3" },
+          ],
+          audioSync: {
+            sectionGroups: {
+              cold_open: {
+                startSegment: "cold_open_001",
+                endSegment: "cold_open_002",
+              },
+              part3_mold_has_three_parts: {
+                startSegment: "part3_mold_has_three_parts_001",
+                endSegment: "part3_mold_has_three_parts_002",
+              },
+            },
+            silenceGapDefault: 0.3,
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          segments: [
+            { id: "cold_open_001" },
+            { id: "cold_open_002" },
+            { id: "part3_mold_parts_001" },
+            { id: "part3_mold_parts_002" },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true }),
+      });
+
+    const result = await prepareAudioSyncAutomation(fetchImpl as unknown as typeof fetch);
+
+    expect(result).toEqual({
+      changed: true,
+      filledSections: ["part3_mold_parts"],
+      removedSections: ["part3_mold_has_three_parts"],
+      unmatchedSegments: [],
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      3,
+      "/api/project",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          audioSync: {
+            sectionGroups: {
+              cold_open: {
+                startSegment: "cold_open_001",
+                endSegment: "cold_open_002",
+              },
+              part3_mold_parts: {
+                startSegment: "part3_mold_parts_001",
+                endSegment: "part3_mold_parts_002",
               },
             },
             silenceGapDefault: 0.3,

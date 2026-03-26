@@ -264,6 +264,62 @@ class TestLoadSectionGroups:
             ]
         }
 
+    def test_prunes_obsolete_section_groups_that_are_not_current_project_sections(self, tmp_path):
+        project = {
+            "sections": [
+                {
+                    "id": "part3_mold_parts",
+                    "specDir": "part3_mold_parts",
+                }
+            ],
+            "audioSync": {
+                "sectionGroups": {
+                    "part3_mold_has_three_parts": {
+                        "startSegment": "part3_mold_has_three_parts_001",
+                        "endSegment": "part3_mold_has_three_parts_002",
+                    },
+                    "part3_mold_parts": {
+                        "startSegment": "part3_mold_parts_001",
+                        "endSegment": "part3_mold_parts_002",
+                    },
+                }
+            },
+        }
+        (tmp_path / "project.json").write_text(json.dumps(project), encoding="utf-8")
+
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        (output_dir / "segments.json").write_text(
+            json.dumps(
+                {
+                    "segments": [
+                        {
+                            "id": "part3_mold_parts_001",
+                            "sectionId": "part3_mold_parts",
+                            "cleanText": "First line.",
+                        },
+                        {
+                            "id": "part3_mold_parts_002",
+                            "sectionId": "part3_mold_parts",
+                            "cleanText": "Second line.",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        _create_dummy_wav(str(output_dir / "part3_mold_parts_001.wav"))
+        _create_dummy_wav(str(output_dir / "part3_mold_parts_002.wav"))
+
+        section_groups = load_section_groups(str(tmp_path), str(output_dir))
+
+        assert section_groups == {
+            "part3_mold_parts": [
+                "part3_mold_parts_001",
+                "part3_mold_parts_002",
+            ]
+        }
+
     def test_section_groups_not_dict_raises(self, tmp_path):
         (tmp_path / "project.json").write_text('{"sectionGroups": ["a", "b"]}')
         with pytest.raises(ValueError, match="dictionary"):

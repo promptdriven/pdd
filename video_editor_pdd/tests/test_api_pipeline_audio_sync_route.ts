@@ -478,6 +478,31 @@ describe("audio-sync executor factory", () => {
     );
   });
 
+  it("prunes obsolete sectionGroups that no longer exist in project.sections", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [{ id: "cold_open" }, { id: "part3_mold_parts" }],
+      audioSync: {
+        sectionGroups: {
+          cold_open: ["cold_open_001"],
+          part3_mold_has_three_parts: ["part3_mold_has_three_parts_001"],
+          part3_mold_parts: ["part3_mold_parts_001"],
+        },
+      },
+    });
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    const [, , options] = mockSpawn.mock.calls[0];
+    expect(options.env.SECTION_GROUPS).toBe(
+      JSON.stringify({
+        cold_open: ["cold_open_001"],
+        part3_mold_parts: ["part3_mold_parts_001"],
+      })
+    );
+  });
+
   it("defaults to empty object when audioSync.sectionGroups is missing", async () => {
     mockLoadProject.mockReturnValue({});
 
