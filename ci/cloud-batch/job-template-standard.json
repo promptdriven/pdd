@@ -9,6 +9,12 @@
                             "entrypoint": "/entrypoint.sh"
                         },
                         "environment": {
+                            "variables": {
+                                "VERTEX_PROJECT": "{{PROJECT_ID}}",
+                                "PDD_TEST_HEADLESS": "1",
+                                "GCS_BUCKET_NAME": "litellm_cache",
+                                "FIXED_TASK_INDEX": "54"
+                            },
                             "secretVariables": {
                                 "GCS_HMAC_ACCESS_KEY_ID": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_ACCESS_KEY_ID/versions/latest",
                                 "GCS_HMAC_SECRET_ACCESS_KEY": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_SECRET_ACCESS_KEY/versions/latest",
@@ -21,10 +27,6 @@
                         }
                     }
                 ],
-                "computeResource": {
-                    "cpuMilli": "2000",
-                    "memoryMib": "2000"
-                },
                 "volumes": [
                     {
                         "gcs": {
