@@ -1,96 +1,84 @@
 [title:]
 
-# Section 5.1: Compound Returns — Section Title Card
+# Section 5.1: Part 5 — Compound Returns Title Card
 
 **Tool:** Title
-**Duration:** ~8s (240 frames @ 30fps)
+**Duration:** ~8s
 **Timestamp:** 0:00 - 0:08
 
 ## Visual Description
-
-A bold section title card introducing Part 5. The text "COMPOUND RETURNS" appears in large, clean typography against a deep navy-black background. Below, a subtle tagline: "Why the economics compound for you." The title animates in with a confident fade-and-scale, establishing the shift from individual examples to systemic implications.
-
-A faint grid pattern pulses softly in the background — suggesting the mathematical/economic framing of this section.
+A clean section title card introducing Part 5. The words "Compound Returns" appear center-screen in large, bold white typography against a deep navy background. A subtle upward-curving line — hinting at exponential growth — traces beneath the title as an accent, glowing faintly in gold. The subtitle "Part 5" appears above in smaller, muted text.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: faint `#1A2540` at 0.08 opacity, 80px spacing, pulsing
+- No grid lines
 
 ### Chart/Visual Elements
-
-#### Title Text
-- "COMPOUND RETURNS" — centered, Inter, 72px, bold (800), `#E2E8F0` at 0.95
-- Tracking: 6px letter-spacing
-- Positioned at vertical center minus 40px
-
-#### Tagline
-- "Why the economics compound for you." — Inter, 22px, regular (400), `#94A3B8` at 0.7
-- Positioned 60px below title
-
-#### Background Grid
-- Grid lines: 1px, `#1A2540` at 0.08
-- Pulse: opacity oscillates 0.04–0.12 on 90-frame sine cycle
-- Adds subtle mathematical texture
+- **Accent curve:** A thin (`1.5px`) golden line (`#D9944A` at `0.4`) traces an exponential arc from bottom-left to bottom-right beneath the title, rising gently from left to right
+- **Subtle glow:** The curve has a soft `8px` glow at `#D9944A` opacity `0.1`
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Black. Grid fades in softly.
-2. **Frame 15-60 (0.5-2s):** "COMPOUND RETURNS" scales from 0.85 → 1.0 and fades from 0 → 1. `easeOutCubic`.
-3. **Frame 60-90 (2-3s):** Tagline fades in. `easeOutQuad`.
-4. **Frame 90-210 (3-7s):** Hold. Grid pulses softly.
-5. **Frame 210-240 (7-8s):** Everything fades out. `easeInQuad`.
+1. **Frame 0-30 (0-1s):** Background fades in from black. "Part 5" label fades in above center.
+2. **Frame 30-75 (1-2.5s):** "Compound Returns" scales up from `0.85` to `1.0` with opacity `0→1`. Slight vertical shift from `+20px` to `0px`.
+3. **Frame 75-120 (2.5-4s):** The golden accent curve draws left-to-right beneath the title.
+4. **Frame 120-210 (4-7s):** Hold. Gentle pulse on the accent glow (opacity `0.1→0.2→0.1`, 60-frame cycle).
+5. **Frame 210-240 (7-8s):** All elements fade out to black over 30 frames.
 
 ### Typography
-- Title: Inter, 72px, bold (800), `#E2E8F0`, tracking 6px
-- Tagline: Inter, 22px, regular (400), `#94A3B8` at 0.7
+- Section label: Inter, 16px, regular (400), `#64748B`, uppercase, letter-spacing `3px`
+- Title: Inter, 64px, bold (700), `#E2E8F0`
+- All text centered horizontally and vertically
 
 ### Easing
-- Title scale-in: `easeOut(cubic)` over 45 frames
-- Tagline fade: `easeOut(quad)` over 30 frames
-- Grid pulse: `easeInOut(sine)` on 90-frame cycle
-- Fade-out: `easeIn(quad)` over 30 frames
+- Title scale-up: `easeOutCubic`
+- Title fade-in: `easeOutQuad`
+- Curve draw: `easeInOutCubic`
+- Glow pulse: `easeInOutSine`
+- Fade-out: `easeInQuad`
 
 ## Narration Sync
 > "Now let's zoom out. Because the numbers you just saw — individual patches, individual bugs — add up to something staggering."
-
-Segment: `part5_compound_returns_001`
-
-- **0:00** ("Now let's zoom out"): Title card appears
-- **0:04** ("numbers you just saw"): Hold on title
-- **0:07** ("staggering"): Begin fade-out transition
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={240}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <PulsingGrid spacing={80} color="#1A2540"
-      opacityRange={[0.04, 0.12]} period={90} />
-
-    <Sequence from={15}>
-      <ScaleIn from={0.85} to={1.0} duration={45}>
-        <FadeIn duration={45}>
-          <Text text="COMPOUND RETURNS"
-            font="Inter" size={72} weight={800}
-            color="#E2E8F0" opacity={0.95}
-            letterSpacing={6}
-            x={960} y={500} align="center" />
-        </FadeIn>
-      </ScaleIn>
-    </Sequence>
-
-    <Sequence from={60}>
-      <FadeIn duration={30}>
-        <Text text="Why the economics compound for you."
-          font="Inter" size={22} weight={400}
-          color="#94A3B8" opacity={0.7}
-          x={960} y={570} align="center" />
+    {/* Section label */}
+    <Sequence from={0}>
+      <FadeIn durationInFrames={30}>
+        <Text text="PART 5" font="Inter" size={16}
+          weight={400} color="#64748B"
+          letterSpacing="3px" align="center"
+          y={-60} />
       </FadeIn>
     </Sequence>
 
+    {/* Main title */}
+    <Sequence from={30}>
+      <ScaleAndFade
+        fromScale={0.85} toScale={1.0}
+        fromY={20} toY={0}
+        durationInFrames={45} easing="easeOutCubic">
+        <Text text="Compound Returns" font="Inter" size={64}
+          weight={700} color="#E2E8F0" align="center" />
+      </ScaleAndFade>
+    </Sequence>
+
+    {/* Accent curve */}
+    <Sequence from={75}>
+      <AnimatedCurve
+        points="exponential-arc" color="#D9944A"
+        strokeWidth={1.5} opacity={0.4}
+        glowRadius={8} glowOpacity={0.1}
+        drawDuration={45} easing="easeInOutCubic" />
+    </Sequence>
+
+    {/* Fade out */}
     <Sequence from={210}>
-      <FadeOut duration={30} />
+      <FadeOut durationInFrames={30} easing="easeInQuad" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -100,12 +88,12 @@ Segment: `part5_compound_returns_001`
 ```json
 {
   "type": "title_card",
-  "sectionId": "part5_compound_returns",
-  "title": "COMPOUND RETURNS",
-  "tagline": "Why the economics compound for you.",
+  "sectionLabel": "PART 5",
+  "title": "Compound Returns",
+  "accentStyle": "exponential_curve",
+  "accentColor": "#D9944A",
   "backgroundColor": "#0A0F1A",
+  "durationSeconds": 8,
   "narrationSegments": ["part5_compound_returns_001"]
 }
 ```
-
----

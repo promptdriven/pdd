@@ -1,141 +1,141 @@
 [Remotion]
 
-# Section 1.6: Performance vs Context Length — The EMNLP Evidence
+# Section 1.6: Performance vs Context — EMNLP Degradation Graph
 
 **Tool:** Remotion
-**Duration:** ~18s (540 frames @ 30fps)
-**Timestamp:** 3:08 - 3:26
+**Duration:** ~24s (720 frames @ 30fps)
+**Timestamp:** 3:32 - 3:56
 
 ## Visual Description
 
-A subtle graph inset appears overlaying the context window visualization. The graph shows "Performance vs. Context Length" — a steadily dropping line proving that even with perfect retrieval, model performance degrades as input length grows. This is the EMNLP 2025 finding.
+A small but devastating inset graph that appears as a companion to the context window shrink visualization. The chart shows "Performance vs. Context Length" — a single line that drops steadily from left to right. This is the empirical data backing the visual metaphor.
 
-The graph is compact and clinical — positioned in the lower-right as a supporting evidence callout. The line drops from high-left to low-right with a shaded area beneath showing the degradation range (14-85%). A label cites the source. After the main point lands, a second annotation fades in about context rot: "Faster patching → faster growth → faster rot" — a causal chain.
+The graph is clean, minimal, scientific. A single descending line from high performance at low context length to degraded performance at high context length. The annotation is stark: "Even with perfect retrieval, performance degrades 14-85% as context grows (EMNLP, 2025)."
+
+After the performance graph, we return to the main code cost chart. The "Context Rot" layer in the debt area pulses ominously. A feedback annotation appears: "Faster patching → faster growth → faster rot."
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0A0F1A` (inherited from context window visualization)
-- Inset graph area: 420×280px, positioned at (1350, 720), with `#0F172A` at 0.9 background, 1px border `#1E293B`
+- Background: `#0A0F1A` (deep navy-black)
+- Inset graph area: 600×350px, positioned at (960, 480), centered
 
 ### Chart/Visual Elements
 
-#### Inset Graph
-- X-axis: "Context Length" — Inter, 9px, `#64748B` at 0.4
-- Y-axis: "Model Performance" — Inter, 9px, `#64748B` at 0.4
-- Grid: 4×3 light grid, `#1E293B` at 0.05
-- Axis lines: `#334155` at 0.3, 1px
+#### Inset Graph Frame
+- Rounded rect: 600×350px, `#111827` fill, `#334155` border at 0.3, rounded 8px
+- Subtle shadow: `#000000` at 0.3, 4px offset, 12px blur
+
+#### Graph Axes
+- X-axis: "Context Length (tokens)" — 0 to 128k
+  - Labels: "4k", "16k", "32k", "64k", "128k"
+  - Color: `#475569` at 0.5, Inter 10px
+- Y-axis: "Relative Performance" — 0% to 100%
+  - Labels: "0%", "25%", "50%", "75%", "100%"
+  - Color: `#475569` at 0.5, Inter 10px
 
 #### Performance Line
-- Color: `#EF4444`, 2px solid stroke
-- Path: descending curve from (left, 90%) to (right, 15%) — steeper in the middle
-- Glow: 4px Gaussian blur, `#EF4444` at 0.1
-- Shaded area below line: `#EF4444` at 0.04
+- Color: `#EF4444`, 2px solid
+- Data: (4k, 95%), (16k, 82%), (32k, 65%), (64k, 40%), (128k, 15%)
+- Smooth bezier through points
+- Area under the line: `#EF4444` at 0.05
 
-#### Degradation Range Label
-- "14-85% degradation" — Inter, 11px, bold, `#EF4444` at 0.7
-- Positioned centered in the shaded area
-
-#### Source Citation
-- "Even with perfect retrieval, performance degrades 14-85% as context grows" — Inter, 9px, `#94A3B8` at 0.4
-- "(EMNLP, 2025)" — Inter, 9px, `#64748B` at 0.3
-
-#### Context Rot Annotation (appears after inset)
-- Position: centered, large — (960, 200)
-- "Faster patching → faster growth → faster rot" — Inter, 16px, semi-bold (600), `#EF4444` at 0.7
-- Arrows rendered as animated connecting symbols
-- Subtle red pulse on "rot"
+#### Annotation
+- "Even with perfect retrieval, performance degrades 14-85% as context grows"
+  - Inter, 12px, `#E2E8F0` at 0.6
+  - Positioned below graph
+- "(EMNLP, 2025)" — Inter, 10px, `#94A3B8` at 0.4
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Context window visualization still visible in background. Inset graph container slides in from lower-right.
-2. **Frame 30-60 (1-2s):** Axes draw inside inset. Grid appears.
-3. **Frame 60-180 (2-6s):** Performance line draws left-to-right, descending steadily. Shaded area fills beneath.
-4. **Frame 180-240 (6-8s):** "14-85% degradation" label fades in centered in the shaded area. Source citation appears below inset.
-5. **Frame 240-360 (8-12s):** Hold on inset. The evidence sinks in.
-6. **Frame 360-420 (12-14s):** Inset dims to 0.3 opacity. Context rot annotation types in at center: "Faster patching → faster growth → faster rot" with each arrow animating.
-7. **Frame 420-540 (14-18s):** "rot" pulses red. Hold on the causal chain.
+1. **Frame 0-30 (0-1s):** Inset graph frame fades in. Dark panel appears.
+2. **Frame 30-60 (1-2s):** Axes appear. Labels tick in.
+3. **Frame 60-240 (2-8s):** Performance line draws from left to right. Steady decline visible.
+4. **Frame 240-360 (8-12s):** Area under the line fills. The gap from 100% is dramatic.
+5. **Frame 360-480 (12-16s):** Annotation text appears below the graph.
+6. **Frame 480-720 (16-24s):** Graph remains. Then transitions: graph shrinks and moves to corner, main chart returns with Context Rot layer pulsing.
 
 ### Typography
-- Inset axis labels: Inter, 9px, `#64748B` at 0.4
-- Degradation label: Inter, 11px, bold, `#EF4444` at 0.7
-- Source: Inter, 9px, `#94A3B8` at 0.4
-- Context rot annotation: Inter, 16px, semi-bold (600), `#EF4444` at 0.7
+- Graph title: Inter, 14px, bold (700), `#E2E8F0`
+- Axis labels: Inter, 10px, `#475569` at 0.5
+- Annotation: Inter, 12px, `#E2E8F0` at 0.6
+- Citation: Inter, 10px, `#94A3B8` at 0.4
 
 ### Easing
-- Inset slide-in: `easeOut(cubic)` over 30 frames
-- Line draw: `easeInOut(quad)` over 120 frames
-- Shaded area fill: `easeOut(quad)` over 60 frames
-- Label fade-in: `easeOut(quad)` over 20 frames
-- Arrow animate: `easeOut(cubic)` over 15 frames each, staggered
-- Rot pulse: `easeInOut(sine)` on 30-frame cycle
+- Frame appear: `easeOut(cubic)` over 20 frames
+- Line draw: `easeInOut(cubic)` over 180 frames
+- Area fill: `easeOut(quad)` over 60 frames
+- Annotation: `easeOut(quad)` over 20 frames
+- Graph shrink transition: `easeInOut(cubic)` over 30 frames
 
 ## Narration Sync
-> "And it gets worse. A 2025 EMNLP study proved that even when the model retrieves the right information, performance still degrades—fourteen to eighty-five percent."
-> "This is why AI-assisted patching is really two stories."
+> "it gets worse. A 2025 study found that even with perfect retrieval — even if you could magically select only the right code — model performance still degrades 14 to 85% as context length grows. The window isn't just smaller. It's noisier."
+> "is why AI-assisted patching shows such wildly different results across different studies."
 
 Segments: `part1_economics_021`, `part1_economics_022`
 
-- **3:08** ("it gets worse"): Inset graph slides in
-- **3:20** ("fourteen to eighty-five percent"): Degradation label appears
-- **3:26** ("two stories"): Context rot annotation types in
+- **212.32s** ("it gets worse"): Inset graph frame appears
+- **220s** ("even with perfect retrieval"): Performance line drawing, declining
+- **236s** ("14 to 85%"): Annotation appears with percentage
+- **244.24s** ("is why AI-assisted patching"): Transition back to main chart
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={540}>
+<Sequence from={0} durationInFrames={720}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Background: context window viz at low opacity */}
-    <Opacity value={0.3}>
-      <ContextWindowVisualization />
-    </Opacity>
-
-    {/* Inset graph */}
+    {/* Inset graph frame */}
     <Sequence from={0}>
-      <SlideIn from="right" distance={30} duration={30}>
-        <InsetGraph position={[1350, 720]} width={420} height={280}
-          background="#0F172A" backgroundOpacity={0.9}
-          borderColor="#1E293B">
-          <AnimatedAxis axis="x" label="Context Length" />
-          <AnimatedAxis axis="y" label="Model Performance" />
-
-          <Sequence from={60}>
-            <AnimatedLine data={perfDegradationData}
-              color="#EF4444" width={2}
-              glow={{ blur: 4, opacity: 0.1 }}
-              fillBelow={{ color: '#EF4444', opacity: 0.04 }}
-              drawDuration={120} />
-          </Sequence>
-
-          <Sequence from={180}>
-            <FadeIn duration={20}>
-              <Text text="14-85% degradation"
-                font="Inter" size={11} weight={700}
-                color="#EF4444" opacity={0.7}
-                align="center" />
-            </FadeIn>
-          </Sequence>
-        </InsetGraph>
-      </SlideIn>
-    </Sequence>
-
-    {/* Source citation */}
-    <Sequence from={180}>
       <FadeIn duration={20}>
-        <Text text="Even with perfect retrieval, performance degrades (EMNLP, 2025)"
-          font="Inter" size={9} color="#94A3B8" opacity={0.4}
-          x={1350} y={880} align="center" />
+        <InsetPanel x={960} y={480} width={600} height={350}
+          bg="#111827" border="#334155" borderOpacity={0.3}
+          cornerRadius={8} shadow={{ color: "#000", opacity: 0.3, blur: 12 }} />
       </FadeIn>
     </Sequence>
 
-    {/* Context rot annotation */}
+    {/* Graph axes */}
+    <Sequence from={30}>
+      <FadeIn duration={20}>
+        <ChartAxes
+          xRange={[0, 128000]} yRange={[0, 100]}
+          xLabel="Context Length (tokens)"
+          yLabel="Relative Performance"
+          xTicks={["4k", "16k", "32k", "64k", "128k"]}
+          yTicks={["0%", "25%", "50%", "75%", "100%"]}
+          gridColor="#1E293B" axisColor="#334155"
+          labelColor="#475569" labelOpacity={0.5} labelSize={10}
+          region={{ x: 360, y: 305, width: 520, height: 280 }} />
+      </FadeIn>
+    </Sequence>
+
+    {/* Performance degradation line */}
+    <Sequence from={60}>
+      <AnimatedLine
+        data={[[4000, 95], [16000, 82], [32000, 65], [64000, 40], [128000, 15]]}
+        color="#EF4444" strokeWidth={2}
+        drawDuration={180} easing="easeInOutCubic"
+        areaFill={{ color: "#EF4444", opacity: 0.05, startFrame: 180 }} />
+    </Sequence>
+
+    {/* Title */}
+    <Sequence from={30}>
+      <FadeIn duration={15}>
+        <Text text="Performance vs. Context Length" font="Inter" size={14}
+          weight={700} color="#E2E8F0"
+          x={960} y={280} align="center" />
+      </FadeIn>
+    </Sequence>
+
+    {/* Annotation */}
     <Sequence from={360}>
-      <CausalChain
-        items={["Faster patching", "faster growth", "faster rot"]}
-        separator="→"
-        font="Inter" size={16} weight={600}
-        color="#EF4444" opacity={0.7}
-        x={960} y={200} stagger={15}
-        pulseItem={2} pulseColor="#EF4444" />
+      <FadeIn duration={20}>
+        <Text
+          text="Even with perfect retrieval, performance degrades 14-85% as context grows"
+          font="Inter" size={12} color="#E2E8F0" opacity={0.6}
+          x={960} y={680} align="center" />
+        <Text text="(EMNLP, 2025)" font="Inter" size={10}
+          color="#94A3B8" opacity={0.4}
+          x={960} y={700} align="center" />
+      </FadeIn>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -144,21 +144,20 @@ Segments: `part1_economics_021`, `part1_economics_022`
 ## Data Points JSON
 ```json
 {
-  "type": "inset_chart",
-  "chartId": "performance_vs_context",
-  "chartType": "single_line_degradation",
-  "xAxis": { "label": "Context Length" },
-  "yAxis": { "label": "Model Performance" },
+  "type": "inset_line_chart",
+  "title": "Performance vs. Context Length",
+  "xAxis": { "label": "Context Length (tokens)", "range": [0, 128000] },
+  "yAxis": { "label": "Relative Performance", "range": [0, 100], "unit": "%" },
   "series": [
     {
       "id": "performance_degradation",
+      "label": "Model Performance",
       "color": "#EF4444",
-      "degradationRange": { "min": 14, "max": 85 },
-      "source": "EMNLP, 2025"
+      "data": [[4000, 95], [16000, 82], [32000, 65], [64000, 40], [128000, 15]]
     }
   ],
-  "causalChain": ["Faster patching", "faster growth", "faster rot"],
-  "backgroundColor": "#0A0F1A",
+  "citation": "EMNLP, 2025",
+  "keyFinding": "14-85% performance degradation as context grows",
   "narrationSegments": ["part1_economics_021", "part1_economics_022"]
 }
 ```

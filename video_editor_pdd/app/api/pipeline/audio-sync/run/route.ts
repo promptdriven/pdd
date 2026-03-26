@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import path from "path";
 import { spawn } from "child_process";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
+import { resolvePythonRunSpec } from "@/app/api/pipeline/_lib/python-runtime";
 import { loadProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
 import { getAppRemotionPublicDir, getAppScriptsDir, getProjectDir } from "@/lib/projects";
@@ -60,9 +61,11 @@ registerExecutor("audio-sync", (params, send: SseSend) => {
     onLog(`[audio-sync] Loaded sectionGroups: ${JSON.stringify(sectionGroups)}`);
 
     // Spawn the Python script
+    const python = resolvePythonRunSpec({ preferredCondaEnv: "video_editor" });
     const proc = spawn(
-      "python3",
+      python.command,
       [
+        ...python.argsPrefix,
         path.join(getAppScriptsDir(), "sync_audio_pipeline.py"),
         "--project-dir",
         getProjectDir(),
@@ -72,7 +75,7 @@ registerExecutor("audio-sync", (params, send: SseSend) => {
       {
         cwd: getProjectDir(),
         env: {
-          ...process.env,
+          ...python.env,
           SECTION_GROUPS: JSON.stringify(sectionGroups),
         },
       }

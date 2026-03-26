@@ -3,154 +3,140 @@
 # Section 1.2: Sock Price Chart — Labor vs Garment Cost Over Time
 
 **Tool:** Remotion
-**Duration:** ~30s (900 frames @ 30fps)
-**Timestamp:** 0:04 - 0:34
+**Duration:** ~21s (630 frames @ 30fps)
+**Timestamp:** 0:23 - 0:44
 
 ## Visual Description
 
-An animated line chart showing the economics of sock darning from 1950 to 2020. The X-axis spans decades; the Y-axis represents cost relative to an hour of wages. Two lines: a warm amber "Labor cost of darning" line that stays relatively flat, and a cool blue "Cost of new socks" line that starts high and falls steadily.
+An animated line chart showing the economics of socks from 1950 to 2020. The Y-axis represents cost in labor-hours, the X-axis is time. Two lines tell the story:
 
-The lines cross around 1960-65 — this is "The Threshold" moment. Before the crossing, darning is rational. After, buying new socks is cheaper. By 2020, the blue line is essentially at zero relative to labor cost. The crossing point gets a pulsing highlight label.
+1. **Blue line ("Labor cost"):** The rising value of an hour of human work. Starts low in 1950, climbs steadily.
+2. **Amber line ("Garment cost"):** The cost of quality wool socks. Starts high in 1950 (roughly equal to an hour's wages), drops over time as manufacturing scales.
 
-The chart uses a clean 3Blue1Brown-inspired aesthetic — dark background, thin precise lines, mathematical elegance.
+The lines cross around 1960-65 — "The Threshold" — where it became cheaper to buy new socks than to darn old ones. After the crossing, the lines diverge dramatically. By 2020, socks are essentially free relative to labor.
+
+The crossing point gets a special highlight treatment: a glowing dot, a label "The Threshold", and a brief pulse animation to draw the eye.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: `#1E293B` at 0.06, 80px horizontal spacing, 60px vertical spacing
+- Grid lines: horizontal dashed at `#1E293B` at 0.1, every 20% of Y-axis
 
 ### Chart/Visual Elements
 
 #### Axes
-- X-axis: 1950-2020, major ticks every 10 years, minor every 5
-- X-axis label: "Year" — Inter, 11px, `#64748B` at 0.5
-- Y-axis: relative cost (0-100%), no explicit numbers — implied by position
-- Y-axis label: "Cost (Relative to Hourly Wage)" — Inter, 11px, `#64748B` at 0.5, rotated -90°
-- Axis lines: `#334155` at 0.4, 1.5px
-- Tick labels: JetBrains Mono, 10px, `#94A3B8` at 0.5
+- X-axis: 1950 to 2020, tick marks every decade, labels at bottom
+  - Color: `#475569` at 0.6, Inter 12px
+- Y-axis: "Cost (Labor Hours)" — 0 to 4 hours
+  - Color: `#475569` at 0.6, Inter 12px
+- Axis lines: `#334155` at 0.3, 1px
 
-#### Line 1 — Labor Cost of Darning (amber)
-- Color: `#D9944A`, 2.5px stroke
-- Path: relatively flat line from (1950, 45%) to (2020, 50%) — slight upward drift
-- Glow: 6px Gaussian blur, `#D9944A` at 0.12
-- Label: "Labor cost (darning)" — Inter, 11px, `#D9944A` at 0.7, positioned at line endpoint
+#### Lines
+- **Labor cost (blue):** `#4A90D9`, 3px stroke, starts ~1.0 at 1950, rises to ~3.5 at 2020
+  - Data: smooth bezier through (1950, 1.0), (1960, 1.3), (1970, 1.8), (1980, 2.2), (1990, 2.6), (2000, 3.0), (2020, 3.5)
+  - Label: "Hour of labor" — Inter, 13px, `#4A90D9`, positioned at line end
+- **Garment cost (amber):** `#D9944A`, 3px stroke, starts ~1.0 at 1950, drops to ~0.1 at 2020
+  - Data: smooth bezier through (1950, 1.0), (1960, 0.7), (1965, 0.5), (1970, 0.35), (1980, 0.2), (2000, 0.12), (2020, 0.08)
+  - Label: "Pair of wool socks" — Inter, 13px, `#D9944A`, positioned at line end
 
-#### Line 2 — Cost of New Socks (blue)
-- Color: `#4A90D9`, 2.5px stroke
-- Path: starts at (1950, 80%), falls steeply through 1960s, flattens near zero by 2000
-- Glow: 6px Gaussian blur, `#4A90D9` at 0.12
-- Label: "Cost of new socks" — Inter, 11px, `#4A90D9` at 0.7, positioned at line endpoint
+#### Crossing Point
+- Position: approximately 1962, ~0.85 labor-hours
+- Glowing dot: 8px, `#FFFFFF` at 0.9, glow radius 20px, `#FFFFFF` at 0.15
+- Label: "The Threshold" — Inter, 16px, bold, `#E2E8F0`, offset above crossing point
 
-#### Crossing Point — "The Threshold"
-- Position: approximately (1962, 47%)
-- Circle: 8px, `#E2E8F0` at 0.8, with 16px glow at 0.2
-- Label: "The Threshold" — Inter, 16px, bold (700), `#E2E8F0` at 0.9
-- Connecting line: 1px dashed, `#E2E8F0` at 0.3, from circle to label
-- Pulse: circle breathes between 0.6 and 1.0 opacity on 40-frame cycle
-
-#### Divergence Shading (post-threshold)
-- Shaded area between lines after 1965: `#4A90D9` at 0.04
-- Grows wider as lines diverge — visual emphasis on the economic gap
+#### Divergence Area
+- Shaded region between the two lines after the crossing: gradient from `#4A90D9` at 0.05 at top to `#D9944A` at 0.05 at bottom
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Axes draw in — X-axis left-to-right, Y-axis bottom-to-top. Grid lines fade in.
-2. **Frame 30-60 (1-2s):** Tick labels appear. Y-axis label fades in. Chart title area ready.
-3. **Frame 60-180 (2-6s):** Amber line draws from 1950 rightward, keeping pace with narration about 1950 economics. Blue line draws simultaneously but faster — it starts high and begins to descend.
-4. **Frame 180-240 (6-8s):** Lines approach crossing point. Circle appears at threshold. "The Threshold" label fades in with connecting dashed line.
-5. **Frame 240-300 (8-10s):** Crossing point pulses. Brief hold — the 3B1B "notice this" moment.
-6. **Frame 300-600 (10-20s):** Lines continue past threshold. Blue line plunges. Shaded divergence area fills progressively. By 2020, the gap is enormous.
-7. **Frame 600-750 (20-25s):** Divergence area fully shaded. Line labels appear at endpoints.
-8. **Frame 750-900 (25-30s):** Hold on complete chart. Crossing point continues pulsing.
+1. **Frame 0-30 (0-1s):** Axes fade in. Grid lines appear.
+2. **Frame 30-90 (1-3s):** Both lines begin drawing simultaneously from 1950. The lines are close together, nearly overlapping.
+3. **Frame 90-180 (3-6s):** Lines reach 1960s. They converge and CROSS. Crossing point glows. "The Threshold" label appears.
+4. **Frame 180-360 (6-12s):** Lines diverge dramatically. The blue rises, amber drops. Shaded divergence area fills in gradually.
+5. **Frame 360-480 (12-16s):** Lines reach 2020. The gap is enormous. Final labels appear at line ends.
+6. **Frame 480-630 (16-21s):** Hold. Crossing point pulses gently. The visual settles.
 
 ### Typography
-- Chart title area: Inter, 12px, semi-bold (600), `#94A3B8` at 0.4, letter-spacing 3px
-- Axis labels: Inter, 11px, `#64748B` at 0.5
-- Tick labels: JetBrains Mono, 10px, `#94A3B8` at 0.5
-- Threshold label: Inter, 16px, bold (700), `#E2E8F0` at 0.9
-- Line labels: Inter, 11px, respective line colors at 0.7
+- Chart title: Inter, 20px, bold (700), `#E2E8F0`, top-left
+- Axis labels: Inter, 12px, `#475569` at 0.6
+- Line labels: Inter, 13px, respective line colors
+- "The Threshold": Inter, 16px, bold (700), `#E2E8F0`
 
 ### Easing
-- Axis draw: `easeOut(cubic)` over 30 frames
-- Line draw: `easeInOut(quad)` continuous over respective durations
-- Threshold circle appear: `easeOut(back)` over 15 frames
-- Label fade-in: `easeOut(quad)` over 20 frames
-- Shading fill: `easeOut(quad)` progressive
-- Threshold pulse: `easeInOut(sine)` on 40-frame cycle
+- Line draw: `easeInOut(cubic)` over duration
+- Crossing glow: `easeOut(quad)` bloom over 15 frames
+- Label appear: `easeOut(quad)` over 20 frames
+- Divergence fill: `easeIn(quad)` as area grows
+- Crossing pulse: `easeInOut(sine)` on 60-frame cycle
 
 ## Narration Sync
-> "This isn't nostalgia. It's economics."
-> "In 1950, a wool sock cost real money relative to an hour of labor. Darning made sense. You'd spend thirty minutes to save a dollar."
-> "By the mid-1960s, the math flipped. A new sock cost less than the time to repair the old one. Darning became irrational."
+> "In 1950, a wool sock cost about an hour of wages to buy. Darning — repairing it — made economic sense. You'd spend fifteen minutes fixing what cost an hour to replace."
+> "Or K. By the mid 1960s, manufacturing scaled. Prices dropped. Now look at the chart. The lines cross."
 
-Segments: `part1_economics_005`, `part1_economics_006`, `part1_economics_007`
+Segments: `part1_economics_006`, `part1_economics_007`
 
-- **0:04** ("isn't nostalgia. It's economics"): Chart axes begin drawing
-- **0:08** ("In 1950, a wool sock"): Lines begin drawing from 1950
-- **0:19** ("By the mid-1960s"): Crossing point approaches, threshold label appears
-- **0:27** ("Darning became irrational"): Lines fully diverged, chart complete
+- **23.94s** ("In 1950, a wool sock"): Chart axes appear, lines begin drawing
+- **29s** ("Darning — repairing it"): Lines approaching crossing point
+- **34.62s** ("By the mid 1960s"): Lines crossing, "The Threshold" appears
+- **40s** ("The lines cross"): Divergence visible, dramatic gap widening
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={900}>
+<Sequence from={0} durationInFrames={630}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <ChartGrid hSpacing={80} vSpacing={60} color="#1E293B" opacity={0.06} />
-
-    {/* Axes */}
+    {/* Axes and grid */}
     <Sequence from={0}>
-      <AnimatedAxis axis="x" from={1950} to={2020}
-        majorTick={10} minorTick={5}
-        color="#334155" opacity={0.4} width={1.5}
-        labelFont="JetBrains Mono" labelSize={10}
-        labelColor="#94A3B8" labelOpacity={0.5}
-        drawDuration={30} />
-      <AnimatedAxis axis="y" label="Cost (Relative to Hourly Wage)"
-        color="#334155" opacity={0.4} width={1.5}
-        labelFont="Inter" labelSize={11}
-        labelColor="#64748B" labelOpacity={0.5}
-        drawDuration={30} />
+      <FadeIn duration={30}>
+        <ChartAxes
+          xRange={[1950, 2020]} yRange={[0, 4]}
+          xLabel="Year" yLabel="Cost (Labor Hours)"
+          gridColor="#1E293B" gridOpacity={0.1}
+          axisColor="#334155" labelColor="#475569" />
+      </FadeIn>
     </Sequence>
 
-    {/* Amber line — labor cost */}
-    <Sequence from={60}>
-      <AnimatedLine data={laborCostData} color="#D9944A"
-        width={2.5} glow={{ blur: 6, opacity: 0.12 }}
-        drawDuration={540} />
+    {/* Labor cost line (blue) */}
+    <Sequence from={30}>
+      <AnimatedLine
+        data={[
+          [1950, 1.0], [1960, 1.3], [1970, 1.8],
+          [1980, 2.2], [1990, 2.6], [2000, 3.0], [2020, 3.5]
+        ]}
+        color="#4A90D9" strokeWidth={3}
+        drawDuration={420} easing="easeInOutCubic"
+        label="Hour of labor" labelColor="#4A90D9" />
     </Sequence>
 
-    {/* Blue line — sock cost */}
-    <Sequence from={60}>
-      <AnimatedLine data={sockCostData} color="#4A90D9"
-        width={2.5} glow={{ blur: 6, opacity: 0.12 }}
-        drawDuration={540} />
+    {/* Garment cost line (amber) */}
+    <Sequence from={30}>
+      <AnimatedLine
+        data={[
+          [1950, 1.0], [1960, 0.7], [1965, 0.5],
+          [1970, 0.35], [1980, 0.2], [2000, 0.12], [2020, 0.08]
+        ]}
+        color="#D9944A" strokeWidth={3}
+        drawDuration={420} easing="easeInOutCubic"
+        label="Pair of wool socks" labelColor="#D9944A" />
     </Sequence>
 
-    {/* Divergence shading */}
-    <Sequence from={300}>
-      <AreaBetween upper={laborCostData} lower={sockCostData}
-        color="#4A90D9" opacity={0.04}
-        startX={1965} fillDuration={300} />
-    </Sequence>
-
-    {/* Threshold crossing */}
+    {/* Divergence shaded area */}
     <Sequence from={180}>
-      <ThresholdMarker cx={thresholdX} cy={thresholdY}
-        radius={8} color="#E2E8F0" opacity={0.8}
-        glowRadius={16} glowOpacity={0.2}
-        pulse={{ min: 0.6, max: 1.0, period: 40 }}
-        label="The Threshold" labelFont="Inter"
-        labelSize={16} labelWeight={700}
-        dashedLine />
+      <FillArea
+        upperLine="labor_cost" lowerLine="garment_cost"
+        startX={1962} fillColor="#4A90D9" opacity={0.05}
+        fillDuration={180} />
     </Sequence>
 
-    {/* Line labels at endpoints */}
-    <Sequence from={600}>
+    {/* Crossing point highlight */}
+    <Sequence from={90}>
+      <GlowDot x={1962} y={0.85} radius={8}
+        color="#FFFFFF" glowRadius={20} glowOpacity={0.15}
+        fadeIn={15} pulse={60} />
       <FadeIn duration={20}>
-        <LineLabel text="Labor cost (darning)" color="#D9944A"
-          opacity={0.7} position="end" />
-        <LineLabel text="Cost of new socks" color="#4A90D9"
-          opacity={0.7} position="end" />
+        <Text text="The Threshold" font="Inter" size={16}
+          weight={700} color="#E2E8F0"
+          x={1962} yOffset={-30} align="center" />
       </FadeIn>
     </Sequence>
   </AbsoluteFill>
@@ -160,39 +146,25 @@ Segments: `part1_economics_005`, `part1_economics_006`, `part1_economics_007`
 ## Data Points JSON
 ```json
 {
-  "type": "animated_chart",
-  "chartId": "sock_economics",
-  "chartType": "dual_line",
-  "xAxis": { "label": "Year", "range": [1950, 2020], "majorTick": 10 },
-  "yAxis": { "label": "Cost (Relative to Hourly Wage)", "range": [0, 100] },
+  "type": "animated_line_chart",
+  "xAxis": { "label": "Year", "range": [1950, 2020], "ticks": "decade" },
+  "yAxis": { "label": "Cost (Labor Hours)", "range": [0, 4] },
   "series": [
     {
       "id": "labor_cost",
-      "label": "Labor cost (darning)",
-      "color": "#D9944A",
-      "dataPoints": [
-        { "x": 1950, "y": 45 }, { "x": 1960, "y": 47 },
-        { "x": 1970, "y": 48 }, { "x": 1980, "y": 48 },
-        { "x": 1990, "y": 49 }, { "x": 2000, "y": 49 },
-        { "x": 2010, "y": 50 }, { "x": 2020, "y": 50 }
-      ]
+      "label": "Hour of labor",
+      "color": "#4A90D9",
+      "data": [[1950, 1.0], [1960, 1.3], [1970, 1.8], [1980, 2.2], [1990, 2.6], [2000, 3.0], [2020, 3.5]]
     },
     {
-      "id": "sock_cost",
-      "label": "Cost of new socks",
-      "color": "#4A90D9",
-      "dataPoints": [
-        { "x": 1950, "y": 80 }, { "x": 1955, "y": 65 },
-        { "x": 1960, "y": 52 }, { "x": 1965, "y": 40 },
-        { "x": 1970, "y": 28 }, { "x": 1980, "y": 15 },
-        { "x": 1990, "y": 8 }, { "x": 2000, "y": 4 },
-        { "x": 2010, "y": 2 }, { "x": 2020, "y": 1 }
-      ]
+      "id": "garment_cost",
+      "label": "Pair of wool socks",
+      "color": "#D9944A",
+      "data": [[1950, 1.0], [1960, 0.7], [1965, 0.5], [1970, 0.35], [1980, 0.2], [2000, 0.12], [2020, 0.08]]
     }
   ],
-  "threshold": { "x": 1962, "y": 47, "label": "The Threshold" },
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["part1_economics_005", "part1_economics_006", "part1_economics_007"]
+  "crossingPoint": { "x": 1962, "y": 0.85, "label": "The Threshold" },
+  "narrationSegments": ["part1_economics_006", "part1_economics_007"]
 }
 ```
 

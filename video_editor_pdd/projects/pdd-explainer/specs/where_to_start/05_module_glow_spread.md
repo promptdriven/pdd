@@ -1,149 +1,171 @@
 [Remotion]
 
-# Section 6.5: Spreading Glow — Gradual Migration
+# Section 6.5: Module Glow Spread — Gradual Adoption Across the Codebase
 
 **Tool:** Remotion
-**Duration:** ~6s (180 frames @ 30fps)
-**Timestamp:** 0:20 - 0:26
+**Duration:** ~11s (330 frames @ 30fps)
+**Timestamp:** 0:15 - 0:26
 
 ## Visual Description
 
-The codebase view is now pulled back far enough to see the full system — a grid of 12-15 module rectangles arranged in a loose network layout, connected by thin dependency lines. Two modules (auth_handler, payment_processor) already glow blue, indicating they've been migrated to prompt-driven. The rest are gray.
+The full codebase returns — the same dense layout from Spec 02, but now viewed from a higher abstraction. The code wall transforms into a schematic module map: a grid of ~20 rectangles representing individual modules/files in the project, each labeled with a filename.
 
-One by one, additional modules begin to glow. Not simultaneously — sequentially, organically, like a network lighting up. Each module's transformation follows a compressed version of the previous animation: a brief flash, the prompt icon appears, the code dims, and the glow settles. The dependency lines between migrated modules shift from gray to a faint blue, showing the growing "prompt-driven zone."
+One module (`auth_handler.py`) already glows blue-purple — it was converted in the previous spec. Now, a second module highlights: `user_model.py`. A small prompt icon materializes beside it. It glows. Then a third: `payment_processor.py`. Then `api_routes.py`. One by one, modules light up.
 
-By the end of the shot, roughly 6-7 of the 12-15 modules are glowing. The migration is not complete — and that's the point. The visual communicates gradual, risk-free, one-module-at-a-time adoption. No big bang.
+The glow spreads organically — not left-to-right or top-to-bottom, but scattered across the grid, the way a real team would adopt PDD: starting with the modules they understand best, the ones with good test coverage, the natural starting points.
 
-A small percentage counter in the corner ticks up: "15% → 25% → 40% → 50%" as modules light up.
+By the end, roughly 8 of the 20 modules glow. The rest remain gray. This is intentional — no big bang. The partial glow says: "You don't have to convert everything. Start where it makes sense."
+
+A counter in the corner tracks: "3/20 modules → 5/20 → 8/20 migrated"
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
 
 ### Chart/Visual Elements
 
-#### Module Network Graph
-- 14 module nodes arranged in organic cluster layout
-- Node size: 90x55px rounded rectangles
-- Node background: `#1E293B` at 0.6 (unmigrated), `#111827` at 0.9 with `#60A5FA` glow (migrated)
-- Node border: 1px `#334155` at 0.3 (unmigrated), 1px `#60A5FA` at 0.4 (migrated)
-- Node labels: JetBrains Mono, 8px, `#94A3B8` at 0.5 (file names, truncated)
-- Migrated node glow: 10px blur, `#60A5FA` at 0.1
-- Prompt icon (migrated): small 8x10px blue rectangle beside each migrated node, `#60A5FA` at 0.5
+#### Module Grid
+- 5 columns × 4 rows = 20 modules
+- Each module: rounded rectangle, 240x90px
+- Grid spacing: 30px horizontal, 20px vertical
+- Grid centered at (960, 480)
+- Default state: `#1E1E2E` fill, `#334155` 1px border, `#8B949E` filename at 0.5
+- Converted state: `#1E1E2E` fill, `#8B5CF6` 2px border, `#8B5CF6` glow 10px at 0.1, filename in `#E2E8F0`
 
-#### Dependency Lines
-- Connecting lines between related modules
-- Unmigrated: 1px, `#334155` at 0.15
-- Migrated (both endpoints): 1px, `#60A5FA` at 0.2
-- Mixed (one migrated, one not): 1px, `#334155` at 0.1 with dashed pattern
+#### Module Labels (filenames)
+- Inter, 11px, centered in each rectangle
+- Default: `#8B949E` at 0.5
+- Converted: `#E2E8F0` at 0.9
 
-#### Pre-migrated Modules (frame 0)
-- `auth_handler.py` at (400, 350) — already glowing
-- `payment_processor.py` at (600, 420) — already glowing
+#### Module Names (order of conversion)
+| Order | Module | Grid Position (col, row) |
+|-------|--------|------------------------|
+| 1 (pre-converted) | auth_handler.py | (2, 1) |
+| 2 | user_model.py | (4, 0) |
+| 3 | payment_processor.py | (1, 2) |
+| 4 | api_routes.py | (3, 3) |
+| 5 | email_service.py | (0, 1) |
+| 6 | config_loader.py | (4, 3) |
+| 7 | search_index.py | (2, 0) |
+| 8 | notification_hub.py | (0, 3) |
 
-#### Modules that migrate during animation
-- `user_service.py` at (820, 310) — migrates at frame 20
-- `config.py` at (350, 550) — migrates at frame 45
-- `db_connector.py` at (650, 580) — migrates at frame 65
-- `email_sender.py` at (1050, 400) — migrates at frame 85
-- `cache_layer.py` at (900, 550) — migrates at frame 105
+Remaining 12 modules stay gray: `db_connection.py`, `cache_manager.py`, `logger.py`, `middleware.py`, `rate_limiter.py`, `session_store.py`, `file_upload.py`, `webhook_handler.py`, `scheduler.py`, `analytics.py`, `admin_panel.py`, `test_runner.py`
 
-#### Remaining Unmigrated
-- `legacy_router.py` at (1200, 320)
-- `reporting.py` at (1100, 560)
-- `webhook_handler.py` at (500, 200)
-- `session_manager.py` at (750, 180)
-- `rate_limiter.py` at (1000, 220)
-- `notification_service.py` at (1250, 480)
-- `data_exporter.py` at (850, 680)
+#### Prompt Icon (per converted module)
+- Small document icon: 12x16px, `#8B5CF6` at 0.6
+- Appears to the right of the module rectangle after conversion
+- Subtle particle trail during materialization
 
 #### Migration Counter
-- Position: (1740, 100)
-- Format: "NN% prompt-driven" — Inter, 16px, bold (700), `#60A5FA` at 0.6
-- Ticks: 15% → 22% → 29% → 36% → 43% → 50%
-- Backdrop: rounded rect, `#111827` at 0.5, 8px padding
+- Position: top-right corner, x: 1680, y: 80
+- Format: "N/20 migrated" — Inter, 16px, semi-bold
+- Number: `#8B5CF6`, "/20 migrated": `#64748B` at 0.6
+- Updates as each module converts
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Full network visible. Auth_handler and payment_processor already glowing. Counter shows "15%".
-2. **Frame 20-35 (0.67-1.17s):** `user_service.py` flashes and migrates. Glow appears. Counter ticks to "22%". Dependency line to auth_handler turns blue.
-3. **Frame 45-60 (1.5-2s):** `config.py` migrates. Counter: "29%".
-4. **Frame 65-80 (2.17-2.67s):** `db_connector.py` migrates. Counter: "36%". Cluster of blue grows.
-5. **Frame 85-100 (2.83-3.33s):** `email_sender.py` migrates. Counter: "43%".
-6. **Frame 105-120 (3.5-4s):** `cache_layer.py` migrates. Counter: "50%". The blue zone now dominates the left-center.
-7. **Frame 120-180 (4-6s):** Hold. Migrated modules pulse gently in unison. Unmigrated modules remain gray and still. The contrast is clear.
+1. **Frame 0-30 (0-1s):** Module grid fades in. `auth_handler.py` already glows (pre-converted). Counter shows "1/20 migrated".
+2. **Frame 30-70 (1-2.33s):** `user_model.py` highlights — border transitions from gray to purple, glow blooms. Prompt icon materializes. Counter: "2/20".
+3. **Frame 70-110 (2.33-3.67s):** `payment_processor.py` converts. Counter: "3/20".
+4. **Frame 110-150 (3.67-5s):** `api_routes.py` converts. Counter: "4/20".
+5. **Frame 150-190 (5-6.33s):** `email_service.py` and `config_loader.py` convert in quicker succession. Counter: "5/20" → "6/20".
+6. **Frame 190-230 (6.33-7.67s):** `search_index.py` and `notification_hub.py` convert. Counter: "7/20" → "8/20". Pace accelerating — momentum building.
+7. **Frame 230-280 (7.67-9.33s):** Hold. 8 modules glowing, 12 gray. The partial adoption is the visual argument. Glowing modules pulse gently in sync.
+8. **Frame 280-330 (9.33-11s):** Camera subtly zooms out 5% to show the full grid. The pattern of scattered blue-purple among gray is organic, not forced. Hold.
 
 ### Typography
-- Module labels: JetBrains Mono, 8px, `#94A3B8` at 0.5
-- Migration counter: Inter, 16px, bold (700), `#60A5FA` at 0.6
-- Counter label: Inter, 11px, `#94A3B8` at 0.4
+- Module filenames: Inter, 11px, centered
+- Migration counter number: Inter, 16px, semi-bold (600), `#8B5CF6`
+- Migration counter suffix: Inter, 16px, `#64748B` at 0.6
 
 ### Easing
-- Module migration flash: `easeOut(cubic)` over 10 frames
-- Glow appear: `easeOut(quad)` over 10 frames
-- Dependency line color shift: `easeInOut(quad)` over 15 frames
-- Counter tick: `easeOut(quad)` with number interpolation
-- Hold pulse: `easeInOut(sine)` on 40-frame cycle
+- Grid fade-in: `easeOut(quad)` over 30 frames
+- Module conversion (border + glow): `easeOut(cubic)` over 20 frames per module
+- Prompt icon materialize: `easeOut(back)` over 15 frames
+- Counter update: `easeOut(quad)` number morph over 10 frames
+- Modules 5-8 accelerate: 30-frame gap → 20-frame gap between conversions
+- Final zoom-out: `easeInOut(quad)` over 30 frames
+- Synchronized pulse: `easeInOut(sine)` on 50-frame cycle
 
 ## Narration Sync
-> "Just a gradual migration of where value lives — from code to specification."
+> "One module at a time. No big bang. No rewrite. Just a gradual migration of where value lives — from code to specification."
 
 Segment: `where_to_start_002`
 
-- **0:20** ("Just a gradual migration"): Modules begin lighting up one by one
-- **0:22** ("where value lives"): Migration counter climbing, blue zone spreading
-- **0:25** ("from code to specification"): Hold at 50% — the visual makes it clear this is an ongoing process, not a completed one
+- **0:15** (15.46s): Module grid appears — "One module at a time"
+- **0:17** (17.00s): Second and third modules converting — "No big bang"
+- **0:19** (19.00s): More modules lighting up — "No rewrite"
+- **0:22** (22.00s): 8/20 glowing, hold — "a gradual migration of where value lives"
+- **0:25** (25.00s): Zoomed-out view — "from code to specification"
+- **0:26** (26.24s): Segment ends
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={180}>
+<Sequence from={0} durationInFrames={330}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Dependency lines (rendered first, below nodes) */}
-    <DependencyGraph
-      edges={edges}
-      migratedNodes={migratedSet}
-      unmigColor="#334155"
-      migColor="#60A5FA"
-      mixedDash={true}
-    />
 
-    {/* Module nodes */}
-    {modules.map((mod) => (
-      <ModuleNode
-        key={mod.name}
-        name={mod.name}
-        x={mod.x} y={mod.y}
-        width={90} height={55}
-        migrated={mod.migratedAt !== null}
-        migrateAtFrame={mod.migratedAt}
-        unmigBg="#1E293B"
-        migBg="#111827"
-        glowColor="#60A5FA"
-        glowBlur={10}
-        labelFont="JetBrains Mono"
-        labelSize={8}
-      />
+    {/* Module grid */}
+    <Sequence from={0}>
+      <FadeIn duration={30}>
+        <ModuleGrid
+          cols={5} rows={4}
+          cellWidth={240} cellHeight={90}
+          spacingX={30} spacingY={20}
+          center={[960, 480]}
+          modules={allModules}
+          defaultBorder="#334155" defaultFill="#1E1E2E"
+        />
+      </FadeIn>
+    </Sequence>
+
+    {/* Progressive module conversions */}
+    {conversionSequence.map((conversion, i) => (
+      <Sequence key={i} from={conversion.startFrame}>
+        <ModuleConvert
+          moduleId={conversion.id}
+          borderColor="#8B5CF6" glowColor="#8B5CF6"
+          glowRadius={10} glowOpacity={0.1}
+          convertDuration={20}
+          easing="easeOutCubic"
+        />
+        <Sequence from={10}>
+          <PromptIcon
+            position={conversion.iconPosition}
+            color="#8B5CF6" opacity={0.6}
+            size={[12, 16]}
+            fadeIn={15} easing="easeOut(back)"
+          />
+        </Sequence>
+      </Sequence>
     ))}
 
     {/* Migration counter */}
     <Sequence from={0}>
       <MigrationCounter
-        x={1740} y={100}
-        steps={[
-          { frame: 0, value: 15 },
-          { frame: 35, value: 22 },
-          { frame: 60, value: 29 },
-          { frame: 80, value: 36 },
-          { frame: 100, value: 43 },
-          { frame: 120, value: 50 }
-        ]}
-        suffix="% prompt-driven"
-        color="#60A5FA"
-        bgColor="#111827"
+        x={1680} y={80} total={20}
+        schedule={counterSchedule}
+        numberColor="#8B5CF6" numberSize={16} numberWeight={600}
+        suffixColor="#64748B" suffixOpacity={0.6}
+        font="Inter"
       />
     </Sequence>
+
+    {/* Synchronized pulse on converted modules */}
+    <Sequence from={230}>
+      <PulseGroup
+        targets={convertedModuleIds}
+        color="#8B5CF6" opacity={0.1}
+        cycleFrames={50} easing="easeInOut(sine)"
+      />
+    </Sequence>
+
+    {/* Final zoom out */}
+    <Sequence from={280}>
+      <ZoomOut startScale={1.0} endScale={0.95}
+        duration={30} easing="easeInOut(quad)" />
+    </Sequence>
+
   </AbsoluteFill>
 </Sequence>
 ```
@@ -151,31 +173,24 @@ Segment: `where_to_start_002`
 ## Data Points JSON
 ```json
 {
-  "type": "network_graph",
-  "chartId": "module_glow_spread",
-  "totalModules": 14,
-  "migrationSequence": [
-    { "name": "auth_handler.py", "frame": 0, "position": [400, 350] },
-    { "name": "payment_processor.py", "frame": 0, "position": [600, 420] },
-    { "name": "user_service.py", "frame": 20, "position": [820, 310] },
-    { "name": "config.py", "frame": 45, "position": [350, 550] },
-    { "name": "db_connector.py", "frame": 65, "position": [650, 580] },
-    { "name": "email_sender.py", "frame": 85, "position": [1050, 400] },
-    { "name": "cache_layer.py", "frame": 105, "position": [900, 550] }
+  "type": "progressive_migration",
+  "grid": { "cols": 5, "rows": 4, "totalModules": 20 },
+  "conversionOrder": [
+    { "id": "auth_handler", "label": "auth_handler.py", "col": 2, "row": 1, "frame": 0, "preConverted": true },
+    { "id": "user_model", "label": "user_model.py", "col": 4, "row": 0, "frame": 30 },
+    { "id": "payment_processor", "label": "payment_processor.py", "col": 1, "row": 2, "frame": 70 },
+    { "id": "api_routes", "label": "api_routes.py", "col": 3, "row": 3, "frame": 110 },
+    { "id": "email_service", "label": "email_service.py", "col": 0, "row": 1, "frame": 150 },
+    { "id": "config_loader", "label": "config_loader.py", "col": 4, "row": 3, "frame": 170 },
+    { "id": "search_index", "label": "search_index.py", "col": 2, "row": 0, "frame": 190 },
+    { "id": "notification_hub", "label": "notification_hub.py", "col": 0, "row": 3, "frame": 210 }
   ],
-  "unmigrated": [
-    "legacy_router.py", "reporting.py", "webhook_handler.py",
-    "session_manager.py", "rate_limiter.py", "notification_service.py",
-    "data_exporter.py"
+  "unconverted": [
+    "db_connection.py", "cache_manager.py", "logger.py", "middleware.py",
+    "rate_limiter.py", "session_store.py", "file_upload.py", "webhook_handler.py",
+    "scheduler.py", "analytics.py", "admin_panel.py", "test_runner.py"
   ],
-  "counterSteps": [15, 22, 29, 36, 43, 50],
-  "colors": {
-    "migrated": "#60A5FA",
-    "unmigrated": "#1E293B",
-    "dependency_migrated": "#60A5FA",
-    "dependency_unmigrated": "#334155"
-  },
-  "backgroundColor": "#0A0F1A",
+  "counterSteps": [1, 2, 3, 4, 5, 6, 7, 8],
   "narrationSegments": ["where_to_start_002"]
 }
 ```

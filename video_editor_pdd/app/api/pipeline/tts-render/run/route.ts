@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
+import { resolvePythonRunSpec } from "@/app/api/pipeline/_lib/python-runtime";
 import { createSseStream } from "@/lib/sse";
 import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
 import type { SseSend } from "@/lib/types";
@@ -45,15 +46,17 @@ async function runRenderProcess(
   segments: string[] | undefined,
   onLog: (line: string) => void
 ): Promise<void> {
+  const python = resolvePythonRunSpec({ preferredCondaEnv: "video_editor" });
   const args = [
+    ...python.argsPrefix,
     path.join(getAppScriptsDir(), "render_tts.py"),
     ...(segments ?? []).flatMap((s) => ["--segment", s]),
   ];
 
-  const proc = spawn("python3", args, {
+  const proc = spawn(python.command, args, {
     cwd: getProjectDir(),
     env: {
-      ...process.env,
+      ...python.env,
       // Prefer Qwen when it works, but allow the script to fall back to Edge TTS
       // so downstream audio-sync still receives real WAV files in local dev/test envs.
       RENDER_TTS_ALLOW_EDGE_FALLBACK:

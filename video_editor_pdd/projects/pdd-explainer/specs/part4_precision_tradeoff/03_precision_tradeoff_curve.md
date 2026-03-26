@@ -3,180 +3,178 @@
 # Section 4.3: Precision Tradeoff Curve — Tests vs Prompt Precision
 
 **Tool:** Remotion
-**Duration:** ~20s (601 frames @ 30fps)
-**Timestamp:** 0:27 - 0:47
+**Duration:** ~17s (510 frames @ 30fps)
+**Timestamp:** 0:30 - 0:47
 
 ## Visual Description
 
-A clean animated graph that forms the conceptual core of this section. The graph appears with a brief "This maps directly to PDD" text flash, then the inverse curve draws.
+An animated graph that reveals the core insight of the section: an inverse relationship between the number of tests and the required prompt precision.
 
-**X-axis:** "Number of Tests" (0 to 50+)
-**Y-axis:** "Required Prompt Precision" (low to high)
+The graph appears cleanly. X-axis: "Number of Tests" (0 to 100). Y-axis: "Required Prompt Precision" (0% to 100%). An inverse curve draws from top-left to bottom-right — a steep descent that flattens into a long tail.
 
-An inverse/hyperbolic curve forms — starting high on the left (few tests = high prompt precision needed) and dropping toward the right (many tests = low prompt precision needed). The curve follows a 1/x shape.
+A glowing dot animates along the curve. At the LEFT (few tests), the dot is high — the prompt must be extremely detailed. A callout appears: "Few tests → detailed prompt required." A mini prompt document icon appears, dense with text lines.
 
-After the curve draws, an animated dot travels along it. At the left extreme (few tests), a dense 50-line prompt document appears as a pop-out annotation. The dot moves right, and at the right extreme (many tests), a minimal 10-line prompt appears — but surrounded by a constellation of test wall icons. A terminal annotation shows `pdd test parser` with 47 tests passing.
+The dot then slides RIGHT along the curve (many tests). As it descends, the callout changes: "Many tests → minimal prompt sufficient." A mini prompt document shrinks to just a few lines, while test icons multiply around it.
 
-The two scenarios are visually contrasted: heavy prompt vs heavy tests, both producing the same result.
+The key visual: the area ABOVE the curve represents "work the prompt must do" and the area BELOW represents "work the tests handle." As the dot moves right, the prompt's burden visually shrinks.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Blueprint grid: 40px spacing, `#1E293B` at 0.03
+- Grid lines: `#1E293B` at 0.05, 60px spacing
 
 ### Chart/Visual Elements
 
-#### Intro Text
-- "This maps directly to PDD." — Inter, 32px, bold, `#E2E8F0` at 0.8, centered at (960, 540)
-- Fades in and out quickly before graph appears
-
-#### Graph Axes
-- X-axis: horizontal line at y: 800, from x: 200 to x: 1720, `#334155` at 0.4, 2px
-- Y-axis: vertical line at x: 200, from y: 200 to y: 800, `#334155` at 0.4, 2px
-- X-label: "Number of Tests →" — Inter, 14px, `#94A3B8` at 0.6, at (960, 860)
-- Y-label: "Required Prompt Precision →" — Inter, 14px, `#94A3B8` at 0.6, rotated -90° at (140, 500)
-- X tick marks: 0, 10, 20, 30, 40, 50+ — Inter, 11px, `#64748B` at 0.4
-- Y tick marks: Low, Medium, High — Inter, 11px, `#64748B` at 0.4
+#### Axes
+- X-axis: from (200, 850) to (1720, 850), `#475569` 2px
+  - Label: "Number of Tests" — Inter, 14px, `#94A3B8`, centered below at y: 900
+  - Tick marks at 0, 20, 40, 60, 80, 100 — `#475569` 1px, 8px tall
+  - Tick labels: Inter, 11px, `#64748B`
+- Y-axis: from (200, 850) to (200, 150), `#475569` 2px
+  - Label: "Required Prompt Precision" — Inter, 14px, `#94A3B8`, rotated -90°, x: 100
+  - Tick marks at 0%, 25%, 50%, 75%, 100% — `#475569` 1px, 8px wide
+  - Tick labels: Inter, 11px, `#64748B`
 
 #### Inverse Curve
-- Path: hyperbolic curve from (220, 240) to (1700, 760), stroke `#2DD4BF` at 0.8, 3px
-- Fill below curve: gradient from `#2DD4BF` at 0.05 to transparent
-- Curve equation approximation: y = 240 + 520 * (1 / (1 + 0.08 * x))
+- Path: exponential decay from (200, 200) to (1720, 780)
+  - Data: `y = 200 + 600 * e^(-0.04 * x)` mapped to pixel space
+- Stroke: `#A78BFA` (purple), 3px, solid
+- Glow: `#A78BFA` at 0.15, 6px radius
+
+#### Shaded Regions
+- Above curve (prompt burden): `#F59E0B` at 0.06, fill to top
+- Below curve (test coverage): `#2DD4BF` at 0.06, fill to bottom
+- Region labels:
+  - "Prompt does the work" — Inter, 12px, `#F59E0B` at 0.4, positioned in upper-left area
+  - "Tests do the work" — Inter, 12px, `#2DD4BF` at 0.4, positioned in lower-right area
 
 #### Animated Dot
-- Circle, 10px radius, `#2DD4BF` at 1.0, with glow `#2DD4BF` at 0.3, 15px radius
-- Travels along curve path from left to right
+- Circle: 8px radius, `#E2E8F0`, solid fill
+- Glow: `#A78BFA` at 0.3, 12px radius
+- Moves along curve from left to right
 
-#### Left Annotation (Few Tests)
-- Position: pop-out anchored at curve point (280, 280)
-- Dense prompt document: 300×200px, bg `#0F1E1E`, border `#2DD4BF` at 0.3, rounded 6px
-- Content: ~12 visible lines of dense text (simulated), Inter, 8px, `#2DD4BF` at 0.4
-- File label: "`parser_v1.prompt` — 50 lines" — JetBrains Mono, 10px, `#2DD4BF` at 0.6
-- Connector line: dashed, from curve point to annotation, `#2DD4BF` at 0.15
-
-#### Right Annotation (Many Tests)
-- Position: pop-out anchored at curve point (1500, 720)
-- Minimal prompt document: 200×80px, bg `#0F1E1E`, border `#2DD4BF` at 0.3, rounded 6px
-- Content: ~4 visible lines of text, Inter, 8px, `#2DD4BF` at 0.4
-- File label: "`parser_v2.prompt` — 10 lines" — JetBrains Mono, 10px, `#2DD4BF` at 0.6
-- Test wall icons: 12 small wall icons (8×16px each), `#D9944A` at 0.5, arranged in arc around prompt
-- Terminal: small terminal block (250×60px), bg `#1E1E2E`, showing `pdd test parser` → "47 tests passing ✓", JetBrains Mono, 9px, `#4ADE80` at 0.6
-- Connector line: dashed, from curve point to annotation, `#2DD4BF` at 0.15
+#### Callout Boxes
+- Left callout (few tests): rounded rect, `#1E1E2E` bg, `#F59E0B` border at 0.3
+  - "Few tests → detailed prompt" — Inter, 12px, `#F59E0B`
+  - Mini prompt icon: 5 text lines (dense), `#F59E0B` at 0.4
+- Right callout (many tests): rounded rect, `#1E1E2E` bg, `#2DD4BF` border at 0.3
+  - "Many tests → minimal prompt" — Inter, 12px, `#2DD4BF`
+  - Mini prompt icon: 2 text lines (sparse), `#2DD4BF` at 0.4
+  - Surrounding test icons: 6 small check marks, `#2DD4BF` at 0.3
 
 ### Animation Sequence
-1. **Frame 0-45 (0-1.5s):** "This maps directly to PDD." fades in, holds, fades out.
-2. **Frame 45-90 (1.5-3s):** Axes draw in. X and Y labels appear. Tick marks fade in.
-3. **Frame 90-180 (3-6s):** Inverse curve draws from left to right with stroke-dashoffset animation. Subtle fill gradient below curve fades in.
-4. **Frame 180-300 (6-10s):** Animated dot appears at far left of curve. Left annotation (dense 50-line prompt) pops out. Dot holds briefly. Narration: "With few tests, your prompt needs to specify everything."
-5. **Frame 300-450 (10-15s):** Dot travels along curve toward the right. As it moves, left annotation fades. Right annotation (minimal prompt + test walls + terminal) pops out. Narration: "With many tests, the prompt only needs to specify intent."
-6. **Frame 450-540 (15-18s):** Both annotations visible at reduced opacity. The curve pulses to emphasize the relationship.
-7. **Frame 540-601 (18-20s):** Hold. Dot rests at right end. Test walls glow gently.
+1. **Frame 0-30 (0-1s):** Axes draw in. Grid visible. Labels appear.
+2. **Frame 30-90 (1-3s):** Inverse curve draws from left to right. Glow follows the drawing edge.
+3. **Frame 90-150 (3-5s):** Shaded regions fill in — amber above, teal below. Region labels fade in.
+4. **Frame 150-210 (5-7s):** Dot appears at top-left of curve. Left callout box appears with "Few tests → detailed prompt" and dense prompt icon.
+5. **Frame 210-330 (7-11s):** Dot slides along curve toward the right. Left callout fades. The dot descends as it moves right.
+6. **Frame 330-420 (11-14s):** Dot reaches lower-right region. Right callout appears: "Many tests → minimal prompt" with sparse prompt icon and test check marks.
+7. **Frame 420-510 (14-17s):** Hold. The visual contrast is clear: prompt burden shrank, test coverage grew.
 
 ### Typography
-- Intro text: Inter, 32px, bold (700), `#E2E8F0` at 0.8
-- Axis labels: Inter, 14px, semi-bold (600), `#94A3B8` at 0.6
-- Tick labels: Inter, 11px, `#64748B` at 0.4
-- File labels: JetBrains Mono, 10px, `#2DD4BF` at 0.6
-- Prompt content: Inter, 8px, `#2DD4BF` at 0.4
-- Terminal text: JetBrains Mono, 9px, `#4ADE80` at 0.6
+- Axis labels: Inter, 14px, `#94A3B8`
+- Tick labels: Inter, 11px, `#64748B`
+- Region labels: Inter, 12px, respective colors at 0.4
+- Callout text: Inter, 12px, respective colors
 
 ### Easing
-- Intro text fade: `easeInOut(quad)` over 15 frames
-- Axis draw: `easeOut(cubic)` over 30 frames
-- Curve draw: `easeInOut(cubic)` over 90 frames
-- Dot travel: `easeInOut(quad)` over 150 frames
-- Annotation pop-out: `easeOut(back)` over 20 frames (slight spring)
-- Annotation fade-out: `easeOut(quad)` over 15 frames
-- Curve pulse: `easeInOut(sine)` on 40-frame cycle
-- Test wall glow: `easeInOut(sine)` on 30-frame cycle
+- Axis draw: `easeOut(quad)` over 30 frames
+- Curve draw: `easeInOut(cubic)` over 60 frames
+- Region fill: `easeOut(quad)` over 30 frames
+- Dot movement: `easeInOut(cubic)` over 120 frames
+- Callout appear: `easeOut(quad)` over 20 frames
+- Callout fade: `easeIn(quad)` over 15 frames
 
 ## Narration Sync
-> "This maps directly to PDD."
-> "With few tests, your prompt needs to specify everything. Edge cases. Error handling. Exact behavior in every situation."
-> "On... With many tests, the prompt only needs to specify intent. The tests handle the constraints."
+> "With few tests, your prompt must specify everything. Architecture, edge cases, error handling — all of it."
+> "With many tests, the prompt only needs to specify intent. The tests handle the constraints."
 
-Segments: `part4_precision_tradeoff_004`, `part4_precision_tradeoff_005`, `part4_precision_tradeoff_006`
+Segments: `part4_precision_tradeoff_005`, `part4_precision_tradeoff_006`
 
-- **0:27** ("This maps directly"): Intro text flash
-- **0:30** ("With few tests"): Dot at left end, dense prompt annotation visible
-- **0:35** ("Edge cases"): Dot beginning to move right
-- **0:40** ("With many tests"): Dot arriving at right end, minimal prompt + tests visible
-- **0:45** ("tests handle the constraints"): Both annotations visible, curve pulsing
+- **30.10s** (seg 005): Graph axes appear, curve begins drawing
+- **33s**: Dot at top-left, "few tests" callout visible
+- **39.80s** (seg 005 ends): Dot moving along curve
+- **40.10s** (seg 006): Dot descending toward right
+- **47.00s** (seg 006 ends): Dot at bottom-right, "many tests" callout visible
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={601}>
+<Sequence from={0} durationInFrames={510}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <BlueprintGrid spacing={40} color="#1E293B" opacity={0.03} />
-
-    {/* Intro text */}
-    <Sequence from={0} durationInFrames={45}>
-      <FadeInOut fadeIn={15} fadeOut={15} hold={15}>
-        <Text text="This maps directly to PDD." font="Inter" size={32}
-          weight={700} color="#E2E8F0" opacity={0.8}
-          x={960} y={540} align="center" />
-      </FadeInOut>
-    </Sequence>
+    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
     {/* Axes */}
-    <Sequence from={45}>
-      <StrokeDraw duration={30}>
-        <Axis orientation="horizontal" from={[200, 800]} to={[1720, 800]}
-          color="#334155" opacity={0.4} width={2}
-          label="Number of Tests →" labelFont="Inter" labelSize={14} />
-        <Axis orientation="vertical" from={[200, 800]} to={[200, 200]}
-          color="#334155" opacity={0.4} width={2}
-          label="Required Prompt Precision →" labelFont="Inter" labelSize={14} />
-      </StrokeDraw>
-      <Sequence from={20}>
-        <FadeIn duration={15}>
-          <TickMarks axis="x" values={["0", "10", "20", "30", "40", "50+"]}
-            font="Inter" size={11} color="#64748B" />
-          <TickMarks axis="y" values={["Low", "Medium", "High"]}
-            font="Inter" size={11} color="#64748B" />
-        </FadeIn>
-      </Sequence>
+    <Sequence from={0}>
+      <DrawLine from={[200, 850]} to={[1720, 850]}
+        color="#475569" width={2} drawDuration={30} />
+      <DrawLine from={[200, 850]} to={[200, 150]}
+        color="#475569" width={2} drawDuration={30} />
+      <AxisLabels
+        xLabel="Number of Tests" yLabel="Required Prompt Precision"
+        xTicks={[0, 20, 40, 60, 80, 100]}
+        yTicks={["0%", "25%", "50%", "75%", "100%"]}
+        font="Inter" labelSize={14} tickSize={11}
+        labelColor="#94A3B8" tickColor="#64748B" />
     </Sequence>
 
     {/* Inverse curve */}
-    <Sequence from={90}>
-      <StrokeDraw duration={90}>
-        <CurvePath d={INVERSE_CURVE_PATH} stroke="#2DD4BF" strokeWidth={3} opacity={0.8} />
-      </StrokeDraw>
-      <Sequence from={60}>
-        <FadeIn duration={30}>
-          <CurveFill d={INVERSE_CURVE_PATH} fill="#2DD4BF" opacity={0.05}
-            gradient="toBottom" />
-        </FadeIn>
-      </Sequence>
+    <Sequence from={30}>
+      <AnimatedCurve
+        fn={(x) => 200 + 600 * Math.exp(-0.04 * x)}
+        xRange={[0, 100]} mapToPixel={[200, 1720, 850, 150]}
+        color="#A78BFA" width={3}
+        glowColor="#A78BFA" glowOpacity={0.15} glowRadius={6}
+        drawDuration={60} />
     </Sequence>
 
-    {/* Animated dot with annotations */}
-    <Sequence from={180}>
-      <AnimatedDot path={INVERSE_CURVE_PATH} travelDuration={150}
-        startFrame={0} radius={10} color="#2DD4BF"
-        glow="#2DD4BF" glowRadius={15} glowOpacity={0.3}>
-        {/* Left annotation — dense prompt */}
-        <Annotation anchor="left" fadeIn={20} fadeOut={15}
-          visibleFrom={0} visibleUntil={200}>
-          <PromptDocument width={300} height={200} bg="#0F1E1E"
-            border="#2DD4BF" lines={12}
-            fileLabel="parser_v1.prompt — 50 lines" />
-        </Annotation>
-        {/* Right annotation — minimal prompt + tests */}
-        <Annotation anchor="right" fadeIn={20}
-          visibleFrom={120}>
-          <PromptDocument width={200} height={80} bg="#0F1E1E"
-            border="#2DD4BF" lines={4}
-            fileLabel="parser_v2.prompt — 10 lines" />
-          <TestWallIcons count={12} color="#D9944A" arrangement="arc" />
-          <TerminalBlock width={250} height={60}
-            command="pdd test parser" output="47 tests passing ✓"
-            outputColor="#4ADE80" />
-        </Annotation>
-      </AnimatedDot>
+    {/* Shaded regions */}
+    <Sequence from={90}>
+      <FadeIn duration={30}>
+        <FillArea above curve="#A78BFA" color="#F59E0B" opacity={0.06} />
+        <FillArea below curve="#A78BFA" color="#2DD4BF" opacity={0.06} />
+        <Text text="Prompt does the work" font="Inter" size={12}
+          color="#F59E0B" opacity={0.4} x={500} y={300} />
+        <Text text="Tests do the work" font="Inter" size={12}
+          color="#2DD4BF" opacity={0.4} x={1300} y={700} />
+      </FadeIn>
+    </Sequence>
+
+    {/* Animated dot along curve */}
+    <Sequence from={150}>
+      <CurveDot
+        fn={(x) => 200 + 600 * Math.exp(-0.04 * x)}
+        xRange={[0, 100]} mapToPixel={[200, 1720, 850, 150]}
+        radius={8} color="#E2E8F0"
+        glowColor="#A78BFA" glowOpacity={0.3} glowRadius={12}
+        startX={0} endX={100} duration={180}
+        startFrame={0} moveFrame={60} />
+    </Sequence>
+
+    {/* Left callout — few tests */}
+    <Sequence from={150}>
+      <FadeIn duration={20}>
+        <CalloutBox x={450} y={220}
+          bg="#1E1E2E" border="#F59E0B" borderOpacity={0.3}>
+          <Text text="Few tests → detailed prompt" font="Inter" size={12}
+            color="#F59E0B" />
+          <PromptIcon lines={5} color="#F59E0B" opacity={0.4} />
+        </CalloutBox>
+      </FadeIn>
+    </Sequence>
+
+    {/* Right callout — many tests */}
+    <Sequence from={330}>
+      <FadeIn duration={20}>
+        <CalloutBox x={1350} y={600}
+          bg="#1E1E2E" border="#2DD4BF" borderOpacity={0.3}>
+          <Text text="Many tests → minimal prompt" font="Inter" size={12}
+            color="#2DD4BF" />
+          <PromptIcon lines={2} color="#2DD4BF" opacity={0.4} />
+          <TestCheckmarks count={6} color="#2DD4BF" opacity={0.3} />
+        </CalloutBox>
+      </FadeIn>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -186,32 +184,26 @@ Segments: `part4_precision_tradeoff_004`, `part4_precision_tradeoff_005`, `part4
 ```json
 {
   "type": "animated_chart",
-  "chartId": "precision_tradeoff_curve",
+  "chartType": "inverse_curve",
   "axes": {
-    "x": { "label": "Number of Tests", "range": [0, 50], "ticks": ["0", "10", "20", "30", "40", "50+"] },
-    "y": { "label": "Required Prompt Precision", "range": ["Low", "High"], "ticks": ["Low", "Medium", "High"] }
+    "x": { "label": "Number of Tests", "range": [0, 100], "unit": "count" },
+    "y": { "label": "Required Prompt Precision", "range": [0, 100], "unit": "percent" }
   },
   "curve": {
-    "type": "inverse_hyperbolic",
-    "color": "#2DD4BF",
-    "strokeWidth": 3
+    "function": "y = 200 + 600 * exp(-0.04 * x)",
+    "color": "#A78BFA",
+    "interpretation": "inverse_relationship"
   },
-  "annotations": {
-    "left": {
-      "label": "parser_v1.prompt — 50 lines",
-      "description": "Dense prompt, few tests",
-      "position": "high_precision"
-    },
-    "right": {
-      "label": "parser_v2.prompt — 10 lines",
-      "description": "Minimal prompt, 47 tests",
-      "testCount": 47,
-      "position": "low_precision"
-    }
-  },
-  "introText": "This maps directly to PDD.",
+  "regions": [
+    { "position": "above_curve", "label": "Prompt does the work", "color": "#F59E0B" },
+    { "position": "below_curve", "label": "Tests do the work", "color": "#2DD4BF" }
+  ],
+  "callouts": [
+    { "position": "left", "label": "Few tests → detailed prompt", "promptLines": 5 },
+    { "position": "right", "label": "Many tests → minimal prompt", "promptLines": 2, "testCount": 6 }
+  ],
   "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["part4_precision_tradeoff_004", "part4_precision_tradeoff_005", "part4_precision_tradeoff_006"]
+  "narrationSegments": ["part4_precision_tradeoff_005", "part4_precision_tradeoff_006"]
 }
 ```
 

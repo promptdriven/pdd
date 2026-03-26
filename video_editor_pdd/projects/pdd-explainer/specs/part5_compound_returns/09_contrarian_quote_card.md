@@ -1,159 +1,138 @@
 [title:]
 
-# Section 5.9: Contrarian Quote Card — "Way of the Future"
+# Section 5.9: Contrarian Quote Card — "The Way of the Future"
 
 **Tool:** Title
-**Duration:** ~18s (540 frames @ 30fps)
+**Duration:** ~18s
 **Timestamp:** 1:33 - 1:51
 
 ## Visual Description
+A clean, elegant quote card fills the screen. The quote appears in large serif-style typography against a dark background, with the attribution below in smaller sans-serif. The design is intentionally restrained — no charts, no animations beyond the text appearing. It lets the words carry the weight.
 
-A clean, impactful quote card. Against a deep navy-black background, the quote appears in elegant, large typography — centered, balanced, breathing. The quote is set in a slightly warm white, with the attribution below in a muted, smaller font.
+The quote: *"This is either the way of the future or it's going to crash and burn spectacularly."*
 
-> "This is either the way of the future or it's going to crash and burn spectacularly."
-> — Research engineer, after seeing PDD for the first time
+The attribution: *— Research engineer, after seeing PDD for the first time*
 
-The design is minimal — no charts, no data, no imagery. Just the words. The contrast with the dense data visuals that preceded it creates impact through negative space. The quote acknowledges the contrarian nature of PDD while leaning into the bet.
-
-A subtle vertical line or thin border accent in `#4A90D9` (the blue from the generate line) anchors the quote, connecting it visually to the economics argument.
+The card has a subtle warm border accent on the left side — a vertical line in amber that gives it the feel of an editorial pull-quote. A faint quotation mark watermark sits behind the text at large scale.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none — intentionally clean
+- No grid lines
 
 ### Chart/Visual Elements
 
-#### Quote Text
-- Line 1: "This is either the way of the future"
-  - Inter, 32px, regular (400), `#E2E8F0` at 0.95
-- Line 2: "or it's going to crash and burn"
-  - Inter, 32px, regular (400), `#E2E8F0` at 0.95
-- Line 3: "spectacularly."
-  - Inter, 32px, bold (700), `#E2E8F0` at 1.0
-  - The word "spectacularly" is slightly emphasized — bolder weight
-- Line spacing: 48px
-- Centered at (960, 440)
-- Max width: 900px
+#### Quotation Mark Watermark
+- Character: `"` (opening double-quote)
+- Font: Georgia or serif fallback, `400px`
+- Color: `#1E293B` opacity `0.15`
+- Position: upper-left, offset `(80, 60)`, behind all other elements
 
-#### Quote Marks
-- Large opening quote mark: " — Georgia or serif, 120px, `#4A90D9` at 0.15
-- Position: upper-left of quote text, offset (-60, -80)
-- Decorative, not functional
+#### Left Border Accent
+- Vertical line: `3px` wide, `#D9944A` opacity `0.6`
+- Position: `x=160`, from `y=340` to `y=640` (spanning the quote area)
+
+#### Quote Text
+- *"This is either the way of the future or it's going to crash and burn spectacularly."*
+- Font: Georgia, 36px, italic, `#E2E8F0`
+- Line-height: `1.5`
+- Max width: `900px`, left-aligned at `x=200`
+- Vertical center: `y≈440`
 
 #### Attribution
-- "— Research engineer, after seeing PDD for the first time"
-  - Inter, 16px, regular (400), `#94A3B8` at 0.6
-- Position: centered below quote, 80px gap
-
-#### Accent Line
-- Thin vertical line: 2px wide, 120px tall
-- Color: `#4A90D9` at 0.3
-- Position: left of quote text, x = 400
-- Centered vertically with quote
+- *— Research engineer, after seeing PDD for the first time*
+- Font: Inter, 15px, regular (400), `#94A3B8`
+- Position: below quote, left-aligned at `x=200`, `y≈580`
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Black. Accent line fades in. Quote mark fades in.
-2. **Frame 30-90 (1-3s):** Quote text line 1 fades in, left-to-right reveal. `easeOutQuad`.
-3. **Frame 90-150 (3-5s):** Line 2 fades in.
-4. **Frame 150-210 (5-7s):** Line 3 fades in — "spectacularly." lands with weight.
-5. **Frame 210-270 (7-9s):** Attribution fades in below.
-6. **Frame 270-480 (9-16s):** Hold. Let the quote breathe. Accent line pulses very subtly.
-7. **Frame 480-540 (16-18s):** Gentle fade to black.
+1. **Frame 0-30 (0-1s):** Background fades in. Quotation mark watermark fades in at `0.15` opacity. Left border accent draws top-to-bottom.
+2. **Frame 30-90 (1-3s):** Quote text appears word-by-word or line-by-line, each line fading in with a slight upward shift (`+8px→0`). First line: "This is either the way of the future". Second line: "or it's going to crash and burn spectacularly."
+3. **Frame 90-135 (3-4.5s):** Attribution fades in below the quote.
+4. **Frame 135-450 (4.5-15s):** Hold. The quote sits on screen, letting the narration deliver it. Very slight ambient glow pulse on the left border accent (opacity `0.6→0.75→0.6`, 120-frame cycle).
+5. **Frame 450-540 (15-18s):** All elements fade out together.
 
 ### Typography
-- Quote text: Inter, 32px, regular (400), `#E2E8F0` — "spectacularly." at bold (700)
-- Quote mark: Georgia, 120px, `#4A90D9` at 0.15
-- Attribution: Inter, 16px, regular (400), `#94A3B8` at 0.6
+- Quote: Georgia, 36px, italic, `#E2E8F0`, line-height `1.5`
+- Attribution: Inter, 15px, regular (400), `#94A3B8`
+- Watermark: Georgia, 400px, `#1E293B` opacity `0.15`
 
 ### Easing
-- Accent line fade: `easeOut(quad)` over 20 frames
-- Quote line reveals: `easeOut(quad)` over 30 frames each
-- Attribution fade: `easeOut(quad)` over 25 frames
-- Accent pulse: `easeInOut(sine)` on 120-frame cycle, opacity 0.2–0.4
-- Final fade-out: `easeIn(quad)` over 40 frames
+- Border draw: `easeInOutCubic` over 25 frames
+- Quote line fade: `easeOutQuad` over 20 frames each, staggered 15 frames apart
+- Attribution fade: `easeOutQuad` over 25 frames
+- Glow pulse: `easeInOutSine` on 120-frame cycle
+- Fade-out: `easeInQuad` over 30 frames
 
 ## Narration Sync
-> "A researcher at Microsoft, after seeing PDD for the first time, said: 'This is either the way of the future or it's going to crash and burn spectacularly.' He's right — it's a contrarian bet. But the economics are on our side."
-
-Segment: `part5_compound_returns_010`
-
-- **1:33** ("A researcher at Microsoft"): Accent line and quote mark appear
-- **1:37** ("said:"): Quote line 1 fades in
-- **1:39** ("way of the future"): Line 1 complete
-- **1:41** ("crash and burn"): Line 2 fades in
-- **1:43** ("spectacularly"): Line 3 lands with emphasis
-- **1:45** (attribution): Attribution fades in
-- **1:47** ("contrarian bet"): Hold on full quote
-- **1:50** ("economics are on our side"): Begin fade-out
+> "A researcher at Microsoft, after seeing PDD for the first time, said: 'This is either the way of the future or it's going to crash and burn spectacularly.'"
+> "He's right — it's a contrarian bet. But the economics are on our side."
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={540}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Accent line */}
+    {/* Quotation mark watermark */}
     <Sequence from={0}>
-      <FadeIn duration={20}>
-        <AccentLine x={400} y={380} height={120}
-          color="#4A90D9" opacity={0.3} width={2}
-          pulse={{ min: 0.2, max: 0.4, period: 120 }} />
+      <FadeIn durationInFrames={30}>
+        <Text text={'\u201C'} font="Georgia" size={400}
+          color="#1E293B" opacity={0.15}
+          x={80} y={60} />
       </FadeIn>
     </Sequence>
 
-    {/* Quote mark */}
-    <Sequence from={10}>
-      <FadeIn duration={20}>
-        <Text text="\u201C" font="Georgia" size={120}
-          color="#4A90D9" opacity={0.15}
-          x={900} y={360} />
-      </FadeIn>
+    {/* Left border accent */}
+    <Sequence from={0}>
+      <AnimatedVerticalLine
+        x={160} y1={340} y2={640}
+        strokeWidth={3} color="#D9944A" opacity={0.6}
+        drawDuration={25} easing="easeInOutCubic" />
     </Sequence>
 
-    {/* Quote line 1 */}
+    {/* Quote text — line 1 */}
     <Sequence from={30}>
-      <FadeIn duration={30}>
+      <FadeAndShift fromY={8} toY={0} durationInFrames={20}
+        easing="easeOutQuad">
         <Text text="This is either the way of the future"
-          font="Inter" size={32} weight={400}
-          color="#E2E8F0" opacity={0.95}
-          x={960} y={420} align="center" />
-      </FadeIn>
+          font="Georgia" size={36} style="italic"
+          color="#E2E8F0" x={200} y={420}
+          maxWidth={900} lineHeight={1.5} />
+      </FadeAndShift>
     </Sequence>
 
-    {/* Quote line 2 */}
-    <Sequence from={90}>
-      <FadeIn duration={30}>
-        <Text text="or it's going to crash and burn"
-          font="Inter" size={32} weight={400}
-          color="#E2E8F0" opacity={0.95}
-          x={960} y={468} align="center" />
-      </FadeIn>
-    </Sequence>
-
-    {/* Quote line 3 */}
-    <Sequence from={150}>
-      <FadeIn duration={30}>
-        <Text text="spectacularly."
-          font="Inter" size={32} weight={700}
-          color="#E2E8F0" opacity={1.0}
-          x={960} y={516} align="center" />
-      </FadeIn>
+    {/* Quote text — line 2 */}
+    <Sequence from={45}>
+      <FadeAndShift fromY={8} toY={0} durationInFrames={20}
+        easing="easeOutQuad">
+        <Text text="or it's going to crash and burn spectacularly."
+          font="Georgia" size={36} style="italic"
+          color="#E2E8F0" x={200} y={480}
+          maxWidth={900} lineHeight={1.5} />
+      </FadeAndShift>
     </Sequence>
 
     {/* Attribution */}
-    <Sequence from={210}>
-      <FadeIn duration={25}>
+    <Sequence from={90}>
+      <FadeIn durationInFrames={25}>
         <Text text="— Research engineer, after seeing PDD for the first time"
-          font="Inter" size={16} weight={400}
-          color="#94A3B8" opacity={0.6}
-          x={960} y={596} align="center" />
+          font="Inter" size={15} weight={400}
+          color="#94A3B8" x={200} y={580} />
       </FadeIn>
     </Sequence>
 
+    {/* Ambient glow pulse on border */}
+    <Sequence from={135}>
+      <Loop durationInFrames={120}>
+        <OpacityPulse target="left_border"
+          from={0.6} to={0.75}
+          durationInFrames={120} easing="easeInOutSine" />
+      </Loop>
+    </Sequence>
+
     {/* Fade out */}
-    <Sequence from={480}>
-      <FadeOut duration={40} />
+    <Sequence from={450}>
+      <FadeOut durationInFrames={30} easing="easeInQuad" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -163,13 +142,13 @@ Segment: `part5_compound_returns_010`
 ```json
 {
   "type": "quote_card",
-  "cardId": "contrarian_quote",
   "quote": "This is either the way of the future or it's going to crash and burn spectacularly.",
   "attribution": "Research engineer, after seeing PDD for the first time",
-  "accentColor": "#4A90D9",
+  "quoteFont": "Georgia",
+  "quoteSize": 36,
+  "accentColor": "#D9944A",
   "backgroundColor": "#0A0F1A",
+  "durationSeconds": 18,
   "narrationSegments": ["part5_compound_returns_010"]
 }
 ```
-
----

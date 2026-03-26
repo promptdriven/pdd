@@ -1,139 +1,147 @@
 [Remotion]
 
-# Section 5.5: Investment Comparison Table — Patching vs PDD
+# Section 5.5: Investment Comparison Table — Patching vs. PDD Returns
 
 **Tool:** Remotion
-**Duration:** ~9s (270 frames @ 30fps)
+**Duration:** ~10s (300 frames @ 30fps)
 **Timestamp:** 1:02 - 1:11
 
 ## Visual Description
+A clean, structured comparison table appears, reinforcing the diverging curves with concrete examples. The table has three columns — "Investment", "Patching", and "PDD" — and three rows comparing how each approach handles bug fixes, code improvements, and documentation.
 
-A clean comparison table appears, row by row, contrasting how the same investment yields different returns under Patching vs PDD. Three rows reveal the systematic advantage:
+The table builds row by row. The "Patching" column entries appear in muted amber, suggesting limitation. The "PDD" column entries appear in bright teal with a subtle glow, suggesting compounding value. Each PDD cell feels like a win.
 
-| Investment | Patching | PDD |
-|------------|----------|-----|
-| Fix a bug | One place, once | Impossible forever |
-| Improve code | One version | All future versions |
-| Document intent | One snapshot | Living specification |
-
-The PDD column is highlighted in green — each entry represents a compound return. The Patching column is in muted amber — each entry represents a one-time, depreciating action. The contrast between "one" (temporal, local) and "all/forever" (permanent, global) is the key visual takeaway.
+The table design is minimal and modern — no heavy borders, just horizontal dividers and plenty of whitespace.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- No grid lines
 
 ### Chart/Visual Elements
 
-#### Table Container
-- Width: 1200px, centered horizontally
-- Position: centered vertically at y=440
-- Background: `#0F1729` at 0.6
-- Border: 1px `#1E293B`
-- Border-radius: 12px
-- Padding: 32px
+#### Table Layout
+- Table width: `1100px`, centered horizontally
+- Table top: `280px` from top
+- Column widths: `280px` (Investment), `360px` (Patching), `360px` (PDD)
+- Row height: `80px`
+- Row dividers: `1px` solid, `#1E293B` opacity `0.4`
 
 #### Header Row
-- Background: `#1A2540` at 0.8
-- Columns:
-  - "Investment" — Inter, 14px, semi-bold (600), `#94A3B8`
-  - "Patching" — Inter, 14px, semi-bold (600), `#F59E0B` at 0.8
-  - "PDD" — Inter, 14px, semi-bold (600), `#4ADE80` at 0.8
-- Column widths: 30% | 30% | 40%
-- Height: 48px
-- Bottom border: 1px `#334155`
+- Background: none (transparent)
+- "Investment" — Inter, 14px, bold, `#64748B`, uppercase, letter-spacing `1.5px`
+- "Patching" — Inter, 14px, bold, `#D9944A`, uppercase, letter-spacing `1.5px`
+- "PDD" — Inter, 14px, bold, `#4A90D9`, uppercase, letter-spacing `1.5px`
+- Bottom border: `2px` solid `#334155`
 
-#### Data Rows (3 rows)
-- Row height: 56px
-- Bottom border: 1px `#1E293B` at 0.5
-- Investment column: Inter, 15px, semi-bold (600), `#E2E8F0` at 0.9
-- Patching column: Inter, 15px, regular (400), `#F59E0B` at 0.6
-- PDD column: Inter, 15px, semi-bold (600), `#4ADE80` at 0.9
+#### Row 1 — Fix a Bug
+- Investment: "Fix a bug" — Inter, 16px, medium (500), `#E2E8F0`
+- Patching: "One place, once" — Inter, 16px, regular (400), `#D9944A` opacity `0.7`
+- PDD: "Impossible forever" — Inter, 16px, bold (600), `#4A90D9`
+- PDD cell has subtle left-border accent: `3px` solid `#4A90D9` opacity `0.3`
 
-#### Row Data
-1. "Fix a bug" | "One place, once" | "Impossible forever"
-2. "Improve code" | "One version" | "All future versions"
-3. "Document intent" | "One snapshot" | "Living specification"
+#### Row 2 — Improve Code
+- Investment: "Improve code" — Inter, 16px, medium (500), `#E2E8F0`
+- Patching: "One version" — Inter, 16px, regular (400), `#D9944A` opacity `0.7`
+- PDD: "All future versions" — Inter, 16px, bold (600), `#4A90D9`
+- PDD cell has subtle left-border accent: `3px` solid `#4A90D9` opacity `0.3`
 
-#### PDD Column Highlight
-- Each PDD cell has a faint green left border: 3px `#4ADE80` at 0.3
-- On row reveal, PDD cell briefly pulses: background `#4ADE80` at 0.04 → 0.0
+#### Row 3 — Document Intent
+- Investment: "Document intent" — Inter, 16px, medium (500), `#E2E8F0`
+- Patching: "One snapshot" — Inter, 16px, regular (400), `#D9944A` opacity `0.7`
+- PDD: "Living specification" — Inter, 16px, bold (600), `#4A90D9`
+- PDD cell has subtle left-border accent: `3px` solid `#4A90D9` opacity `0.3`
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Table container fades in. Header row appears. `easeOutQuad`.
-2. **Frame 30-90 (1-3s):** Row 1 slides in from right. "Fix a bug" → "One place, once" → "Impossible forever". PDD cell pulses green briefly.
-3. **Frame 90-150 (3-5s):** Row 2 slides in. "Improve code" → "One version" → "All future versions". PDD cell pulses.
-4. **Frame 150-210 (5-7s):** Row 3 slides in. "Document intent" → "One snapshot" → "Living specification". PDD cell pulses.
-5. **Frame 210-270 (7-9s):** Hold. All rows visible. Faint green glow on PDD column.
+1. **Frame 0-30 (0-1s):** Header row fades in. Column titles appear. Bottom border draws left-to-right.
+2. **Frame 30-90 (1-3s):** Row 1 slides in from right (translateX `+40px→0`) with fade. All three cells appear simultaneously.
+3. **Frame 90-150 (3-5s):** Row 2 slides in with the same animation.
+4. **Frame 150-210 (5-7s):** Row 3 slides in.
+5. **Frame 210-240 (7-8s):** All PDD cells get a brief simultaneous glow pulse — the left-border accents pulse brightness from `0.3→0.6→0.3`.
+6. **Frame 240-300 (8-10s):** Hold. The table sits, clean and persuasive.
 
 ### Typography
-- Header: Inter, 14px, semi-bold (600)
-- Investment column: Inter, 15px, semi-bold (600), `#E2E8F0`
-- Patching column: Inter, 15px, regular (400), `#F59E0B` at 0.6
-- PDD column: Inter, 15px, semi-bold (600), `#4ADE80`
+- Column headers: Inter, 14px, bold (700), respective colors, uppercase, letter-spacing `1.5px`
+- Investment column: Inter, 16px, medium (500), `#E2E8F0`
+- Patching column: Inter, 16px, regular (400), `#D9944A` opacity `0.7`
+- PDD column: Inter, 16px, bold (600), `#4A90D9`
 
 ### Easing
-- Container fade: `easeOut(quad)` over 20 frames
-- Row slide-in: `easeOut(cubic)` over 25 frames
-- PDD pulse: `easeOut(quad)` over 15 frames (opacity 0.04 → 0.0)
+- Row slide-in: `easeOutCubic` over 30 frames
+- Row fade-in: `easeOutQuad` over 25 frames
+- Header border draw: `easeInOutCubic` over 20 frames
+- Glow pulse: `easeInOutSine` over 30 frames
 
 ## Narration Sync
 > "One side of this equation compounds against you. The other compounds for you. That's not a marginal difference. Over time, it's everything."
 
-Segment: `part5_compound_returns_006`
-
-- **1:02** ("One side of this equation"): Table container and header appear
-- **1:04** ("compounds against you"): Row 1 reveals
-- **1:06** ("The other compounds for you"): Row 2 reveals
-- **1:08** ("marginal difference"): Row 3 reveals
-- **1:11** ("it's everything"): Hold — all rows visible
-
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={270}>
+<Sequence from={0} durationInFrames={300}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Table container */}
+    {/* Header row */}
     <Sequence from={0}>
-      <FadeIn duration={20}>
-        <TableContainer width={1200} y={440}
-          bg="#0F1729" border="#1E293B" radius={12}>
-
-          {/* Header */}
-          <TableHeader
-            columns={["Investment", "Patching", "PDD"]}
-            colors={["#94A3B8", "#F59E0B", "#4ADE80"]}
-            bg="#1A2540" />
-
-          {/* Row 1 */}
-          <Sequence from={30}>
-            <SlideIn direction="right" duration={25}>
-              <TableRow
-                cells={["Fix a bug", "One place, once", "Impossible forever"]}
-                pddHighlight />
-            </SlideIn>
-          </Sequence>
-
-          {/* Row 2 */}
-          <Sequence from={90}>
-            <SlideIn direction="right" duration={25}>
-              <TableRow
-                cells={["Improve code", "One version", "All future versions"]}
-                pddHighlight />
-            </SlideIn>
-          </Sequence>
-
-          {/* Row 3 */}
-          <Sequence from={150}>
-            <SlideIn direction="right" duration={25}>
-              <TableRow
-                cells={["Document intent", "One snapshot", "Living specification"]}
-                pddHighlight />
-            </SlideIn>
-          </Sequence>
-        </TableContainer>
+      <FadeIn durationInFrames={25}>
+        <TableHeader
+          columns={["Investment", "Patching", "PDD"]}
+          colors={["#64748B", "#D9944A", "#4A90D9"]}
+          font="Inter" size={14} weight={700}
+          uppercase letterSpacing="1.5px"
+          borderColor="#334155" borderWidth={2}
+          borderDrawDuration={20} />
       </FadeIn>
+    </Sequence>
+
+    {/* Row 1: Fix a bug */}
+    <Sequence from={30}>
+      <SlideAndFade fromX={40} durationInFrames={30} easing="easeOutCubic">
+        <TableRow
+          cells={[
+            { text: "Fix a bug", color: "#E2E8F0", weight: 500 },
+            { text: "One place, once", color: "#D9944A", opacity: 0.7 },
+            { text: "Impossible forever", color: "#4A90D9", weight: 600,
+              accentBorder: { color: "#4A90D9", opacity: 0.3, width: 3 } }
+          ]}
+          dividerColor="#1E293B" dividerOpacity={0.4} />
+      </SlideAndFade>
+    </Sequence>
+
+    {/* Row 2: Improve code */}
+    <Sequence from={90}>
+      <SlideAndFade fromX={40} durationInFrames={30} easing="easeOutCubic">
+        <TableRow
+          cells={[
+            { text: "Improve code", color: "#E2E8F0", weight: 500 },
+            { text: "One version", color: "#D9944A", opacity: 0.7 },
+            { text: "All future versions", color: "#4A90D9", weight: 600,
+              accentBorder: { color: "#4A90D9", opacity: 0.3, width: 3 } }
+          ]}
+          dividerColor="#1E293B" dividerOpacity={0.4} />
+      </SlideAndFade>
+    </Sequence>
+
+    {/* Row 3: Document intent */}
+    <Sequence from={150}>
+      <SlideAndFade fromX={40} durationInFrames={30} easing="easeOutCubic">
+        <TableRow
+          cells={[
+            { text: "Document intent", color: "#E2E8F0", weight: 500 },
+            { text: "One snapshot", color: "#D9944A", opacity: 0.7 },
+            { text: "Living specification", color: "#4A90D9", weight: 600,
+              accentBorder: { color: "#4A90D9", opacity: 0.3, width: 3 } }
+          ]}
+          dividerColor="#1E293B" dividerOpacity={0.4} />
+      </SlideAndFade>
+    </Sequence>
+
+    {/* PDD column glow pulse */}
+    <Sequence from={210}>
+      <GlowPulse targets="pdd_cells"
+        property="accentBorderOpacity"
+        from={0.3} to={0.6}
+        durationInFrames={30} easing="easeInOutSine" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -143,17 +151,28 @@ Segment: `part5_compound_returns_006`
 ```json
 {
   "type": "comparison_table",
-  "tableId": "investment_comparison",
-  "columns": ["Investment", "Patching", "PDD"],
-  "columnColors": ["#E2E8F0", "#F59E0B", "#4ADE80"],
-  "rows": [
-    { "investment": "Fix a bug", "patching": "One place, once", "pdd": "Impossible forever" },
-    { "investment": "Improve code", "patching": "One version", "pdd": "All future versions" },
-    { "investment": "Document intent", "patching": "One snapshot", "pdd": "Living specification" }
+  "columns": [
+    { "id": "investment", "label": "Investment", "color": "#64748B" },
+    { "id": "patching", "label": "Patching", "color": "#D9944A" },
+    { "id": "pdd", "label": "PDD", "color": "#4A90D9" }
   ],
-  "backgroundColor": "#0A0F1A",
+  "rows": [
+    {
+      "investment": "Fix a bug",
+      "patching": "One place, once",
+      "pdd": "Impossible forever"
+    },
+    {
+      "investment": "Improve code",
+      "patching": "One version",
+      "pdd": "All future versions"
+    },
+    {
+      "investment": "Document intent",
+      "patching": "One snapshot",
+      "pdd": "Living specification"
+    }
+  ],
   "narrationSegments": ["part5_compound_returns_006"]
 }
 ```
-
----

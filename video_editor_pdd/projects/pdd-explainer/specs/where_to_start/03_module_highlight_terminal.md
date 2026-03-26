@@ -1,170 +1,188 @@
 [Remotion]
 
-# Section 6.3: Module Highlight & Terminal Command
+# Section 6.3: Module Highlight & Terminal — `pdd update` Creates a Prompt
 
 **Tool:** Remotion
-**Duration:** ~5s (150 frames @ 30fps)
-**Timestamp:** 0:10 - 0:15
+**Duration:** ~9s (270 frames @ 30fps)
+**Timestamp:** 0:06 - 0:15
 
 ## Visual Description
 
-The dense legacy codebase from the previous shot is still visible, but now a single module — `auth_handler.py` — highlights with a blue selection glow. The other code panels dim to near-black. A terminal window slides up from the bottom of the screen, semi-transparent, showing the command being typed:
+The legacy codebase from the previous spec is still visible but now de-emphasized. A single module — `auth_handler.py` — highlights in the file tree and in the code wall, outlined with a glowing blue border.
+
+A terminal panel slides up from the bottom of the frame, overlaying the lower third. The terminal shows the command being typed:
 
 ```
 $ pdd update auth_handler.py
 ```
 
-The command types character by character. On completion, the terminal shows output: `✓ Prompt generated: auth_handler.prompt.md`. A prompt file icon materializes next to the module — it glows a soft blue (`#60A5FA`), pulsing gently. The original code file simultaneously desaturates to gray, becoming visually subordinate. The prompt is the new source of truth; the code is now the artifact.
+After the command executes, a new file materializes to the right of the code: `auth_handler.prompt.md`. The prompt file appears as a clean, glowing document — compact (5-6 visible lines), rendered with a blue-purple border and soft glow. It looks intentional, structured, authoritative.
 
-This is the pivotal visual moment — the inversion of value. What was authoritative (code) dims. What was derived (prompt) glows.
+Meanwhile, the original `auth_handler.py` code begins to dim — it's becoming an artifact. The prompt file glows brighter — it's becoming the source of truth.
+
+A small animated arrow connects the code to the prompt: "extracted from →"
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- Background: `#0D1117` (GitHub dark theme, inherited from Spec 02)
 
 ### Chart/Visual Elements
 
-#### Dimmed Codebase
-- Previous code panels at `#111827` at 0.3 (dimmed from 0.9)
-- Code text: `#334155` at 0.2 (nearly invisible)
-- Warning comments: `#D9944A` at 0.1 (nearly gone)
+#### Module Highlight
+- In file tree: `auth_handler.py` gets a blue highlight bar, `#4A90D9` at 0.15
+- In code pane: the entire pane 1 gets a 2px border glow, `#4A90D9` at 0.3, rounded 6px
+- Other code panes dim to 0.3 opacity
 
-#### Highlighted Module
-- `auth_handler.py` panel: full brightness, `#111827` at 0.95
-- Selection glow: 12px blur, `#60A5FA` at 0.15, around panel border
-- File tab `auth_handler.py`: active, 2px top border `#60A5FA`
+#### Terminal Panel
+- Height: 200px, anchored to bottom
+- Background: `#1A1A2E` at 0.95
+- Border-top: `#334155`, 1px
+- Prompt symbol: `$` — JetBrains Mono, 14px, `#10B981`
+- Command text: `pdd update auth_handler.py` — JetBrains Mono, 14px, `#E2E8F0`
+- Output line 1: `Analyzing auth_handler.py...` — `#64748B`
+- Output line 2: `Generated auth_handler.prompt.md ✓` — `#10B981`
 
-#### Terminal Window
-- Position: bottom-center, 700x180px, anchored at y: 880
-- Background: `#0D1117` at 0.92
-- Border: 1px `#30363D`, border-radius 8px
-- Terminal header bar: 28px, `#161B22`, three dots (red/yellow/green circles, 8px)
-- Prompt: `$` — JetBrains Mono, 13px, `#7EE787` at 0.8
-- Command: `pdd update auth_handler.py` — JetBrains Mono, 13px, `#E2E8F0` at 0.9
-- Output: `✓ Prompt generated: auth_handler.prompt.md` — JetBrains Mono, 12px, `#4ADE80` at 0.8
+#### Prompt Document (materializes)
+- Rounded rectangle: 400x280px, `#1E1E2E` fill, `#8B5CF6` 2px border
+- Position: x: 1100, y: 200 (right side of frame)
+- Label: `auth_handler.prompt.md` — Inter, 12px, `#8B5CF6`, top-left
+- Body: 5-6 placeholder lines of spec text, Inter 12px, `#E2E8F0` at 0.8
+- Glow: `#8B5CF6` at 0.12, 16px blur
+- Materializes from particles converging inward
 
-#### Prompt File Icon
-- Position: next to highlighted module, offset right 20px
-- Icon: rounded rectangle 40x50px, `#60A5FA` at 0.2 fill, `#60A5FA` at 0.6 stroke
-- Label: `.prompt.md` — JetBrains Mono, 9px, `#60A5FA` at 0.7
-- Glow: 16px blur, `#60A5FA` at 0.12, pulsing
-
-#### Code-to-Artifact Shift
-- Original code panel desaturates: filter grayscale(0.8), opacity drops to 0.4
-- Label "artifact" — Inter, 10px, `#64748B` at 0.3, below code panel
-- Label "source of truth" — Inter, 10px, `#60A5FA` at 0.5, below prompt icon
+#### Extraction Arrow
+- Curved arrow from code pane center-right to prompt document left edge
+- Label: "extracted from →" — Inter, 11px, italic, `#64748B` at 0.6
+- Arrow: `#4A90D9` at 0.3, 1.5px, dashed
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Background panels dim. `auth_handler.py` panel brightens with selection glow. `easeOutCubic`.
-2. **Frame 20-40 (0.67-1.33s):** Terminal window slides up from below viewport. `easeOutCubic`.
-3. **Frame 40-80 (1.33-2.67s):** Command types character by character: `pdd update auth_handler.py` (1.5 frames per character).
-4. **Frame 80-100 (2.67-3.33s):** Terminal output appears line by line. Green checkmark. `easeOutQuad`.
-5. **Frame 100-120 (3.33-4s):** Prompt file icon materializes with scale-in (0 → 1) and glow. Code panel desaturates to gray. Labels appear. `easeOutBack`.
-6. **Frame 120-150 (4-5s):** Hold. Prompt icon pulses. The inversion is visible — glowing prompt, gray code.
+1. **Frame 0-30 (0-1s):** Code wall dims to 0.3 except pane 1. `auth_handler.py` highlights blue in file tree. Blue border glows around pane 1.
+2. **Frame 30-60 (1-2s):** Terminal panel slides up from bottom. `$` prompt appears.
+3. **Frame 60-100 (2-3.33s):** Command types character-by-character: `pdd update auth_handler.py` (1.5 frames per character).
+4. **Frame 100-120 (3.33-4s):** Terminal output: "Analyzing auth_handler.py..." appears.
+5. **Frame 120-160 (4-5.33s):** Prompt document materializes — particles converge from code pane into the document shape on the right. Glow blooms.
+6. **Frame 160-180 (5.33-6s):** Terminal shows "Generated auth_handler.prompt.md ✓". Extraction arrow draws.
+7. **Frame 180-220 (6-7.33s):** Original code in pane 1 begins fading to `#475569` at 0.3 (graying out). Prompt document glow intensifies.
+8. **Frame 220-270 (7.33-9s):** Hold. Code = gray artifact. Prompt = glowing source of truth. The contrast is clear.
 
 ### Typography
-- Terminal prompt: JetBrains Mono, 13px, `#7EE787` at 0.8
-- Terminal command: JetBrains Mono, 13px, `#E2E8F0` at 0.9
-- Terminal output: JetBrains Mono, 12px, `#4ADE80` at 0.8
-- Prompt file label: JetBrains Mono, 9px, `#60A5FA` at 0.7
-- Role labels: Inter, 10px, respective colors
+- Terminal prompt: JetBrains Mono, 14px, `#10B981`
+- Terminal command: JetBrains Mono, 14px, `#E2E8F0`
+- Terminal output: JetBrains Mono, 13px, `#64748B` (analysis), `#10B981` (success)
+- Prompt label: Inter, 12px, `#8B5CF6`
+- Prompt body: Inter, 12px, `#E2E8F0` at 0.8
+- Arrow label: Inter, 11px, italic, `#64748B` at 0.6
 
 ### Easing
-- Panel dim: `easeOut(cubic)` over 20 frames
-- Terminal slide-up: `easeOut(cubic)` over 20 frames
-- Command typing: `linear` at 1.5 frames per character
-- Prompt icon scale-in: `easeOut(back)` over 20 frames
-- Code desaturate: `easeInOut(quad)` over 20 frames
-- Prompt glow pulse: `easeInOut(sine)` on 30-frame cycle
+- Code dim: `easeIn(quad)` over 30 frames
+- Module highlight: `easeOut(cubic)` over 15 frames
+- Terminal slide-up: `easeOut(back)` over 20 frames (slight overshoot)
+- Command type: `linear`, 1.5 frames/character
+- Particle converge: `easeIn(cubic)` over 40 frames
+- Prompt glow bloom: `easeOut(quad)` over 20 frames
+- Code gray-out: `easeIn(quad)` over 40 frames
+- Arrow draw: `easeInOut(quad)` over 20 frames
 
 ## Narration Sync
-> "Start with one module. Generate its prompt. Add tests. Regenerate. Compare. When the regenerated version passes all tests, the prompt is your new source of truth for that module."
+> "PDD can create prompts from existing code. Start with one module. Generate its prompt. Add tests. Regenerate. Compare. When the regenerated version passes all tests, the prompt is your new source of truth for that module."
 
 Segment: `where_to_start_001`
 
-- **0:10** ("Start with one module"): `auth_handler.py` highlights, others dim
-- **0:11** ("Generate its prompt"): Terminal slides up, command types
-- **0:13** ("Add tests. Regenerate."): Terminal output appears, prompt file materializes
-- **0:14** ("the prompt is your new source of truth"): Code grays out, prompt glows — inversion complete
+- **0:06** (6.00s): Module highlights — "Start with one module"
+- **0:08** (8.00s): Terminal command types — "Generate its prompt"
+- **0:10** (10.00s): Prompt materializes — "Add tests. Regenerate. Compare."
+- **0:13** (13.00s): Code grays, prompt glows — "the prompt is your new source of truth"
+- **0:15** (15.12s): Hold — segment ends
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={150}>
-  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Dimmed codebase */}
+<Sequence from={0} durationInFrames={270}>
+  <AbsoluteFill style={{ backgroundColor: '#0D1117' }}>
+
+    {/* Dimmed code wall from Spec 02 */}
     <Sequence from={0}>
-      <DimTransition duration={20} targetOpacity={0.3}>
-        <CodebasePanels panels={panels} />
-      </DimTransition>
+      <AnimateOpacity from={0.7} to={0.3} duration={30}>
+        <CodeWall panes={codePanes} />
+      </AnimateOpacity>
     </Sequence>
 
-    {/* Highlighted module */}
+    {/* Highlighted module — pane 1 */}
     <Sequence from={0}>
-      <GlowHighlight color="#60A5FA" blur={12} opacity={0.15} duration={20}>
-        <CodePanel
-          file="auth_handler.py"
-          highlighted={true}
-          bgColor="#111827" bgOpacity={0.95}
-        />
-      </GlowHighlight>
+      <FadeIn duration={15}>
+        <GlowBorder
+          target="pane1" color="#4A90D9" opacity={0.3}
+          width={2} radius={6} />
+      </FadeIn>
     </Sequence>
 
-    {/* Terminal window */}
-    <Sequence from={20}>
-      <SlideUp from={200} duration={20}>
-        <TerminalWindow
-          x={610} y={880} width={700} height={180}
-          bgColor="#0D1117" borderColor="#30363D"
-        >
-          <Sequence from={20}>
+    {/* File tree highlight */}
+    <Sequence from={0}>
+      <HighlightRow file="auth_handler.py" color="#4A90D9"
+        opacity={0.15} duration={15} />
+    </Sequence>
+
+    {/* Terminal panel */}
+    <Sequence from={30}>
+      <SlideUp from={200} duration={20} easing="easeOut(back)">
+        <TerminalPanel height={200} background="#1A1A2E">
+          <Sequence from={30}>
             <TypeWriter
               text="pdd update auth_handler.py"
-              font="JetBrains Mono" size={13}
-              color="#E2E8F0" charDelay={1.5}
-              prompt="$" promptColor="#7EE787"
-            />
+              prompt="$" promptColor="#10B981"
+              font="JetBrains Mono" fontSize={14}
+              charDelay={1.5} color="#E2E8F0" />
           </Sequence>
-          <Sequence from={60}>
+          <Sequence from={70}>
             <FadeIn duration={10}>
-              <Text text="✓ Prompt generated: auth_handler.prompt.md"
-                font="JetBrains Mono" size={12}
-                color="#4ADE80" opacity={0.8} />
+              <Text text="Analyzing auth_handler.py..."
+                color="#64748B" font="JetBrains Mono" size={13} />
             </FadeIn>
           </Sequence>
-        </TerminalWindow>
+          <Sequence from={130}>
+            <FadeIn duration={10}>
+              <Text text="Generated auth_handler.prompt.md ✓"
+                color="#10B981" font="JetBrains Mono" size={13} />
+            </FadeIn>
+          </Sequence>
+        </TerminalPanel>
       </SlideUp>
     </Sequence>
 
-    {/* Prompt file icon */}
-    <Sequence from={100}>
-      <ScaleIn from={0} to={1} duration={20}>
-        <PromptFileIcon
-          label=".prompt.md" color="#60A5FA"
-          glowBlur={16} glowOpacity={0.12}
-          pulseRate={30}
+    {/* Prompt document materializes */}
+    <Sequence from={120}>
+      <ParticleConverge
+        target={{ x: 1100, y: 200, width: 400, height: 280 }}
+        source={{ x: 500, y: 300 }}
+        duration={40} easing="easeInCubic"
+      >
+        <PromptDocument
+          x={1100} y={200} width={400} height={280}
+          label="auth_handler.prompt.md"
+          borderColor="#8B5CF6" glowColor="#8B5CF6"
+          glowOpacity={0.12} glowRadius={16}
+          lines={5} font="Inter" fontSize={12}
         />
-      </ScaleIn>
+      </ParticleConverge>
     </Sequence>
 
-    {/* Code desaturation */}
-    <Sequence from={100}>
-      <Desaturate amount={0.8} duration={20}>
-        <FadeTo opacity={0.4} duration={20} />
-      </Desaturate>
+    {/* Extraction arrow */}
+    <Sequence from={160}>
+      <DrawArrow
+        from={{ x: 700, y: 340 }} to={{ x: 900, y: 340 }}
+        color="#4A90D9" opacity={0.3} width={1.5} dashed
+        label="extracted from →" labelColor="#64748B"
+        drawDuration={20} />
     </Sequence>
 
-    {/* Role labels */}
-    <Sequence from={110}>
-      <FadeIn duration={15}>
-        <Text text="artifact" font="Inter" size={10}
-          color="#64748B" opacity={0.3} />
-        <Text text="source of truth" font="Inter" size={10}
-          color="#60A5FA" opacity={0.5} />
-      </FadeIn>
+    {/* Code gray-out */}
+    <Sequence from={180}>
+      <AnimateColor
+        target="pane1_code" to="#475569" toOpacity={0.3}
+        duration={40} easing="easeInQuad" />
     </Sequence>
+
   </AbsoluteFill>
 </Sequence>
 ```
@@ -172,17 +190,16 @@ Segment: `where_to_start_001`
 ## Data Points JSON
 ```json
 {
-  "type": "code_transformation",
-  "chartId": "module_highlight_terminal",
-  "highlightedModule": "auth_handler.py",
-  "terminalCommand": "pdd update auth_handler.py",
-  "terminalOutput": "✓ Prompt generated: auth_handler.prompt.md",
-  "promptFile": "auth_handler.prompt.md",
-  "transformation": {
-    "code": { "role": "artifact", "color": "#64748B", "opacity": 0.4 },
-    "prompt": { "role": "source_of_truth", "color": "#60A5FA", "opacity": 1.0 }
-  },
-  "backgroundColor": "#0A0F1A",
+  "type": "interactive_demo",
+  "command": "pdd update auth_handler.py",
+  "targetModule": "auth_handler.py",
+  "outputFile": "auth_handler.prompt.md",
+  "phases": [
+    { "id": "highlight", "frames": [0, 30], "description": "Module highlights in codebase" },
+    { "id": "terminal", "frames": [30, 120], "description": "Terminal command executes" },
+    { "id": "materialize", "frames": [120, 180], "description": "Prompt file materializes from code" },
+    { "id": "shift", "frames": [180, 270], "description": "Code dims, prompt glows — source of truth shifts" }
+  ],
   "narrationSegments": ["where_to_start_001"]
 }
 ```

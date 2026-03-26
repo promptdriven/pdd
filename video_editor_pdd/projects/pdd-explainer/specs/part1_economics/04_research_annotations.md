@@ -1,158 +1,167 @@
 [Remotion]
 
-# Section 1.4: Research Annotations — The Productivity Paradox Data
+# Section 1.4: Research Annotations — Studies Overlaid on Chart
 
 **Tool:** Remotion
 **Duration:** ~40s (1200 frames @ 30fps)
-**Timestamp:** 1:17 - 1:57
+**Timestamp:** 1:25 - 2:05
 
 ## Visual Description
 
-Building on the code cost chart from 03, research annotations materialize one by one over the chart, creating a layered data-storytelling effect. Each annotation is a floating card with a key statistic, study source, and fine print — connected to the relevant chart element by a thin callout line.
+The code cost chart from Spec 03 remains visible but the camera has zoomed in slightly on the gap between the solid and dashed amber lines. Research study annotations materialize one by one, each pointing to a specific part of the chart. The annotations are designed like academic citation callouts — clean, precise, grounding the argument in real data.
 
-The annotations appear in two waves. Wave 1 contrasts individual vs systemic productivity: "Individual task: -55%" pointing to the dropping solid line, versus "Overall throughput: ~0%" pointing to the flat dashed line. Wave 2 adds the damage evidence: "Code churn: +44%" and "Refactoring: -60%" pointing to the debt shading area.
+The sequence builds a damning picture: individual patches get faster (GitHub study), but overall throughput is flat (Uplevel study), and code quality is deteriorating (GitClear study). Each annotation arrives with a small connecting line to its relevant chart element.
 
-The contrast between wave 1 annotations — one green-positive, one red-negative — makes the paradox viscerally clear. Wave 2 annotations are both red, showing the situation worsening.
+After the initial three annotations, two more appear pointing to the debt area: code churn +44% and refactoring -60%. The debt area itself separates into two visible layers: a darker "Code Complexity" layer and a lighter "Context Rot" layer with a subtle static/noise texture.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Inherits chart from 03_code_cost_chart (shown at 0.92 scale, pulled-back state)
+- Inherits chart from Spec 03 (code cost chart)
 
 ### Chart/Visual Elements
 
-#### Annotation Card Style
-- Background: `#0F172A` at 0.85, 1px border `#1E293B` at 0.4
-- Border radius: 6px
-- Padding: 12px 16px
-- Drop shadow: `#000000` at 0.3, blur 8px, offset (0, 2)
-- Width: 260px
+#### Annotation 1 — GitHub (pointing to dropping solid line)
+- Text: "Individual task: −55%" — Inter, 14px, bold, `#2DD4BF`
+- Fine print: "GitHub, 2022 · 95 developers, one greenfield task" — Inter, 10px, `#94A3B8` at 0.5
+- Connecting line: thin 1px `#2DD4BF` at 0.3 from annotation to solid amber line
+- Position: right side of chart, y aligned with solid line ~2023
 
-#### Annotation 1 — Individual Task (green, positive)
-- Position: lower-right, near the dropping solid amber line
-- Callout line: 1px, `#4ADE80` at 0.3, from card to amber solid line at ~2024
-- Header: "Individual task: −55%" — Inter, 18px, bold (700), `#4ADE80`
-- Source: "GitHub, 2022" — Inter, 10px, `#94A3B8` at 0.5
-- Fine print: "95 developers, one greenfield task" — Inter, 9px, `#64748B` at 0.4
+#### Annotation 2 — Uplevel (pointing to dashed line)
+- Text: "Overall throughput: ~0%" — Inter, 14px, bold, `#EF4444`
+- Fine print: "Uplevel, 2024 · 785 developers, one year" — Inter, 10px, `#94A3B8` at 0.5
+- Connecting line: thin 1px `#EF4444` at 0.3 from annotation to dashed amber line
+- Position: right side, y aligned with dashed line
 
-#### Annotation 2 — Overall Throughput (red, negative)
-- Position: upper-right, near the flat dashed amber line
-- Callout line: 1px, `#EF4444` at 0.3, from card to dashed line at ~2024
-- Header: "Overall throughput: ~0%" — Inter, 18px, bold (700), `#EF4444`
-- Source: "Uplevel, 2024" — Inter, 10px, `#94A3B8` at 0.5
-- Fine print: "785 developers, one year" — Inter, 9px, `#64748B` at 0.4
+#### Annotation 3 — GitClear (pointing to debt area)
+- Text: "Code churn: +44%" — Inter, 14px, bold, `#EF4444`
+- Fine print: "GitClear, 2025 · 211M lines analyzed" — Inter, 10px, `#94A3B8` at 0.5
+- Connecting line: to debt shaded area
+- Position: middle-right, pointing into the shaded region
 
-#### Annotation 3 — Code Churn (red)
-- Position: center-right, pointing to debt shading area
-- Callout line: 1px, `#EF4444` at 0.3, from card to debt area center
-- Header: "Code churn: +44%" — Inter, 18px, bold (700), `#EF4444`
-- Source: "GitClear, 2025" — Inter, 10px, `#94A3B8` at 0.5
-- Fine print: "211M lines analyzed" — Inter, 9px, `#64748B` at 0.4
+#### Annotation 4 — Refactoring (pointing to widening gap)
+- Text: "Refactoring: −60%" — Inter, 14px, bold, `#EF4444`
+- Fine print: below annotation 3
+- Position: below annotation 3, also pointing to debt area
 
-#### Annotation 4 — Refactoring Collapse (red)
-- Position: center-left, pointing to the widening gap
-- Callout line: 1px, `#EF4444` at 0.3, from card to debt gap edge
-- Header: "Refactoring: −60%" — Inter, 18px, bold (700), `#EF4444`
-- Source: "GitClear, 2025" — Inter, 10px, `#94A3B8` at 0.5
-- Fine print: "Developers aren't cleaning up. They're piling on." — Inter, 9px, italic, `#64748B` at 0.4
+#### Debt Layer Separation
+- Lower layer: "Code Complexity" — darker amber `#D9944A` at 0.12, solid fill
+- Upper layer: "Context Rot" — lighter amber `#D9944A` at 0.06, with SVG noise texture overlay
+- Dividing line between layers: `#D9944A` at 0.15, 1px dashed
+- Small labels for each layer: Inter, 10px, `#D9944A` at 0.4
 
 ### Animation Sequence
-1. **Frame 0-60 (0-2s):** Chart from 03 is visible in pulled-back state. Brief hold for orientation.
-2. **Frame 60-180 (2-6s):** Annotation 1 slides in from right with callout line drawing. The green "+55%" number counts up from 0.
-3. **Frame 180-360 (6-12s):** Annotation 2 slides in from right. The red "~0%" appears. Callout line draws to dashed line. The contrast between green and red is immediately visible.
-4. **Frame 360-420 (12-14s):** Brief hold on the two contrasting annotations. Viewer absorbs the paradox.
-5. **Frame 420-600 (14-20s):** Wave 1 annotations dim to 0.4 opacity. Annotation 3 slides in — "Code churn: +44%" pointing to the debt area.
-6. **Frame 600-780 (20-26s):** Annotation 4 appears — "Refactoring: −60%". The debt shading area pulses briefly (opacity 0.08 → 0.14 → 0.08).
-7. **Frame 780-960 (26-32s):** All four annotations visible at balanced opacity. The picture is complete.
-8. **Frame 960-1200 (32-40s):** Hold. Chart and annotations remain for narration about debt layers.
+1. **Frame 0-60 (0-2s):** Chart from Spec 03 visible. Slight zoom into the gap region.
+2. **Frame 60-180 (2-6s):** Annotation 1 (GitHub −55%) materializes with connecting line to solid amber line.
+3. **Frame 180-420 (6-14s):** Annotation 2 (Uplevel ~0%) materializes pointing to dashed line. The contrast with Annotation 1 is stark.
+4. **Frame 420-660 (14-22s):** Annotation 3 (GitClear +44% churn) appears, pointing to debt area. Annotation 4 (Refactoring −60%) appears below it.
+5. **Frame 660-840 (22-28s):** Debt area separates into two layers. "Code Complexity" darkens. "Context Rot" gets noise texture.
+6. **Frame 840-1200 (28-40s):** Camera lingers on the layered debt. "Context Rot" layer pulses with a subtle static effect. Annotation: "Faster patching → faster growth → faster rot" appears.
 
 ### Typography
-- Annotation headers: Inter, 18px, bold (700), respective colors
-- Source lines: Inter, 10px, `#94A3B8` at 0.5
-- Fine print: Inter, 9px, `#64748B` at 0.4
+- Annotation main text: Inter, 14px, bold (700), `#2DD4BF` or `#EF4444`
+- Fine print: Inter, 10px, `#94A3B8` at 0.5
+- Layer labels: Inter, 10px, `#D9944A` at 0.4
+- Feedback annotation: Inter, 13px, italic, `#D9944A` at 0.6
 
 ### Easing
-- Card slide-in: `easeOut(cubic)` over 30 frames, 20px rightward
-- Callout line draw: `easeOut(quad)` over 20 frames
-- Number count-up: `easeOut(quad)` over 30 frames
-- Dim transition: `easeOut(quad)` over 15 frames
-- Debt pulse: `easeInOut(sine)` over 30 frames
+- Annotation appear: `easeOut(cubic)` over 20 frames, slight 5px slide-in from right
+- Connecting line draw: `easeOut(quad)` over 15 frames
+- Layer separation: `easeInOut(cubic)` over 30 frames
+- Noise texture: continuous, subtle `easeInOut(sine)` shimmer
 
 ## Narration Sync
-> "GitHub measured a fifty-five percent speedup on individual coding tasks. But that was ninety-five developers writing one HTTP server from scratch."
-> "When Uplevel tracked almost eight hundred developers across real enterprise work for a full year? No change in throughput. Forty-one percent more bugs."
-> "GitClear confirmed it across two hundred eleven million lines of code. Since AI coding assistants arrived, code churn is up forty-four percent. Meanwhile, refactoring collapsed by sixty percent."
+> "GitHub measured a 55% speed improvement for individual tasks..."
+> "Uplevel tracked almost 800 developers for a full year... Overall throughput? Statistically indistinguishable from zero."
+> "GitClear confirmed it across 211 million lines... code churn jumped 44%... refactoring dropped 60%..."
+> "there's a second kind of debt building up that almost nobody talks about..."
 
-Segments: `part1_economics_014`, `part1_economics_015`, `part1_economics_016`
+Segments: `part1_economics_014`, `part1_economics_015`, `part1_economics_016`, `part1_economics_017`
 
-- **1:17** ("GitHub measured a 55%"): Annotation 1 slides in — individual task speedup
-- **1:32** ("Uplevel tracked almost 800"): Annotation 2 slides in — overall throughput flat
-- **1:57** ("GitClear confirmed"): Annotations 3 & 4 appear — churn up, refactoring down
+- **97.46s** ("GitHub measured a 55%"): Annotation 1 materializes
+- **111.82s** ("Uplevel tracked almost 800"): Annotation 2 appears, contrast visible
+- **136.62s** ("GitClear confirmed it"): Annotations 3 & 4 appear
+- **158.50s** ("there's a second kind of debt"): Debt layers separate, Context Rot revealed
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={1200}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Inherited chart at pulled-back scale */}
-    <ScaledChart scale={0.92}>
-      <CodeCostChart />
-    </ScaledChart>
+    {/* Inherited chart (zoomed view) */}
+    <ZoomedChart chart="code_cost_chart" zoomRegion="debt_gap" zoomLevel={1.3} />
 
-    {/* Wave 1 — Individual vs Overall */}
+    {/* Annotation 1: GitHub */}
     <Sequence from={60}>
-      <AnnotationCard
-        position={[1350, 650]} calloutTo={[1100, 520]}
-        header="Individual task: −55%" headerColor="#4ADE80"
-        source="GitHub, 2022"
-        finePrint="95 developers, one greenfield task"
-        slideFrom="right" slideDuration={30}
-        calloutColor="#4ADE80" />
+      <SlideIn from="right" distance={5} duration={20}>
+        <Annotation
+          mainText="Individual task: −55%"
+          mainColor="#2DD4BF" mainWeight={700}
+          subText="GitHub, 2022 · 95 developers, one greenfield task"
+          subColor="#94A3B8" subOpacity={0.5}
+          connectTo={{ line: "immediate_patch", x: 2023 }}
+          lineColor="#2DD4BF" lineOpacity={0.3}
+          position={{ x: 1400, y: 620 }} />
+      </SlideIn>
     </Sequence>
 
+    {/* Annotation 2: Uplevel */}
     <Sequence from={180}>
-      <AnnotationCard
-        position={[1350, 280]} calloutTo={[1100, 340]}
-        header="Overall throughput: ~0%" headerColor="#EF4444"
-        source="Uplevel, 2024"
-        finePrint="785 developers, one year"
-        slideFrom="right" slideDuration={30}
-        calloutColor="#EF4444" />
+      <SlideIn from="right" distance={5} duration={20}>
+        <Annotation
+          mainText="Overall throughput: ~0%"
+          mainColor="#EF4444" mainWeight={700}
+          subText="Uplevel, 2024 · 785 developers, one year"
+          subColor="#94A3B8" subOpacity={0.5}
+          connectTo={{ line: "total_cost_debt", x: 2024 }}
+          lineColor="#EF4444" lineOpacity={0.3}
+          position={{ x: 1400, y: 200 }} />
+      </SlideIn>
     </Sequence>
 
-    {/* Dim wave 1 */}
+    {/* Annotation 3: GitClear churn */}
     <Sequence from={420}>
-      <OpacityTransition targets={['annotation_1', 'annotation_2']}
-        to={0.4} duration={15} />
+      <SlideIn from="right" distance={5} duration={20}>
+        <Annotation
+          mainText="Code churn: +44%"
+          mainColor="#EF4444" mainWeight={700}
+          subText="GitClear, 2025 · 211M lines analyzed"
+          subColor="#94A3B8" subOpacity={0.5}
+          connectTo={{ area: "debt_area", x: 2024 }}
+          lineColor="#EF4444" lineOpacity={0.3}
+          position={{ x: 1400, y: 380 }} />
+      </SlideIn>
     </Sequence>
 
-    {/* Wave 2 — Damage evidence */}
-    <Sequence from={420}>
-      <AnnotationCard
-        position={[1350, 450]} calloutTo={[900, 430]}
-        header="Code churn: +44%" headerColor="#EF4444"
-        source="GitClear, 2025"
-        finePrint="211M lines analyzed"
-        slideFrom="right" slideDuration={30}
-        calloutColor="#EF4444" />
+    {/* Annotation 4: Refactoring */}
+    <Sequence from={480}>
+      <SlideIn from="right" distance={5} duration={20}>
+        <Annotation
+          mainText="Refactoring: −60%"
+          mainColor="#EF4444" mainWeight={700}
+          connectTo={{ area: "debt_area", x: 2023 }}
+          lineColor="#EF4444" lineOpacity={0.3}
+          position={{ x: 1400, y: 440 }} />
+      </SlideIn>
     </Sequence>
 
-    <Sequence from={600}>
-      <AnnotationCard
-        position={[300, 450]} calloutTo={[700, 430]}
-        header="Refactoring: −60%" headerColor="#EF4444"
-        source="GitClear, 2025"
-        finePrint="Developers aren't cleaning up. They're piling on."
-        italic slideFrom="left" slideDuration={30}
-        calloutColor="#EF4444" />
+    {/* Debt layer separation */}
+    <Sequence from={660}>
+      <DebtLayers
+        lower={{ label: "Code Complexity", color: "#D9944A", opacity: 0.12 }}
+        upper={{ label: "Context Rot", color: "#D9944A", opacity: 0.06, noiseTexture: true }}
+        separationDuration={30} />
     </Sequence>
 
-    {/* Debt area pulse */}
-    <Sequence from={600}>
-      <PulseOverlay target="debtShading"
-        fromOpacity={0.08} toOpacity={0.14}
-        duration={30} />
+    {/* Feedback annotation */}
+    <Sequence from={840}>
+      <FadeIn duration={20}>
+        <Text text="Faster patching → faster growth → faster rot"
+          font="Inter" size={13} style="italic"
+          color="#D9944A" opacity={0.6}
+          x={960} y={950} align="center" />
+      </FadeIn>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -161,48 +170,46 @@ Segments: `part1_economics_014`, `part1_economics_015`, `part1_economics_016`
 ## Data Points JSON
 ```json
 {
-  "type": "annotation_overlay",
-  "chartId": "code_cost_triple_line",
+  "type": "annotated_chart_overlay",
+  "baseChart": "code_cost_chart",
   "annotations": [
     {
       "id": "github_individual",
-      "header": "Individual task: −55%",
+      "text": "Individual task: −55%",
       "source": "GitHub, 2022",
-      "finePrint": "95 developers, one greenfield task",
-      "color": "#4ADE80",
-      "target": "immediate_patch_line",
-      "wave": 1
+      "detail": "95 developers, one greenfield task",
+      "color": "#2DD4BF",
+      "pointsTo": "immediate_patch_line"
     },
     {
-      "id": "uplevel_overall",
-      "header": "Overall throughput: ~0%",
+      "id": "uplevel_throughput",
+      "text": "Overall throughput: ~0%",
       "source": "Uplevel, 2024",
-      "finePrint": "785 developers, one year",
+      "detail": "785 developers, one year",
       "color": "#EF4444",
-      "target": "total_cost_line",
-      "wave": 1
+      "pointsTo": "total_cost_dashed_line"
     },
     {
       "id": "gitclear_churn",
-      "header": "Code churn: +44%",
+      "text": "Code churn: +44%",
       "source": "GitClear, 2025",
-      "finePrint": "211M lines analyzed",
+      "detail": "211M lines analyzed",
       "color": "#EF4444",
-      "target": "debt_shading",
-      "wave": 2
+      "pointsTo": "debt_area"
     },
     {
-      "id": "gitclear_refactoring",
-      "header": "Refactoring: −60%",
+      "id": "refactoring_decline",
+      "text": "Refactoring: −60%",
       "source": "GitClear, 2025",
-      "finePrint": "Developers aren't cleaning up. They're piling on.",
       "color": "#EF4444",
-      "target": "debt_gap",
-      "wave": 2
+      "pointsTo": "debt_area"
     }
   ],
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["part1_economics_014", "part1_economics_015", "part1_economics_016"]
+  "debtLayers": [
+    { "id": "code_complexity", "label": "Code Complexity", "opacity": 0.12 },
+    { "id": "context_rot", "label": "Context Rot", "opacity": 0.06, "texture": "noise" }
+  ],
+  "narrationSegments": ["part1_economics_014", "part1_economics_015", "part1_economics_016", "part1_economics_017"]
 }
 ```
 

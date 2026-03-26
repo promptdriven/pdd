@@ -35,7 +35,7 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 455.509333,
+      "durationSeconds": 455.530667,
       "offsetSeconds": 17.621333,
       "compositions": [
         "01_section_title_card",
@@ -52,26 +52,21 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 227.562667,
-      "offsetSeconds": 473.130666,
+      "offsetSeconds": 473.152,
       "compositions": [
         "01_section_title_card"
       ],
       "timelineSource": "generated"
     },
     {
-      "id": "part3_mold_three_parts",
+      "id": "part3_mold_has_three_parts",
       "label": "Part 3: The Mold Has Three Parts",
-      "videoFile": "part3_mold_three_parts.mp4",
-      "specDir": "part3_mold_three_parts",
-      "remotionDir": "S03-Part3MoldThreeParts",
-      "compositionId": "Part3MoldThreePartsSection",
-      "durationSeconds": 344.213333,
-      "offsetSeconds": 700.693333,
-      "compositions": [
-        "01_section_title_card",
-        "02_mold_cross_section"
-      ],
-      "timelineSource": "generated"
+      "videoFile": "part3_mold_has_three_parts.mp4",
+      "specDir": "part3_mold_has_three_parts",
+      "remotionDir": "S03-Part3MoldHasThreeParts",
+      "compositionId": "Part3MoldHasThreePartsSection",
+      "durationSeconds": 0.085333,
+      "offsetSeconds": 700.714667
     },
     {
       "id": "part4_precision_tradeoff",
@@ -81,7 +76,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 111.914667,
-      "offsetSeconds": 1044.906666,
+      "offsetSeconds": 700.8,
       "compositions": [
         "01_section_title_card",
         "02_printer_vs_mold_split",
@@ -97,7 +92,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 115.157333,
-      "offsetSeconds": 1156.821333,
+      "offsetSeconds": 812.714667,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -115,11 +110,10 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 32.149333,
-      "offsetSeconds": 1271.978666,
+      "offsetSeconds": 927.872,
       "compositions": [
         "01_section_title_card",
-        "02_legacy_codebase_reveal",
-        "04_source_of_truth_shift"
+        "02_legacy_codebase_reveal"
       ],
       "timelineSource": "generated"
     },
@@ -131,10 +125,11 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 20.714667,
-      "offsetSeconds": 1304.127999,
+      "offsetSeconds": 960.0213329999999,
       "compositions": [
         "04_pdd_triangle",
         "05_dissolve_regenerate_loop",
+        "06_mold_glow_finale",
         "07_the_beat"
       ],
       "timelineSource": "generated"
@@ -154,9 +149,9 @@
         "startSegment": "part2_paradigm_shift_001",
         "endSegment": "part2_paradigm_shift_019"
       },
-      "part3_mold_three_parts": {
-        "startSegment": "part3_mold_three_parts_001",
-        "endSegment": "part3_mold_three_parts_030"
+      "part3_mold_has_three_parts": {
+        "startSegment": "part3_mold_has_three_parts_001",
+        "endSegment": "part3_mold_has_three_parts_030"
       },
       "part4_precision_tradeoff": {
         "startSegment": "part4_precision_tradeoff_001",
@@ -183,14 +178,25 @@
     "maxConcurrentGenerations": 4,
     "references": [
       {
-        "id": "chip_engineer",
+        "id": "chip_engineer_1980s",
         "label": "1980s Chip Engineer",
-        "imagePath": "outputs/veo/references/chip_engineer.png",
+        "imagePath": "outputs/veo/references/chip_engineer_1980s.png",
         "sections": [
           "part2_paradigm_shift"
         ],
-        "referencePrompt": "Electronics engineer, male, 30s-40s, short-sleeve button-down shirt, 1980s style. Hunched over drafting desk drawing circuits with mechanical pencil under fluorescent lighting.",
-        "prompt": "Electronics engineer, male, 30s-40s, short-sleeve button-down shirt, 1980s style. Hunched over drafting desk drawing circuits with mechanical pencil under fluorescent lighting.",
+        "referencePrompt": "A chip design engineer in his 30s wearing a short-sleeve dress shirt, hunched over a large drafting desk in a 1980s electronics lab. Technical pen in hand, surrounded by datasheets and analog instruments.",
+        "prompt": "A chip design engineer in his 30s wearing a short-sleeve dress shirt, hunched over a large drafting desk in a 1980s electronics lab. Technical pen in hand, surrounded by datasheets and analog instruments.",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "craftsman",
+        "label": "Woodworking Craftsman",
+        "imagePath": "outputs/veo/references/craftsman.png",
+        "sections": [
+          "part2_paradigm_shift"
+        ],
+        "referencePrompt": "A craftsman in his 50s wearing a leather apron over a flannel shirt, working in a warm wood-filled workshop with natural window light and an overhead lamp. Weathered hands, focused expression.",
+        "prompt": "A craftsman in his 50s wearing a leather apron over a flannel shirt, working in a warm wood-filled workshop with natural window light and an overhead lamp. Weathered hands, focused expression.",
         "source": "stage6-inferred"
       },
       {
@@ -198,10 +204,12 @@
         "label": "Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
-          "cold_open"
+          "closing",
+          "cold_open",
+          "part5_compound_returns"
         ],
-        "referencePrompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office.",
-        "prompt": "Software developer, mid-20s to mid-30s, casual attire, confident and focused. Hands on mechanical keyboard. Lit by cool blue-white monitor glow in a dim modern home office.",
+        "referencePrompt": "A developer in their late 20s wearing a dark henley shirt, sitting at a modern desk with a mechanical keyboard and ultrawide monitor. Relaxed posture, warm desk lamp nearby.",
+        "prompt": "A developer in their late 20s wearing a dark henley shirt, sitting at a modern desk with a mechanical keyboard and ultrawide monitor. Relaxed posture, warm desk lamp nearby.",
         "source": "stage6-inferred"
       },
       {
@@ -209,10 +217,21 @@
         "label": "Developer",
         "imagePath": "outputs/veo/references/developer_protagonist.png",
         "sections": [
-          "closing"
+          "part1_economics"
         ],
-        "referencePrompt": "Developer seated at modern workstation, seen from behind, mechanical keyboard, monitor glow lighting",
-        "prompt": "Developer seated at modern workstation, seen from behind, mechanical keyboard, monitor glow lighting",
+        "referencePrompt": "Mid-30s software developer, focused expression, modern casual attire, working at a clean desk with dark-themed code editor",
+        "prompt": "Mid-30s software developer, focused expression, modern casual attire, working at a clean desk with dark-themed code editor",
+        "source": "stage6-inferred"
+      },
+      {
+        "id": "factory_engineer",
+        "label": "Factory Engineer",
+        "imagePath": "outputs/veo/references/factory_engineer.png",
+        "sections": [
+          "part2_paradigm_shift"
+        ],
+        "referencePrompt": "An engineer in a clean grey work shirt, mid-40s, steady hands, working at a well-lit industrial workbench with precision tools and machined steel molds.",
+        "prompt": "An engineer in a clean grey work shirt, mid-40s, steady hands, working at a well-lit industrial workbench with precision tools and machined steel molds.",
         "source": "stage6-inferred"
       },
       {
@@ -220,10 +239,11 @@
         "label": "Great-Grandmother",
         "imagePath": "outputs/veo/references/grandmother.png",
         "sections": [
-          "cold_open"
+          "cold_open",
+          "part5_compound_returns"
         ],
-        "referencePrompt": "Elderly woman in her 70s-80s, weathered hands with visible age spots, seated in a wooden chair. 1950s domestic attire. Lit by warm amber lamplight. Darning a wool sock over a wooden darning egg.",
-        "prompt": "Elderly woman in her 70s-80s, weathered hands with visible age spots, seated in a wooden chair. 1950s domestic attire. Lit by warm amber lamplight. Darning a wool sock over a wooden darning egg.",
+        "referencePrompt": "An elderly woman in her 70s with silver hair pinned up, wearing a floral housedress and reading glasses on a chain. 1950s appearance, kind face, sitting in a cushioned armchair under warm lamplight.",
+        "prompt": "An elderly woman in her 70s with silver hair pinned up, wearing a floral housedress and reading glasses on a chain. 1950s appearance, kind face, sitting in a cushioned armchair under warm lamplight.",
         "source": "stage6-inferred"
       },
       {
@@ -231,11 +251,10 @@
         "label": "Grandmother",
         "imagePath": "outputs/veo/references/grandmother_darner.png",
         "sections": [
-          "part1_economics",
-          "part5_compound_returns"
+          "part1_economics"
         ],
-        "referencePrompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight",
-        "prompt": "Elderly woman with weathered skilled hands, domestic setting, warm lamplight",
+        "referencePrompt": "Elderly woman in her 70s, experienced steady hands, calm focused expression, working under warm lamplight in a comfortable living room",
+        "prompt": "Elderly woman in her 70s, experienced steady hands, calm focused expression, working under warm lamplight in a comfortable living room",
         "source": "stage6-inferred"
       }
     ],

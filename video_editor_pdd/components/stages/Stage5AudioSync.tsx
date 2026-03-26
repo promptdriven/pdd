@@ -179,9 +179,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
   useEffect(() => {
     return () => {
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        previewAudioRef.current = null;
+      const audio = previewAudioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
       }
     };
   }, []);
@@ -392,26 +394,23 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
   const handlePreviewSegmentAudio = async (segmentId: string) => {
     try {
+      const audio = previewAudioRef.current;
+      if (!audio) {
+        throw new Error('Audio preview unavailable');
+      }
+
       if (playingSegmentId === segmentId) {
-        previewAudioRef.current?.pause();
-        previewAudioRef.current = null;
+        audio.pause();
+        audio.currentTime = 0;
         setPlayingSegmentId(null);
         return;
       }
 
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        previewAudioRef.current = null;
-      }
-
-      const audio = new Audio(`/api/audio/tts/${segmentId}.wav?v=${Date.now()}`);
-      audio.addEventListener('ended', () => {
-        if (previewAudioRef.current === audio) {
-          previewAudioRef.current = null;
-          setPlayingSegmentId(null);
-        }
-      });
-      previewAudioRef.current = audio;
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = `/api/audio/tts/${segmentId}.wav?v=${Date.now()}`;
+      audio.load();
+      setDetectError(null);
       await audio.play();
       setPlayingSegmentId(segmentId);
     } catch (err: any) {
@@ -445,6 +444,16 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
   return (
     <div className="space-y-6">
+      <audio
+        ref={previewAudioRef}
+        className="hidden"
+        preload="auto"
+        onEnded={() => setPlayingSegmentId(null)}
+        onError={() => {
+          setPlayingSegmentId(null);
+          setDetectError('Failed to load segment audio');
+        }}
+      />
       <h2 className="text-xl font-semibold">Stage 5 — Audio Sync</h2>
       {/* Top Section: Section Grouping Table */}
       <div className="rounded-lg border border-slate-700 bg-slate-900 p-4 shadow-sm">

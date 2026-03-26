@@ -117,6 +117,162 @@ def _coerce_section_groups(
     return section_groups
 
 
+def _parse_segment_index(segment_id: str) -> Optional[int]:
+    try:
+        return int(segment_id.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_requested_segment_numbers(value: Any) -> List[int]:
+    numbers: List[int] = []
+    if isinstance(value, list):
+        for segment_id in value:
+            if isinstance(segment_id, str):
+                index = _parse_segment_index(segment_id)
+                if index is not None:
+                    numbers.append(index)
+    elif isinstance(value, dict):
+        start_seg = value.get("startSegment")
+        end_seg = value.get("endSegment")
+        start_num = _parse_segment_index(start_seg) if isinstance(start_seg, str) else None
+        end_num = _parse_segment_index(end_seg) if isinstance(end_seg, str) else None
+        if start_num is not None and end_num is not None and end_num >= start_num:
+            numbers.extend(list(range(start_num, end_num + 1)))
+    return numbers
+
+
+def _load_manifest_sections(output_dir: str) -> Dict[str, List[str]]:
+    manifest_path = Path(output_dir) / "segments.json"
+    if not manifest_path.exists():
+        return {}
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    segments = manifest.get("segments")
+    if not isinstance(segments, list):
+        return {}
+
+    section_map: Dict[str, List[str]] = {}
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        segment_id = segment.get("id")
+        section_id = segment.get("sectionId")
+        if isinstance(segment_id, str) and isinstance(section_id, str):
+            section_map.setdefault(section_id, []).append(segment_id)
+    return section_map
+
+
+def _normalize_section_key(section_id: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", section_id.lower()).strip()
+
+
+def _resolve_manifest_section_alias(
+    section_id: str,
+    requested_numbers: List[int],
+    manifest_sections: Dict[str, List[str]],
+    project: Dict[str, Any],
+) -> Optional[str]:
+    if section_id in manifest_sections:
+        return section_id
+
+    candidates = list(manifest_sections.keys())
+    project_sections = project.get("sections")
+    if isinstance(project_sections, list):
+        preferred = [
+            section.get("id")
+            for section in project_sections
+            if isinstance(section, dict)
+            and isinstance(section.get("id"), str)
+            and section.get("id") in manifest_sections
+        ]
+        if preferred:
+            candidates = preferred
+
+    raw_norm = _normalize_section_key(section_id)
+    requested_set = set(requested_numbers)
+    best_candidate: Optional[str] = None
+    best_score: Tuple[int, float] = (-1, 0.0)
+
+    for candidate in candidates:
+        candidate_norm = _normalize_section_key(candidate)
+        similarity = SequenceMatcher(None, raw_norm, candidate_norm).ratio()
+        candidate_numbers = {
+            index
+            for index in (_parse_segment_index(seg_id) for seg_id in manifest_sections[candidate])
+            if index is not None
+        }
+        overlap = len(requested_set & candidate_numbers) if requested_set else 0
+        score = (overlap, similarity)
+        if score > best_score:
+            best_candidate = candidate
+            best_score = score
+
+    if best_candidate is None:
+        return None
+
+    overlap, similarity = best_score
+    if requested_set and overlap <= 0:
+        return None
+    if similarity < 0.65:
+        return None
+    return best_candidate
+
+
+def _resolve_section_groups_with_manifest(
+    project: Dict[str, Any],
+    raw: Dict[str, Any],
+    output_dir: str,
+) -> Dict[str, List[str]]:
+    section_groups = _coerce_section_groups(raw, output_dir)
+    manifest_sections = _load_manifest_sections(output_dir)
+    if not manifest_sections:
+        return section_groups
+
+    normalized: Dict[str, List[str]] = {}
+    for section_id, value in raw.items():
+        direct_segment_ids = section_groups.get(section_id, [])
+        requested_numbers = _extract_requested_segment_numbers(value)
+        if not requested_numbers:
+            requested_numbers = [
+                index
+                for index in (_parse_segment_index(segment_id) for segment_id in direct_segment_ids)
+                if index is not None
+            ]
+
+        target_section_id = (
+            section_id
+            if section_id in manifest_sections
+            else _resolve_manifest_section_alias(
+                section_id,
+                requested_numbers,
+                manifest_sections,
+                project,
+            )
+        )
+
+        if target_section_id and target_section_id in manifest_sections:
+            requested_set = set(requested_numbers)
+            mapped_segment_ids = [
+                segment_id
+                for segment_id in manifest_sections[target_section_id]
+                if not requested_set
+                or _parse_segment_index(segment_id) in requested_set
+            ]
+            if mapped_segment_ids:
+                normalized[target_section_id] = mapped_segment_ids
+                continue
+
+        normalized[section_id] = direct_segment_ids
+
+    return normalized
+
+
 def load_section_groups(
     project_dir: str, output_dir: str
 ) -> Dict[str, List[str]]:
@@ -137,7 +293,8 @@ def load_section_groups(
     if not raw:
         raise ValueError("No sectionGroups found")
 
-    return _coerce_section_groups(raw, output_dir)
+    project = load_project(project_dir)
+    return _resolve_section_groups_with_manifest(project, raw, output_dir)
 
 
 def get_segment_wav_path(output_dir: str, segment_id: str) -> Path:

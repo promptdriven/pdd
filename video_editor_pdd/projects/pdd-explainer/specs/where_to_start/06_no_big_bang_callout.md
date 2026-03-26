@@ -1,128 +1,135 @@
-[title:]
+[Remotion]
 
-# Section 6.6: No Big Bang Callout
+# Section 6.6: No Big Bang Callout — Gradual Migration Text Card
 
-**Tool:** Title
-**Duration:** ~3s (90 frames @ 30fps)
-**Timestamp:** 0:26 - 0:29
+**Tool:** Remotion
+**Duration:** ~6s (180 frames @ 30fps)
+**Timestamp:** 0:22 - 0:28
 
 ## Visual Description
 
-A text callout card that bridges the "where to start" section into the closing. The network graph from the previous shot fades into the background at very low opacity, and a clean typographic statement appears center-screen:
+A text-forward infographic that reinforces the "no big bang" message. The module grid from the previous spec is still faintly visible in the background (8/20 glowing), but heavily blurred and dimmed to ~0.15 opacity — it becomes atmospheric.
 
-> "You don't patch socks because socks got cheap."
+Three short statements appear in sequence, stacked vertically, center-screen:
 
-This is the sock metaphor returning one final time — not as a visual but as a text punch. The quote sits in large, serif-adjacent typography (Inter at heavy weight with wider tracking for a more editorial feel). Below, a thin horizontal rule, and then a smaller line: "The economics made patching irrational."
+1. **"No big bang."** — appears first, bold, white
+2. **"No rewrite."** — appears second, bold, white
+3. **"Just a gradual migration of where value lives."** — appears third, slightly smaller, with "value" highlighted in blue-purple
 
-The callback is intentional — this exact phrasing mirrors the opening of the closing section, creating a smooth handoff.
+Each line enters with a clean left-to-right wipe, timed to the narration cadence. The three lines together form a manifesto-style layout — minimal, confident, declarative.
+
+Below the three lines, a subtle animated graphic: a horizontal bar that transitions from gray (code) on the left to glowing purple (prompt) on the right, with the transition point slowly sliding rightward — a visual metaphor for the gradual migration.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- Background layer: blurred module grid from Spec 05 at 0.15
 
 ### Chart/Visual Elements
 
-#### Background Ghost (network echo)
-- Faint echo of the module network graph from 05
-- All nodes: `#1E293B` at 0.03
-- All edges: `#334155` at 0.02
-- Fades from 0.03 → 0.0 over first 30 frames
+#### Statement Lines
+| Line | Text | Font | Size | Weight | Color | Position (y) |
+|------|------|------|------|--------|-------|--------------|
+| 1 | "No big bang." | Inter | 42px | Bold (700) | `#E2E8F0` | 380 |
+| 2 | "No rewrite." | Inter | 42px | Bold (700) | `#E2E8F0` | 440 |
+| 3 | "Just a gradual migration of where value lives." | Inter | 28px | Regular (400) | `#94A3B8` | 520 |
 
-#### Primary Quote
-- "You don't patch socks" — Inter, 44px, bold (700), `#E2E8F0` at 0.9, centered at y: 460
-- "because socks got cheap." — Inter, 44px, bold (700), `#D9944A` at 0.9, centered at y: 520
-- The amber color on "because socks got cheap" echoes the sock/grandmother color palette
+- Line 3 highlight: "value" rendered in `#8B5CF6` at 1.0, semi-bold (600)
+- All lines left-aligned at x: 500, right margin comfortable
+- Line spacing: 60px between lines 1-2, 80px between lines 2-3
 
-#### Horizontal Rule
-- 160px wide, 1.5px, `#334155` at 0.4, centered at y: 560
-
-#### Secondary Line
-- "The economics made patching irrational." — Inter, 20px, regular (400), `#94A3B8` at 0.6, centered at y: 590
+#### Migration Bar
+- Position: centered at y: 640, width: 600px, height: 6px, rounded ends
+- Left portion: `#475569` (code/gray)
+- Right portion: `#8B5CF6` (prompt/purple), with soft glow
+- Transition point: animated, sliding from 20% to 50% over hold period
+- Small labels: "code" (left end, `#475569`), "specification" (right end, `#8B5CF6`) — Inter, 11px
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Background ghost fades. Clean dark background.
-2. **Frame 15-35 (0.5-1.17s):** "You don't patch socks" fades in. `easeOutQuad`.
-3. **Frame 35-50 (1.17-1.67s):** "because socks got cheap." fades in with 8px upward slide, in amber. `easeOutCubic`.
-4. **Frame 50-58 (1.67-1.93s):** Horizontal rule draws from center outward. `easeInOutQuad`.
-5. **Frame 58-70 (1.93-2.33s):** Secondary line fades in. `easeOutQuad`.
-6. **Frame 70-90 (2.33-3s):** Hold. Clean and impactful.
+1. **Frame 0-20 (0-0.67s):** Blurred module grid background stabilizes. Frame settles.
+2. **Frame 20-50 (0.67-1.67s):** Line 1 "No big bang." wipes in from left. Clean, decisive.
+3. **Frame 50-80 (1.67-2.67s):** Line 2 "No rewrite." wipes in.
+4. **Frame 80-120 (2.67-4s):** Line 3 wipes in. "value" highlights in purple.
+5. **Frame 120-140 (4-4.67s):** Migration bar fades in below. Transition point starts at 20%.
+6. **Frame 140-180 (4.67-6s):** Migration bar transition slides rightward to 50%. Labels appear. Hold.
 
 ### Typography
-- Primary quote line 1: Inter, 44px, bold (700), `#E2E8F0` at 0.9
-- Primary quote line 2: Inter, 44px, bold (700), `#D9944A` at 0.9
-- Horizontal rule: `#334155` at 0.4
-- Secondary line: Inter, 20px, regular (400), `#94A3B8` at 0.6
+- Lines 1-2: Inter, 42px, bold (700), `#E2E8F0`
+- Line 3: Inter, 28px, regular (400), `#94A3B8`, with "value" in `#8B5CF6` semi-bold (600)
+- Bar labels: Inter, 11px, respective colors at 0.6
 
 ### Easing
-- Quote line 1 fade: `easeOut(quad)` over 20 frames
-- Quote line 2 slide-up: `easeOut(cubic)` over 15 frames
-- Rule draw: `easeInOut(quad)` over 8 frames
-- Secondary line fade: `easeOut(quad)` over 12 frames
-- Ghost network fade: `easeIn(quad)` over 30 frames
+- Line wipe-in: `easeOut(cubic)` over 20 frames, masked left-to-right reveal
+- "value" highlight: `easeOut(quad)` color transition over 10 frames
+- Migration bar fade-in: `easeOut(quad)` over 15 frames
+- Bar transition slide: `easeInOut(quad)` over 40 frames (20% → 50%)
 
 ## Narration Sync
-> "You don't patch socks because socks got cheap. The economics made patching irrational."
+> "One module at a time. No big bang. No rewrite. Just a gradual migration of where value lives — from code to specification."
 
-Segment: `where_to_start_003`
+Segment: `where_to_start_002` (closing beats)
 
-- **0:26** ("You don't patch socks"): First line appears
-- **0:27** ("because socks got cheap"): Amber text slides up
-- **0:28** ("The economics"): Rule draws, secondary line fades in
-- **0:29** (hold): Clean frame — the callback lands
+- **0:22** (22.00s): "No big bang." appears
+- **0:23** (23.00s): "No rewrite." appears
+- **0:24** (24.00s): "Just a gradual migration..." appears
+- **0:26** (26.24s): Migration bar visible, hold — segment ends
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={90}>
+<Sequence from={0} durationInFrames={180}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Ghost network echo */}
-    <Sequence from={0} durationInFrames={30}>
-      <FadeOut duration={30}>
-        <GhostNetwork nodes={networkNodes} edges={networkEdges}
-          nodeOpacity={0.03} edgeOpacity={0.02} />
-      </FadeOut>
+
+    {/* Blurred background: module grid from Spec 05 */}
+    <BlurLayer blur={20} opacity={0.15}>
+      <ModuleGrid converted={8} total={20} />
+    </BlurLayer>
+
+    {/* Statement lines */}
+    <Sequence from={20}>
+      <WipeReveal direction="left-to-right" duration={20}>
+        <Text text="No big bang." font="Inter" size={42}
+          weight={700} color="#E2E8F0"
+          x={500} y={380} align="left" />
+      </WipeReveal>
     </Sequence>
 
-    {/* Primary quote - line 1 */}
-    <Sequence from={15}>
-      <FadeIn duration={20}>
-        <Text text="You don't patch socks"
-          font="Inter" size={44} weight={700}
-          color="#E2E8F0" opacity={0.9}
-          x={960} y={460} align="center" />
-      </FadeIn>
-    </Sequence>
-
-    {/* Primary quote - line 2 (amber) */}
-    <Sequence from={35}>
-      <SlideUp distance={8} duration={15}>
-        <FadeIn duration={15}>
-          <Text text="because socks got cheap."
-            font="Inter" size={44} weight={700}
-            color="#D9944A" opacity={0.9}
-            x={960} y={520} align="center" />
-        </FadeIn>
-      </SlideUp>
-    </Sequence>
-
-    {/* Horizontal rule */}
     <Sequence from={50}>
-      <DrawLine from={[880, 560]} to={[1040, 560]}
-        color="#334155" opacity={0.4} width={1.5}
-        drawDuration={8} fromCenter />
+      <WipeReveal direction="left-to-right" duration={20}>
+        <Text text="No rewrite." font="Inter" size={42}
+          weight={700} color="#E2E8F0"
+          x={500} y={440} align="left" />
+      </WipeReveal>
     </Sequence>
 
-    {/* Secondary line */}
-    <Sequence from={58}>
-      <FadeIn duration={12}>
-        <Text text="The economics made patching irrational."
-          font="Inter" size={20} weight={400}
-          color="#94A3B8" opacity={0.6}
-          x={960} y={590} align="center" />
+    <Sequence from={80}>
+      <WipeReveal direction="left-to-right" duration={25}>
+        <RichText x={500} y={520} align="left" font="Inter" size={28}>
+          <Span color="#94A3B8" weight={400}>
+            Just a gradual migration of where{' '}
+          </Span>
+          <Span color="#8B5CF6" weight={600}>value</Span>
+          <Span color="#94A3B8" weight={400}> lives.</Span>
+        </RichText>
+      </WipeReveal>
+    </Sequence>
+
+    {/* Migration bar */}
+    <Sequence from={120}>
+      <FadeIn duration={15}>
+        <MigrationBar
+          x={660} y={640} width={600} height={6}
+          leftColor="#475569" rightColor="#8B5CF6"
+          initialSplit={0.2} finalSplit={0.5}
+          transitionStart={20} transitionDuration={40}
+          leftLabel="code" rightLabel="specification"
+          labelFont="Inter" labelSize={11}
+          rounded
+        />
       </FadeIn>
     </Sequence>
+
   </AbsoluteFill>
 </Sequence>
 ```
@@ -130,15 +137,21 @@ Segment: `where_to_start_003`
 ## Data Points JSON
 ```json
 {
-  "type": "quote_card",
-  "chartId": "no_big_bang_callout",
-  "quoteLine1": "You don't patch socks",
-  "quoteLine2": "because socks got cheap.",
-  "quoteLine2Color": "#D9944A",
-  "secondaryText": "The economics made patching irrational.",
-  "callback": "sock_metaphor",
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["where_to_start_003"]
+  "type": "text_manifesto",
+  "statements": [
+    { "text": "No big bang.", "frame": 20, "style": "bold" },
+    { "text": "No rewrite.", "frame": 50, "style": "bold" },
+    { "text": "Just a gradual migration of where value lives.", "frame": 80, "highlight": "value" }
+  ],
+  "migrationBar": {
+    "from": "code",
+    "to": "specification",
+    "startSplit": 0.2,
+    "endSplit": 0.5,
+    "leftColor": "#475569",
+    "rightColor": "#8B5CF6"
+  },
+  "narrationSegments": ["where_to_start_002"]
 }
 ```
 

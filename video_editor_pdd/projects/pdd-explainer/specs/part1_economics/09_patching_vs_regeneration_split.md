@@ -1,165 +1,168 @@
 [split:]
 
-# Section 1.9: Agentic Patching vs PDD Regeneration — Side-by-Side
+# Section 1.9: Patching vs Regeneration — Context Window Comparison
 
 **Tool:** Split
-**Duration:** ~22s (660 frames @ 30fps)
-**Timestamp:** 4:28 - 4:50
+**Duration:** ~26s (780 frames @ 30fps)
+**Timestamp:** 6:01 - 6:27
 
 ## Visual Description
 
-A vertical split screen comparing the two approaches to code maintenance. LEFT panel: "Agentic Patching" — a context window visualization crammed with 15,000 tokens of code. Red highlights mark irrelevant sections the AI grabbed. A tiny green section shows the actually relevant code buried in the noise. RIGHT panel: "PDD Regeneration" — a context window with a clean 300-token prompt, 2,000 tokens of tests, and a small grounding example. Clean. Focused. Room to think.
+A vertical split screen showing the fundamental difference in how agentic patching and PDD regeneration use the context window. This is the practical "so what do you do about it?" visual.
 
-The contrast is stark. The left panel feels cluttered and anxious. The right panel feels spacious and intentional. Both panels use a code-editor aesthetic with syntax-highlighted token blocks.
+**LEFT — "Agentic Patching":** A context window visualization filled with 15,000 tokens of code. Red highlights mark irrelevant sections (~60% of the window). A tiny green section shows the relevant code. The window is cramped, noisy, wasteful. Label: "15,000 tokens consumed. ~40% relevant."
+
+**RIGHT — "PDD Regeneration":** A context window with a 300-token prompt at the top, 2,000 tokens of tests below it, and a small grounding example. The rest is empty — clean white space. The window is spacious, focused, efficient. Label: "2,300 tokens consumed. 100% curated."
+
+The split holds as a compression animation plays: twenty code blocks try to fit into a context window (they overflow), then compress into twenty compact prompt blocks (they all fit with room to spare).
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#000000` (true black)
-- Split line: 2px vertical divider at x: 960, color `#334155` at 0.2
+- Background: `#0A0F1A` (deep navy-black)
+- Split line: 2px vertical divider at x: 960, color `#334155` at 0.15
 
 ### Chart/Visual Elements
 
-#### Panel Headers
-- LEFT: "AGENTIC PATCHING" — Inter, 14px, semi-bold (600), `#EF4444` at 0.4, letter-spacing 2px, centered at y: 40
-- RIGHT: "PDD REGENERATION" — Inter, 14px, semi-bold (600), `#4ADE80` at 0.4, letter-spacing 2px, centered at y: 40
+#### Left Panel — Agentic Patching
+- Header: "AGENTIC PATCHING" — Inter, 16px, bold, `#EF4444` at 0.7, y: 50
+- Context window: 850×680px, bg `#1E1E2E`, border `#EF4444` at 0.2, rounded 6px
+- Content: dense syntax-highlighted code, JetBrains Mono, 8px
+  - Red overlay blocks (~60%): `#EF4444` at 0.15 — irrelevant code
+  - Green section (~10%): `#22C55E` at 0.15 — relevant code
+  - Gray sections (~30%): `#94A3B8` at 0.05 — partially relevant
+- Token count: "15,000 tokens consumed" — Inter, 12px, `#EF4444` at 0.6
+- Relevance: "~40% relevant" — Inter, 12px, `#EF4444` at 0.5
 
-#### Left Panel — Agentic Patching (x: 0 to x: 958)
-- Background: `#0A0F1A`
-- Context window box: 400×500px, centered in panel, border `#334155` at 0.3
-- Token counter: "~15,000 tokens" — JetBrains Mono, 10px, `#EF4444` at 0.5, top-right of box
-- Inside box: dense rows of code blocks (faux syntax-highlighted)
-  - Irrelevant blocks: `#EF4444` at 0.15 background, 12-15 blocks filling ~80% of space
-  - Relevant blocks: `#4ADE80` at 0.15 background, 2-3 tiny blocks (~5% of space)
-- Label below box: "Red = irrelevant code retrieved" — Inter, 9px, `#EF4444` at 0.4
-- Second label: "Green = actually needed" — Inter, 9px, `#4ADE80` at 0.4
-- Stress indicator: subtle red vignette at edges
+#### Right Panel — PDD Regeneration
+- Header: "PDD REGENERATION" — Inter, 16px, bold, `#2DD4BF` at 0.7, y: 50
+- Context window: 850×680px, bg `#0F1E1E`, border `#2DD4BF` at 0.2, rounded 6px
+- Content blocks (vertically stacked with generous spacing):
+  - Prompt block: 300 tokens, clean text, `#2DD4BF` at 0.5, ~80px tall
+  - Test block: 2,000 tokens, structured, `#2DD4BF` at 0.4, ~200px tall
+  - Grounding example: small, `#2DD4BF` at 0.3, ~60px tall
+  - Remaining space: empty `#0F1E1E` — deliberately empty, labeled "Room to think"
+- Token count: "2,300 tokens consumed" — Inter, 12px, `#2DD4BF` at 0.6
+- Relevance: "100% curated" — Inter, 12px, `#2DD4BF` at 0.5
 
-#### Right Panel — PDD Regeneration (x: 962 to x: 1920)
-- Background: `#0A0F1A`
-- Context window box: 400×500px, centered in panel, border `#334155` at 0.3
-- Token counter: "~2,500 tokens" — JetBrains Mono, 10px, `#4ADE80` at 0.5, top-right of box
-- Inside box: clean layered sections
-  - Prompt section: `#4A90D9` at 0.12 background, 60px height, label "Prompt (300 tokens)"
-  - Tests section: `#D9944A` at 0.12 background, 100px height, label "Tests (2,000 tokens)"
-  - Grounding section: `#5AAA6E` at 0.12 background, 40px height, label "Grounding example"
-  - Remaining space: empty `#0F172A` at 0.3, label "Room to think"
-- Clean indicator: subtle blue vignette at edges, calming
-
-#### Bottom Comparison Stats
-- LEFT: "Context utilization: ~5%" — Inter, 11px, `#EF4444` at 0.5
-- RIGHT: "Context utilization: ~95%" — Inter, 11px, `#4ADE80` at 0.5
+#### Compression Animation (Phase 2, overlays on top of split)
+- 20 code blocks float from left panel, overflow their window boundary
+- Blocks compress into 20 compact prompt blocks
+- Prompt blocks float into right panel, all fit with room to spare
+- Counter: "Same system. 5-10× more fits." — Inter, 16px, bold, `#E2E8F0`
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Split line draws. Panel headers fade in.
-2. **Frame 20-90 (0.67-3s):** Left panel: context window box draws. Dense code blocks fill in rapidly — chaotic, overwhelming. Red highlights appear on irrelevant sections.
-3. **Frame 90-180 (3-6s):** Left panel: tiny green relevant blocks barely visible. Token counter: "~15,000 tokens". The mess is complete.
-4. **Frame 180-300 (6-10s):** Right panel: context window box draws. Clean layered sections appear one by one — prompt (blue), tests (amber), grounding (green). Each appears neatly with gentle fade.
-5. **Frame 300-360 (10-12s):** Right panel: "Room to think" label in the empty space. Token counter: "~2,500 tokens". The contrast is stark.
-6. **Frame 360-420 (12-14s):** Legend labels appear below each panel.
-7. **Frame 420-540 (14-18s):** Bottom comparison stats appear: "~5% utilization" vs "~95% utilization".
-8. **Frame 540-660 (18-22s):** Hold on complete split. Right panel subtly pulses with blue glow.
+1. **Frame 0-15 (0-0.5s):** Split line fades in.
+2. **Frame 15-180 (0.5-6s):** Left panel fills with dense code. Red/green highlights appear. Header and labels.
+3. **Frame 180-360 (6-12s):** Right panel fills with clean prompt/test/grounding blocks. Empty space visible. Header and labels.
+4. **Frame 360-480 (12-16s):** Token counts appear on both sides. The 15k vs 2.3k contrast lands.
+5. **Frame 480-660 (16-22s):** Compression animation: 20 code blocks → try to fit → overflow → compress → 20 prompt blocks → fit easily.
+6. **Frame 660-780 (22-26s):** "Same system. 5-10× more fits." label. Hold.
 
 ### Typography
-- Panel headers: Inter, 14px, semi-bold (600), respective colors at 0.4, letter-spacing 2px
-- Token counters: JetBrains Mono, 10px, respective colors at 0.5
-- Section labels inside boxes: Inter, 9px, `#94A3B8` at 0.5
-- Legend labels: Inter, 9px, respective colors at 0.4
-- Comparison stats: Inter, 11px, respective colors at 0.5
+- Headers: Inter, 16px, bold (700), respective colors
+- Code: JetBrains Mono, 8px, syntax-highlighted
+- Prompt text: Inter, 11px, `#2DD4BF`
+- Token counts: Inter, 12px, respective colors
+- Compression label: Inter, 16px, bold (700), `#E2E8F0`
 
 ### Easing
-- Split line draw: `easeOut(cubic)` over 15 frames
-- Code blocks fill: `easeOut(quad)`, staggered 1 frame each
-- Clean sections appear: `easeOut(cubic)` over 20 frames, staggered 30 frames
-- Stats fade: `easeOut(quad)` over 20 frames
-- Right panel pulse: `easeInOut(sine)` on 50-frame cycle
+- Split line: `easeOut(quad)` over 15 frames
+- Code fill: linear rapid, 0.3s
+- Prompt blocks: `easeOut(quad)` per block, staggered 15 frames
+- Red/green highlights: `easeOut(quad)` over 20 frames
+- Compression animation: `easeInOut(back)` — blocks shrink with slight overshoot
+- Counter: `easeOut(quad)` over 20 frames
 
 ## Narration Sync
-> "Regeneration doesn't have this problem. A prompt is a fifth to a tenth the size of the code it governs."
-> "And there's something else. These models are trained on up to thirty times more natural language than code."
+> "I saw this firsthand. A 3,000-line Python module I maintained for two years? Claude Code rewrote it in three minutes — from a 15-line prompt and a test suite."
+> "Research also confirms. Modules around 300 lines can be reliably regenerated from prompts of 15 to 50 lines..."
 
-Segments: `part1_economics_027`, `part1_economics_028`
+Segments: `part1_economics_029`, `part1_economics_030`
 
-- **4:28** ("Regeneration doesn't have this problem"): Split draws, left panel fills chaotically
-- **4:36** ("A prompt is a fifth"): Right panel shows clean layout
-- **4:42** ("something else"): Comparison stats appear
-- **4:50** ("thirty times more natural language"): Hold
+- **388.10s** ("I saw this firsthand"): Split appears, left panel filling
+- **395s** ("Claude Code rewrote it"): Right panel filling, contrast visible
+- **413.28s** ("Research also confirms"): Compression animation playing
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={660}>
-  <AbsoluteFill style={{ backgroundColor: '#000000' }}>
+<Sequence from={0} durationInFrames={780}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
     {/* Left panel — Agentic Patching */}
     <Panel x={0} width={958}>
-      <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-        <PanelHeader text="AGENTIC PATCHING" color="#EF4444"
-          opacity={0.4} letterSpacing={2} y={40} />
-
-        <Sequence from={20}>
-          <ContextWindowBox width={400} height={500}
-            borderColor="#334155" borderOpacity={0.3}>
-            <DenseCodeBlocks count={60}
-              irrelevantColor="#EF4444" irrelevantOpacity={0.15}
-              irrelevantCount={50}
-              relevantColor="#4ADE80" relevantOpacity={0.15}
-              relevantCount={3}
-              fillDuration={70} stagger={1} />
-            <TokenCounter value="~15,000 tokens"
-              color="#EF4444" opacity={0.5} />
-          </ContextWindowBox>
-        </Sequence>
-
-        <Sequence from={360}>
-          <FadeIn duration={20}>
-            <Text text="Red = irrelevant code retrieved"
-              color="#EF4444" opacity={0.4} size={9} y={820} />
-            <Text text="Green = actually needed"
-              color="#4ADE80" opacity={0.4} size={9} y={840} />
-          </FadeIn>
-        </Sequence>
-      </AbsoluteFill>
+      <FadeIn duration={15}>
+        <Text text="AGENTIC PATCHING" font="Inter" size={16}
+          weight={700} color="#EF4444" opacity={0.7}
+          x={479} y={50} align="center" />
+      </FadeIn>
+      <Sequence from={15}>
+        <ContextWindow x={55} y={80} width={850} height={680}
+          bg="#1E1E2E" border="#EF4444" borderOpacity={0.2}
+          content="dense_code_with_highlights"
+          highlights={[
+            { type: "irrelevant", color: "#EF4444", opacity: 0.15, percent: 60 },
+            { type: "relevant", color: "#22C55E", opacity: 0.15, percent: 10 },
+            { type: "partial", color: "#94A3B8", opacity: 0.05, percent: 30 }
+          ]} />
+      </Sequence>
+      <Sequence from={360}>
+        <FadeIn duration={15}>
+          <Text text="15,000 tokens consumed" font="Inter" size={12}
+            color="#EF4444" opacity={0.6} x={479} y={790} align="center" />
+          <Text text="~40% relevant" font="Inter" size={12}
+            color="#EF4444" opacity={0.5} x={479} y={810} align="center" />
+        </FadeIn>
+      </Sequence>
     </Panel>
 
     {/* Split divider */}
-    <SplitLine x={960} color="#334155" opacity={0.2} drawDuration={15} />
+    <FadeIn duration={15}>
+      <SplitLine x={960} color="#334155" opacity={0.15} width={2} />
+    </FadeIn>
 
     {/* Right panel — PDD Regeneration */}
     <Panel x={962} width={958}>
-      <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-        <PanelHeader text="PDD REGENERATION" color="#4ADE80"
-          opacity={0.4} letterSpacing={2} y={40} />
-
-        <Sequence from={180}>
-          <ContextWindowBox width={400} height={500}
-            borderColor="#334155" borderOpacity={0.3}>
-            <CleanSection label="Prompt (300 tokens)"
-              color="#4A90D9" opacity={0.12} height={60}
-              delay={0} />
-            <CleanSection label="Tests (2,000 tokens)"
-              color="#D9944A" opacity={0.12} height={100}
-              delay={30} />
-            <CleanSection label="Grounding example"
-              color="#5AAA6E" opacity={0.12} height={40}
-              delay={60} />
-            <EmptySpace label="Room to think"
-              color="#0F172A" opacity={0.3} delay={90} />
-            <TokenCounter value="~2,500 tokens"
-              color="#4ADE80" opacity={0.5} />
-          </ContextWindowBox>
-        </Sequence>
-      </AbsoluteFill>
+      <FadeIn duration={15}>
+        <Text text="PDD REGENERATION" font="Inter" size={16}
+          weight={700} color="#2DD4BF" opacity={0.7}
+          x={479} y={50} align="center" />
+      </FadeIn>
+      <Sequence from={180}>
+        <ContextWindow x={55} y={80} width={850} height={680}
+          bg="#0F1E1E" border="#2DD4BF" borderOpacity={0.2}
+          content="prompt_blocks"
+          blocks={[
+            { label: "Prompt", tokens: 300, height: 80, color: "#2DD4BF", opacity: 0.5 },
+            { label: "Tests", tokens: 2000, height: 200, color: "#2DD4BF", opacity: 0.4 },
+            { label: "Grounding example", tokens: 100, height: 60, color: "#2DD4BF", opacity: 0.3 }
+          ]}
+          emptyLabel="Room to think" />
+      </Sequence>
+      <Sequence from={360}>
+        <FadeIn duration={15}>
+          <Text text="2,300 tokens consumed" font="Inter" size={12}
+            color="#2DD4BF" opacity={0.6} x={479} y={790} align="center" />
+          <Text text="100% curated" font="Inter" size={12}
+            color="#2DD4BF" opacity={0.5} x={479} y={810} align="center" />
+        </FadeIn>
+      </Sequence>
     </Panel>
 
-    {/* Comparison stats */}
-    <Sequence from={420}>
+    {/* Compression animation overlay */}
+    <Sequence from={480}>
+      <CompressionAnimation
+        codeBlocks={20} promptBlocks={20}
+        overflowDuration={40} compressDuration={60} fitDuration={40}
+        codeColor="#EF4444" promptColor="#2DD4BF" />
+    </Sequence>
+
+    {/* Summary label */}
+    <Sequence from={660}>
       <FadeIn duration={20}>
-        <Text text="Context utilization: ~5%"
-          color="#EF4444" opacity={0.5} size={11}
-          x={480} y={920} align="center" />
-        <Text text="Context utilization: ~95%"
-          color="#4ADE80" opacity={0.5} size={11}
-          x={1440} y={920} align="center" />
+        <Text text="Same system. 5-10× more fits."
+          font="Inter" size={16} weight={700} color="#E2E8F0"
+          x={960} y={950} align="center" />
       </FadeIn>
     </Sequence>
   </AbsoluteFill>
@@ -173,28 +176,28 @@ Segments: `part1_economics_027`, `part1_economics_028`
   "layout": "vertical_split",
   "splitPosition": 960,
   "leftPanel": {
-    "label": "AGENTIC PATCHING",
-    "content": "context_window_cluttered",
+    "header": "AGENTIC PATCHING",
+    "headerColor": "#EF4444",
+    "content": "dense_code_with_highlights",
     "tokenCount": 15000,
-    "relevantPercent": 5,
-    "color": "#EF4444",
-    "background": "#0A0F1A"
+    "relevance": "~40%",
+    "thematicRole": "wasteful_context"
   },
   "rightPanel": {
-    "label": "PDD REGENERATION",
-    "content": "context_window_clean",
-    "tokenCount": 2500,
-    "relevantPercent": 95,
-    "sections": [
-      { "label": "Prompt", "tokens": 300, "color": "#4A90D9" },
-      { "label": "Tests", "tokens": 2000, "color": "#D9944A" },
-      { "label": "Grounding", "tokens": 200, "color": "#5AAA6E" }
-    ],
-    "color": "#4ADE80",
-    "background": "#0A0F1A"
+    "header": "PDD REGENERATION",
+    "headerColor": "#2DD4BF",
+    "content": "prompt_test_grounding",
+    "tokenCount": 2300,
+    "relevance": "100%",
+    "thematicRole": "curated_context"
   },
-  "backgroundColor": "#000000",
-  "narrationSegments": ["part1_economics_027", "part1_economics_028"]
+  "compressionAnimation": {
+    "codeBlocks": 20,
+    "promptBlocks": 20,
+    "ratio": "5-10×"
+  },
+  "backgroundColor": "#0A0F1A",
+  "narrationSegments": ["part1_economics_029", "part1_economics_030"]
 }
 ```
 

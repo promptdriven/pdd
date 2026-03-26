@@ -1,175 +1,168 @@
 [Remotion]
 
-# Section 2.10: Verilog Synthesis Triple — Same Spec, Different Gates, Same Function
+# Section 2.10: Verilog Synthesis — Three Different Netlists
 
 **Tool:** Remotion
-**Duration:** ~38s (1140 frames @ 30fps)
-**Timestamp:** 2:14 - 2:52
+**Duration:** ~36s (1080 frames @ 30fps)
+**Timestamp:** 1:57 - 2:33
 
 ## Visual Description
 
-A cornerstone animation illustrating the non-deterministic synthesis concept. Clean Verilog code appears on the left side of the screen — a readable hardware description. Below it, a stylized Synopsys Design Compiler icon processes the code. A gate-level netlist flows out automatically — lines, nodes, and connections forming a circuit diagram.
+A three-phase animated sequence showing the chip design paradigm shift:
 
-Then the same Verilog code runs through synthesis three times, side by side. Three visibly different gate-level netlists appear — different wiring, different node layouts, different structures. All different. Then a green checkmark appears over each with the label "Functionally equivalent." The point is visceral: the output varies, but the behavior is locked.
+**Phase 1 — Schematic dissolves to Verilog (0-8s):** A dense hand-drawn schematic (rendered as a tangle of lines, transistor symbols, and nodes) dissolves into clean Verilog code. The code appears line by line in a dark code editor — syntax highlighted in the style of a modern IDE but with period-appropriate HDL. Below the code, a Synopsys Design Compiler icon (a stylized gear + chip symbol) processes the code, and a gate-level netlist flows out from the right side — an abstract graph of nodes and connections.
+
+**Phase 2 — Triple synthesis (8-23s):** The same Verilog code block is shown three times side by side (tiled across the frame). Below each, a "Synthesize" animation runs: the Synopsys gear spins, and three visibly different gate-level netlists generate below — different node arrangements, different wire routes, different layouts. All three are clearly distinct structures.
+
+**Phase 3 — Equivalence verification (23-36s):** A green checkmark (`✓ Functionally equivalent`) animates over each of the three netlists simultaneously. Despite looking completely different, all three produce identical behavior. The checkmarks glow and pulse.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Blueprint grid: 60px spacing, `#1E293B` at 0.05
+- Grid: None (code editor aesthetic)
 
 ### Chart/Visual Elements
 
-#### Verilog Code Block (Phase 1)
-- Position: left side, x: 100-600, y: 200-700
-- Background: `#0F172A` at 0.9, 1px border `#334155` at 0.3, border-radius 6px
-- File label: "counter.v" — JetBrains Mono, 10px, `#64748B` at 0.5
-- Code content: 8-10 lines of Verilog, syntax-highlighted
-  - Keywords (`module`, `always`, `if`): `#C792EA` (purple)
-  - Signals (`clk`, `reset`, `count`): `#82AAFF` (blue)
-  - Operators/numbers: `#F78C6C` (orange)
-  - Comments: `#546E7A` (gray)
-- Font: JetBrains Mono, 14px
+#### Hand-Drawn Schematic (Phase 1, dissolves)
+- Abstract representation: random-walk lines (`#94A3B8` at 0.4, 1px) connecting node dots (`#94A3B8`, 4px circles)
+- Transistor symbols: small triangle-gate shapes scattered, `#94A3B8` at 0.5
+- Fills area 400x600 centered, then dissolves (particle effect)
 
-#### Synopsys Compiler Icon (Phase 1)
-- Position: center, (960, 500)
-- Stylized gear/processor icon, 80×80px, `#4A90D9` at 0.6
-- Label: "Synthesis" — Inter, 12px, `#94A3B8` at 0.5
-- Processing animation: rotating gear, pulsing glow
+#### Verilog Code Block
+- Editor frame: rounded rectangle, `#1E1E2E` fill, `#334155` 1px border
+- Code font: JetBrains Mono, 14px
+- Syntax colors: keywords `#C678DD` (purple), signals `#61AFEF` (blue), values `#E5C07B` (amber), comments `#5C6370` (grey)
+- Sample code:
+  ```
+  module counter (
+    input  clk, reset,
+    output [7:0] count
+  );
+    reg [7:0] count_reg;
+    always @(posedge clk)
+      if (reset) count_reg <= 0;
+      else count_reg <= count_reg + 1;
+    assign count = count_reg;
+  endmodule
+  ```
 
-#### Gate-Level Netlist (Phase 1)
-- Position: right side, x: 1200-1800, y: 200-700
-- Network of nodes and connections:
-  - Nodes: small circles 6px, `#4ADE80` at 0.5
-  - Connections: 1px lines, `#334155` at 0.4
-  - Gate symbols: AND, OR, NOT — simplified geometric shapes, `#4ADE80` at 0.3
-- Overall look: a complex circuit diagram, clearly machine-generated
+#### Synopsys Processing Icon
+- Stylized gear: `#4A90D9`, 40px, with small chip outline inside
+- Spin animation during synthesis
+- Arrow from code → gear → netlist
 
-#### Triple Synthesis (Phase 2)
-- Three Verilog code blocks stacked or in a row at top, all identical, smaller (scale 0.6)
-- Three arrows pointing down to three different netlists
-- Netlist 1: nodes arranged in a diamond pattern, `#4ADE80`
-- Netlist 2: nodes arranged in a grid pattern, `#38BDF8`
-- Netlist 3: nodes arranged in a tree pattern, `#FBBF24`
-- Each is visually distinct but roughly the same complexity
+#### Gate-Level Netlists (x3)
+- Abstract graph visualization: nodes (circles, 6px, `#10B981`) connected by edges (lines, 1px, `#10B981` at 0.4)
+- Each netlist has a different random layout (same node count, different positions/routing)
+- Netlist 1: clustered layout, ~30 nodes
+- Netlist 2: grid-like layout, ~30 nodes
+- Netlist 3: radial layout, ~30 nodes
 
-#### Green Checkmarks
-- Over each netlist: large checkmark icon, 48px, `#4ADE80`
-- Label below each: "Functionally equivalent" — Inter, 12px, `#4ADE80` at 0.7
+#### Equivalence Checkmarks
+- Green checkmark: `#10B981`, 48px, drawn with stroke animation
+- Label: "Functionally equivalent" — Inter, 16px, `#10B981`, below checkmark
+- Glow: `#10B981` at 0.15, 12px blur
 
 ### Animation Sequence
-1. **Frame 0-90 (0-3s):** Verilog code block types on line by line from top. Syntax highlighting applies as each line appears.
-2. **Frame 90-180 (3-6s):** Arrow draws from code block to Synopsys icon. Icon starts spinning/pulsing — "processing."
-3. **Frame 180-330 (6-11s):** Arrow draws from icon to right. Gate-level netlist draws node by node, connections forming. The output is clearly auto-generated — complex, dense, but structured.
-4. **Frame 330-450 (11-15s):** Scene transitions. Single code/netlist pair fades and repositions. Three identical code blocks appear at top, smaller. "Run 1", "Run 2", "Run 3" labels.
-5. **Frame 450-660 (15-22s):** Three synthesis arrows animate simultaneously. Three different netlists draw below — each with a distinctly different layout. Different colors distinguish them.
-6. **Frame 660-780 (22-26s):** Brief hold on three different netlists. The visual difference is stark.
-7. **Frame 780-900 (26-30s):** Green checkmarks appear over each netlist simultaneously. "Functionally equivalent" labels fade in below each.
-8. **Frame 900-1140 (30-38s):** Hold. The three different-looking netlists with identical checkmarks make the point: output varies, behavior is locked.
+1. **Frame 0-60 (0-2s):** Hand-drawn schematic visible, dense and messy.
+2. **Frame 60-120 (2-4s):** Schematic dissolves into particles. Particles reorganize.
+3. **Frame 120-180 (4-6s):** Verilog code appears line by line in editor frame.
+4. **Frame 180-240 (6-8s):** Synopsys gear appears below code, spins. Arrow + first netlist flows out.
+5. **Frame 240-360 (8-12s):** View transitions to triple layout. Three copies of Verilog code tile across top.
+6. **Frame 360-480 (12-16s):** Three Synopsys gears spin simultaneously below each code block.
+7. **Frame 480-690 (16-23s):** Three different netlists generate below — each drawing its own unique node/edge layout. Clearly different from each other.
+8. **Frame 690-780 (23-26s):** Green checkmarks draw over each netlist with stroke animation.
+9. **Frame 780-900 (26-30s):** "Functionally equivalent" labels fade in below each checkmark.
+10. **Frame 900-1080 (30-36s):** Hold. Checkmarks pulse gently. Visual settles.
 
 ### Typography
-- File label: JetBrains Mono, 10px, `#64748B` at 0.5
-- Code: JetBrains Mono, 14px, syntax-highlighted
-- Synthesis label: Inter, 12px, `#94A3B8` at 0.5
-- Run labels: Inter, 11px, `#94A3B8` at 0.4
-- Equivalence label: Inter, 12px, `#4ADE80` at 0.7
+- Verilog code: JetBrains Mono, 14px, syntax-highlighted
+- Equivalence label: Inter, 16px, semi-bold, `#10B981`
+- Netlist node labels: None (abstract)
 
 ### Easing
-- Code type-on: linear, 3 frames per line
-- Arrow draw: `easeOut(quad)` over 20 frames
-- Netlist node appear: `easeOut(cubic)` staggered, 2 frames apart
-- Scene transition: `easeInOut(cubic)` over 30 frames
-- Checkmark appear: `easeOut(back)` over 15 frames — slight bounce
-- Label fade-in: `easeOut(quad)` over 15 frames
+- Schematic dissolve: `easeIn(quad)` particle scatter over 60 frames
+- Code line reveal: `easeOut(cubic)` per line, 8 frames each
+- Gear spin: `linear` continuous, 2 rotations per synthesis
+- Netlist draw: `easeInOut(cubic)` for node placement, `easeOut(quad)` for edge drawing
+- Checkmark stroke: `easeOut(cubic)` over 30 frames
+- Label fade-in: `easeOut(quad)` over 20 frames
 
 ## Narration Sync
-> "Now, synthesis was non-deterministic. Run it twice, get different gates. Different wiring. Different layout. The output varied every single time."
-> "What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking — using SAT and SMT solvers to produce mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time."
+> "In the 1980s, chip designers drew every gate by hand. When transistor counts hit tens of thousands, they couldn't keep up. So in 1985, they moved up — from schematics to Verilog. A hardware description language. You described what you wanted the chip to do, and a synthesis tool generated the gates."
+> "Now — synthesis was non-deterministic. Run it twice, get different gates. Different wiring. Different layout. The output varied every single time."
 
-Segments: `part2_paradigm_shift_015`, `part2_paradigm_shift_016`
+Segments: `part2_paradigm_shift_014`, `part2_paradigm_shift_015`
 
-- **2:14** ("synthesis was non-deterministic"): Verilog code appears, synthesis processes
-- **2:20** ("Run it twice"): Triple synthesis begins
-- **2:34** ("What Synopsys did"): Three different netlists visible
-- **2:48** ("function was the same"): Green checkmarks appear — all equivalent
+- **1:57** (117.12s): Schematic appears — "In the 1980s, chip designers drew every gate by hand"
+- **2:07** (127s): Schematic dissolves to Verilog — "they moved up — from schematics to Verilog"
+- **2:12** (132s): Synopsys processes code — "a synthesis tool generated the gates"
+- **2:20** (139.84s): Triple layout — "synthesis was non-deterministic"
+- **2:26** (146s): Three different netlists visible — "Different wiring. Different layout"
+- **2:33** (152.82s): Checkmarks appear (transition to next spec)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={1140}>
+<Sequence from={0} durationInFrames={1080}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
-    {/* Phase 1: Single synthesis demo */}
-    <Sequence from={0} durationInFrames={450}>
-      {/* Verilog code block */}
-      <Sequence from={0}>
-        <CodeBlock
-          x={100} y={200} width={500} height={500}
-          fileName="counter.v"
-          language="verilog"
-          code={VERILOG_COUNTER}
-          typeOnDuration={90}
-          font="JetBrains Mono" fontSize={14} />
+    {/* Phase 1: Schematic dissolve → Verilog */}
+    <Sequence from={0} durationInFrames={240}>
+      <SchematicDissolve startFrame={60} dissolveFrames={60} />
+      <Sequence from={120}>
+        <CodeBlockReveal
+          code={verilogCode} language="verilog"
+          font="JetBrains Mono" size={14}
+          lineDelay={8}
+        />
       </Sequence>
-
-      {/* Synthesis icon */}
-      <Sequence from={90}>
-        <SynthesisIcon
-          cx={960} cy={500} size={80}
-          color="#4A90D9" opacity={0.6}
-          processing arrowFrom={[600, 450]}
-          arrowDrawDuration={20} />
-      </Sequence>
-
-      {/* Gate-level netlist */}
       <Sequence from={180}>
-        <GateNetlist
-          x={1200} y={200} width={600} height={500}
-          nodeColor="#4ADE80" nodeOpacity={0.5}
-          edgeColor="#334155" edgeOpacity={0.4}
-          drawStagger={2}
-          arrowFrom={[1040, 500]}
-          arrowDrawDuration={20} />
+        <SynopsysGear x={960} y={700} size={40} color="#4A90D9" />
+        <ArrowFlow from={[960, 650]} to={[1300, 700]} />
+        <NetlistGraph layout="clustered" nodes={30} color="#10B981" />
       </Sequence>
     </Sequence>
 
-    {/* Phase 2: Triple synthesis comparison */}
-    <Sequence from={330}>
-      {/* Three identical code blocks at top */}
-      <TripleCodeBlocks
-        code={VERILOG_COUNTER}
-        positions={[[160, 80], [660, 80], [1160, 80]]}
-        scale={0.6}
-        labels={['Run 1', 'Run 2', 'Run 3']}
-        fadeIn={30} />
+    {/* Phase 2: Triple synthesis */}
+    <Sequence from={240} durationInFrames={450}>
+      <TripleLayout>
+        {[0, 1, 2].map(i => (
+          <Column key={i}>
+            <CodeBlockMini code={verilogCode} />
+            <Sequence from={120}>
+              <SynopsysGear spinning />
+            </Sequence>
+            <Sequence from={240}>
+              <NetlistGraph
+                layout={['clustered', 'grid', 'radial'][i]}
+                nodes={30} color="#10B981"
+                drawDuration={210}
+              />
+            </Sequence>
+          </Column>
+        ))}
+      </TripleLayout>
     </Sequence>
 
-    <Sequence from={450}>
-      {/* Three different netlists */}
-      <GateNetlist
-        x={60} y={400} width={560} height={400}
-        layout="diamond" nodeColor="#4ADE80"
-        drawStagger={2} />
-      <GateNetlist
-        x={660} y={400} width={560} height={400}
-        layout="grid" nodeColor="#38BDF8"
-        drawStagger={2} />
-      <GateNetlist
-        x={1260} y={400} width={560} height={400}
-        layout="tree" nodeColor="#FBBF24"
-        drawStagger={2} />
+    {/* Phase 3: Equivalence checkmarks */}
+    <Sequence from={690} durationInFrames={390}>
+      <TripleLayout>
+        {[0, 1, 2].map(i => (
+          <Sequence key={i} from={0}>
+            <StrokeCheckmark size={48} color="#10B981" drawFrames={30} />
+            <Sequence from={90}>
+              <FadeIn duration={20}>
+                <Text text="Functionally equivalent"
+                  font="Inter" size={16} color="#10B981" weight={600} />
+              </FadeIn>
+            </Sequence>
+          </Sequence>
+        ))}
+      </TripleLayout>
     </Sequence>
 
-    {/* Green checkmarks */}
-    <Sequence from={780}>
-      <CheckmarkOverlay
-        positions={[[340, 580], [940, 580], [1540, 580]]}
-        size={48} color="#4ADE80"
-        easing="easeOut(back)" duration={15}
-        label="Functionally equivalent"
-        labelFont="Inter" labelSize={12} />
-    </Sequence>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -177,27 +170,27 @@ Segments: `part2_paradigm_shift_015`, `part2_paradigm_shift_016`
 ## Data Points JSON
 ```json
 {
-  "type": "animated_diagram",
-  "diagramId": "verilog_synthesis_triple",
+  "type": "animated_infographic",
   "phases": [
     {
-      "id": "single_synthesis",
-      "elements": ["verilog_code", "synthesis_icon", "gate_netlist"]
+      "id": "schematic_to_verilog",
+      "description": "Hand-drawn schematic dissolves into Verilog code",
+      "frames": [0, 240]
     },
     {
       "id": "triple_synthesis",
-      "elements": ["three_code_blocks", "three_netlists", "three_checkmarks"]
+      "description": "Same Verilog synthesized three times, producing three different netlists",
+      "frames": [240, 690],
+      "netlists": ["clustered", "grid", "radial"]
+    },
+    {
+      "id": "equivalence_check",
+      "description": "Green checkmarks confirm all three are functionally equivalent",
+      "frames": [690, 1080],
+      "checkColor": "#10B981"
     }
   ],
-  "netlists": [
-    { "id": "run_1", "layout": "diamond", "color": "#4ADE80" },
-    { "id": "run_2", "layout": "grid", "color": "#38BDF8" },
-    { "id": "run_3", "layout": "tree", "color": "#FBBF24" }
-  ],
-  "equivalenceLabel": "Functionally equivalent",
-  "equivalenceColor": "#4ADE80",
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["part2_paradigm_shift_015", "part2_paradigm_shift_016"]
+  "narrationSegments": ["part2_paradigm_shift_014", "part2_paradigm_shift_015"]
 }
 ```
 

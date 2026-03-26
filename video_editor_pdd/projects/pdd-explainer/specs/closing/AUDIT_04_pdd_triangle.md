@@ -1,4 +1,14 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame is sampled at 96.4% progress (frame 202/210), which falls in the 'hold' phase (frames 195-210) where 'all elements stable, code block in center, triangle glows softly.' The three critical elements — PROMPT (blue, top), TESTS (green, bottom-left), GROUNDING (amber, bottom-right) — are all present with correct colors, labels, vertex dots, and descriptor text. The triangle edges are fully drawn and visible. The center code block area shows horizontal line shapes representing code, but they appear as faint gray bars rather than legible pseudocode text (spec calls for 8-10 lines of JetBrains Mono pseudocode at 11px). At this late hold phase the code should be fully materialized and stable, yet the lines look like abstract placeholders rather than readable code tokens. The descriptor text for PROMPT ('encode intent') is partially obscured by the vertex dot overlapping it. All other layout, color, and composition aspects match the spec well — triangle is centered, background is deep navy-black, vertex positions form an approximately equilateral triangle, labels use correct colors (blue/green/amber).
+Multiple significant deviations from the spec are visible at frame 129/150 (86.7% progress, well into phase 5 where code should be materializing in the center):
+
+1. **Vertex nodes are circles, not rounded rectangles.** The spec calls for rounded rectangle nodes (180×50px, corner radius 25px) with semi-transparent fills and borders. The render shows small solid circles (~30px diameter) at each vertex — completely wrong shape.
+
+2. **Missing center code block.** At frame 129 (phase 5: frames 110-150), generated code should be materializing character-by-character in the center of the triangle. The triangle interior is entirely empty.
+
+3. **Missing subtitle labels for TESTS and GROUNDING.** The spec requires subtitle text below each vertex: 'encode intent' (faintly visible under PROMPT), 'preserve behavior' (missing under TESTS), and 'maintain style' (missing under GROUNDING). Only the PROMPT subtitle is barely visible.
+
+4. **Color assignment is swapped between TESTS and GROUNDING.** The spec defines TESTS as amber (#D9944A) at bottom-left and GROUNDING as green (#5AAA6E) at bottom-right. The render shows a green circle at bottom-left labeled TESTS and an amber/orange circle at bottom-right labeled GROUNDING — the label text colors match the spec (TESTS in amber, GROUNDING in green) but the circle fills are swapped, creating a conflicting visual.
+
+5. **Labels are positioned below vertices instead of inside nodes.** The spec describes labels inside the rounded-rectangle nodes. Since nodes are circles instead of rectangles, labels are placed below the circles — a consequence of the wrong node shape.

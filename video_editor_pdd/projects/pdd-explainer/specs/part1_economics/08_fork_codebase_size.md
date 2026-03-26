@@ -1,175 +1,157 @@
 [Remotion]
 
-# Section 1.8: Fork by Codebase Size — The Trap Revealed
+# Section 1.8: Fork by Codebase Size — Diverging Patch Cost Paths
 
 **Tool:** Remotion
-**Duration:** ~40s (1200 frames @ 30fps)
-**Timestamp:** 3:48 - 4:28
+**Duration:** ~22s (660 frames @ 30fps)
+**Timestamp:** 4:18 - 4:40
 
 ## Visual Description
 
-Returning to the code cost chart, the amber "immediate patch cost" line FORKS into two divergent paths at 2020. The lower path — labeled "Small codebase" — plunges downward, showing genuine transformation. The upper path — labeled "Large codebase" — stays flat at ~10-12 developer hours, showing no improvement.
+The main code cost chart returns, but now the amber "immediate patch cost" line FORKS into two paths at 2020. This is the visual realization that "same tools, different results" has a specific cause: codebase size.
 
-Annotations appear: "METR, 2025: experienced devs 19% slower on mature repos" on the flat upper line. Then a devastating second annotation: "Developers believed AI saved 20%. It cost 19%." — the 39-point perception gap.
+- **Lower fork ("Small codebase"):** Plunges downward — AI-assisted patching is genuinely faster on small, clean repos. The line drops steeply.
+- **Upper fork ("Large codebase"):** Stays flat at ~10-12 hours. Despite the same AI tools, large codebases don't see the speed improvements.
 
-Finally, an arrow curves from the small-codebase fork upward toward the large-codebase fork with the label "Every patch adds code." — showing that patching itself pushes you from the world where AI helps into the world where it doesn't.
+Annotations appear sequentially:
+1. "METR, 2025: experienced devs 19% slower on mature repos" — pointing to the flat upper fork.
+2. "Developers believed AI saved 20%. It cost 19%." — a devastating second annotation that fades in below the first.
+3. An arrow curving from the lower fork upward toward the upper fork, with the label "Every patch adds code." — showing the inevitability of small codebases becoming large ones.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Inherits chart framework from 03_code_cost_chart
+- Inherits chart from Spec 03
 
 ### Chart/Visual Elements
 
-#### Inherited Chart (dimmed)
-- Blue generate line: visible at 0.2 opacity
-- Amber dashed total cost line: visible at 0.2 opacity
-- Debt shading: visible at 0.03 opacity
+#### Forking Lines (replacing single amber solid line from 2020 onward)
+- **Lower fork ("Small codebase"):**
+  - Color: `#22C55E`, 3px solid
+  - Data from fork point: (2020, 2.5), (2022, 1.2), (2024, 0.4), (2025, 0.2)
+  - Label: "Small codebase" — Inter, 13px, `#22C55E`
+- **Upper fork ("Large codebase"):**
+  - Color: `#EF4444`, 3px solid
+  - Data from fork point: (2020, 2.5), (2022, 2.8), (2024, 3.0), (2025, 3.2)
+  - Label: "Large codebase" — Inter, 13px, `#EF4444`
+- Fork point at (2020, 2.5): small dot `#D9944A`, 6px
 
-#### Forking Amber Line — at year 2020
-- Fork point: small circle 6px, `#D9944A` at 0.6, at (2020, ~35%)
-
-#### Lower Fork — Small Codebase
-- Color: `#4ADE80`, 2.5px solid stroke
-- Path: plunges from (2020, 35%) to (2025, 10%)
-- Glow: 6px Gaussian blur, `#4ADE80` at 0.1
-- Label: "Small codebase" — Inter, 12px, semi-bold, `#4ADE80` at 0.7
-- Small annotation: "A few thousand lines — context covers everything" — Inter, 9px, `#4ADE80` at 0.4
-
-#### Upper Fork — Large Codebase
-- Color: `#EF4444`, 2.5px solid stroke
-- Path: stays flat from (2020, 35%) to (2025, 32%) — barely moves
-- Glow: 6px Gaussian blur, `#EF4444` at 0.1
-- Label: "Large codebase" — Inter, 12px, semi-bold, `#EF4444` at 0.7
+#### Fork Annotation
+- "Same tools. Different codebase sizes." — Inter, 14px, `#E2E8F0` at 0.6
+- Positioned near fork point
 
 #### METR Annotation
-- Position: above the flat upper fork line
-- "METR, 2025: experienced devs 19% slower on mature repos" — Inter, 12px, `#EF4444` at 0.6
-- Callout line: 1px, `#EF4444` at 0.2
+- "METR, 2025: experienced devs 19% slower on mature repos"
+  - Inter, 12px, `#EF4444` at 0.7
+  - Connecting line to upper fork
+- "Developers believed AI saved 20%. It cost 19%."
+  - Inter, 12px, bold, `#EF4444` at 0.8
+  - Fades in below first annotation
 
-#### Perception Gap Annotation
-- Position: below METR annotation
-- "Developers believed AI saved 20%. It cost 19%." — Inter, 14px, bold (700), `#EF4444` at 0.8
-- Subtle red glow behind text: `#EF4444` at 0.04
-
-#### Trap Arrow
-- Curved arrow from lower fork bending upward toward upper fork
-- Color: `#D9944A` at 0.5, 2px, with arrowhead
-- Label: "Every patch adds code." — Inter, 13px, semi-bold (600), `#D9944A` at 0.7
-- The arrow follows a quadratic bezier curve
+#### Growth Arrow
+- Curved arrow from lower fork arcing upward to upper fork
+  - Color: `#94A3B8` at 0.3, dashed, arrow head
+  - Label: "Every patch adds code." — Inter, 12px, `#94A3B8` at 0.5
 
 ### Animation Sequence
-1. **Frame 0-60 (0-2s):** Chart visible with dimmed elements. Amber solid line is the focus.
-2. **Frame 60-120 (2-4s):** Fork point circle appears at 2020. The line splits — lower fork draws downward (green), upper fork extends flat (red).
-3. **Frame 120-240 (4-8s):** Fork labels appear: "Small codebase" (green) and "Large codebase" (red). Small annotation about context coverage appears under the green fork.
-4. **Frame 240-360 (8-12s):** "Same tools. Different codebase sizes." annotation fades in centrally.
-5. **Frame 360-480 (12-16s):** METR annotation appears on the flat upper fork: "experienced devs 19% slower."
-6. **Frame 480-600 (16-20s):** Perception gap annotation fades in dramatically: "Developers believed AI saved 20%. It cost 19%." Red glow.
-7. **Frame 600-780 (20-26s):** Hold on the perception gap. This is the emotional gut-punch moment.
-8. **Frame 780-960 (26-32s):** Trap arrow animates — curves from green fork upward toward red fork. "Every patch adds code." label appears along the arrow path.
-9. **Frame 960-1200 (32-40s):** Hold on complete visualization. The trap is visible.
+1. **Frame 0-60 (0-2s):** Chart visible. Original amber line present up to 2020.
+2. **Frame 60-180 (2-6s):** At 2020, the line FORKS. Lower path draws down green. Upper path draws flat red. Fork annotation appears.
+3. **Frame 180-300 (6-10s):** Lines continue drawing. Small codebase plunges. Large codebase stays flat.
+4. **Frame 300-420 (10-14s):** METR annotation appears pointing to upper fork.
+5. **Frame 420-480 (14-16s):** "Developers believed AI saved 20%..." second annotation fades in.
+6. **Frame 480-600 (16-20s):** Growth arrow curves from lower fork toward upper fork. "Every patch adds code."
+7. **Frame 600-660 (20-22s):** Hold. The inevitability is visible.
 
 ### Typography
-- Fork labels: Inter, 12px, semi-bold, respective colors at 0.7
-- METR annotation: Inter, 12px, `#EF4444` at 0.6
-- Perception gap: Inter, 14px, bold (700), `#EF4444` at 0.8
-- Trap label: Inter, 13px, semi-bold (600), `#D9944A` at 0.7
-- Fine print: Inter, 9px, `#4ADE80` at 0.4
+- Fork labels: Inter, 13px, respective colors
+- Fork annotation: Inter, 14px, `#E2E8F0` at 0.6
+- METR annotation: Inter, 12px, `#EF4444`
+- Belief annotation: Inter, 12px, bold, `#EF4444`
+- Growth arrow label: Inter, 12px, `#94A3B8` at 0.5
 
 ### Easing
-- Fork line draw: `easeInOut(quad)` over 60 frames
-- Fork point appear: `easeOut(back)` over 15 frames
-- Label fade: `easeOut(quad)` over 20 frames
-- Perception gap fade: `easeOut(quad)` over 30 frames (slower for emphasis)
-- Arrow draw: `easeInOut(cubic)` over 60 frames
-- Red glow pulse: `easeInOut(sine)` on 40-frame cycle
+- Fork draw: `easeOut(cubic)` over 120 frames, diverging paths
+- Annotation appear: `easeOut(quad)` over 20 frames
+- Arrow draw: `easeInOut(cubic)` over 60 frames with curve
+- Belief annotation: `easeOut(quad)` over 30 frames — slightly slower for emphasis
 
 ## Narration Sync
-> "On a small codebase—a few thousand lines—patching with AI is genuinely transformative."
-> "But on a large codebase—the kind you end up with after years of patching—experienced developers are actually nineteen percent slower with AI tools."
-> "And that's the trap: every patch makes the codebase bigger. So patching pushes you from the world where AI helps into the world where it doesn't."
+> "A tower? And that's the thing nobody wants to hear..."
+> "The degeneration doesn't have this problem. A regenerated module is always small. Context window is always clean..."
+> "It's just there's something else. Agentic patching — what Cursor, Copilot, all the tools do — stuffs the context window with code..."
 
-Segments: `part1_economics_024`, `part1_economics_025`, `part1_economics_026`
+Segments: `part1_economics_026`, `part1_economics_027`, `part1_economics_028`
 
-- **3:48** ("Small codebase"): Fork draws, green path plunges
-- **4:09** ("large codebase"): Upper fork stays flat, METR annotation
-- **4:17** ("believed AI saved 20%"): Perception gap annotation
-- **4:22** ("that's the trap"): Arrow curves upward, "Every patch adds code."
+- **321.30s** ("A tower?"): Chart returns, fork begins
+- **331.98s** ("The degeneration doesn't have this problem"): Lower fork plunging, blue line emphasized
+- **361.46s** ("Agentic patching"): Upper fork flat, METR annotation visible
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={1200}>
+<Sequence from={0} durationInFrames={660}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Dimmed chart background */}
-    <Opacity value={0.2}>
-      <CodeCostChart />
-    </Opacity>
+    {/* Base chart with axes and existing lines */}
+    <CodeCostChart showUntil={2020} />
 
     {/* Fork point */}
     <Sequence from={60}>
-      <ForkPoint cx={forkX} cy={forkY} r={6}
-        color="#D9944A" opacity={0.6} />
+      <GlowDot x={2020} y={2.5} radius={6} color="#D9944A" />
     </Sequence>
 
-    {/* Green lower fork */}
+    {/* Lower fork — Small codebase */}
     <Sequence from={60}>
-      <AnimatedLine data={smallCodebaseFork} color="#4ADE80"
-        width={2.5} glow={{ blur: 6, opacity: 0.1 }}
-        drawDuration={60} />
-      <Sequence from={60}>
-        <FadeIn duration={20}>
-          <LineLabel text="Small codebase" color="#4ADE80"
-            opacity={0.7} font="Inter" size={12} weight={600} />
-        </FadeIn>
-      </Sequence>
+      <AnimatedLine
+        data={[[2020, 2.5], [2022, 1.2], [2024, 0.4], [2025, 0.2]]}
+        color="#22C55E" strokeWidth={3}
+        drawDuration={120} label="Small codebase" />
     </Sequence>
 
-    {/* Red upper fork */}
+    {/* Upper fork — Large codebase */}
     <Sequence from={60}>
-      <AnimatedLine data={largeCodebaseFork} color="#EF4444"
-        width={2.5} glow={{ blur: 6, opacity: 0.1 }}
-        drawDuration={60} />
-      <Sequence from={60}>
-        <FadeIn duration={20}>
-          <LineLabel text="Large codebase" color="#EF4444"
-            opacity={0.7} font="Inter" size={12} weight={600} />
-        </FadeIn>
-      </Sequence>
+      <AnimatedLine
+        data={[[2020, 2.5], [2022, 2.8], [2024, 3.0], [2025, 3.2]]}
+        color="#EF4444" strokeWidth={3}
+        drawDuration={120} label="Large codebase" />
     </Sequence>
 
-    {/* METR annotation */}
-    <Sequence from={360}>
-      <AnnotationCard
-        header="METR, 2025: experienced devs 19% slower"
-        headerColor="#EF4444"
-        calloutTo={largeCodebaseLine2024}
-        calloutColor="#EF4444" />
-    </Sequence>
-
-    {/* Perception gap */}
-    <Sequence from={480}>
-      <FadeIn duration={30}>
-        <GlowText
-          text="Developers believed AI saved 20%. It cost 19%."
-          font="Inter" size={14} weight={700}
-          color="#EF4444" opacity={0.8}
-          glowColor="#EF4444" glowOpacity={0.04}
-          x={960} y={250} align="center" />
+    {/* Fork annotation */}
+    <Sequence from={120}>
+      <FadeIn duration={20}>
+        <Text text="Same tools. Different codebase sizes."
+          font="Inter" size={14} color="#E2E8F0" opacity={0.6}
+          x={960} y={700} align="center" />
       </FadeIn>
     </Sequence>
 
-    {/* Trap arrow */}
-    <Sequence from={780}>
+    {/* METR annotation */}
+    <Sequence from={300}>
+      <SlideIn from="right" distance={5} duration={20}>
+        <Annotation
+          mainText="METR, 2025: experienced devs 19% slower on mature repos"
+          mainColor="#EF4444" mainSize={12}
+          connectTo={{ line: "large_codebase", x: 2024 }}
+          position={{ x: 1400, y: 280 }} />
+      </SlideIn>
+    </Sequence>
+
+    {/* Belief annotation */}
+    <Sequence from={420}>
+      <FadeIn duration={30}>
+        <Text text="Developers believed AI saved 20%. It cost 19%."
+          font="Inter" size={12} weight={700} color="#EF4444" opacity={0.8}
+          x={1400} y={320} align="center" />
+      </FadeIn>
+    </Sequence>
+
+    {/* Growth arrow */}
+    <Sequence from={480}>
       <CurvedArrow
-        from={smallForkEnd} to={largeForkMid}
-        color="#D9944A" opacity={0.5} width={2}
-        drawDuration={60}>
-        <PathLabel text="Every patch adds code."
-          font="Inter" size={13} weight={600}
-          color="#D9944A" opacity={0.7} />
-      </CurvedArrow>
+        from={{ line: "small_codebase", x: 2024 }}
+        to={{ line: "large_codebase", x: 2025 }}
+        color="#94A3B8" opacity={0.3} dashed
+        drawDuration={60} label="Every patch adds code." />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -178,38 +160,39 @@ Segments: `part1_economics_024`, `part1_economics_025`, `part1_economics_026`
 ## Data Points JSON
 ```json
 {
-  "type": "forking_chart",
-  "chartId": "codebase_size_fork",
-  "forkYear": 2020,
+  "type": "forked_line_chart",
+  "baseChart": "code_cost_chart",
+  "forkPoint": { "year": 2020, "value": 2.5 },
   "forks": [
     {
       "id": "small_codebase",
       "label": "Small codebase",
-      "color": "#4ADE80",
-      "dataPoints": [
-        { "x": 2020, "y": 35 }, { "x": 2021, "y": 28 },
-        { "x": 2022, "y": 22 }, { "x": 2023, "y": 15 },
-        { "x": 2024, "y": 12 }, { "x": 2025, "y": 10 }
-      ]
+      "color": "#22C55E",
+      "data": [[2020, 2.5], [2022, 1.2], [2024, 0.4], [2025, 0.2]]
     },
     {
       "id": "large_codebase",
       "label": "Large codebase",
       "color": "#EF4444",
-      "dataPoints": [
-        { "x": 2020, "y": 35 }, { "x": 2021, "y": 35 },
-        { "x": 2022, "y": 34 }, { "x": 2023, "y": 34 },
-        { "x": 2024, "y": 33 }, { "x": 2025, "y": 32 }
-      ]
+      "data": [[2020, 2.5], [2022, 2.8], [2024, 3.0], [2025, 3.2]]
     }
   ],
   "annotations": [
-    { "text": "METR, 2025: experienced devs 19% slower on mature repos", "color": "#EF4444" },
-    { "text": "Developers believed AI saved 20%. It cost 19%.", "color": "#EF4444", "emphasis": true }
+    {
+      "text": "METR, 2025: experienced devs 19% slower on mature repos",
+      "pointsTo": "large_codebase"
+    },
+    {
+      "text": "Developers believed AI saved 20%. It cost 19%.",
+      "emphasis": true
+    }
   ],
-  "trapArrow": { "label": "Every patch adds code.", "color": "#D9944A" },
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["part1_economics_024", "part1_economics_025", "part1_economics_026"]
+  "growthArrow": {
+    "from": "small_codebase",
+    "to": "large_codebase",
+    "label": "Every patch adds code."
+  },
+  "narrationSegments": ["part1_economics_026", "part1_economics_027", "part1_economics_028"]
 }
 ```
 

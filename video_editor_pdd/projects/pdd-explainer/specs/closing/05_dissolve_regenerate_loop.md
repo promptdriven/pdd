@@ -1,119 +1,158 @@
 [Remotion]
 
-# Section 7.5: Dissolve Regenerate Loop — Code as Disposable Output
+# Section 7.5: Dissolve-Regenerate Loop — Code as Disposable Output
 
 **Tool:** Remotion
-**Duration:** ~6s (180 frames @ 30fps)
-**Timestamp:** 0:13 - 0:19
+**Duration:** ~5s (150 frames @ 30fps)
+**Timestamp:** 0:13 - 0:18
 
 ## Visual Description
+Continuing from the PDD triangle (which remains visible as a faint frame), the code block in the center dissolves and regenerates in a mesmerizing loop. Each cycle:
 
-Continuing from the PDD triangle, the code block in the center of the triangle dissolves and regenerates. This happens three times in a subtle loop. Each regeneration produces slightly different code — different variable names, different line structure — but the triangle vertices (PROMPT, TESTS, GROUNDING) remain absolutely stable.
+1. The existing code pixelates/dissolves outward like particles scattering
+2. New code materializes in its place — visually different (different variable names, different structure) but the same shape/size
+3. A subtle terminal annotation flashes: `pdd generate → ✓`
 
-A subtle terminal ticker runs at the bottom: `pdd generate` → code appears → `pdd test` → `✓` → repeat. The repetition drives the point home: code is ephemeral output, the mold is permanent.
+The triangle vertices remain stable and glowing throughout — they are permanent. The code in the center is transient, disposable, regenerated at will. The visual contrast is the point: the mold is fixed, the plastic changes every time.
 
-Each regeneration cycle, the code briefly flickers with a different tint (blue, then green, then amber) — echoing which vertex is "driving" that generation. But the result always passes.
+Two full dissolve-regenerate cycles play during this spec. Each cycle takes ~2s. A final green `✓` checkmark holds on screen.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- Triangle frame from spec 04 persists at reduced opacity (`0.3`)
 
 ### Chart/Visual Elements
 
-#### Triangle (persistent from 04_pdd_triangle)
-- Same positions and styling as Section 7.4
-- All vertices at steady glow — no animation, stable anchors
-- Edge lines: 2px, `#334155` at 0.3
+#### Persistent Triangle (Background)
+- Same triangle as spec 04, but at `0.3` opacity
+- Vertex labels: `PROMPT`, `TESTS`, `GROUNDING` — faint but readable
+- No animation — static background element
 
-#### Center Code Block
-- Position: centered at (960, 520), width 400px, height 200px
-- Code: JetBrains Mono, 11px, `#E2E8F0` at 0.7
-- 8-10 lines per generation
-- Containment area: faint border `#334155` at 0.06
+#### Code Block (Center)
+- Position: centered in triangle, `(810, 400)` to `(1110, 560)`
+- Font: JetBrains Mono, 12px, `#64748B`
+- Two variations alternate:
 
-#### Dissolve/Regenerate Effect
-- Dissolve: code characters scatter outward with decreasing opacity (particle effect)
-- Regenerate: new code characters stream inward from triangle edges, assembling into lines
-- Cycle 1 tint: `#60A5FA` at 0.05 (blue — prompt-driven)
-- Cycle 2 tint: `#4ADE80` at 0.05 (green — test-driven)
-- Cycle 3 tint: `#D9944A` at 0.05 (amber — grounding-driven)
+**Variation A:**
+```
+def validate_email(addr: str) -> bool:
+    pattern = compile(EMAIL_RE)
+    if not pattern.match(addr):
+        raise InvalidEmail(addr)
+    return check_domain(addr)
+```
 
-#### Terminal Ticker
-- Position: bottom center, (560, 980) to (1360, 1020)
-- Background: transparent
-- Font: JetBrains Mono, 11px, `#64748B` at 0.5
-- Cycles: `pdd generate → ✓ → pdd generate → ✓ → pdd generate → ✓`
+**Variation B:**
+```
+def validate_email(address: str) -> bool:
+    if not EMAIL_REGEX.fullmatch(address):
+        raise InvalidEmail(f"Bad: {address}")
+    return verify_mx_record(address)
+```
+
+#### Dissolve Particles
+- Each character breaks into 2-3 particles
+- Particle color: `#64748B` at `0.3`, fading to `0`
+- Particle motion: radial outward from center, random velocity
+- Particle size: 2-3px
+
+#### Terminal Annotation
+- Position: bottom-center, `(960, 850)`
+- `pdd generate → ✓` in monospace, small
+- Font: JetBrains Mono, 13px, `#94A3B8`
+- Flashes on each regeneration cycle
 
 ### Animation Sequence
-1. **Frame 0-10 (0-0.3s):** Triangle stable from previous spec. Code block visible in center.
-2. **Frame 10-50 (0.3-1.7s):** Cycle 1 — code dissolves (particles scatter, 15 frames). New code regenerates (streams in, 15 frames). Blue tint flash. Terminal: `pdd generate → ✓`. `easeInOut(cubic)`.
-3. **Frame 50-60 (1.7-2s):** Brief hold. Code stable.
-4. **Frame 60-100 (2-3.3s):** Cycle 2 — dissolve and regenerate. Different code. Green tint flash. Terminal: `pdd generate → ✓`.
-5. **Frame 100-110 (3.3-3.7s):** Brief hold.
-6. **Frame 110-150 (3.7-5s):** Cycle 3 — dissolve and regenerate. Different code again. Amber tint flash. Terminal: `pdd generate → ✓`.
-7. **Frame 150-180 (5-6s):** Final hold. Code stable. Triangle glowing. Terminal shows final `✓`.
+1. **Frame 0-15 (0-0.5s):** Triangle fades to `0.3` background. Code variation A visible from previous spec.
+2. **Frame 15-35 (0.5-1.2s):** Code A dissolves — characters break into particles scattering outward.
+3. **Frame 35-55 (1.2-1.8s):** Code B materializes character by character. Terminal annotation flashes `pdd generate → ✓`.
+4. **Frame 55-60 (1.8-2.0s):** Brief hold on code B.
+5. **Frame 60-80 (2.0-2.7s):** Code B dissolves — same particle effect.
+6. **Frame 80-100 (2.7-3.3s):** Code A materializes again (different each time but always valid). Terminal annotation flashes again.
+7. **Frame 100-120 (3.3-4.0s):** Hold on regenerated code. Green `✓` scales in large at center.
+8. **Frame 120-150 (4.0-5.0s):** Hold with checkmark. Triangle vertices pulse gently. Code is steady.
 
 ### Typography
-- Code: JetBrains Mono, 11px, regular (400), `#E2E8F0`
-- Terminal ticker: JetBrains Mono, 11px, regular (400), `#64748B`
-- Checkmarks: `#4ADE80`
+- Code: JetBrains Mono, 12px, `#64748B` at `0.5`
+- Terminal annotation: JetBrains Mono, 13px, `#94A3B8`
+- Checkmark: JetBrains Mono, 36px, `#22C55E`
 
 ### Easing
-- Dissolve scatter: `easeIn(quad)` over 15 frames
-- Regenerate stream: `easeOut(cubic)` over 15 frames
-- Tint flash: `easeInOut(sine)` — ramp up 5 frames, hold 5, ramp down 5
-- Terminal text: `linear`, 10 frame delay between elements
+- Dissolve particles: `easeOutCubic` outward, 20 frames
+- Code materialization: `easeOutQuad` character-by-character, 20 frames
+- Checkmark scale: `easeOutBack` over 12 frames
+- Triangle vertex pulse: `easeInOutSine` on 60-frame cycle
 
 ## Narration Sync
 > "Code is generated, verified, and disposable."
-> "The code is just plastic."
 
-Segments: `closing_003`, `closing_004`
+Segment: `closing_003` (12.54s - 15.38s)
 
-- **0:13** ("Code is generated"): Cycle 1 dissolve/regenerate
-- **0:14** ("verified"): Cycle 2 dissolve/regenerate, checkmark
-- **0:15** ("and disposable"): Cycle 3 dissolve/regenerate
-- **0:16** ("The code"): Final hold, code stable but unremarkable
-- **0:19** ("is just plastic"): Triangle glows, code fades slightly in emphasis
+- **0:13** First dissolve cycle begins — "Code is generated"
+- **0:14** First regeneration completes — "verified"
+- **0:16** Second cycle completes — "and disposable"
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={180}>
+<Sequence from={0} durationInFrames={150}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Persistent triangle from previous spec */}
-    <TriangleFrame
-      vertices={[[960, 200], [480, 750], [1440, 750]]}
-      labels={["PROMPT", "TESTS", "GROUNDING"]}
-      colors={["#60A5FA", "#4ADE80", "#D9944A"]}
-      edgeColor="#334155" edgeOpacity={0.3}
-      glowRadius={40} glowOpacity={0.15} />
+    {/* Persistent triangle at reduced opacity */}
+    <Opacity value={0.3}>
+      <TriangleDiagram vertices={triangleVertices} edges={true} />
+    </Opacity>
 
-    {/* Dissolve-regenerate loop */}
-    {[0, 1, 2].map((cycle) => (
-      <Sequence from={10 + cycle * 50} key={cycle}>
-        <DissolveRegenerate
-          oldCode={CODE_VARIANTS[cycle]}
-          newCode={CODE_VARIANTS[cycle + 1]}
-          dissolveDuration={15}
-          regenDuration={15}
-          tintColor={CYCLE_TINTS[cycle]}
-          tintOpacity={0.05}
-          center={[960, 520]}
-          width={400} height={200}
-          font="JetBrains Mono" fontSize={11} />
-      </Sequence>
-    ))}
+    {/* Dissolve-regenerate cycle 1 */}
+    <Sequence from={15}>
+      <ParticleDissolve
+        text={codeVariationA}
+        font="JetBrains Mono" size={12}
+        color="#64748B" x={810} y={400}
+        durationInFrames={20} easing="easeOutCubic"
+      />
+    </Sequence>
+    <Sequence from={35}>
+      <TypeOn
+        text={codeVariationB}
+        font="JetBrains Mono" size={12}
+        color="#64748B" x={810} y={400}
+        durationInFrames={20}
+      />
+      <FadeIn durationInFrames={8}>
+        <Text text="pdd generate → ✓"
+          font="JetBrains Mono" size={13}
+          color="#94A3B8" x={960} y={850} align="center" />
+      </FadeIn>
+    </Sequence>
 
-    {/* Terminal ticker */}
-    <TerminalTicker
-      x={560} y={980} width={800}
-      font="JetBrains Mono" fontSize={11}
-      color="#64748B" opacity={0.5}
-      checkColor="#4ADE80"
-      cycles={3} cycleDelay={50} />
+    {/* Dissolve-regenerate cycle 2 */}
+    <Sequence from={60}>
+      <ParticleDissolve
+        text={codeVariationB}
+        font="JetBrains Mono" size={12}
+        color="#64748B" x={810} y={400}
+        durationInFrames={20} easing="easeOutCubic"
+      />
+    </Sequence>
+    <Sequence from={80}>
+      <TypeOn
+        text={codeVariationA2}
+        font="JetBrains Mono" size={12}
+        color="#64748B" x={810} y={400}
+        durationInFrames={20}
+      />
+    </Sequence>
+
+    {/* Final checkmark */}
+    <Sequence from={100}>
+      <ScaleSpring from={0} to={1.0} overshoot={1.12}
+        durationInFrames={12} easing="easeOutBack">
+        <Text text="✓" font="JetBrains Mono" size={36}
+          color="#22C55E" x={960} y={620} align="center" />
+      </ScaleSpring>
+    </Sequence>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -121,21 +160,15 @@ Segments: `closing_003`, `closing_004`
 ## Data Points JSON
 ```json
 {
-  "type": "animated_diagram",
-  "chartId": "dissolve_regenerate_loop",
-  "cycles": 3,
-  "cycleTints": ["#60A5FA", "#4ADE80", "#D9944A"],
-  "triangle": {
-    "persistent": true,
-    "source": "pdd_triangle"
-  },
-  "terminal": {
-    "command": "pdd generate",
-    "successIndicator": "✓"
-  },
+  "type": "dissolve_regenerate_loop",
+  "cycles": 2,
+  "codeVariations": 2,
+  "trianglePersists": true,
+  "triangleOpacity": 0.3,
+  "particleCount": "2-3 per character",
   "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["closing_003", "closing_004"]
+  "successColor": "#22C55E",
+  "durationSeconds": 5,
+  "narrationSegments": ["closing_003"]
 }
 ```
-
----

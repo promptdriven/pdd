@@ -3,138 +3,153 @@
 # Section 7.8: Final Title Card — Prompt-Driven Development
 
 **Tool:** Title
-**Duration:** ~4s (120 frames @ 30fps)
-**Timestamp:** 0:19 - 0:23
+**Duration:** ~6s
+**Timestamp:** 0:21 - 0:27
 
 ## Visual Description
-
-The final frame of the entire video. Fades up from the beat's near-black. The title "Prompt-Driven Development" appears centered, large, clean — the definitive statement. Below it, a subtle URL. Below the URL, two monospaced lines providing the immediate next action:
+Fade from black to the final title card. "Prompt-Driven Development" appears in large, clean typography — the definitive statement of the video's thesis. Below the title, a URL appears in muted text. Further below, two lines of monospace code provide the immediate call-to-action:
 
 ```
 uv tool install pdd-cli
 pdd update your_module.py
 ```
 
-The title glows with a gentle warm amber aura — echoing the mold glow. The install commands are practical, quiet, secondary. The composition is clean and confident: this is a real tool, ready to use.
-
-The final narration line — "The mold is what matters" — lands as the title appears.
+The card is elegant, minimal, and unhurried. The title appears first, then the install commands fade in beneath — a bridge from concept to action. A subtle glow on "Prompt-Driven Development" echoes the mold glow from the previous spec — the specification is what matters, and here's how to start.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- Background: `#050810` fading up to `#0A0F1A`
+- No grid, no decoration
 
 ### Chart/Visual Elements
 
-#### Title
-- Text: "Prompt-Driven Development"
-- Font: Inter, 52px, bold (700), `#E2E8F0`
-- Position: centered at (960, 400)
-- Letter-spacing: 2px
-- Glow: `#D9944A` at 0.08, blur radius 60px
+#### Title Text
+- "Prompt-Driven Development"
+- Font: Inter, 48px, bold (700), `#E2E8F0`
+- Position: centered, `(960, 380)`
+- Subtle outer glow: `#4A90D9` at `0.1`, `12px` blur
 
 #### URL
-- Text: "promptdrivendevelopment.com"
-- Font: Inter, 16px, regular (400), `#94A3B8` at 0.6
-- Position: centered at (960, 480)
+- "promptdrivendevelopment.com"
+- Font: Inter, 16px, regular (400), `#64748B`
+- Position: centered, `(960, 450)`
 
 #### Install Commands
 - Line 1: `uv tool install pdd-cli`
 - Line 2: `pdd update your_module.py`
-- Font: JetBrains Mono, 16px, regular (400), `#64748B` at 0.5
-- Position: centered block at (960, 580), 30px line height
-- Left-aligned within centered block (monospace alignment)
-- Faint left border: 2px `#D9944A` at 0.2, padding-left 16px
-
-#### Subtle Triangle Echo
-- The PDD triangle from Section 7.4, rendered at 0.03 opacity
-- Same vertex positions but scaled to 0.4x, centered behind title
-- Purely atmospheric — reinforces the three-component message subliminally
+- Font: JetBrains Mono, 18px, `#94A3B8`
+- Position: centered, starting at `(960, 560)`
+- Line spacing: `36px`
+- Background pill: `#111827` with `1px` border `#1E293B`, radius `8px`, padding `24px 40px`
+- Prompt `$` prefix: `#22C55E` (green)
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Title text fades in from 0 to full opacity. Amber glow ramps up. `easeOut(cubic)`.
-2. **Frame 30-45 (1-1.5s):** URL fades in below title. `easeOut(quad)`.
-3. **Frame 45-75 (1.5-2.5s):** Install commands fade in. Line 1 first, line 2 follows 10 frames later. Left border draws in. `easeOut(quad)`.
-4. **Frame 75-120 (2.5-4s):** Hold. All elements stable. Title glow pulses very gently (barely perceptible). This frame can hold indefinitely for video end card.
+1. **Frame 0-30 (0-1s):** Background lifts from `#050810` to `#0A0F1A`. Silence continues from the beat.
+2. **Frame 30-60 (1-2s):** "Prompt-Driven Development" fades in with subtle scale (`0.97→1.0`). Outer glow blooms.
+3. **Frame 60-80 (2-2.7s):** URL fades in below title.
+4. **Frame 80-110 (2.7-3.7s):** Command pill background fades in. Install commands appear line by line with a slight stagger.
+5. **Frame 110-160 (3.7-5.3s):** Hold. All elements settled. Title glow pulses very gently.
+6. **Frame 160-180 (5.3-6s):** All elements fade to black.
 
 ### Typography
-- Title: Inter, 52px, bold (700), `#E2E8F0`, letter-spacing 2px
-- URL: Inter, 16px, regular (400), `#94A3B8` at 0.6
-- Commands: JetBrains Mono, 16px, regular (400), `#64748B` at 0.5
+- Title: Inter, 48px, bold (700), `#E2E8F0`
+- URL: Inter, 16px, regular (400), `#64748B`
+- Commands: JetBrains Mono, 18px, regular, `#94A3B8`
+- Command prompt `$`: JetBrains Mono, 18px, `#22C55E`
 
 ### Easing
-- Title fade: `easeOut(cubic)` over 30 frames
-- Glow ramp: `easeOut(quad)` over 30 frames
-- URL fade: `easeOut(quad)` over 15 frames
-- Command fade: `easeOut(quad)` over 15 frames each, staggered 10 frames
-- Title glow pulse: `easeInOut(sine)`, very slow (120 frame period), amplitude 0.06-0.10
+- Background lift: `easeOutQuad` over 30 frames
+- Title fade + scale: `easeOutCubic` over 25 frames
+- Title glow bloom: `easeOutQuad` over 20 frames
+- URL fade-in: `easeOutQuad` over 20 frames
+- Command pill: `easeOutQuad` over 15 frames
+- Command lines: `easeOutQuad` over 15 frames, staggered 10 frames
+- Title glow pulse: `easeInOutSine` on 90-frame cycle
+- Final fade-out: `easeInCubic` over 20 frames
 
 ## Narration Sync
-> "The mold is what matters."
+> (No narration — the final spoken line "The mold is what matters" completes during the beat. This card plays in post-narration silence.)
 
-Segment: `closing_005`
-
-- **0:19** ("The mold"): Title begins fading in
-- **0:20** ("is what matters"): Title fully visible, URL appearing
-- **0:21** (post-narration): Install commands fade in
-- **0:23** (end): All elements stable. End card hold.
+Post-segment: follows `closing_005` (20.66s onward)
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={120}>
-  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Subtle triangle echo */}
-    <TriangleFrame
-      vertices={[[960, 320], [860, 450], [1060, 450]]}
-      colors={["#60A5FA", "#4ADE80", "#D9944A"]}
-      edgeColor="#334155"
-      vertexOpacity={0.03}
-      edgeOpacity={0.02}
-      showLabels={false} />
+<Sequence from={0} durationInFrames={180}>
+  <AbsoluteFill>
+    {/* Background lift */}
+    <AnimateColor from="#050810" to="#0A0F1A"
+      durationInFrames={30} easing="easeOutQuad"
+      property="backgroundColor" />
 
     {/* Title */}
-    <Sequence from={0}>
-      <FadeIn duration={30}>
-        <Text text="Prompt-Driven Development"
-          font="Inter" size={52} weight={700}
-          color="#E2E8F0" letterSpacing={2}
-          x={960} y={400} align="center"
-          glow={{ color: "#D9944A", opacity: 0.08, blur: 60 }} />
-      </FadeIn>
+    <Sequence from={30}>
+      <ScaleAndFade fromScale={0.97} toScale={1.0}
+        durationInFrames={25} easing="easeOutCubic">
+        <GlowText
+          text="Prompt-Driven Development"
+          font="Inter" size={48} weight={700}
+          color="#E2E8F0"
+          glowColor="#4A90D9" glowOpacity={0.1}
+          glowBlur={12}
+          x={960} y={380} align="center"
+        />
+      </ScaleAndFade>
+    </Sequence>
+
+    {/* Title glow pulse */}
+    <Sequence from={55}>
+      <Loop durationInFrames={90}>
+        <OpacityPulse target="title_glow"
+          from={0.1} to={0.18}
+          durationInFrames={90} easing="easeInOutSine" />
+      </Loop>
     </Sequence>
 
     {/* URL */}
-    <Sequence from={30}>
-      <FadeIn duration={15}>
+    <Sequence from={60}>
+      <FadeIn durationInFrames={20} easing="easeOutQuad">
         <Text text="promptdrivendevelopment.com"
           font="Inter" size={16} weight={400}
-          color="#94A3B8" opacity={0.6}
-          x={960} y={480} align="center" />
+          color="#64748B" x={960} y={450} align="center" />
       </FadeIn>
     </Sequence>
 
-    {/* Install commands */}
-    <Sequence from={45}>
-      <FadeIn duration={15}>
-        <CodeBlock
-          x={760} y={560} leftBorder={{ width: 2, color: "#D9944A", opacity: 0.2 }}
-          paddingLeft={16}>
-          <Text text="uv tool install pdd-cli"
-            font="JetBrains Mono" size={16} weight={400}
-            color="#64748B" opacity={0.5} />
-        </CodeBlock>
+    {/* Command pill background */}
+    <Sequence from={80}>
+      <FadeIn durationInFrames={15} easing="easeOutQuad">
+        <RoundedRect
+          x={700} y={530} width={520} height={110}
+          bg="#111827" border="#1E293B"
+          borderWidth={1} radius={8}
+        />
       </FadeIn>
     </Sequence>
-    <Sequence from={55}>
-      <FadeIn duration={15}>
-        <CodeBlock x={760} y={590}>
-          <Text text="pdd update your_module.py"
-            font="JetBrains Mono" size={16} weight={400}
-            color="#64748B" opacity={0.5} />
-        </CodeBlock>
+
+    {/* Command line 1 */}
+    <Sequence from={85}>
+      <FadeIn durationInFrames={15} easing="easeOutQuad">
+        <Text text="$ uv tool install pdd-cli"
+          font="JetBrains Mono" size={18}
+          color="#94A3B8" x={730} y={558}
+          promptChar="$" promptColor="#22C55E" />
       </FadeIn>
+    </Sequence>
+
+    {/* Command line 2 */}
+    <Sequence from={95}>
+      <FadeIn durationInFrames={15} easing="easeOutQuad">
+        <Text text="$ pdd update your_module.py"
+          font="JetBrains Mono" size={18}
+          color="#94A3B8" x={730} y={594}
+          promptChar="$" promptColor="#22C55E" />
+      </FadeIn>
+    </Sequence>
+
+    {/* Final fade to black */}
+    <Sequence from={160}>
+      <FadeOut durationInFrames={20} easing="easeInCubic" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -143,23 +158,18 @@ Segment: `closing_005`
 ## Data Points JSON
 ```json
 {
-  "type": "title_card",
-  "chartId": "final_title_card",
+  "type": "final_title_card",
   "title": "Prompt-Driven Development",
-  "titleFont": { "family": "Inter", "size": 52, "weight": 700, "color": "#E2E8F0" },
-  "titleGlow": { "color": "#D9944A", "opacity": 0.08, "blur": 60 },
   "url": "promptdrivendevelopment.com",
   "commands": [
     "uv tool install pdd-cli",
     "pdd update your_module.py"
   ],
-  "commandFont": { "family": "JetBrains Mono", "size": 16, "color": "#64748B" },
-  "ghostElements": [
-    { "source": "pdd_triangle", "opacity": 0.03, "scale": 0.4 }
-  ],
+  "titleColor": "#E2E8F0",
+  "titleGlow": "#4A90D9",
   "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["closing_005"]
+  "commandBg": "#111827",
+  "durationSeconds": 6,
+  "narrationSegments": []
 }
 ```
-
----

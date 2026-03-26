@@ -54,6 +54,16 @@ jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
+const mockResolvePythonRunSpec = jest.fn(() => ({
+  command: "python3",
+  argsPrefix: [] as string[],
+  env: { ...process.env },
+}));
+
+jest.mock("@/app/api/pipeline/_lib/python-runtime", () => ({
+  resolvePythonRunSpec: (...args: unknown[]) => mockResolvePythonRunSpec(...args),
+}));
+
 jest.mock("@/lib/projects", () => ({
   getProjectDir: () => process.cwd(),
   getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
@@ -152,6 +162,12 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockLoadProject.mockReset();
   mockReadFile.mockReset();
+  mockResolvePythonRunSpec.mockClear();
+  mockResolvePythonRunSpec.mockReturnValue({
+    command: "python3",
+    argsPrefix: [],
+    env: { ...process.env },
+  });
 
   // Default: loadProject returns config with sectionGroups
   mockLoadProject.mockReturnValue({
@@ -382,7 +398,7 @@ describe("audio-sync executor factory", () => {
     expect(mockLoadProject).toHaveBeenCalled();
   });
 
-  it("spawns python3 with sync_audio_pipeline.py", async () => {
+  it("spawns the resolved python command with sync_audio_pipeline.py", async () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     await executor(jest.fn());
     await flushPromises();
@@ -397,6 +413,16 @@ describe("audio-sync executor factory", () => {
       "--remotion-public",
       path.join(process.cwd(), "remotion", "public"),
     ]);
+  });
+
+  it("resolves the Stage 5 python runtime from the preferred conda env", async () => {
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    expect(mockResolvePythonRunSpec).toHaveBeenCalledWith({
+      preferredCondaEnv: "video_editor",
+    });
   });
 
   it("spawns with cwd set to the active project directory", async () => {
@@ -1076,8 +1102,8 @@ describe("app/api/pipeline/audio-sync/run/route.ts source structure", () => {
     );
   });
 
-  it("spawns python3 with sync_audio_pipeline.py", () => {
-    expect(sourceCode).toMatch(/spawn\s*\(\s*["']python3["']/);
+  it("resolves a python runtime before spawning sync_audio_pipeline.py", () => {
+    expect(sourceCode).toMatch(/resolvePythonRunSpec/);
     expect(sourceCode).toMatch(/sync_audio_pipeline\.py/);
   });
 

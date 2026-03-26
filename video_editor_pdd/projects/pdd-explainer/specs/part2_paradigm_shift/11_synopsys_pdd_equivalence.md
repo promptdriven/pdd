@@ -1,150 +1,180 @@
 [Remotion]
 
-# Section 2.11: Synopsys-PDD Equivalence — Specification In, Verified Artifact Out
+# Section 2.11: Synopsys–PDD Equivalence — Verification Overlay
 
 **Tool:** Remotion
-**Duration:** ~13s (390 frames @ 30fps)
-**Timestamp:** 2:58 - 3:11
+**Duration:** ~38s (1140 frames @ 30fps)
+**Timestamp:** 2:34 - 3:12
 
 ## Visual Description
 
-A clean text overlay that draws the explicit parallel between chip design and PDD. Two lines appear in a balanced, typographic layout:
+A two-phase animated sequence that draws the explicit parallel between Synopsys chip verification and PDD software verification.
 
-**Line 1:** "Synopsys: specification in → verified hardware out."
-**Line 2:** "PDD: prompt in → verified software out."
+**Phase 1 — Verification explanation (0-24s):** The three netlists from the previous spec remain visible (faded to 30% opacity as background context). In the foreground, a clean infographic builds: a flow diagram showing `Verilog Spec → Synthesis Engine → Gate-Level Netlist → Formal Verification ✓`. Key terms animate in as the narrator explains SAT/SMT solvers and mathematical proof. The words "The gates were different every time" appears, with three netlist thumbnails below cycling through variations. Then "The function was the same every time" appears with a single green checkmark.
 
-The two lines are visually parallel — same structure, same layout, different domains. An arrow connects the concepts. Then a morphing animation: Verilog code on the left morphs into a glowing document labeled "PROMPT". A gate-level netlist on the right morphs into lines of software code. A Synopsys verification checkmark morphs into a test suite with green checkmarks.
+**Phase 2 — Synopsys ↔ PDD parallel (24-38s):** The flow diagram morphs into a split comparison:
+- LEFT: "Synopsys: specification in → verified hardware out"
+- RIGHT: "PDD: prompt in → verified software out"
 
-The transition makes the analogy concrete — same architecture, different medium.
+Both sides use identical visual structure — a glowing input document, an arrow through a processing engine, and a verified output with a green checkmark. The "Same architecture" label appears centered between them. Then the Verilog code visually morphs (color shift + shape morph) into a glowing PROMPT document. The gate-level netlist morphs into software code lines. The Synopsys checkmark morphs into a test suite with green checkmarks.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Blueprint grid: 60px spacing, `#1E293B` at 0.05
+- Background context: Previous netlists at 0.1 opacity
 
 ### Chart/Visual Elements
 
-#### Text Overlay (Phase 1)
-- Line 1: "Synopsys: specification in → verified hardware out." — Inter, 24px, bold (700), `#E2E8F0`
-  - "Synopsys" highlighted `#4A90D9`
-  - "→" as arrow icon, `#64748B` at 0.6
-  - Centered at y: 440
-- Line 2: "PDD: prompt in → verified software out." — Inter, 24px, bold (700), `#E2E8F0`
-  - "PDD" highlighted `#4ADE80`
-  - "→" as arrow icon, `#64748B` at 0.6
-  - Centered at y: 520
-- Connecting bracket: thin vertical line between the two, `#334155` at 0.3
-- Shared label at right: "Same architecture" — Inter, 14px, italic, `#FBBF24` at 0.6
+#### Flow Diagram (Phase 1)
+- Boxes: rounded rectangles, `#1E293B` fill, `#334155` 1.5px border, 12px radius
+- "Verilog Spec": 200x60, `#C678DD` text, x: 200, y: 300
+- "Synthesis Engine": 220x60, `#4A90D9` text, x: 600, y: 300
+- "Gate-Level Netlist": 220x60, `#10B981` text, x: 1050, y: 300
+- "Formal Verification ✓": 240x60, `#10B981` text + green border, x: 1500, y: 300
+- Arrows between boxes: `#475569`, 2px, triangular arrowhead
 
-#### Morph Elements (Phase 2)
-- LEFT morph: Verilog code block → glowing "PROMPT" document
-  - Verilog: small code snippet, JetBrains Mono, `#C792EA` syntax
-  - PROMPT: rounded rectangle with glow, `#4ADE80` at 0.4, labeled "PROMPT"
-- CENTER morph: Synopsys checkmark → test suite checkmarks
-  - Single large checkmark `#4A90D9` → three smaller checkmarks with "Tests" label `#4ADE80`
-- RIGHT morph: gate-level netlist nodes → software code lines
-  - Netlist: nodes and connections, `#4ADE80`
-  - Code: horizontal lines representing code, `#94A3B8` at 0.4
+#### Key Insight Text
+- "The gates were different every time." — Inter, 28px, `#E2E8F0`, y: 500
+- "The function was the same every time." — Inter, 28px, bold, `#10B981`, y: 580
+- Green checkmark next to second line: 32px, `#10B981`
+
+#### Synopsys ↔ PDD Comparison (Phase 2)
+- LEFT block: rounded rect 700x120, `#1E293B` fill
+  - "Synopsys:" — Inter, 20px, bold, `#C678DD`
+  - "specification in → verified hardware out" — Inter, 18px, `#E2E8F0`
+- RIGHT block: rounded rect 700x120, `#1E293B` fill
+  - "PDD:" — Inter, 20px, bold, `#8B5CF6`
+  - "prompt in → verified software out" — Inter, 18px, `#E2E8F0`
+- Center label: "Same architecture." — Inter, 16px, `#64748B`, italic
+
+#### Morph Sequence (Phase 2, end)
+- Verilog code shape (left) morphs color from `#C678DD` to `#8B5CF6`, label changes to "PROMPT"
+- Netlist shape (center) morphs from abstract graph to code lines (`#10B981` → `#61AFEF`)
+- Checkmark (right) stays green but multiplies into a column of 5 small checkmarks (test suite)
 
 ### Animation Sequence
-1. **Frame 0-60 (0-2s):** Line 1 types on: "Synopsys: specification in → verified hardware out."
-2. **Frame 60-120 (2-4s):** Line 2 types on below: "PDD: prompt in → verified software out."
-3. **Frame 120-180 (4-6s):** Connecting bracket appears. "Same architecture" label fades in. Hold.
-4. **Frame 180-270 (6-9s):** Text fades to 0.3 opacity. Three morph pairs appear below:
-   - LEFT: Verilog code morphs into PROMPT document
-   - CENTER: checkmark morphs into test suite
-   - RIGHT: netlist morphs into software code
-5. **Frame 270-390 (9-13s):** Hold on completed morph. The three pairs sit side by side, showing the complete translation.
+1. **Frame 0-60 (0-2s):** Background netlists fade to 0.1. Flow diagram boxes begin appearing left to right.
+2. **Frame 60-180 (2-6s):** All four boxes visible. Arrows draw between them.
+3. **Frame 180-360 (6-12s):** Key insight text animates in. "The gates were different" first, then "The function was the same" with emphasis.
+4. **Frame 360-480 (12-16s):** Netlist thumbnails cycle through variations below "different" text. Single checkmark pulses below "same" text.
+5. **Frame 480-600 (16-20s):** Flow diagram fades. Phase 2 transition.
+6. **Frame 600-720 (20-24s):** Synopsys block slides in from left. PDD block slides in from right. "Same architecture" appears centered.
+7. **Frame 720-900 (24-30s):** Morph sequence begins. Verilog → PROMPT (color shift). Netlist → Code lines (shape morph). Checkmark → test suite (multiply animation).
+8. **Frame 900-1020 (30-34s):** Morph complete. All three elements in their PDD form. Labels update.
+9. **Frame 1020-1140 (34-38s):** Hold. Elements pulse gently. "Same architecture" glows.
 
 ### Typography
-- Comparison lines: Inter, 24px, bold (700), `#E2E8F0`
-- Synopsys highlight: `#4A90D9`
-- PDD highlight: `#4ADE80`
-- Architecture label: Inter, 14px, italic, `#FBBF24` at 0.6
-- Morph labels: Inter, 12px, `#94A3B8` at 0.5
+- Box labels: Inter, 18-20px, semi-bold (600)
+- Key insight text: Inter, 28px, regular/bold
+- Comparison labels: Inter, 18-20px
+- Center label: Inter, 16px, italic, `#64748B`
 
 ### Easing
-- Text type-on: linear, 2 frames per character
-- Bracket draw: `easeOut(quad)` over 15 frames
-- Label fade-in: `easeOut(quad)` over 20 frames
-- Morph transitions: `easeInOut(cubic)` over 40 frames
-- Text dim: `easeOut(quad)` over 15 frames
+- Box appearance: `easeOut(cubic)` over 20 frames, staggered 15 frames each
+- Arrow draw: `easeInOut(quad)` over 20 frames
+- Text fade-in: `easeOut(quad)` over 25 frames
+- Block slide-in: `easeOut(cubic)` over 30 frames
+- Morph color shift: `easeInOut(cubic)` over 60 frames
+- Morph shape: `easeInOut(cubic)` over 60 frames
 
 ## Narration Sync
+> "What Synopsys did was wrap a verification toolchain around the generator. Formal equivalence checking — using SAT and SMT solvers to produce mathematical proof that the output, whatever it looked like, behaved identically to the spec. The gates were different every time. The function was the same every time."
 > "Synopsys turned hardware descriptions into verified silicon. PDD turns prompts into verified software. Same architecture. Specification in, verified artifact out."
 
-Segment: `part2_paradigm_shift_017`
+Segments: `part2_paradigm_shift_016`, `part2_paradigm_shift_017`
 
-- **2:58** ("Synopsys turned hardware"): Line 1 types on
-- **3:02** ("PDD turns prompts"): Line 2 types on
-- **3:06** ("Same architecture"): Label appears, morphs begin
+- **2:34** (153.86s): Flow diagram builds — "What Synopsys did was wrap a verification toolchain"
+- **2:50** (170s): "The gates were different" / "The function was the same"
+- **2:58** (178.04s): Synopsys ↔ PDD comparison — "Synopsys turned hardware descriptions..."
+- **3:05** (185s): Morph begins — "PDD turns prompts into verified software"
+- **3:11** (190.66s): "Specification in, verified artifact out" — morph complete
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={390}>
+<Sequence from={0} durationInFrames={1140}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
-    {/* Line 1 — Synopsys */}
-    <Sequence from={0}>
-      <TypeWriter
-        parts={[
-          { text: 'Synopsys', color: '#4A90D9' },
-          { text: ': specification in ', color: '#E2E8F0' },
-          { text: '→', color: '#64748B' },
-          { text: ' verified hardware out.', color: '#E2E8F0' }
-        ]}
-        font="Inter" size={24} weight={700}
-        x={960} y={440} align="center"
-        charDelay={2} />
+    {/* Phase 1: Flow diagram + key insight */}
+    <Sequence from={0} durationInFrames={600}>
+      {/* Background context: previous netlists */}
+      <NetlistBackground opacity={0.1} />
+
+      {/* Flow diagram boxes */}
+      {flowSteps.map((step, i) => (
+        <Sequence key={i} from={i * 15}>
+          <FadeIn duration={20}>
+            <FlowBox label={step.label} color={step.color}
+              x={step.x} y={300} />
+          </FadeIn>
+        </Sequence>
+      ))}
+
+      {/* Arrows */}
+      <Sequence from={60}>
+        <FlowArrows steps={flowSteps} color="#475569" />
+      </Sequence>
+
+      {/* Key insight text */}
+      <Sequence from={180}>
+        <FadeIn duration={25}>
+          <Text text="The gates were different every time."
+            font="Inter" size={28} color="#E2E8F0" y={500} />
+        </FadeIn>
+      </Sequence>
+      <Sequence from={240}>
+        <FadeIn duration={25}>
+          <Text text="The function was the same every time."
+            font="Inter" size={28} weight={700} color="#10B981" y={580} />
+          <Checkmark size={32} color="#10B981" x={1100} y={580} />
+        </FadeIn>
+      </Sequence>
     </Sequence>
 
-    {/* Line 2 — PDD */}
-    <Sequence from={60}>
-      <TypeWriter
-        parts={[
-          { text: 'PDD', color: '#4ADE80' },
-          { text: ': prompt in ', color: '#E2E8F0' },
-          { text: '→', color: '#64748B' },
-          { text: ' verified software out.', color: '#E2E8F0' }
-        ]}
-        font="Inter" size={24} weight={700}
-        x={960} y={520} align="center"
-        charDelay={2} />
+    {/* Phase 2: Synopsys ↔ PDD parallel */}
+    <Sequence from={600} durationInFrames={540}>
+      <SlideIn from="left" duration={30}>
+        <ComparisonBlock
+          title="Synopsys:" titleColor="#C678DD"
+          body="specification in → verified hardware out"
+          x={260} y={400}
+        />
+      </SlideIn>
+      <SlideIn from="right" duration={30}>
+        <ComparisonBlock
+          title="PDD:" titleColor="#8B5CF6"
+          body="prompt in → verified software out"
+          x={1260} y={400}
+        />
+      </SlideIn>
+      <Sequence from={60}>
+        <FadeIn duration={20}>
+          <Text text="Same architecture." font="Inter" size={16}
+            color="#64748B" italic x={960} y={540} />
+        </FadeIn>
+      </Sequence>
+
+      {/* Morph sequence */}
+      <Sequence from={120}>
+        <MorphElement
+          from={{ shape: 'code', color: '#C678DD', label: 'Verilog' }}
+          to={{ shape: 'document', color: '#8B5CF6', label: 'PROMPT' }}
+          duration={60}
+        />
+        <MorphElement
+          from={{ shape: 'graph', color: '#10B981', label: 'Netlist' }}
+          to={{ shape: 'codeLines', color: '#61AFEF', label: 'Software' }}
+          duration={60}
+        />
+        <MorphElement
+          from={{ shape: 'checkmark', color: '#10B981' }}
+          to={{ shape: 'testSuite', color: '#10B981', count: 5 }}
+          duration={60}
+        />
+      </Sequence>
     </Sequence>
 
-    {/* Connecting bracket + label */}
-    <Sequence from={120}>
-      <FadeIn duration={20}>
-        <VerticalBracket x={1480} yTop={440} yBottom={520}
-          color="#334155" opacity={0.3} width={1} />
-        <Text text="Same architecture"
-          font="Inter" size={14} style="italic"
-          color="#FBBF24" opacity={0.6}
-          x={1560} y={480} align="left" />
-      </FadeIn>
-    </Sequence>
-
-    {/* Morph pairs */}
-    <Sequence from={180}>
-      <MorphPair
-        fromElement={<VerilogSnippet />}
-        toElement={<PromptDocument label="PROMPT" color="#4ADE80" />}
-        position={[300, 700]}
-        duration={40} />
-      <MorphPair
-        fromElement={<CheckmarkIcon color="#4A90D9" />}
-        toElement={<TestSuiteIcons color="#4ADE80" count={3} />}
-        position={[960, 700]}
-        duration={40} />
-      <MorphPair
-        fromElement={<NetlistNodes color="#4ADE80" />}
-        toElement={<CodeLines color="#94A3B8" />}
-        position={[1620, 700]}
-        duration={40} />
-    </Sequence>
   </AbsoluteFill>
 </Sequence>
 ```
@@ -152,30 +182,29 @@ Segment: `part2_paradigm_shift_017`
 ## Data Points JSON
 ```json
 {
-  "type": "text_overlay_with_morph",
-  "diagramId": "synopsys_pdd_equivalence",
-  "comparisons": [
+  "type": "animated_infographic",
+  "phases": [
     {
-      "domain": "Synopsys",
-      "domainColor": "#4A90D9",
-      "input": "specification",
-      "output": "verified hardware"
+      "id": "verification_flow",
+      "description": "Flow diagram: Verilog → Synthesis → Netlist → Formal Verification",
+      "frames": [0, 600],
+      "keyInsight": {
+        "different": "The gates were different every time.",
+        "same": "The function was the same every time."
+      }
     },
     {
-      "domain": "PDD",
-      "domainColor": "#4ADE80",
-      "input": "prompt",
-      "output": "verified software"
+      "id": "synopsys_pdd_parallel",
+      "description": "Side-by-side comparison of Synopsys and PDD pipelines",
+      "frames": [600, 1140],
+      "morphs": [
+        { "from": "Verilog", "to": "PROMPT", "colorFrom": "#C678DD", "colorTo": "#8B5CF6" },
+        { "from": "Gate netlist", "to": "Software code", "colorFrom": "#10B981", "colorTo": "#61AFEF" },
+        { "from": "Synopsys checkmark", "to": "Test suite", "colorFrom": "#10B981", "colorTo": "#10B981" }
+      ]
     }
   ],
-  "morphPairs": [
-    { "from": "verilog_code", "to": "prompt_document" },
-    { "from": "synopsys_checkmark", "to": "test_suite" },
-    { "from": "gate_netlist", "to": "software_code" }
-  ],
-  "sharedLabel": "Same architecture",
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": ["part2_paradigm_shift_017"]
+  "narrationSegments": ["part2_paradigm_shift_016", "part2_paradigm_shift_017"]
 }
 ```
 

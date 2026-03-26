@@ -1,67 +1,59 @@
-[Remotion]
+[title:]
 
 # Section 7.7: The Beat — Silence Before the Final Line
 
-**Tool:** Remotion
-**Duration:** ~2s (60 frames @ 30fps)
+**Tool:** Title
+**Duration:** ~2s
 **Timestamp:** 0:19 - 0:21
 
 ## Visual Description
+A deliberate moment of near-silence and visual stillness. The screen holds on deep darkness — not quite black, the faintest ghost of the glowing triangle lingers for a fraction of a second, then fades completely. The viewer sits in the dark for one beat.
 
-A deliberate pause. The screen fades to near-black — just the deep navy `#0A0F1A` background, empty. No text, no elements, no animation. A breath before the final line.
-
-This is a dramatic beat: the visual equivalent of a speaker pausing before their closing statement. The silence gives the previous line ("The code is just plastic") time to land, and creates anticipation for what follows.
-
-A very faint ghost of the PDD triangle lingers at the absolute edge of perception — vertices at 0.02 opacity. Barely there. Subliminal.
+This is the dramatic pause before the final line lands. The visual emptiness gives the narration room to breathe. "The mold is what matters" arrives into this silence.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- Background: `#0A0F1A` fading to `#050810` (near-black)
+- No elements, no text, no decoration
 
 ### Chart/Visual Elements
-
-#### Ghost Triangle (subliminal)
-- Same vertex positions as Section 7.4
-- Vertex dots: 0.02 opacity (barely visible)
-- Edge lines: 0.01 opacity
-- No labels, no text
-- This is felt, not seen
+- None — deliberate emptiness
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Previous visual fades to black. Ghost triangle at 0.02.
-2. **Frame 15-45 (0.5-1.5s):** Hold on near-black. Silence. Ghost triangle static.
-3. **Frame 45-60 (1.5-2s):** Hold continues. Ready for final line.
+1. **Frame 0-15 (0-0.5s):** Residual glow from previous spec fades to `0`. Background darkens from `#0A0F1A` to `#050810`.
+2. **Frame 15-45 (0.5-1.5s):** Pure dark hold. Nothing on screen.
+3. **Frame 45-60 (1.5-2.0s):** Hold continues. The narration line "The mold is what matters" begins during this hold.
 
 ### Typography
 - None
 
 ### Easing
-- Fade to black: `easeIn(quad)` over 15 frames
-- Ghost elements: static, no animation
+- Background darkening: `easeInQuad` over 15 frames
 
 ## Narration Sync
-> (silence / beat)
+> "The mold is what matters."
 
-Segment: between `closing_004` and `closing_005`
+Segment: `closing_005` (19.14s - 20.66s)
 
-- **0:19** (beat begins): Fade to near-black
-- **0:21** (beat ends): Ready for final line
+- **0:19** Screen goes dark — beat of silence
+- **0:19.5** Narration delivers: "The mold is what matters" into darkness
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={60}>
-  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Ghost triangle — subliminal */}
-    <TriangleFrame
-      vertices={[[960, 200], [480, 750], [1440, 750]]}
-      colors={["#60A5FA", "#4ADE80", "#D9944A"]}
-      edgeColor="#334155"
-      vertexOpacity={0.02}
-      edgeOpacity={0.01}
-      showLabels={false} />
+  <AbsoluteFill>
+    {/* Background darkening */}
+    <Sequence from={0}>
+      <AnimateColor
+        from="#0A0F1A" to="#050810"
+        durationInFrames={15} easing="easeInQuad"
+        property="backgroundColor"
+      />
+    </Sequence>
+
+    {/* Pure hold — intentionally empty */}
   </AbsoluteFill>
 </Sequence>
 ```
@@ -69,16 +61,11 @@ Segment: between `closing_004` and `closing_005`
 ## Data Points JSON
 ```json
 {
-  "type": "beat",
-  "chartId": "the_beat",
-  "startAnchor": { "type": "segmentEnd", "segmentId": "closing_004" },
-  "endAnchor": { "type": "segmentStart", "segmentId": "closing_005" },
-  "ghostElements": [
-    { "source": "pdd_triangle", "opacity": 0.02 }
-  ],
-  "backgroundColor": "#0A0F1A",
-  "narrationSegments": []
+  "type": "dramatic_beat",
+  "content": "empty",
+  "backgroundFrom": "#0A0F1A",
+  "backgroundTo": "#050810",
+  "durationSeconds": 2,
+  "narrationSegments": ["closing_005"]
 }
 ```
-
----

@@ -6,126 +6,146 @@ import { GeneratedContractVisual } from "./_shared/GeneratedContractVisual";
 import { ColdOpenSection } from "./cold_open";
 import { Part1EconomicsSection } from "./part1_economics";
 import { Part2ParadigmShiftSection } from "./part2_paradigm_shift";
-import { Part3MoldThreePartsSection } from "./part3_mold_three_parts";
+import { Part3MoldHasThreePartsSection } from "./part3_mold_has_three_parts";
 import { Part4PrecisionTradeoffSection } from "./part4_precision_tradeoff";
 import { Part5CompoundReturnsSection } from "./part5_compound_returns";
 import { WhereToStartSection } from "./where_to_start";
 import { ClosingSection } from "./closing";
-import { ColdOpen06CodeBlinkPatched } from "./ColdOpen06CodeBlinkPatched";
+import { ColdOpen07CodeRegeneration } from "./ColdOpen07CodeRegeneration";
+import { ColdOpen01SplitScreenHook } from "./ColdOpen01SplitScreenHook";
+import { ColdOpen07PddTitleCard } from "./ColdOpen07PddTitleCard";
+import { Part1Economics04ResearchAnnotations } from "./Part1Economics04ResearchAnnotations";
 import { Part1Economics05ContextWindowShrink } from "./Part1Economics05ContextWindowShrink";
+import { Part1Economics09CrossingLinesMoment } from "./Part1Economics09CrossingLinesMoment";
+import { Part2ParadigmShift08SynopsysPddEquivalence } from "./Part2ParadigmShift08SynopsysPddEquivalence";
 import { Part2ParadigmShift09AbstractionStaircase } from "./Part2ParadigmShift09AbstractionStaircase";
-import { Part3MoldThreeParts02MoldCrossSection } from "./Part3MoldThreeParts02MoldCrossSection";
-import { Part3MoldThreeParts10ThreeComponentsTable } from "./Part3MoldThreeParts10ThreeComponentsTable";
-import { Part4PrecisionTradeoff08PromptCodeSpectrum } from "./Part4PrecisionTradeoff08PromptCodeSpectrum";
+import { Part4PrecisionTradeoff03PrecisionTradeoffCurve } from "./Part4PrecisionTradeoff03PrecisionTradeoffCurve";
+import { Part4PrecisionTradeoff07EmbeddedCodeDocument } from "./Part4PrecisionTradeoff07EmbeddedCodeDocument";
+import { Part5CompoundReturns02MaintenancePieChart } from "./Part5CompoundReturns02MaintenancePieChart";
+import { Part5CompoundReturns03CompoundDebtCurve } from "./Part5CompoundReturns03CompoundDebtCurve";
 import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
-import { Closing03CodeRegenerateWorkflow } from "./Closing03CodeRegenerateWorkflow";
+import { Part5CompoundReturns07EconomicsCrossingCallback } from "./Part5CompoundReturns07EconomicsCrossingCallback";
+import { WhereToStart02LegacyCodebaseReveal } from "./WhereToStart02LegacyCodebaseReveal";
+import { WhereToStart07NoBigBangCallout } from "./WhereToStart07NoBigBangCallout";
 import { Closing04PddTriangle } from "./Closing04PddTriangle";
 import { Closing05DissolveRegenerateLoop } from "./Closing05DissolveRegenerateLoop";
+import { Closing06MoldGlowFinale } from "./Closing06MoldGlowFinale";
 import { Closing07TheBeat } from "./Closing07TheBeat";
-import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "cold_open:01_split_screen_hook": { leftSrc: "veo/developer_ai_edit.mp4", defaultSrc: "veo/developer_ai_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_ai_edit.mp4", outputSrc: "veo/developer_ai_edit.mp4", baseSrc: "veo/developer_ai_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
-  "part1_economics:12_developer_darning_split": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
-  "part2_paradigm_shift:06_craftsman_vs_mold": { rightSrc: "veo/mold_glow_finale.mp4" },
+  "cold_open:01_split_screen_darning": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "part1_economics:11_developer_darning_split": { leftSrc: "veo/developer_cursor_coding.mp4", defaultSrc: "veo/developer_cursor_coding.mp4", rightSrc: "veo/grandmother_darning_expert.mp4", backgroundSrc: "veo/developer_cursor_coding.mp4", outputSrc: "veo/developer_cursor_coding.mp4", baseSrc: "veo/developer_cursor_coding.mp4", revealSrc: "veo/grandmother_darning_expert.mp4" },
+  "part2_paradigm_shift:06_split_craftsman_vs_mold": { defaultSrc: "veo/craftsman_carving.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4" },
+  "part4_precision_tradeoff:04_prompt_detail_comparison": { leftSrc: "veo/developer_prompt_shift.mp4", defaultSrc: "veo/developer_prompt_shift.mp4", rightSrc: "veo/developer_prompt_shift.mp4", backgroundSrc: "veo/developer_prompt_shift.mp4", outputSrc: "veo/developer_prompt_shift.mp4", baseSrc: "veo/developer_prompt_shift.mp4" },
 };
 
 const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "cold_open:01_split_screen_hook": {"specBaseName": "01_split_screen_hook", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"content": "veo_clip_then_zoom_out", "clipId": "developer_ai_edit", "zoomOutReveals": "massive_codebase_with_patches", "thematicRole": "modern_developer_patching"}, "rightPanel": {"content": "veo_clip_then_zoom_out", "clipId": "grandmother_darning", "zoomOutReveals": "drawer_of_mended_garments", "thematicRole": "grandmother_darning_socks"}, "backgroundColor": "#000000", "narrationSegments": ["cold_open_001", "cold_open_002", "cold_open_003"]}, "mediaAliases": {"leftSrc": "veo/developer_ai_edit.mp4", "defaultSrc": "veo/developer_ai_edit.mp4", "rightSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/developer_ai_edit.mp4", "outputSrc": "veo/developer_ai_edit.mp4", "baseSrc": "veo/developer_ai_edit.mp4", "revealSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:05_code_blink_patched": {"specBaseName": "05_code_blink_patched", "dataPoints": {"type": "code_display", "language": "python", "filename": "auth_handler.py", "lineCount": 24, "patchComments": [{"line": 3, "text": "# patched 2024-01 — handle None case"}, {"line": 8, "text": "# workaround: upstream API sometimes returns 403"}, {"line": 14, "text": "# TODO: clean this up after migration"}, {"line": 19, "text": "# edge case fix (see ticket #4721)"}], "cursorPosition": {"line": 14, "column": 48}, "theme": "dark_ide", "backgroundColor": "#0D1117", "narrationSegments": ["cold_open_005"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:06_code_regeneration": {"specBaseName": "06_code_regeneration", "dataPoints": {"type": "code_regeneration", "filename": "auth_handler.py", "deletedLines": 24, "generatedLines": 16, "deletionDurationFrames": 36, "generationDurationFrames": 16, "terminal": {"command": "pdd generate auth_handler", "result": "Generated in 0.8s", "position": "bottom_right"}, "theme": "dark_ide", "backgroundColor": "#0D1117", "narrationSegments": ["cold_open_005"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:07_pdd_title_card": {"specBaseName": "07_pdd_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 0, "sectionLabel": "Cold Open", "title": "Prompt-Driven Development", "titleColor": "#4A90D9", "subtitle": "So why are we still patching?", "subtitleColor": "#94A3B8", "backgroundColor": "#0D1117", "codeUnderlay": true, "underlayOpacity": 0.15, "narrationSegments": ["cold_open_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 1, "sectionLabel": "PART 1", "titleLine1": "THE ECONOMICS", "titleLine2": "OF DARNING", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "quadratic_curve", "color": "#D9944A", "component": "descending_cost"}, {"shape": "quadratic_curve", "color": "#4A90D9", "component": "ascending_cost"}, {"shape": "crossing_point", "color": "#E2E8F0", "component": "threshold"}], "narrationSegments": ["part1_economics_001", "part1_economics_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:02_sock_price_chart": {"specBaseName": "02_sock_price_chart", "dataPoints": {"type": "animated_chart", "chartId": "sock_economics", "chartType": "dual_line", "xAxis": {"label": "Year", "range": [1950, 2020], "majorTick": 10}, "yAxis": {"label": "Cost (Relative to Hourly Wage)", "range": [0, 100]}, "series": [{"id": "labor_cost", "label": "Labor cost (darning)", "color": "#D9944A", "dataPoints": [{"x": 1950, "y": 45}, {"x": 1960, "y": 47}, {"x": 1970, "y": 48}, {"x": 1980, "y": 48}, {"x": 1990, "y": 49}, {"x": 2000, "y": 49}, {"x": 2010, "y": 50}, {"x": 2020, "y": 50}]}, {"id": "sock_cost", "label": "Cost of new socks", "color": "#4A90D9", "dataPoints": [{"x": 1950, "y": 80}, {"x": 1955, "y": 65}, {"x": 1960, "y": 52}, {"x": 1965, "y": 40}, {"x": 1970, "y": 28}, {"x": 1980, "y": 15}, {"x": 1990, "y": 8}, {"x": 2000, "y": 4}, {"x": 2010, "y": 2}, {"x": 2020, "y": 1}]}], "threshold": {"x": 1962, "y": 47, "label": "The Threshold"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_005", "part1_economics_006", "part1_economics_007"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
-  "part1_economics:03_code_cost_chart": {"specBaseName": "03_code_cost_chart", "dataPoints": {"type": "animated_chart", "chartId": "code_cost_triple_line", "chartType": "triple_line", "xAxis": {"label": "Year", "range": [2000, 2025], "majorTick": 5}, "yAxis": {"label": "Cost (Developer Hours)", "range": [0, 100]}, "series": [{"id": "generate_cost", "label": "Cost to generate", "color": "#4A90D9", "style": "solid", "dataPoints": [{"x": 2000, "y": 85}, {"x": 2005, "y": 85}, {"x": 2010, "y": 84}, {"x": 2015, "y": 83}, {"x": 2020, "y": 82}, {"x": 2021, "y": 78}, {"x": 2022, "y": 75}, {"x": 2023, "y": 50}, {"x": 2024, "y": 25}, {"x": 2025, "y": 15}]}, {"id": "immediate_patch", "label": "Immediate patch cost", "color": "#D9944A", "style": "solid", "dataPoints": [{"x": 2000, "y": 40}, {"x": 2005, "y": 39}, {"x": 2010, "y": 38}, {"x": 2015, "y": 37}, {"x": 2020, "y": 35}, {"x": 2021, "y": 32}, {"x": 2022, "y": 28}, {"x": 2023, "y": 24}, {"x": 2024, "y": 22}, {"x": 2025, "y": 20}]}, {"id": "total_cost_debt", "label": "Total cost (with debt)", "color": "#D9944A", "style": "dashed", "dataPoints": [{"x": 2000, "y": 55}, {"x": 2005, "y": 55}, {"x": 2010, "y": 56}, {"x": 2015, "y": 56}, {"x": 2020, "y": 57}, {"x": 2021, "y": 57}, {"x": 2022, "y": 58}, {"x": 2023, "y": 59}, {"x": 2024, "y": 60}, {"x": 2025, "y": 60}]}], "keyDates": [{"year": 2021, "label": "Codex"}, {"year": 2023, "label": "GPT-4"}, {"year": 2023.5, "label": "Claude"}, {"year": 2024, "label": "Gemini"}], "debtShading": {"between": ["total_cost_debt", "immediate_patch"], "color": "#D9944A"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_008", "part1_economics_009", "part1_economics_010", "part1_economics_011", "part1_economics_012", "part1_economics_013"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:04_research_annotations": {"specBaseName": "04_research_annotations", "dataPoints": {"type": "annotation_overlay", "chartId": "code_cost_triple_line", "annotations": [{"id": "github_individual", "header": "Individual task: −55%", "source": "GitHub, 2022", "finePrint": "95 developers, one greenfield task", "color": "#4ADE80", "target": "immediate_patch_line", "wave": 1}, {"id": "uplevel_overall", "header": "Overall throughput: ~0%", "source": "Uplevel, 2024", "finePrint": "785 developers, one year", "color": "#EF4444", "target": "total_cost_line", "wave": 1}, {"id": "gitclear_churn", "header": "Code churn: +44%", "source": "GitClear, 2025", "finePrint": "211M lines analyzed", "color": "#EF4444", "target": "debt_shading", "wave": 2}, {"id": "gitclear_refactoring", "header": "Refactoring: −60%", "source": "GitClear, 2025", "finePrint": "Developers aren't cleaning up. They're piling on.", "color": "#EF4444", "target": "debt_gap", "wave": 2}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_014", "part1_economics_015", "part1_economics_016"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:05_context_window_shrink": {"specBaseName": "05_context_window_shrink", "dataPoints": {"type": "animated_diagram", "diagramId": "context_window_shrink", "stages": [{"gridSize": 4, "blockPx": 60, "coveragePercent": 80, "color": "#4ADE80"}, {"gridSize": 8, "blockPx": 30, "coveragePercent": 40, "color": "#FBBF24"}, {"gridSize": 16, "blockPx": 15, "coveragePercent": 10, "color": "#EF4444"}, {"gridSize": 32, "blockPx": 7.5, "coveragePercent": 2, "color": "#DC2626"}], "contextWindow": {"width": 260, "height": 260, "color": "#4A90D9"}, "retrievalErrors": {"irrelevantInside": 3, "neededOutside": 5, "irrelevantColor": "#EF4444", "neededColor": "#4ADE80"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_017", "part1_economics_018", "part1_economics_019", "part1_economics_020"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:06_performance_vs_context": {"specBaseName": "06_performance_vs_context", "dataPoints": {"type": "inset_chart", "chartId": "performance_vs_context", "chartType": "single_line_degradation", "xAxis": {"label": "Context Length"}, "yAxis": {"label": "Model Performance"}, "series": [{"id": "performance_degradation", "color": "#EF4444", "degradationRange": {"min": 14, "max": 85}, "source": "EMNLP, 2025"}], "causalChain": ["Faster patching", "faster growth", "faster rot"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_021", "part1_economics_022"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:08_fork_codebase_size": {"specBaseName": "08_fork_codebase_size", "dataPoints": {"type": "forking_chart", "chartId": "codebase_size_fork", "forkYear": 2020, "forks": [{"id": "small_codebase", "label": "Small codebase", "color": "#4ADE80", "dataPoints": [{"x": 2020, "y": 35}, {"x": 2021, "y": 28}, {"x": 2022, "y": 22}, {"x": 2023, "y": 15}, {"x": 2024, "y": 12}, {"x": 2025, "y": 10}]}, {"id": "large_codebase", "label": "Large codebase", "color": "#EF4444", "dataPoints": [{"x": 2020, "y": 35}, {"x": 2021, "y": 35}, {"x": 2022, "y": 34}, {"x": 2023, "y": 34}, {"x": 2024, "y": 33}, {"x": 2025, "y": 32}]}], "annotations": [{"text": "METR, 2025: experienced devs 19% slower on mature repos", "color": "#EF4444"}, {"text": "Developers believed AI saved 20%. It cost 19%.", "color": "#EF4444", "emphasis": true}], "trapArrow": {"label": "Every patch adds code.", "color": "#D9944A"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_024", "part1_economics_025", "part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:09_patching_vs_regeneration_split": {"specBaseName": "09_patching_vs_regeneration_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"label": "AGENTIC PATCHING", "content": "context_window_cluttered", "tokenCount": 15000, "relevantPercent": 5, "color": "#EF4444", "background": "#0A0F1A"}, "rightPanel": {"label": "PDD REGENERATION", "content": "context_window_clean", "tokenCount": 2500, "relevantPercent": 95, "sections": [{"label": "Prompt", "tokens": 300, "color": "#4A90D9"}, {"label": "Tests", "tokens": 2000, "color": "#D9944A"}, {"label": "Grounding", "tokens": 200, "color": "#5AAA6E"}], "color": "#4ADE80", "background": "#0A0F1A"}, "backgroundColor": "#000000", "narrationSegments": ["part1_economics_027", "part1_economics_028"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 20}, "renderMode": "component"},
-  "part1_economics:10_context_compression": {"specBaseName": "10_context_compression", "dataPoints": {"type": "animated_diagram", "diagramId": "context_compression", "moduleCount": 20, "codeBlockSize": {"width": 120, "height": 80}, "promptBlockSize": {"width": 50, "height": 30}, "compressionRatio": "5-10×", "contextWindow": {"width": 600, "height": 500}, "overflowCount": 12, "resultLabel": "Same system. 5-10× more fits.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_029", "part1_economics_030"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:11_crossing_lines_moment": {"specBaseName": "11_crossing_lines_moment", "dataPoints": {"type": "chart_event", "chartId": "code_cost_triple_line", "event": "crossing_moment", "crossings": [{"id": "generate_crosses_total", "year": 2024, "y": 35, "radius": 8}, {"id": "generate_crosses_immediate", "year": 2025, "y": 20, "radius": 10}], "label": "We are here.", "debtResetNote": "Debt resets with each generation.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_031"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:12_developer_darning_split": {"specBaseName": "12_developer_darning_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"label": "CURSOR", "content": "developer_cursor_coding", "colorGrade": {"color": "#4A90D9", "opacity": 0.03}, "codeComments": ["// don't touch this", "// legacy", "// temporary fix (2019)"], "background": "#000000"}, "rightPanel": {"label": "DARNING NEEDLE", "content": "grandmother_darning_expert", "colorGrade": {"color": "#D4A043", "opacity": 0.04}, "background": "#000000"}, "embeddedVeoClips": ["developer_cursor_coding", "grandmother_darning_expert"], "backgroundColor": "#000000", "narrationSegments": ["part1_economics_032", "part1_economics_033"]}, "mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4", "defaultSrc": "veo/developer_cursor_edit.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4", "rightSrc": "veo/grandmother_darning_lamplight.mp4"}, "overlayConfig": {"fadeInFrames": 20}, "renderMode": "component"},
-  "part1_economics:15_key_insight_stillness": {"specBaseName": "15_key_insight_stillness", "dataPoints": {"type": "title_card", "sectionNumber": "1.key", "sectionLabel": "THE KEY INSIGHT", "style": "stillness_beat", "backgroundColor": "#0A0F1A", "breathing": true, "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:17_try_it_yourself": {"specBaseName": "17_try_it_yourself", "dataPoints": {"type": "title_card", "sectionNumber": "1.end", "style": "handwritten_challenge", "challenge": "Try it yourself.", "supportingText": ["Take your favorite LLM.", "Give it a hard coding problem as code,", "then as natural language.", "The natural language version will win."], "font": "Caveat", "backgroundColor": "#0A0F1A", "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 40}, "renderMode": "component"},
-  "part2_paradigm_shift:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 2, "sectionLabel": "PART 2", "titleLine1": "THE PARADIGM", "titleLine2": "SHIFT", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "mold_nozzle", "color": "#4A90D9", "component": "injection_nozzle"}, {"shape": "mold_cavity", "color": "#4A90D9", "component": "rectangular_cavity"}, {"shape": "mold_walls", "color": "#D9944A", "component": "constraint_walls"}], "narrationSegments": ["part2_paradigm_shift_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part2_paradigm_shift:02_double_meter_insight": {"specBaseName": "02_double_meter_insight", "dataPoints": {"type": "dual_meter_animation", "diagramId": "double_meter_insight", "meters": [{"id": "context_window", "label": "Effective Context Window", "position": "left", "scaleMin": "1×", "scaleMax": "10×", "fillGradient": ["#4A90D9", "#38BDF8"]}, {"id": "model_performance", "label": "Model Performance", "position": "right", "scaleMin": "Base", "scaleMax": "+89%", "fillGradient": ["#4ADE80", "#22D3EE"]}], "insightText": "Bigger window AND smarter model.", "challengeText": "Try it yourself.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part2_paradigm_shift_002", "part2_paradigm_shift_003", "part2_paradigm_shift_004"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
-  "part2_paradigm_shift:05_mold_defect_fix": {"specBaseName": "05_mold_defect_fix", "dataPoints": {"type": "animated_diagram", "diagramId": "mold_defect_fix", "elements": {"mold": {"type": "cross_section", "wallColor": "#D9944A"}, "conveyor": {"type": "belt", "direction": "left_to_right"}, "parts": {"normalColor": "#4A90D9", "defectColor": "#EF4444"}, "engineer": {"color": "#E2E8F0", "toolColor": "#FBBF24"}, "counter": {"maxValue": "10000+", "color": "#4ADE80"}}, "narrativeArc": "defect_found → fix_mold → all_future_parts_perfect", "backgroundColor": "#0A0F1A", "narrationSegments": ["part2_paradigm_shift_008", "part2_paradigm_shift_009", "part2_paradigm_shift_010"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part2_paradigm_shift:06_craftsman_vs_mold": {"specBaseName": "06_craftsman_vs_mold", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"content": "veo_clip_with_aura", "clipId": "craftsman_carving", "aura": {"color": "#FFB347", "target": "wooden_chair"}, "label": "Value lives in the object", "thematicRole": "crafting_value_in_object"}, "rightPanel": {"content": "veo_clip_with_aura", "clipId": "mold_producing_parts", "aura": {"color": "#4A90D9", "target": "injection_mold"}, "label": "Value lives in the specification", "partDissolves": true, "thematicRole": "molding_value_in_spec"}, "backgroundColor": "#000000", "narrationSegments": ["part2_paradigm_shift_010", "part2_paradigm_shift_011", "part2_paradigm_shift_012"]}, "mediaAliases": {"rightSrc": "veo/mold_glow_finale.mp4"}, "overlayConfig": {"fadeInFrames": 90}, "renderMode": "component"},
-  "part2_paradigm_shift:10_verilog_synthesis_triple": {"specBaseName": "10_verilog_synthesis_triple", "dataPoints": {"type": "animated_diagram", "diagramId": "verilog_synthesis_triple", "phases": [{"id": "single_synthesis", "elements": ["verilog_code", "synthesis_icon", "gate_netlist"]}, {"id": "triple_synthesis", "elements": ["three_code_blocks", "three_netlists", "three_checkmarks"]}], "netlists": [{"id": "run_1", "layout": "diamond", "color": "#4ADE80"}, {"id": "run_2", "layout": "grid", "color": "#38BDF8"}, {"id": "run_3", "layout": "tree", "color": "#FBBF24"}], "equivalenceLabel": "Functionally equivalent", "equivalenceColor": "#4ADE80", "backgroundColor": "#0A0F1A", "narrationSegments": ["part2_paradigm_shift_015", "part2_paradigm_shift_016"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 120}, "renderMode": "component"},
-  "part2_paradigm_shift:11_synopsys_pdd_equivalence": {"specBaseName": "11_synopsys_pdd_equivalence", "dataPoints": {"type": "text_overlay_with_morph", "diagramId": "synopsys_pdd_equivalence", "comparisons": [{"domain": "Synopsys", "domainColor": "#4A90D9", "input": "specification", "output": "verified hardware"}, {"domain": "PDD", "domainColor": "#4ADE80", "input": "prompt", "output": "verified software"}], "morphPairs": [{"from": "verilog_code", "to": "prompt_document"}, {"from": "synopsys_checkmark", "to": "test_suite"}, {"from": "gate_netlist", "to": "software_code"}], "sharedLabel": "Same architecture", "backgroundColor": "#0A0F1A", "narrationSegments": ["part2_paradigm_shift_017"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part2_paradigm_shift:12_abstraction_staircase": {"specBaseName": "12_abstraction_staircase", "dataPoints": {"type": "animated_diagram", "diagramId": "abstraction_staircase", "steps": [{"id": "transistors", "label": "Transistors", "decade": "1970s", "color": "#D9944A"}, {"id": "schematics", "label": "Schematics", "decade": "1980s", "color": "#F59E0B"}, {"id": "rtl_verilog", "label": "RTL / Verilog", "decade": "1990s", "color": "#4A90D9"}, {"id": "behavioral_hls", "label": "Behavioral / HLS", "decade": "2010s", "color": "#2DD4BF"}, {"id": "natural_language", "label": "Natural language → Code", "decade": "2020s", "color": "#4ADE80", "pulsing": true}], "transitionLabel": "Couldn't scale", "transitionColor": "#EF4444", "chipLayout": {"label": "Billions of gates", "gateCount": "billions"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part2_paradigm_shift_018", "part2_paradigm_shift_019"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part2_paradigm_shift:13_prompt_replaces_review": {"specBaseName": "13_prompt_replaces_review", "dataPoints": {"type": "animated_diagram", "diagramId": "prompt_replaces_review", "phases": [{"id": "spec_and_tests", "elements": ["prompt_document", "test_suite", "review_label"]}, {"id": "mold_metaphor", "elements": ["prompt_source", "code_stream", "test_walls"]}], "promptDocument": {"label": "PROMPT", "glowColor": "#4ADE80", "lineCount": 8}, "testSuite": {"label": "TESTS", "testCount": 6, "checkColor": "#4ADE80"}, "reviewLabel": "Review the spec. Verify the output.", "moldAnimation": {"codeColor": "#94A3B8", "wallColor": "#D9944A"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part2_paradigm_shift_019"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
-  "part3_mold_three_parts:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 3, "sectionLabel": "PART 3", "titleLine1": "THE MOLD HAS", "titleLine2": "THREE PARTS", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "mold_shell", "color": "#4A90D9", "component": "outer_shell"}, {"shape": "mold_walls", "color": "#D9944A", "component": "test_walls"}, {"shape": "mold_nozzle", "color": "#2DD4BF", "component": "prompt_nozzle"}, {"shape": "mold_material", "color": "#A78BFA", "component": "grounding_material"}], "narrationSegments": ["part3_mold_three_parts_001", "part3_mold_three_parts_002", "part3_mold_three_parts_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:02_mold_cross_section": {"specBaseName": "02_mold_cross_section", "dataPoints": {"type": "animated_diagram", "diagramId": "mold_cross_section", "regions": [{"id": "walls", "label": "Tests: The Walls", "color": "#D9944A", "role": "constraints"}, {"id": "nozzle", "label": "Prompt: The Specification", "color": "#2DD4BF", "role": "specification"}, {"id": "material", "label": "Grounding: The Material", "color": "#A78BFA", "role": "style"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_004", "part3_mold_three_parts_005", "part3_mold_three_parts_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:03_test_walls_illuminate": {"specBaseName": "03_test_walls_illuminate", "dataPoints": {"type": "animated_diagram", "diagramId": "test_walls_illuminate", "walls": [{"id": "wall_null", "label": "null → None"}, {"id": "wall_empty", "label": "empty string → ''"}, {"id": "wall_unicode", "label": "handles unicode"}, {"id": "wall_latency", "label": "latency < 100ms"}, {"id": "wall_no_throw", "label": "no exceptions thrown"}, {"id": "wall_idempotent", "label": "idempotent"}], "wallColor": "#D9944A", "liquidGradient": ["#4A90D9", "#A78BFA"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_007", "part3_mold_three_parts_008"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:05_research_annotations": {"specBaseName": "05_research_annotations", "dataPoints": {"type": "annotation_overlay", "diagramId": "research_annotations", "annotations": [{"id": "coderabbit_stat", "type": "warning", "stat": "1.7×", "text": "AI code: 1.7× more issues", "source": "CodeRabbit, 2025", "detail": "75% more logic errors, 8× more perf problems", "color": "#EF4444"}, {"id": "dora_stat", "type": "positive", "text": "AI + strong tests = amplified delivery", "source": "DORA, 2025", "color": "#4ADE80"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_009", "part3_mold_three_parts_010"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:06_bug_add_wall": {"specBaseName": "06_bug_add_wall", "dataPoints": {"type": "animated_diagram", "diagramId": "bug_add_wall", "phases": [{"id": "bug_found", "action": "highlight_bug_line", "color": "#EF4444"}, {"id": "add_wall", "action": "materialize_wall", "label": "handles_null_userid", "color": "#D9944A"}, {"id": "regenerate", "action": "dissolve_and_regenerate_code"}, {"id": "permanent", "action": "wall_glows_permanently"}], "terminalCommands": ["pdd bug user_parser", "pdd fix user_parser"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_011", "part3_mold_three_parts_012", "part3_mold_three_parts_013"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:07_ratchet_timelapse": {"specBaseName": "07_ratchet_timelapse", "dataPoints": {"type": "animated_diagram", "diagramId": "ratchet_timelapse", "wallTimeline": [{"frame": 0, "count": 4, "phase": "initial"}, {"frame": 90, "count": 7, "phase": "early_growth"}, {"frame": 180, "count": 12, "phase": "mid_growth"}, {"frame": 270, "count": 18, "phase": "acceleration"}, {"frame": 330, "count": 25, "phase": "mature"}], "wallColor": "#D9944A", "ratchetMetaphor": true, "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_014", "part3_mold_three_parts_015"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:08_traditional_vs_pdd_split": {"specBaseName": "08_traditional_vs_pdd_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "TRADITIONAL", "headerColor": "#EF4444", "steps": [{"text": "Bug found", "opacity": 0.8}, {"text": "→ Patch code", "opacity": 0.8}, {"text": "Similar bug elsewhere", "opacity": 0.7}, {"text": "→ Patch again", "opacity": 0.6}, {"text": "Different bug", "opacity": 0.5}, {"text": "→ Patch again...", "opacity": 0.4}, {"text": "...", "opacity": 0.2}], "thematicRole": "endless_cycle"}, "rightPanel": {"header": "PDD", "headerColor": "#4ADE80", "steps": [{"text": "Bug found"}, {"text": "→ Add test (pdd bug)"}, {"text": "→ Regenerate (pdd fix)"}, {"text": "Bug impossible forever", "icon": "lock", "glow": true}], "thematicRole": "permanent_fix"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_015", "part3_mold_three_parts_016"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:09_bug_fork_diagram": {"specBaseName": "09_bug_fork_diagram", "dataPoints": {"type": "animated_diagram", "diagramId": "bug_fork", "root": {"label": "Bug found", "color": "#EF4444"}, "branches": [{"id": "code_bug", "label": "Code bug — add a wall", "color": "#D9944A", "action": "add_test", "file": "test_user_parser.py"}, {"id": "prompt_defect", "label": "Prompt defect — change the mold", "color": "#2DD4BF", "action": "fix_specification", "file": "user_parser.prompt"}], "convergence": {"label": "Regenerate", "color": "#4ADE80"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_016"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:10_five_generations": {"specBaseName": "10_five_generations", "dataPoints": {"type": "animated_diagram", "diagramId": "five_generations", "panels": [{"id": "gen_1", "status": "fail", "color": "#EF4444", "statusDelay": 0}, {"id": "gen_2", "status": "warn", "color": "#F59E0B", "statusDelay": 60}, {"id": "gen_3", "status": "fail", "color": "#EF4444", "statusDelay": 0}, {"id": "gen_4", "status": "warn", "color": "#F59E0B", "statusDelay": 60}, {"id": "gen_5", "status": "pass", "color": "#4ADE80", "statusDelay": 120}], "label": "Generate five. Pick the one that passes all tests.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_017"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:11_z3_formal_proof": {"specBaseName": "11_z3_formal_proof", "dataPoints": {"type": "annotation_overlay", "diagramId": "z3_formal_proof", "comparison": {"left": {"label": "Synopsys Formality", "domain": "chip_verification", "color": "#4A90D9"}, "right": {"label": "PDD + Z3", "domain": "code_verification", "color": "#2DD4BF"}, "equivalence": {"symbol": "≡", "color": "#A78BFA"}}, "emphasisLine": "Not sampling. Mathematical proof.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_018"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:12_module_level_aside": {"specBaseName": "12_module_level_aside", "dataPoints": {"type": "animated_diagram", "diagramId": "module_level_aside", "modules": [{"id": "auth", "label": "auth"}, {"id": "users", "label": "users"}, {"id": "payments", "label": "payments"}, {"id": "api", "label": "api"}, {"id": "parser", "label": "parser", "highlighted": true}, {"id": "events", "label": "events"}, {"id": "cache", "label": "cache"}, {"id": "queue", "label": "queue"}, {"id": "config", "label": "config"}], "limitations": ["race conditions", "cascading failures", "architectural mismatches"], "pddModule": "parser", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_019"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:13_prompt_nozzle": {"specBaseName": "13_prompt_nozzle", "dataPoints": {"type": "animated_diagram", "diagramId": "prompt_nozzle", "nozzleLabels": ["intent", "requirements", "constraints"], "promptText": ["Parse user IDs from untrusted input.", "Return None on failure, never throw.", "Handle unicode."], "promptFile": "user_parser.prompt", "dualGeneration": true, "nozzleColor": "#2DD4BF", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_020", "part3_mold_three_parts_021", "part3_mold_three_parts_022"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:14_prompt_ratio": {"specBaseName": "14_prompt_ratio", "dataPoints": {"type": "animated_diagram", "diagramId": "prompt_ratio", "promptSize": "~12 lines", "codeSize": "~200 lines", "ratio": "1:5 to 1:10", "analogy": {"prompt": "header file", "code": "OBJ file"}, "promptColor": "#2DD4BF", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_023"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:15_context_window_comparison": {"specBaseName": "15_context_window_comparison", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "RAW CODE CONTEXT", "headerColor": "#94A3B8", "content": "dense_code", "tokenCount": 15000, "scope": "1 module's implementation", "thematicRole": "overwhelming_code"}, "rightPanel": {"header": "PROMPT CONTEXT", "headerColor": "#2DD4BF", "content": "prompt_blocks", "tokenCount": 15000, "scope": "10 modules' specifications", "thematicRole": "curated_prompts"}, "multiplier": "10×", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_024"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:17_grounding_feedback_loop": {"specBaseName": "17_grounding_feedback_loop", "dataPoints": {"type": "animated_diagram", "diagramId": "grounding_feedback_loop", "phases": [{"id": "dual_grounding", "paths": [{"label": "OOP grounding", "style": "classes_with_methods", "color": "#4A90D9"}, {"label": "Functional grounding", "style": "pure_functions", "color": "#4ADE80"}]}, {"id": "feedback", "flow": "(prompt, code) → Grounding Database", "color": "#A78BFA"}, {"id": "pipeline", "stages": ["Prompt", "Grounding", "Mold", "Test Walls", "Code"]}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_026", "part3_mold_three_parts_027", "part3_mold_three_parts_028"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_three_parts:18_three_components_table": {"specBaseName": "18_three_components_table", "dataPoints": {"type": "animated_diagram", "diagramId": "three_components_table", "table": {"columns": ["Component", "Encodes", "Owner"], "rows": [{"component": "Prompt", "encodes": "WHAT (intent)", "owner": "Developer", "color": "#2DD4BF"}, {"component": "Grounding", "encodes": "HOW (style)", "owner": "Automatic", "color": "#A78BFA"}, {"component": "Tests", "encodes": "CORRECTNESS", "owner": "Accumulated", "color": "#D9944A"}]}, "priorityRule": "When these conflict, tests win. Always.", "hierarchy": ["Tests", "Prompt", "Grounding"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_three_parts_029", "part3_mold_three_parts_030"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part4_precision_tradeoff:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 4, "sectionLabel": "PART 4", "titleLine1": "THE PRECISION", "titleLine2": "TRADEOFF", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "printer_nozzle", "color": "#60A5FA", "side": "left"}, {"shape": "coordinate_grid", "color": "#60A5FA", "side": "left"}, {"shape": "mold_outline", "color": "#D9944A", "side": "right"}, {"shape": "flow_curves", "color": "#A78BFA", "side": "right"}], "narrationSegments": ["part4_precision_tradeoff_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part4_precision_tradeoff:02_printer_vs_mold_split": {"specBaseName": "02_printer_vs_mold_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "3D PRINTING", "headerColor": "#60A5FA", "elements": [{"type": "coordinate_grid", "spacing": 40, "color": "#60A5FA"}, {"type": "printer_nozzle", "layers": 3, "pointsPerLayer": 8}, {"type": "coordinate_labels", "font": "JetBrains Mono", "size": 8}], "caption": "Every point must be specified", "thematicRole": "explicit_precision"}, "rightPanel": {"header": "INJECTION MOLDING", "headerColor": "#D9944A", "elements": [{"type": "mold_walls", "strokeWidth": 4, "color": "#D9944A"}, {"type": "liquid_flow", "color": "#A78BFA"}, {"type": "wall_glow_on_impact", "glowColor": "#D9944A"}], "caption": "Walls do the precision work", "thematicRole": "emergent_precision"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_002", "part4_precision_tradeoff_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part4_precision_tradeoff:03_precision_tradeoff_curve": {"specBaseName": "03_precision_tradeoff_curve", "dataPoints": {"type": "animated_chart", "chartId": "precision_tradeoff_curve", "axes": {"x": {"label": "Number of Tests", "range": [0, 50], "ticks": ["0", "10", "20", "30", "40", "50+"]}, "y": {"label": "Required Prompt Precision", "range": ["Low", "High"], "ticks": ["Low", "Medium", "High"]}}, "curve": {"type": "inverse_hyperbolic", "color": "#2DD4BF", "strokeWidth": 3}, "annotations": {"left": {"label": "parser_v1.prompt — 50 lines", "description": "Dense prompt, few tests", "position": "high_precision"}, "right": {"label": "parser_v2.prompt — 10 lines", "description": "Minimal prompt, 47 tests", "testCount": 47, "position": "low_precision"}}, "introText": "This maps directly to PDD.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_004", "part4_precision_tradeoff_005", "part4_precision_tradeoff_006"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 45}, "renderMode": "component"},
-  "part4_precision_tradeoff:04_code_generation_comparison": {"specBaseName": "04_code_generation_comparison", "dataPoints": {"type": "animated_diagram", "diagramId": "code_generation_comparison", "scenarios": [{"side": "left", "promptFile": "parser_v1.prompt", "promptLines": 50, "testCount": 5, "result": "correct", "emphasis": "prompt_heavy"}, {"side": "right", "promptFile": "parser_v2.prompt", "promptLines": 10, "testCount": 47, "result": "correct", "emphasis": "test_heavy", "preferred": true}], "takeaway": {"line1": "More tests, less prompt.", "line2": "The walls do the precision work."}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_007", "part4_precision_tradeoff_008"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
-  "part4_precision_tradeoff:05_embedded_code_document": {"specBaseName": "05_embedded_code_document", "dataPoints": {"type": "animated_diagram", "diagramId": "embedded_code_document", "document": {"naturalLanguageBlocks": 5, "embeddedCodeBlocks": 1, "totalLines": 18, "codeLines": 4, "nlLines": 14}, "codeBlock": {"language": "python", "function": "hash_id", "purpose": "Performance-critical hashing implementation"}, "annotations": {"nlLabel": "Architecture, intent, constraints → natural language", "codeLabel": "Algorithm choice, performance-critical logic → code"}, "bottomLabel": "The boundary between prompt and code is fluid.", "colors": {"naturalLanguage": "#2DD4BF", "code": "#60A5FA", "background": "#0A0F1A"}, "narrationSegments": ["part4_precision_tradeoff_009"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 120}, "renderMode": "component"},
-  "part4_precision_tradeoff:06_prompt_code_spectrum": {"specBaseName": "06_prompt_code_spectrum", "dataPoints": {"type": "animated_diagram", "diagramId": "prompt_code_spectrum", "spectrum": {"leftEnd": {"label": "Pure natural language", "color": "#2DD4BF"}, "rightEnd": {"label": "Pure code", "color": "#475569"}, "width": 1520}, "slider": {"position": 0.25, "label": "Most work lives here"}, "notches": [{"position": 0.6, "label": "Algorithm choice"}, {"position": 0.75, "label": "Bit-level ops"}, {"position": 0.9, "label": "Performance loops"}], "annotations": [{"position": 0.15, "label": "Architecture", "color": "#2DD4BF"}, {"position": 0.25, "label": "Intent", "color": "#2DD4BF"}, {"position": 0.35, "label": "Constraints / Edge cases", "color": "#2DD4BF"}, {"position": 0.65, "label": "Algorithm choice", "color": "#94A3B8"}, {"position": 0.85, "label": "Bit-level ops / Perf. loops", "color": "#64748B"}], "bottomLabel": {"line1": "Stay in prompt space as long as possible.", "line2": "Dip into code when you must."}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_010"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 45}, "renderMode": "component"},
-  "part5_compound_returns:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionId": "part5_compound_returns", "title": "COMPOUND RETURNS", "tagline": "Why the economics compound for you.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part5_compound_returns:02_maintenance_pie_chart": {"specBaseName": "02_maintenance_pie_chart", "dataPoints": {"type": "pie_chart", "chartId": "maintenance_cost_pie", "slices": [{"label": "Maintenance", "range": "80-90%", "color": "#F59E0B", "pullOut": 8}, {"label": "Initial Development", "range": "10-20%", "color": "#4ADE80"}], "callouts": [{"text": "40% more on maintenance", "source": "McKinsey", "color": "#F59E0B"}, {"text": "⅓ of dev time on debt", "source": "Stripe", "color": "#F59E0B"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_002"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
-  "part5_compound_returns:03_compound_debt_curve": {"specBaseName": "03_compound_debt_curve", "dataPoints": {"type": "animated_chart", "chartId": "compound_debt_curve", "morphFrom": "maintenance_cost_pie", "curves": [{"id": "debt_exponential", "formula": "base * (1 + 0.25)^x", "color": "#F59E0B", "strokeWidth": 3, "label": "Debt × (1 + Rate)^Time", "fill": true}, {"id": "regeneration_flat", "formula": "constant", "color": "#4ADE80", "strokeWidth": 2.5, "dashed": true, "label": "Regeneration cost (debt resets each cycle)"}], "stats": [{"value": "$1.52T", "label": "annually", "source": "CISQ", "color": "#F59E0B"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_003"]}, "mediaAliases": {}, "overlayConfig": {"gradientOverlay": "bottom", "fadeInFrames": 60}, "renderMode": "component"},
-  "part5_compound_returns:04_diverging_cost_curves": {"specBaseName": "04_diverging_cost_curves", "dataPoints": {"type": "animated_chart", "chartId": "diverging_cost_curves", "curves": [{"id": "patching_exponential", "label": "Patching", "color": "#F59E0B", "type": "exponential", "direction": "up", "annotations": ["+debt", "+debt", "+debt", "+debt", "+debt"]}, {"id": "pdd_flat", "label": "PDD", "color": "#4ADE80", "type": "flat", "annotations": ["+test", "+test", "+test", "+test", "+test", "+test", "+test", "+test"]}], "xAxis": ["Now", "6 months", "1 year", "2 years", "5 years"], "pivotLabel": "Tests accrue compound returns", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_004", "part5_compound_returns_005"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part5_compound_returns:05_investment_comparison_table": {"specBaseName": "05_investment_comparison_table", "dataPoints": {"type": "comparison_table", "tableId": "investment_comparison", "columns": ["Investment", "Patching", "PDD"], "columnColors": ["#E2E8F0", "#F59E0B", "#4ADE80"], "rows": [{"investment": "Fix a bug", "patching": "One place, once", "pdd": "Impossible forever"}, {"investment": "Improve code", "patching": "One version", "pdd": "All future versions"}, {"investment": "Document intent", "patching": "One snapshot", "pdd": "Living specification"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part5_compound_returns:08_economics_crossing_callback": {"specBaseName": "08_economics_crossing_callback", "dataPoints": {"type": "chart_callback", "chartId": "code_cost_triple_line", "callbackTo": "part1_economics/11_crossing_lines_moment", "event": "crossing_reprise", "crossingPoint": {"radius": 12, "glowRadius": 24, "pulseRange": [0.85, 1.15], "pulsePeriod": 45}, "newAnnotation": "When economics change, rational behavior changes.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_009"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part5_compound_returns:09_contrarian_quote_card": {"specBaseName": "09_contrarian_quote_card", "dataPoints": {"type": "quote_card", "cardId": "contrarian_quote", "quote": "This is either the way of the future or it's going to crash and burn spectacularly.", "attribution": "Research engineer, after seeing PDD for the first time", "accentColor": "#4A90D9", "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_010"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
-  "part5_compound_returns:10_transition_out": {"specBaseName": "10_transition_out", "dataPoints": {"type": "transition", "transitionId": "compound_returns_out", "echoes": [{"source": "diverging_cost_curves", "opacity": 0.08}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part5_compound_returns_011"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "where_to_start:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionId": "where_to_start", "sectionNumber": 6, "sectionLabel": "PART 6", "title": "WHERE TO START", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "codebase_tree", "color": "#334155", "style": "file_tree"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "where_to_start:02_legacy_codebase_reveal": {"specBaseName": "02_legacy_codebase_reveal", "dataPoints": {"type": "code_visualization", "chartId": "legacy_codebase_reveal", "panels": 5, "fileNames": ["auth_handler.py", "payment_processor.py", "user_service.py", "legacy_router.py", "config.py"], "warningComments": ["// don't touch", "// here be dragons", "// TODO: fix this someday", "// nobody knows why this works"], "lineCount": "~47,000", "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
-  "where_to_start:03_module_highlight_terminal": {"specBaseName": "03_module_highlight_terminal", "dataPoints": {"type": "code_transformation", "chartId": "module_highlight_terminal", "highlightedModule": "auth_handler.py", "terminalCommand": "pdd update auth_handler.py", "terminalOutput": "✓ Prompt generated: auth_handler.prompt.md", "promptFile": "auth_handler.prompt.md", "transformation": {"code": {"role": "artifact", "color": "#64748B", "opacity": 0.4}, "prompt": {"role": "source_of_truth", "color": "#60A5FA", "opacity": 1.0}}, "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "where_to_start:04_source_of_truth_shift": {"specBaseName": "04_source_of_truth_shift", "dataPoints": {"type": "code_transformation", "chartId": "source_of_truth_shift", "transformedModules": [{"name": "auth_handler.py", "state": "complete"}, {"name": "payment_processor.py", "state": "animating"}], "pendingModules": ["user_service.py", "legacy_router.py", "config.py", "db_connector.py", "email_sender.py", "cache_layer.py"], "workflow": ["module", "prompt", "tests", "regenerate", "compare"], "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "where_to_start:05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "network_graph", "chartId": "module_glow_spread", "totalModules": 14, "migrationSequence": [{"name": "auth_handler.py", "frame": 0, "position": [400, 350]}, {"name": "payment_processor.py", "frame": 0, "position": [600, 420]}, {"name": "user_service.py", "frame": 20, "position": [820, 310]}, {"name": "config.py", "frame": 45, "position": [350, 550]}, {"name": "db_connector.py", "frame": 65, "position": [650, 580]}, {"name": "email_sender.py", "frame": 85, "position": [1050, 400]}, {"name": "cache_layer.py", "frame": 105, "position": [900, 550]}], "unmigrated": ["legacy_router.py", "reporting.py", "webhook_handler.py", "session_manager.py", "rate_limiter.py", "notification_service.py", "data_exporter.py"], "counterSteps": [15, 22, 29, 36, 43, 50], "colors": {"migrated": "#60A5FA", "unmigrated": "#1E293B", "dependency_migrated": "#60A5FA", "dependency_unmigrated": "#334155"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "where_to_start:06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "quote_card", "chartId": "no_big_bang_callout", "quoteLine1": "You don't patch socks", "quoteLine2": "because socks got cheap.", "quoteLine2Color": "#D9944A", "secondaryText": "The economics made patching irrational.", "callback": "sock_metaphor", "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "where_to_start:07_transition_to_closing": {"specBaseName": "07_transition_to_closing", "dataPoints": {"type": "transition", "transitionId": "where_to_start_to_closing", "echoes": [{"source": "no_big_bang_callout", "opacity": 0.06}, {"source": "sock_metaphor", "opacity": 0.05}], "backgroundColor": "#0A0F1A", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "closing:02_code_regenerate_workflow": {"specBaseName": "02_code_regenerate_workflow", "dataPoints": {"type": "code_animation", "chartId": "code_regenerate_workflow", "phases": [{"id": "bug_highlight", "frame": 0, "description": "Buggy code with red highlight on line 7"}, {"id": "test_add", "frame": 30, "description": "New test_edge_case fades in"}, {"id": "terminal_commands", "frame": 60, "description": "pdd bug → pdd fix sequence"}, {"id": "dissolve_regen", "frame": 90, "description": "Code dissolves, regenerates clean"}, {"id": "all_pass", "frame": 120, "description": "All tests passing checkmark"}], "terminalCommands": ["pdd bug user_parser", "pdd fix user_parser", "✓ All tests passing"], "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_001", "closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "closing:04_pdd_triangle": {"specBaseName": "04_pdd_triangle", "dataPoints": {"type": "animated_diagram", "chartId": "pdd_triangle", "vertices": [{"id": "prompt", "label": "PROMPT", "position": [960, 200], "color": "#60A5FA", "descriptor": "encode intent"}, {"id": "tests", "label": "TESTS", "position": [480, 750], "color": "#4ADE80", "descriptor": "preserve behavior"}, {"id": "grounding", "label": "GROUNDING", "position": [1440, 750], "color": "#D9944A", "descriptor": "maintain style"}], "centerElement": {"type": "generated_code", "position": [960, 520], "font": "JetBrains Mono"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "closing:05_dissolve_regenerate_loop": {"specBaseName": "05_dissolve_regenerate_loop", "dataPoints": {"type": "animated_diagram", "chartId": "dissolve_regenerate_loop", "cycles": 3, "cycleTints": ["#60A5FA", "#4ADE80", "#D9944A"], "triangle": {"persistent": true, "source": "pdd_triangle"}, "terminal": {"command": "pdd generate", "successIndicator": "✓"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_003", "closing_004"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "closing:07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": {"type": "beat", "chartId": "the_beat", "startAnchor": {"type": "segmentEnd", "segmentId": "closing_004"}, "endAnchor": {"type": "segmentStart", "segmentId": "closing_005"}, "ghostElements": [{"source": "pdd_triangle", "opacity": 0.02}], "backgroundColor": "#0A0F1A", "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "closing:08_final_title_card": {"specBaseName": "08_final_title_card", "dataPoints": {"type": "title_card", "chartId": "final_title_card", "title": "Prompt-Driven Development", "titleFont": {"family": "Inter", "size": 52, "weight": 700, "color": "#E2E8F0"}, "titleGlow": {"color": "#D9944A", "opacity": 0.08, "blur": 60}, "url": "promptdrivendevelopment.com", "commands": ["uv tool install pdd-cli", "pdd update your_module.py"], "commandFont": {"family": "JetBrains Mono", "size": 16, "color": "#64748B"}, "ghostElements": [{"source": "pdd_triangle", "opacity": 0.03, "scale": 0.4}], "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_005"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
+  "cold_open:01_split_screen_darning": {"specBaseName": "01_split_screen_darning", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.8}, "panels": {"left": {"clips": ["developer_cursor_edit", "developer_codebase_zoomout"], "crossfadeAt": 5.8}, "right": {"clips": ["grandmother_darning", "grandmother_drawer_zoomout"], "crossfadeAt": 5.8}}, "durationSeconds": 11.0}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_edit.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:07_code_cursor_blink": {"specBaseName": "07_code_cursor_blink", "dataPoints": {"type": "code_editor", "language": "typescript", "lineCount": 30, "patchIndicators": ["// HACK:", "// TODO: refactor", "// patch for #1247"], "gutterPlusLines": [3, 7, 12, 18, 22, 25], "cursorPosition": {"line": 14, "column": 4}, "theme": "vscode-dark"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:08_code_regeneration": {"specBaseName": "08_code_regeneration", "dataPoints": {"type": "code_editor_animation", "phases": [{"name": "cascade_delete", "direction": "bottom-to-top", "durationFrames": 15}, {"name": "empty_beat", "durationFrames": 3}, {"name": "cascade_generate", "direction": "top-to-bottom", "durationFrames": 30}, {"name": "terminal_overlay", "text": "$ pdd generate ✓", "durationFrames": 12}], "theme": "vscode-dark", "cleanCode": true, "terminalCommand": "pdd generate"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:09_title_card_pdd": {"specBaseName": "09_title_card_pdd", "dataPoints": {"type": "title_card", "title": "Prompt-Driven Development", "tagline": "Why You're Still Darning Socks", "titleFont": "Inter Bold", "titleSize": 72, "titleColor": "#FFFFFF", "glowColor": "rgba(79, 193, 255, 0.3)", "backgroundCodeOpacity": 0.2, "vignetteOpacity": 0.6}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:01_split_screen_hook": {"specBaseName": "01_split_screen_hook", "dataPoints": null, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:07_pdd_title_card": {"specBaseName": "07_pdd_title_card", "dataPoints": null, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 1, "sectionLabel": "PART 1", "titleLine1": "THE ECONOMICS", "titleLine2": "OF CODE", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "bezier_curve", "color": "#4A90D9", "role": "descending_cost"}, {"shape": "bezier_curve", "color": "#D9944A", "role": "ascending_cost"}], "narrationSegments": ["part1_economics_001", "part1_economics_002", "part1_economics_003", "part1_economics_004", "part1_economics_005"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:04_research_annotations": {"specBaseName": "04_research_annotations", "dataPoints": {"type": "annotated_chart_overlay", "baseChart": "code_cost_chart", "annotations": [{"id": "github_individual", "text": "Individual task: −55%", "source": "GitHub, 2022", "detail": "95 developers, one greenfield task", "color": "#2DD4BF", "pointsTo": "immediate_patch_line"}, {"id": "uplevel_throughput", "text": "Overall throughput: ~0%", "source": "Uplevel, 2024", "detail": "785 developers, one year", "color": "#EF4444", "pointsTo": "total_cost_dashed_line"}, {"id": "gitclear_churn", "text": "Code churn: +44%", "source": "GitClear, 2025", "detail": "211M lines analyzed", "color": "#EF4444", "pointsTo": "debt_area"}, {"id": "refactoring_decline", "text": "Refactoring: −60%", "source": "GitClear, 2025", "color": "#EF4444", "pointsTo": "debt_area"}], "debtLayers": [{"id": "code_complexity", "label": "Code Complexity", "opacity": 0.12}, {"id": "context_rot", "label": "Context Rot", "opacity": 0.06, "texture": "noise"}], "narrationSegments": ["part1_economics_014", "part1_economics_015", "part1_economics_016", "part1_economics_017"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:05_context_window_shrink": {"specBaseName": "05_context_window_shrink", "dataPoints": {"type": "context_window_visualization", "contextWindow": {"width": 280, "height": 200, "fixedSize": true, "borderColor": "#4A90D9"}, "gridPhases": [{"size": "4x4", "blocks": 16, "coverage": 0.8, "color": "#2DD4BF"}, {"size": "8x8", "blocks": 64, "coverage": 0.4, "color": "#F59E0B"}, {"size": "16x16", "blocks": 256, "coverage": 0.1, "color": "#EF4444"}, {"size": "32x32", "blocks": 1024, "coverage": 0.02, "color": "#EF4444"}], "highlights": {"red": {"meaning": "irrelevant_code_retrieved", "count": 4}, "green": {"meaning": "needed_code_invisible", "count": 8}}, "narrationSegments": ["part1_economics_018", "part1_economics_019", "part1_economics_020"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:06_performance_vs_context": {"specBaseName": "06_performance_vs_context", "dataPoints": {"type": "inset_line_chart", "title": "Performance vs. Context Length", "xAxis": {"label": "Context Length (tokens)", "range": [0, 128000]}, "yAxis": {"label": "Relative Performance", "range": [0, 100], "unit": "%"}, "series": [{"id": "performance_degradation", "label": "Model Performance", "color": "#EF4444", "data": [[4000, 95], [16000, 82], [32000, 65], [64000, 40], [128000, 15]]}], "citation": "EMNLP, 2025", "keyFinding": "14-85% performance degradation as context grows", "narrationSegments": ["part1_economics_021", "part1_economics_022"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:08_fork_codebase_size": {"specBaseName": "08_fork_codebase_size", "dataPoints": {"type": "forked_line_chart", "baseChart": "code_cost_chart", "forkPoint": {"year": 2020, "value": 2.5}, "forks": [{"id": "small_codebase", "label": "Small codebase", "color": "#22C55E", "data": [[2020, 2.5], [2022, 1.2], [2024, 0.4], [2025, 0.2]]}, {"id": "large_codebase", "label": "Large codebase", "color": "#EF4444", "data": [[2020, 2.5], [2022, 2.8], [2024, 3.0], [2025, 3.2]]}], "annotations": [{"text": "METR, 2025: experienced devs 19% slower on mature repos", "pointsTo": "large_codebase"}, {"text": "Developers believed AI saved 20%. It cost 19%.", "emphasis": true}], "growthArrow": {"from": "small_codebase", "to": "large_codebase", "label": "Every patch adds code."}, "narrationSegments": ["part1_economics_026", "part1_economics_027", "part1_economics_028"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:09_patching_vs_regeneration_split": {"specBaseName": "09_patching_vs_regeneration_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "AGENTIC PATCHING", "headerColor": "#EF4444", "content": "dense_code_with_highlights", "tokenCount": 15000, "relevance": "~40%", "thematicRole": "wasteful_context"}, "rightPanel": {"header": "PDD REGENERATION", "headerColor": "#2DD4BF", "content": "prompt_test_grounding", "tokenCount": 2300, "relevance": "100%", "thematicRole": "curated_context"}, "compressionAnimation": {"codeBlocks": 20, "promptBlocks": 20, "ratio": "5-10×"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part1_economics_029", "part1_economics_030"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:10_crossing_lines_moment": {"specBaseName": "10_crossing_lines_moment", "dataPoints": {"type": "crossing_moment", "baseChart": "code_cost_chart", "finalSegment": {"line": "generate_cost", "data": [[2024, 3], [2024.5, 2.0], [2025, 0.8], [2025.5, 0.4]]}, "crossings": [{"id": "generate_below_total_debt", "x": 2024.5, "y": 2.0, "meaning": "Regeneration cheaper than patching + debt"}, {"id": "generate_below_immediate", "x": 2025, "y": 0.6, "meaning": "Regeneration cheaper than even immediate patching"}], "label": "We are here.", "annotation": "Small modules. Clear prompts. Always fits in context.", "narrationSegments": ["part1_economics_031", "part1_economics_032"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:11_developer_darning_split": {"specBaseName": "11_developer_darning_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"content": "veo_clip_with_zoom_overlay", "clipId": "developer_cursor_coding", "zoomOut": {"startFrame": 150, "duration": 60, "from": 1.0, "to": 0.5}, "legacyComments": ["// don't touch this", "// legacy", "// temporary fix (2019)", "// TODO: refactor someday", "// no idea why this works"], "thematicRole": "developer_patching"}, "rightPanel": {"content": "veo_clip", "clipId": "grandmother_darning_expert", "thematicRole": "grandmother_darning"}, "backgroundColor": "#000000", "narrationSegments": ["part1_economics_033"]}, "mediaAliases": {"leftSrc": "veo/developer_cursor_coding.mp4", "defaultSrc": "veo/developer_cursor_coding.mp4", "rightSrc": "veo/grandmother_darning_expert.mp4", "backgroundSrc": "veo/developer_cursor_coding.mp4", "outputSrc": "veo/developer_cursor_coding.mp4", "baseSrc": "veo/developer_cursor_coding.mp4", "revealSrc": "veo/grandmother_darning_expert.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:14_key_insight_stillness": {"specBaseName": "14_key_insight_stillness", "dataPoints": {"type": "title_card", "variant": "stillness_beat", "backgroundColor": "#0A0F1A", "elements": [{"type": "pulsing_line", "color": "#E2E8F0", "maxOpacity": 0.03, "purpose": "subliminal_presence"}, {"type": "radial_glow", "color": "#FFB347", "opacity": 0.02, "purpose": "warmth_callback"}], "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:16_try_it_yourself": {"specBaseName": "16_try_it_yourself", "dataPoints": {"type": "title_card", "variant": "handwritten_challenge", "text": "Try it yourself.", "font": "Caveat", "backgroundColor": "#0F172A", "underlineColor": "#2DD4BF", "animation": "handwritten_trace", "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 2, "sectionLabel": "PART 2", "titleLine1": "THE PARADIGM", "titleLine2": "SHIFT", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "mold_silhouette", "color": "#8B5CF6", "role": "injection_mold_preview"}], "narrationSegments": ["part2_paradigm_shift_001", "part2_paradigm_shift_002", "part2_paradigm_shift_003", "part2_paradigm_shift_004"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
+  "part2_paradigm_shift:04_mold_production_counter": {"specBaseName": "04_mold_production_counter", "dataPoints": {"type": "animated_infographic", "elements": [{"id": "mold", "shape": "cross_section", "color": "#64748B", "role": "constant_specification"}, {"id": "parts", "shape": "rounded_rect", "color": "#D9944A", "role": "generated_output"}, {"id": "counter", "values": [1, 10, 100, 1000, 10000], "role": "scale_indicator"}, {"id": "defect", "color": "#EF4444", "role": "flaw_transition"}], "narrationSegments": ["part2_paradigm_shift_007", "part2_paradigm_shift_008"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:06_split_craftsman_vs_mold": {"specBaseName": "06_split_craftsman_vs_mold", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["craftsman_carving"], "aura": {"color": "#F59E0B", "target": "chair", "appearsAt": 8.0}, "label": "Value in the object"}, "right": {"clips": ["mold_producing_parts"], "aura": {"color": "#4A90D9", "target": "mold", "appearsAt": 12.0}, "label": "Value in the specification"}}, "narrationSegments": ["part2_paradigm_shift_010", "part2_paradigm_shift_011", "part2_paradigm_shift_012"], "durationSeconds": 25.0}, "mediaAliases": {"defaultSrc": "veo/craftsman_carving.mp4", "backgroundSrc": "veo/craftsman_carving.mp4", "outputSrc": "veo/craftsman_carving.mp4", "baseSrc": "veo/craftsman_carving.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:11_synopsys_pdd_equivalence": {"specBaseName": "11_synopsys_pdd_equivalence", "dataPoints": {"type": "animated_infographic", "phases": [{"id": "verification_flow", "description": "Flow diagram: Verilog → Synthesis → Netlist → Formal Verification", "frames": [0, 600], "keyInsight": {"different": "The gates were different every time.", "same": "The function was the same every time."}}, {"id": "synopsys_pdd_parallel", "description": "Side-by-side comparison of Synopsys and PDD pipelines", "frames": [600, 1140], "morphs": [{"from": "Verilog", "to": "PROMPT", "colorFrom": "#C678DD", "colorTo": "#8B5CF6"}, {"from": "Gate netlist", "to": "Software code", "colorFrom": "#10B981", "colorTo": "#61AFEF"}, {"from": "Synopsys checkmark", "to": "Test suite", "colorFrom": "#10B981", "colorTo": "#10B981"}]}], "narrationSegments": ["part2_paradigm_shift_016", "part2_paradigm_shift_017"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:12_abstraction_staircase": {"specBaseName": "12_abstraction_staircase", "dataPoints": {"type": "animated_timeline", "layout": "ascending_staircase", "steps": [{"label": "Transistors", "decade": "1970s", "color": "#D9944A"}, {"label": "Schematics", "decade": "1980s", "color": "#E97B2C"}, {"label": "RTL / Verilog", "decade": "1990s", "color": "#4A90D9"}, {"label": "Behavioral / HLS", "decade": "2010s", "color": "#14B8A6"}, {"label": "Natural Language → Code", "decade": "2020s", "color": "#8B5CF6", "pulsing": true}], "transitionArrows": {"label": "Couldn't scale", "color": "#EF4444"}, "narrationSegments": ["part2_paradigm_shift_018"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:13_billion_gate_unreviewable": {"specBaseName": "13_billion_gate_unreviewable", "dataPoints": {"type": "animated_infographic", "phases": [{"id": "overwhelming_scale", "description": "Billions of gates and massive code diffs — unreviewable", "frames": [0, 210], "elements": ["gate_grid", "code_diff_scroll"]}, {"id": "prompt_and_tests", "description": "Clean prompt document + verified test suite — reviewable", "frames": [210, 390], "prompt": {"label": "PROMPT", "color": "#8B5CF6", "lineCount": 5}, "tests": {"label": "TESTS", "color": "#10B981", "items": ["test_handles_null_input", "test_validates_schema", "test_returns_correct_type", "test_edge_case_empty", "test_performance_under_load"]}, "bottomLabel": "Review the spec. Verify the output."}], "narrationSegments": ["part2_paradigm_shift_019"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 3, "sectionLabel": "PART 3", "titleLine1": "THE MOLD HAS", "titleLine2": "THREE PARTS", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "mold_shell", "color": "#4A90D9", "component": "outer_shell"}, {"shape": "mold_walls", "color": "#D9944A", "component": "test_walls"}, {"shape": "mold_nozzle", "color": "#2DD4BF", "component": "prompt_nozzle"}, {"shape": "mold_material", "color": "#A78BFA", "component": "grounding_material"}], "narrationSegments": ["part3_mold_has_three_parts_001", "part3_mold_has_three_parts_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:02_mold_cross_section": {"specBaseName": "02_mold_cross_section", "dataPoints": {"type": "animated_diagram", "diagramId": "mold_cross_section", "regions": [{"id": "walls", "label": "Tests: The Walls", "color": "#D9944A", "role": "constraints"}, {"id": "nozzle", "label": "Prompt: The Specification", "color": "#2DD4BF", "role": "specification"}, {"id": "material", "label": "Grounding: The Material", "color": "#A78BFA", "role": "style"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_003", "part3_mold_has_three_parts_004"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:03_test_walls_illuminate": {"specBaseName": "03_test_walls_illuminate", "dataPoints": {"type": "animated_diagram", "diagramId": "test_walls_illuminate", "walls": [{"id": "wall_null", "label": "null → None"}, {"id": "wall_empty", "label": "empty string → ''"}, {"id": "wall_unicode", "label": "handles unicode"}, {"id": "wall_latency", "label": "latency < 100ms"}, {"id": "wall_no_throw", "label": "no exceptions thrown"}, {"id": "wall_idempotent", "label": "idempotent"}], "wallColor": "#D9944A", "liquidGradient": ["#4A90D9", "#A78BFA"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_005", "part3_mold_has_three_parts_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:05_research_annotations": {"specBaseName": "05_research_annotations", "dataPoints": {"type": "annotation_overlay", "diagramId": "research_annotations", "annotations": [{"id": "coderabbit", "headline": "AI code: 1.7× more issues", "source": "CodeRabbit, 2025", "color": "#EF4444", "subStats": ["75% more logic errors", "8× more performance problems"]}, {"id": "dora", "headline": "AI + strong tests = amplified delivery", "source": "DORA, 2025", "color": "#4ADE80"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_007", "part3_mold_has_three_parts_008"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 90}, "renderMode": "component"},
+  "part3_mold_has_three_parts:06_bug_add_wall": {"specBaseName": "06_bug_add_wall", "dataPoints": {"type": "animated_diagram", "diagramId": "bug_add_wall", "phases": [{"id": "bug_found", "action": "highlight_bug_line", "color": "#EF4444"}, {"id": "add_wall", "action": "materialize_wall", "label": "handles_null_userid", "color": "#D9944A"}, {"id": "regenerate", "action": "dissolve_and_regenerate_code"}, {"id": "permanent", "action": "wall_glows_permanently"}], "terminalCommands": ["pdd bug user_parser", "pdd fix user_parser"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_009", "part3_mold_has_three_parts_010", "part3_mold_has_three_parts_011"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:07_ratchet_timelapse": {"specBaseName": "07_ratchet_timelapse", "dataPoints": {"type": "animated_diagram", "diagramId": "ratchet_timelapse", "wallProgression": [6, 7, 8, 11, 15, 20], "wallColor": "#D9944A", "terminalCommand": "pdd test", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_012"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:08_traditional_vs_pdd_split": {"specBaseName": "08_traditional_vs_pdd_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "TRADITIONAL", "headerColor": "#EF4444", "steps": [{"text": "Bug found", "opacity": 0.8}, {"text": "→ Patch code", "opacity": 0.8}, {"text": "Similar bug elsewhere", "opacity": 0.7}, {"text": "→ Patch again", "opacity": 0.6}, {"text": "Different bug", "opacity": 0.5}, {"text": "→ Patch again...", "opacity": 0.4}, {"text": "...", "opacity": 0.2}], "thematicRole": "endless_cycle"}, "rightPanel": {"header": "PDD", "headerColor": "#4ADE80", "steps": [{"text": "Bug found"}, {"text": "→ Add test (pdd bug)"}, {"text": "→ Regenerate (pdd fix)"}, {"text": "Bug impossible forever", "icon": "lock", "glow": true}], "thematicRole": "permanent_fix"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_013"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:09_bug_fork_diagram": {"specBaseName": "09_bug_fork_diagram", "dataPoints": {"type": "animated_diagram", "diagramId": "bug_fork_diagram", "root": {"text": "Bug found", "color": "#EF4444"}, "branches": [{"id": "code_bug", "label": "Code bug", "action": "Add a wall (failing test)", "color": "#D9944A", "condition": "Code doesn't pass tests"}, {"id": "prompt_defect", "label": "Prompt defect", "action": "Change the mold itself", "color": "#2DD4BF", "condition": "Code passes tests, wrong behavior"}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_014"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
+  "part3_mold_has_three_parts:10_five_generations": {"specBaseName": "10_five_generations", "dataPoints": {"type": "animated_diagram", "diagramId": "five_generations", "panels": [{"id": "gen_1", "status": "fail", "color": "#EF4444", "statusDelay": 0}, {"id": "gen_2", "status": "warn", "color": "#F59E0B", "statusDelay": 60}, {"id": "gen_3", "status": "fail", "color": "#EF4444", "statusDelay": 0}, {"id": "gen_4", "status": "warn", "color": "#F59E0B", "statusDelay": 60}, {"id": "gen_5", "status": "pass", "color": "#4ADE80", "statusDelay": 120}], "label": "Generate five. Pick the one that passes all tests.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_015"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:11_z3_formal_proof": {"specBaseName": "11_z3_formal_proof", "dataPoints": {"type": "annotation_overlay", "diagramId": "z3_formal_proof", "comparison": {"left": {"label": "Synopsys Formality", "domain": "chip_verification", "color": "#4A90D9"}, "right": {"label": "PDD + Z3", "domain": "code_verification", "color": "#2DD4BF"}, "equivalence": {"symbol": "≡", "color": "#A78BFA"}}, "emphasisLine": "Not sampling. Mathematical proof.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_016"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:12_module_level_aside": {"specBaseName": "12_module_level_aside", "dataPoints": {"type": "animated_diagram", "diagramId": "module_level_aside", "modules": ["auth", "api", "user_parser", "billing", "cache", "queue", "mailer"], "highlightedModule": "user_parser", "highlightColors": ["#2DD4BF", "#D9944A"], "limitation": "PDD operates at the module level", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_017"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:13_prompt_nozzle": {"specBaseName": "13_prompt_nozzle", "dataPoints": {"type": "animated_diagram", "diagramId": "prompt_nozzle", "nozzleLabels": ["intent", "requirements", "constraints"], "promptText": ["Parse user IDs from untrusted input.", "Return None on failure, never throw.", "Handle unicode."], "promptFile": "user_parser.prompt", "dualGeneration": true, "nozzleColor": "#2DD4BF", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_018", "part3_mold_has_three_parts_019", "part3_mold_has_three_parts_020"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:14_prompt_ratio": {"specBaseName": "14_prompt_ratio", "dataPoints": {"type": "animated_diagram", "diagramId": "prompt_ratio", "promptFile": {"name": "user_parser.prompt", "lines": 15, "color": "#2DD4BF"}, "codeFile": {"name": "user_parser.py", "lines": 200, "color": "#94A3B8"}, "ratio": {"from": "1:5", "to": "1:10"}, "analogy": {"prompt": "header file", "code": "OBJ file"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_021"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:15_context_window_comparison": {"specBaseName": "15_context_window_comparison", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "RAW CODE CONTEXT", "headerColor": "#94A3B8", "content": "dense_code", "tokenCount": 15000, "scope": "1 module's implementation", "thematicRole": "overwhelming_code"}, "rightPanel": {"header": "PROMPT CONTEXT", "headerColor": "#2DD4BF", "content": "prompt_blocks", "tokenCount": 15000, "scope": "10 modules' specifications", "thematicRole": "curated_prompts"}, "multiplier": "10×", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_022"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:17_grounding_styles_split": {"specBaseName": "17_grounding_styles_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "OOP GROUNDING", "headerColor": "#4A90D9", "content": "oop_code", "pathLabel": "Path A: OOP codebase grounding", "thematicRole": "object_oriented_style"}, "rightPanel": {"header": "FUNCTIONAL GROUNDING", "headerColor": "#4ADE80", "content": "functional_code", "pathLabel": "Path B: Functional codebase grounding", "thematicRole": "functional_style"}, "sharedHeader": "Same prompt. Same tests. Different grounding.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_024", "part3_mold_has_three_parts_025"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:18_grounding_feedback_loop": {"specBaseName": "18_grounding_feedback_loop", "dataPoints": {"type": "animated_diagram", "diagramId": "grounding_feedback_loop", "flow": [{"id": "success", "type": "code_module", "status": "passed", "color": "#4ADE80"}, {"id": "database", "type": "grounding_database", "color": "#A78BFA"}, {"id": "future", "type": "future_generation", "color": "#A78BFA"}], "feedbackArrow": "success → database → future", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_025"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:19_three_components_assembly": {"specBaseName": "19_three_components_assembly", "dataPoints": {"type": "animated_diagram", "diagramId": "three_components_assembly", "pipeline": [{"stage": "prompt", "label": "intent", "color": "#2DD4BF"}, {"stage": "grounding", "label": "styled", "color": "#A78BFA"}, {"stage": "walls", "label": "constrained", "color": "#D9944A"}, {"stage": "output", "label": "code", "color": "#E2E8F0"}], "statement": "Prompt + Tests + Grounding. Intent + Constraints + Style.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:20_three_components_table": {"specBaseName": "20_three_components_table", "dataPoints": {"type": "animated_diagram", "diagramId": "three_components_table", "table": {"columns": ["Component", "Encodes", "Owner"], "rows": [{"component": "Prompt", "encodes": "WHAT (intent)", "owner": "Developer", "color": "#2DD4BF"}, {"component": "Grounding", "encodes": "HOW (style)", "owner": "Automatic", "color": "#A78BFA"}, {"component": "Tests", "encodes": "CORRECTNESS", "owner": "Accumulated", "color": "#D9944A"}]}, "priorityRule": "When these conflict, tests win. Always.", "hierarchy": ["Tests", "Prompt", "Grounding"], "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_027"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_has_three_parts:21_code_output_finale": {"specBaseName": "21_code_output_finale", "dataPoints": {"type": "animated_diagram", "diagramId": "code_output_finale", "elements": {"code": {"role": "output", "finalOpacity": 0.15}, "mold": {"role": "source_of_truth", "colors": ["#2DD4BF", "#D9944A", "#A78BFA"], "pulsing": true}}, "statement": "The code is output. The mold is what matters.", "backgroundColor": "#0A0F1A", "narrationSegments": ["part3_mold_has_three_parts_028"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part4_precision_tradeoff:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 4, "sectionLabel": "PART 4", "titleLine1": "THE PRECISION", "titleLine2": "TRADEOFF", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "dot_matrix_grid", "color": "#F59E0B", "role": "3d_printing_precision"}, {"shape": "mold_flow_walls", "color": "#2DD4BF", "role": "injection_molding_walls"}], "narrationSegments": ["part4_precision_tradeoff_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 39}, "renderMode": "component"},
+  "part4_precision_tradeoff:02_printer_vs_mold_split": {"specBaseName": "02_printer_vs_mold_split", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "3D PRINTING", "headerColor": "#F59E0B", "content": "coordinate_grid_with_nozzle_path", "pointCount": 2847, "caption": "Every point must be defined.", "thematicRole": "exhaustive_specification"}, "rightPanel": {"header": "INJECTION MOLDING", "headerColor": "#2DD4BF", "content": "mold_walls_with_liquid_flow", "wallCount": 6, "liquidCurves": 10, "caption": "The walls do the precision work.", "thematicRole": "wall_based_precision"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_002", "part4_precision_tradeoff_003", "part4_precision_tradeoff_004"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part4_precision_tradeoff:03_precision_tradeoff_curve": {"specBaseName": "03_precision_tradeoff_curve", "dataPoints": {"type": "animated_chart", "chartType": "inverse_curve", "axes": {"x": {"label": "Number of Tests", "range": [0, 100], "unit": "count"}, "y": {"label": "Required Prompt Precision", "range": [0, 100], "unit": "percent"}}, "curve": {"function": "y = 200 + 600 * exp(-0.04 * x)", "color": "#A78BFA", "interpretation": "inverse_relationship"}, "regions": [{"position": "above_curve", "label": "Prompt does the work", "color": "#F59E0B"}, {"position": "below_curve", "label": "Tests do the work", "color": "#2DD4BF"}], "callouts": [{"position": "left", "label": "Few tests → detailed prompt", "promptLines": 5}, {"position": "right", "label": "Many tests → minimal prompt", "promptLines": 2, "testCount": 6}], "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_005", "part4_precision_tradeoff_006"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
+  "part4_precision_tradeoff:04_prompt_detail_comparison": {"specBaseName": "04_prompt_detail_comparison", "dataPoints": {"type": "split_screen", "layout": "vertical_split", "splitPosition": 960, "leftPanel": {"header": "DETAILED PROMPT", "headerColor": "#F59E0B", "filename": "parser_v1.prompt", "lineCount": 50, "testCount": 3, "thematicRole": "verbose_specification"}, "rightPanel": {"header": "MINIMAL PROMPT", "headerColor": "#2DD4BF", "filename": "parser_v2.prompt", "lineCount": 10, "testCount": 47, "thematicRole": "test_driven_specification"}, "outcome": {"both_correct": true, "promptReduction": "5×", "summary": "Same result. 5× less prompt."}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_007", "part4_precision_tradeoff_008"]}, "mediaAliases": {"leftSrc": "veo/developer_prompt_shift.mp4", "defaultSrc": "veo/developer_prompt_shift.mp4", "rightSrc": "veo/developer_prompt_shift.mp4", "backgroundSrc": "veo/developer_prompt_shift.mp4", "outputSrc": "veo/developer_prompt_shift.mp4", "baseSrc": "veo/developer_prompt_shift.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "part4_precision_tradeoff:05_walls_precision_callout": {"specBaseName": "05_walls_precision_callout", "dataPoints": {"type": "kinetic_typography", "primaryText": ["More tests,", "less prompt."], "secondaryText": "The walls do the precision work.", "visualElements": {"testWalls": {"count": 8, "color": "#2DD4BF"}, "promptDocument": {"initialLines": 12, "finalLines": 3, "color": "#F59E0B"}, "checkmark": {"color": "#22C55E"}}, "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_008"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part4_precision_tradeoff:06_embedded_code_document": {"specBaseName": "06_embedded_code_document", "dataPoints": {"type": "document_visualization", "document": {"width": 720, "height": 700, "sections": [{"type": "natural_language", "lines": 8, "topic": "parser_requirements"}, {"type": "natural_language", "lines": 6, "topic": "edge_cases"}, {"type": "code_block", "lines": 5, "language": "python", "topic": "token_validation"}, {"type": "natural_language", "lines": 6, "topic": "error_handling"}]}, "annotations": [{"target": "natural_language", "label": "Architecture, intent, constraints", "color": "#A78BFA"}, {"target": "code_block", "label": "Precision where it matters", "color": "#2DD4BF"}], "labels": ["The boundary between prompt and code is fluid.", "Stay in prompt space. Dip into code when you must."], "backgroundColor": "#0A0F1A", "narrationSegments": ["part4_precision_tradeoff_009"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part5_compound_returns:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionLabel": "PART 5", "title": "Compound Returns", "accentStyle": "exponential_curve", "accentColor": "#D9944A", "backgroundColor": "#0A0F1A", "durationSeconds": 8, "narrationSegments": ["part5_compound_returns_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 30}, "renderMode": "component"},
+  "part5_compound_returns:02_maintenance_pie_chart": {"specBaseName": "02_maintenance_pie_chart", "dataPoints": {"type": "animated_pie_chart", "center": [960, 460], "radius": 280, "wedges": [{"id": "initial_development", "label": "Initial Development", "value": "10-20%", "midpointPct": 15, "color": "#4A90D9", "sweepAngle": 54}, {"id": "maintenance", "label": "Maintenance", "value": "80-90%", "midpointPct": 85, "color": "#D9944A", "sweepAngle": 306}], "citations": ["McKinsey: +40% maintenance overhead from tech debt", "Stripe: 33% of dev week on debt"], "narrationSegments": ["part5_compound_returns_002"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 90}, "renderMode": "component"},
+  "part5_compound_returns:03_compound_debt_curve": {"specBaseName": "03_compound_debt_curve", "dataPoints": {"type": "animated_line_chart", "morphFrom": "maintenance_pie_chart", "xAxis": {"label": "Time (years)", "range": [0, 10]}, "yAxis": {"label": "Cumulative Cost", "range": [0, 100]}, "series": [{"id": "debt_curve", "label": "Debt × (1 + Rate)^Time", "color": "#D9944A", "formula": "C₀ × (1 + 0.3)^t", "data": [[0, 1], [1, 1.3], [2, 1.7], [3, 2.2], [4, 2.9], [5, 3.7], [6, 4.8], [7, 6.3], [8, 8.2], [9, 10.6], [10, 13.8]]}, {"id": "regeneration_line", "label": "Regeneration cost (resets each cycle)", "color": "#4A90D9", "style": "dashed", "data": [[0, 1], [2, 1.1], [4, 1.0], [6, 1.1], [8, 1.0], [10, 1.1]]}], "callout": {"value": "$1.52 trillion / year", "source": "US technical debt — CISQ", "anchorPoint": [8, 8.2]}, "narrationSegments": ["part5_compound_returns_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part5_compound_returns:04_diverging_cost_curves": {"specBaseName": "04_diverging_cost_curves", "dataPoints": {"type": "diverging_line_chart", "xAxis": {"label": "Years", "range": [0, 10]}, "yAxis": {"label": "Cumulative Cost", "range": [0, 100]}, "series": [{"id": "patching_curve", "label": "Patching", "color": "#D9944A", "style": "solid", "data": [[0, 2], [1, 3], [2, 4.5], [3, 7], [4, 11], [5, 17], [6, 26], [7, 39], [8, 55], [9, 72], [10, 90]]}, {"id": "pdd_curve", "label": "PDD", "color": "#4A90D9", "style": "solid", "data": [[0, 2], [1, 3.5], [1.5, 2.2], [3, 3.8], [3.5, 2.3], [5, 3.9], [5.5, 2.2], [7, 3.7], [7.5, 2.1], [9, 3.6], [10, 4.0]]}], "annotations": [{"text": "Each patch adds debt", "anchorYear": 6, "target": "patching_curve"}, {"text": "Each test constrains forever", "anchorYear": 6, "target": "pdd_curve"}], "impactText": "Over time, it's everything.", "narrationSegments": ["part5_compound_returns_004", "part5_compound_returns_005", "part5_compound_returns_006"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 45}, "renderMode": "component"},
+  "part5_compound_returns:05_investment_comparison_table": {"specBaseName": "05_investment_comparison_table", "dataPoints": {"type": "comparison_table", "columns": [{"id": "investment", "label": "Investment", "color": "#64748B"}, {"id": "patching", "label": "Patching", "color": "#D9944A"}, {"id": "pdd", "label": "PDD", "color": "#4A90D9"}], "rows": [{"investment": "Fix a bug", "patching": "One place, once", "pdd": "Impossible forever"}, {"investment": "Improve code", "patching": "One version", "pdd": "All future versions"}, {"investment": "Document intent", "patching": "One snapshot", "pdd": "Living specification"}], "narrationSegments": ["part5_compound_returns_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part5_compound_returns:08_economics_crossing_callback": {"specBaseName": "08_economics_crossing_callback", "dataPoints": {"type": "callback_chart", "referencesSpec": "part1_economics/02_sock_price_chart", "crossingPoint": {"x": 1962, "y": 0.85}, "pulseEffect": {"rings": 3, "maxRadius": 100, "color": "#D9944A", "cycleDuration": 90}, "newLabel": "The economics changed.", "narrationSegments": ["part5_compound_returns_009"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part5_compound_returns:09_contrarian_quote_card": {"specBaseName": "09_contrarian_quote_card", "dataPoints": {"type": "quote_card", "quote": "This is either the way of the future or it's going to crash and burn spectacularly.", "attribution": "Research engineer, after seeing PDD for the first time", "quoteFont": "Georgia", "quoteSize": 36, "accentColor": "#D9944A", "backgroundColor": "#0A0F1A", "durationSeconds": 18, "narrationSegments": ["part5_compound_returns_010"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 90}, "renderMode": "component"},
+  "where_to_start:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 6, "sectionLabel": "PART 6", "titleLine1": "WHERE TO", "titleLine2": "START", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "module_grid", "rows": 4, "cols": 6, "highlightIndex": 13, "highlightColor": "#4A90D9"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "where_to_start:02_legacy_codebase_reveal": {"specBaseName": "02_legacy_codebase_reveal", "dataPoints": {"type": "code_wall", "layout": "stacked_panes", "paneCount": 3, "dangerComments": [{"pane": 1, "line": 12, "text": "// don't touch", "glowFrame": 30}, {"pane": 1, "line": 28, "text": "// here be dragons", "glowFrame": 60}, {"pane": 2, "line": 8, "text": "// TODO: refactor this someday", "glowFrame": 100}, {"pane": 2, "line": 22, "text": "// nobody knows why this works", "glowFrame": 115}, {"pane": 3, "line": 15, "text": "// legacy — do not modify", "glowFrame": 140}], "scrollRate": 0.5, "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "where_to_start:05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "progressive_migration", "grid": {"cols": 5, "rows": 4, "totalModules": 20}, "conversionOrder": [{"id": "auth_handler", "label": "auth_handler.py", "col": 2, "row": 1, "frame": 0, "preConverted": true}, {"id": "user_model", "label": "user_model.py", "col": 4, "row": 0, "frame": 30}, {"id": "payment_processor", "label": "payment_processor.py", "col": 1, "row": 2, "frame": 70}, {"id": "api_routes", "label": "api_routes.py", "col": 3, "row": 3, "frame": 110}, {"id": "email_service", "label": "email_service.py", "col": 0, "row": 1, "frame": 150}, {"id": "config_loader", "label": "config_loader.py", "col": 4, "row": 3, "frame": 170}, {"id": "search_index", "label": "search_index.py", "col": 2, "row": 0, "frame": 190}, {"id": "notification_hub", "label": "notification_hub.py", "col": 0, "row": 3, "frame": 210}], "unconverted": ["db_connection.py", "cache_manager.py", "logger.py", "middleware.py", "rate_limiter.py", "session_store.py", "file_upload.py", "webhook_handler.py", "scheduler.py", "analytics.py", "admin_panel.py", "test_runner.py"], "counterSteps": [1, 2, 3, 4, 5, 6, 7, 8], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "where_to_start:06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "text_manifesto", "statements": [{"text": "No big bang.", "frame": 20, "style": "bold"}, {"text": "No rewrite.", "frame": 50, "style": "bold"}, {"text": "Just a gradual migration of where value lives.", "frame": 80, "highlight": "value"}], "migrationBar": {"from": "code", "to": "specification", "startSplit": 0.2, "endSplit": 0.5, "leftColor": "#475569", "rightColor": "#8B5CF6"}, "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "where_to_start:07_economics_callback": {"specBaseName": "07_economics_callback", "dataPoints": {"type": "metaphor_callback", "comparison": {"left": {"label": "patch it?", "icon": "holey_sock", "color": "#D9944A", "status": "deprecated"}, "right": {"label": "replace it.", "icon": "fresh_sock", "color": "#10B981", "status": "preferred"}}, "closingStatements": ["You don't patch socks because socks got cheap.", "The economics made patching irrational."], "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "closing:03_pdd_bug_fix_terminal": {"specBaseName": "03_pdd_bug_fix_terminal", "dataPoints": {"type": "terminal_animation", "commands": [{"cmd": "pdd bug email_validator", "output": "Test added: test_rejects_unicode_homoglyphs"}, {"cmd": "pdd fix email_validator", "output": "Regenerating... ✓ All tests pass"}], "terminalBg": "#111827", "backgroundColor": "#0A0F1A", "successColor": "#22C55E", "durationSeconds": 5, "narrationSegments": ["closing_001", "closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "closing:04_pdd_triangle": {"specBaseName": "04_pdd_triangle", "dataPoints": {"type": "triangle_diagram", "vertices": [{"label": "PROMPT", "subtitle": "encode intent", "color": "#4A90D9", "position": [960, 200]}, {"label": "TESTS", "subtitle": "preserve behavior", "color": "#D9944A", "position": [520, 720]}, {"label": "GROUNDING", "subtitle": "maintain style", "color": "#5AAA6E", "position": [1400, 720]}], "edgeColor": "#334155", "centerCode": true, "backgroundColor": "#0A0F1A", "durationSeconds": 5, "narrationSegments": ["closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "closing:05_dissolve_regenerate_loop": {"specBaseName": "05_dissolve_regenerate_loop", "dataPoints": {"type": "dissolve_regenerate_loop", "cycles": 2, "codeVariations": 2, "trianglePersists": true, "triangleOpacity": 0.3, "particleCount": "2-3 per character", "backgroundColor": "#0A0F1A", "successColor": "#22C55E", "durationSeconds": 5, "narrationSegments": ["closing_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "closing:06_mold_glow_finale": {"specBaseName": "06_mold_glow_finale", "dataPoints": {"type": "mold_glow_diagram", "vertices": [{"label": "PROMPT", "color": "#4A90D9", "glowRadius": 20}, {"label": "TESTS", "color": "#D9944A", "glowRadius": 20}, {"label": "GROUNDING", "color": "#5AAA6E", "glowRadius": 20}], "codeOpacity": 0.2, "moldOverlay": true, "backgroundColor": "#0A0F1A", "durationSeconds": 4, "narrationSegments": ["closing_004"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "closing:07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": {"type": "dramatic_beat", "content": "empty", "backgroundFrom": "#0A0F1A", "backgroundTo": "#050810", "durationSeconds": 2, "narrationSegments": ["closing_005"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
 };
 
+const ColdOpen01SplitScreenDarningPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:01_split_screen_darning"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:01_split_screen_darning"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen07CodeCursorBlinkPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_code_cursor_blink"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_code_cursor_blink"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen07CodeRegenerationPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:08_code_regeneration"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:08_code_regeneration"] ?? null}>
+      <ColdOpen07CodeRegeneration />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen09TitleCardPddPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:09_title_card_pdd"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:09_title_card_pdd"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
 const ColdOpen01SplitScreenHookPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:01_split_screen_hook"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:01_split_screen_hook"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const ColdOpen06CodeBlinkPatchedPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:05_code_blink_patched"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:05_code_blink_patched"] ?? null}>
-      <ColdOpen06CodeBlinkPatched />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const ColdOpen06CodeRegenerationPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:06_code_regeneration"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:06_code_regeneration"] ?? null}>
-      <GeneratedContractVisual />
+      <ColdOpen01SplitScreenHook />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const ColdOpen07PddTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_pdd_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_pdd_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <ColdOpen07PddTitleCard />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -136,24 +156,10 @@ const Part1Economics01SectionTitleCardPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part1Economics02SockPriceChartPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:02_sock_price_chart"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:02_sock_price_chart"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part1Economics03CodeCostChartPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:03_code_cost_chart"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:03_code_cost_chart"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
 const Part1Economics04ResearchAnnotationsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:04_research_annotations"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:04_research_annotations"] ?? null}>
-      <GeneratedContractVisual />
+      <Part1Economics04ResearchAnnotations />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -185,37 +191,30 @@ const Part1Economics09PatchingVsRegenerationSplitPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part1Economics10ContextCompressionPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:10_context_compression"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:10_context_compression"] ?? null}>
+const Part1Economics09CrossingLinesMomentPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:10_crossing_lines_moment"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:10_crossing_lines_moment"] ?? null}>
+      <Part1Economics09CrossingLinesMoment />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part1Economics11DeveloperDarningSplitPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:11_developer_darning_split"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:11_developer_darning_split"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part1Economics11CrossingLinesMomentPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:11_crossing_lines_moment"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:11_crossing_lines_moment"] ?? null}>
+const Part1Economics14KeyInsightStillnessPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:14_key_insight_stillness"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:14_key_insight_stillness"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part1Economics12DeveloperDarningSplitPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:12_developer_darning_split"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:12_developer_darning_split"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part1Economics15KeyInsightStillnessPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:15_key_insight_stillness"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:15_key_insight_stillness"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part1Economics17TryItYourselfPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:17_try_it_yourself"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:17_try_it_yourself"] ?? null}>
+const Part1Economics16TryItYourselfPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:16_try_it_yourself"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:16_try_it_yourself"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -227,38 +226,24 @@ const Part2ParadigmShift01SectionTitleCardPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift02DoubleMeterInsightPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:02_double_meter_insight"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:02_double_meter_insight"] ?? null}>
+const Part2ParadigmShift04MoldProductionCounterPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift05MoldDefectFixPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:05_mold_defect_fix"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:05_mold_defect_fix"] ?? null}>
+const Part2ParadigmShift06SplitCraftsmanVsMoldPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:06_split_craftsman_vs_mold"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:06_split_craftsman_vs_mold"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift06CraftsmanVsMoldPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:06_craftsman_vs_mold"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:06_craftsman_vs_mold"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part2ParadigmShift10VerilogSynthesisTriplePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:10_verilog_synthesis_triple"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:10_verilog_synthesis_triple"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part2ParadigmShift11SynopsysPddEquivalencePreview: React.FC = () => (
+const Part2ParadigmShift08SynopsysPddEquivalencePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:11_synopsys_pdd_equivalence"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:11_synopsys_pdd_equivalence"] ?? null}>
-      <GeneratedContractVisual />
+      <Part2ParadigmShift08SynopsysPddEquivalence />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -269,122 +254,143 @@ const Part2ParadigmShift09AbstractionStaircasePreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part2ParadigmShift13PromptReplacesReviewPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:13_prompt_replaces_review"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:13_prompt_replaces_review"] ?? null}>
+const Part2ParadigmShift13BillionGateUnreviewablePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:13_billion_gate_unreviewable"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:13_billion_gate_unreviewable"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts01SectionTitleCardPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:01_section_title_card"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:01_section_title_card"] ?? null}>
+const Part3MoldHasThreeParts01SectionTitleCardPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:01_section_title_card"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:01_section_title_card"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts02MoldCrossSectionPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:02_mold_cross_section"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:02_mold_cross_section"] ?? null}>
-      <Part3MoldThreeParts02MoldCrossSection />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part3MoldThreeParts03TestWallsIlluminatePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:03_test_walls_illuminate"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:03_test_walls_illuminate"] ?? null}>
+const Part3MoldHasThreeParts02MoldCrossSectionPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:02_mold_cross_section"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:02_mold_cross_section"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts05ResearchAnnotationsPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:05_research_annotations"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:05_research_annotations"] ?? null}>
+const Part3MoldHasThreeParts03TestWallsIlluminatePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:03_test_walls_illuminate"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:03_test_walls_illuminate"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts06BugAddWallPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:06_bug_add_wall"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:06_bug_add_wall"] ?? null}>
+const Part3MoldHasThreeParts05ResearchAnnotationsPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:05_research_annotations"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:05_research_annotations"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts07RatchetTimelapsePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:07_ratchet_timelapse"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:07_ratchet_timelapse"] ?? null}>
+const Part3MoldHasThreeParts06BugAddWallPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:06_bug_add_wall"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:06_bug_add_wall"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts08TraditionalVsPddSplitPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:08_traditional_vs_pdd_split"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:08_traditional_vs_pdd_split"] ?? null}>
+const Part3MoldHasThreeParts07RatchetTimelapsePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:07_ratchet_timelapse"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:07_ratchet_timelapse"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts09BugForkDiagramPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:09_bug_fork_diagram"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:09_bug_fork_diagram"] ?? null}>
+const Part3MoldHasThreeParts08TraditionalVsPddSplitPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:08_traditional_vs_pdd_split"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:08_traditional_vs_pdd_split"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts10FiveGenerationsPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:10_five_generations"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:10_five_generations"] ?? null}>
+const Part3MoldHasThreeParts09BugForkDiagramPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:09_bug_fork_diagram"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:09_bug_fork_diagram"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts11Z3FormalProofPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:11_z3_formal_proof"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:11_z3_formal_proof"] ?? null}>
+const Part3MoldHasThreeParts10FiveGenerationsPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:10_five_generations"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:10_five_generations"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts12ModuleLevelAsidePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:12_module_level_aside"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:12_module_level_aside"] ?? null}>
+const Part3MoldHasThreeParts11Z3FormalProofPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:11_z3_formal_proof"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:11_z3_formal_proof"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts13PromptNozzlePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:13_prompt_nozzle"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:13_prompt_nozzle"] ?? null}>
+const Part3MoldHasThreeParts12ModuleLevelAsidePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:12_module_level_aside"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:12_module_level_aside"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts14PromptRatioPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:14_prompt_ratio"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:14_prompt_ratio"] ?? null}>
+const Part3MoldHasThreeParts13PromptNozzlePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:13_prompt_nozzle"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:13_prompt_nozzle"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts15ContextWindowComparisonPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:15_context_window_comparison"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:15_context_window_comparison"] ?? null}>
+const Part3MoldHasThreeParts14PromptRatioPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:14_prompt_ratio"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:14_prompt_ratio"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts17GroundingFeedbackLoopPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:17_grounding_feedback_loop"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:17_grounding_feedback_loop"] ?? null}>
+const Part3MoldHasThreeParts15ContextWindowComparisonPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:15_context_window_comparison"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:15_context_window_comparison"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part3MoldThreeParts10ThreeComponentsTablePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_three_parts:18_three_components_table"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_three_parts:18_three_components_table"] ?? null}>
-      <Part3MoldThreeParts10ThreeComponentsTable />
+const Part3MoldHasThreeParts17GroundingStylesSplitPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:17_grounding_styles_split"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:17_grounding_styles_split"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part3MoldHasThreeParts18GroundingFeedbackLoopPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:18_grounding_feedback_loop"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:18_grounding_feedback_loop"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part3MoldHasThreeParts19ThreeComponentsAssemblyPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:19_three_components_assembly"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:19_three_components_assembly"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part3MoldHasThreeParts20ThreeComponentsTablePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:20_three_components_table"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:20_three_components_table"] ?? null}>
+      <GeneratedContractVisual />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part3MoldHasThreeParts21CodeOutputFinalePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_has_three_parts:21_code_output_finale"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_has_three_parts:21_code_output_finale"] ?? null}>
+      <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -405,28 +411,28 @@ const Part4PrecisionTradeoff02PrinterVsMoldSplitPreview: React.FC = () => (
 const Part4PrecisionTradeoff03PrecisionTradeoffCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
+      <Part4PrecisionTradeoff03PrecisionTradeoffCurve />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part4PrecisionTradeoff04PromptDetailComparisonPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:04_prompt_detail_comparison"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:04_prompt_detail_comparison"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part4PrecisionTradeoff04CodeGenerationComparisonPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:04_code_generation_comparison"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:04_code_generation_comparison"] ?? null}>
+const Part4PrecisionTradeoff05WallsPrecisionCalloutPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:05_walls_precision_callout"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:05_walls_precision_callout"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part4PrecisionTradeoff05EmbeddedCodeDocumentPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:05_embedded_code_document"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:05_embedded_code_document"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part4PrecisionTradeoff08PromptCodeSpectrumPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:06_prompt_code_spectrum"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:06_prompt_code_spectrum"] ?? null}>
-      <Part4PrecisionTradeoff08PromptCodeSpectrum />
+const Part4PrecisionTradeoff07EmbeddedCodeDocumentPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:06_embedded_code_document"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:06_embedded_code_document"] ?? null}>
+      <Part4PrecisionTradeoff07EmbeddedCodeDocument />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -440,14 +446,14 @@ const Part5CompoundReturns01SectionTitleCardPreview: React.FC = () => (
 const Part5CompoundReturns02MaintenancePieChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
-      <GeneratedContractVisual />
+      <Part5CompoundReturns02MaintenancePieChart />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns03CompoundDebtCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:03_compound_debt_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:03_compound_debt_curve"] ?? null}>
-      <GeneratedContractVisual />
+      <Part5CompoundReturns03CompoundDebtCurve />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -465,23 +471,16 @@ const Part5CompoundReturns05InvestmentComparisonTablePreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const Part5CompoundReturns08EconomicsCrossingCallbackPreview: React.FC = () => (
+const Part5CompoundReturns07EconomicsCrossingCallbackPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
-      <GeneratedContractVisual />
+      <Part5CompoundReturns07EconomicsCrossingCallback />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns09ContrarianQuoteCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Part5CompoundReturns10TransitionOutPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:10_transition_out"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:10_transition_out"] ?? null}>
       <GeneratedContractVisual />
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -496,21 +495,7 @@ const WhereToStart01SectionTitleCardPreview: React.FC = () => (
 const WhereToStart02LegacyCodebaseRevealPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:02_legacy_codebase_reveal"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:02_legacy_codebase_reveal"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const WhereToStart03ModuleHighlightTerminalPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:03_module_highlight_terminal"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:03_module_highlight_terminal"] ?? null}>
-      <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const WhereToStart04SourceOfTruthShiftPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:04_source_of_truth_shift"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:04_source_of_truth_shift"] ?? null}>
-      <GeneratedContractVisual />
+      <WhereToStart02LegacyCodebaseReveal />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -521,24 +506,17 @@ const WhereToStart05ModuleGlowSpreadPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const WhereToStart06NoBigBangCalloutPreview: React.FC = () => (
+const WhereToStart07NoBigBangCalloutPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:06_no_big_bang_callout"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:06_no_big_bang_callout"] ?? null}>
-      <GeneratedContractVisual />
+      <WhereToStart07NoBigBangCallout />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const WhereToStart07TransitionToClosingPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:07_transition_to_closing"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:07_transition_to_closing"] ?? null}>
+const Closing03PddBugFixTerminalPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:03_pdd_bug_fix_terminal"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:03_pdd_bug_fix_terminal"] ?? null}>
       <GeneratedContractVisual />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Closing03CodeRegenerateWorkflowPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:02_code_regenerate_workflow"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:02_code_regenerate_workflow"] ?? null}>
-      <Closing03CodeRegenerateWorkflow />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -556,17 +534,17 @@ const Closing05DissolveRegenerateLoopPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
+const Closing06MoldGlowFinalePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:06_mold_glow_finale"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:06_mold_glow_finale"] ?? null}>
+      <Closing06MoldGlowFinale />
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
 const Closing07TheBeatPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:07_the_beat"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:07_the_beat"] ?? null}>
       <Closing07TheBeat />
-    </VisualMediaProvider>
-  </VisualContractProvider>
-);
-const Closing09FinalTitleCardPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:08_final_title_card"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:08_final_title_card"] ?? null}>
-      <Closing09FinalTitleCard />
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -599,9 +577,9 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="Part3MoldThreePartsSection"
-        component={Part3MoldThreePartsSection}
-        durationInFrames={10325}
+        id="Part3MoldHasThreePartsSection"
+        component={Part3MoldHasThreePartsSection}
+        durationInFrames={1}
         fps={30}
         width={1920}
         height={1080}
@@ -639,25 +617,41 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="cold-open01-split-screen-hook"
-        component={ColdOpen01SplitScreenHookPreview}
+        id="cold-open01-split-screen-darning"
+        component={ColdOpen01SplitScreenDarningPreview}
         durationInFrames={240}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open05-code-blink-patched"
-        component={ColdOpen06CodeBlinkPatchedPreview}
+        id="cold-open07-code-cursor-blink"
+        component={ColdOpen07CodeCursorBlinkPreview}
         durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open06-code-regeneration"
-        component={ColdOpen06CodeRegenerationPreview}
+        id="cold-open08-code-regeneration"
+        component={ColdOpen07CodeRegenerationPreview}
         durationInFrames={270}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open09-title-card-pdd"
+        component={ColdOpen09TitleCardPddPreview}
+        durationInFrames={180}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open01-split-screen-hook"
+        component={ColdOpen01SplitScreenHookPreview}
+        durationInFrames={240}
         fps={30}
         width={1920}
         height={1080}
@@ -674,22 +668,6 @@ export const RemotionRoot: React.FC = () => {
         id="part1-economics01-section-title-card"
         component={Part1Economics01SectionTitleCardPreview}
         durationInFrames={120}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics02-sock-price-chart"
-        component={Part1Economics02SockPriceChartPreview}
-        durationInFrames={900}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics03-code-cost-chart"
-        component={Part1Economics03CodeCostChartPreview}
-        durationInFrames={1260}
         fps={30}
         width={1920}
         height={1080}
@@ -713,7 +691,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics06-performance-vs-context"
         component={Part1Economics06PerformanceVsContextPreview}
-        durationInFrames={540}
+        durationInFrames={720}
         fps={30}
         width={1920}
         height={1080}
@@ -721,7 +699,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics08-fork-codebase-size"
         component={Part1Economics08ForkCodebaseSizePreview}
-        durationInFrames={1200}
+        durationInFrames={660}
         fps={30}
         width={1920}
         height={1080}
@@ -729,47 +707,39 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics09-patching-vs-regeneration-split"
         component={Part1Economics09PatchingVsRegenerationSplitPreview}
-        durationInFrames={660}
+        durationInFrames={780}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part1-economics10-context-compression"
-        component={Part1Economics10ContextCompressionPreview}
-        durationInFrames={600}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part1-economics11-crossing-lines-moment"
-        component={Part1Economics11CrossingLinesMomentPreview}
+        id="part1-economics10-crossing-lines-moment"
+        component={Part1Economics09CrossingLinesMomentPreview}
         durationInFrames={750}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part1-economics12-developer-darning-split"
-        component={Part1Economics12DeveloperDarningSplitPreview}
-        durationInFrames={420}
+        id="part1-economics11-developer-darning-split"
+        component={Part1Economics11DeveloperDarningSplitPreview}
+        durationInFrames={240}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part1-economics15-key-insight-stillness"
-        component={Part1Economics15KeyInsightStillnessPreview}
-        durationInFrames={180}
+        id="part1-economics14-key-insight-stillness"
+        component={Part1Economics14KeyInsightStillnessPreview}
+        durationInFrames={210}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part1-economics17-try-it-yourself"
-        component={Part1Economics17TryItYourselfPreview}
-        durationInFrames={180}
+        id="part1-economics16-try-it-yourself"
+        component={Part1Economics16TryItYourselfPreview}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -783,41 +753,25 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="part2-paradigm-shift02-double-meter-insight"
-        component={Part2ParadigmShift02DoubleMeterInsightPreview}
+        id="part2-paradigm-shift04-mold-production-counter"
+        component={Part2ParadigmShift04MoldProductionCounterPreview}
+        durationInFrames={330}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift06-split-craftsman-vs-mold"
+        component={Part2ParadigmShift06SplitCraftsmanVsMoldPreview}
         durationInFrames={750}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part2-paradigm-shift05-mold-defect-fix"
-        component={Part2ParadigmShift05MoldDefectFixPreview}
-        durationInFrames={420}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part2-paradigm-shift06-craftsman-vs-mold"
-        component={Part2ParadigmShift06CraftsmanVsMoldPreview}
-        durationInFrames={600}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part2-paradigm-shift10-verilog-synthesis-triple"
-        component={Part2ParadigmShift10VerilogSynthesisTriplePreview}
-        durationInFrames={540}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
         id="part2-paradigm-shift11-synopsys-pdd-equivalence"
-        component={Part2ParadigmShift11SynopsysPddEquivalencePreview}
-        durationInFrames={390}
+        component={Part2ParadigmShift08SynopsysPddEquivalencePreview}
+        durationInFrames={1140}
         fps={30}
         width={1920}
         height={1080}
@@ -831,137 +785,161 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="part2-paradigm-shift13-prompt-replaces-review"
-        component={Part2ParadigmShift13PromptReplacesReviewPreview}
-        durationInFrames={360}
+        id="part2-paradigm-shift13-billion-gate-unreviewable"
+        component={Part2ParadigmShift13BillionGateUnreviewablePreview}
+        durationInFrames={390}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts01-section-title-card"
-        component={Part3MoldThreeParts01SectionTitleCardPreview}
-        durationInFrames={120}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts02-mold-cross-section"
-        component={Part3MoldThreeParts02MoldCrossSectionPreview}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts03-test-walls-illuminate"
-        component={Part3MoldThreeParts03TestWallsIlluminatePreview}
-        durationInFrames={300}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts05-research-annotations"
-        component={Part3MoldThreeParts05ResearchAnnotationsPreview}
-        durationInFrames={450}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts06-bug-add-wall"
-        component={Part3MoldThreeParts06BugAddWallPreview}
-        durationInFrames={540}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts07-ratchet-timelapse"
-        component={Part3MoldThreeParts07RatchetTimelapsePreview}
+        id="part3-mold-has-three-parts01-section-title-card"
+        component={Part3MoldHasThreeParts01SectionTitleCardPreview}
         durationInFrames={420}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts08-traditional-vs-pdd-split"
-        component={Part3MoldThreeParts08TraditionalVsPddSplitPreview}
+        id="part3-mold-has-three-parts02-mold-cross-section"
+        component={Part3MoldHasThreeParts02MoldCrossSectionPreview}
+        durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts03-test-walls-illuminate"
+        component={Part3MoldHasThreeParts03TestWallsIlluminatePreview}
+        durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts05-research-annotations"
+        component={Part3MoldHasThreeParts05ResearchAnnotationsPreview}
+        durationInFrames={420}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts06-bug-add-wall"
+        component={Part3MoldHasThreeParts06BugAddWallPreview}
+        durationInFrames={540}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts07-ratchet-timelapse"
+        component={Part3MoldHasThreeParts07RatchetTimelapsePreview}
+        durationInFrames={420}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts08-traditional-vs-pdd-split"
+        component={Part3MoldHasThreeParts08TraditionalVsPddSplitPreview}
         durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts09-bug-fork-diagram"
-        component={Part3MoldThreeParts09BugForkDiagramPreview}
+        id="part3-mold-has-three-parts09-bug-fork-diagram"
+        component={Part3MoldHasThreeParts09BugForkDiagramPreview}
+        durationInFrames={420}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts10-five-generations"
+        component={Part3MoldHasThreeParts10FiveGenerationsPreview}
+        durationInFrames={540}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts11-z3-formal-proof"
+        component={Part3MoldHasThreeParts11Z3FormalProofPreview}
+        durationInFrames={600}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts12-module-level-aside"
+        component={Part3MoldHasThreeParts12ModuleLevelAsidePreview}
         durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts10-five-generations"
-        component={Part3MoldThreeParts10FiveGenerationsPreview}
+        id="part3-mold-has-three-parts13-prompt-nozzle"
+        component={Part3MoldHasThreeParts13PromptNozzlePreview}
         durationInFrames={540}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts11-z3-formal-proof"
-        component={Part3MoldThreeParts11Z3FormalProofPreview}
+        id="part3-mold-has-three-parts14-prompt-ratio"
+        component={Part3MoldHasThreeParts14PromptRatioPreview}
+        durationInFrames={420}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts15-context-window-comparison"
+        component={Part3MoldHasThreeParts15ContextWindowComparisonPreview}
         durationInFrames={720}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts12-module-level-aside"
-        component={Part3MoldThreeParts12ModuleLevelAsidePreview}
-        durationInFrames={720}
+        id="part3-mold-has-three-parts17-grounding-styles-split"
+        component={Part3MoldHasThreeParts17GroundingStylesSplitPreview}
+        durationInFrames={420}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts13-prompt-nozzle"
-        component={Part3MoldThreeParts13PromptNozzlePreview}
-        durationInFrames={540}
+        id="part3-mold-has-three-parts18-grounding-feedback-loop"
+        component={Part3MoldHasThreeParts18GroundingFeedbackLoopPreview}
+        durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts14-prompt-ratio"
-        component={Part3MoldThreeParts14PromptRatioPreview}
-        durationInFrames={540}
+        id="part3-mold-has-three-parts19-three-components-assembly"
+        component={Part3MoldHasThreeParts19ThreeComponentsAssemblyPreview}
+        durationInFrames={420}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part3-mold-three-parts15-context-window-comparison"
-        component={Part3MoldThreeParts15ContextWindowComparisonPreview}
-        durationInFrames={810}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts17-grounding-feedback-loop"
-        component={Part3MoldThreeParts17GroundingFeedbackLoopPreview}
-        durationInFrames={660}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part3-mold-three-parts18-three-components-table"
-        component={Part3MoldThreeParts10ThreeComponentsTablePreview}
+        id="part3-mold-has-three-parts20-three-components-table"
+        component={Part3MoldHasThreeParts20ThreeComponentsTablePreview}
         durationInFrames={480}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-has-three-parts21-code-output-finale"
+        component={Part3MoldHasThreeParts21CodeOutputFinalePreview}
+        durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
@@ -991,25 +969,25 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="part4-precision-tradeoff04-code-generation-comparison"
-        component={Part4PrecisionTradeoff04CodeGenerationComparisonPreview}
-        durationInFrames={511}
+        id="part4-precision-tradeoff04-prompt-detail-comparison"
+        component={Part4PrecisionTradeoff04PromptDetailComparisonPreview}
+        durationInFrames={325}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="part4-precision-tradeoff05-embedded-code-document"
-        component={Part4PrecisionTradeoff05EmbeddedCodeDocumentPreview}
+        id="part4-precision-tradeoff05-walls-precision-callout"
+        component={Part4PrecisionTradeoff05WallsPrecisionCalloutPreview}
+        durationInFrames={186}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part4-precision-tradeoff06-embedded-code-document"
+        component={Part4PrecisionTradeoff07EmbeddedCodeDocumentPreview}
         durationInFrames={480}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="part4-precision-tradeoff06-prompt-code-spectrum"
-        component={Part4PrecisionTradeoff08PromptCodeSpectrumPreview}
-        durationInFrames={360}
         fps={30}
         width={1920}
         height={1080}
@@ -1056,7 +1034,7 @@ export const RemotionRoot: React.FC = () => {
       />
       <Composition
         id="part5-compound-returns08-economics-crossing-callback"
-        component={Part5CompoundReturns08EconomicsCrossingCallbackPreview}
+        component={Part5CompoundReturns07EconomicsCrossingCallbackPreview}
         durationInFrames={300}
         fps={30}
         width={1920}
@@ -1071,17 +1049,9 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="part5-compound-returns10-transition-out"
-        component={Part5CompoundReturns10TransitionOutPreview}
-        durationInFrames={120}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
         id="where-to-start01-section-title-card"
         component={WhereToStart01SectionTitleCardPreview}
-        durationInFrames={90}
+        durationInFrames={120}
         fps={30}
         width={1920}
         height={1080}
@@ -1095,49 +1065,33 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="where-to-start03-module-highlight-terminal"
-        component={WhereToStart03ModuleHighlightTerminalPreview}
-        durationInFrames={240}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="where-to-start04-source-of-truth-shift"
-        component={WhereToStart04SourceOfTruthShiftPreview}
-        durationInFrames={180}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
         id="where-to-start05-module-glow-spread"
         component={WhereToStart05ModuleGlowSpreadPreview}
-        durationInFrames={180}
+        durationInFrames={330}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
         id="where-to-start06-no-big-bang-callout"
-        component={WhereToStart06NoBigBangCalloutPreview}
-        durationInFrames={90}
+        component={WhereToStart07NoBigBangCalloutPreview}
+        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="where-to-start07-transition-to-closing"
-        component={WhereToStart07TransitionToClosingPreview}
-        durationInFrames={90}
-        fps={30}
-        width={1920}
-        height={1080}
-      />
-      <Composition
-        id="closing02-code-regenerate-workflow"
-        component={Closing03CodeRegenerateWorkflowPreview}
+        id="where-to-start07-economics-callback"
+        component={Part5CompoundReturns07EconomicsCrossingCallbackPreview}
         durationInFrames={300}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="closing03-pdd-bug-fix-terminal"
+        component={Closing03PddBugFixTerminalPreview}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1145,7 +1099,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing04-pdd-triangle"
         component={Closing04PddTrianglePreview}
-        durationInFrames={210}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1159,17 +1113,17 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="closing07-the-beat"
-        component={Closing07TheBeatPreview}
-        durationInFrames={120}
+        id="closing06-mold-glow-finale"
+        component={Closing06MoldGlowFinalePreview}
+        durationInFrames={240}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="closing08-final-title-card"
-        component={Closing09FinalTitleCardPreview}
-        durationInFrames={240}
+        id="closing07-the-beat"
+        component={Closing07TheBeatPreview}
+        durationInFrames={120}
         fps={30}
         width={1920}
         height={1080}

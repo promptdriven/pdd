@@ -88,6 +88,16 @@ jest.mock("@/lib/projects", () => ({
   getAppScriptsDir: () => path.join(process.cwd(), "scripts"),
 }));
 
+const mockResolvePythonRunSpec = jest.fn(() => ({
+  command: "python3",
+  argsPrefix: [] as string[],
+  env: { ...process.env },
+}));
+
+jest.mock("@/app/api/pipeline/_lib/python-runtime", () => ({
+  resolvePythonRunSpec: (...args: unknown[]) => mockResolvePythonRunSpec(...args),
+}));
+
 // Import after mocking
 import { POST } from "../app/api/pipeline/tts-render/run/route";
 import { GET as GETSegments } from "../app/api/pipeline/tts-render/segments/route";
@@ -190,6 +200,12 @@ beforeEach(() => {
   mockStatSync.mockReset();
   mockUnlinkSync.mockReset();
   mockRunPipelineStage.mockReset();
+  mockResolvePythonRunSpec.mockClear();
+  mockResolvePythonRunSpec.mockReturnValue({
+    command: "python3",
+    argsPrefix: [],
+    env: { ...process.env },
+  });
 
   mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
   mockSpawnSync.mockReturnValue({ status: 0, stdout: "", stderr: "" });
@@ -735,7 +751,7 @@ describe("POST — segments parameter", () => {
 // ---------------------------------------------------------------------------
 
 describe("executor — spawn command", () => {
-  it("spawns python3 with render_tts.py as first arg", async () => {
+  it("spawns the resolved python command with render_tts.py as first arg", async () => {
     mockExistsSync.mockReturnValue(false);
     mockReaddirSync.mockReturnValue([]);
 
@@ -747,6 +763,19 @@ describe("executor — spawn command", () => {
     const [cmd, args] = mockSpawn.mock.calls[0];
     expect(cmd).toBe("python3");
     expect(args[0]).toContain("render_tts.py");
+  });
+
+  it("resolves the Stage 4 python runtime from the preferred conda env", async () => {
+    mockExistsSync.mockReturnValue(false);
+    mockReaddirSync.mockReturnValue([]);
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    expect(mockResolvePythonRunSpec).toHaveBeenCalledWith({
+      preferredCondaEnv: "video_editor",
+    });
   });
 
   it("enables Edge TTS fallback by default in the child environment", async () => {
@@ -1378,8 +1407,8 @@ describe("app/api/pipeline/tts-render/run/route.ts source structure", () => {
     );
   });
 
-  it("spawns python3 with render_tts.py", () => {
-    expect(sourceCode).toMatch(/spawn\s*\(\s*["']python3["']/);
+  it("resolves a python runtime before spawning render_tts.py", () => {
+    expect(sourceCode).toMatch(/resolvePythonRunSpec/);
     expect(sourceCode).toMatch(/render_tts\.py/);
   });
 

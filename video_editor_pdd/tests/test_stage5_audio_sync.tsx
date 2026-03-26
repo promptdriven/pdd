@@ -379,13 +379,21 @@ describe("transcript audio preview action", () => {
     expect(sourceCode).toMatch(/const\s+handlePreviewSegmentAudio\s*=\s*async/);
   });
 
-  it("creates browser Audio for the segment wav route", () => {
-    expect(sourceCode).toMatch(/new\s+Audio\s*\(\s*`\/api\/audio\/tts\/\$\{segmentId\}\.wav/);
+  it("uses the preview audio element ref for the segment wav route", () => {
+    expect(sourceCode).toMatch(/const\s+audio\s*=\s*previewAudioRef\.current/);
+    expect(sourceCode).toMatch(/audio\.src\s*=\s*`\/api\/audio\/tts\/\$\{segmentId\}\.wav/);
+    expect(sourceCode).toMatch(/audio\.load\s*\(\s*\)/);
+    expect(sourceCode).toMatch(/await\s+audio\.play\s*\(\s*\)/);
   });
 
   it("toggles stop/play based on the active segment", () => {
     expect(sourceCode).toMatch(/playingSegmentId\s*===\s*segmentId/);
     expect(sourceCode).toMatch(/playingSegmentId\s*===\s*row\.segmentId\s*\?\s*'Stop Audio'\s*:\s*'Play Audio'/);
+  });
+
+  it("renders a hidden audio element for preview playback", () => {
+    expect(sourceCode).toMatch(/<audio[\s\S]*?ref=\{previewAudioRef\}/);
+    expect(sourceCode).toMatch(/preload="auto"/);
   });
 });
 

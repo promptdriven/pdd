@@ -1,107 +1,58 @@
 [veo:]
 
-# Section 2.9: 1980s Chip Lab — Hand-Drawing Circuits
+# Section 2.9: 1980s Electronics Lab — Hand-Drawn Schematics
 
 **Tool:** Veo
-**Duration:** ~8s (240 frames @ 30fps)
-**Timestamp:** 1:50 - 1:58
+**Duration:** ~7s
+**Timestamp:** 1:50 - 1:57
 
 ## Visual Description
+A 1980s electronics lab. An engineer hunches over a large desk, hand-drawing circuit schematics on paper or vellum with a technical pen. The desk is covered with reference sheets, transistor datasheets, and a cup of coffee. Wires and breadboard prototypes are visible in the background. The scene has a period-appropriate color palette — slightly desaturated, warm tungsten overhead lighting, analog instruments on shelves. The engineer's hand moves steadily but visibly slows as the density of the schematic increases, establishing that manual design hits a scaling wall.
 
-A cinematic scene of a 1980s electronics lab. An engineer hunches over a large drafting desk, drawing circuits by hand on a paper schematic. The desk is covered with technical drawings — transistor symbols, resistor networks, wire traces filling the page. The engineer uses a mechanical pencil and a ruler, carefully connecting components.
-
-The environment is period-accurate: fluorescent tube lighting, oscilloscopes in the background, large paper schematics pinned to walls, coffee mug, reference manuals. The mood is skilled labor approaching its limit — the drawings are becoming impossibly dense.
+### Veo Prompt
+```
+Medium shot of a 1980s electronics lab. An engineer in a short-sleeve dress shirt hunches over a large drafting desk, hand-drawing intricate circuit schematics with a technical pen on paper. Reference datasheets and transistor diagrams scattered on the desk. Coffee cup nearby. Background shows breadboard prototypes, oscilloscope, and analog instruments on shelves. Period-appropriate warm tungsten overhead lighting, slightly desaturated colors. The engineer's hand draws steadily across a dense schematic. 1980s aesthetic. Cinematic, 4K.
+```
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: 1980s electronics lab interior
-- Grid lines: N/A (live-action footage)
-
-### Chart/Visual Elements
-
-**Camera**
-- Framing: Medium shot from over-the-shoulder, looking down at the schematic
-- Movement: Very slow drift from the engineer toward the paper, revealing density
-- Depth of field: Moderate, f/3.5 — paper surface sharp, background instruments soft
-- Angle: Elevated, looking down over the engineer's shoulder
-
-**Lighting**
-- Key light: Overhead fluorescent tubes `#F5F5DC` — flat, institutional
-- Fill: Warm desk lamp `#FFD699` at 0.3 — focused on the schematic
-- Accent: Green CRT glow from oscilloscope in background `#00FF41` at 0.05
-- Overall tone: 1980s institutional, warm paper, cool fluorescent
-
-**Subject**
-- Engineer: Male, 30s-40s, wearing short-sleeve button-down shirt. Period-appropriate.
-- Action: Drawing circuit connections with mechanical pencil. Focused, methodical.
-- Desk: Covered with schematics, transistor symbols dense across large paper sheets
-- Background: Oscilloscopes, lab equipment, pinned schematics on wall
+- Framing: Medium shot, slight over-shoulder, static camera
+- Color temperature: Warm tungsten, slightly desaturated 1980s palette
 
 ### Animation Sequence
-1. **Frame 0-120 (0-4s):** Over-shoulder medium shot. Engineer's hand moves across the schematic, drawing a transistor connection. The density of existing drawings is visible.
-2. **Frame 120-240 (4-8s):** Camera drifts closer to the paper. Hundreds of transistor symbols fill the view. The hand slows — the complexity is overwhelming.
+1. **0-3s:** Establishing shot. Engineer drawing on schematic. Pen moves steadily.
+2. **3-5s:** Camera holds. Dense circuit lines visible on the paper.
+3. **5-7s:** Engineer's hand continues. The schematic is visibly packed with detail.
 
 ### Typography
-- None (pure B-roll footage)
+- None — cinematic B-roll.
 
 ### Easing
-- Camera drift: natural, slow dolly forward
-- Hard cut in and out
-
-### Veo Prompt
-
-```
-Over-the-shoulder medium shot of an electronics engineer in a 1980s laboratory, hunched over a large drafting desk drawing circuits by hand with a mechanical pencil. Dense transistor symbols, resistor networks, and wire traces fill a large paper schematic. Short-sleeve button-down shirt, 1980s period style. Overhead fluorescent tube lighting with a warm desk lamp illuminating the schematic. An oscilloscope with a green CRT display glows softly in the background. Camera slowly drifts forward from over the shoulder toward the paper, revealing the overwhelming density of hand-drawn components. Moderate depth of field. Cinematic, 24fps. The mood is skilled labor approaching its limits — methodical work becoming impossibly complex.
-```
+- N/A (live-action footage)
 
 ## Narration Sync
-> "And it's not just plastics. The chip industry hit this exact wall, and I watched it happen."
-> "In the 1980s, chip designers drew every gate by hand. When transistor counts hit tens of thousands, they couldn't keep up."
+> "And it's not just plastics. The chip industry hit this exact wall — and I watched it happen."
 
-Segments: `part2_paradigm_shift_013`, `part2_paradigm_shift_014`
+Segment: `part2_paradigm_shift_013`
 
-- **1:50** ("not just plastics"): 1980s lab establishing shot, engineer drawing
-- **1:57** ("chip designers drew every gate"): Camera closer, density overwhelming
-
-## Code Structure (Remotion)
-```typescript
-<Sequence from={0} durationInFrames={240}>
-  <VeoClip
-    clipId="1980s_chip_lab"
-    src="/clips/1980s_chip_lab.mp4"
-    fit="cover"
-  />
-</Sequence>
-```
+- **1:50** (110.48s): Lab appears — "And it's not just plastics"
+- **1:57** (116.90s): Transition to Verilog synthesis animation
 
 ## Data Points JSON
 ```json
 {
   "type": "veo_clip",
   "clipId": "1980s_chip_lab",
-  "camera": {
-    "framing": "over_shoulder_medium",
-    "movement": "slow_drift_forward",
-    "dof": "moderate",
-    "aperture": "f/3.5",
-    "angle": "elevated_over_shoulder"
-  },
-  "lighting": {
-    "key": { "color": "#F5F5DC", "type": "overhead_fluorescent" },
-    "fill": { "color": "#FFD699", "opacity": 0.3, "type": "desk_lamp" },
-    "accent": { "color": "#00FF41", "opacity": 0.05, "type": "oscilloscope_crt" },
-    "grade": "1980s_institutional"
-  },
+  "durationSeconds": 7,
   "characters": [
     {
-      "id": "chip_engineer",
+      "id": "chip_engineer_1980s",
       "label": "1980s Chip Engineer",
-      "referencePrompt": "Electronics engineer, male, 30s-40s, short-sleeve button-down shirt, 1980s style. Hunched over drafting desk drawing circuits with mechanical pencil under fluorescent lighting."
+      "referencePrompt": "A chip design engineer in his 30s wearing a short-sleeve dress shirt, hunched over a large drafting desk in a 1980s electronics lab. Technical pen in hand, surrounded by datasheets and analog instruments."
     }
-  ],
-  "narrationSegments": ["part2_paradigm_shift_013", "part2_paradigm_shift_014"]
+  ]
 }
 ```
 

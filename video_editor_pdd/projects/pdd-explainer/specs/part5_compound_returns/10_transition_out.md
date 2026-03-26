@@ -1,69 +1,62 @@
-[Remotion]
+[title:]
 
-# Section 5.10: Compound Returns Transition Out
+# Section 5.10: Transition Out — Bridge to Next Section
 
-**Tool:** Remotion
-**Duration:** ~4s (120 frames @ 30fps)
+**Tool:** Title
+**Duration:** ~4s
 **Timestamp:** 1:51 - 1:55
 
 ## Visual Description
+A brief transition beat that bridges Part 5 into the next section. The screen is dark — the quote card has faded out — and a single line of text appears center-screen, setting up the practical turn: a forward-looking prompt that the next section will answer.
 
-A brief transition closing Part 5 and bridging to the next section. The deep navy-black background holds. A faint echo of the diverging cost curves flickers — the patching line rising, the PDD line flat — then dissolves. The visual suggests the argument has been made; it's time to move forward.
-
-The narration begins the pivot: "Now, you don't work on a massive codebase..." — setting up the next section's practical focus.
+The text "Now, you don't work on socks." appears in clean white typography, slightly smaller than a title card. It's a pivot line — acknowledging the metaphor is over and grounding the viewer back in software. The tone is wry, direct, almost a knowing aside.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: none
+- No grid lines, no decorative elements
 
 ### Chart/Visual Elements
-
-#### Echo Curves (ghost)
-- Patching curve: `#F59E0B` at 0.08 — faint ghost of the exponential
-- PDD curve: `#4ADE80` at 0.08 — faint ghost of the flat line
-- Both at reduced scale, centered
-- These are memory traces, not functional charts
-
-#### Fade Elements
-- The ghost curves dissolve from opacity 0.08 → 0.0 over 2 seconds
-- Background remains solid `#0A0F1A`
+- None — text only
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Ghost curves visible at 0.08 opacity — a visual residue of the compound returns argument.
-2. **Frame 30-90 (1-3s):** Ghost curves fade to 0. Clean black.
-3. **Frame 90-120 (3-4s):** Hold on black. Clean transition space.
+1. **Frame 0-20 (0-0.7s):** Background holds at `#0A0F1A`. Brief beat of silence/darkness.
+2. **Frame 20-50 (0.7-1.7s):** Text fades in with slight scale (`0.95→1.0`) and opacity (`0→1`).
+3. **Frame 50-100 (1.7-3.3s):** Hold on text.
+4. **Frame 100-120 (3.3-4s):** Text and background fade to black.
 
 ### Typography
-- None
+- Text: Inter, 28px, medium (500), `#E2E8F0`
+- Centered horizontally and vertically
 
 ### Easing
-- Ghost curve fade: `easeIn(quad)` over 60 frames
-- Overall: `linear`
+- Text fade-in: `easeOutQuad` over 20 frames
+- Text scale: `easeOutCubic` over 20 frames
+- Fade to black: `easeInQuad` over 20 frames
 
 ## Narration Sync
-> "Now, you don't work on a massive codebase..."
-
-Segment: `part5_compound_returns_011`
-
-- **1:51** ("Now, you don't"): Ghost curves visible, beginning to fade
-- **1:53** ("massive codebase"): Curves dissolved, clean black
-- **1:55** (segment ends): Ready for next section
+> "Now, you don't work on socks."
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={120}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Ghost echo of diverging curves */}
-    <Sequence from={0} durationInFrames={90}>
-      <FadeOut duration={60} startFrom={30}>
-        <GhostCurves
-          patching={{ color: "#F59E0B", opacity: 0.08 }}
-          pdd={{ color: "#4ADE80", opacity: 0.08 }}
-          scale={0.6} centered />
-      </FadeOut>
+    {/* Transition text */}
+    <Sequence from={20}>
+      <ScaleAndFade
+        fromScale={0.95} toScale={1.0}
+        durationInFrames={20} easing="easeOutCubic">
+        <Text text="Now, you don't work on socks."
+          font="Inter" size={28} weight={500}
+          color="#E2E8F0" align="center" />
+      </ScaleAndFade>
+    </Sequence>
+
+    {/* Fade to black */}
+    <Sequence from={100}>
+      <FadeOut durationInFrames={20} easing="easeInQuad" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -72,14 +65,10 @@ Segment: `part5_compound_returns_011`
 ## Data Points JSON
 ```json
 {
-  "type": "transition",
-  "transitionId": "compound_returns_out",
-  "echoes": [
-    { "source": "diverging_cost_curves", "opacity": 0.08 }
-  ],
+  "type": "transition_card",
+  "text": "Now, you don't work on socks.",
   "backgroundColor": "#0A0F1A",
+  "durationSeconds": 4,
   "narrationSegments": ["part5_compound_returns_011"]
 }
 ```
-
----

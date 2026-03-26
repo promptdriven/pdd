@@ -3,75 +3,89 @@
 # Section 6.1: Where to Start — Section Title Card
 
 **Tool:** Title
-**Duration:** ~3s (90 frames @ 30fps)
-**Timestamp:** 0:00 - 0:03
+**Duration:** ~4s (120 frames @ 30fps)
+**Timestamp:** 0:00 - 0:04
 
 ## Visual Description
 
-A brief, confident section title card. "WHERE TO START" appears in clean, large typography against the deep navy-black background. Unlike earlier section titles which had taglines, this one is direct — no subtitle. The section number "PART 6" sits above, understated. A faint ghost outline of a codebase tree structure sits behind the text at very low opacity, previewing the legacy-code theme of this section.
+A section title card introducing the practical adoption section. "WHERE TO" appears first in large bold weight, then "START" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
 
-The card is intentionally short — this section is practical, not conceptual, so the title gets out of the way quickly.
+Behind the text, a faint ghost silhouette of a codebase grid pattern — small rectangular blocks arranged in a staggered layout like file/module icons. One block near the center glows faintly blue — previewing the "start with one module" theme. The rest remain dim gray. Background is deep navy-black.
+
+The title holds briefly to orient the viewer, then transitions into the legacy codebase reveal.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Blueprint grid: 60px spacing, `#1E293B` at 0.04
+- Blueprint grid: 60px spacing, `#1E293B` at 0.05
 
 ### Chart/Visual Elements
 
 #### Title Text
-- "WHERE TO START" — Inter, 72px, bold (800), `#E2E8F0` at 0.95, centered at y: 500
-- Tracking: 5px letter-spacing
+- "WHERE TO" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
+- "START" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 180px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
 #### Section Number
-- "PART 6" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 440
+- "PART 6" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
-#### Background Ghost (codebase tree)
-- Vertical trunk line: 2px, `#334155` at 0.04, from (960, 300) to (960, 780)
-- Branch lines: 6 horizontal branches, alternating left/right, 80-140px wide, `#334155` at 0.03
-- Small file icons at branch endpoints: 8x10px rectangles, `#334155` at 0.03
-- Overall effect: a ghostly file-tree skeleton
+#### Background Ghost (module grid)
+- 6x4 grid of small rounded rectangles: 30x20px, `#475569` at 0.04
+- Center block: `#4A90D9` at 0.08, soft glow 10px
+- Grid centered at (960, 540), spacing 80px horizontal, 50px vertical
 
 ### Animation Sequence
-1. **Frame 0-10 (0-0.33s):** Background fades in. Blueprint grid appears. Ghost tree draws with stroke-dashoffset.
-2. **Frame 10-25 (0.33-0.83s):** "PART 6" fades in. `easeOutQuad`.
-3. **Frame 25-50 (0.83-1.67s):** "WHERE TO START" scales from 0.9 → 1.0 and fades in. `easeOutCubic`.
-4. **Frame 50-75 (1.67-2.5s):** Hold. Ghost tree pulses once subtly.
-5. **Frame 75-90 (2.5-3s):** Everything fades out. `easeInQuad`.
+1. **Frame 0-10 (0-0.33s):** Background fades in from black. Blueprint grid appears.
+2. **Frame 10-25 (0.33-0.83s):** "PART 6" label fades in. Ghost module grid fades in.
+3. **Frame 25-45 (0.83-1.5s):** "WHERE TO" types on character-by-character (2 frames per character).
+4. **Frame 45-55 (1.5-1.83s):** Horizontal rule draws from center outward.
+5. **Frame 55-70 (1.83-2.33s):** "START" fades in with 10px upward slide.
+6. **Frame 70-100 (2.33-3.33s):** Hold. Center ghost block pulses gently.
+7. **Frame 100-120 (3.33-4s):** Title begins fade-out, transitioning to legacy codebase.
 
 ### Typography
 - Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
-- Title: Inter, 72px, bold (800), `#E2E8F0` at 0.95, letter-spacing 5px
+- Title words: Inter, 72px, bold (700), `#E2E8F0`
+- Rule: `#334155` at 0.5
 
 ### Easing
-- Title scale-in: `easeOut(cubic)` over 25 frames
-- Section label fade: `easeOut(quad)` over 15 frames
-- Ghost tree draw: `easeInOut(cubic)` over 20 frames
-- Fade-out: `easeIn(quad)` over 15 frames
+- Text fade-in: `easeOut(quad)` over 15 frames
+- "START" slide-up: `easeOut(cubic)` over 15 frames
+- Rule draw: `easeInOut(quad)` over 10 frames
+- Ghost grid fade-in: `easeOut(quad)` over 20 frames
+- Center block pulse: `easeInOut(sine)` on 45-frame cycle
+- Title fade-out: `easeIn(quad)` over 20 frames
 
 ## Narration Sync
-> "Now — you don't work on a greenfield project. Nobody does."
+> (No narration — visual title card overlaps with the opening beat of segment where_to_start_001)
 
-Segment: `where_to_start_001`
+Segment: `where_to_start_001` (opening)
 
-- **0:00** ("Now"): Title card appears
-- **0:01** ("you don't work"): Title fully visible
-- **0:03** (title fades): Transition to legacy codebase visual
+- **0:00** (0.00s): Title card begins fade-in
+- **0:02** (2.00s): Title fully visible, hold
+- **0:04** (4.00s): Title fading out, transitioning to legacy codebase
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={90}>
+<Sequence from={0} durationInFrames={120}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.04} />
+    <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
-    {/* Ghost codebase tree */}
-    <Sequence from={0}>
-      <StrokeDraw duration={20}>
-        <CodebaseTree cx={960} cy={540} color="#334155"
-          trunkOpacity={0.04} branchOpacity={0.03} />
-      </StrokeDraw>
+    {/* Ghost module grid */}
+    <Sequence from={10}>
+      <FadeIn duration={20}>
+        <ModuleGrid
+          rows={4} cols={6} cellSize={[30, 20]}
+          spacingX={80} spacingY={50}
+          center={[960, 540]}
+          color="#475569" opacity={0.04}
+          highlightIndex={13} highlightColor="#4A90D9"
+          highlightOpacity={0.08} glowRadius={10}
+          pulseCycle={45}
+        />
+      </FadeIn>
     </Sequence>
 
     {/* Section label */}
@@ -79,26 +93,40 @@ Segment: `where_to_start_001`
       <FadeIn duration={15}>
         <Text text="PART 6" font="Inter" size={14}
           weight={600} color="#64748B" opacity={0.5}
-          letterSpacing={4} x={960} y={440} align="center" />
+          letterSpacing={4} x={960} y={400} align="center" />
       </FadeIn>
     </Sequence>
 
-    {/* Title */}
+    {/* Title: WHERE TO */}
     <Sequence from={25}>
-      <ScaleIn from={0.9} to={1.0} duration={25}>
-        <FadeIn duration={25}>
-          <Text text="WHERE TO START"
-            font="Inter" size={72} weight={800}
-            color="#E2E8F0" opacity={0.95}
-            letterSpacing={5}
-            x={960} y={500} align="center" />
+      <TypeWriter text="WHERE TO" font="Inter" size={72}
+        weight={700} color="#E2E8F0"
+        charDelay={2} x={960} y={460} align="center" />
+    </Sequence>
+
+    {/* Horizontal rule */}
+    <Sequence from={45}>
+      <DrawLine from={[870, 505]} to={[1050, 505]}
+        color="#334155" opacity={0.5} width={2}
+        drawDuration={10} fromCenter />
+    </Sequence>
+
+    {/* Title: START */}
+    <Sequence from={55}>
+      <SlideUp distance={10} duration={15}>
+        <FadeIn duration={15}>
+          <Text text="START" font="Inter" size={72}
+            weight={700} color="#E2E8F0"
+            x={975} y={545} align="center" />
         </FadeIn>
-      </ScaleIn>
+      </SlideUp>
     </Sequence>
 
     {/* Fade out */}
-    <Sequence from={75}>
-      <FadeOut duration={15} />
+    <Sequence from={100}>
+      <FadeOut duration={20}>
+        <AbsoluteFill />
+      </FadeOut>
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -108,13 +136,13 @@ Segment: `where_to_start_001`
 ```json
 {
   "type": "title_card",
-  "sectionId": "where_to_start",
   "sectionNumber": 6,
   "sectionLabel": "PART 6",
-  "title": "WHERE TO START",
+  "titleLine1": "WHERE TO",
+  "titleLine2": "START",
   "backgroundColor": "#0A0F1A",
   "ghostElements": [
-    { "shape": "codebase_tree", "color": "#334155", "style": "file_tree" }
+    { "shape": "module_grid", "rows": 4, "cols": 6, "highlightIndex": 13, "highlightColor": "#4A90D9" }
   ],
   "narrationSegments": ["where_to_start_001"]
 }

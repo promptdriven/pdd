@@ -2,51 +2,44 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
-import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
-import { Closing03CodeRegenerateWorkflow } from "../Closing03CodeRegenerateWorkflow";
+import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Closing04PddTriangle } from "../Closing04PddTriangle";
 import { Closing05DissolveRegenerateLoop } from "../Closing05DissolveRegenerateLoop";
+import { Closing06MoldGlowFinale } from "../Closing06MoldGlowFinale";
 import { Closing07TheBeat } from "../Closing07TheBeat";
-import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "02_code_regenerate_workflow": Closing03CodeRegenerateWorkflow,
   "04_pdd_triangle": Closing04PddTriangle,
   "05_dissolve_regenerate_loop": Closing05DissolveRegenerateLoop,
+  "06_mold_glow_finale": Closing06MoldGlowFinale,
   "07_the_beat": Closing07TheBeat,
-  "08_final_title_card": Closing09FinalTitleCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "02_code_regenerate_workflow": 300,
-  "04_pdd_triangle": 210,
+  "04_pdd_triangle": 150,
   "05_dissolve_regenerate_loop": 240,
+  "06_mold_glow_finale": 240,
   "07_the_beat": 120,
-  "08_final_title_card": 240,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "01_sock_callback_discard": { defaultSrc: "veo/sock_discard_closing.mp4", backgroundSrc: "veo/sock_discard_closing.mp4", outputSrc: "veo/sock_discard_closing.mp4", baseSrc: "veo/sock_discard_closing.mp4" },
-  "03_developer_regenerate_clip": { defaultSrc: "veo/code_regenerate_closing.mp4", backgroundSrc: "veo/code_regenerate_closing.mp4", outputSrc: "veo/code_regenerate_closing.mp4", baseSrc: "veo/code_regenerate_closing.mp4" },
-  "06_mold_glow_finale": { defaultSrc: "veo/mold_glow_finale.mp4", backgroundSrc: "veo/mold_glow_finale.mp4", outputSrc: "veo/mold_glow_finale.mp4", baseSrc: "veo/mold_glow_finale.mp4" },
+  "01_sock_discard_callback": { defaultSrc: "veo/sock_discard_callback.mp4", backgroundSrc: "veo/sock_discard_callback.mp4", outputSrc: "veo/sock_discard_callback.mp4", baseSrc: "veo/sock_discard_callback.mp4" },
+  "02_developer_regenerate_clip": { defaultSrc: "veo/developer_regenerate_closing.mp4", backgroundSrc: "veo/developer_regenerate_closing.mp4", outputSrc: "veo/developer_regenerate_closing.mp4", baseSrc: "veo/developer_regenerate_closing.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {
-  "01_sock_callback_discard": { fadeInFrames: 10, fadeOutFrames: 28 },
-  "03_developer_regenerate_clip": { fadeInFrames: 10, fadeOutFrames: 30 },
-  "06_mold_glow_finale": { fadeInFrames: 15, fadeOutFrames: 20 },
-  "08_final_title_card": { fadeInFrames: 30 },
+  "08_final_title_card": { fadeOutFrames: 20 },
 };
 
 const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "01_sock_callback_discard": {"specBaseName": "01_sock_callback_discard", "dataPoints": {"type": "veo_clip", "clipId": "sock_discard_closing", "camera": {"framing": "medium_close_up", "movement": "static", "dof": "moderate", "drift": false}, "lighting": {"key": {"color": "natural_daylight", "position": "upper_right", "type": "window"}, "fill": "ambient", "grade": "neutral_cool"}, "callbackTo": "part1_economics/sock_metaphor", "narrationSegments": ["closing_001"]}, "mediaAliases": {"defaultSrc": "veo/sock_discard_closing.mp4", "backgroundSrc": "veo/sock_discard_closing.mp4", "outputSrc": "veo/sock_discard_closing.mp4", "baseSrc": "veo/sock_discard_closing.mp4"}, "overlayConfig": {"fadeInFrames": 10, "fadeOutFrames": 28}, "renderMode": "generated-media"},
-  "02_code_regenerate_workflow": {"specBaseName": "02_code_regenerate_workflow", "dataPoints": {"type": "code_animation", "chartId": "code_regenerate_workflow", "phases": [{"id": "bug_highlight", "frame": 0, "description": "Buggy code with red highlight on line 7"}, {"id": "test_add", "frame": 30, "description": "New test_edge_case fades in"}, {"id": "terminal_commands", "frame": 60, "description": "pdd bug → pdd fix sequence"}, {"id": "dissolve_regen", "frame": 90, "description": "Code dissolves, regenerates clean"}, {"id": "all_pass", "frame": 120, "description": "All tests passing checkmark"}], "terminalCommands": ["pdd bug user_parser", "pdd fix user_parser", "✓ All tests passing"], "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_001", "closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "03_developer_regenerate_clip": {"specBaseName": "03_developer_regenerate_clip", "dataPoints": {"type": "veo_clip", "clipId": "code_regenerate_closing", "camera": {"framing": "over_the_shoulder", "movement": "static_with_drift", "dof": "shallow", "drift": true}, "lighting": {"key": {"color": "#B0C4DE", "position": "front", "type": "monitor_glow"}, "fill": {"color": "#2A1F14", "type": "ambient"}, "grade": "cool_neutral"}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Developer seated at modern workstation, seen from behind, mechanical keyboard, monitor glow lighting"}], "narrationSegments": ["closing_001", "closing_002"]}, "mediaAliases": {"defaultSrc": "veo/code_regenerate_closing.mp4", "backgroundSrc": "veo/code_regenerate_closing.mp4", "outputSrc": "veo/code_regenerate_closing.mp4", "baseSrc": "veo/code_regenerate_closing.mp4"}, "overlayConfig": {"fadeInFrames": 10, "fadeOutFrames": 30}, "renderMode": "generated-media"},
-  "04_pdd_triangle": {"specBaseName": "04_pdd_triangle", "dataPoints": {"type": "animated_diagram", "chartId": "pdd_triangle", "vertices": [{"id": "prompt", "label": "PROMPT", "position": [960, 200], "color": "#60A5FA", "descriptor": "encode intent"}, {"id": "tests", "label": "TESTS", "position": [480, 750], "color": "#4ADE80", "descriptor": "preserve behavior"}, {"id": "grounding", "label": "GROUNDING", "position": [1440, 750], "color": "#D9944A", "descriptor": "maintain style"}], "centerElement": {"type": "generated_code", "position": [960, 520], "font": "JetBrains Mono"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "05_dissolve_regenerate_loop": {"specBaseName": "05_dissolve_regenerate_loop", "dataPoints": {"type": "animated_diagram", "chartId": "dissolve_regenerate_loop", "cycles": 3, "cycleTints": ["#60A5FA", "#4ADE80", "#D9944A"], "triangle": {"persistent": true, "source": "pdd_triangle"}, "terminal": {"command": "pdd generate", "successIndicator": "✓"}, "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_003", "closing_004"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "06_mold_glow_finale": {"specBaseName": "06_mold_glow_finale", "dataPoints": {"type": "veo_clip", "clipId": "mold_glow_finale", "camera": {"framing": "close_up", "movement": "static", "dof": "moderate", "drift": false}, "lighting": {"key": {"color": "#D4A043", "position": "internal", "type": "practical_glow"}, "fill": "minimal", "rim": {"color": "#60A5FA", "opacity": 0.1}, "grade": "high_contrast_warm"}, "callbackTo": "part2_injection_mold", "narrationSegments": ["closing_004"]}, "mediaAliases": {"defaultSrc": "veo/mold_glow_finale.mp4", "backgroundSrc": "veo/mold_glow_finale.mp4", "outputSrc": "veo/mold_glow_finale.mp4", "baseSrc": "veo/mold_glow_finale.mp4"}, "overlayConfig": {"fadeInFrames": 15, "fadeOutFrames": 20}, "renderMode": "generated-media"},
-  "07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": {"type": "beat", "chartId": "the_beat", "startAnchor": {"type": "segmentEnd", "segmentId": "closing_004"}, "endAnchor": {"type": "segmentStart", "segmentId": "closing_005"}, "ghostElements": [{"source": "pdd_triangle", "opacity": 0.02}], "backgroundColor": "#0A0F1A", "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "08_final_title_card": {"specBaseName": "08_final_title_card", "dataPoints": {"type": "title_card", "chartId": "final_title_card", "title": "Prompt-Driven Development", "titleFont": {"family": "Inter", "size": 52, "weight": 700, "color": "#E2E8F0"}, "titleGlow": {"color": "#D9944A", "opacity": 0.08, "blur": 60}, "url": "promptdrivendevelopment.com", "commands": ["uv tool install pdd-cli", "pdd update your_module.py"], "commandFont": {"family": "JetBrains Mono", "size": 16, "color": "#64748B"}, "ghostElements": [{"source": "pdd_triangle", "opacity": 0.03, "scale": 0.4}], "backgroundColor": "#0A0F1A", "narrationSegments": ["closing_005"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
+  "01_sock_discard_callback": {"specBaseName": "01_sock_discard_callback", "dataPoints": {"type": "veo_clip", "clipId": "sock_discard_callback", "durationSeconds": 3, "narrationSegments": ["closing_001"]}, "mediaAliases": {"defaultSrc": "veo/sock_discard_callback.mp4", "backgroundSrc": "veo/sock_discard_callback.mp4", "outputSrc": "veo/sock_discard_callback.mp4", "baseSrc": "veo/sock_discard_callback.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "02_developer_regenerate_clip": {"specBaseName": "02_developer_regenerate_clip", "dataPoints": {"type": "veo_clip", "clipId": "developer_regenerate_closing", "durationSeconds": 4, "characters": [{"id": "developer", "label": "Developer", "referencePrompt": "A developer in their late 20s wearing a dark henley shirt, sitting at a modern desk with a mechanical keyboard and ultrawide monitor. Relaxed posture, warm desk lamp nearby."}], "narrationSegments": ["closing_001", "closing_002"]}, "mediaAliases": {"defaultSrc": "veo/developer_regenerate_closing.mp4", "backgroundSrc": "veo/developer_regenerate_closing.mp4", "outputSrc": "veo/developer_regenerate_closing.mp4", "baseSrc": "veo/developer_regenerate_closing.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "03_pdd_bug_fix_terminal": {"specBaseName": "03_pdd_bug_fix_terminal", "dataPoints": {"type": "terminal_animation", "commands": [{"cmd": "pdd bug email_validator", "output": "Test added: test_rejects_unicode_homoglyphs"}, {"cmd": "pdd fix email_validator", "output": "Regenerating... ✓ All tests pass"}], "terminalBg": "#111827", "backgroundColor": "#0A0F1A", "successColor": "#22C55E", "durationSeconds": 5, "narrationSegments": ["closing_001", "closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "04_pdd_triangle": {"specBaseName": "04_pdd_triangle", "dataPoints": {"type": "triangle_diagram", "vertices": [{"label": "PROMPT", "subtitle": "encode intent", "color": "#4A90D9", "position": [960, 200]}, {"label": "TESTS", "subtitle": "preserve behavior", "color": "#D9944A", "position": [520, 720]}, {"label": "GROUNDING", "subtitle": "maintain style", "color": "#5AAA6E", "position": [1400, 720]}], "edgeColor": "#334155", "centerCode": true, "backgroundColor": "#0A0F1A", "durationSeconds": 5, "narrationSegments": ["closing_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "05_dissolve_regenerate_loop": {"specBaseName": "05_dissolve_regenerate_loop", "dataPoints": {"type": "dissolve_regenerate_loop", "cycles": 2, "codeVariations": 2, "trianglePersists": true, "triangleOpacity": 0.3, "particleCount": "2-3 per character", "backgroundColor": "#0A0F1A", "successColor": "#22C55E", "durationSeconds": 5, "narrationSegments": ["closing_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "06_mold_glow_finale": {"specBaseName": "06_mold_glow_finale", "dataPoints": {"type": "mold_glow_diagram", "vertices": [{"label": "PROMPT", "color": "#4A90D9", "glowRadius": 20}, {"label": "TESTS", "color": "#D9944A", "glowRadius": 20}, {"label": "GROUNDING", "color": "#5AAA6E", "glowRadius": 20}], "codeOpacity": 0.2, "moldOverlay": true, "backgroundColor": "#0A0F1A", "durationSeconds": 4, "narrationSegments": ["closing_004"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": {"type": "dramatic_beat", "content": "empty", "backgroundFrom": "#0A0F1A", "backgroundTo": "#050810", "durationSeconds": 2, "narrationSegments": ["closing_005"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "08_final_title_card": {"specBaseName": "08_final_title_card", "dataPoints": {"type": "final_title_card", "title": "Prompt-Driven Development", "url": "promptdrivendevelopment.com", "commands": ["uv tool install pdd-cli", "pdd update your_module.py"], "titleColor": "#E2E8F0", "titleGlow": "#4A90D9", "backgroundColor": "#0A0F1A", "commandBg": "#111827", "durationSeconds": 6, "narrationSegments": []}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 20}, "renderMode": "generated-media"},
 };
 
 export const ClosingSection: React.FC = () => {
@@ -88,11 +81,7 @@ export const ClosingSection: React.FC = () => {
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
-                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (
-                  <GeneratedMediaVisual config={visualOverlayConfig} />
-                ) : (
-                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
-                )}
+                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

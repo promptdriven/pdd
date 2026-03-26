@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame is entirely wrong. At frame 172/186 (93% progress, hold phase), the spec requires a complete kinetic typography composition with: (1) 'More tests,' in teal (#2DD4BF) at ~y:440, (2) 'less prompt.' in amber (#F59E0B) at ~y:530, (3) secondary text 'The walls do the precision work.' in muted slate at ~y:640, (4) 8 teal test wall icons stacked on the left, (5) a shrunken prompt document icon with a green checkmark on the right, and (6) a faint ghost curve in the background. Instead, the frame shows a dark background with a single rounded-rectangle bar near the vertical center containing the text 'Structured contract preview' — which matches no element in this spec whatsoever. This appears to be content from an entirely different component or a placeholder that was never replaced with the actual 05_walls_precision_callout implementation.
