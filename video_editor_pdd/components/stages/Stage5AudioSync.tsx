@@ -2,6 +2,11 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectConfig, Section } from '../../lib/types';
+import {
+  fillMissingAudioSyncSectionGroups,
+  normalizeAudioSyncSectionGroups,
+  toSegmentRangeSectionGroups,
+} from './_lib/audio-sync-automation';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
 import { extractJobIdFromSse } from '@/lib/client/sse-utils';
@@ -40,20 +45,6 @@ const EMPTY_VALIDATION_SUMMARY: SegmentValidationSummary = {
   failCount: 0,
   skipCount: 0,
 };
-
-function expandRange(start: string, end: string): string[] {
-  const sm = start.match(/^(.+)_(\d{3})$/);
-  const em = end.match(/^(.+)_(\d{3})$/);
-  if (!sm || !em || sm[1] !== em[1]) return [start, end].filter(Boolean);
-  const prefix = sm[1];
-  const s = parseInt(sm[2], 10);
-  const e = parseInt(em[2], 10);
-  const result: string[] = [];
-  for (let i = s; i <= e; i++) {
-    result.push(`${prefix}_${String(i).padStart(3, '0')}`);
-  }
-  return result;
-}
 
 const ROW_HEIGHT = 32;
 const VIEWPORT_HEIGHT = 320;
@@ -105,20 +96,9 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         const data = (await res.json()) as ProjectConfig;
         if (!active) return;
         setProject(data);
-        // Normalize sectionGroups: API may return SegmentRange objects
-        // ({ startSegment, endSegment }) or string arrays.
-        const rawGroups = data.audioSync?.sectionGroups ?? {};
-        const normalized: Record<string, string[]> = {};
-        for (const [key, val] of Object.entries(rawGroups)) {
-          if (Array.isArray(val)) {
-            normalized[key] = val;
-          } else if (val && typeof val === 'object' && 'startSegment' in val) {
-            const sr = val as { startSegment: string; endSegment: string };
-            normalized[key] = expandRange(sr.startSegment, sr.endSegment);
-          } else {
-            normalized[key] = [];
-          }
-        }
+        const normalized = normalizeAudioSyncSectionGroups(
+          data.audioSync?.sectionGroups ?? {}
+        );
         setSectionGroups(normalized);
         // default section
         if (data.sections?.length > 0) {
@@ -233,44 +213,18 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       // Sort by length descending for longest-match-first
       const sortedSectionIds = [...sectionIds].sort((a, b) => b.length - a.length);
 
-      const grouped: Record<string, string[]> = {};
-      const unmatched: string[] = [];
-
-      for (const seg of allSegments) {
-        let matched = false;
-        let prefixMatched = false;
-        for (const sectionId of sortedSectionIds) {
-          const prefix = sectionId + '_';
-          if (seg.id.startsWith(prefix)) {
-            prefixMatched = true;
-            const suffix = seg.id.slice(prefix.length);
-            if (/^\d{3}$/.test(suffix)) {
-              if (!grouped[sectionId]) grouped[sectionId] = [];
-              grouped[sectionId].push(seg.id);
-              matched = true;
-              break;
-            }
-          }
-        }
-        if (!matched && prefixMatched) unmatched.push(seg.id);
-      }
-
-      setUnmatchedSegments(unmatched);
-
-      const filled: string[] = [];
-      setSectionGroups((prev) => {
-        const next = { ...prev };
-        for (const [sectionId, segments] of Object.entries(grouped)) {
-          const existing = prev[sectionId] ?? [];
-          if (existing.length === 0 || overwriteExisting) {
-            next[sectionId] = segments.sort();
-            filled.push(sectionId);
-          }
-        }
-        return next;
+      const existingGroups = overwriteExisting
+        ? Object.fromEntries(sections.map((section) => [section.id, []]))
+        : sectionGroups;
+      const detection = fillMissingAudioSyncSectionGroups({
+        sections,
+        existingGroups,
+        segments: allSegments,
       });
 
-      setAutoFilledSections(filled);
+      setUnmatchedSegments(detection.unmatchedSegments);
+      setSectionGroups(detection.groups);
+      setAutoFilledSections(detection.filledSections);
       setTimeout(() => setAutoFilledSections([]), 5000);
     } catch (err: any) {
       setDetectError(err?.message ?? 'Failed to detect segments');
@@ -283,16 +237,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     setSavingConfig(true);
     setDetectError(null);
     try {
-      // Convert string[] arrays to {startSegment, endSegment} SegmentRange objects
-      const rangeGroups: Record<string, { startSegment: string; endSegment: string }> = {};
-      for (const [sectionId, segments] of Object.entries(sectionGroups)) {
-        if (segments.length > 0) {
-          rangeGroups[sectionId] = {
-            startSegment: segments[0],
-            endSegment: segments[segments.length - 1],
-          };
-        }
-      }
+      const rangeGroups = toSegmentRangeSectionGroups(sectionGroups);
       const res = await fetch('/api/project', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

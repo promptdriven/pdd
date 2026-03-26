@@ -34,6 +34,7 @@ import Stage7VeoGeneration from '@/components/stages/Stage7VeoGeneration';
 import Stage8CompositionGen from '@/components/stages/Stage8CompositionGen';
 import Stage9RenderStitch from '@/components/stages/Stage9RenderStitch';
 import Stage10Audit from '@/components/stages/Stage10Audit';
+import { prepareAudioSyncAutomation } from '@/components/stages/_lib/audio-sync-automation';
 
 type TabKey = 'pipeline' | 'review';
 
@@ -593,6 +594,13 @@ export default function Page() {
 
         await loadProjectConfig();
         return;
+      }
+
+      if (step.id === 'audio-sync') {
+        const audioSyncPrep = await prepareAudioSyncAutomation(fetch);
+        if (audioSyncPrep.changed) {
+          await loadProjectConfig();
+        }
       }
 
       if (step.mode === 'job') {

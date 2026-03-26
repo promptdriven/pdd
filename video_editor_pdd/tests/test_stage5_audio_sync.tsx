@@ -917,12 +917,8 @@ describe("Detect Segments button", () => {
     expect(sourceCode).toMatch(/\[\s*autoFilledSections\s*,\s*setAutoFilledSections\s*\]/);
   });
 
-  it("sorts section IDs by length descending for longest-first match", () => {
-    expect(sourceCode).toMatch(/b\.length\s*-\s*a\.length/);
-  });
-
-  it("validates suffix with 3-digit regex", () => {
-    expect(sourceCode).toMatch(/\/\^\\d\{3\}\$\//);
+  it("delegates detection to the shared audio-sync automation helper", () => {
+    expect(sourceCode).toMatch(/fillMissingAudioSyncSectionGroups/);
   });
 
   it("renders Overwrite existing checkbox text", () => {
@@ -953,20 +949,12 @@ describe("unmatched segments warning", () => {
 // ---------------------------------------------------------------------------
 
 describe("save config SegmentRange conversion", () => {
-  it("references startSegment in handleSaveConfig", () => {
-    expect(sourceCode).toMatch(/startSegment/);
+  it("imports the shared range conversion helper", () => {
+    expect(sourceCode).toMatch(/toSegmentRangeSectionGroups/);
   });
 
-  it("references endSegment in handleSaveConfig", () => {
-    expect(sourceCode).toMatch(/endSegment/);
-  });
-
-  it("uses segments[0] for start", () => {
-    expect(sourceCode).toMatch(/segments\[0\]/);
-  });
-
-  it("uses segments[segments.length - 1] for end", () => {
-    expect(sourceCode).toMatch(/segments\[segments\.length\s*-\s*1\]/);
+  it("delegates range conversion to the shared helper", () => {
+    expect(sourceCode).toMatch(/toSegmentRangeSectionGroups/);
   });
 });
 
@@ -975,12 +963,8 @@ describe("save config SegmentRange conversion", () => {
 // ---------------------------------------------------------------------------
 
 describe("Detect Segments skips foreign-project segments", () => {
-  it("tracks whether any section prefix matched a segment", () => {
-    expect(sourceCode).toMatch(/let\s+prefixMatched\s*=\s*false/);
-  });
-
-  it("only flags unmatched segments when prefix was recognized", () => {
-    expect(sourceCode).toMatch(/!matched\s*&&\s*prefixMatched/);
+  it("uses the shared helper that handles foreign-project segments", () => {
+    expect(sourceCode).toMatch(/fillMissingAudioSyncSectionGroups/);
   });
 });
 
@@ -1010,6 +994,6 @@ describe("Save Config error handling", () => {
 
 describe("SegmentRange expansion on load", () => {
   it("generates full segment range between start and end", () => {
-    expect(sourceCode).toMatch(/expandRange/);
+    expect(sourceCode).toMatch(/normalizeAudioSyncSectionGroups/);
   });
 });
