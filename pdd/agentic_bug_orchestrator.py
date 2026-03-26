@@ -347,6 +347,20 @@ def _parse_changed_files(output: str, marker: str) -> List[str]:
     return files
 
 
+def _parse_fix_locations(step6_output: str) -> List[str]:
+    """Extract fix locations from Step 6's FIX_LOCATIONS marker.
+
+    Returns a list of file paths (stripped of whitespace and backticks).
+    """
+    files = []
+    for match in re.finditer(r"FIX_LOCATIONS:\s*(.*)", step6_output):
+        for f in match.group(1).split(","):
+            cleaned = f.strip().strip("`")
+            if cleaned:
+                files.append(cleaned)
+    return files
+
+
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
     """Validate a REPRO_FILES_CREATED path is safe (no traversal/absolute paths).
 
@@ -749,6 +763,7 @@ def run_agentic_bug_orchestrator(
         "issue_author": issue_author,
         "issue_title": issue_title,
         "step5_reproduction_tests": "",
+        "fix_locations": "none",
     }
     
     # Populate context with previous step outputs
@@ -770,6 +785,11 @@ def run_agentic_bug_orchestrator(
         s55_out = context["step5.5_output"]
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
         changed_files.extend(prompt_fixed)
+
+    # Step 6: re-extract fix locations for downstream steps
+    if "step6_output" in context:
+        fix_locs = _parse_fix_locations(context["step6_output"])
+        context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
 
     # Step 7
     if "step7_output" in context:
@@ -1046,6 +1066,13 @@ def run_agentic_bug_orchestrator(
                 changed_files.extend(repro_files)
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
+
+        if step_num == 6:
+            fix_locs = _parse_fix_locations(step_output)
+            if fix_locs:
+                context["fix_locations"] = ", ".join(fix_locs)
+            else:
+                context["fix_locations"] = "none"
 
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
