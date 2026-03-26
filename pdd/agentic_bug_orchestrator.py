@@ -1055,6 +1055,7 @@ def run_agentic_bug_orchestrator(
                     prompt_fixed = _parse_changed_files(step_output, "PROMPT_FIXED")
                     if prompt_fixed:
                         changed_files.extend(prompt_fixed)
+                        changed_files = list(set(changed_files))
                         context["files_to_stage"] = ", ".join(changed_files)
                         files_extracted = True
                     else:

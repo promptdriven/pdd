@@ -2629,7 +2629,7 @@ def test_step7_filesystem_fallback_when_no_markers(mock_dependencies, default_ar
     # Patch _get_modified_and_untracked to simulate filesystem detection
     with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_fs:
         mock_fs.side_effect = [
-            [],  # pre-step-7 snapshot (Step 7 has no DEFECT_TYPE, not used)
+            [],  # pre-step-7 snapshot (used by Step 7 prompt-file filesystem fallback)
             [],  # pre-step-9 snapshot
             ["tests/test_new.py"],  # post-step-9: new test file appeared
         ]
@@ -5086,7 +5086,7 @@ def test_count_generated_tests_with_stubs(tmp_path):
 
 
 def _make_mock_dependencies(tmp_path):
-    """Returns a context manager and the mock objects for patching all deps."""
+    """Create and return a mock worktree directory path under the given tmp_path."""
     mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     mock_worktree_path.mkdir(parents=True, exist_ok=True)
     return mock_worktree_path
