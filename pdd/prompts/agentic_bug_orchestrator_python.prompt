@@ -118,6 +118,16 @@ After Step 7, parse output for:
 - `PROMPT_FIXED: path/to/file.prompt` - The prompt was auto-fixed; add to changed_files list
 - `PROMPT_REVIEW: reason` - Hard stop, prompt defect needs human review (ambiguous case)
 
+% Step 7 Filesystem Fallback for Prompt Files
+Before Step 7 runs, snapshot the current modified/untracked files via
+`_get_modified_and_untracked(current_cwd)`. After Step 7, if `DEFECT_TYPE: prompt`
+is detected but no `PROMPT_FIXED:` markers are found in the output, detect modified
+`.prompt` files on disk by diffing against the pre-Step-7 snapshot. Filter to files
+ending in `.prompt` to avoid picking up unrelated changes.
+
+Additionally, if `DEFECT_TYPE: prompt` but no `.prompt` files are in `changed_files`
+after both marker parsing and filesystem fallback, log a warning.
+
 **E2E gate (Step 10 → Step 11):**
 - After Step 10 (verify), parse output for `E2E_NEEDED: no`
 - If found, skip Step 11 (E2E test) entirely — do not invoke the LLM, do not wait for timeout
