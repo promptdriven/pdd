@@ -2,19 +2,26 @@
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
-# Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
-# (used by the STANDARD group for slow tasks). SKIP_INDEX causes the SPOT
-# group to skip one index so effective indices stay contiguous.
-if [ -n "${FIXED_TASK_INDEX:-}" ]; then
-    TASK_INDEX="${FIXED_TASK_INDEX}"
-elif [ -n "${SKIP_INDEX:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
+# Detect job type from BATCH_TASK_COUNT (predefined by Cloud Batch).
+# Cloud Batch does NOT reliably inject custom environment variables into
+# containers, so we use task count to distinguish SPOT (74 tasks) from
+# STANDARD (1 task) jobs.
+_SKIP_IDX=54  # sync_regression case_1 — runs on STANDARD to avoid preemption
+_TASK_COUNT="${BATCH_TASK_COUNT:-0}"
+_RAW="${BATCH_TASK_INDEX:-0}"
+
+if [ "${_TASK_COUNT}" -eq 1 ]; then
+    # STANDARD job: single slow task
+    TASK_INDEX="${_SKIP_IDX}"
+elif [ "${_TASK_COUNT}" -gt 1 ] && [ "${_TASK_COUNT}" -lt 75 ]; then
+    # SPOT job: skip the STANDARD task's index
+    if [ "${_RAW}" -ge "${_SKIP_IDX}" ]; then
         TASK_INDEX=$((_RAW + 1))
     else
         TASK_INDEX="${_RAW}"
     fi
 else
+    # Fallback: single job with all tasks (no split)
     TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
 fi
 RESULTS_DIR="/mnt/disks/results"
