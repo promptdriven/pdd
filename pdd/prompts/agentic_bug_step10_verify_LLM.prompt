@@ -80,17 +80,14 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    - If any mock assumes behavior that contradicts the investigation findings, report: FAIL: Test does not work as expected — mock assumptions contradict investigation findings
    - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
 
-5. **Verify call-boundary coverage (multi-file bugs)**
-   The fix locations are: `{fix_locations}`. If there are multiple files listed, check that the generated tests cover ALL of them — not just one. If any fix location file has no test coverage, report: **FAIL: Test does not work as expected — missing test coverage for [uncovered file(s)].** If only one file is listed (or "none"), this check passes automatically.
-
-6. **Classify E2E test necessity**
+5. **Classify E2E test necessity**
    Determine whether an E2E test would add value beyond the unit test created in Step 9.
    - Answer: "Is there a user-facing behavior or integration path NOT already covered by the unit test?"
    - Output `E2E_NEEDED: yes` if the bug has user-facing symptoms (CLI output, API response, UI behavior) that the unit test cannot verify because it mocks the integration boundary.
    - Output `E2E_NEEDED: no` if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path.
    - Include a one-line justification after the marker (e.g., `E2E_NEEDED: no — unit test covers the full code path from input to output with no mocked boundaries`).
 
-7. **Summarize the investigation**
+6. **Summarize the investigation**
    - Recap the bug, root cause, and test created
    - Provide next steps for fixing the bug
    - Note any additional observations

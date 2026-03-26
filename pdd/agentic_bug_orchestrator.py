@@ -364,6 +364,46 @@ def _parse_fix_locations(step6_output: str) -> List[str]:
     return deduped
 
 
+def _verify_fix_location_coverage(
+    fix_locations: List[str], test_files: List[str], work_dir: Path
+) -> List[str]:
+    """Check that generated test files reference all fix_location modules.
+
+    Converts each fix_location path to a dotted module path and checks if any
+    test file contains a reference to it (import, patch target, string literal).
+
+    Returns a list of fix_locations that have NO coverage in any test file.
+    """
+    if len(fix_locations) <= 1:
+        return []  # Single-file bugs don't need cross-file coverage
+
+    uncovered: List[str] = []
+    # Read all test file contents once
+    test_contents: List[str] = []
+    for tf in test_files:
+        abs_path = (work_dir / tf) if not Path(tf).is_absolute() else Path(tf)
+        try:
+            test_contents.append(abs_path.read_text())
+        except OSError:
+            continue
+
+    for fix_loc in fix_locations:
+        # Convert path to module: pdd/commands/generate.py -> pdd.commands.generate
+        module_path = fix_loc.replace("/", ".").removesuffix(".py")
+        # Also check for the bare filename without extension
+        basename = Path(fix_loc).stem
+
+        found = False
+        for content in test_contents:
+            if module_path in content or basename in content:
+                found = True
+                break
+        if not found:
+            uncovered.append(fix_loc)
+
+    return uncovered
+
+
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
     """Validate a REPRO_FILES_CREATED path is safe (no traversal/absolute paths).
 
@@ -1076,6 +1116,10 @@ def run_agentic_bug_orchestrator(
                 context["fix_locations"] = ", ".join(fix_locs)
             else:
                 context["fix_locations"] = "none"
+                logger.warning(
+                    "Step 6 output missing FIX_LOCATIONS marker — "
+                    "downstream call-boundary checks will be skipped"
+                )
 
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
@@ -1128,6 +1172,7 @@ def run_agentic_bug_orchestrator(
             # Structural test guard: scan generated files for banned patterns
             file_violations: dict = {}  # fpath -> [violations]
             retry_extracted: List[str] = []
+            cv_extracted: List[str] = []
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
@@ -1341,6 +1386,69 @@ def run_agentic_bug_orchestrator(
                         console.print(
                             f"[yellow]  → After retry: {final_real} of "
                             f"{planned_count} tests (proceeding with warning)[/yellow]"
+                        )
+
+            # Deterministic fix-location coverage check (replaces LLM-based Step 10 check)
+            fix_locs_str = context.get("fix_locations", "none")
+            if fix_locs_str != "none":
+                fix_locs_list = [f.strip() for f in fix_locs_str.split(",") if f.strip()]
+                # Gather all test files generated so far (including retries)
+                all_test_files = list(set(extracted + retry_extracted + cv_extracted))
+                uncovered = _verify_fix_location_coverage(
+                    fix_locs_list, all_test_files, current_work_dir
+                )
+                if uncovered:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]  → Fix-location coverage gap: no tests reference "
+                            f"{', '.join(uncovered)}, retrying Step 9[/yellow]"
+                        )
+                    coverage_addendum = (
+                        "\n\n% IMPORTANT — MISSING FIX-LOCATION COVERAGE\n"
+                        "Your previous attempt only generated tests for SOME of the fix locations.\n"
+                        f"The fix locations are: {fix_locs_str}\n"
+                        f"Missing test coverage for: {', '.join(uncovered)}\n\n"
+                        "You MUST generate tests that cover ALL fix locations. For multi-file bugs, "
+                        "mock the callee and verify the caller passes correct arguments, AND test "
+                        "the callee directly. Each fix location file must appear in at least one "
+                        "test (via import, patch target, or direct invocation)."
+                    )
+                    cov_success, cov_output, cov_cost, cov_model = run_agentic_task(
+                        instruction=formatted_prompt + coverage_addendum,
+                        cwd=current_work_dir,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label="step9",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += cov_cost
+                    model_used = cov_model
+                    state["total_cost"] = total_cost
+                    state["model_used"] = model_used
+
+                    cov_retry_extracted: List[str] = []
+                    if cov_success:
+                        cov_created = _parse_changed_files(cov_output, "FILES_CREATED")
+                        cov_modified = _parse_changed_files(cov_output, "FILES_MODIFIED")
+                        cov_retry_extracted = cov_created + cov_modified
+                        if cov_retry_extracted:
+                            changed_files.extend(cov_retry_extracted)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+                        step_output = cov_output
+                        context["step9_output"] = cov_output
+
+                    # Log whether retry fixed the gap
+                    still_uncovered = _verify_fix_location_coverage(
+                        fix_locs_list,
+                        list(set(all_test_files + cov_retry_extracted)),
+                        current_work_dir,
+                    )
+                    if still_uncovered and not quiet:
+                        console.print(
+                            f"[yellow]  → After retry, still missing coverage for: "
+                            f"{', '.join(still_uncovered)} (proceeding with warning)[/yellow]"
                         )
 
         if step_num == 10:
