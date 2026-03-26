@@ -1,10 +1,9 @@
 """
-Real-LLM tests for issue #939: call-site enumeration and retry safety.
+Real-LLM regression tests for issue #939: call-site enumeration and retry safety.
 
-These tests call pdd.change.change() with crafted inputs and assert
-the LLM follows the guidance added in #939:
-1. Enumerates call sites explicitly (not vague "all call sites")
-2. Specifies max retry count and fallback when introducing retry logic
+Two tests, each making one change() call + one cheap LLM-as-judge call:
+1. Call-site enumeration — verifies the LLM lists all 4 call sites by name
+2. Retry safety — verifies the LLM specifies a max retry count AND fallback
 
 Requires: PDD_RUN_REAL_LLM_TESTS=1 or --run-all
 """
@@ -12,8 +11,10 @@ Requires: PDD_RUN_REAL_LLM_TESTS=1 or --run-all
 import os
 
 import pytest
+from pydantic import BaseModel
 
 from pdd.change import change
+from pdd.llm_invoke import llm_invoke
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
@@ -27,8 +28,39 @@ def _skip_unless_real() -> None:
         )
 
 
+class JudgmentResult(BaseModel):
+    """Structured output for LLM-as-judge evaluation."""
+    passed: bool
+    reasoning: str
+
+
+def _judge(prompt_output: str, question: str) -> JudgmentResult:
+    """Use a cheap LLM to judge whether the output meets a criterion."""
+    result = llm_invoke(
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict test evaluator. Answer the question about "
+                    "the provided text. Set passed=true only if the criterion is "
+                    "clearly and unambiguously met. Be strict."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"TEXT:\n{prompt_output}\n\nQUESTION:\n{question}",
+            },
+        ],
+        output_pydantic=JudgmentResult,
+        strength=0.0,
+        temperature=0.0,
+        verbose=False,
+    )
+    return result["result"]
+
+
 # ---------------------------------------------------------------------------
-# Fixtures: crafted prompts and code for each scenario
+# Test inputs
 # ---------------------------------------------------------------------------
 
 CALL_SITE_INPUT_PROMPT = """\
@@ -118,6 +150,11 @@ pipeline.
 """
 
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.real
 class TestCallSiteEnumeration:
     """Verify the LLM enumerates each call site when changing a function's return type."""
@@ -134,15 +171,16 @@ class TestCallSiteEnumeration:
             verbose=False,
         )
 
-        prompt_lower = modified_prompt.lower()
-
-        # All four call sites must be mentioned explicitly
-        call_sites = ["ingest", "transform", "export_csv", "audit_log"]
-        missing = [s for s in call_sites if s not in prompt_lower]
-        assert not missing, (
-            f"LLM failed to enumerate call sites: {missing}. "
-            f"The hardened prompt should force explicit enumeration. "
-            f"Model: {model}, cost: ${cost:.4f}"
+        judgment = _judge(
+            modified_prompt,
+            "Does this text explicitly mention ALL FOUR of these function "
+            "names as call sites that need updating: ingest, transform, "
+            "export_csv, audit_log? Each must appear by name, not just as "
+            "a vague reference like 'all call sites'.",
+        )
+        assert judgment.passed, (
+            f"LLM did not enumerate all 4 call sites. "
+            f"Judge: {judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
         )
 
 
@@ -150,8 +188,8 @@ class TestCallSiteEnumeration:
 class TestRetrySafety:
     """Verify the LLM includes retry bounds and fallback when adding retry logic."""
 
-    def test_change_includes_retry_bound(self) -> None:
-        """The modified prompt must specify a maximum retry count."""
+    def test_change_includes_retry_bound_and_fallback(self) -> None:
+        """The modified prompt must specify a max retry count AND fallback behavior."""
         _skip_unless_real()
 
         modified_prompt, cost, model = change(
@@ -162,45 +200,25 @@ class TestRetrySafety:
             verbose=False,
         )
 
-        prompt_lower = modified_prompt.lower()
-
-        # Must contain a numeric retry limit
-        has_retry_bound = any(
-            phrase in prompt_lower
-            for phrase in [
-                "max", "maximum", "limit", "at most",
-                "retry count", "retries", "attempts",
-            ]
+        bound_judgment = _judge(
+            modified_prompt,
+            "Does this text specify a concrete maximum number of retry "
+            "attempts (e.g., 'retry up to 3 times', 'max 5 attempts')? "
+            "There must be an explicit numeric limit, not just the word 'retry'.",
         )
-        assert has_retry_bound, (
-            "LLM did not specify a retry bound in the modified prompt. "
-            "The hardened prompt should force a maximum retry count. "
-            f"Model: {model}, cost: ${cost:.4f}"
+        assert bound_judgment.passed, (
+            f"LLM did not specify a retry bound. "
+            f"Judge: {bound_judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
         )
 
-    def test_change_includes_fallback(self) -> None:
-        """The modified prompt must define fallback behavior when retries are exhausted."""
-        _skip_unless_real()
-
-        modified_prompt, cost, model = change(
-            input_prompt=RETRY_INPUT_PROMPT,
-            input_code=RETRY_INPUT_CODE,
-            change_prompt=RETRY_CHANGE_PROMPT,
-            budget=2.0,
-            verbose=False,
+        fallback_judgment = _judge(
+            modified_prompt,
+            "Does this text define what should happen when all retry "
+            "attempts are exhausted (e.g., raise an exception, log and "
+            "skip, return an error)? There must be explicit fallback "
+            "behavior, not just 'retry N times'.",
         )
-
-        prompt_lower = modified_prompt.lower()
-
-        has_fallback = any(
-            phrase in prompt_lower
-            for phrase in [
-                "fallback", "fail", "error", "raise", "exception",
-                "abort", "give up", "exhausted",
-            ]
-        )
-        assert has_fallback, (
-            "LLM did not define fallback behavior when retries are exhausted. "
-            "The hardened prompt should force a defined fallback. "
-            f"Model: {model}, cost: ${cost:.4f}"
+        assert fallback_judgment.passed, (
+            f"LLM did not define fallback behavior. "
+            f"Judge: {fallback_judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
         )
