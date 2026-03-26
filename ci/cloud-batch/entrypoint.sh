@@ -77,6 +77,7 @@ export GOOGLE_CLOUD_LOCATION="us-central1"
 
 # ── Set common env vars ──────────────────────────────────────────────────
 export PDD_MODEL_DEFAULT="vertex_ai/gemini-3-flash-preview"
+export PDD_STRENGTH_DEFAULT="0.5"
 export PDD_AGENTIC_PROVIDER="google,anthropic,openai"
 export PDD_RUN_REAL_LLM_TESTS=1
 export PDD_RUN_LLM_TESTS=1
