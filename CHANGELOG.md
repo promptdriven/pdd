@@ -1,26 +1,56 @@
+## v0.0.188 (2026-03-25)
+
+### Feat
+
+- Add `part3_mold_parts` segment to project configuration and update multiple narration audio files.
+- add sibling bug detection to pdd bug prompts (#967) (#968)
+- Introduce audio segment preview functionality, update audio synchronization and TTS rendering APIs, and revise the narrative script.
+- implement automation for detecting and saving audio sync section groups based on TTS segments.
+
+### Fix
+
+- deduplicate changed_files after PROMPT_FIXED extend, fix misleading comments
+- detect SPOT vs STANDARD job via BATCH_TASK_COUNT, not custom env vars
+- pass Cloud Batch env vars via container commands, not environment block
+- move Cloud Batch env vars from Runnable to TaskSpec level
+- also extract FILES_CREATED/FILES_MODIFIED from Step 7 resume path
+- pdd bug Step 12 never commits prompt files when Step 7 classifies Prompt Defect
+- flush STOP_CONDITION print to avoid buffering in piped stdout (#671)
+- correct misleading stderr comment in STOP_CONDITION code (#671)
+- emit STOP_CONDITION to stdout on complexity split (#671)
+- respect --manual flag in pdd test for non-Python languages
+- classify ImportError vs test failure in pdd fix verification (#934) (#955)
+- strengthen audit evidence and code transformation contracts
+- remove unreachable sibling scan, update #794 tests to production-realistic scenarios
+- update test names/docs after rebase — inline regex removed by #633
+- add ValueError guard to directory scan relative_to() and tighten test assertions
+- prevent _extract_test_files directory scan when test files already found (#953)
+- pdd fix infrastructure bugs + step 11 API mocking guidance (#633)
+- harden audit-driven contract rendering
+- increase SPOT job maxRetryCount to 5 for better preemption resilience
+- run slow sync_regression case_1 on STANDARD VM to avoid spot preemption
+
 ## v0.0.187 (2026-03-24)
 
 ### Feat
 
-- FAST_TRACK for pre-diagnosed issues + 8 pdd-sync fixes (#836)
-- use real investigation data as Step 8 test inputs (#916)
-- Update video compositions and audit reports, including a fix for an incorrect asset rendering.
-- Add new audit specifications for the pdd-explainer video project and update Remotion compositions, generation scripts, and related tests.
+- **FAST_TRACK for pre-diagnosed issues**: Step 3 triage detects when issue author provides root cause analysis with file paths, line numbers, and causal explanation — skips Steps 4–5 (diagnosis), saving ~50% cost and ~10–15 min on well-documented issues (#836)
+- **Step 8 test inputs use real investigation data**: when Steps 2/6 uncovered exact strings, patterns, or values relevant to the bug, the test plan prompt now instructs the LLM to use those verbatim instead of inventing generic placeholders (#916)
+- **Step 9 cross-validation against Step 8 plan**: Step 8 now emits `PLANNED_TEST_COUNT`, and the orchestrator compares generated test functions (excluding stubs) against planned count — retries once if tests were dropped (#924) (#926)
 
 ### Fix
 
-- improve contract-first renderer fidelity
-- harden contract-first audit rendering
-- improve contract-driven preview routing
-- tighten contract renderer selection
-- prefer contract-driven visual rendering
-- cross-validate Step 9 test count against Step 8 plan (#924) (#926)
-- harden manifest-driven preview and fallback rendering
-- include LLM module analysis cost in sync progress comment (#745) (#748)
-- align closing visuals with authored specs
-- align closing clip ids with staged media
-- make manifest-driven visuals render end to end
-- make compositions use anchor-based timelines
+- **sync_order.sh clobbering in pdd-change PRs**: change orchestrator now writes to `.pdd/sync_order_change.sh` instead of overwriting the repo-level `sync_order.sh` (#571) (#836)
+- **prompt path prefix mismatch**: `.prompt` files starting with `pdd/prompts/` (not just `prompts/`) are now recognized for module extraction in change orchestrator (#836)
+- **pytest-cov crash with litellm ≥1.80.11**: coverage `--cov` target collapsed from dotted submodule to top-level package to avoid pydantic RootModel crash under coverage's import hook; per-module coverage extracted from output (#836)
+- **synthetic coverage=0.0 overwriting real coverage**: Python post-operation paths (crash, verify, fix) in sync now run `_execute_tests_and_create_run_report` for actual coverage measurement instead of saving hardcoded 0.0 reports (#836)
+- **test_extend overwriting existing tests via agentic path**: Python merge mode (`--extend`) now forces the native path, which properly merges with existing tests instead of overwriting (#836)
+- **path-qualified basename resolution**: `_filter_invalid_basenames` now resolves path-qualified module names (e.g. `frontend/app/settings/github/page`) via unambiguous tail matching against architecture.json (#836)
+- **include LLM module analysis cost in sync progress comment**: `initial_cost` passed into `AsyncSyncRunner` so the GitHub progress table shows full cost from the start (#745) (#748)
+
+### Build
+
+- pin `litellm[caching]` upper bound to `<=1.82.6` (pydantic RootModel compatibility)
 
 ## v0.0.186 (2026-03-23)
 

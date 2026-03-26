@@ -318,13 +318,12 @@ class TestStep11ErrorMessageTracing:
 # --- Test: Verify Current Prompt Is Missing All Four ---
 
 
-class TestStep11CurrentPromptLacksGuidance:
+class TestStep11PromptGuidanceDetails:
     """
-    Meta-test verifying the current prompt state matches the bug report.
+    Verify structural properties of the prompt's API mocking guidance.
 
-    These tests confirm the ABSENCE of the required guidance. They should
-    PASS on the current (buggy) code. If any fail, the prompt may have been
-    partially fixed already.
+    These tests check that the prompt contains page.route() mentions
+    and HTTP method instructions beyond the original brief reference.
     """
 
     def test_only_existing_page_route_mention_is_line_84(
@@ -355,13 +354,14 @@ class TestStep11CurrentPromptLacksGuidance:
                 "The single page.route() mention should be the 'Prefer self-contained' line."
             )
 
-    def test_no_http_method_guidance_exists(
+    def test_http_method_guidance_exists(
         self, step11_prompt_content: str
     ) -> None:
         """
-        Confirm the prompt currently has NO guidance about HTTP methods in mocks.
+        Confirm the prompt contains guidance about HTTP methods in mocks.
 
-        After the fix, this test should be removed or updated.
+        Updated after fix: the API Mocking Best Practices section now provides
+        explicit HTTP method guidance (do NOT assume REST conventions).
         """
         content_lower = step11_prompt_content.lower()
         has_http_method_guidance = any([
@@ -369,7 +369,6 @@ class TestStep11CurrentPromptLacksGuidance:
             "do not assume rest" in content_lower,
             "don't assume rest" in content_lower,
         ])
-        # This documents the current buggy state — should have NO guidance
-        assert not has_http_method_guidance, (
-            "Prompt already contains HTTP method guidance — bug may be partially fixed."
+        assert has_http_method_guidance, (
+            "Prompt should contain HTTP method guidance after the fix."
         )

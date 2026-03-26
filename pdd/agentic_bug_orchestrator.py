@@ -774,14 +774,22 @@ def run_agentic_bug_orchestrator(
     # Step 7
     if "step7_output" in context:
         s7_out = context["step7_output"]
+        prompt_fixed = _parse_changed_files(s7_out, "PROMPT_FIXED")
         created = _parse_changed_files(s7_out, "FILES_CREATED")
         modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
-        changed_files.extend(created + modified)
-    
+        changed_files.extend(prompt_fixed + created + modified)
+
     # Step 9
     if "step9_output" in context:
         s9_out = context["step9_output"]
-        e2e_created = _parse_changed_files(s9_out, "E2E_FILES_CREATED")
+        created = _parse_changed_files(s9_out, "FILES_CREATED")
+        modified = _parse_changed_files(s9_out, "FILES_MODIFIED")
+        changed_files.extend(created + modified)
+
+    # Step 11
+    if "step11_output" in context:
+        s11_out = context["step11_output"]
+        e2e_created = _parse_changed_files(s11_out, "E2E_FILES_CREATED")
         changed_files.extend(e2e_created)
 
     changed_files = list(set(changed_files))  # Deduplicate
@@ -936,6 +944,11 @@ def run_agentic_bug_orchestrator(
         if not quiet:
             console.print(f"[bold][Step {step_index}/{total_steps}][/bold] {description}...")
 
+        # Snapshot filesystem BEFORE step 7 (prompt classification) runs (for fallback detection)
+        pre_step7_prompt_files: List[str] = []
+        if step_num == 7:
+            pre_step7_prompt_files = _get_modified_and_untracked(current_work_dir)
+
         # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
         pre_step7_files: List[str] = []
         if step_num == 9:
@@ -1042,8 +1055,25 @@ def run_agentic_bug_orchestrator(
                     prompt_fixed = _parse_changed_files(step_output, "PROMPT_FIXED")
                     if prompt_fixed:
                         changed_files.extend(prompt_fixed)
+                        changed_files = list(set(changed_files))
                         context["files_to_stage"] = ", ".join(changed_files)
                         files_extracted = True
+                    else:
+                        # Filesystem fallback: detect modified .prompt files (#966)
+                        post_step7_files = _get_modified_and_untracked(current_work_dir)
+                        new_prompt_files = [
+                            f for f in post_step7_files
+                            if f not in pre_step7_prompt_files and f.endswith(".prompt")
+                        ]
+                        if new_prompt_files:
+                            changed_files.extend(new_prompt_files)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+                            files_extracted = True
+                    # Warn if DEFECT_TYPE is prompt but no .prompt files detected
+                    prompt_in_changed = any(f.endswith(".prompt") for f in changed_files)
+                    if not prompt_in_changed and not quiet:
+                        console.print("[yellow]Warning: DEFECT_TYPE is 'prompt' but no .prompt files detected in changed_files[/yellow]")
 
         if step_num == 8:
             # Parse planned test count for Step 9 prompt injection
