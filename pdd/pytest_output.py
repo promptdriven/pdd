@@ -1,14 +1,15 @@
 import argparse
 import json
 import io
+import os
 import re
+import signal
 import sys
 import pytest
 import subprocess
 from pathlib import Path
 from rich.console import Console
 from rich.pretty import pprint
-import os
 from .python_env_detector import detect_host_python_executable
 
 console = Console()
@@ -170,11 +171,16 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
     project_root = _find_project_root(test_path)
 
     # Build subprocess kwargs - only modify cwd/env for PDD projects (.pddrc found)
+    # Use Popen (not subprocess.run) with start_new_session=True so we can
+    # kill the entire process group on timeout, preventing orphaned child
+    # processes from holding pipes open (Issue #894, pattern from #830).
+    subprocess_timeout = 300
     subprocess_kwargs = {
-        "capture_output": True,
         "text": True,
-        "timeout": 300,
         "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "start_new_session": True,
     }
 
     # Bug #360: Include extra test files to detect test isolation failures
@@ -204,15 +210,42 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
         pytest_args.append(f"--rootdir={project_root}")
 
     try:
-        # Run pytest using subprocess with the detected Python executable
-        # Use -B flag to disable bytecode caching, ensuring fresh imports
-        result = subprocess.run(pytest_args, **subprocess_kwargs)
-        
-        stdout = result.stdout
-        stderr = result.stderr
-        return_code = result.returncode
+        # Run pytest using Popen for proper process group cleanup (Issue #894).
+        # Use -B flag to disable bytecode caching, ensuring fresh imports.
+        proc = subprocess.Popen(pytest_args, **subprocess_kwargs)
+        try:
+            stdout, stderr = proc.communicate(timeout=subprocess_timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group to prevent orphaned child processes
+            # from holding pipes open (causes executor read_stream deadlock).
+            if proc.pid and os.name == "posix":
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            return {
+                "test_file": test_file,
+                "test_results": [
+                    {
+                        "standard_output": "",
+                        "standard_error": "Test execution timed out",
+                        "return_code": -1,
+                        "warnings": 0,
+                        "errors": 1,
+                        "failures": 0,
+                        "passed": 0,
+                    }
+                ],
+            }
+
+        return_code = proc.returncode
         parse_stdout = _strip_ansi(stdout or "")
-        
+
         # Parse the output to extract test results
         # Count passed, failed, and skipped tests from the output
         passed = parse_stdout.count(" PASSED")
@@ -228,7 +261,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
         summary_text = summary_lines[-1] if summary_lines else ""
         warning_match = re.search(r"(\d+) warnings?", summary_text)
         warnings = int(warning_match.group(1)) if warning_match else 0
-        
+
         # If return code is 2, it indicates a pytest error
         if return_code == 2:
             errors = 1
@@ -252,21 +285,6 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                     "errors": errors,
                     "failures": failures,
                     "passed": passed,
-                }
-            ],
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "test_file": test_file,
-            "test_results": [
-                {
-                    "standard_output": "",
-                    "standard_error": "Test execution timed out",
-                    "return_code": -1,
-                    "warnings": 0,
-                    "errors": 1,
-                    "failures": 0,
-                    "passed": 0,
                 }
             ],
         }

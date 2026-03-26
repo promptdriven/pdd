@@ -1,6 +1,7 @@
 import pytest
 import json
 import os
+import subprocess as real_subprocess
 from pathlib import Path
 from pdd.pytest_output import (
     run_pytest_and_capture_output,
@@ -10,7 +11,20 @@ from pdd.pytest_output import (
 )
 import pdd.pytest_output
 import sys
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
+
+def _mock_popen_from_completed(completed: real_subprocess.CompletedProcess) -> MagicMock:
+    """Create a mock Popen object from a CompletedProcess for test compatibility.
+
+    After Issue #894, run_pytest_and_capture_output uses Popen instead of
+    subprocess.run. This helper creates a Popen mock that behaves equivalently.
+    """
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (completed.stdout, completed.stderr)
+    mock_proc.returncode = completed.returncode
+    mock_proc.pid = 12345
+    return mock_proc
 
 
 # Create a directory for test outputs (use project root output/ directory)
@@ -265,14 +279,12 @@ def test_run_pytest_and_capture_output_parses_ansi_failed_output(tmp_path) -> No
     test_file = tmp_path / "test_failure_color_unit.py"
     test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
 
-    import subprocess
-
     ansi_stdout = "test_failure_color_unit.py::test_fail \x1b[31mFAILED\x1b[0m [100%]\n"
-    fake_completed = subprocess.CompletedProcess(
+    fake_completed = real_subprocess.CompletedProcess(
         args=["pytest"], returncode=1, stdout=ansi_stdout, stderr=""
     )
 
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result.get("test_results", [{}])[0]
@@ -313,12 +325,10 @@ def test_run_pytest_and_capture_output_nonzero_returncode_never_looks_passing(tm
     test_file = tmp_path / "test_nonzero_returncode.py"
     test_file.write_text("def test_fail():\n    assert False\n", encoding="utf-8")
 
-    import subprocess
-
-    fake_completed = subprocess.CompletedProcess(
+    fake_completed = real_subprocess.CompletedProcess(
         args=["pytest"], returncode=1, stdout="(output omitted)", stderr=""
     )
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result.get("test_results", [{}])[0]
@@ -539,7 +549,7 @@ def test_warning_count_ignores_litellm_and_pydantic_warnings(tmp_path):
         args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
     )
 
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result["test_results"][0]
@@ -574,7 +584,7 @@ def test_warning_count_parses_pytest_summary_line(tmp_path):
         args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
     )
 
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result["test_results"][0]
@@ -602,7 +612,7 @@ def test_warning_count_zero_for_clean_output(tmp_path):
         args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
     )
 
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result["test_results"][0]
@@ -631,7 +641,7 @@ def test_warning_count_mixed_library_and_pytest_warnings(tmp_path):
         args=["pytest"], returncode=0, stdout=fake_stdout, stderr=""
     )
 
-    with patch("pdd.pytest_output.subprocess.run", return_value=fake_completed):
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)):
         result = run_pytest_and_capture_output(str(test_file))
 
     results = result["test_results"][0]
