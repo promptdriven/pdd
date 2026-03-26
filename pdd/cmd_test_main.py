@@ -33,6 +33,7 @@ def cmd_test_main(
     merge: bool = False,
     strength: float | None = None,
     temperature: float | None = None,
+    manual: bool = False,
 ) -> tuple[str, float, str, bool | None]:
     """
     CLI wrapper for generating or enhancing unit tests.
@@ -49,6 +50,8 @@ def cmd_test_main(
         merge: If True, merge output into the first existing test file.
         strength: Optional override for LLM strength.
         temperature: Optional override for LLM temperature.
+        manual: If True, bypass agentic test generation and use the legacy
+            single-LLM path for all languages (including non-Python).
 
     Returns:
         tuple: (generated_test_code, total_cost, model_name, agentic_success)
@@ -121,7 +124,8 @@ def cmd_test_main(
     # merges with existing tests. The agentic path ignores existing_tests
     # and merge, overwriting the file entirely — destroying coverage.
     use_agentic_tests = (
-        ((detected_language and detected_language.lower() != 'python') or agentic_mode)
+        not manual
+        and ((detected_language and detected_language.lower() != 'python') or agentic_mode)
         and not (detected_language and detected_language.lower() == 'python' and merge)
     )
     if use_agentic_tests:

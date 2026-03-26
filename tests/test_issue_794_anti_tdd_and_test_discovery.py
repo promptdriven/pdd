@@ -407,11 +407,12 @@ class TestBug2VerifyTestsIndependently:
     """Missed test files are never verified, allowing false ALL_TESTS_PASS."""
 
     def test_missed_test_files_never_verified(self, tmp_path):
-        """End-to-end impact: when _extract_test_files() misses a committed
-        test file, _verify_tests_independently() never checks it.
+        """End-to-end impact: committed test files must be discovered via
+        git branch diff so _verify_tests_independently() checks them.
 
-        This allows the orchestrator to report ALL_TESTS_PASS while the
-        missed test file still has failing assertions from anti-TDD generation.
+        In production, the feature branch always has a merge-base against
+        main, so _get_modified_and_untracked() finds committed files via
+        `git diff --name-only <merge-base> HEAD`.
         """
         # Setup: two test files on disk, one failing
         tests_dir = tmp_path / "tests"
@@ -421,8 +422,8 @@ class TestBug2VerifyTestsIndependently:
             "def test_anti_tdd(): assert False, 'anti-TDD assertion'\n"
         )
 
-        # Initialize git so _get_modified_and_untracked works
-        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        # Initialize git with a main branch (production-like: merge-base works)
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@test.com"],
             cwd=tmp_path, capture_output=True, check=True,
@@ -436,7 +437,13 @@ class TestBug2VerifyTestsIndependently:
             cwd=tmp_path, capture_output=True, check=True,
         )
 
-        # Commit the missed file (simulating pdd bug commit 2)
+        # Create feature branch (so merge-base against main works)
+        subprocess.run(
+            ["git", "checkout", "-b", "fix/issue-794"],
+            cwd=tmp_path, capture_output=True, check=True,
+        )
+
+        # Commit the missed file on feature branch (simulating pdd bug commit 2)
         subprocess.run(
             ["git", "add", "tests/test_missed_committed.py"],
             cwd=tmp_path, capture_output=True, check=True,
@@ -446,8 +453,9 @@ class TestBug2VerifyTestsIndependently:
             cwd=tmp_path, capture_output=True, check=True,
         )
 
-        # Step 1: _extract_test_files only finds the discovered file
-        # (test_missed_committed.py is committed, not in markers or changed_files)
+        # Step 1: _extract_test_files finds committed file via git branch diff
+        # (test_missed_committed.py is committed on feature branch, found via
+        # merge-base diff against main)
         discovered = _extract_test_files(
             issue_content="",
             changed_files=["tests/test_discovered.py"],
@@ -471,7 +479,6 @@ class TestBug2VerifyTestsIndependently:
         # and verification should catch its failure
         assert "test_missed_committed.py" in output, (
             "Verification output should include test_missed_committed.py. "
-            "Currently this file is missed by _extract_test_files() because "
-            "it was committed (not untracked), so _verify_tests_independently() "
-            f"never checks it. Verification output: {output}"
+            "The file should be found via git branch diff (merge-base against main). "
+            f"Verification output: {output}"
         )

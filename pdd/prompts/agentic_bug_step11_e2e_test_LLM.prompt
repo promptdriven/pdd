@@ -83,6 +83,36 @@ Playwright browsers (chromium) may or may not be pre-installed. If you write a P
 2. If installation fails or the dev server isn't running, still output `E2E_FILES_CREATED` with the test path
 3. Prefer self-contained Playwright tests that use `page.route()` to mock API responses rather than requiring a live backend
 
+% API Mocking Best Practices
+
+When using `page.route()` or similar API mocking in E2E tests:
+
+1. **Read the actual API call implementation before writing mocks:**
+   - Find the fetch/axios/API client call in the source code
+   - Use the exact HTTP method (GET, POST, PUT, PATCH, DELETE) — do NOT assume REST conventions (e.g., updates may use POST not PUT)
+   - Match the request body shape and response shape from the source
+   - Trace error handling: follow thrown errors through catch blocks to find the exact UI text displayed to users
+
+2. **Playwright `page.route()` gotcha — use a single handler per URL pattern:**
+   - Playwright stacks route handlers; the LAST registered handler for a URL runs FIRST
+   - If the last handler calls `route.continue()`, the previous handler for the same URL is skipped entirely
+   - ALWAYS use ONE `page.route()` call per URL pattern that switches on request method:
+     ```typescript
+     await page.route('**/api/endpoint', async (route) => {
+       const method = route.request().method();
+       if (method === 'GET') { /* handle GET */ }
+       else if (method === 'POST') { /* handle POST */ }
+       else { await route.continue(); }
+     });
+     ```
+   - NEVER register two `page.route()` calls for the same URL pattern — the second silently overrides the first
+
+3. **Verify error message assertions against source code:**
+   - Read the component's catch block to find what `setError`/`setState` receives
+   - Read the API function's error throw to find the `Error` message text
+   - Trace the full path: API function throw → component catch → state setter → rendered text
+   - Use the exact text (or a regex that matches it) in test assertions — do NOT guess error wording
+
 % CRITICAL: Discover E2E Test Environment First
 
 Before writing any E2E test, you MUST understand the existing test infrastructure. First, identify the primary language of the repository, then search for language-appropriate configuration files.

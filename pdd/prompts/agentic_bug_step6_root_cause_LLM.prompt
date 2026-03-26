@@ -1,4 +1,4 @@
-<pdd-reason>Analyzes bug root cause with cross-cutting concern detection for better fix guidance.</pdd-reason>
+<pdd-reason>Analyzes bug root cause with cross-cutting detection, variable reference audit, and state symmetry checks.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to analyze the root cause of the issue.
 
@@ -94,6 +94,21 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
      - A state check needed at many call sites → fix should be a single check at the entry point or a decorator
    If cross-cutting, note this in your root cause analysis and recommend the centralized approach. The fix may require creating a new module or utility, not just modifying existing code.
 
+9. **Variable reference audit**
+   After identifying the root cause variable/marker/field, grep for ALL references to it across the affected file(s). For each reference:
+   - Classify it as a **write** (assignment, append, extend) or **read** (condition, extraction, formatting)
+   - Note which code path it belongs to (first-run execution, resume/reload, retry, error recovery)
+   - Compare all write sites for consistency: if a marker or field is handled in one write site but missing from another, flag that as a **sibling bug**
+   - Example: if `PROMPT_FIXED` is parsed and added to `changed_files` on the execution path (line N) but NOT on the resume path (line M), that's an independent bug even if the issue only describes the execution-path failure
+
+10. **State symmetry check**
+    If the affected code saves state (to disk, database, or in-memory checkpoints) and can resume from that state:
+    - Identify the save point: what fields/markers are written during execution
+    - Identify the restore point: what fields/markers are re-extracted when resuming
+    - Compare the two: every marker handled during save must also be handled during restore
+    - Report any asymmetries (markers saved but not restored, or restored but not saved) as independent bugs
+    - This catches bugs where a code path works correctly on first run but silently drops data on resume
+
 
 % Output
 
@@ -141,6 +156,11 @@ problematic_code_snippet()
 - [If cross-cutting]: **Affected call sites:** [List the 5+ locations that would need the same change]
 - [If cross-cutting]: **Centralized approach:** [Describe the single mechanism — env var, context object, new utility module, decorator — that would solve it in one place instead of N changes]
 - [If cross-cutting]: **New file needed?** [Yes/No — e.g., a `quiet.py` module, a config singleton, a middleware]
+
+### Sibling Bugs
+- **Variable reference audit:** [List all write/read sites for the root-cause variable. Flag any write site that handles a marker inconsistently compared to others]
+- **State symmetry check:** [If save/restore exists — list markers handled during execution vs during restore. Flag asymmetries]
+- **Independent bugs found:** [List any sibling bugs discovered, with file:line and a one-line description. "None" if the root cause is the only bug]
 
 ### Fix Location
 - **File(s) to modify:** `path/to/root_cause_file.py`

@@ -17,7 +17,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from pdd.load_prompt_template import load_prompt_template
-from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently
+from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently, _classify_verification_failure, _handle_verification_failure
 
 
 def _strip_pdd_metadata(template: str) -> str:
@@ -2274,10 +2274,15 @@ class TestIssue797TypeScriptTestFiles:
 
         assert "e2e/tests/login.spec.ts" in result
 
-    # ── _extract_test_files: inline regex (line 197) ──
+    # ── _extract_test_files: inline regex removed (issue #633) ──
 
-    def test_extract_test_files_inline_regex_matches_tsx_test_files(self, tmp_path):
-        """Inline references to .test.tsx files in issue content should be found."""
+    def test_extract_test_files_narrative_mentions_not_extracted(self, tmp_path):
+        """Inline references in issue narrative should NOT be extracted.
+
+        The inline regex was removed because it picked up files mentioned as
+        examples, not just files to verify. Files should be discovered via
+        markers, changed_files, or disk/git detection instead.
+        """
         test_dir = tmp_path / "src" / "__test__"
         test_dir.mkdir(parents=True)
         (test_dir / "Button.test.tsx").touch()
@@ -2286,7 +2291,31 @@ class TestIssue797TypeScriptTestFiles:
 
         result = _extract_test_files(issue_content, [], tmp_path)
 
-        assert "src/__test__/Button.test.tsx" in result
+        assert "src/__test__/Button.test.tsx" not in result
+
+    def test_extract_test_files_does_not_match_narrative_examples(self, tmp_path):
+        """Files mentioned as examples in issue narrative should NOT be extracted.
+
+        Issue #633 mentioned link-github-save-navigation.spec.ts as an example
+        of a broken test, and the regex incorrectly picked it up for verification.
+        The inline regex should only match files from markers or changed_files,
+        not from unstructured narrative text.
+        """
+        # The example file exists on disk (as it would in a real project)
+        e2e_dir = tmp_path / "frontend" / "e2e" / "tests" / "settings"
+        e2e_dir.mkdir(parents=True)
+        (e2e_dir / "link-github-save-navigation.spec.ts").touch()
+
+        issue_content = (
+            "## Problem\n\n"
+            "PDD bug step 11 generates Playwright E2E tests that look correct but contain subtle bugs.\n\n"
+            "**Concrete example**: PR #627 generated `frontend/e2e/tests/settings/link-github-save-navigation.spec.ts` with 3 bugs.\n\n"
+            "## Fix\n\nUpdate the step 11 prompt."
+        )
+
+        result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert "frontend/e2e/tests/settings/link-github-save-navigation.spec.ts" not in result
 
     # ── _verify_tests_independently: runner dispatch ──
 
@@ -3982,3 +4011,528 @@ class TestConvergencePromptRequirements:
         assert "per-cycle file-hash" in prompt.lower() or "Per-cycle file-hash comparison" in prompt, (
             "Orchestrator prompt is missing requirement 5b: per-cycle file-hash comparison"
         )
+
+class TestClassifyVerificationFailure:
+    """Tests for _classify_verification_failure (issue #934).
+
+    All tests are deterministic pattern matching — no LLM mocks needed.
+    Unrecognized patterns default to test_failure without any LLM call.
+    """
+
+    def test_python_import_error(self):
+        """Python ImportError in pytest ^E format should be classified as import_error."""
+        output = "tests/test_login.py::test_auth\nE   ImportError: No module named 'login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_module_not_found_error(self):
+        """Python ModuleNotFoundError in pytest ^E format should be classified as import_error."""
+        output = "tests/test_login.py::test_auth\nE   ModuleNotFoundError: No module named 'pdd.login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_name_error_pytest_format(self):
+        """NameError in pytest traceback format should be classified as import_error."""
+        output = "tests/test_login.py::test_retry\nE   NameError: name '_count_planned_tests' is not defined"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_attribute_error_pytest_format(self):
+        """AttributeError in pytest traceback format should be classified as import_error."""
+        output = "tests/test_login.py::test_retry\nE   AttributeError: module 'login' has no attribute 'handle'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_syntax_error_pytest_format(self):
+        """SyntaxError in pytest traceback format should be classified as import_error."""
+        output = "tests/test_login.py\nE   SyntaxError: invalid syntax"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_js_cannot_find_module(self):
+        """JS/TS 'Cannot find module' in pytest ^E format should be classified as import_error."""
+        output = "tests/test_app.js\nE   Cannot find module './login' from 'src/index.ts'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_js_module_not_found(self):
+        """JS/TS 'Module not found' in pytest ^E format should be classified as import_error."""
+        output = "tests/test_app.js\nE   Module not found: Error: Can't resolve './login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_js_reference_error(self):
+        """JS/TS ReferenceError in pytest ^E format should be classified as import_error."""
+        output = "tests/test_app.js\nE   ReferenceError: handleLogin is not defined"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_no_test_runner_available(self):
+        """'FAILED (no test runner available)' should be classified as import_error."""
+        assert _classify_verification_failure("test_login.ts: FAILED (no test runner available)") == "import_error"
+
+    def test_assertion_error_is_test_failure(self):
+        """AssertionError (no import patterns) should be classified as test_failure."""
+        assert _classify_verification_failure("FAILED tests/test_login.py::test_retry - AssertionError: assert 1 == 2") == "test_failure"
+
+    def test_empty_output_is_test_failure(self):
+        """Empty output should default to test_failure."""
+        assert _classify_verification_failure("") == "test_failure"
+
+    def test_name_error_outside_pytest_format_no_match(self):
+        """NameError NOT in pytest ^E format should not match (avoids false positives)."""
+        output = "FAILED - assert 'NameError' in error_messages"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_unrecognized_pattern_defaults_to_test_failure(self):
+        """Unrecognized patterns (e.g. Go compile errors) default to test_failure."""
+        assert _classify_verification_failure("./main.go:10:2: undefined: handleLogin") == "test_failure"
+
+    def test_unknown_output_defaults_to_test_failure(self):
+        """Completely unknown output defaults to test_failure."""
+        assert _classify_verification_failure("some unknown error output") == "test_failure"
+
+
+class TestHandleVerificationFailure:
+    """Tests for _handle_verification_failure helper (deduplication of retry logic)."""
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    def test_import_error_returns_should_retry(self, _mock_classify):
+        """First import_error should return should_retry=True."""
+        console = MagicMock()
+        failure_type, retries, should_retry = _handle_verification_failure(
+            "ImportError: No module named 'login'", 0, console
+        )
+        assert failure_type == "import_error"
+        assert retries == 1
+        assert should_retry is True
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    def test_import_error_exhausted_returns_no_retry(self, _mock_classify):
+        """Second import_error (retries=1) should return should_retry=False."""
+        console = MagicMock()
+        failure_type, retries, should_retry = _handle_verification_failure(
+            "ImportError: No module named 'login'", 1, console
+        )
+        assert failure_type == "import_error"
+        assert retries == 1
+        assert should_retry is False
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="test_failure")
+    def test_test_failure_returns_no_retry(self, _mock_classify):
+        """test_failure should never retry."""
+        console = MagicMock()
+        failure_type, retries, should_retry = _handle_verification_failure(
+            "FAILED tests/test_login.py::test_retry - AssertionError", 0, console
+        )
+        assert failure_type == "test_failure"
+        assert retries == 0
+        assert should_retry is False
+
+
+class TestImportErrorRetryBehavior:
+    """Tests for import_error retry routing at verification call sites (issue #934).
+
+    When verification fails with an import error, the orchestrator should retry
+    from Step 1 instead of falling through to expensive Steps 3-9.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_import_error_retries_step1(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 2 verification ImportError should retry from Step 1."""
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should have retried — step1 called in cycle 1 and again in cycle 2 (retry)
+        step1_calls = sum(1 for c in mock_run.call_args_list if 'step1' in str(c))
+        assert step1_calls >= 2, (
+            f"Expected Step 1 to be called at least twice (original + retry) but got {step1_calls}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="test_failure")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_test_failure_falls_through(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 2 verification AssertionError should fall through to Steps 3-9."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "FAILED tests/test_login.py::test_retry - AssertionError")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Step 1 should NOT be retried — should proceed to Step 3+
+        step1_calls = sum(1 for c in mock_run.call_args_list if 'step1' in str(c))
+        assert step1_calls == 1, (
+            f"Expected Step 1 to be called exactly once (no retry for test_failure) but got {step1_calls}"
+        )
+        # Should have continued past Step 2 (at least to Step 3)
+        assert mock_run.call_count > 2
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_import_error_retry_limited_to_one(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Import error retry should be limited to 1 total (global budget) to prevent infinite loops."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 3
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Global budget of 1 retry, so step1 calls <= max_cycles + 1
+        step1_calls = sum(1 for c in mock_run.call_args_list if 'step1' in str(c))
+        max_cycles = e2e_fix_default_args["max_cycles"]
+        assert step1_calls <= max_cycles + 1, (
+            f"Expected at most {max_cycles + 1} Step 1 calls (max_cycles + 1 retry) "
+            f"but got {step1_calls}. Global retry budget should prevent excessive retries."
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step9_import_error_retries_step1(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 9 verification ImportError should retry from Step 1."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        call_labels = []
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            call_labels.append(label)
+            if 'step9' in label:
+                return (True, "Verification complete. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should have retried Step 1 after Step 9 import error
+        step9_indices = [i for i, l in enumerate(call_labels) if 'step9' in l]
+        step1_after_step9 = any(
+            i > s9_idx and 'step1' in call_labels[i]
+            for s9_idx in step9_indices
+            for i in range(s9_idx + 1, len(call_labels))
+        )
+        assert step9_indices, "Step 9 should have been called"
+        assert step1_after_step9, (
+            f"Expected Step 1 to be retried after Step 9 import_error but call sequence was: {call_labels}"
+        )
+
+
+class TestReviewFix1NoLLMFallback:
+    """Review item 1: _classify_verification_failure must NOT call LLM.
+
+    The most common failure (AssertionError) won't match any tier-1 pattern.
+    The old tier-2 LLM fallback added an LLM call on the most frequent path,
+    defeating the purpose of the optimization. Default should be test_failure
+    with no LLM call.
+    """
+
+    def test_no_llm_call_for_assertion_error(self):
+        """AssertionError should be classified as test_failure WITHOUT any LLM call."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure(
+                "FAILED tests/test_login.py::test_retry - AssertionError: assert 1 == 2"
+            )
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_no_llm_call_for_unknown_output(self):
+        """Unknown/unrecognized output should default to test_failure WITHOUT LLM call."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure("some completely unknown error output")
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_no_llm_call_for_empty_output(self):
+        """Empty output should default to test_failure WITHOUT LLM call."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure("")
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_no_llm_call_for_go_compile_error(self):
+        """Go compile errors should default to test_failure WITHOUT LLM call.
+
+        Previously these went through tier-2 LLM fallback. Now they should
+        just be test_failure (conservative default).
+        """
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure(
+                "./main.go:10:2: undefined: handleLogin"
+            )
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_tier1_patterns_still_work_without_llm(self):
+        """Tier-1 patterns should still detect import_error without any LLM involvement."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            # Use pytest traceback format (anchored)
+            result = _classify_verification_failure(
+                "tests/test_login.py::test_retry\nE   NameError: name '_count_planned_tests' is not defined"
+            )
+            assert result == "import_error"
+            mock_llm.assert_not_called()
+
+
+class TestReviewFix2AnchoredPatterns:
+    """Review item 2: ImportError/ReferenceError patterns must be anchored.
+
+    Unanchored patterns false-positive on test output containing
+    'pytest.raises(ImportError)' or assertion messages mentioning error types.
+    """
+
+    def test_pytest_raises_import_error_not_false_positive(self):
+        """'pytest.raises(ImportError)' in test output should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "PASSED tests/test_routes_init.py::test_invalid_import - "
+            "with pytest.raises(ImportError): import nonexistent"
+        )
+        assert result == "test_failure", (
+            "pytest.raises(ImportError) in passing test output should not trigger import_error"
+        )
+
+    def test_import_error_in_assertion_message_not_false_positive(self):
+        """ImportError mentioned in an assertion string should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "FAILED tests/test_error_handling.py::test_error_msg - "
+            "AssertionError: assert 'ImportError: no module' in error_messages"
+        )
+        assert result == "test_failure", (
+            "ImportError inside assertion message should not trigger false positive"
+        )
+
+    def test_reference_error_in_test_name_not_false_positive(self):
+        """ReferenceError in test name/description should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "PASSED tests/test_errors.py::test_handles_ReferenceError_gracefully"
+        )
+        assert result == "test_failure", (
+            "ReferenceError in test name should not trigger false positive"
+        )
+
+    def test_bare_import_error_at_line_start_not_matched(self):
+        """Bare ImportError at line start (not ^E format) should NOT trigger import_error.
+
+        Only pytest ^E format is matched to avoid false positives from log/print lines.
+        """
+        output = "ImportError: cannot import name '_count_planned_tests' from 'pdd.agentic_bug_orchestrator'"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_real_import_error_pytest_E_format_detected(self):
+        """Real ImportError in pytest ^E format should be detected."""
+        output = "tests/test_login.py::test_auth\nE   ImportError: No module named 'login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_bare_module_not_found_at_line_start_not_matched(self):
+        """Bare ModuleNotFoundError at line start should NOT trigger import_error."""
+        output = "ModuleNotFoundError: No module named 'pdd.login'"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_bare_reference_error_at_line_start_not_matched(self):
+        """Bare ReferenceError at line start should NOT trigger import_error."""
+        output = "ReferenceError: handleLogin is not defined\n    at Object.<anonymous>"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_real_reference_error_pytest_E_format_detected(self):
+        """Real ReferenceError in pytest ^E format should be detected."""
+        output = "tests/test_app.js\nE   ReferenceError: handleLogin is not defined"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_cannot_find_module_mid_line_not_false_positive(self):
+        """'Cannot find module' mid-line (e.g. in assertion) should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "FAILED - assert error.message == 'Cannot find module ./login'"
+        )
+        assert result == "test_failure"
+
+    def test_real_cannot_find_module_pytest_E_format_detected(self):
+        """Real 'Cannot find module' in pytest ^E format should be detected."""
+        output = "tests/test_app.js\nE   Cannot find module './login' from 'src/index.ts'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_real_module_not_found_pytest_E_format_detected(self):
+        """Real 'Module not found' in pytest ^E format should be detected."""
+        output = "tests/test_app.js\nE   Module not found: Error: Can't resolve './login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+
+class TestReviewFix3VerificationContextInjection:
+    """Review item 3: Retry prompt must include verification failure output.
+
+    When retrying from Step 1 after import_error, the LLM needs to see what
+    went wrong so it doesn't re-hallucinate the same failure.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_retry_prompt_contains_verification_output(
+        self, mock_extract, mock_verify, _mock_classify,
+        e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Step 1 retry prompt should contain the verification failure output."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        verification_error = "ImportError: cannot import name '_count_planned_tests' from 'pdd.agentic_bug_orchestrator'"
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, verification_error)
+
+        prompts_by_label = {}
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            instruction = kwargs.get('instruction', '') or (args[0] if args else '')
+            prompts_by_label[label] = instruction
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Find the retry Step 1 call (second time step1 appears)
+        step1_labels = [l for l in prompts_by_label if 'step1' in l]
+        assert len(step1_labels) >= 2, (
+            f"Expected at least 2 Step 1 calls (original + retry) but got: {step1_labels}"
+        )
+        retry_label = step1_labels[1]
+        retry_prompt = prompts_by_label[retry_label]
+
+        # The retry prompt must contain the verification failure output
+        assert "_count_planned_tests" in retry_prompt, (
+            f"Retry Step 1 prompt should contain the verification failure details "
+            f"(ImportError about _count_planned_tests) but got:\n{retry_prompt[:500]}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_non_retry_prompt_does_not_contain_stale_context(
+        self, mock_extract, mock_verify, _mock_classify,
+        e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Normal (non-retry) Step 1 prompt should NOT contain verification failure context."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: cannot import name 'missing_func'")
+
+        prompts_by_label = {}
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            instruction = kwargs.get('instruction', '') or (args[0] if args else '')
+            prompts_by_label[label] = instruction
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # The FIRST Step 1 call should NOT have verification failure context
+        step1_labels = [l for l in prompts_by_label if 'step1' in l]
+        assert len(step1_labels) >= 1
+        first_prompt = prompts_by_label[step1_labels[0]]
+        assert "PREVIOUS ATTEMPT FAILED" not in first_prompt, (
+            "First Step 1 call should not contain verification failure context"
+        )
+
+
+class TestReviewFix4ConsistentRetryState:
+    """Review item 4: All 4 verification call sites should have consistent state on retry.
+
+    When should_retry is True, all sites should set step_outputs to indicate
+    what happened before breaking, so orchestrator state is clean.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_main_path_sets_verification_failed_on_retry(
+        self, mock_extract, mock_verify, _mock_classify,
+        e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Step 2 main-path retry should set step_output to VERIFICATION_FAILED before breaking."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        call_count = [0]
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            call_count[0] += 1
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Check that save_workflow_state was called with step_outputs containing
+            # a VERIFICATION_FAILED or IMPORT_ERROR_RETRY marker for step 2
+            # At minimum, the state should reflect that verification failed
+            save_calls = mock_save.call_args_list
+            # Find the save call after the verification failure
+            found_verification_state = False
+            for call in save_calls:
+                args, kwargs_call = call
+                # state_data is positional arg index 4 or keyword
+                state_data = args[3] if len(args) > 3 else kwargs_call.get('state_data', {})
+                if isinstance(state_data, dict):
+                    step_outputs = state_data.get('step_outputs', {})
+                    step2_output = step_outputs.get('2', '')
+                    if 'VERIFICATION_FAILED' in step2_output or 'IMPORT_ERROR_RETRY' in step2_output:
+                        found_verification_state = True
+                        break
+
+            assert found_verification_state, (
+                "Step 2 main-path retry should save state with VERIFICATION_FAILED "
+                "or IMPORT_ERROR_RETRY in step_outputs['2']"
+            )

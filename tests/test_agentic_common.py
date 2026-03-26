@@ -4134,3 +4134,86 @@ class TestIssue830SaveWorkflowStateDivergence:
             f"Expected a warning about GitHub state save failure. "
             f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# GIT_WORK_TREE worktree isolation (Issue #894)
+# ---------------------------------------------------------------------------
+
+
+def test_git_work_tree_set_to_cwd_in_subprocess_env(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """GIT_WORK_TREE must be set to cwd so CLI agents stay in the worktree.
+
+    Without this, agents follow the worktree's .git file pointer back to
+    the main repo and write files there instead of in the worktree.
+    See: https://github.com/gltanaka/pdd/issues/894
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" in env_passed, "GIT_WORK_TREE not set — CLI agent will escape worktree"
+    assert env_passed["GIT_WORK_TREE"] == str(mock_cwd)
+
+
+def test_git_work_tree_overrides_inherited_value(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """A pre-existing GIT_WORK_TREE from the parent env must be overwritten.
+
+    If the parent process already has GIT_WORK_TREE pointing elsewhere,
+    the subprocess must use the worktree cwd, not the inherited value.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert env_passed["GIT_WORK_TREE"] == str(mock_cwd), (
+        f"GIT_WORK_TREE should be {mock_cwd}, got {env_passed.get('GIT_WORK_TREE')}"
+    )
+
+
+def test_git_work_tree_matches_subprocess_cwd(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """GIT_WORK_TREE and the subprocess cwd kwarg must agree.
+
+    If they diverge, git operations may resolve to a different directory
+    than file writes, causing split-brain behavior.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    cwd_passed = kwargs["cwd"]
+    assert "GIT_WORK_TREE" in env_passed, "GIT_WORK_TREE not set in subprocess env"
+    assert str(env_passed["GIT_WORK_TREE"]) == str(cwd_passed), (
+        f"GIT_WORK_TREE ({env_passed['GIT_WORK_TREE']}) != cwd ({cwd_passed})"
+    )

@@ -1014,6 +1014,9 @@ def _run_with_provider(
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
     env.pop("PDD_OUTPUT_COST_PATH", None)
+    # Force CLI agents to stay in the worktree instead of following
+    # the .git file pointer back to the main repo (Issue #894).
+    env["GIT_WORK_TREE"] = str(cwd)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
