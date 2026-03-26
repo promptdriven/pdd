@@ -350,15 +350,18 @@ def _parse_changed_files(output: str, marker: str) -> List[str]:
 def _parse_fix_locations(step6_output: str) -> List[str]:
     """Extract fix locations from Step 6's FIX_LOCATIONS marker.
 
-    Returns a list of file paths (stripped of whitespace and backticks).
+    Returns a deduplicated list of file paths (stripped of whitespace and backticks).
+    Reuses _parse_changed_files for the core parsing logic.
     """
-    files = []
-    for match in re.finditer(r"FIX_LOCATIONS:\s*(.*)", step6_output):
-        for f in match.group(1).split(","):
-            cleaned = f.strip().strip("`")
-            if cleaned:
-                files.append(cleaned)
-    return files
+    raw = _parse_changed_files(step6_output, "FIX_LOCATIONS")
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for f in raw:
+        cleaned = f.strip("`")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return deduped
 
 
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:

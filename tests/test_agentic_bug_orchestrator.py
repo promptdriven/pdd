@@ -6052,3 +6052,35 @@ class TestFixLocationsFlowToDownstreamSteps:
         output_no_marker = "Root cause is in generate.py but no marker"
         result = _parse_fix_locations(output_no_marker)
         assert result == []
+
+
+class TestFixLocationsInRealPrompts:
+    """Verify that the real prompt files contain {fix_locations} placeholder."""
+
+    @pytest.mark.parametrize("prompt_file", [
+        "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt",
+        "pdd/prompts/agentic_bug_step9_generate_LLM.prompt",
+        "pdd/prompts/agentic_bug_step10_verify_LLM.prompt",
+    ])
+    def test_real_prompt_contains_fix_locations_placeholder(self, prompt_file):
+        """Real prompt files must contain {fix_locations} so the orchestrator can inject it."""
+        prompt_path = Path(__file__).parent.parent / prompt_file
+        content = prompt_path.read_text()
+        assert "{fix_locations}" in content, (
+            f"{prompt_file} is missing {{fix_locations}} placeholder — "
+            f"orchestrator injects this but the prompt won't use it"
+        )
+
+
+class TestParseFixLocationsDeduplication:
+    """Verify fix locations are deduplicated."""
+
+    def test_deduplicates_repeated_files(self):
+        """Duplicate file paths from multiple markers are deduplicated."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = (
+            "FIX_LOCATIONS: pdd/generate.py, pdd/main.py\n"
+            "FIX_LOCATIONS: pdd/generate.py\n"
+        )
+        result = _parse_fix_locations(output)
+        assert result == ["pdd/generate.py", "pdd/main.py"]
