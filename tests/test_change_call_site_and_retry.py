@@ -1,8 +1,8 @@
 """
-Real-LLM tests for issue #939: verify change_LLM prompt hardening.
+Real-LLM tests for issue #939: call-site enumeration and retry safety.
 
 These tests call pdd.change.change() with crafted inputs and assert
-the LLM actually follows the hardening guidance added in #939:
+the LLM follows the guidance added in #939:
 1. Enumerates call sites explicitly (not vague "all call sites")
 2. Specifies max retry count and fallback when introducing retry logic
 
