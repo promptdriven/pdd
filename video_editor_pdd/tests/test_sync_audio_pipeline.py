@@ -1388,6 +1388,32 @@ class TestMainExitCodes:
             "maxWarnRatio": 0.35,
         }
 
+    def test_main_uses_manifest_normalized_section_groups(self):
+        with mock.patch("sys.argv", ["sync_audio_pipeline.py"]):
+            with mock.patch("sync_audio_pipeline.load_project") as mock_load:
+                mock_load.return_value = {
+                    "sectionGroups": {
+                        "part3_mold_has_three_parts": ["part3_mold_has_three_parts_001"],
+                    }
+                }
+                with mock.patch("sync_audio_pipeline.load_section_groups") as mock_groups:
+                    mock_groups.return_value = {
+                        "part3_mold_parts": ["part3_mold_parts_001"],
+                    }
+                    with mock.patch("sync_audio_pipeline.process_section") as mock_proc:
+                        mock_proc.return_value = {
+                            "sectionId": "part3_mold_parts",
+                            "status": "done",
+                            "wordCount": 5,
+                        }
+                        with pytest.raises(SystemExit) as exc_info:
+                            main()
+                        assert exc_info.value.code == 0
+
+        mock_groups.assert_called_once_with(".", "outputs/tts/")
+        assert mock_proc.call_args[1]["section_id"] == "part3_mold_parts"
+        assert mock_proc.call_args[1]["segment_ids"] == ["part3_mold_parts_001"]
+
 
 class TestMainJsonOutput:
     """Verify JSON progress lines printed to stdout."""

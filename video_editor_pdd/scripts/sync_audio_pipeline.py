@@ -1057,12 +1057,7 @@ def main() -> None:
     # Load section groups configuration
     try:
         project = load_project(args.project_dir)
-        raw_section_groups = (
-            json.loads(os.environ["SECTION_GROUPS"])
-            if os.environ.get("SECTION_GROUPS")
-            else project["sectionGroups"]
-        )
-        section_groups = _coerce_section_groups(raw_section_groups, args.output_dir)
+        section_groups = load_section_groups(args.project_dir, args.output_dir)
     except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
         error_result = {
             "sectionId": "__global__",

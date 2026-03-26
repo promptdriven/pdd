@@ -1,3 +1,35 @@
+## v0.0.188 (2026-03-25)
+
+### Feat
+
+- Add `part3_mold_parts` segment to project configuration and update multiple narration audio files.
+- add sibling bug detection to pdd bug prompts (#967) (#968)
+- Introduce audio segment preview functionality, update audio synchronization and TTS rendering APIs, and revise the narrative script.
+- implement automation for detecting and saving audio sync section groups based on TTS segments.
+
+### Fix
+
+- deduplicate changed_files after PROMPT_FIXED extend, fix misleading comments
+- detect SPOT vs STANDARD job via BATCH_TASK_COUNT, not custom env vars
+- pass Cloud Batch env vars via container commands, not environment block
+- move Cloud Batch env vars from Runnable to TaskSpec level
+- also extract FILES_CREATED/FILES_MODIFIED from Step 7 resume path
+- pdd bug Step 12 never commits prompt files when Step 7 classifies Prompt Defect
+- flush STOP_CONDITION print to avoid buffering in piped stdout (#671)
+- correct misleading stderr comment in STOP_CONDITION code (#671)
+- emit STOP_CONDITION to stdout on complexity split (#671)
+- respect --manual flag in pdd test for non-Python languages
+- classify ImportError vs test failure in pdd fix verification (#934) (#955)
+- strengthen audit evidence and code transformation contracts
+- remove unreachable sibling scan, update #794 tests to production-realistic scenarios
+- update test names/docs after rebase — inline regex removed by #633
+- add ValueError guard to directory scan relative_to() and tighten test assertions
+- prevent _extract_test_files directory scan when test files already found (#953)
+- pdd fix infrastructure bugs + step 11 API mocking guidance (#633)
+- harden audit-driven contract rendering
+- increase SPOT job maxRetryCount to 5 for better preemption resilience
+- run slow sync_regression case_1 on STANDARD VM to avoid spot preemption
+
 ## v0.0.187 (2026-03-24)
 
 ### Feat

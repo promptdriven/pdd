@@ -184,6 +184,7 @@ describe("prepareAudioSyncAutomation", () => {
     expect(result).toEqual({
       changed: true,
       filledSections: ["part1_economics"],
+      removedSections: [],
       unmatchedSegments: [],
     });
     expect(fetchImpl).toHaveBeenNthCalledWith(1, "/api/project");
@@ -286,29 +287,38 @@ describe("prepareAudioSyncAutomation", () => {
     );
   });
 
-  it("skips detection and save when all section groups already exist", async () => {
-    const fetchImpl = jest.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        sections: [{ id: "cold_open", label: "Cold Open" }],
-        audioSync: {
-          sectionGroups: {
-            cold_open: {
-              startSegment: "cold_open_001",
-              endSegment: "cold_open_002",
+  it("reconciles against the current manifest without saving when groups already match", async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          sections: [{ id: "cold_open", label: "Cold Open" }],
+          audioSync: {
+            sectionGroups: {
+              cold_open: {
+                startSegment: "cold_open_001",
+                endSegment: "cold_open_002",
+              },
             },
           },
-        },
-      }),
-    });
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          segments: [{ id: "cold_open_001" }, { id: "cold_open_002" }],
+        }),
+      });
 
     const result = await prepareAudioSyncAutomation(fetchImpl as unknown as typeof fetch);
 
     expect(result).toEqual({
       changed: false,
       filledSections: [],
+      removedSections: [],
       unmatchedSegments: [],
     });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
