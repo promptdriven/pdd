@@ -12,7 +12,10 @@ export interface RunFlaggedTranscriptRerenderRetriesOptions<T extends SegmentVal
   startTtsRerender: (segmentIds: string[]) => Promise<string>;
   startAudioSync: (sectionId: string) => Promise<string>;
   waitForJob: (jobId: string) => Promise<void>;
+  continueOnAudioSyncError?: boolean;
   reloadValidationRows: () => Promise<T[]>;
+  captureSegmentStates?: (segmentIds: string[]) => Promise<Record<string, string>>;
+  restoreSegmentStates?: (snapshots: Record<string, string>) => Promise<void>;
   onTtsJobStarted?: (info: {
     attempt: number;
     jobId: string;
@@ -40,7 +43,10 @@ export interface RunFlaggedTranscriptRerenderRetriesAcrossSectionsOptions<
   startTtsRerender: (segmentIds: string[]) => Promise<string>;
   startAudioSync: (sectionIds: string[]) => Promise<string>;
   waitForJob: (jobId: string) => Promise<void>;
+  continueOnAudioSyncError?: boolean;
   reloadValidationRowsBySection: () => Promise<Record<string, T[]>>;
+  captureSegmentStates?: (segmentIds: string[]) => Promise<Record<string, string>>;
+  restoreSegmentStates?: (snapshots: Record<string, string>) => Promise<void>;
   onTtsJobStarted?: (info: {
     attempt: number;
     jobId: string;
@@ -75,6 +81,35 @@ function clampMaxRetries(maxRetries: number): number {
   }
 
   return Math.max(0, Math.floor(maxRetries));
+}
+
+function getRowMatchRatio<T extends SegmentValidationLike>(
+  rows: T[],
+  segmentId: string,
+): number {
+  const row = rows.find((candidate) => candidate.segmentId === segmentId);
+  return typeof row?.matchRatio === "number" ? row.matchRatio : -1;
+}
+
+function getRowsBySectionMatchRatio<T extends SegmentValidationLike>(
+  rowsBySection: Record<string, T[]>,
+  segmentId: string,
+): number {
+  for (const rows of Object.values(rowsBySection)) {
+    const ratio = getRowMatchRatio(rows, segmentId);
+    if (ratio >= 0) {
+      return ratio;
+    }
+  }
+
+  return -1;
+}
+
+function canTrackBestSegmentStates(
+  captureSegmentStates?: (segmentIds: string[]) => Promise<Record<string, string>>,
+  restoreSegmentStates?: (snapshots: Record<string, string>) => Promise<void>,
+): captureSegmentStates is (segmentIds: string[]) => Promise<Record<string, string>> {
+  return typeof captureSegmentStates === "function" && typeof restoreSegmentStates === "function";
 }
 
 export function collectFlaggedSegmentsBelowThreshold<T extends SegmentValidationLike>(
@@ -133,10 +168,27 @@ export async function runFlaggedTranscriptRerenderRetries<T extends SegmentValid
   const maxRetries = clampMaxRetries(options.maxRetries);
   let attemptsCompleted = 0;
   let currentRows = options.initialRows;
+  const trackedSegmentIds = collectFlaggedSegmentsBelowThreshold(
+    currentRows,
+    options.thresholdPercent,
+  );
   let remainingSegmentIds = collectFlaggedSegmentsBelowThreshold(
     currentRows,
     options.thresholdPercent,
   );
+  const trackBestSegmentStates = canTrackBestSegmentStates(
+    options.captureSegmentStates,
+    options.restoreSegmentStates,
+  );
+  const bestScoresBySegment: Record<string, number> = {};
+  let bestStatesBySegment: Record<string, string> = {};
+
+  if (trackBestSegmentStates && trackedSegmentIds.length > 0) {
+    for (const segmentId of trackedSegmentIds) {
+      bestScoresBySegment[segmentId] = getRowMatchRatio(currentRows, segmentId);
+    }
+    bestStatesBySegment = await options.captureSegmentStates(trackedSegmentIds);
+  }
 
   while (attemptsCompleted < maxRetries && remainingSegmentIds.length > 0) {
     const attempt = attemptsCompleted + 1;
@@ -154,9 +206,44 @@ export async function runFlaggedTranscriptRerenderRetries<T extends SegmentValid
       jobId: syncJobId,
       sectionId: options.sectionId,
     });
-    await options.waitForJob(syncJobId);
+    try {
+      await options.waitForJob(syncJobId);
+    } catch (error) {
+      if (!options.continueOnAudioSyncError) {
+        throw error;
+      }
+    }
 
     attemptsCompleted = attempt;
+    currentRows = await options.reloadValidationRows();
+    if (trackBestSegmentStates && trackedSegmentIds.length > 0) {
+      const capturedStates = await options.captureSegmentStates(trackedSegmentIds);
+      for (const segmentId of trackedSegmentIds) {
+        const nextScore = getRowMatchRatio(currentRows, segmentId);
+        if (nextScore > (bestScoresBySegment[segmentId] ?? -1)) {
+          bestScoresBySegment[segmentId] = nextScore;
+          if (capturedStates[segmentId]) {
+            bestStatesBySegment[segmentId] = capturedStates[segmentId];
+          }
+        }
+      }
+    }
+    remainingSegmentIds = collectFlaggedSegmentsBelowThreshold(
+      currentRows,
+      options.thresholdPercent,
+    );
+  }
+
+  if (trackBestSegmentStates && attemptsCompleted > 0 && trackedSegmentIds.length > 0) {
+    await options.restoreSegmentStates(bestStatesBySegment);
+    const syncJobId = await options.startAudioSync(options.sectionId);
+    try {
+      await options.waitForJob(syncJobId);
+    } catch (error) {
+      if (!options.continueOnAudioSyncError) {
+        throw error;
+      }
+    }
     currentRows = await options.reloadValidationRows();
     remainingSegmentIds = collectFlaggedSegmentsBelowThreshold(
       currentRows,
@@ -179,10 +266,32 @@ export async function runFlaggedTranscriptRerenderRetriesAcrossSections<
   const maxRetries = clampMaxRetries(options.maxRetries);
   let attemptsCompleted = 0;
   let currentRowsBySection = options.initialRowsBySection;
+  const trackedSegmentIdsBySection = collectFlaggedSegmentsBelowThresholdBySection(
+    currentRowsBySection,
+    options.thresholdPercent,
+  );
+  const trackedSectionIds = Object.keys(trackedSegmentIdsBySection);
+  const trackedSegmentIds = Object.values(trackedSegmentIdsBySection).flat();
   let remainingSegmentIdsBySection = collectFlaggedSegmentsBelowThresholdBySection(
     currentRowsBySection,
     options.thresholdPercent,
   );
+  const trackBestSegmentStates = canTrackBestSegmentStates(
+    options.captureSegmentStates,
+    options.restoreSegmentStates,
+  );
+  const bestScoresBySegment: Record<string, number> = {};
+  let bestStatesBySegment: Record<string, string> = {};
+
+  if (trackBestSegmentStates && trackedSegmentIds.length > 0) {
+    for (const segmentId of trackedSegmentIds) {
+      bestScoresBySegment[segmentId] = getRowsBySectionMatchRatio(
+        currentRowsBySection,
+        segmentId,
+      );
+    }
+    bestStatesBySegment = await options.captureSegmentStates(trackedSegmentIds);
+  }
 
   while (
     attemptsCompleted < maxRetries &&
@@ -206,9 +315,44 @@ export async function runFlaggedTranscriptRerenderRetriesAcrossSections<
       jobId: syncJobId,
       sectionIds,
     });
-    await options.waitForJob(syncJobId);
+    try {
+      await options.waitForJob(syncJobId);
+    } catch (error) {
+      if (!options.continueOnAudioSyncError) {
+        throw error;
+      }
+    }
 
     attemptsCompleted = attempt;
+    currentRowsBySection = await options.reloadValidationRowsBySection();
+    if (trackBestSegmentStates && trackedSegmentIds.length > 0) {
+      const capturedStates = await options.captureSegmentStates(trackedSegmentIds);
+      for (const segmentId of trackedSegmentIds) {
+        const nextScore = getRowsBySectionMatchRatio(currentRowsBySection, segmentId);
+        if (nextScore > (bestScoresBySegment[segmentId] ?? -1)) {
+          bestScoresBySegment[segmentId] = nextScore;
+          if (capturedStates[segmentId]) {
+            bestStatesBySegment[segmentId] = capturedStates[segmentId];
+          }
+        }
+      }
+    }
+    remainingSegmentIdsBySection = collectFlaggedSegmentsBelowThresholdBySection(
+      currentRowsBySection,
+      options.thresholdPercent,
+    );
+  }
+
+  if (trackBestSegmentStates && attemptsCompleted > 0 && trackedSegmentIds.length > 0) {
+    await options.restoreSegmentStates(bestStatesBySegment);
+    const syncJobId = await options.startAudioSync(trackedSectionIds);
+    try {
+      await options.waitForJob(syncJobId);
+    } catch (error) {
+      if (!options.continueOnAudioSyncError) {
+        throw error;
+      }
+    }
     currentRowsBySection = await options.reloadValidationRowsBySection();
     remainingSegmentIdsBySection = collectFlaggedSegmentsBelowThresholdBySection(
       currentRowsBySection,

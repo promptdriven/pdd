@@ -68,6 +68,7 @@ import {
   runJob,
   retryJob,
   runPipelineStage,
+  runPipelineStageDirect,
   registerExecutor,
   clearExecutors,
   setJobSend,
@@ -888,6 +889,39 @@ describe("runPipelineStage", () => {
     await expect(runPipelineStage("setup", {}, send)).rejects.toThrow(
       'No executor registered for stage "setup"'
     );
+  });
+
+  it("runPipelineStageDirect runs only the requested stage", async () => {
+    const { send } = createMockSend();
+    const executionOrder: string[] = [];
+
+    registerExecutor("setup", (_params, _send) => {
+      return async (onLog) => {
+        executionOrder.push("setup");
+        onLog("setup executed");
+      };
+    });
+
+    registerExecutor("script", (_params, _send) => {
+      return async (onLog) => {
+        executionOrder.push("script");
+        onLog("script executed");
+      };
+    });
+
+    await runPipelineStageDirect("script", {}, send);
+
+    expect(executionOrder).toEqual(["script"]);
+  });
+
+  it("runPipelineStageDirect still emits the initial job event", async () => {
+    const { send, calls } = createMockSend();
+
+    const jobId = await runPipelineStageDirect("setup", {}, send);
+
+    const jobEvents = calls.filter((call: any) => call.type === "job");
+    expect(jobEvents).toHaveLength(1);
+    expect((jobEvents[0] as any).jobId).toBe(jobId);
   });
 });
 

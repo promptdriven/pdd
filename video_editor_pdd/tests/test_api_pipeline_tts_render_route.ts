@@ -29,10 +29,12 @@ import path from "path";
 
 const mockRegisterExecutor = jest.fn();
 const mockRunPipelineStage = jest.fn();
+const mockRunPipelineStageDirect = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   registerExecutor: (...args: unknown[]) => mockRegisterExecutor(...args),
   runPipelineStage: (...args: unknown[]) => mockRunPipelineStage(...args),
+  runPipelineStageDirect: (...args: unknown[]) => mockRunPipelineStageDirect(...args),
 }));
 
 // Mock child_process.spawn
@@ -200,6 +202,7 @@ beforeEach(() => {
   mockStatSync.mockReset();
   mockUnlinkSync.mockReset();
   mockRunPipelineStage.mockReset();
+  mockRunPipelineStageDirect.mockReset();
   mockResolvePythonRunSpec.mockClear();
   mockResolvePythonRunSpec.mockReturnValue({
     command: "python3",
@@ -208,6 +211,7 @@ beforeEach(() => {
   });
 
   mockRunPipelineStage.mockResolvedValue("test-job-tts-001");
+  mockRunPipelineStageDirect.mockResolvedValue("test-job-tts-001");
   mockSpawnSync.mockReturnValue({ status: 0, stdout: "", stderr: "" });
 
   // Default: spawn completes successfully
@@ -721,6 +725,12 @@ describe("POST — segments parameter", () => {
       makeRequest({ segments: ["intro", "outro"] }) as any
     );
     expect(response).toBeInstanceOf(Response);
+    await flushPromises();
+    expect(mockRunPipelineStageDirect).toHaveBeenCalledWith(
+      "tts-render",
+      { segments: ["intro", "outro"] },
+      expect.any(Function)
+    );
   });
 
   it("handles invalid body gracefully (non-JSON)", async () => {
@@ -1416,6 +1426,7 @@ describe("app/api/pipeline/tts-render/run/route.ts source structure", () => {
   it("imports registerExecutor from @/lib/jobs", () => {
     expect(sourceCode).toMatch(/@\/lib\/jobs/);
     expect(sourceCode).toMatch(/registerExecutor/);
+    expect(sourceCode).toMatch(/runPipelineStageDirect/);
   });
 
   it("imports SseSend from @/lib/types", () => {

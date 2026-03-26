@@ -27,10 +27,12 @@ import path from "path";
 
 const mockRegisterExecutor = jest.fn();
 const mockRunPipelineStage = jest.fn();
+const mockRunPipelineStageDirect = jest.fn();
 
 jest.mock("@/lib/jobs", () => ({
   registerExecutor: (...args: unknown[]) => mockRegisterExecutor(...args),
   runPipelineStage: (...args: unknown[]) => mockRunPipelineStage(...args),
+  runPipelineStageDirect: (...args: unknown[]) => mockRunPipelineStageDirect(...args),
 }));
 
 // Mock child_process.spawn
@@ -166,6 +168,7 @@ beforeEach(() => {
   mockStdoutOn.mockReset();
   mockStderrOn.mockReset();
   mockRunPipelineStage.mockReset();
+  mockRunPipelineStageDirect.mockReset();
   mockLoadProject.mockReset();
   mockReadFile.mockReset();
   mockReaddir.mockReset();
@@ -188,6 +191,7 @@ beforeEach(() => {
 
   // Default: runPipelineStage resolves with a job ID
   mockRunPipelineStage.mockResolvedValue("test-job-id-1234");
+  mockRunPipelineStageDirect.mockResolvedValue("test-job-id-1234");
   mockReaddir.mockResolvedValue([]);
   mockStat.mockResolvedValue({ mtimeMs: 1000 });
 
@@ -294,9 +298,29 @@ describe("POST — SSE events", () => {
     await POST(makePostRequest({ sections: ["intro"] }) as any);
     await flushPromises();
 
-    expect(mockRunPipelineStage).toHaveBeenCalledWith(
+    expect(mockRunPipelineStageDirect).toHaveBeenCalledWith(
       "audio-sync",
       { sections: ["intro"] },
+      expect.any(Function)
+    );
+  });
+
+  it("runs isolated audio-sync jobs when validation-tolerant retry mode is enabled", async () => {
+    await POST(
+      makePostRequest({
+        sections: ["part4_precision_tradeoff"],
+        allowValidationFailures: true,
+        skipDependencies: true,
+      }) as any
+    );
+    await flushPromises();
+
+    expect(mockRunPipelineStageDirect).toHaveBeenCalledWith(
+      "audio-sync",
+      {
+        sections: ["part4_precision_tradeoff"],
+        allowValidationFailures: true,
+      },
       expect.any(Function)
     );
   });
@@ -725,6 +749,25 @@ describe("audio-sync executor factory", () => {
     const executor = registerCallArgs.factory({}, jest.fn());
     await expect(executor(jest.fn())).rejects.toThrow(
       "sync_audio_pipeline.py exited with code 1"
+    );
+  });
+
+  it("passes retry-mode validation tolerance through the subprocess env", async () => {
+    const executor = registerCallArgs.factory(
+      { sections: ["part4_precision_tradeoff"], allowValidationFailures: true },
+      jest.fn()
+    );
+
+    await executor(jest.fn());
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "python3",
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          SYNC_AUDIO_ALLOW_VALIDATION_FAILURES: "1",
+        }),
+      })
     );
   });
 
@@ -1194,6 +1237,7 @@ describe("app/api/pipeline/audio-sync/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/@\/lib\/jobs/);
     expect(sourceCode).toMatch(/registerExecutor/);
     expect(sourceCode).toMatch(/runPipelineStage/);
+    expect(sourceCode).toMatch(/runPipelineStageDirect/);
   });
 
   it("imports loadProject from @/lib/project", () => {

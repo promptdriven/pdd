@@ -211,6 +211,11 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/\[\s*artifactState\s*,\s*setArtifactState\s*\]/);
   });
 
+  it("uses a stable empty sections fallback before project load", () => {
+    expect(sourceCode).toMatch(/const\s+EMPTY_SECTIONS\s*:\s*Section\[\]\s*=\s*\[\]/);
+    expect(sourceCode).toMatch(/project\?\.sections\s*\?\?\s*EMPTY_SECTIONS/);
+  });
+
   it("tracks per-segment rerender job IDs", () => {
     expect(sourceCode).toMatch(/\[\s*validationJobIds\s*,\s*setValidationJobIds\s*\]/);
   });
@@ -316,11 +321,11 @@ describe("timestamp loading", () => {
     expect(sourceCode).toMatch(/setArtifactState\s*\(\s*nextArtifactState\s*\)/);
   });
 
-  it("clears stale timestamps and validation rows when audio sync data is stale", () => {
+  it("clears stale timestamps but preserves the last validation rows when audio sync data is stale", () => {
     expect(sourceCode).toMatch(/if\s*\(\s*nextArtifactState\.stale\s*\)/);
     expect(sourceCode).toMatch(/setTimestamps\s*\(\s*\[\]\s*\)/);
-    expect(sourceCode).toMatch(/setValidationRows\s*\(\s*\[\]\s*\)/);
-    expect(sourceCode).toMatch(/setValidationSummary\s*\(\s*EMPTY_VALIDATION_SUMMARY\s*\)/);
+    expect(sourceCode).toMatch(/setValidationRows\s*\(\s*nextValidationRows\s*\)/);
+    expect(sourceCode).toMatch(/setValidationSummary\s*\(\s*nextValidationSummary\s*\)/);
   });
 
   it("tracks loading state for timestamps", () => {
@@ -352,6 +357,7 @@ describe("transcript validation panel", () => {
 
   it("renders a stale audio-sync warning when sync outputs are older than TTS audio", () => {
     expect(sourceCode).toMatch(/Audio sync data is stale relative to the current TTS audio/);
+    expect(sourceCode).toMatch(/Showing the last available transcript validation results/);
     expect(sourceCode).toMatch(/artifactState\.stale/);
   });
 
@@ -378,6 +384,42 @@ describe("transcript validation panel", () => {
     expect(sourceCode).toMatch(/Retry Flagged Segments/);
     expect(sourceCode).toMatch(/Retry Across All Sections/);
   });
+
+  it("shows a current-section below-threshold summary", () => {
+    expect(sourceCode).toMatch(/Below Threshold in This Section/);
+    expect(sourceCode).toMatch(/retryableValidationSegmentIds\.length/);
+    expect(sourceCode).toMatch(/belowThresholdValidationRows/);
+  });
+
+  it("shows a project-wide below-threshold summary with expandable breakdown", () => {
+    expect(sourceCode).toMatch(/Below Threshold Across Project/);
+    expect(sourceCode).toMatch(/projectWideRetryableSegmentIdsBySection/);
+    expect(sourceCode).toMatch(/projectWideRetryableSectionIds/);
+    expect(sourceCode).toMatch(/<details/);
+  });
+
+  it("shows retry progress while a batch rerender is running", () => {
+    expect(sourceCode).toMatch(/Retry Progress/);
+    expect(sourceCode).toMatch(/batchRetryProgress/);
+    expect(sourceCode).toMatch(/attempt\}/);
+  });
+
+  it("shows a preparing retry phase before downstream jobs start", () => {
+    expect(sourceCode).toMatch(/phase:\s*'preparing'/);
+    expect(sourceCode).toMatch(/Preparing retry run/);
+  });
+
+  it("styles retry actions as explicit buttons", () => {
+    expect(sourceCode).toMatch(/inline-flex items-center justify-center/);
+    expect(sourceCode).toMatch(/shadow-sm/);
+    expect(sourceCode).toMatch(/hover:bg-orange-500/);
+    expect(sourceCode).toMatch(/hover:bg-indigo-500/);
+  });
+
+  it("reports before and after below-threshold counts after retry runs", () => {
+    expect(sourceCode).toMatch(/Before:/);
+    expect(sourceCode).toMatch(/After:/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -387,7 +429,7 @@ describe("transcript validation panel", () => {
 describe("transcript rerender action", () => {
   it("posts flagged segment IDs to /api/pipeline/tts-render/run", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/tts-render\/run['"]/);
-    expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{\s*segments\s*:\s*\[\s*segmentId\s*\]\s*\}\s*\)/);
+    expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{[\s\S]*segments\s*:\s*\[\s*segmentId\s*\][\s\S]*skipDependencies\s*:\s*true[\s\S]*\}\s*\)/);
   });
 
   it("extracts a rerender job ID from the SSE response", () => {
@@ -400,7 +442,7 @@ describe("transcript rerender action", () => {
 
   it("runs audio sync again for the selected section after rerender completes", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/audio-sync\/run['"]/);
-    expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{\s*sections\s*:\s*\[\s*selectedSectionId\s*\]\s*\}\s*\)/);
+    expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{[\s\S]*sections\s*:\s*\[\s*selectedSectionId\s*\][\s\S]*allowValidationFailures\s*:\s*true[\s\S]*skipDependencies\s*:\s*true[\s\S]*\}\s*\)/);
   });
 
   it("renders an SseLogPanel for follow-up audio sync jobs", () => {
@@ -412,6 +454,32 @@ describe("transcript rerender action", () => {
     expect(sourceCode).toMatch(/collectFlaggedSegmentsBelowThreshold/);
     expect(sourceCode).toMatch(/runFlaggedTranscriptRerenderRetriesAcrossSections/);
     expect(sourceCode).toMatch(/collectFlaggedSegmentsBelowThresholdBySection/);
+  });
+
+  it("allows retry flows to continue after audio-sync validation errors", () => {
+    expect(sourceCode).toMatch(/continueOnAudioSyncError:\s*true/);
+    expect(sourceCode).toMatch(/allowValidationFailures:\s*true/);
+    expect(sourceCode).toMatch(/skipDependencies:\s*true/);
+  });
+
+  it("loads validation rows across sections for the project-wide threshold summary", () => {
+    expect(sourceCode).toMatch(/setAllValidationRowsBySection/);
+    expect(sourceCode).toMatch(/loadingAllValidationRows/);
+    expect(sourceCode).toMatch(/fetchValidationRowsForSection/);
+  });
+
+  it("includes the selected section's last available validation rows in project-wide retry summaries even when stale", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*section\.id\s*===\s*selectedSectionId\s*\)\s*\{\s*return\s*\[[\s\S]*?rows\s*:\s*validationRows/);
+  });
+
+  it("shows when the project-wide retry summary includes stale sections", () => {
+    expect(sourceCode).toMatch(/Includes last available validation results for/);
+  });
+
+  it("avoids resetting project-wide validation state on every pre-load render", () => {
+    expect(sourceCode).toMatch(/if\s*\(\s*sections\.length\s*===\s*0\s*\)/);
+    expect(sourceCode).toMatch(/setAllValidationRowsBySection\s*\(\s*\(prev\)\s*=>/);
+    expect(sourceCode).toMatch(/Object\.keys\s*\(\s*prev\s*\)\.length\s*===\s*0\s*\?\s*prev\s*:\s*\{\s*\}/);
   });
 
   it("renders SseLogPanels for batch rerender and batch audio-sync jobs", () => {

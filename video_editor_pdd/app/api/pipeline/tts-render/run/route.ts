@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 
-import { registerExecutor, runPipelineStage } from "@/lib/jobs";
+import { registerExecutor, runPipelineStage, runPipelineStageDirect } from "@/lib/jobs";
 import { resolvePythonRunSpec } from "@/app/api/pipeline/_lib/python-runtime";
 import { createSseStream } from "@/lib/sse";
 import { parseSegmentsFromScript, getWavDuration } from "@/lib/tts-segments";
@@ -155,16 +155,16 @@ export async function POST(request: NextRequest): Promise<Response> {
     Array.isArray(body?.segments) && body.segments.length > 0
       ? (body.segments as string[])
       : undefined;
+  const skipDependencies = body?.skipDependencies === true;
 
   const { stream, send, done, error } = createSseStream();
 
   (async () => {
     try {
-      const jobId = await runPipelineStage(
-        "tts-render",
-        { segments },
-        send
-      );
+      const runStage = skipDependencies || !!segments
+        ? runPipelineStageDirect
+        : runPipelineStage;
+      const jobId = await runStage("tts-render", { segments }, send);
       send({ type: "complete", jobId });
       done();
     } catch (err) {

@@ -473,3 +473,28 @@ export async function runPipelineStage(
   }
   return jobId;
 }
+
+export async function runPipelineStageDirect(
+  stage: PipelineStage,
+  params: Record<string, unknown>,
+  send: SseSend
+): Promise<string> {
+  await ensureExecutorRegistered(stage);
+  const factory = EXECUTORS.get(stage);
+  if (!factory) {
+    throw new Error(`No executor registered for stage "${stage}"`);
+  }
+
+  const jobId = createJob(stage, params);
+  send({ type: "job", jobId });
+  JOB_SEND_MAP.set(jobId, send);
+
+  try {
+    const executor = factory(params, send);
+    await runJob(jobId, executor);
+  } finally {
+    JOB_SEND_MAP.delete(jobId);
+  }
+
+  return jobId;
+}

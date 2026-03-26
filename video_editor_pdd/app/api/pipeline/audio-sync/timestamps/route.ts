@@ -93,7 +93,7 @@ async function getAudioSyncArtifactState(
   return {
     stale,
     message: stale
-      ? "Audio sync data is stale relative to the current TTS audio. Re-run audio sync for this section."
+      ? "Audio sync data is stale relative to the current TTS audio. Showing the last available transcript validation results; re-run audio sync for this section."
       : null,
     latestAudioUpdatedAtMs,
     syncUpdatedAtMs,

@@ -17,6 +17,10 @@ import {
   loadSegmentPreviewAudio,
   resetSegmentPreviewAudio,
 } from './_lib/segment-audio-preview';
+import {
+  captureSegmentAudioSnapshots,
+  restoreSegmentAudioSnapshots,
+} from './_lib/segment-audio-snapshots';
 import PipelineAdvanceButton from '../PipelineAdvanceButton';
 import SseLogPanel from '../SseLogPanel';
 import { extractJobIdFromSse, waitForJobCompletion } from '@/lib/client/sse-utils';
@@ -56,6 +60,15 @@ interface AudioSyncArtifactState {
   syncUpdatedAtMs?: number;
 }
 
+interface BatchRetryProgressState {
+  mode: 'section' | 'all-sections';
+  phase: 'preparing' | 'rerender' | 'audio-sync';
+  attempt: number;
+  maxRetries: number;
+  currentSegmentCount: number;
+  currentSectionCount: number;
+}
+
 const EMPTY_VALIDATION_SUMMARY: SegmentValidationSummary = {
   passCount: 0,
   warnCount: 0,
@@ -68,6 +81,7 @@ const FRESH_AUDIO_SYNC_ARTIFACT_STATE: AudioSyncArtifactState = {
   message: null,
 };
 
+const EMPTY_SECTIONS: Section[] = [];
 const ROW_HEIGHT = 32;
 const VIEWPORT_HEIGHT = 320;
 
@@ -75,7 +89,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [project, setProject] = useState<ProjectConfig | null>(null);
   const [loadingProject, setLoadingProject] = useState(true);
   const [projectError, setProjectError] = useState<string | null>(null);
-  const sections: Section[] = project?.sections ?? [];
+  const sections: Section[] = project?.sections ?? EMPTY_SECTIONS;
 
   const [sectionGroups, setSectionGroups] = useState<Record<string, string[]>>(
     {}
@@ -96,9 +110,17 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [batchValidationSyncJobId, setBatchValidationSyncJobId] = useState<string | null>(null);
   const [batchRetryRunning, setBatchRetryRunning] = useState(false);
   const [batchRetryMessage, setBatchRetryMessage] = useState<string | null>(null);
+  const [batchRetryProgress, setBatchRetryProgress] = useState<BatchRetryProgressState | null>(
+    null
+  );
   const [artifactState, setArtifactState] = useState<AudioSyncArtifactState>(
     FRESH_AUDIO_SYNC_ARTIFACT_STATE
   );
+  const [allValidationRowsBySection, setAllValidationRowsBySection] = useState<
+    Record<string, SegmentValidation[]>
+  >({});
+  const [projectWideStaleSectionIds, setProjectWideStaleSectionIds] = useState<string[]>([]);
+  const [loadingAllValidationRows, setLoadingAllValidationRows] = useState(false);
   const [loadingTimestamps, setLoadingTimestamps] = useState(false);
   const [search, setSearch] = useState('');
   const [validationJobIds, setValidationJobIds] = useState<Record<string, string | null>>({});
@@ -162,9 +184,9 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       setArtifactState(nextArtifactState);
       if (nextArtifactState.stale) {
         setTimestamps([]);
-        setValidationRows([]);
-        setValidationSummary(EMPTY_VALIDATION_SUMMARY);
-        return [];
+        setValidationRows(nextValidationRows);
+        setValidationSummary(nextValidationSummary);
+        return nextValidationRows as SegmentValidation[];
       }
 
       setTimestamps(list);
@@ -182,14 +204,17 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     }
   };
 
-  const fetchValidationRowsForSection = async (sectionId: string) => {
+  const fetchValidationDataForSection = async (sectionId: string) => {
     const res = await fetch(
       `/api/pipeline/audio-sync/timestamps?section=${encodeURIComponent(
         sectionId
       )}`
     );
     if (!res.ok) {
-      return [] as SegmentValidation[];
+      return {
+        artifactState: FRESH_AUDIO_SYNC_ARTIFACT_STATE,
+        rows: [] as SegmentValidation[],
+      };
     }
 
     const data = await res.json();
@@ -212,13 +237,17 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           }
         : FRESH_AUDIO_SYNC_ARTIFACT_STATE;
 
-    if (nextArtifactState.stale) {
-      return [] as SegmentValidation[];
-    }
+    return {
+      artifactState: nextArtifactState,
+      rows: Array.isArray(data?.validation?.segments)
+        ? (data.validation.segments as SegmentValidation[])
+        : [],
+    };
+  };
 
-    return Array.isArray(data?.validation?.segments)
-      ? (data.validation.segments as SegmentValidation[])
-      : [];
+  const fetchValidationRowsForSection = async (sectionId: string) => {
+    const { rows } = await fetchValidationDataForSection(sectionId);
+    return rows;
   };
 
   // ----------------------------------------
@@ -282,6 +311,62 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (sections.length === 0) {
+      setAllValidationRowsBySection((prev) =>
+        Object.keys(prev).length === 0 ? prev : {}
+      );
+      setProjectWideStaleSectionIds((prev) => (prev.length === 0 ? prev : []));
+      setLoadingAllValidationRows(false);
+      return;
+    }
+
+    let active = true;
+    (async () => {
+      setLoadingAllValidationRows(true);
+      try {
+        const nextEntries = await Promise.all(
+          sections.map(async (section) => {
+            if (section.id === selectedSectionId) {
+              return [
+                section.id,
+                {
+                  artifactState,
+                  rows: validationRows,
+                },
+              ] as const;
+            }
+
+            return [
+              section.id,
+              await fetchValidationDataForSection(section.id),
+            ] as const;
+          })
+        );
+
+        if (!active) return;
+        setAllValidationRowsBySection(
+          Object.fromEntries(
+            nextEntries.map(([sectionId, data]) => [sectionId, data.rows] as const)
+          )
+        );
+        setProjectWideStaleSectionIds(
+          nextEntries
+            .filter(([, data]) => data.artifactState.stale)
+            .map(([sectionId]) => sectionId)
+        );
+      } finally {
+        if (active) {
+          setLoadingAllValidationRows(false);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [sections, selectedSectionId, validationRows, artifactState, dataReloadVersion]);
+
   // ----------------------------------------
   // Derived values
   // ----------------------------------------
@@ -300,6 +385,30 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         retryMatchThresholdPercent
       ),
     [flaggedValidationRows, retryMatchThresholdPercent]
+  );
+  const belowThresholdValidationRows = useMemo(() => {
+    const retryableSet = new Set(retryableValidationSegmentIds);
+    return flaggedValidationRows.filter((row) => retryableSet.has(row.segmentId));
+  }, [flaggedValidationRows, retryableValidationSegmentIds]);
+  const projectWideRetryableSegmentIdsBySection = useMemo(
+    () =>
+      collectFlaggedSegmentsBelowThresholdBySection(
+        allValidationRowsBySection,
+        retryMatchThresholdPercent
+      ),
+    [allValidationRowsBySection, retryMatchThresholdPercent]
+  );
+  const projectWideRetryableSectionIds = useMemo(
+    () => Object.keys(projectWideRetryableSegmentIdsBySection),
+    [projectWideRetryableSegmentIdsBySection]
+  );
+  const totalProjectWideRetryableSegments = useMemo(
+    () =>
+      Object.values(projectWideRetryableSegmentIdsBySection).reduce(
+        (sum, segmentIds) => sum + segmentIds.length,
+        0
+      ),
+    [projectWideRetryableSegmentIdsBySection]
   );
 
   const totalWords = timestamps.length;
@@ -412,7 +521,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       const res = await fetch('/api/pipeline/tts-render/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ segments: [segmentId] }),
+        body: JSON.stringify({ segments: [segmentId], skipDependencies: true }),
       });
       if (!res.ok) {
         throw new Error('Failed to start TTS rerender.');
@@ -437,7 +546,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       const res = await fetch('/api/pipeline/audio-sync/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sections: [selectedSectionId] }),
+        body: JSON.stringify({
+          sections: [selectedSectionId],
+          allowValidationFailures: true,
+          skipDependencies: true,
+        }),
       });
       if (!res.ok) {
         throw new Error('Failed to rerun audio sync.');
@@ -474,6 +587,14 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     setBatchRetryRunning(true);
     setBatchValidationRerenderJobId(null);
     setBatchValidationSyncJobId(null);
+    setBatchRetryProgress({
+      mode: 'section',
+      phase: 'preparing',
+      attempt: 1,
+      maxRetries: retryMaxAttempts,
+      currentSegmentCount: retryableValidationSegmentIds.length,
+      currentSectionCount: 1,
+    });
 
     try {
       const result = await runFlaggedTranscriptRerenderRetries({
@@ -481,11 +602,12 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         thresholdPercent: retryMatchThresholdPercent,
         maxRetries: retryMaxAttempts,
         sectionId: selectedSectionId,
+        continueOnAudioSyncError: true,
         startTtsRerender: async (segmentIds) => {
           const res = await fetch('/api/pipeline/tts-render/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ segments: segmentIds }),
+            body: JSON.stringify({ segments: segmentIds, skipDependencies: true }),
           });
           if (!res.ok) {
             throw new Error('Failed to start batch TTS rerender.');
@@ -503,7 +625,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           const res = await fetch('/api/pipeline/audio-sync/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sections: [sectionId] }),
+            body: JSON.stringify({
+              sections: [sectionId],
+              allowValidationFailures: true,
+              skipDependencies: true,
+            }),
           });
           if (!res.ok) {
             throw new Error('Failed to start batch audio sync rerun.');
@@ -518,6 +644,30 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           return nextJobId;
         },
         waitForJob: waitForJobCompletion,
+        onTtsJobStarted: ({ attempt, segmentIds }) => {
+          setBatchRetryProgress({
+            mode: 'section',
+            phase: 'rerender',
+            attempt,
+            maxRetries: retryMaxAttempts,
+            currentSegmentCount: segmentIds.length,
+            currentSectionCount: 1,
+          });
+        },
+        onAudioSyncJobStarted: ({ attempt }) => {
+          setBatchRetryProgress({
+            mode: 'section',
+            phase: 'audio-sync',
+            attempt,
+            maxRetries: retryMaxAttempts,
+            currentSegmentCount: retryableValidationSegmentIds.length,
+            currentSectionCount: 1,
+          });
+        },
+        captureSegmentStates: async (segmentIds) =>
+          captureSegmentAudioSnapshots({ segmentIds }),
+        restoreSegmentStates: async (snapshots) =>
+          restoreSegmentAudioSnapshots({ snapshots }),
         reloadValidationRows: async () => {
           const rows = await reloadSectionArtifacts(selectedSectionId);
           setDataReloadVersion((prev) => prev + 1);
@@ -527,13 +677,14 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
       setBatchRetryMessage(
         result.remainingSegmentIds.length === 0
-          ? `Retry complete after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'}.`
-          : `Stopped after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'} with ${result.remainingSegmentIds.length} segment${result.remainingSegmentIds.length === 1 ? '' : 's'} still below threshold.`
+          ? `Retry complete after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'}. Before: ${retryableValidationSegmentIds.length} segment${retryableValidationSegmentIds.length === 1 ? '' : 's'} below threshold. After: ${result.remainingSegmentIds.length}.`
+          : `Stopped after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'}. Before: ${retryableValidationSegmentIds.length} segment${retryableValidationSegmentIds.length === 1 ? '' : 's'} below threshold. After: ${result.remainingSegmentIds.length} segment${result.remainingSegmentIds.length === 1 ? '' : 's'} still below threshold.`
       );
     } catch (err: any) {
       setDetectError(err?.message ?? 'Failed to retry flagged transcript mismatches');
     } finally {
       setBatchRetryRunning(false);
+      setBatchRetryProgress(null);
     }
   };
 
@@ -547,16 +698,26 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     setBatchRetryRunning(true);
     setBatchValidationRerenderJobId(null);
     setBatchValidationSyncJobId(null);
+    setBatchRetryProgress({
+      mode: 'all-sections',
+      phase: 'preparing',
+      attempt: 1,
+      maxRetries: retryMaxAttempts,
+      currentSegmentCount: 0,
+      currentSectionCount: sections.length,
+    });
 
     try {
       const initialRowsBySection = Object.fromEntries(
         await Promise.all(
-          sections.map(async (section) => [
-            section.id,
-            section.id === selectedSectionId
-              ? flaggedValidationRows
-              : await fetchValidationRowsForSection(section.id),
-          ] as const)
+          sections.map(async (section) => {
+            if (section.id === selectedSectionId) {
+              return [section.id, validationRows] as const;
+            }
+
+            const { rows } = await fetchValidationDataForSection(section.id);
+            return [section.id, rows] as const;
+          })
         )
       );
 
@@ -565,6 +726,19 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         retryMatchThresholdPercent
       );
       const retryableSectionIds = Object.keys(retryableBySection);
+      const retryableSegmentCount = Object.values(retryableBySection).reduce(
+        (sum, segmentIds) => sum + segmentIds.length,
+        0
+      );
+
+      setBatchRetryProgress({
+        mode: 'all-sections',
+        phase: 'preparing',
+        attempt: 1,
+        maxRetries: retryMaxAttempts,
+        currentSegmentCount: retryableSegmentCount,
+        currentSectionCount: retryableSectionIds.length,
+      });
 
       if (retryableSectionIds.length === 0) {
         setBatchRetryMessage('No flagged transcript mismatches are below the current threshold in any section.');
@@ -575,11 +749,12 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         initialRowsBySection,
         thresholdPercent: retryMatchThresholdPercent,
         maxRetries: retryMaxAttempts,
+        continueOnAudioSyncError: true,
         startTtsRerender: async (segmentIds) => {
           const res = await fetch('/api/pipeline/tts-render/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ segments: segmentIds }),
+            body: JSON.stringify({ segments: segmentIds, skipDependencies: true }),
           });
           if (!res.ok) {
             throw new Error('Failed to start all-sections TTS rerender.');
@@ -597,7 +772,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           const res = await fetch('/api/pipeline/audio-sync/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sections: sectionIds }),
+            body: JSON.stringify({
+              sections: sectionIds,
+              allowValidationFailures: true,
+              skipDependencies: true,
+            }),
           });
           if (!res.ok) {
             throw new Error('Failed to start all-sections audio sync rerun.');
@@ -612,6 +791,30 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           return nextJobId;
         },
         waitForJob: waitForJobCompletion,
+        onTtsJobStarted: ({ attempt, segmentIds }) => {
+          setBatchRetryProgress({
+            mode: 'all-sections',
+            phase: 'rerender',
+            attempt,
+            maxRetries: retryMaxAttempts,
+            currentSegmentCount: segmentIds.length,
+            currentSectionCount: retryableSectionIds.length,
+          });
+        },
+        onAudioSyncJobStarted: ({ attempt, sectionIds }) => {
+          setBatchRetryProgress({
+            mode: 'all-sections',
+            phase: 'audio-sync',
+            attempt,
+            maxRetries: retryMaxAttempts,
+            currentSegmentCount: retryableSegmentCount,
+            currentSectionCount: sectionIds.length,
+          });
+        },
+        captureSegmentStates: async (segmentIds) =>
+          captureSegmentAudioSnapshots({ segmentIds }),
+        restoreSegmentStates: async (snapshots) =>
+          restoreSegmentAudioSnapshots({ snapshots }),
         reloadValidationRowsBySection: async () => {
           const nextRowsBySection = Object.fromEntries(
             await Promise.all(
@@ -632,15 +835,20 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
       });
 
       const remainingSectionIds = Object.keys(result.remainingSegmentIdsBySection);
+      const remainingSegmentCount = Object.values(result.remainingSegmentIdsBySection).reduce(
+        (sum, segmentIds) => sum + segmentIds.length,
+        0
+      );
       setBatchRetryMessage(
         remainingSectionIds.length === 0
-          ? `All-sections retry complete after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'}.`
-          : `All-sections retry stopped after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'} with ${remainingSectionIds.length} section${remainingSectionIds.length === 1 ? '' : 's'} still below threshold.`
+          ? `All-sections retry complete after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'}. Before: ${retryableSegmentCount} segment${retryableSegmentCount === 1 ? '' : 's'} across ${retryableSectionIds.length} section${retryableSectionIds.length === 1 ? '' : 's'} below threshold. After: ${remainingSegmentCount} across ${remainingSectionIds.length}.`
+          : `All-sections retry stopped after ${result.attemptsCompleted} attempt${result.attemptsCompleted === 1 ? '' : 's'}. Before: ${retryableSegmentCount} segment${retryableSegmentCount === 1 ? '' : 's'} across ${retryableSectionIds.length} section${retryableSectionIds.length === 1 ? '' : 's'} below threshold. After: ${remainingSegmentCount} segment${remainingSegmentCount === 1 ? '' : 's'} across ${remainingSectionIds.length} section${remainingSectionIds.length === 1 ? '' : 's'} still below threshold.`
       );
     } catch (err: any) {
       setDetectError(err?.message ?? 'Failed to retry flagged transcript mismatches across all sections');
     } finally {
       setBatchRetryRunning(false);
+      setBatchRetryProgress(null);
     }
   };
 
@@ -851,11 +1059,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
         <div className="text-xs text-slate-400 mb-2">
           {loadingTimestamps ? 'Loading timestamps…' : ''}
         </div>
-        {artifactState.stale && (
-          <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-            {artifactState.message ?? 'Audio sync data is stale relative to the current TTS audio. Re-run audio sync for this section.'}
-          </div>
-        )}
+            {artifactState.stale && (
+              <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                {artifactState.message ?? 'Audio sync data is stale relative to the current TTS audio. Showing the last available transcript validation results; re-run audio sync for this section.'}
+              </div>
+            )}
 
         <div className="mb-4 rounded-lg border border-slate-700 bg-slate-950/60 p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -908,21 +1116,142 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                 artifactState.stale ||
                 retryableValidationSegmentIds.length === 0
               }
-              className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+              className="inline-flex items-center justify-center rounded-md border border-orange-400/60 bg-orange-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-orange-600"
             >
               {batchRetryRunning ? 'Retrying…' : 'Retry Flagged Segments'}
             </button>
             <button
               onClick={handleRetryFlaggedSegmentsAcrossAllSections}
               disabled={batchRetryRunning || sections.length === 0}
-              className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+              className="inline-flex items-center justify-center rounded-md border border-indigo-400/60 bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-indigo-600"
             >
               {batchRetryRunning ? 'Retrying…' : 'Retry Across All Sections'}
             </button>
-            <div className="text-xs text-slate-500">
-              {retryableValidationSegmentIds.length} segment{retryableValidationSegmentIds.length === 1 ? '' : 's'} below threshold
-            </div>
           </div>
+
+          <div className="mb-3 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
+              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                Below Threshold in This Section
+              </div>
+              <div className="text-sm text-slate-200">
+                {retryableValidationSegmentIds.length} segment
+                {retryableValidationSegmentIds.length === 1 ? '' : 's'} currently fall below the
+                retry threshold for {selectedSectionId || 'this section'}.
+              </div>
+              {belowThresholdValidationRows.length === 0 ? (
+                <div className="mt-2 text-xs text-slate-500">
+                  No current-section segments are below the retry threshold.
+                </div>
+              ) : (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {belowThresholdValidationRows.map((row) => (
+                    <div
+                      key={row.segmentId}
+                      className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                    >
+                      {row.segmentId}
+                      {typeof row.matchRatio === 'number' && (
+                        <span className="ml-1 text-amber-100/80">
+                          {(row.matchRatio * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <details className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
+              <summary className="cursor-pointer list-none">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Below Threshold Across Project
+                </div>
+                <div className="text-sm text-slate-200">
+                  {loadingAllValidationRows
+                    ? 'Loading project-wide retry candidates…'
+                    : `${totalProjectWideRetryableSegments} segment${
+                        totalProjectWideRetryableSegments === 1 ? '' : 's'
+                      } across ${projectWideRetryableSectionIds.length} section${
+                        projectWideRetryableSectionIds.length === 1 ? '' : 's'
+                      } are below the retry threshold.`}
+                </div>
+                {!loadingAllValidationRows && projectWideStaleSectionIds.length > 0 && (
+                  <div className="mt-1 text-xs text-amber-300/90">
+                    Includes last available validation results for{' '}
+                    {projectWideStaleSectionIds.length} stale section
+                    {projectWideStaleSectionIds.length === 1 ? '' : 's'}.
+                  </div>
+                )}
+              </summary>
+
+              <div className="mt-3 space-y-2">
+                {projectWideRetryableSectionIds.length === 0 ? (
+                  <div className="text-xs text-slate-500">
+                    No project-wide segments are below the current retry threshold.
+                  </div>
+                ) : (
+                  projectWideRetryableSectionIds.map((sectionId) => (
+                    <div
+                      key={sectionId}
+                      className="rounded border border-slate-800 bg-slate-950/70 px-3 py-2"
+                    >
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
+                        {sectionId}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {projectWideRetryableSegmentIdsBySection[sectionId].map((segmentId) => (
+                          <span
+                            key={segmentId}
+                            className="rounded border border-indigo-500/30 bg-indigo-500/10 px-2 py-1 text-xs text-indigo-200"
+                          >
+                            {segmentId}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </details>
+          </div>
+
+          {batchRetryRunning && batchRetryProgress && (
+            <div className="mb-3 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-sky-100">
+                <div>
+                  Retry Progress: {batchRetryProgress.mode === 'all-sections' ? 'All Sections' : 'This Section'} · attempt{' '}
+                  {batchRetryProgress.attempt} of {batchRetryProgress.maxRetries} ·{' '}
+                  {batchRetryProgress.phase === 'preparing'
+                    ? 'Preparing retry run'
+                    : batchRetryProgress.phase === 'rerender'
+                      ? 're-rendering segments'
+                      : 're-running audio sync'}
+                </div>
+                <div>
+                  {batchRetryProgress.currentSegmentCount} segment
+                  {batchRetryProgress.currentSegmentCount === 1 ? '' : 's'} ·{' '}
+                  {batchRetryProgress.currentSectionCount} section
+                  {batchRetryProgress.currentSectionCount === 1 ? '' : 's'}
+                </div>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-sky-400 transition-all"
+                  style={{
+                    width: `${Math.max(
+                      8,
+                      Math.round(
+                        (batchRetryProgress.attempt /
+                          Math.max(1, batchRetryProgress.maxRetries)) *
+                          100
+                      )
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
 
           {batchRetryMessage && (
             <div className="mb-3 rounded-md border border-slate-700 bg-slate-900/70 px-3 py-2 text-xs text-slate-300">

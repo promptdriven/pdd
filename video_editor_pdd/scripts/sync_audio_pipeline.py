@@ -1078,6 +1078,10 @@ def main() -> None:
         print(json.dumps(error_result), flush=True)
         sys.exit(1)
 
+    allow_validation_failures = os.environ.get(
+        "SYNC_AUDIO_ALLOW_VALIDATION_FAILURES", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     any_failed = False
     validation_policy = resolve_validation_policy(project)
 
@@ -1094,7 +1098,13 @@ def main() -> None:
         print(json.dumps(result), flush=True)
 
         if result["status"] == "error":
-            any_failed = True
+            error_message = result.get("error", "")
+            if not (
+                allow_validation_failures
+                and isinstance(error_message, str)
+                and error_message.startswith("Transcript validation failed:")
+            ):
+                any_failed = True
 
     sys.exit(1 if any_failed else 0)
 

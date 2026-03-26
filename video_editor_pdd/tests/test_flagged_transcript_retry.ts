@@ -162,6 +162,94 @@ describe("runFlaggedTranscriptRerenderRetries", () => {
       remainingSegmentIds: [],
     });
   });
+
+  it("restores the best-known segment states after retries finish", async () => {
+    const startTtsRerender = jest
+      .fn<Promise<string>, [string[]]>()
+      .mockResolvedValueOnce("tts-job-1")
+      .mockResolvedValueOnce("tts-job-2");
+    const startAudioSync = jest
+      .fn<Promise<string>, [string]>()
+      .mockResolvedValueOnce("sync-job-1")
+      .mockResolvedValueOnce("sync-job-2")
+      .mockResolvedValueOnce("sync-job-3");
+    const waitForJob = jest.fn<Promise<void>, [string]>().mockResolvedValue();
+    const reloadValidationRows = jest
+      .fn<Promise<SegmentValidationLike[]>, []>()
+      .mockResolvedValueOnce([
+        { segmentId: "seg_001", status: "warn", matchRatio: 0.82 },
+      ])
+      .mockResolvedValueOnce([
+        { segmentId: "seg_001", status: "warn", matchRatio: 0.75 },
+      ])
+      .mockResolvedValueOnce([
+        { segmentId: "seg_001", status: "warn", matchRatio: 0.82 },
+      ]);
+    const captureSegmentStates = jest
+      .fn<Promise<Record<string, string>>, [string[]]>()
+      .mockResolvedValueOnce({ seg_001: "baseline" })
+      .mockResolvedValueOnce({ seg_001: "attempt-1" })
+      .mockResolvedValueOnce({ seg_001: "attempt-2" });
+    const restoreSegmentStates = jest.fn<Promise<void>, [Record<string, string>]>().mockResolvedValue();
+
+    const result = await runFlaggedTranscriptRerenderRetries({
+      initialRows: [{ segmentId: "seg_001", status: "warn", matchRatio: 0.8 }],
+      thresholdPercent: 94,
+      maxRetries: 2,
+      sectionId: "part1_economics",
+      startTtsRerender,
+      startAudioSync,
+      waitForJob,
+      reloadValidationRows,
+      captureSegmentStates,
+      restoreSegmentStates,
+    });
+
+    expect(captureSegmentStates).toHaveBeenNthCalledWith(1, ["seg_001"]);
+    expect(captureSegmentStates).toHaveBeenNthCalledWith(2, ["seg_001"]);
+    expect(captureSegmentStates).toHaveBeenNthCalledWith(3, ["seg_001"]);
+    expect(restoreSegmentStates).toHaveBeenCalledWith({ seg_001: "attempt-1" });
+    expect(startAudioSync).toHaveBeenNthCalledWith(3, "part1_economics");
+    expect(result.finalRows).toEqual([
+      { segmentId: "seg_001", status: "warn", matchRatio: 0.82 },
+    ]);
+  });
+
+  it("continues after audio-sync wait errors when configured to tolerate them", async () => {
+    const startTtsRerender = jest
+      .fn<Promise<string>, [string[]]>()
+      .mockResolvedValue("tts-job-1");
+    const startAudioSync = jest
+      .fn<Promise<string>, [string]>()
+      .mockResolvedValue("sync-job-1");
+    const waitForJob = jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("sync failed"));
+    const reloadValidationRows = jest
+      .fn<Promise<SegmentValidationLike[]>, []>()
+      .mockResolvedValue([
+        { segmentId: "seg_001", status: "warn", matchRatio: 0.91 },
+      ]);
+
+    const result = await runFlaggedTranscriptRerenderRetries({
+      initialRows: [{ segmentId: "seg_001", status: "warn", matchRatio: 0.8 }],
+      thresholdPercent: 94,
+      maxRetries: 1,
+      sectionId: "part1_economics",
+      startTtsRerender,
+      startAudioSync,
+      waitForJob,
+      continueOnAudioSyncError: true,
+      reloadValidationRows,
+    });
+
+    expect(result).toEqual({
+      attemptsCompleted: 1,
+      finalRows: [{ segmentId: "seg_001", status: "warn", matchRatio: 0.91 }],
+      remainingSegmentIds: ["seg_001"],
+    });
+  });
 });
 
 describe("collectFlaggedSegmentsBelowThresholdBySection", () => {
@@ -230,6 +318,102 @@ describe("runFlaggedTranscriptRerenderRetriesAcrossSections", () => {
         part3: [{ segmentId: "part3_001", status: "pass", matchRatio: 1 }],
       },
       remainingSegmentIdsBySection: {},
+    });
+  });
+
+  it("restores best-known segment states across sections after retries finish", async () => {
+    const startTtsRerender = jest
+      .fn<Promise<string>, [string[]]>()
+      .mockResolvedValue("tts-job-1");
+    const startAudioSync = jest
+      .fn<Promise<string>, [string[]]>()
+      .mockResolvedValueOnce("sync-job-1")
+      .mockResolvedValueOnce("sync-job-2");
+    const waitForJob = jest.fn<Promise<void>, [string]>().mockResolvedValue();
+    const reloadValidationRowsBySection = jest
+      .fn<Promise<Record<string, SegmentValidationLike[]>>, []>()
+      .mockResolvedValueOnce({
+        part1: [{ segmentId: "part1_001", status: "warn", matchRatio: 0.91 }],
+        part3: [{ segmentId: "part3_001", status: "warn", matchRatio: 0.6 }],
+      })
+      .mockResolvedValueOnce({
+        part1: [{ segmentId: "part1_001", status: "warn", matchRatio: 0.91 }],
+        part3: [{ segmentId: "part3_001", status: "warn", matchRatio: 0.6 }],
+      });
+    const captureSegmentStates = jest
+      .fn<Promise<Record<string, string>>, [string[]]>()
+      .mockResolvedValueOnce({
+        part1_001: "baseline-1",
+        part3_001: "baseline-3",
+      })
+      .mockResolvedValueOnce({
+        part1_001: "attempt-1-1",
+        part3_001: "attempt-1-3",
+      });
+    const restoreSegmentStates = jest.fn<Promise<void>, [Record<string, string>]>().mockResolvedValue();
+
+    const result = await runFlaggedTranscriptRerenderRetriesAcrossSections({
+      initialRowsBySection: {
+        part1: [{ segmentId: "part1_001", status: "warn", matchRatio: 0.8 }],
+        part3: [{ segmentId: "part3_001", status: "warn", matchRatio: 0.5 }],
+      },
+      thresholdPercent: 94,
+      maxRetries: 1,
+      startTtsRerender,
+      startAudioSync,
+      waitForJob,
+      reloadValidationRowsBySection,
+      captureSegmentStates,
+      restoreSegmentStates,
+    });
+
+    expect(restoreSegmentStates).toHaveBeenCalledWith({
+      part1_001: "attempt-1-1",
+      part3_001: "attempt-1-3",
+    });
+    expect(startAudioSync).toHaveBeenNthCalledWith(2, ["part1", "part3"]);
+    expect(result.finalRowsBySection).toEqual({
+      part1: [{ segmentId: "part1_001", status: "warn", matchRatio: 0.91 }],
+      part3: [{ segmentId: "part3_001", status: "warn", matchRatio: 0.6 }],
+    });
+  });
+
+  it("continues all-sections retries after audio-sync wait errors when configured to tolerate them", async () => {
+    const startTtsRerender = jest
+      .fn<Promise<string>, [string[]]>()
+      .mockResolvedValue("tts-job-1");
+    const startAudioSync = jest
+      .fn<Promise<string>, [string[]]>()
+      .mockResolvedValue("sync-job-1");
+    const waitForJob = jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("sync failed"));
+    const reloadValidationRowsBySection = jest
+      .fn<Promise<Record<string, SegmentValidationLike[]>>, []>()
+      .mockResolvedValue({
+        part4: [{ segmentId: "part4_001", status: "warn", matchRatio: 0.82 }],
+      });
+
+    const result = await runFlaggedTranscriptRerenderRetriesAcrossSections({
+      initialRowsBySection: {
+        part4: [{ segmentId: "part4_001", status: "warn", matchRatio: 0.5 }],
+      },
+      thresholdPercent: 94,
+      maxRetries: 1,
+      startTtsRerender,
+      startAudioSync,
+      waitForJob,
+      continueOnAudioSyncError: true,
+      reloadValidationRowsBySection,
+    });
+
+    expect(result).toEqual({
+      attemptsCompleted: 1,
+      finalRowsBySection: {
+        part4: [{ segmentId: "part4_001", status: "warn", matchRatio: 0.82 }],
+      },
+      remainingSegmentIdsBySection: { part4: ["part4_001"] },
     });
   });
 });

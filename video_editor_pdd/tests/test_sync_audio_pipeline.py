@@ -1519,6 +1519,36 @@ class TestMainExitCodes:
                         main()
                     assert exc_info.value.code == 1
 
+    def test_exit_zero_on_validation_failures_when_tolerance_enabled(self):
+        with mock.patch.dict(os.environ, {"SYNC_AUDIO_ALLOW_VALIDATION_FAILURES": "1"}, clear=False):
+            with mock.patch("sys.argv", ["sync_audio_pipeline.py"]):
+                with mock.patch("sync_audio_pipeline.load_project") as mock_load:
+                    mock_load.return_value = {"sectionGroups": {"intro": ["seg_001"]}}
+                    with mock.patch("sync_audio_pipeline.process_section") as mock_proc:
+                        mock_proc.return_value = {
+                            "sectionId": "intro",
+                            "status": "error",
+                            "error": "Transcript validation failed: failCount 3 > 2.",
+                        }
+                        with pytest.raises(SystemExit) as exc_info:
+                            main()
+                        assert exc_info.value.code == 0
+
+    def test_exit_nonzero_on_non_validation_failures_even_when_tolerance_enabled(self):
+        with mock.patch.dict(os.environ, {"SYNC_AUDIO_ALLOW_VALIDATION_FAILURES": "1"}, clear=False):
+            with mock.patch("sys.argv", ["sync_audio_pipeline.py"]):
+                with mock.patch("sync_audio_pipeline.load_project") as mock_load:
+                    mock_load.return_value = {"sectionGroups": {"intro": ["seg_001"]}}
+                    with mock.patch("sync_audio_pipeline.process_section") as mock_proc:
+                        mock_proc.return_value = {
+                            "sectionId": "intro",
+                            "status": "error",
+                            "error": "Failed to concatenate WAV files: boom",
+                        }
+                        with pytest.raises(SystemExit) as exc_info:
+                            main()
+                        assert exc_info.value.code == 1
+
     def test_exit_nonzero_if_any_section_fails(self):
         """Spec: Non-zero if ANY section failed (even if others succeed)."""
         with mock.patch("sys.argv", ["sync_audio_pipeline.py"]):

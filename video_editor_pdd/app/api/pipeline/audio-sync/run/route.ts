@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import path from "path";
 import { spawn } from "child_process";
-import { registerExecutor, runPipelineStage } from "@/lib/jobs";
+import { registerExecutor, runPipelineStage, runPipelineStageDirect } from "@/lib/jobs";
 import { resolvePythonRunSpec } from "@/app/api/pipeline/_lib/python-runtime";
 import { loadProject } from "@/lib/project";
 import type { SseSend } from "@/lib/types";
@@ -64,6 +64,7 @@ registerExecutor("audio-sync", (params, send: SseSend) => {
     const requestedSections = Array.isArray(params.sections)
       ? params.sections.filter((sectionId): sectionId is string => typeof sectionId === "string")
       : [];
+    const allowValidationFailures = params.allowValidationFailures === true;
     const sectionGroups =
       requestedSections.length > 0
         ? Object.fromEntries(
@@ -92,6 +93,7 @@ registerExecutor("audio-sync", (params, send: SseSend) => {
         env: {
           ...python.env,
           SECTION_GROUPS: JSON.stringify(sectionGroups),
+          SYNC_AUDIO_ALLOW_VALIDATION_FAILURES: allowValidationFailures ? "1" : "0",
         },
       }
     );
@@ -158,14 +160,20 @@ export async function POST(_request: NextRequest): Promise<Response> {
   const sections = Array.isArray(body?.sections)
     ? body.sections.filter((sectionId: unknown): sectionId is string => typeof sectionId === "string")
     : undefined;
+  const allowValidationFailures = body?.allowValidationFailures === true;
+  const skipDependencies = body?.skipDependencies === true;
 
   (async () => {
     try {
-      const jobId = await runPipelineStage(
-        "audio-sync",
-        sections && sections.length > 0 ? { sections } : {},
-        send
-      );
+      const params = {
+        ...(sections && sections.length > 0 ? { sections } : {}),
+        ...(allowValidationFailures ? { allowValidationFailures: true } : {}),
+      };
+      const runStage =
+        skipDependencies || !!allowValidationFailures || !!(sections && sections.length > 0)
+          ? runPipelineStageDirect
+          : runPipelineStage;
+      const jobId = await runStage("audio-sync", params, send);
       send({ type: "job", jobId });
       send({ type: "complete", jobId });
       done();
