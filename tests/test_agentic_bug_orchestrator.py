@@ -6363,3 +6363,245 @@ class TestMissingFixLocationsMarkerWarning:
             f"Expected warning about missing FIX_LOCATIONS marker. "
             f"Warning calls: {warning_calls}"
         )
+
+
+# =============================================================================
+# Issue #729: BUG_STEP_TIMEOUTS mismatch tests
+# =============================================================================
+# These tests verify that BUG_STEP_TIMEOUTS correctly maps all 12 integer-keyed
+# steps to the correct timeout values. They fail on the current buggy code because
+# the dict uses the stale 5.5 numbering scheme (10 entries) instead of the correct
+# 12-entry mapping (keys 1-12).
+
+
+def test_issue729_all_12_steps_get_correct_timeout(mock_dependencies, default_args):
+    """Fresh run delivers correct per-step timeout for all 12 steps.
+
+    The correct mapping is:
+      1: 240, 2: 400, 3: 400, 4: 500, 5: 600, 6: 600,
+      7: 600, 8: 340, 9: 1000, 10: 600, 11: 2000, 12: 240
+
+    Fails on buggy code: step 4 gets 600.0 instead of 500.0 (first mismatch).
+    """
+    mock_run, _, _ = mock_dependencies
+
+    # Expected correct timeout for each step (from the correct 12-step mapping)
+    correct_timeouts = {
+        1: 240.0, 2: 400.0, 3: 400.0, 4: 500.0, 5: 600.0, 6: 600.0,
+        7: 600.0, 8: 340.0, 9: 1000.0, 10: 600.0, 11: 2000.0, 12: 240.0,
+    }
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Build a map of step_num -> actual timeout from the mock calls
+    actual_timeouts = {}
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        timeout = call_obj.kwargs.get("timeout")
+        step_str = label.replace("step", "").replace("_", ".")
+        step_num = float(step_str) if "." in step_str else int(step_str)
+        actual_timeouts[step_num] = timeout
+
+    # Assert every step got the correct timeout
+    for step_num, expected_timeout in correct_timeouts.items():
+        actual = actual_timeouts.get(step_num)
+        assert actual == expected_timeout, (
+            f"Step {step_num}: expected timeout={expected_timeout}, got timeout={actual}"
+        )
+
+
+def test_issue729_resume_step6_gets_600s_timeout(mock_dependencies, default_args, tmp_path):
+    """Resume from step 5 should give step 6 (Root Cause) a 600s timeout.
+
+    Fails on buggy code: step 6 gets 340.0 (Test Plan value from stale mapping).
+    """
+    mock_run, _, _ = mock_dependencies
+
+    # Set up saved state so orchestrator resumes from step 6
+    state_dir = tmp_path / ".pdd" / "bug-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    import json
+    saved_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "dup check ok",
+            "2": "docs ok",
+            "3": "triage ok",
+            "4": "api ok",
+            "5": "reproduce ok",
+        },
+        "total_cost": 0.5,
+        "model_used": "model",
+        "worktree_path": str(tmp_path / ".pdd" / "worktrees" / "fix-issue-1"),
+    }
+    state_file = state_dir / "bug_state_1.json"
+    state_file.write_text(json.dumps(saved_state))
+
+    # Make load_workflow_state return the saved state
+    with patch("pdd.agentic_bug_orchestrator.load_workflow_state") as mock_load_state:
+        mock_load_state.return_value = (saved_state, None)
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+            return (True, "ok", 0.1, "model")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_bug_orchestrator(**default_args)
+
+    # Find the step 6 call and verify its timeout
+    step6_timeout = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get("label") == "step6":
+            step6_timeout = call_obj.kwargs.get("timeout")
+            break
+
+    assert step6_timeout is not None, "step6 was never called"
+    assert step6_timeout == 600.0, (
+        f"Step 6 (Root Cause) timeout: expected 600.0, got {step6_timeout}. "
+        "The stale BUG_STEP_TIMEOUTS mapping assigns 340.0 (Test Plan) to key 6."
+    )
+
+
+def test_issue729_fast_track_step6_gets_600s(mock_dependencies, default_args):
+    """Fast-track path (triage returns FAST_TRACK) should give step 6 600s timeout.
+
+    When step 3 returns FAST_TRACK, steps 4-5 are skipped and step 6 runs next.
+    Fails on buggy code: step 6 gets 340.0 instead of 600.0.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    call_count = [0]
+
+    def side_effect(*args, **kwargs):
+        call_count[0] += 1
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, "FAST_TRACK: Pre-diagnosed issue", 0.1, "model")
+        if label == "step9":
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Verify steps 4 and 5 were skipped (not called via run_agentic_task)
+    called_labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert "step4" not in called_labels, "step4 should be skipped in fast-track"
+    assert "step5" not in called_labels, "step5 should be skipped in fast-track"
+
+    # Verify step 6 got the correct timeout
+    step6_timeout = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get("label") == "step6":
+            step6_timeout = call_obj.kwargs.get("timeout")
+            break
+
+    assert step6_timeout is not None, "step6 was never called after fast-track"
+    assert step6_timeout == 600.0, (
+        f"Step 6 (Root Cause) timeout after fast-track: expected 600.0, got {step6_timeout}. "
+        "Stale BUG_STEP_TIMEOUTS[6] returns 340.0 (Test Plan timeout)."
+    )
+
+
+def test_issue729_timeout_adder_uses_corrected_base(mock_dependencies, default_args):
+    """With timeout_adder=60, step 6 should get 660 (600+60), step 11 should get 2060.
+
+    Fails on buggy code: step 6 gets 400.0 (340+60), step 11 gets 400.0 (default 340+60).
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    default_args["timeout_adder"] = 60.0
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Build timeout map from calls
+    timeout_map = {}
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        timeout = call_obj.kwargs.get("timeout")
+        step_str = label.replace("step", "").replace("_", ".")
+        step_num = float(step_str) if "." in step_str else int(step_str)
+        timeout_map[step_num] = timeout
+
+    # Step 6 (Root Cause): base 600 + adder 60 = 660
+    assert timeout_map.get(6) == 660.0, (
+        f"Step 6 with adder: expected 660.0 (600+60), got {timeout_map.get(6)}. "
+        "Buggy code gives 400.0 (340+60) from stale mapping."
+    )
+
+    # Step 11 (E2E): base 2000 + adder 60 = 2060
+    assert timeout_map.get(11) == 2060.0, (
+        f"Step 11 with adder: expected 2060.0 (2000+60), got {timeout_map.get(11)}. "
+        "Buggy code gives 400.0 (default 340+60) since key 11 is missing."
+    )
+
+    # Step 12 (Create PR): base 240 + adder 60 = 300
+    assert timeout_map.get(12) == 300.0, (
+        f"Step 12 with adder: expected 300.0 (240+60), got {timeout_map.get(12)}. "
+        "Buggy code gives 400.0 (default 340+60) since key 12 is missing."
+    )
+
+
+def test_issue729_no_step_falls_through_to_default_timeout(mock_dependencies, default_args):
+    """Steps 11 and 12 must have explicit timeouts, not fall through to 340.0 default.
+
+    Fails on buggy code: steps 11-12 have no keys in stale dict, get default 340.0.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Collect timeouts for steps 10, 11, 12 — these are missing from the stale dict
+    timeout_map = {}
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        timeout = call_obj.kwargs.get("timeout")
+        step_str = label.replace("step", "").replace("_", ".")
+        step_num = float(step_str) if "." in step_str else int(step_str)
+        timeout_map[step_num] = timeout
+
+    # Step 11 (E2E) should get 2000, not 340 default
+    assert timeout_map.get(11) == 2000.0, (
+        f"Step 11 (E2E): expected 2000.0, got {timeout_map.get(11)}. "
+        "Buggy code: key 11 missing from BUG_STEP_TIMEOUTS, falls through to 340.0 default."
+    )
+
+    # Step 12 (Create PR) should get 240, not 340 default
+    assert timeout_map.get(12) == 240.0, (
+        f"Step 12 (Create PR): expected 240.0, got {timeout_map.get(12)}. "
+        "Buggy code: key 12 missing from BUG_STEP_TIMEOUTS, falls through to 340.0 default."
+    )
+
+    # Step 10 (Verify) should get 600, not the buggy mapping
+    assert timeout_map.get(10) == 600.0, (
+        f"Step 10 (Verify Unit Test): expected 600.0, got {timeout_map.get(10)}. "
+        "Buggy code: key 10 maps to 240.0 (Create PR timeout from stale mapping)."
+    )
