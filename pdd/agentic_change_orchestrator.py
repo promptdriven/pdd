@@ -452,6 +452,9 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
     Other steps use case-insensitive substring matching as a fallback.
     A universal STOP_CONDITION: tag is recognized on any step.
+
+    Set PDD_SKIP_DUPLICATE_CHECK=1 (or true/yes/on) to skip the step-1 duplicate
+    substring hard stop (e.g. autonomous pdd-issue runs that still mention duplicates).
     """
     if not output:
         return None
@@ -459,7 +462,9 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     output_lower = output.lower()
 
     if step_num == 1 and "duplicate of #" in output_lower:
-        return "Issue is a duplicate"
+        skip_dup = os.environ.get("PDD_SKIP_DUPLICATE_CHECK", "").strip().lower()
+        if skip_dup not in ("1", "true", "yes", "on"):
+            return "Issue is a duplicate"
     if step_num == 2 and "already implemented" in output_lower:
         return "Already implemented"
     if step_num == 4:

@@ -3177,6 +3177,16 @@ def test_check_hard_stop_case_insensitive_fallbacks():
     assert _check_hard_stop(9, "FAIL: build error") is not None
 
 
+def test_check_hard_stop_step1_pdd_skip_duplicate_check(monkeypatch):
+    """PDD_SKIP_DUPLICATE_CHECK=1 skips duplicate substring hard stop at step 1."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    monkeypatch.setenv("PDD_SKIP_DUPLICATE_CHECK", "1")
+    assert _check_hard_stop(1, "duplicate of #42") is None
+    monkeypatch.setenv("PDD_SKIP_DUPLICATE_CHECK", "true")
+    assert _check_hard_stop(1, "DUPLICATE OF #1") is None
+
+
 def test_step4_prompt_has_stop_condition_instruction():
     """Step 4 prompt must instruct LLM to output STOP_CONDITION line prefix."""
     prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_change_step4_clarify_LLM.prompt"

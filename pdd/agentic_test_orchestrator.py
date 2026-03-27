@@ -242,6 +242,9 @@ def _check_hard_stop(step_num: Union[int, float], output: str) -> Optional[str]:
 
     Clarification step (3) requires the explicit STOP_CONDITION: tag.
     A universal STOP_CONDITION: tag is recognized on any step.
+
+    Set PDD_SKIP_DUPLICATE_CHECK=1 (or true/yes/on) to skip the step-1 duplicate
+    substring hard stop.
     """
     if not output:
         return None
@@ -249,7 +252,9 @@ def _check_hard_stop(step_num: Union[int, float], output: str) -> Optional[str]:
     output_lower = output.lower()
 
     if step_num == 1 and "duplicate of #" in output_lower:
-        return "Issue is a duplicate"
+        skip_dup = os.environ.get("PDD_SKIP_DUPLICATE_CHECK", "").strip().lower()
+        if skip_dup not in ("1", "true", "yes", "on"):
+            return "Issue is a duplicate"
     if step_num == 3:
         if stop_match and "needs more info" in stop_match.group(1).lower():
             return "Needs more info from author"

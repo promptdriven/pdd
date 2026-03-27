@@ -4369,6 +4369,12 @@ class TestCheckHardStop:
         assert result is not None
         assert "duplicate" in result.lower()
 
+    def test_step1_duplicate_skipped_when_pdd_skip_duplicate_check(self, monkeypatch):
+        """PDD_SKIP_DUPLICATE_CHECK=1 skips duplicate hard stop at step 1."""
+        monkeypatch.setenv("PDD_SKIP_DUPLICATE_CHECK", "1")
+        result = _check_hard_stop(1, "This is Duplicate of #42", True)
+        assert result is None
+
     def test_step1_no_duplicate(self):
         """No hard stop at step 1 without duplicate marker."""
         result = _check_hard_stop(1, "Not a duplicate, unique issue", True)

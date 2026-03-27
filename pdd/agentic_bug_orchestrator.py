@@ -470,9 +470,15 @@ def _copy_repro_files_to_worktree(
 
 
 def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: bool) -> Optional[str]:
-    """Check output for hard stop conditions."""
+    """Check output for hard stop conditions.
+
+    Set PDD_SKIP_DUPLICATE_CHECK=1 (or true/yes/on) to skip the step-1 duplicate
+    substring hard stop.
+    """
     if step_num == 1 and "Duplicate of #" in output:
-        return "Issue is a duplicate"
+        skip_dup = os.environ.get("PDD_SKIP_DUPLICATE_CHECK", "").strip().lower()
+        if skip_dup not in ("1", "true", "yes", "on"):
+            return "Issue is a duplicate"
     if step_num == 2:
         if "Feature Request (Not a Bug)" in output:
             return "Feature Request (Not a Bug)"

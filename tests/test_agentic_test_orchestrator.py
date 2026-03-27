@@ -765,6 +765,14 @@ def test_check_hard_stop_step3_no_substring_fallback():
     assert _check_hard_stop(3, "STOP_CONDITION: Needs more info") is not None
 
 
+def test_check_hard_stop_step1_pdd_skip_duplicate_check(monkeypatch):
+    """PDD_SKIP_DUPLICATE_CHECK=1 skips duplicate substring hard stop at step 1."""
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    monkeypatch.setenv("PDD_SKIP_DUPLICATE_CHECK", "1")
+    assert _check_hard_stop(1, "duplicate of #42") is None
+
+
 def test_step3_prompt_has_stop_condition_instruction():
     """Step 3 prompt must instruct LLM to output STOP_CONDITION line prefix."""
     prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_test_step3_clarify_LLM.prompt"
