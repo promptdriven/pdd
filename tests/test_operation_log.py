@@ -744,7 +744,7 @@ def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path)
         return ("Generated", 0.10, "gpt-4")
 
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths
+        "pdd.operation_log.get_pdd_file_paths", return_value=paths
     ):
         mock_generate(prompt_file="prompts/hashmod_python.prompt")
 
@@ -802,11 +802,9 @@ def test_decorator_fingerprint_failure_warns_not_silent_issue_983(temp_pdd_env):
         return ("Generated", 0.05, "gpt-4")
 
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths",
+        "pdd.operation_log.get_pdd_file_paths",
         side_effect=RuntimeError("simulated path resolution failure"),
-    ), patch("pdd.operation_log.Console") as mock_console_cls:
-        mock_console = MagicMock()
-        mock_console_cls.return_value = mock_console
+    ), patch("pdd.operation_log.console") as mock_console:
 
         # Should NOT raise — the decorator still catches the exception
         mock_generate(prompt_file="prompts/warnmod_python.prompt")

@@ -12,6 +12,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
+from .sync_determine_operation import get_pdd_file_paths
+
+console = Console()
+
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
@@ -372,11 +376,9 @@ def log_operation(
                     if success:
                         if updates_fingerprint:
                             try:
-                                from .sync_determine_operation import get_pdd_file_paths
                                 paths = get_pdd_file_paths(basename, language)
                                 save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
                             except Exception as e:
-                                console = Console()
                                 console.print(f"[yellow]Warning: fingerprint saving failed for {basename}/{language}: {e}[/yellow]")
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
