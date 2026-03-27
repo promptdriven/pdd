@@ -2,6 +2,7 @@ import fnmatch
 import re
 import subprocess
 import sys
+import heapq
 from collections import Counter, defaultdict
 from typing import Tuple, Optional, List, Dict, Any, Set
 import click
@@ -289,7 +290,12 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     return str(pddrc_parent / expanded)
 
 
-def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None) -> Tuple[str, str]:
+def resolve_prompt_code_pair(
+    code_file_path: str,
+    quiet: bool = False,
+    output_dir: Optional[str] = None,
+    create_missing_prompt: bool = True,
+) -> Tuple[str, str]:
     """
     Derives the corresponding prompt file path from a code file path.
     Searches for and creates prompts only in the specified output directory or 'prompts' directory.
@@ -337,14 +343,14 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
         template_path = _resolve_prompt_from_pddrc(code_file_path, repo_root, language)
         if template_path:
             prompt_path = Path(template_path)
-            if not prompt_path.parent.exists():
+            if create_missing_prompt and not prompt_path.parent.exists():
                 try:
                     prompt_path.parent.mkdir(parents=True, exist_ok=True)
                     if not quiet:
                         console.print(f"[success]Created prompts directory:[/success] [path]{prompt_path.parent}[/path]")
                 except OSError as e:
                     console.print(f"[error]Failed to create prompts directory: {e}[/error]")
-            if not prompt_path.exists():
+            if create_missing_prompt and not prompt_path.exists():
                 try:
                     prompt_path.touch()
                     if not quiet:
@@ -397,7 +403,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
 
     # Ensure prompts directory exists
     prompts_path = Path(final_prompts_dir)
-    if not prompts_path.exists():
+    if create_missing_prompt and not prompts_path.exists():
         try:
             prompts_path.mkdir(parents=True, exist_ok=True)
             if not quiet:
@@ -405,7 +411,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
         except OSError as e:
             console.print(f"[error]Failed to create prompts directory {final_prompts_dir}: {e}[/error]")
 
-    if not prompt_path.exists():
+    if create_missing_prompt and not prompt_path.exists():
         try:
             prompt_path.touch()
             if not quiet:
@@ -416,7 +422,13 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
 
     return prompt_path_str, code_file_path
 
-def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: Optional[str] = None, output_dir: Optional[str] = None) -> List[Tuple[str, str]]:
+def find_and_resolve_all_pairs(
+    repo_root: str,
+    quiet: bool = False,
+    extensions: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    create_missing_prompts: bool = True,
+) -> List[Tuple[str, str]]:
     """
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
     """
@@ -478,7 +490,12 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
         ]
     
     for file_path in code_files:
-        prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir)
+        prompt_path, code_path = resolve_prompt_code_pair(
+            file_path,
+            quiet,
+            output_dir,
+            create_missing_prompt=create_missing_prompts,
+        )
         pairs.append((prompt_path, code_path))
         
     return pairs
@@ -824,6 +841,112 @@ def _included_docs_for_drift_report(
     return sorted(rows, key=lambda x: (-x[1], x[0]))
 
 
+def _dependency_order_key(prompt_path: str) -> Optional[str]:
+    """
+    Build a stable module key matching fingerprint identity.
+
+    Uses `infer_module_identity()` so that nested prompt basenames (e.g. `src/foo`)
+    become part of the key and avoid collisions.
+    """
+    try:
+        from .operation_log import infer_module_identity
+
+        basename, language = infer_module_identity(prompt_path)
+        if not basename or not language:
+            return None
+        return f"{basename}::{language}"
+    except Exception:
+        return None
+
+
+def _order_changed_items_by_dependency(
+    changed_items: List[Tuple[str, str, str]],
+) -> List[Tuple[str, str, str]]:
+    """
+    Order changed prompt/code pairs so dependencies are updated first.
+
+    We derive a module dependency graph from `<include>` relationships inside prompt files.
+    When multiple modules are eligible, we prefer the one with the most downstream dependents.
+    """
+    if len(changed_items) <= 1:
+        return changed_items
+
+    # Map module key -> (index in original list, prompt_path, code_path, reason)
+    key_to_item: Dict[str, Tuple[int, Tuple[str, str, str]]] = {}
+    for idx, item in enumerate(changed_items):
+        prompt_path = item[0]
+        key = _dependency_order_key(prompt_path)
+        if key is None:
+            return changed_items  # If we can't identify modules, don't risk reordering.
+        key_to_item[key] = (idx, item)
+
+    changed_keys = set(key_to_item.keys())
+
+    # graph[module] = set(dependencies_in_changed_set)
+    graph: Dict[str, Set[str]] = {k: set() for k in changed_keys}
+    reverse: Dict[str, Set[str]] = {k: set() for k in changed_keys}  # dependency -> dependents
+
+    for key, (_idx, (prompt_path, _code_path, _reason)) in key_to_item.items():
+        include_deps = extract_include_deps(Path(prompt_path))
+        for dep_path_str in include_deps.keys():
+            dep_path = Path(dep_path_str)
+            if not dep_path.is_absolute():
+                dep_path = (Path.cwd() / dep_path).resolve()
+            dep_key = _dependency_order_key(dep_path)
+            if dep_key and dep_key in changed_keys:
+                graph[key].add(dep_key)
+                reverse[dep_key].add(key)
+
+    # Downstream dependents count (transitive) for tie-breaking.
+    downstream_count: Dict[str, int] = {}
+    for k in changed_keys:
+        visited: Set[str] = set()
+        stack = [k]
+        while stack:
+            cur = stack.pop()
+            for dependent in reverse.get(cur, set()):
+                if dependent not in visited:
+                    visited.add(dependent)
+                    stack.append(dependent)
+        visited.discard(k)
+        downstream_count[k] = len(visited)
+
+    # Kahn's algorithm over `graph` where edges are module -> dependencies.
+    in_degree: Dict[str, int] = {k: len(graph[k]) for k in changed_keys}
+    heap: List[Tuple[int, int, str]] = []
+    for k in changed_keys:
+        if in_degree[k] == 0:
+            # Max downstream_count first, then original index.
+            heapq.heappush(heap, (-downstream_count[k], key_to_item[k][0], k))
+
+    ordered_keys: List[str] = []
+    processed: Set[str] = set()
+
+    while heap:
+        _neg_downstream, _orig_idx, k = heapq.heappop(heap)
+        if k in processed:
+            continue
+        ordered_keys.append(k)
+        processed.add(k)
+
+        for dependent in reverse.get(k, set()):
+            in_degree[dependent] -= 1
+            if in_degree[dependent] == 0:
+                heapq.heappush(heap, (-downstream_count[dependent], key_to_item[dependent][0], dependent))
+
+    # If cycles exist or nodes remain, append remaining nodes in best-effort order.
+    if len(processed) != len(changed_keys):
+        remaining = [k for k in changed_keys if k not in processed]
+        remaining.sort(key=lambda n: (-downstream_count[n], key_to_item[n][0]))
+        ordered_keys.extend(remaining)
+
+    # Build final ordered items.
+    ordered_items: List[Tuple[str, str, str]] = []
+    for k in ordered_keys:
+        ordered_items.append(key_to_item[k][1])
+    return ordered_items
+
+
 def _estimate_dry_run_cost_range(
     ctx: click.Context,
     repo_obj: git.Repo,
@@ -952,7 +1075,13 @@ def update_main(
                 scan_dir = cwd
             else:
                 scan_dir = repo_root
-        pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
+        pairs = find_and_resolve_all_pairs(
+            scan_dir,
+            quiet,
+            extensions,
+            output,
+            create_missing_prompts=not dry_run,
+        )
 
         if pairs and not dry_run:
             from .pddrc_initializer import ensure_pddrc_for_scan
@@ -981,6 +1110,10 @@ def update_main(
             if not quiet:
                 rprint("[info]No changed code files detected. Everything is in sync.[/info]")
             return None
+
+        # Process in dependency order so that if a budget cap stops execution,
+        # earlier-updated modules have their downstream dependents ready.
+        changed_items = _order_changed_items_by_dependency(changed_items)
 
         if dry_run:
             if not quiet:
@@ -1020,6 +1153,8 @@ def update_main(
         results = []
         total_repo_cost = 0.0
         budget_reached = False
+        updated_doc_paths: Set[str] = set()
+        submitted_dev_units: Set[str] = set()
 
         progress = Progress(
             SpinnerColumn(),
@@ -1077,6 +1212,83 @@ def update_main(
                             )
                         except Exception:
                             pass  # Best-effort; don't fail the update
+
+                        # Regenerate example and upload dev unit for grounding (best-effort).
+                        try:
+                            dev_key = f"{basename}::{language}"
+                            if dev_key not in submitted_dev_units:
+                                from .sync_determine_operation import get_pdd_file_paths
+                                from .sync_main import _auto_submit_example
+                                from .context_generator_main import context_generator_main
+
+                                context_name, _context_cfg = detect_context_for_file(code_path, repo_root)
+                                pdd_files = get_pdd_file_paths(
+                                    basename=basename,
+                                    language=language,
+                                    prompts_dir=str(Path(repo_root) / "prompts"),
+                                    context_override=ctx.obj.get("context") or context_name,
+                                )
+                                # In repo mode, these source-of-truth paths are known from the
+                                # current pair and avoid context/path resolution mismatches.
+                                pdd_files["prompt"] = Path(prompt_path)
+                                pdd_files["code"] = Path(code_path)
+
+                                # Regenerate example (do NOT regenerate code or tests).
+                                # Use the existing example generator pipeline (writes to pdd_files["example"]).
+                                try:
+                                    context_generator_main(
+                                        ctx=ctx,
+                                        prompt_file=str(pdd_files["prompt"]),
+                                        code_file=str(pdd_files["code"]),
+                                        output=str(pdd_files["example"]),
+                                        format="code",
+                                    )
+                                except Exception:
+                                    # Best-effort: still allow upload (example is optional in submit payload).
+                                    pass
+
+                                _auto_submit_example(basename, language, pdd_files, ctx)
+                                submitted_dev_units.add(dev_key)
+                        except Exception:
+                            # Best-effort: cloud submission should not abort repo update.
+                            pass
+
+                    # Update markdown docs referenced via <include> tags.
+                    # This heals stale context used by the next `pdd generate` / `pdd change`.
+                    try:
+                        from .context_generator_main import context_generator_main
+
+                        include_deps = extract_include_deps(Path(prompt_path))
+                        # extract_include_deps returns resolved paths relative to CWD when possible.
+                        for dep_str in include_deps.keys():
+                            dep_path = Path(dep_str)
+                            if not dep_path.is_absolute():
+                                dep_path = (Path.cwd() / dep_path).resolve()
+                            else:
+                                dep_path = dep_path.resolve()
+
+                            if dep_path.suffix.lower() != ".md":
+                                continue  # Only regenerate .md reliably (context generator forces .md extension).
+                            if not dep_path.exists():
+                                continue
+
+                            dep_key = str(dep_path)
+                            if dep_key in updated_doc_paths:
+                                continue
+
+                            # Regenerate the doc by running the existing markdown generator
+                            # with the updated prompt + code as the source of truth.
+                            context_generator_main(
+                                ctx=ctx,
+                                prompt_file=str(prompt_path),
+                                code_file=str(code_path),
+                                output=str(dep_path),
+                                format="md",
+                            )
+                            updated_doc_paths.add(dep_key)
+                    except Exception:
+                        # Best-effort: doc regeneration should not abort the whole repo update.
+                        pass
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
