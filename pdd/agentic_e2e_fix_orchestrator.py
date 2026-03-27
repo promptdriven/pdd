@@ -1642,12 +1642,35 @@ def run_agentic_e2e_fix_orchestrator(
                                 "starting next cycle.[/yellow]"
                             )
                             _step9_token = "CONTINUE_CYCLE"
-                    handled = _handle_step9_control_token(
-                        _step9_token,
-                        stage="initial",
-                        success_flag=step_success,
-                    )
-                    if handled is True:
+                    if _step9_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+                        # Independent verification: don't trust LLM output alone
+                        test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                        if test_files:
+                            verified, verify_output = _verify_tests_independently(test_files, cwd)
+                            if verified:
+                                console.print("[green]LOCAL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
+                                success = True
+                                final_message = "All tests passed after fixes (independently verified)."
+                                break
+                            else:
+                                console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
+                                _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
+                                step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
+                                step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                                if should_retry:
+                                    verification_failure_context = verify_output
+                                    last_completed_step = 0
+                                    break
+                                last_completed_step = step_num - 1
+                                # Don't break — fall through to cycle increment
+                        else:
+                            console.print("[green]LOCAL_TESTS_PASS detected in Step 9.[/green]")
+                            success = True
+                            final_message = "All tests passed after fixes."
+                            break
+                    elif _step9_token == "MAX_CYCLES_REACHED":
+                        console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
+                        final_message = "Max cycles reached."
                         break
                     elif _step9_token == "CONTINUE_CYCLE":
                         # Check for progress before starting next cycle (5b)
