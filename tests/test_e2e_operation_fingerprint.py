@@ -50,8 +50,9 @@ def pdd_project(tmp_path, monkeypatch):
         "Create a function called `say_hello` that prints 'Hello, World!'.\n"
     )
 
-    # Pre-create the code output file that code_generator_main would write
-    code_file = project / "src" / f"{basename}.py"
+    # Pre-create the code output file at the default path that
+    # get_pdd_file_paths resolves to (project root, not src/)
+    code_file = project / f"{basename}.py"
     code_file.write_text(
         'def say_hello():\n'
         '    """Print a greeting."""\n'

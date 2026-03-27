@@ -711,3 +711,133 @@ def test_basename_sanitization_deeply_nested(temp_pdd_env):
 
     # Verify no nested directories created
     assert log_path.parent == Path(temp_pdd_env)
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TESTS: Issue #437 - Decorator fingerprint hash fields are null
+# --------------------------------------------------------------------------------
+
+def test_decorator_fingerprint_hashes_not_null_issue_437(temp_pdd_env, tmp_path):
+    """
+    Regression test for Issue #437: The @log_operation decorator must produce
+    non-null hash fields in the fingerprint metadata.
+
+    Bug: The decorator at line 374 called save_fingerprint() without 'paths',
+    causing calculate_current_hashes() to return {}, making all hash fields null.
+
+    Fix: The decorator now calls get_pdd_file_paths(basename, language) and passes
+    the result as paths= to save_fingerprint().
+    """
+    # Create real files so hashes can be computed
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "hashmod_python.prompt"
+    prompt_file.write_text("% Hash Module\nCreate a hash utility.\n")
+
+    code_file = tmp_path / "hashmod.py"
+    code_file.write_text("def compute_hash(): pass\n")
+
+    paths = {"prompt": prompt_file, "code": code_file}
+
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def mock_generate(prompt_file: str):
+        return ("Generated", 0.10, "gpt-4")
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths
+    ):
+        mock_generate(prompt_file="prompts/hashmod_python.prompt")
+
+    fp_path = operation_log.get_fingerprint_path("hashmod", "python")
+    assert fp_path.exists(), "Fingerprint file should be created"
+
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    # THE BUG: With issue #437, these were all null
+    assert fp_data["prompt_hash"] is not None, (
+        "Issue #437: prompt_hash is null — decorator must pass paths to save_fingerprint()"
+    )
+    assert fp_data["code_hash"] is not None, (
+        "Issue #437: code_hash is null — decorator must pass paths to save_fingerprint()"
+    )
+
+    # Verify SHA-256 format
+    for field in ["prompt_hash", "code_hash"]:
+        val = fp_data[field]
+        assert len(val) == 64 and all(c in "0123456789abcdef" for c in val), (
+            f"{field} should be a 64-char hex SHA-256 hash, got: {val}"
+        )
+
+
+def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_437(temp_pdd_env):
+    """
+    Issue #437: Verify the decorator passes 'paths' as a keyword argument
+    to save_fingerprint(). The bug was that 'paths' was omitted entirely.
+    """
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def mock_generate(prompt_file: str):
+        return ("Generated", 0.05, "gpt-4")
+
+    with patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        mock_generate(prompt_file="prompts/mymod_python.prompt")
+
+        assert mock_save_fp.called, "save_fingerprint should be called"
+        call_kwargs = mock_save_fp.call_args.kwargs
+        assert "paths" in call_kwargs, (
+            f"Issue #437: 'paths' missing from save_fingerprint kwargs: {call_kwargs}"
+        )
+        assert call_kwargs["paths"] is not None, (
+            "Issue #437: paths=None passed to save_fingerprint"
+        )
+
+
+def test_decorator_fingerprint_enables_sync_change_detection_issue_437(temp_pdd_env, tmp_path):
+    """
+    Issue #437 impact test: After the decorator saves a fingerprint, sync's
+    read_fingerprint() must see matching hashes, enabling change detection.
+
+    Without the fix, read_fingerprint() sees null hashes and sync incorrectly
+    thinks files changed, causing unnecessary regeneration.
+    """
+    from pdd.sync_determine_operation import calculate_current_hashes, read_fingerprint
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "detectmod_python.prompt"
+    prompt_file.write_text("% Detect Module\nCreate detection logic.\n")
+
+    code_file = tmp_path / "detectmod.py"
+    code_file.write_text("def detect(): return True\n")
+
+    paths = {"prompt": prompt_file, "code": code_file}
+
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def mock_generate(prompt_file: str):
+        return ("Generated", 0.10, "gpt-4")
+
+    # Keep get_meta_dir patched for both writing and reading
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths
+    ), patch(
+        "pdd.sync_determine_operation.get_meta_dir",
+        return_value=Path(str(temp_pdd_env)),
+    ):
+        mock_generate(prompt_file="prompts/detectmod_python.prompt")
+
+        # Read back via sync's reader (inside the same patch context)
+        fp = read_fingerprint("detectmod", "python")
+        assert fp is not None, "read_fingerprint should parse the saved fingerprint"
+
+        # Calculate what the hashes should be
+        expected = calculate_current_hashes(paths)
+
+    # After the fix, stored and calculated hashes must match
+    assert fp.prompt_hash == expected.get("prompt_hash"), (
+        f"Issue #437: prompt_hash mismatch — stored={fp.prompt_hash}, "
+        f"expected={expected.get('prompt_hash')}. Sync cannot detect changes correctly."
+    )
+    assert fp.code_hash == expected.get("code_hash"), (
+        f"Issue #437: code_hash mismatch — stored={fp.code_hash}, "
+        f"expected={expected.get('code_hash')}. Sync cannot detect changes correctly."
+    )

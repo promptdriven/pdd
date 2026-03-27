@@ -371,7 +371,9 @@ def log_operation(
                     append_log_entry(basename, language, entry)
                     if success:
                         if updates_fingerprint:
-                            save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
+                            from .sync_determine_operation import get_pdd_file_paths
+                            paths = get_pdd_file_paths(basename, language)
+                            save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
         return wrapper
