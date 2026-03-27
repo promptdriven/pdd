@@ -1,3 +1,26 @@
+## v0.0.189 (2026-03-26)
+
+### Feat
+
+- Revamp pdd-explainer project specifications, adding new content, removing audited files, and updating related code and assets.
+- harden change_LLM prompt for call-site thoroughness and retry safety (#939)
+- add transcript mismatch retry controls
+
+### Fix
+
+- harden fix-location coverage check and coverage-retry validation
+- deterministic fix-location coverage check replaces LLM-based Step 10 check
+- reuse _parse_changed_files, add dedup, and test real prompts
+- structural fix for multi-file call-boundary coverage (#952)
+- force temperature=1 for Gemini 3 models to prevent Opus fallback
+- use Gemini Flash for regression tests to avoid Vertex AI Opus charges
+- harden stage 5 transcript retry flow
+
+### Refactor
+
+- use LLM-as-judge and merge retry tests into single call
+- rename test file to test_change_call_site_and_retry.py
+
 ## v0.0.188 (2026-03-25)
 
 ### Feat
