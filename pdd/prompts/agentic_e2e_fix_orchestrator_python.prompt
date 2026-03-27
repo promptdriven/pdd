@@ -25,5 +25,9 @@ skipped_steps persists across cycles and is NOT cleared when step_outputs is cle
 This behavior is called `skipped_steps_memory`: even skipped steps contribute their prior stepN_output values into downstream prompts.
 The skipped_steps (or equivalent) state persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
 
+% Convergence (Issue #903)
+The generated orchestrator must implement **Empty dev-units short-circuit** (5a): when Step 5 finds no dev units to fix, skip Steps 6–8 instead of running them with empty context.
+The generated orchestrator must implement **Per-cycle file-hash comparison** (5b): snapshot file hashes at the start of each cycle and compare after work completes so multi-cycle runs can detect when nothing changes (convergence).
+
 This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory`
 so tests can assert the orchestrator prompt documents these behaviors.
