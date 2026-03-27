@@ -1,34 +1,58 @@
+## v0.0.189 (2026-03-26)
+
+### Feat
+
+- Revamp pdd-explainer project specifications, adding new content, removing audited files, and updating related code and assets.
+- harden change_LLM prompt for call-site thoroughness and retry safety (#939)
+- add transcript mismatch retry controls
+
+### Fix
+
+- harden fix-location coverage check and coverage-retry validation
+- deterministic fix-location coverage check replaces LLM-based Step 10 check
+- reuse _parse_changed_files, add dedup, and test real prompts
+- structural fix for multi-file call-boundary coverage (#952)
+- force temperature=1 for Gemini 3 models to prevent Opus fallback
+- use Gemini Flash for regression tests to avoid Vertex AI Opus charges
+- harden stage 5 transcript retry flow
+
+### Refactor
+
+- use LLM-as-judge and merge retry tests into single call
+- rename test file to test_change_call_site_and_retry.py
+
 ## v0.0.188 (2026-03-25)
 
 ### Feat
 
-- Add `part3_mold_parts` segment to project configuration and update multiple narration audio files.
-- add sibling bug detection to pdd bug prompts (#967) (#968)
-- Introduce audio segment preview functionality, update audio synchronization and TTS rendering APIs, and revise the narrative script.
-- implement automation for detecting and saving audio sync section groups based on TTS segments.
+- **sibling bug detection in `pdd bug` prompts** (#967) (#968): Step 6 root-cause analysis now performs variable reference audits and state symmetry checks to discover independent bugs alongside the primary root cause; Step 8 test planning enumerates all execution paths (first-run, resume, retry, error recovery) and requires test coverage for each
+- **ImportError vs test failure classification in `pdd fix`** (#934) (#955): new `_classify_verification_failure()` deterministically detects import/compile errors via pytest `^E` traceback patterns (ImportError, ModuleNotFoundError, NameError, AttributeError, SyntaxError) — import errors get one retry from Step 1 with failure context injected into the prompt; test failures fall through to normal fix workflow
+- **Step 11 API mocking best practices** (#633): new prompt section guides E2E test generation to read actual API implementations before writing mocks, use a single `page.route()` handler per URL pattern (avoids Playwright's stacked-handler gotcha), and verify error message assertions against source code
+- **Playwright test runner detection**: `_detect_ts_test_runner` now checks for `playwright.config.ts` before Jest/Vitest when running `.spec.ts`/`.spec.tsx` files, returning `npx playwright test`
 
 ### Fix
 
-- deduplicate changed_files after PROMPT_FIXED extend, fix misleading comments
-- detect SPOT vs STANDARD job via BATCH_TASK_COUNT, not custom env vars
-- pass Cloud Batch env vars via container commands, not environment block
-- move Cloud Batch env vars from Runnable to TaskSpec level
-- also extract FILES_CREATED/FILES_MODIFIED from Step 7 resume path
-- pdd bug Step 12 never commits prompt files when Step 7 classifies Prompt Defect
-- flush STOP_CONDITION print to avoid buffering in piped stdout (#671)
-- correct misleading stderr comment in STOP_CONDITION code (#671)
-- emit STOP_CONDITION to stdout on complexity split (#671)
-- respect --manual flag in pdd test for non-Python languages
-- classify ImportError vs test failure in pdd fix verification (#934) (#955)
-- strengthen audit evidence and code transformation contracts
+- **pytest subprocess deadlock on timeout** (#894): switch from `subprocess.run` to `Popen` with `start_new_session=True`; on timeout, kill the entire process group via `os.killpg()` to prevent orphaned child processes from holding pipes open
+- **worktree isolation for CLI agents** (#894): set `GIT_WORK_TREE` env var in `_run_with_provider` to prevent CLI agents from following `.git` file pointer back to the main repo
+- **pdd bug Step 7 prompt file commit failure** (#966): add filesystem fallback that snapshots modified files before Step 7 and detects new `.prompt` files on disk when `PROMPT_FIXED:` markers are missing from LLM output; warns if `DEFECT_TYPE: prompt` but no `.prompt` files in `changed_files`
+- **`_extract_test_files` inline regex removed** (#633): the regex matched file paths mentioned as examples in issue narrative text, pulling unrelated tests into verification — four remaining discovery paths (markers, changed_files, disk hashes, git modified) are sufficient
+- **directory scan guard tightened** (#953): fallback scan now only runs when `test_files` is completely empty (previously ran whenever git-based discovery didn't add *new* files), preventing the entire test suite from being pulled into verification
+- **pytest exit code 5 treated as benign**: "no tests collected" is no longer counted as a failure in the safety-net return code check
+- deduplicate `changed_files` after `PROMPT_FIXED` extend
+- also extract `FILES_CREATED`/`FILES_MODIFIED` from Step 7 resume path
+- flush `STOP_CONDITION` print to avoid buffering in piped stdout (#671)
+- correct misleading stderr comment in `STOP_CONDITION` code (#671)
+- emit `STOP_CONDITION` to stdout on complexity split (#671)
+- respect `--manual` flag in `pdd test` for non-Python languages — bypasses agentic pipeline when set
+- add `ValueError` guard to directory scan `relative_to()` and tighten test assertions
 - remove unreachable sibling scan, update #794 tests to production-realistic scenarios
-- update test names/docs after rebase — inline regex removed by #633
-- add ValueError guard to directory scan relative_to() and tighten test assertions
-- prevent _extract_test_files directory scan when test files already found (#953)
-- pdd fix infrastructure bugs + step 11 API mocking guidance (#633)
+- strengthen audit evidence and code transformation contracts
 - harden audit-driven contract rendering
-- increase SPOT job maxRetryCount to 5 for better preemption resilience
-- run slow sync_regression case_1 on STANDARD VM to avoid spot preemption
+
+### Build
+
+- **Cloud Batch dual-job architecture**: split single SPOT job (75 tasks) into SPOT (74 tasks) + STANDARD (1 task) to run slow `sync_regression case_1` on preemption-immune VMs; new `job-template-standard.json` with `FIXED_TASK_INDEX`/`SKIP_INDEX` entrypoint support, dual-job polling and result collection
+- increase SPOT job `maxRetryCount` to 5 for better preemption resilience
 
 ## v0.0.187 (2026-03-24)
 

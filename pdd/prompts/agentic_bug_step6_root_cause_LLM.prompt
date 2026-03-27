@@ -172,6 +172,14 @@ problematic_code_snippet()
 *Proceeding to Step 7: Prompt Classification*
 ```
 
+After posting your comment, output a machine-readable marker listing every file that needs to be modified to fix the bug. This is parsed by the orchestrator and injected into downstream steps:
+
+```
+FIX_LOCATIONS: path/to/file1.py, path/to/file2.py
+```
+
+List ALL files from "File(s) to modify" above, comma-separated on one line. If only one file needs modification, list just that one file.
+
 % Important
 
 - Be specific about the exact location and nature of the bug

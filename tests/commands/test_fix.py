@@ -44,10 +44,20 @@ for _module_name in _side_effect_modules:
 
 import pdd.commands.templates as _templates_module
 from pdd.core.errors import custom_theme as _real_theme
+from pdd.core.errors import handle_error as _real_handle_error
 
 _templates_module.custom_theme = _real_theme
 
-del _import_mocks, _saved_modules, _module_name, _side_effect_modules, _templates_module, _real_theme
+# Repair handle_error binding leaked to sibling command modules that were
+# imported as a side effect (via pdd.commands.__init__) while pdd.core.errors
+# was temporarily mocked above.
+for _mod_name in list(sys.modules):
+    if _mod_name.startswith("pdd.commands."):
+        _mod = sys.modules[_mod_name]
+        if hasattr(_mod, 'handle_error') and isinstance(getattr(_mod, 'handle_error'), MagicMock):
+            setattr(_mod, 'handle_error', _real_handle_error)
+
+del _import_mocks, _saved_modules, _module_name, _side_effect_modules, _templates_module, _real_theme, _real_handle_error
 
 
 @pytest.fixture

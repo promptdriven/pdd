@@ -9,7 +9,7 @@ __version__ = "0.0.179"
 # operations. The module should have a large context window and be affordable.
 EXTRACTION_STRENGTH = 0.5
 
-DEFAULT_STRENGTH = 1.0
+DEFAULT_STRENGTH = float(os.getenv("PDD_STRENGTH_DEFAULT", "1.0"))
 
 DEFAULT_TEMPERATURE = 0.0
 

@@ -5898,3 +5898,468 @@ class TestStep7FilesToStageContextPropagation:
             f"Prompt file not found in Step 12 instruction. "
             f"files_to_stage did not propagate. Instruction: {step12_instruction}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #952: Structured fix locations from Step 6 flow to downstream steps
+# ---------------------------------------------------------------------------
+
+
+class TestParseFixLocations:
+    """Unit tests for _parse_fix_locations helper."""
+
+    def test_parses_single_file(self):
+        """Single FIX_LOCATIONS line with one file."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "Some analysis\nFIX_LOCATIONS: pdd/commands/generate.py\nMore text"
+        assert _parse_fix_locations(output) == ["pdd/commands/generate.py"]
+
+    def test_parses_comma_separated_files(self):
+        """FIX_LOCATIONS with multiple comma-separated files."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "FIX_LOCATIONS: pdd/commands/generate.py, pdd/cmd_test_main.py"
+        assert _parse_fix_locations(output) == [
+            "pdd/commands/generate.py",
+            "pdd/cmd_test_main.py",
+        ]
+
+    def test_parses_multiple_marker_lines(self):
+        """Multiple FIX_LOCATIONS lines are all collected."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = (
+            "FIX_LOCATIONS: pdd/commands/generate.py\n"
+            "FIX_LOCATIONS: pdd/cmd_test_main.py\n"
+        )
+        result = _parse_fix_locations(output)
+        assert "pdd/commands/generate.py" in result
+        assert "pdd/cmd_test_main.py" in result
+
+    def test_returns_empty_when_no_marker(self):
+        """No FIX_LOCATIONS marker returns empty list."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "Root cause is in generate.py:375"
+        assert _parse_fix_locations(output) == []
+
+    def test_strips_whitespace_and_backticks(self):
+        """File paths with backticks or extra whitespace are cleaned."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "FIX_LOCATIONS: `pdd/generate.py` , `pdd/main.py` "
+        result = _parse_fix_locations(output)
+        assert result == ["pdd/generate.py", "pdd/main.py"]
+
+
+class TestFixLocationsFlowToDownstreamSteps:
+    """Orchestrator injects parsed fix_locations into Steps 8/9/10 context."""
+
+    STEP6_OUTPUT_WITH_MARKER = (
+        "## Root Cause Analysis\n"
+        "The `--manual` flag is accepted by generate.py but never forwarded.\n\n"
+        "### Fix Location\n"
+        "**File(s) to modify:**\n"
+        "1. `pdd/commands/generate.py:375` — caller\n"
+        "2. `pdd/cmd_test_main.py:120` — callee\n\n"
+        "FIX_LOCATIONS: pdd/commands/generate.py, pdd/cmd_test_main.py\n"
+    )
+
+    # Template that includes {fix_locations} placeholder for downstream steps
+    TEMPLATE_WITH_FIX_LOCATIONS = (
+        "Prompt for issue {issue_number}.\n"
+        "<step1_output>{step1_output}</step1_output>\n"
+        "<step2_output>{step2_output}</step2_output>\n"
+        "<step3_output>{step3_output}</step3_output>\n"
+        "<step4_output>{step4_output}</step4_output>\n"
+        "<step5_output>{step5_output}</step5_output>\n"
+        "<step6_output>{step6_output}</step6_output>\n"
+        "<step7_output>{step7_output}</step7_output>\n"
+        "<step8_output>{step8_output}</step8_output>\n"
+        "<step9_output>{step9_output}</step9_output>\n"
+        "<fix_locations>{fix_locations}</fix_locations>\n"
+    )
+
+    @pytest.fixture()
+    def run_orchestrator_and_capture(self, tmp_path):
+        """Run orchestrator with Step 6 FIX_LOCATIONS marker, return captured instructions."""
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        captured = {}
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            captured[label] = kwargs.get("instruction", "")
+
+            if label == "step6":
+                return (True, self.STEP6_OUTPUT_WITH_MARKER, 0.1, "model")
+            if label == "step8":
+                return (True, "## Test Plan\nPLANNED_TEST_COUNT: 3", 0.1, "model")
+            if label == "step9":
+                return (True, "Generated tests\nFILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS: Tests correct\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+            mock_run.side_effect = mock_run_side_effect
+            mock_load.return_value = self.TEMPLATE_WITH_FIX_LOCATIONS
+            mock_worktree.return_value = (worktree_path, None)
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        return captured
+
+    @pytest.mark.parametrize("step_label", ["step8", "step9"])
+    def test_fix_locations_injected_into_downstream_steps(
+        self, run_orchestrator_and_capture, step_label
+    ):
+        """Parsed fix_locations from Step 6 appear in downstream step instructions."""
+        captured = run_orchestrator_and_capture
+        instruction = captured.get(step_label, "")
+
+        assert instruction, f"{step_label} was never captured"
+
+        # The structured fix_locations should appear in the instruction
+        assert "pdd/commands/generate.py" in instruction, (
+            f"{step_label} instruction missing first fix location"
+        )
+        assert "pdd/cmd_test_main.py" in instruction, (
+            f"{step_label} instruction missing second fix location"
+        )
+
+    def test_fix_locations_defaults_to_none_when_no_marker(self, tmp_path):
+        """When Step 6 has no FIX_LOCATIONS marker, fix_locations is 'none'."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output_no_marker = "Root cause is in generate.py but no marker"
+        result = _parse_fix_locations(output_no_marker)
+        assert result == []
+
+
+class TestFixLocationsInRealPrompts:
+    """Verify that prompt files using {fix_locations} contain the placeholder."""
+
+    @pytest.mark.parametrize("prompt_file", [
+        "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt",
+        "pdd/prompts/agentic_bug_step9_generate_LLM.prompt",
+    ])
+    def test_real_prompt_contains_fix_locations_placeholder(self, prompt_file):
+        """Prompt files that use fix_locations must contain the placeholder."""
+        prompt_path = Path(__file__).parent.parent / prompt_file
+        content = prompt_path.read_text()
+        assert "{fix_locations}" in content, (
+            f"{prompt_file} is missing {{fix_locations}} placeholder — "
+            f"orchestrator injects this but the prompt won't use it"
+        )
+
+    def test_step10_prompt_does_not_contain_fix_locations(self):
+        """Step 10 should NOT have {fix_locations} — coverage is checked deterministically."""
+        prompt_path = (
+            Path(__file__).parent.parent
+            / "pdd/prompts/agentic_bug_step10_verify_LLM.prompt"
+        )
+        content = prompt_path.read_text()
+        assert "{fix_locations}" not in content, (
+            "Step 10 prompt should not contain {fix_locations} — "
+            "the orchestrator verifies coverage deterministically after Step 9"
+        )
+
+
+class TestParseFixLocationsDeduplication:
+    """Verify fix locations are deduplicated."""
+
+    def test_deduplicates_repeated_files(self):
+        """Duplicate file paths from multiple markers are deduplicated."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = (
+            "FIX_LOCATIONS: pdd/generate.py, pdd/main.py\n"
+            "FIX_LOCATIONS: pdd/generate.py\n"
+        )
+        result = _parse_fix_locations(output)
+        assert result == ["pdd/generate.py", "pdd/main.py"]
+
+
+class TestVerifyFixLocationCoverage:
+    """Unit tests for _verify_fix_location_coverage helper."""
+
+    def test_single_file_always_passes(self, tmp_path):
+        """Single fix location needs no cross-file check."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py"], [], tmp_path
+        )
+        assert result == []
+
+    def test_both_files_covered(self, tmp_path):
+        """When test files reference both fix locations, returns empty."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from unittest.mock import patch\n"
+            "from pdd.commands.generate import run_generate\n"
+            "from pdd.cmd_test_main import cmd_test_main\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == []
+
+    def test_detects_missing_coverage(self, tmp_path):
+        """When a fix location has no reference in tests, it's returned as uncovered."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from pdd.commands.generate import run_generate\n"
+            "def test_something(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == ["pdd/cmd_test_main.py"]
+
+    def test_matches_via_patch_target(self, tmp_path):
+        """Coverage detected via patch('module.path') string."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "@patch('pdd.commands.generate.run_generate')\n"
+            "@patch('pdd.cmd_test_main.cmd_test_main')\n"
+            "def test_caller(mock_callee, mock_caller): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == []
+
+    def test_matches_via_basename(self, tmp_path):
+        """Coverage detected via basename reference (e.g., 'generate' or 'cmd_test_main')."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "# Tests for generate and cmd_test_main\n"
+            "def test_generate_forwards(): pass\n"
+            "def test_cmd_test_main_receives(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == []
+
+    def test_basename_substring_not_false_positive(self, tmp_path):
+        """Basename as substring of another word should NOT count as coverage."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "# This test generates reports and uses cmd_test_main_helper\n"
+            "def test_generate_report(): pass\n"
+            "def test_generated_output(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        # Neither module_path nor word-boundary basename matches
+        assert "pdd/commands/generate.py" in result
+        assert "pdd/cmd_test_main.py" in result
+
+    def test_missing_test_file_skipped(self, tmp_path):
+        """Non-existent test files are skipped gracefully."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        result = _verify_fix_location_coverage(
+            ["pdd/a.py", "pdd/b.py"],
+            ["tests/nonexistent.py"],
+            tmp_path,
+        )
+        assert result == ["pdd/a.py", "pdd/b.py"]
+
+
+class TestFixLocationsResumePathExtraction:
+    """Verify fix_locations is re-extracted on resume when step6_output exists."""
+
+    def test_resume_extracts_fix_locations_from_saved_step6(self, tmp_path):
+        """On resume, fix_locations should be parsed from saved step6_output."""
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        saved_state = {
+            "last_completed_step": 7,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Step 3 output",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": (
+                    "Root cause analysis\n"
+                    "FIX_LOCATIONS: pdd/commands/generate.py, pdd/cmd_test_main.py\n"
+                ),
+                "7": "DEFECT_TYPE: code\nCode bug.",
+            },
+            "total_cost": 0.5,
+            "model_used": "test-model",
+            "worktree_path": str(worktree_path),
+        }
+
+        captured = {}
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            captured[label] = kwargs.get("instruction", "")
+            if label == "step8":
+                return (True, "PLANNED_TEST_COUNT: 2", 0.1, "model")
+            if label == "step9":
+                return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        template = (
+            "Prompt for issue {issue_number}.\n"
+            "<fix_locations>{fix_locations}</fix_locations>\n"
+            "<step1_output>{step1_output}</step1_output>\n"
+            "<step2_output>{step2_output}</step2_output>\n"
+            "<step3_output>{step3_output}</step3_output>\n"
+            "<step4_output>{step4_output}</step4_output>\n"
+            "<step5_output>{step5_output}</step5_output>\n"
+            "<step6_output>{step6_output}</step6_output>\n"
+            "<step7_output>{step7_output}</step7_output>\n"
+            "<step8_output>{step8_output}</step8_output>\n"
+            "<step9_output>{step9_output}</step9_output>\n"
+        )
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+            mock_run.side_effect = mock_run_side_effect
+            mock_load.return_value = template
+            mock_worktree.return_value = (worktree_path, None)
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        # Step 8 should have fix_locations from the resumed step6 output
+        step8_instruction = captured.get("step8", "")
+        assert "pdd/commands/generate.py" in step8_instruction, (
+            "Resume path: Step 8 missing fix location from saved step6_output"
+        )
+        assert "pdd/cmd_test_main.py" in step8_instruction, (
+            "Resume path: Step 8 missing second fix location from saved step6_output"
+        )
+
+
+class TestMissingFixLocationsMarkerWarning:
+    """Verify warning is logged when Step 6 output has no FIX_LOCATIONS marker."""
+
+    def test_logs_warning_when_marker_missing(self, tmp_path):
+        """Step 6 without FIX_LOCATIONS emits a logger.warning."""
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        step6_output_no_marker = "Root cause is in generate.py:375\nNo marker here."
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step6":
+                return (True, step6_output_no_marker, 0.1, "model")
+            if label == "step8":
+                return (True, "PLANNED_TEST_COUNT: 1", 0.1, "model")
+            if label == "step9":
+                return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        template = (
+            "Prompt {issue_number} {fix_locations}\n"
+            "{step1_output}{step2_output}{step3_output}"
+            "{step4_output}{step5_output}{step6_output}"
+            "{step7_output}{step8_output}{step9_output}"
+        )
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.logger") as mock_logger:
+
+            mock_run.side_effect = mock_run_side_effect
+            mock_load.return_value = template
+            mock_worktree.return_value = (worktree_path, None)
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        # Check that logger.warning was called about missing FIX_LOCATIONS
+        warning_calls = [
+            str(c) for c in mock_logger.warning.call_args_list
+        ]
+        assert any("FIX_LOCATIONS" in w for w in warning_calls), (
+            f"Expected warning about missing FIX_LOCATIONS marker. "
+            f"Warning calls: {warning_calls}"
+        )
