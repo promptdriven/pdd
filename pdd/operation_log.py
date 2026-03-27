@@ -375,8 +375,9 @@ def log_operation(
                                 from .sync_determine_operation import get_pdd_file_paths
                                 paths = get_pdd_file_paths(basename, language)
                                 save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
-                            except Exception:
-                                pass  # Best-effort; don't let fingerprint saving break the command
+                            except Exception as e:
+                                console = Console()
+                                console.print(f"[yellow]Warning: fingerprint saving failed for {basename}/{language}: {e}[/yellow]")
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
         return wrapper

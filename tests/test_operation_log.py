@@ -790,3 +790,29 @@ def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_983(temp_pdd_env
         assert call_kwargs["paths"] is not None, (
             "Issue #983: paths=None passed to save_fingerprint"
         )
+
+
+def test_decorator_fingerprint_failure_warns_not_silent_issue_983(temp_pdd_env):
+    """
+    Issue #983: If fingerprint saving fails, the decorator must emit a visible
+    warning — not silently swallow the exception.
+    """
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def mock_generate(prompt_file: str):
+        return ("Generated", 0.05, "gpt-4")
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        side_effect=RuntimeError("simulated path resolution failure"),
+    ), patch("pdd.operation_log.Console") as mock_console_cls:
+        mock_console = MagicMock()
+        mock_console_cls.return_value = mock_console
+
+        # Should NOT raise — the decorator still catches the exception
+        mock_generate(prompt_file="prompts/warnmod_python.prompt")
+
+        # But it MUST print a warning, not silently pass
+        mock_console.print.assert_called_once()
+        warning_msg = mock_console.print.call_args[0][0]
+        assert "Warning" in warning_msg
+        assert "warnmod" in warning_msg
