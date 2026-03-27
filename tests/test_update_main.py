@@ -589,11 +589,13 @@ def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_lan
         os.chdir(original_cwd)
 
 
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
 @patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
-def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
+def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, _mock_example_gen, _mock_auto_submit, temp_git_repo, capsys):
     """
     Test the main orchestration logic of update_main in --repo mode.
     """
@@ -630,11 +632,13 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_cha
     assert result[0] == "Repository update complete."
 
 
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
 @patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
-def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
+def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, _mock_example_gen, _mock_auto_submit, temp_git_repo, capsys):
     """Repo mode should stop processing new files once budget cap is reached."""
     costs = iter([0.60, 0.60, 0.60])  # 3 changed pairs in fixture
 
@@ -676,7 +680,11 @@ def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git
 @patch("pdd.update_main.get_git_changed_files", return_value=set())
 @patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
 @patch("pdd.update_main.update_file_pair")
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
 def test_update_main_repo_mode_dependency_ordering_for_budget(
+    _mock_example_gen,
+    _mock_auto_submit,
     mock_update_file_pair,
     mock_is_changed,
     mock_git_changed,
@@ -800,6 +808,7 @@ def test_update_main_repo_mode_dry_run_skips_work(
     mock_doc_gen.assert_not_called()
 
 
+@patch("pdd.sync_main._auto_submit_example")
 @patch("pdd.context_generator_main.context_generator_main", return_value=("doc", 0.1, "mock"))
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
 @patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
@@ -815,6 +824,7 @@ def test_update_main_repo_mode_updates_included_markdown_docs(
     _mock_is_changed,
     _mock_arch,
     mock_doc_gen,
+    _mock_auto_submit,
     tmp_path,
 ):
     """After updating a prompt successfully, regenerate markdown docs referenced via <include> tags."""
