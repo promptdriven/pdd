@@ -275,7 +275,7 @@ describe("clip loading on mount", () => {
   });
 
   it("initializes selectedClipId from first clip", () => {
-    expect(sourceCode).toMatch(/setSelectedClipId\s*\(\s*fetchedClips\[0\]\.id\s*\)/);
+    expect(sourceCode).toMatch(/setSelectedClipId\s*\(\s*getClipRowKey\s*\(\s*fetchedClips\[0\]\s*\)\s*\)/);
   });
 
   it("uses useEffect for mount-time fetch", () => {
@@ -473,7 +473,12 @@ describe("clip list table", () => {
   });
 
   it("selects a clip row when clicked", () => {
-    expect(sourceCode).toMatch(/onClick=\{\(\)\s*=>\s*setSelectedClipId\s*\(\s*clip\.id\s*\)\s*\}/);
+    expect(sourceCode).toMatch(/onClick=\{\(\)\s*=>\s*setSelectedClipId\s*\(\s*getClipRowKey\s*\(\s*clip\s*\)\s*\)\s*\}/);
+  });
+
+  it("uses a composite row key for duplicate clip ids reused across sections", () => {
+    expect(sourceCode).toMatch(/const\s+getClipRowKey\s*=\s*\(clip:\s*VeoClip\)\s*:\s*string\s*=>\s*`\$\{clip\.sectionId\}:\$\{clip\.id\}`/);
+    expect(sourceCode).toMatch(/key=\{getClipRowKey\(clip\)\}/);
   });
 });
 
@@ -574,7 +579,7 @@ describe("auto-composite checkbox", () => {
 
   it("sends autoComposite flag in run request body", () => {
     expect(sourceCode).toMatch(/autoComposite/);
-    expect(sourceCode).toMatch(/JSON\.stringify\s*\(\s*\{\s*clips\s*:\s*clipIds\s*,\s*autoComposite\s*\}/);
+    expect(sourceCode).toMatch(/JSON\.stringify\s*\(\s*\{\s*clips\s*:\s*uniqueClipIds\s*,\s*autoComposite\s*\}/);
   });
 });
 

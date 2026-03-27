@@ -1,33 +1,34 @@
 [veo:]
 
-# Section 0.2: Developer Making AI-Assisted Edit
+# Section 0.2: Developer at Keyboard — AI-Assisted Edit
 
 **Tool:** Veo
-**Duration:** ~6s
-**Timestamp:** 0:00 - 0:06
+**Duration:** ~5s
+**Timestamp:** 0:00 - 0:05
 
 ## Visual Description
-Close-up of a developer's hands on a keyboard, with a modern IDE (dark theme, syntax-highlighted code) visible on a wide monitor. The developer types briefly, and an AI-assisted code suggestion appears inline — a smooth autocomplete that fills in several lines. The developer presses Tab to accept. The edit lands cleanly. The developer's posture is relaxed, confident. Warm desk lamp provides secondary lighting against the cool glow of the monitor.
+Close-up of a developer's hands at a keyboard, with a code editor (Cursor-like IDE) visible on the monitor. The developer accepts an inline AI suggestion — a code block highlights and is smoothly replaced. The edit lands cleanly. Warm modern office lighting, shallow depth of field focused on the hands and screen. The code on screen shows a function being patched — a small fix in a larger file.
 
 ### Veo Prompt
 ```
-Close-up shot of a developer's hands typing on a mechanical keyboard. A large monitor displays a dark-themed code editor with syntax-highlighted code. An AI autocomplete suggestion appears as ghost text, and the developer accepts it with a keystroke. The code snaps into place. Modern home office, warm desk lamp contrasting with cool monitor glow. Shallow depth of field focused on hands and screen. Cinematic lighting, 4K.
+Close-up shot of a developer's hands typing on a mechanical keyboard. A modern code editor with dark theme is visible on the monitor showing colored syntax-highlighted code. The developer clicks to accept an inline code suggestion that appears in gray text. The code change highlights briefly in green. Warm ambient office lighting, shallow depth of field. Modern desk setup with a single monitor. Cinematic, professional. 4K.
 ```
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Framing: Medium close-up, slight over-the-shoulder angle
-- Color temperature: Cool (monitor) + warm (desk lamp), mixed lighting
+- Framing: Close-up on hands and lower portion of monitor
+- Color temperature: Warm modern office — soft amber ambient with cool blue screen glow
+- Depth of field: Shallow, focus on hands and screen
 
 ### Animation Sequence
-1. **0-2s:** Developer typing, code visible on screen
-2. **2-4s:** AI suggestion ghost text appears inline
-3. **4-6s:** Developer accepts suggestion, code fills in cleanly
+1. **0-2s:** Developer's hands type a few keystrokes. AI suggestion appears as ghost text on screen.
+2. **2-4s:** Developer accepts the suggestion with a keystroke. Code block highlights green briefly.
+3. **4-5s:** The edit settles. Clean diff visible on screen. Hands rest on keyboard.
 
 ### Typography
-- None — the IDE on screen provides all text context
+- None — cinematic B-roll. Used as embedded clip within split screen.
 
 ### Easing
 - N/A (live-action footage)
@@ -35,18 +36,25 @@ Close-up shot of a developer's hands typing on a mechanical keyboard. A large mo
 ## Narration Sync
 > "If you use Cursor, or Claude Code, or Copilot..."
 
+Segment: `cold_open_001` (embedded in split screen left panel)
+
+- **0.00s**: Developer begins typing
+- **3.60s**: Edit completes cleanly
+
 ## Data Points JSON
 ```json
 {
   "type": "veo_clip",
   "clipId": "developer_cursor_edit",
-  "durationSeconds": 6,
+  "durationSeconds": 5,
   "characters": [
     {
-      "id": "developer",
+      "id": "developer_protagonist",
       "label": "Developer",
-      "referencePrompt": "A developer in their late 20s wearing a dark henley shirt, sitting at a modern desk with a mechanical keyboard and ultrawide monitor. Relaxed posture, warm desk lamp nearby."
+      "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Warm office lighting."
     }
   ]
 }
 ```
+
+---

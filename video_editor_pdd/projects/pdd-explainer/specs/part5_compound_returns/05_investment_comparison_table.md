@@ -1,147 +1,157 @@
 [Remotion]
 
-# Section 5.5: Investment Comparison Table — Patching vs. PDD Returns
+# Section 5.5: Investment Comparison Table — Patching vs. PDD
 
 **Tool:** Remotion
-**Duration:** ~10s (300 frames @ 30fps)
-**Timestamp:** 1:02 - 1:11
+**Duration:** ~9s (270 frames @ 30fps)
+**Timestamp:** 1:06 - 1:15
 
 ## Visual Description
-A clean, structured comparison table appears, reinforcing the diverging curves with concrete examples. The table has three columns — "Investment", "Patching", and "PDD" — and three rows comparing how each approach handles bug fixes, code improvements, and documentation.
 
-The table builds row by row. The "Patching" column entries appear in muted amber, suggesting limitation. The "PDD" column entries appear in bright teal with a subtle glow, suggesting compounding value. Each PDD cell feels like a win.
+A clean, animated comparison table materializes, showing how each investment compounds differently under patching vs. PDD:
 
-The table design is minimal and modern — no heavy borders, just horizontal dividers and plenty of whitespace.
+| Investment | Patching | PDD |
+|------------|----------|-----|
+| Fix a bug | One place, once | Impossible forever |
+| Improve code | One version | All future versions |
+| Document intent | One snapshot | Living specification |
+
+The table uses the 3B1B aesthetic — dark background, minimal borders, clean typography. Each row animates in sequentially. The "Patching" column values appear in amber (`#D9944A`) — limited, singular. The "PDD" column values appear in green (`#5AAA6E`) — expansive, permanent. The contrast in language ("once" vs. "forever", "one version" vs. "all future versions") carries the argument.
+
+A subtle glow sweeps across the PDD column after all rows are visible, reinforcing that this side compounds in your favor.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- No grid lines
+- No grid — clean table layout
 
 ### Chart/Visual Elements
 
 #### Table Layout
-- Table width: `1100px`, centered horizontally
-- Table top: `280px` from top
-- Column widths: `280px` (Investment), `360px` (Patching), `360px` (PDD)
-- Row height: `80px`
-- Row dividers: `1px` solid, `#1E293B` opacity `0.4`
+- Table width: 1200px, centered at x: 960
+- Table top: y: 280
+- Row height: 80px
+- Column widths: Investment (360px), Patching (360px), PDD (360px)
+- Borders: `#334155` at 0.3, 1px — horizontal separators only (no vertical lines)
 
 #### Header Row
-- Background: none (transparent)
-- "Investment" — Inter, 14px, bold, `#64748B`, uppercase, letter-spacing `1.5px`
-- "Patching" — Inter, 14px, bold, `#D9944A`, uppercase, letter-spacing `1.5px`
-- "PDD" — Inter, 14px, bold, `#4A90D9`, uppercase, letter-spacing `1.5px`
-- Bottom border: `2px` solid `#334155`
+- "Investment" — Inter, 16px, semi-bold (600), `#64748B`, uppercase, letter-spacing 2px
+- "Patching" — Inter, 16px, semi-bold (600), `#D9944A` at 0.7, uppercase, letter-spacing 2px
+- "PDD" — Inter, 16px, semi-bold (600), `#5AAA6E` at 0.7, uppercase, letter-spacing 2px
+- Header underline: 2px, `#334155` at 0.5
 
-#### Row 1 — Fix a Bug
-- Investment: "Fix a bug" — Inter, 16px, medium (500), `#E2E8F0`
-- Patching: "One place, once" — Inter, 16px, regular (400), `#D9944A` opacity `0.7`
-- PDD: "Impossible forever" — Inter, 16px, bold (600), `#4A90D9`
-- PDD cell has subtle left-border accent: `3px` solid `#4A90D9` opacity `0.3`
+#### Data Rows
+- Investment column: Inter, 18px, regular (400), `#E2E8F0`
+- Patching column: Inter, 18px, regular (400), `#D9944A` at 0.8
+- PDD column: Inter, 18px, semi-bold (600), `#5AAA6E`
 
-#### Row 2 — Improve Code
-- Investment: "Improve code" — Inter, 16px, medium (500), `#E2E8F0`
-- Patching: "One version" — Inter, 16px, regular (400), `#D9944A` opacity `0.7`
-- PDD: "All future versions" — Inter, 16px, bold (600), `#4A90D9`
-- PDD cell has subtle left-border accent: `3px` solid `#4A90D9` opacity `0.3`
+#### Row 1: "Fix a bug" | "One place, once" | "Impossible forever"
+#### Row 2: "Improve code" | "One version" | "All future versions"
+#### Row 3: "Document intent" | "One snapshot" | "Living specification"
 
-#### Row 3 — Document Intent
-- Investment: "Document intent" — Inter, 16px, medium (500), `#E2E8F0`
-- Patching: "One snapshot" — Inter, 16px, regular (400), `#D9944A` opacity `0.7`
-- PDD: "Living specification" — Inter, 16px, bold (600), `#4A90D9`
-- PDD cell has subtle left-border accent: `3px` solid `#4A90D9` opacity `0.3`
+#### PDD Column Glow Sweep
+- Linear gradient sweep left-to-right across PDD column: `#5AAA6E` at 0.08, 120px wide
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Header row fades in. Column titles appear. Bottom border draws left-to-right.
-2. **Frame 30-90 (1-3s):** Row 1 slides in from right (translateX `+40px→0`) with fade. All three cells appear simultaneously.
-3. **Frame 90-150 (3-5s):** Row 2 slides in with the same animation.
-4. **Frame 150-210 (5-7s):** Row 3 slides in.
-5. **Frame 210-240 (7-8s):** All PDD cells get a brief simultaneous glow pulse — the left-border accents pulse brightness from `0.3→0.6→0.3`.
-6. **Frame 240-300 (8-10s):** Hold. The table sits, clean and persuasive.
+1. **Frame 0-30 (0-1s):** Table header row fades in. Column labels appear. Header underline draws.
+2. **Frame 30-70 (1-2.33s):** Row 1 slides in from left. "Fix a bug" → "One place, once" (amber) → "Impossible forever" (green, slight emphasis scale).
+3. **Frame 70-110 (2.33-3.67s):** Row 2 slides in. "Improve code" → "One version" → "All future versions".
+4. **Frame 110-150 (3.67-5s):** Row 3 slides in. "Document intent" → "One snapshot" → "Living specification".
+5. **Frame 150-190 (5-6.33s):** Glow sweep across PDD column, top to bottom.
+6. **Frame 190-270 (6.33-9s):** Hold. Table fully visible.
 
 ### Typography
-- Column headers: Inter, 14px, bold (700), respective colors, uppercase, letter-spacing `1.5px`
-- Investment column: Inter, 16px, medium (500), `#E2E8F0`
-- Patching column: Inter, 16px, regular (400), `#D9944A` opacity `0.7`
-- PDD column: Inter, 16px, bold (600), `#4A90D9`
+- Headers: Inter, 16px, semi-bold (600), respective colors, uppercase, letter-spacing 2px
+- Investment labels: Inter, 18px, regular (400), `#E2E8F0`
+- Patching values: Inter, 18px, regular (400), `#D9944A` at 0.8
+- PDD values: Inter, 18px, semi-bold (600), `#5AAA6E`
 
 ### Easing
-- Row slide-in: `easeOutCubic` over 30 frames
-- Row fade-in: `easeOutQuad` over 25 frames
-- Header border draw: `easeInOutCubic` over 20 frames
-- Glow pulse: `easeInOutSine` over 30 frames
+- Header fade-in: `easeOut(quad)` over 20 frames
+- Row slide-in: `easeOut(cubic)` — 15px left slide, 25 frames
+- PDD emphasis scale: `easeOut(back)` 1.02 → 1.0
+- Glow sweep: `linear` over 40 frames
 
 ## Narration Sync
 > "One side of this equation compounds against you. The other compounds for you. That's not a marginal difference. Over time, it's everything."
 
+Segment: `part5_compound_returns_004`
+
+- **66.06s** (seg 004): Table header appears — "One side of this equation..."
+- **68.00s**: Row 1 — "Fix a bug"
+- **70.00s**: Row 2 — "Improve code"
+- **72.00s**: Row 3 — "Document intent"
+- **73.00s**: Glow sweep — "That's not a marginal difference"
+- **74.88s** (seg 004 ends): Table fully visible — "Over time, it's everything"
+
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={300}>
+<Sequence from={0} durationInFrames={270}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Header row */}
+
+    {/* Table header */}
     <Sequence from={0}>
-      <FadeIn durationInFrames={25}>
+      <FadeIn duration={20}>
         <TableHeader
-          columns={["Investment", "Patching", "PDD"]}
-          colors={["#64748B", "#D9944A", "#4A90D9"]}
-          font="Inter" size={14} weight={700}
-          uppercase letterSpacing="1.5px"
-          borderColor="#334155" borderWidth={2}
-          borderDrawDuration={20} />
+          columns={["INVESTMENT", "PATCHING", "PDD"]}
+          colors={["#64748B", "#D9944A", "#5AAA6E"]}
+          font="Inter" size={16} weight={600}
+          letterSpacing={2} y={280}
+        />
+        <DrawLine from={[360, 310]} to={[1560, 310]}
+          color="#334155" opacity={0.5} width={2}
+          drawDuration={15} />
       </FadeIn>
     </Sequence>
 
-    {/* Row 1: Fix a bug */}
+    {/* Row 1 */}
     <Sequence from={30}>
-      <SlideAndFade fromX={40} durationInFrames={30} easing="easeOutCubic">
-        <TableRow
+      <SlideIn direction="left" distance={15} duration={25}>
+        <TableRow y={360}
           cells={[
-            { text: "Fix a bug", color: "#E2E8F0", weight: 500 },
-            { text: "One place, once", color: "#D9944A", opacity: 0.7 },
-            { text: "Impossible forever", color: "#4A90D9", weight: 600,
-              accentBorder: { color: "#4A90D9", opacity: 0.3, width: 3 } }
+            { text: "Fix a bug", color: "#E2E8F0" },
+            { text: "One place, once", color: "#D9944A", opacity: 0.8 },
+            { text: "Impossible forever", color: "#5AAA6E", weight: 600 }
           ]}
-          dividerColor="#1E293B" dividerOpacity={0.4} />
-      </SlideAndFade>
+        />
+      </SlideIn>
     </Sequence>
 
-    {/* Row 2: Improve code */}
-    <Sequence from={90}>
-      <SlideAndFade fromX={40} durationInFrames={30} easing="easeOutCubic">
-        <TableRow
+    {/* Row 2 */}
+    <Sequence from={70}>
+      <SlideIn direction="left" distance={15} duration={25}>
+        <TableRow y={440}
           cells={[
-            { text: "Improve code", color: "#E2E8F0", weight: 500 },
-            { text: "One version", color: "#D9944A", opacity: 0.7 },
-            { text: "All future versions", color: "#4A90D9", weight: 600,
-              accentBorder: { color: "#4A90D9", opacity: 0.3, width: 3 } }
+            { text: "Improve code", color: "#E2E8F0" },
+            { text: "One version", color: "#D9944A", opacity: 0.8 },
+            { text: "All future versions", color: "#5AAA6E", weight: 600 }
           ]}
-          dividerColor="#1E293B" dividerOpacity={0.4} />
-      </SlideAndFade>
+        />
+      </SlideIn>
     </Sequence>
 
-    {/* Row 3: Document intent */}
+    {/* Row 3 */}
+    <Sequence from={110}>
+      <SlideIn direction="left" distance={15} duration={25}>
+        <TableRow y={520}
+          cells={[
+            { text: "Document intent", color: "#E2E8F0" },
+            { text: "One snapshot", color: "#D9944A", opacity: 0.8 },
+            { text: "Living specification", color: "#5AAA6E", weight: 600 }
+          ]}
+        />
+      </SlideIn>
+    </Sequence>
+
+    {/* PDD column glow sweep */}
     <Sequence from={150}>
-      <SlideAndFade fromX={40} durationInFrames={30} easing="easeOutCubic">
-        <TableRow
-          cells={[
-            { text: "Document intent", color: "#E2E8F0", weight: 500 },
-            { text: "One snapshot", color: "#D9944A", opacity: 0.7 },
-            { text: "Living specification", color: "#4A90D9", weight: 600,
-              accentBorder: { color: "#4A90D9", opacity: 0.3, width: 3 } }
-          ]}
-          dividerColor="#1E293B" dividerOpacity={0.4} />
-      </SlideAndFade>
-    </Sequence>
-
-    {/* PDD column glow pulse */}
-    <Sequence from={210}>
-      <GlowPulse targets="pdd_cells"
-        property="accentBorderOpacity"
-        from={0.3} to={0.6}
-        durationInFrames={30} easing="easeInOutSine" />
+      <GlowSweep
+        region={{ x: 1080, y: 280, width: 360, height: 300 }}
+        color="#5AAA6E" opacity={0.08}
+        sweepWidth={120} duration={40}
+      />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -151,11 +161,9 @@ The table design is minimal and modern — no heavy borders, just horizontal div
 ```json
 {
   "type": "comparison_table",
-  "columns": [
-    { "id": "investment", "label": "Investment", "color": "#64748B" },
-    { "id": "patching", "label": "Patching", "color": "#D9944A" },
-    { "id": "pdd", "label": "PDD", "color": "#4A90D9" }
-  ],
+  "chartId": "investment_patching_vs_pdd",
+  "columns": ["Investment", "Patching", "PDD"],
+  "columnColors": ["#E2E8F0", "#D9944A", "#5AAA6E"],
   "rows": [
     {
       "investment": "Fix a bug",
@@ -173,6 +181,8 @@ The table design is minimal and modern — no heavy borders, just horizontal div
       "pdd": "Living specification"
     }
   ],
-  "narrationSegments": ["part5_compound_returns_006"]
+  "narrationSegments": ["part5_compound_returns_004"]
 }
 ```
+
+---

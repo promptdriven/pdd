@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame at 87.5% progress (frame 104/120) correctly shows the glowing triangle in Phase 4 (slow fade). All three critical vertex labels — PROMPT (blue), TESTS (orange), GROUNDING (green) — are present at full brightness with visible outer glow effects. Triangle edges are brightened to a light slate color. Faded code text is barely visible in the center at very low opacity, properly subordinate to the glowing triangle. The background is deep navy-black (#0A0F1A). The slight dimming expected from the Phase 4 linear fade (~47% through 10% total dim) is consistent with the visible brightness. The mold cross-section overlay at 0.05 opacity is expected to be nearly imperceptible and its absence from clear visibility is within spec. The overall metaphor — luminous specification triangle vs. forgettable faded code — reads exactly as intended.

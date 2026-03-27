@@ -1,18 +1,18 @@
 [title:]
 
-# Section 1.1: The Economics of Code — Section Title Card
+# Section 1.1: The Economics of Darning — Section Title Card
 
 **Tool:** Title
-**Duration:** ~16s (480 frames @ 30fps)
-**Timestamp:** 0:00 - 0:16
+**Duration:** ~24s (720 frames @ 30fps)
+**Timestamp:** 0:00 - 0:24
 
 ## Visual Description
 
-A section title card introducing the economics argument. "THE ECONOMICS" appears first in large bold weight, then "OF CODE" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
+A section title card introducing Part 1. "THE ECONOMICS" appears in large bold weight, then "OF DARNING" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
 
-Behind the text, a faint ghost silhouette of two crossing lines (the sock/code cost analogy) sits at low opacity — a descending curve and an ascending curve that cross in the middle of the frame. The shape previews the economic crossover theme of the section. Background is deep navy-black.
+Behind the text, a faint ghost silhouette of a line chart sits at very low opacity — two lines crossing, foreshadowing the cost-crossing-point thesis. Background is deep navy-black consistent with the overall visual language.
 
-The title holds for the opening beats: "Watch this." (a dramatic cold open), then "15 lines of prompt. 200 lines of code." and continues through the PDD demo setup, transitioning into the economics argument with "isn't nostalgia. It's economics."
+The title holds across three narration segments covering the 30-second demo recap ("Watch this. 15 lines of prompt..."), the test-and-fix cycle, and the "let me show you why this matters" transition. The card fades out as the narration pivots to "This isn't nostalgia. It's economics."
 
 ## Technical Specifications
 
@@ -25,24 +25,24 @@ The title holds for the opening beats: "Watch this." (a dramatic cold open), the
 
 #### Title Text
 - "THE ECONOMICS" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
-- "OF CODE" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
-- Horizontal rule: 240px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+- "OF DARNING" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
+- Horizontal rule: 280px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
 #### Section Number
 - "PART 1" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
 #### Background Ghost (crossing lines)
-- Descending curve: bezier from top-left (300, 300) to bottom-right (1600, 700), `#4A90D9` at 0.03, 2px stroke
-- Ascending curve: bezier from bottom-left (300, 700) to top-right (1600, 300), `#D9944A` at 0.03, 2px stroke
-- Intersection point: subtle glow at crossing (~960, 500), `#FFFFFF` at 0.02, 20px radius
+- Two crossing lines: one descending (`#D9944A` at 0.04), one ascending (`#4A90D9` at 0.04), 1.5px stroke
+- Crossing point: subtle radial glow at intersection, `#FFFFFF` at 0.02, 30px radius
 
 ### Animation Sequence
 1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
 2. **Frame 15-40 (0.5-1.33s):** "PART 1" label fades in. Ghost crossing lines draw with stroke-dashoffset.
 3. **Frame 40-60 (1.33-2s):** "THE ECONOMICS" types on character-by-character (2 frames per character).
 4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
-5. **Frame 70-90 (2.33-3s):** "OF CODE" fades in with 10px upward slide.
-6. **Frame 90-480 (3-16s):** Hold. Ghost lines pulse subtly. Title fades out at end.
+5. **Frame 70-90 (2.33-3s):** "OF DARNING" fades in with 10px upward slide.
+6. **Frame 90-660 (3-22s):** Hold. Ghost lines pulse subtly. Title stays visible through demo recap narration.
+7. **Frame 660-720 (22-24s):** Title and elements fade out, transitioning to price chart.
 
 ### Typography
 - Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
@@ -51,40 +51,40 @@ The title holds for the opening beats: "Watch this." (a dramatic cold open), the
 
 ### Easing
 - Text fade-in: `easeOut(quad)` over 20 frames
-- "OF CODE" slide-up: `easeOut(cubic)` over 20 frames
+- "OF DARNING" slide-up: `easeOut(cubic)` over 20 frames
 - Rule draw: `easeInOut(quad)` over 10 frames
 - Ghost lines draw: `easeInOut(cubic)` over 30 frames
 - Lines pulse: `easeInOut(sine)` on 60-frame cycle
+- Final fade-out: `easeIn(quad)` over 60 frames
 
 ## Narration Sync
-> "Watch this."
-> "15 lines of prompt. 200 lines of code."
-> "Now a failing test. Regenerate."
-> "Now, let me show you why what you just saw isn't nostalgia. It's economics."
+> "Watch this. 15 lines of prompt. Two hundred lines of generated code."
+> "Now a failing test. Regenerate. Bug gone. Not patched — gone. The test is a permanent wall. That bug can never come back."
+> "Now, let me show you why this matters."
 
-Segments: `part1_economics_001`, `part1_economics_002`, `part1_economics_003`, `part1_economics_004`, `part1_economics_005`
+Segments: `part1_economics_001`, `part1_economics_002`, `part1_economics_003`
 
-- **0.00s** ("Watch this"): Title card begins fade-in
-- **0.74s** ("15 lines of prompt"): "THE ECONOMICS" typing on screen
-- **4.50s** ("Now a failing test"): Title fully visible, hold
-- **16.16s** ("Now, let me show you"): Title begins transition to price chart
-- **19.86s** ("isn't nostalgia. It's economics"): Title fading out
+- **0.00s** (seg 001): Title card begins fade-in
+- **6.70s** (seg 001 ends): "THE ECONOMICS" typing visible
+- **7.54s** (seg 002): Title fully visible, hold during demo recap
+- **20.60s** (seg 002 ends): Hold
+- **20.80s** (seg 003): "Now let me show you why this matters"
+- **23.34s** (seg 003 ends): Title begins fade-out
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={480}>
+<Sequence from={0} durationInFrames={720}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
     <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
     {/* Ghost crossing lines */}
     <Sequence from={15}>
       <StrokeDraw duration={30}>
-        <BezierCurve
-          points={[[300, 300], [600, 500], [960, 500], [1600, 700]]}
-          color="#4A90D9" opacity={0.03} strokeWidth={2} />
-        <BezierCurve
-          points={[[300, 700], [600, 500], [960, 500], [1600, 300]]}
-          color="#D9944A" opacity={0.03} strokeWidth={2} />
+        <CrossingLines
+          lineA={{ color: "#D9944A", opacity: 0.04 }}
+          lineB={{ color: "#4A90D9", opacity: 0.04 }}
+          strokeWidth={1.5}
+        />
       </StrokeDraw>
     </Sequence>
 
@@ -106,20 +106,25 @@ Segments: `part1_economics_001`, `part1_economics_002`, `part1_economics_003`, `
 
     {/* Horizontal rule */}
     <Sequence from={60}>
-      <DrawLine from={[840, 505]} to={[1080, 505]}
+      <DrawLine from={[820, 505]} to={[1100, 505]}
         color="#334155" opacity={0.5} width={2}
         drawDuration={10} fromCenter />
     </Sequence>
 
-    {/* Title: OF CODE */}
+    {/* Title: OF DARNING */}
     <Sequence from={70}>
       <SlideUp distance={10} duration={20}>
         <FadeIn duration={20}>
-          <Text text="OF CODE" font="Inter" size={72}
+          <Text text="OF DARNING" font="Inter" size={72}
             weight={700} color="#E2E8F0"
             x={975} y={545} align="center" />
         </FadeIn>
       </SlideUp>
+    </Sequence>
+
+    {/* Fade out */}
+    <Sequence from={660}>
+      <FadeOut duration={60} />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -132,13 +137,12 @@ Segments: `part1_economics_001`, `part1_economics_002`, `part1_economics_003`, `
   "sectionNumber": 1,
   "sectionLabel": "PART 1",
   "titleLine1": "THE ECONOMICS",
-  "titleLine2": "OF CODE",
+  "titleLine2": "OF DARNING",
   "backgroundColor": "#0A0F1A",
   "ghostElements": [
-    { "shape": "bezier_curve", "color": "#4A90D9", "role": "descending_cost" },
-    { "shape": "bezier_curve", "color": "#D9944A", "role": "ascending_cost" }
+    { "shape": "crossing_lines", "colors": ["#D9944A", "#4A90D9"], "role": "cost_crossing_preview" }
   ],
-  "narrationSegments": ["part1_economics_001", "part1_economics_002", "part1_economics_003", "part1_economics_004", "part1_economics_005"]
+  "narrationSegments": ["part1_economics_001", "part1_economics_002", "part1_economics_003"]
 }
 ```
 

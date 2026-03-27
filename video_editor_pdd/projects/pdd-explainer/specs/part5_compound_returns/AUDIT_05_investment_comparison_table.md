@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The rendered frame matches the spec in all material respects. The table is centered with three columns (Investment, Patching, PDD), three data rows with correct text content, proper color coding (amber for Patching, blue/teal for PDD, light gray for Investment), uppercase headers with appropriate letter-spacing, and subtle row dividers. At frame 269/300 (hold phase), all rows are fully visible and static. Small decorative icons appear beside each Investment label and PDD cells have a subtle background fill — these are minor embellishments that enhance the design without contradicting the spec's intent. The left-border accents on PDD cells are visible at rest opacity. Overall composition, layout, typography hierarchy, and color scheme are faithful to the specification.

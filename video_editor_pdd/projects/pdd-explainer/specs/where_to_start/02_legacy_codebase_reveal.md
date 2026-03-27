@@ -1,139 +1,126 @@
 [Remotion]
 
-# Section 6.2: Legacy Codebase Reveal — Dense Intimidating Code Wall
+# Section 6.2: Legacy Codebase Reveal
 
 **Tool:** Remotion
-**Duration:** ~6s (180 frames @ 30fps)
-**Timestamp:** 0:00 - 0:06
+**Duration:** ~9s (270 frames @ 30fps)
+**Timestamp:** 0:00 - 0:09
 
 ## Visual Description
 
-A large, existing codebase fills the screen — dense, intimidating, real. The viewer sees a wall of code rendered in a dark IDE theme. Multiple files are visible as stacked panes, giving the impression of a massive project.
+A large, intimidating codebase fills the screen. Dense code scrolls slowly upward — hundreds of lines of real-looking legacy code. Scattered throughout are the telltale comments of legacy software: `// don't touch`, `// here be dragons`, `// TODO: fix this (2019)`, `// nobody knows why this works`. The comments are highlighted in a warning amber while the surrounding code stays a muted slate.
 
-Scattered through the code are notorious developer comments that signal danger:
-- `// don't touch`
-- `// here be dragons`
-- `// TODO: refactor this someday`
-- `// nobody knows why this works`
-- `// legacy — do not modify`
+The overall feeling should be dread — this is the codebase every developer inherits. The code is dense, tangled, and clearly accreted over years. File tabs at the top show names like `auth_handler.py`, `payment_processor.py`, `legacy_utils.py`, `config_v2_final_FINAL.py`.
 
-These comments are highlighted in a warning amber, making them pop against the muted gray code. The code slowly scrolls upward, revealing more and more — the codebase is deep. A faint file tree sidebar is visible on the left, showing dozens of files, reinforcing scale.
-
-The mood is deliberately overwhelming: this is every real developer's starting point.
+The visual slowly zooms out to show the full scope — this isn't one file, it's an entire project. The scale is overwhelming.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: `#0D1117` (GitHub dark theme)
+- Background: `#0A0F1A` (deep navy-black)
+- No grid — replaced by code editor chrome
 
 ### Chart/Visual Elements
 
-#### Code Wall
-- 3 stacked panes (simulating split editor), each ~350px tall
-- Code font: JetBrains Mono, 12px, `#ABB2BF` at 0.7
-- Syntax colors (muted): keywords `#C678DD` at 0.5, strings `#98C379` at 0.4, functions `#61AFEF` at 0.5
-- Line numbers: `#3B4048` at 0.4, left margin 50px
-- Pane dividers: `#21262D`, 1px horizontal lines
-- Total visible lines: ~80 across all panes
+#### Code Editor Chrome
+- Top bar: `#1E293B`, 40px height, with file tabs
+- File tabs: `auth_handler.py` (active, `#0A0F1A`), `payment_processor.py`, `legacy_utils.py`, `config_v2_final_FINAL.py` — Inter 12px, `#94A3B8`
+- Line numbers: `#334155`, left gutter 50px wide
+- Code text: JetBrains Mono, 13px, `#94A3B8` at 0.7
 
-#### Danger Comments (highlighted)
-- Color: `#D9944A` (warm amber) at 0.9, bold
-- Background highlight: `#D9944A` at 0.08, rounded 4px
-- 5 comments distributed across the 3 panes:
-  - Pane 1, line 12: `// don't touch`
-  - Pane 1, line 28: `// here be dragons`
-  - Pane 2, line 8: `// TODO: refactor this someday`
-  - Pane 2, line 22: `// nobody knows why this works`
-  - Pane 3, line 15: `// legacy — do not modify`
+#### Code Content (representative lines)
+- Keywords: `#C792EA` (purple) — `def`, `class`, `if`, `return`, `import`
+- Strings: `#C3E88D` (green)
+- Functions/methods: `#82AAFF` (blue)
+- Regular code: `#A6ACCD` (slate)
 
-#### File Tree Sidebar
-- Width: 220px, left side
-- Background: `#161B22`
-- File icons and names: `#8B949E` at 0.5, Inter 11px
-- ~30 files listed, nested folders
-- Active file highlighted: `#1E293B` at 0.6
+#### Warning Comments (highlighted)
+- `// don't touch` — `#D9944A` at 0.9, with subtle amber glow background (`#D9944A` at 0.06)
+- `// here be dragons` — same styling
+- `// TODO: fix this (2019)` — same styling
+- `// nobody knows why this works` — same styling
+- Comments scattered at lines ~15, ~42, ~78, ~105
+
+#### Zoom Indicators
+- As zoom-out begins: file boundary lines appear as thin `#334155` at 0.3 dividers
+- Multiple files become visible in minimap-style density
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Code wall fades in from black. File tree appears on left.
-2. **Frame 20-60 (0.67-2s):** Code begins slow upward scroll (0.5px/frame). First danger comments come into view. `// don't touch` glows amber.
-3. **Frame 60-100 (2-3.33s):** More code scrolls. `// here be dragons` enters view and glows. Second pane becomes more visible.
-4. **Frame 100-140 (3.33-4.67s):** `// TODO: refactor this someday` and `// nobody knows why this works` glow in sequence. The scale becomes apparent.
-5. **Frame 140-160 (4.67-5.33s):** Third pane visible. `// legacy — do not modify` glows. Full wall of code is intimidating.
-6. **Frame 160-180 (5.33-6s):** Scroll slows. All danger comments pulse gently together. Hold — the codebase is real and daunting.
+1. **Frame 0-30 (0-1s):** Code editor fades in. Code already visible, scrolling slowly upward at 0.5px/frame.
+2. **Frame 30-60 (1-2s):** First warning comment scrolls into view: `// don't touch`. Amber highlight pulses once.
+3. **Frame 60-120 (2-4s):** More comments appear as code scrolls. `// here be dragons` slides into view. Each pulses on appearance.
+4. **Frame 120-180 (4-6s):** Camera begins slow zoom-out. Individual lines start becoming smaller. More files become visible.
+5. **Frame 180-240 (6-8s):** Zoomed out enough to see 4-5 files side by side. Dense. Overwhelming. Warning comments glow as amber dots in the density.
+6. **Frame 240-270 (8-9s):** Hold at full zoom-out. The codebase fills the screen as a dense block. Transition glow begins on one module.
 
 ### Typography
-- Code: JetBrains Mono, 12px, `#ABB2BF` at 0.7
-- Line numbers: JetBrains Mono, 12px, `#3B4048` at 0.4
-- Danger comments: JetBrains Mono, 12px, bold, `#D9944A` at 0.9
-- File tree: Inter, 11px, `#8B949E` at 0.5
+- Code: JetBrains Mono, 13px → scales down during zoom
+- File tabs: Inter, 12px, semi-bold (600), `#94A3B8`
+- Warning comments: JetBrains Mono, 13px, `#D9944A`
 
 ### Easing
-- Code fade-in: `easeOut(quad)` over 20 frames
-- Scroll: `linear` at 0.5px/frame, decelerating to 0 in final 20 frames via `easeOut(quad)`
-- Comment glow: `easeOut(cubic)` bloom over 10 frames per comment
-- Comment pulse (sustained): `easeInOut(sine)` on 60-frame cycle
+- Scroll: linear, constant 0.5px/frame
+- Comment highlight pulse: `easeInOut(sine)` over 20 frames
+- Zoom-out: `easeInOut(cubic)` over 120 frames
+- Amber dot glow: `easeInOut(sine)` on 40-frame cycle
 
 ## Narration Sync
 > "PDD can create prompts from existing code."
 
-Segment: `where_to_start_001` (opening)
+Segment: `where_to_start_001` (first portion, 0.00s - 9.00s approx)
 
-- **0:00** (0.00s): Legacy codebase appears — visual context for "existing code"
-- **0:02** (2.00s): Danger comments glowing — emphasizing the legacy nature
-- **0:05** (5.00s): Full intimidating codebase visible — setup complete
+- **0.00s** (seg 001): Code editor fades in, scrolling begins
+- **1.00s**: First warning comment visible
+- **4.00s**: Zoom-out begins — "PDD can create prompts from existing code"
+- **9.00s**: Fully zoomed out, one module begins to glow
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={180}>
-  <AbsoluteFill style={{ backgroundColor: '#0D1117' }}>
+<Sequence from={0} durationInFrames={270}>
+  <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
 
-    {/* File tree sidebar */}
+    {/* Code editor chrome */}
+    <EditorChrome
+      tabs={["auth_handler.py", "payment_processor.py", "legacy_utils.py", "config_v2_final_FINAL.py"]}
+      activeTab={0}
+    />
+
+    {/* Scrolling code with warning comments */}
     <Sequence from={0}>
-      <FadeIn duration={20}>
-        <FileTreeSidebar
-          width={220} background="#161B22"
-          files={fileTreeData} activeFile="auth_handler.py"
-          font="Inter" fontSize={11} color="#8B949E" opacity={0.5}
+      <ScrollingCode
+        scrollSpeed={0.5}
+        syntax="python"
+        warningComments={[
+          { line: 15, text: "# don't touch" },
+          { line: 42, text: "# here be dragons" },
+          { line: 78, text: "# TODO: fix this (2019)" },
+          { line: 105, text: "# nobody knows why this works" },
+        ]}
+        warningColor="#D9944A"
+        warningGlow={{ color: "#D9944A", opacity: 0.06 }}
+      />
+    </Sequence>
+
+    {/* Zoom-out camera */}
+    <Sequence from={120}>
+      <ZoomCamera
+        fromScale={1.0} toScale={0.25}
+        duration={120} easing="easeInOutCubic"
+        center={[960, 540]}
+      />
+    </Sequence>
+
+    {/* Module highlight glow (prepares for next spec) */}
+    <Sequence from={240}>
+      <FadeIn duration={30}>
+        <ModuleGlow
+          target="auth_handler"
+          color="#5AAA6E" opacity={0.15}
+          radius={60}
         />
       </FadeIn>
     </Sequence>
-
-    {/* Code wall — 3 stacked panes */}
-    <Sequence from={0}>
-      <FadeIn duration={20}>
-        <ScrollContainer scrollRate={0.5} decelStart={160} decelDuration={20}>
-          {codePanes.map((pane, i) => (
-            <CodePane
-              key={i}
-              lines={pane.lines}
-              startLine={pane.startLine}
-              font="JetBrains Mono" fontSize={12}
-              codeColor="#ABB2BF" codeOpacity={0.7}
-              lineNumberColor="#3B4048"
-              syntaxColors={{
-                keyword: '#C678DD', string: '#98C379', function: '#61AFEF'
-              }}
-            >
-              {pane.dangerComments.map((comment, j) => (
-                <DangerComment
-                  key={j}
-                  line={comment.line}
-                  text={comment.text}
-                  color="#D9944A"
-                  highlightBg="#D9944A"
-                  highlightOpacity={0.08}
-                  glowDelay={comment.glowFrame}
-                  glowDuration={10}
-                  pulseCycle={60}
-                />
-              ))}
-            </CodePane>
-          ))}
-        </ScrollContainer>
-      </FadeIn>
-    </Sequence>
-
   </AbsoluteFill>
 </Sequence>
 ```
@@ -141,17 +128,20 @@ Segment: `where_to_start_001` (opening)
 ## Data Points JSON
 ```json
 {
-  "type": "code_wall",
-  "layout": "stacked_panes",
-  "paneCount": 3,
-  "dangerComments": [
-    { "pane": 1, "line": 12, "text": "// don't touch", "glowFrame": 30 },
-    { "pane": 1, "line": 28, "text": "// here be dragons", "glowFrame": 60 },
-    { "pane": 2, "line": 8, "text": "// TODO: refactor this someday", "glowFrame": 100 },
-    { "pane": 2, "line": 22, "text": "// nobody knows why this works", "glowFrame": 115 },
-    { "pane": 3, "line": 15, "text": "// legacy — do not modify", "glowFrame": 140 }
+  "type": "code_editor_animation",
+  "editorId": "legacy_codebase_reveal",
+  "files": [
+    "auth_handler.py",
+    "payment_processor.py",
+    "legacy_utils.py",
+    "config_v2_final_FINAL.py"
   ],
-  "scrollRate": 0.5,
+  "warningComments": [
+    { "line": 15, "text": "# don't touch" },
+    { "line": 42, "text": "# here be dragons" },
+    { "line": 78, "text": "# TODO: fix this (2019)" },
+    { "line": 105, "text": "# nobody knows why this works" }
+  ],
   "narrationSegments": ["where_to_start_001"]
 }
 ```

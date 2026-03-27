@@ -182,38 +182,36 @@
     "maxConcurrentGenerations": 4,
     "references": [
       {
-        "id": "chip_engineer_1980s",
+        "id": "chip_engineer",
         "label": "1980s Chip Engineer",
-        "imagePath": "outputs/veo/references/chip_engineer_1980s.png",
+        "imagePath": "outputs/veo/references/chip_engineer.png",
         "sections": [
           "part2_paradigm_shift"
         ],
-        "referencePrompt": "A chip design engineer in his 30s wearing a short-sleeve dress shirt, hunched over a large drafting desk in a 1980s electronics lab. Technical pen in hand, surrounded by datasheets and analog instruments.",
-        "prompt": "A chip design engineer in his 30s wearing a short-sleeve dress shirt, hunched over a large drafting desk in a 1980s electronics lab. Technical pen in hand, surrounded by datasheets and analog instruments.",
+        "referencePrompt": "Male electronics engineer in button-down shirt, 1980s style, drafting desk with schematics, fluorescent-lit lab",
+        "prompt": "Male electronics engineer in button-down shirt, 1980s style, drafting desk with schematics, fluorescent-lit lab",
         "source": "stage6-inferred"
       },
       {
         "id": "craftsman",
-        "label": "Woodworking Craftsman",
+        "label": "Craftsman",
         "imagePath": "outputs/veo/references/craftsman.png",
         "sections": [
           "part2_paradigm_shift"
         ],
-        "referencePrompt": "A craftsman in his 50s wearing a leather apron over a flannel shirt, working in a warm wood-filled workshop with natural window light and an overhead lamp. Weathered hands, focused expression.",
-        "prompt": "A craftsman in his 50s wearing a leather apron over a flannel shirt, working in a warm wood-filled workshop with natural window light and an overhead lamp. Weathered hands, focused expression.",
+        "referencePrompt": "Experienced woodworker, middle-aged, work apron, traditional workshop setting with warm lighting",
+        "prompt": "Experienced woodworker, middle-aged, work apron, traditional workshop setting with warm lighting",
         "source": "stage6-inferred"
       },
       {
         "id": "developer",
-        "label": "Developer",
+        "label": "Modern Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
-          "closing",
-          "cold_open",
           "part5_compound_returns"
         ],
-        "referencePrompt": "A developer in their late 20s wearing a dark henley shirt, sitting at a modern desk with a mechanical keyboard and ultrawide monitor. Relaxed posture, warm desk lamp nearby.",
-        "prompt": "A developer in their late 20s wearing a dark henley shirt, sitting at a modern desk with a mechanical keyboard and ultrawide monitor. Relaxed posture, warm desk lamp nearby.",
+        "referencePrompt": "Software developer at modern desk with large monitor showing code editor, cool blue-white lighting, mechanical keyboard, minimalist workspace",
+        "prompt": "Software developer at modern desk with large monitor showing code editor, cool blue-white lighting, mechanical keyboard, minimalist workspace",
         "source": "stage6-inferred"
       },
       {
@@ -221,21 +219,12 @@
         "label": "Developer",
         "imagePath": "outputs/veo/references/developer_protagonist.png",
         "sections": [
+          "closing",
+          "cold_open",
           "part1_economics"
         ],
-        "referencePrompt": "Mid-30s software developer, focused expression, modern casual attire, working at a clean desk with dark-themed code editor",
-        "prompt": "Mid-30s software developer, focused expression, modern casual attire, working at a clean desk with dark-themed code editor",
-        "source": "stage6-inferred"
-      },
-      {
-        "id": "factory_engineer",
-        "label": "Factory Engineer",
-        "imagePath": "outputs/veo/references/factory_engineer.png",
-        "sections": [
-          "part2_paradigm_shift"
-        ],
-        "referencePrompt": "An engineer in a clean grey work shirt, mid-40s, steady hands, working at a well-lit industrial workbench with precision tools and machined steel molds.",
-        "prompt": "An engineer in a clean grey work shirt, mid-40s, steady hands, working at a well-lit industrial workbench with precision tools and machined steel molds.",
+        "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Cool blue-white lighting from LED desk lamp and monitor glow.",
+        "prompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Cool blue-white lighting from LED desk lamp and monitor glow.",
         "source": "stage6-inferred"
       },
       {
@@ -244,25 +233,47 @@
         "imagePath": "outputs/veo/references/grandmother.png",
         "sections": [
           "cold_open",
+          "part1_economics",
           "part5_compound_returns"
         ],
-        "referencePrompt": "An elderly woman in her 70s with silver hair pinned up, wearing a floral housedress and reading glasses on a chain. 1950s appearance, kind face, sitting in a cushioned armchair under warm lamplight.",
-        "prompt": "An elderly woman in her 70s with silver hair pinned up, wearing a floral housedress and reading glasses on a chain. 1950s appearance, kind face, sitting in a cushioned armchair under warm lamplight.",
+        "referencePrompt": "Elderly woman in 1950s domestic setting, warm lamplight, wooden chair, period-appropriate clothing and furnishings",
+        "prompt": "Elderly woman in 1950s domestic setting, warm lamplight, wooden chair, period-appropriate clothing and furnishings",
         "source": "stage6-inferred"
       },
       {
-        "id": "grandmother_darner",
-        "label": "Grandmother",
-        "imagePath": "outputs/veo/references/grandmother_darner.png",
+        "id": "manufacturing_engineer",
+        "label": "Manufacturing Engineer",
+        "imagePath": "outputs/veo/references/manufacturing_engineer.png",
         "sections": [
-          "part1_economics"
+          "part2_paradigm_shift"
         ],
-        "referencePrompt": "Elderly woman in her 70s, experienced steady hands, calm focused expression, working under warm lamplight in a comfortable living room",
-        "prompt": "Elderly woman in her 70s, experienced steady hands, calm focused expression, working under warm lamplight in a comfortable living room",
+        "referencePrompt": "Middle-aged manufacturing engineer in safety glasses and clean work shirt, professional workshop setting",
+        "prompt": "Middle-aged manufacturing engineer in safety glasses and clean work shirt, professional workshop setting",
         "source": "stage6-inferred"
       }
     ],
-    "frameChains": []
+    "frameChains": [
+      {
+        "clips": [
+          "developer_cursor_edit",
+          "developer_codebase_zoomout",
+          "developer_cursor_p1",
+          "developer_regenerate_closing"
+        ],
+        "referenceId": "developer_protagonist",
+        "source": "stage6-inferred"
+      },
+      {
+        "clips": [
+          "grandmother_darning",
+          "grandmother_drawer_zoomout",
+          "grandmother_darning_p1",
+          "grandmother_socks_callback"
+        ],
+        "referenceId": "grandmother",
+        "source": "stage6-inferred"
+      }
+    ]
   },
   "render": {
     "maxParallelRenders": 3,

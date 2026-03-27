@@ -415,6 +415,7 @@ Instructions:
   - when the same human character/person recurs across multiple [veo:] specs or must stay visually consistent, include:
     "characters": [{ "id": "{snake_case_character_id}", "label": "{Display Name}", "referencePrompt": "{portrait/reference description}" }]
   - include characters ONLY for recurring or consistency-critical people, not one-off background extras
+  - When the same person recurs across clips or sections, reuse the EXACT same character id. Do NOT invent aliases like developer_protagonist vs developer_reviewer for the same person.
   - Do NOT put the natural-language Veo prompt inline inside the [veo:] marker.
   - IMPORTANT: Each Veo prompt must describe a single continuous action or moment, NOT a multi-step
     sequence. Veo models cannot reliably produce complex multi-phase action sequences (e.g.
@@ -515,10 +516,12 @@ ${sectionContext}
     const syncedConfig = syncInferredVeoReferencesFromProjectSpecs(getProjectDir(), cfg);
     const previousReferences = JSON.stringify(cfg.veo.references ?? []);
     const nextReferences = JSON.stringify(syncedConfig.veo.references ?? []);
-    if (previousReferences !== nextReferences) {
+    const previousFrameChains = JSON.stringify(cfg.veo.frameChains ?? []);
+    const nextFrameChains = JSON.stringify(syncedConfig.veo.frameChains ?? []);
+    if (previousReferences !== nextReferences || previousFrameChains !== nextFrameChains) {
       saveProject(syncedConfig, getProjectDir());
       onLog(
-        `[specs] Synced ${(syncedConfig.veo.references ?? []).length} Veo reference entr${(syncedConfig.veo.references ?? []).length === 1 ? "y" : "ies"} to project.json`
+        `[specs] Synced ${(syncedConfig.veo.references ?? []).length} Veo reference entr${(syncedConfig.veo.references ?? []).length === 1 ? "y" : "ies"} and ${(syncedConfig.veo.frameChains ?? []).length} frame chain${(syncedConfig.veo.frameChains ?? []).length === 1 ? "" : "s"} to project.json`
       );
     }
   };

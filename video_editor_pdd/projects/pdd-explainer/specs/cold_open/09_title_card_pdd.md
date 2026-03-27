@@ -1,88 +1,123 @@
 [title:]
 
-# Section 0.9: Title Card — Prompt-Driven Development
+# Section 0.9: Title Card — "Prompt-Driven Development"
 
 **Tool:** Title
-**Duration:** ~2s
-**Timestamp:** 0:16 - 0:18
+**Duration:** ~2s (60 frames @ 30fps)
+**Timestamp:** 0:17 - 0:18
 
 ## Visual Description
-The clean regenerated code from spec 08 remains visible but dims to ~20% opacity. Over it, the title "Prompt-Driven Development" fades in — large, clean, centered. The text is white with a very subtle blue glow that pulses once, evoking the "regeneration" energy of the preceding beat. Below the main title, a thin horizontal rule fades in, followed by a subtle tagline or the video working title in smaller text. The background code provides texture without distraction.
+The title card fades in over the regenerated code from the previous shot. The clean code remains visible in the background at reduced opacity, creating a layered effect. "PROMPT-DRIVEN" appears first in large bold weight, then "DEVELOPMENT" fades in below with a slight offset. A thin horizontal rule draws between the two words. The text is white on the darkened code background — the regenerated code is the visual evidence of the thesis. This is the landing moment of the cold open: the name of the thing we've just demonstrated.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #1E1E1E (continuing from code editor) with code at 20% opacity
-- Overlay: Semi-transparent dark vignette (radial gradient from transparent center to #000000 at 60% opacity at edges)
+- Background: Inherited code editor (`#1E1E2E`) with code at 0.15 opacity
+- Overlay: `#1E1E2E` at 0.7 (darkening layer over code)
 
 ### Chart/Visual Elements
-- Title text: centered horizontally and vertically (960px, 480px)
-- Horizontal rule: 200px wide, centered, 1px, #FFFFFF at 40% opacity
-- Blue glow: box-shadow `0 0 40px rgba(79, 193, 255, 0.3)` on text, pulses once
+
+#### Background Code Layer
+- The regenerated clean function from 08_code_regeneration, visible at 15% opacity
+- Creates texture and continuity — the title emerges FROM the code
+
+#### Title Text
+- "PROMPT-DRIVEN" — Inter, 64px, bold (700), `#CDD6F4`, centered at y: 470
+- "DEVELOPMENT" — Inter, 64px, bold (700), `#CDD6F4`, centered at y: 545, offset-right 10px
+- Horizontal rule: 300px wide, 2px, `#6C7086` at 0.5, centered between words at y: 510
+
+#### Subtle Accent
+- Thin glowing line beneath the rule: `#89B4FA` at 0.2, 200px wide, 1px, centered
+- Suggests the technological/code nature of the concept
 
 ### Animation Sequence
-1. **Frame 0-6 (0-0.2s):** Background code dims from 100% → 20% opacity. Dark vignette fades in.
-2. **Frame 6-24 (0.2-0.8s):** "Prompt-Driven Development" fades in (opacity 0 → 1) with slight scale-up (0.95 → 1.0).
-3. **Frame 24-30 (0.8-1.0s):** Blue glow pulses: opacity 0 → 0.3 → 0. Single pulse.
-4. **Frame 30-42 (1.0-1.4s):** Horizontal rule draws in from center outward (width 0 → 200px). Tagline fades in below.
-5. **Frame 42-60 (1.4-2.0s):** Hold. All elements static.
+1. **Frame 0-10 (0-0.33s):** Dark overlay fades in over regenerated code, dimming it to 15% opacity.
+2. **Frame 10-25 (0.33-0.83s):** "PROMPT-DRIVEN" fades in with a 5px upward slide.
+3. **Frame 25-30 (0.83-1.0s):** Horizontal rule draws from center outward.
+4. **Frame 30-45 (1.0-1.5s):** "DEVELOPMENT" fades in with a 5px upward slide.
+5. **Frame 45-48 (1.5-1.6s):** Blue accent glow pulses once beneath the rule.
+6. **Frame 48-60 (1.6-2.0s):** Hold. Title fully visible over faded code. End of cold open.
 
 ### Typography
-- Title: Inter Bold (or Outfit Bold), 72px, #FFFFFF, letter-spacing: 2px
-- Tagline: Inter Regular, 22px, #AAAAAA, letter-spacing: 1px
-- Horizontal rule: 1px solid #FFFFFF at 40% opacity
+- Title words: Inter, 64px, bold (700), `#CDD6F4`
+- Rule: `#6C7086` at 0.5
+- Accent: `#89B4FA` at 0.2
 
 ### Easing
-- Code dim: `easeOutQuad`
-- Title fade-in + scale: `easeOutCubic`
-- Glow pulse: `easeInOutSine`
-- Rule draw-in: `easeInOutQuad`
+- Overlay fade: `easeOut(quad)` over 10 frames
+- "PROMPT-DRIVEN" slide + fade: `easeOut(cubic)` over 15 frames
+- Rule draw: `easeInOut(quad)` over 5 frames
+- "DEVELOPMENT" slide + fade: `easeOut(cubic)` over 15 frames
+- Accent pulse: `easeInOut(sine)` single cycle over 3 frames
 
 ## Narration Sync
 > "So why are we still patching?"
 
+Segment: `cold_open_006` (tail end — title card overlaps final beat)
+
+- **17.40s**: Title card begins fade-in over regenerated code
+- **17.90s**: Title fully visible — cold open ends
+
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={60}>
-  {/* Dim background code */}
-  <Sequence from={0} durationInFrames={6}>
-    <AnimateOpacity from={1} to={0.2}>
-      <CodeEditor code={CLEAN_FUNCTION_CODE} theme="vscode-dark" />
-    </AnimateOpacity>
-  </Sequence>
+  <AbsoluteFill style={{ backgroundColor: '#1E1E2E' }}>
+    {/* Background: regenerated code at low opacity */}
+    <div style={{ opacity: 0.15 }}>
+      <CodeEditor
+        language="python"
+        theme="catppuccin-mocha"
+        code={CLEAN_FUNCTION_CODE}
+      />
+    </div>
 
-  {/* Dark vignette overlay */}
-  <FadeIn durationInFrames={6}>
-    <RadialVignette color="#000000" opacity={0.6} />
-  </FadeIn>
-
-  {/* Title */}
-  <Sequence from={6} durationInFrames={54}>
-    <FadeIn durationInFrames={18}>
-      <ScaleIn from={0.95} to={1.0} durationInFrames={18}>
-        <Title
-          text="Prompt-Driven Development"
-          font="Inter Bold"
-          size={72}
-          color="#FFFFFF"
-          letterSpacing={2}
-          glowColor="rgba(79, 193, 255, 0.3)"
-          glowPulseFrame={24}
-        />
-      </ScaleIn>
-    </FadeIn>
-  </Sequence>
-
-  {/* Horizontal rule + tagline */}
-  <Sequence from={30} durationInFrames={30}>
-    <DrawLine width={200} color="#FFFFFF" opacity={0.4} durationInFrames={12} />
-    <Sequence from={6}>
-      <FadeIn durationInFrames={8}>
-        <Subtitle text="Why You're Still Darning Socks" size={22} color="#AAAAAA" />
+    {/* Darkening overlay */}
+    <Sequence from={0}>
+      <FadeIn duration={10}>
+        <AbsoluteFill style={{ backgroundColor: '#1E1E2E', opacity: 0.7 }} />
       </FadeIn>
     </Sequence>
-  </Sequence>
+
+    {/* Title: PROMPT-DRIVEN */}
+    <Sequence from={10}>
+      <SlideUp distance={5} duration={15}>
+        <FadeIn duration={15}>
+          <Text text="PROMPT-DRIVEN" font="Inter" size={64}
+            weight={700} color="#CDD6F4"
+            x={960} y={470} align="center" />
+        </FadeIn>
+      </SlideUp>
+    </Sequence>
+
+    {/* Horizontal rule */}
+    <Sequence from={25}>
+      <DrawLine from={[810, 510]} to={[1110, 510]}
+        color="#6C7086" opacity={0.5} width={2}
+        drawDuration={5} fromCenter />
+    </Sequence>
+
+    {/* Title: DEVELOPMENT */}
+    <Sequence from={30}>
+      <SlideUp distance={5} duration={15}>
+        <FadeIn duration={15}>
+          <Text text="DEVELOPMENT" font="Inter" size={64}
+            weight={700} color="#CDD6F4"
+            x={970} y={545} align="center" />
+        </FadeIn>
+      </SlideUp>
+    </Sequence>
+
+    {/* Blue accent glow */}
+    <Sequence from={45}>
+      <GlowPulse
+        color="#89B4FA" opacity={0.2}
+        width={200} height={1}
+        x={960} y={512}
+        pulseFrames={3}
+      />
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -90,13 +125,15 @@ The clean regenerated code from spec 08 remains visible but dims to ~20% opacity
 ```json
 {
   "type": "title_card",
-  "title": "Prompt-Driven Development",
-  "tagline": "Why You're Still Darning Socks",
-  "titleFont": "Inter Bold",
-  "titleSize": 72,
-  "titleColor": "#FFFFFF",
-  "glowColor": "rgba(79, 193, 255, 0.3)",
-  "backgroundCodeOpacity": 0.2,
-  "vignetteOpacity": 0.6
+  "sectionNumber": 0,
+  "titleLine1": "PROMPT-DRIVEN",
+  "titleLine2": "DEVELOPMENT",
+  "backgroundColor": "#1E1E2E",
+  "backgroundLayer": "regenerated_code_at_15_percent",
+  "accentColor": "#89B4FA",
+  "narrationSegments": ["cold_open_006"],
+  "durationSeconds": 2.0
 }
 ```
+
+---

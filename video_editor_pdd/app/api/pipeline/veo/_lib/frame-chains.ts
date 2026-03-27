@@ -9,7 +9,7 @@ export type VeoChainPlan = {
   needsLastFrame: boolean;
 };
 
-const resolveReferenceImagePath = (
+export const resolveReferenceImagePath = (
   projectDir: string,
   references: VeoReference[],
   referenceId: string

@@ -3,12 +3,13 @@ import path from 'path';
 
 import { createSseStream } from '@/lib/sse';
 import { loadProject } from '@/lib/project';
-import { generateVeoClip, extractLastFrame } from '@/lib/veo';
+import { syncInferredVeoReferencesFromProjectSpecs } from '@/lib/veo-references';
+import { generateReferenceImage, generateVeoClip, extractLastFrame } from '@/lib/veo';
 import { extractFrameAtTime, getSectionDuration } from '@/lib/render';
 import { runClaudeAnalysis } from '@/lib/claude';
 import { registerExecutor, runPipelineStage } from '@/lib/jobs';
 import { emitClipEvent } from '@/lib/clip-events';
-import type { SseSend } from '@/lib/types';
+import type { SseSend, VeoConfig, VeoReference } from '@/lib/types';
 import { getProjectDir } from "@/lib/projects";
 import {
   generateDeterministicVeoClip,
@@ -19,7 +20,10 @@ import {
   normalizeSpecDir,
   selectCanonicalVeoPromptSpec,
 } from '@/lib/veo-spec-context';
-import { resolveVeoFrameChainPlan } from '../_lib/frame-chains';
+import {
+  resolveReferenceImagePath,
+  resolveVeoFrameChainPlan,
+} from '../_lib/frame-chains';
 import {
   resolveSectionHasVeoIntent,
   resolveSectionVeoPromptFromScript,
@@ -32,6 +36,88 @@ import {
 export const runtime = 'nodejs';
 const CLIP_VALIDATION_SAMPLE_RATIOS = [0.2, 0.5, 0.8];
 const MAX_CLIP_GENERATION_ATTEMPTS = 2;
+
+function resolveActiveReferenceIds(
+  clipIds: string[],
+  frameChains: Array<{ clips?: unknown; referenceId?: unknown }>
+): string[] {
+  const activeClipIds = new Set(clipIds);
+  const referenceIds = new Set<string>();
+
+  for (const chain of frameChains) {
+    if (!Array.isArray(chain?.clips) || typeof chain?.referenceId !== "string") {
+      continue;
+    }
+
+    if (!chain.clips.some((clipId) => typeof clipId === "string" && activeClipIds.has(clipId))) {
+      continue;
+    }
+
+    const referenceId = chain.referenceId.trim();
+    if (!referenceId) {
+      continue;
+    }
+
+    referenceIds.add(referenceId);
+  }
+
+  return Array.from(referenceIds.values()).sort((left, right) => left.localeCompare(right));
+}
+
+function resolveReferencePortraitPrompt(referenceId: string, references: VeoReference[]): {
+  label: string;
+  prompt: string;
+} {
+  const reference = references.find((entry) => entry.id === referenceId);
+  const label = reference?.label ?? referenceId;
+  const prompt =
+    (typeof reference?.referencePrompt === "string" && reference.referencePrompt.trim().length > 0
+      ? reference.referencePrompt.trim()
+      : typeof reference?.prompt === "string" && reference.prompt.trim().length > 0
+        ? reference.prompt.trim()
+        : null) ??
+    `Professional portrait photograph of ${label}, detailed face, neutral background`;
+
+  return { label, prompt };
+}
+
+async function ensureActiveReferencePortraits(
+  projectDir: string,
+  clipIds: string[],
+  veoConfig: Partial<VeoConfig> | null | undefined,
+  onLog: (message: string) => void
+): Promise<void> {
+  const references = veoConfig?.references ?? [];
+  const activeReferenceIds = resolveActiveReferenceIds(
+    clipIds,
+    veoConfig?.frameChains ?? []
+  );
+
+  for (const referenceId of activeReferenceIds) {
+    const existingReferencePath = resolveReferenceImagePath(
+      projectDir,
+      references,
+      referenceId
+    );
+    if (existingReferencePath) {
+      continue;
+    }
+
+    const { label, prompt } = resolveReferencePortraitPrompt(referenceId, references);
+    const outputPath = path.join(
+      projectDir,
+      "outputs",
+      "veo",
+      "references",
+      `${referenceId}.png`
+    );
+
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    onLog(`Generating missing reference portrait for "${label}"`);
+    await generateReferenceImage(prompt, outputPath);
+    onLog(`Reference portrait saved: ${referenceId}.png`);
+  }
+}
 
 function isRetryableVeoGenerationError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
@@ -239,10 +325,28 @@ function resolveSectionClipJobs(
   ];
 }
 
+function dedupeClipJobsById(clipJobs: ResolvedClipJob[]): ResolvedClipJob[] {
+  const seenClipIds = new Set<string>();
+  const deduped: ResolvedClipJob[] = [];
+
+  for (const clipJob of clipJobs) {
+    if (seenClipIds.has(clipJob.id)) {
+      continue;
+    }
+    seenClipIds.add(clipJob.id);
+    deduped.push(clipJob);
+  }
+
+  return deduped;
+}
+
 // Register the Veo executor once at module load
 registerExecutor('veo', (params, send: SseSend) => {
   return async (onLog) => {
-    const config = loadProject();
+    const config = syncInferredVeoReferencesFromProjectSpecs(
+      getProjectDir(),
+      loadProject()
+    );
     const sections = config.sections;
     const mainScriptPath = path.join(getProjectDir(), 'narrative', 'main_script.md');
     let mainScriptContent: string | null = null;
@@ -268,19 +372,27 @@ registerExecutor('veo', (params, send: SseSend) => {
         : true
     );
 
-    const ordered = orderedSections.flatMap((section) =>
-      resolveSectionClipJobs(section, mainScriptContent)
-    ).filter(
-      (clip) =>
-        !requestedClips ||
-        requestedClips.has(clip.id) ||
-        requestedClips.has(clip.sectionId)
+    const ordered = dedupeClipJobsById(
+      orderedSections.flatMap((section) =>
+        resolveSectionClipJobs(section, mainScriptContent)
+      ).filter(
+        (clip) =>
+          !requestedClips ||
+          requestedClips.has(clip.id) ||
+          requestedClips.has(clip.sectionId)
+      )
     );
 
     const total = ordered.length;
     const model = config.veo.model;
     const progressFn = (onLog as unknown as { progress?: (p: number) => void })
       .progress;
+    await ensureActiveReferencePortraits(
+      getProjectDir(),
+      ordered.map((clip) => clip.id),
+      config.veo,
+      onLog
+    );
     const chainPlan = resolveVeoFrameChainPlan(
       getProjectDir(),
       ordered.map((clip) => clip.id),

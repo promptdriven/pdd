@@ -1,33 +1,33 @@
 [veo:]
 
-# Section 0.5: Grandmother's Mending Drawer Zoom-Out
+# Section 0.5: Grandmother's Drawer — Dozens of Mended Garments
 
-**Tool:** Veo (cinematic B-roll)
-**Duration:** ~5s
-**Timestamp:** 0:06 - 0:11
+**Tool:** Veo
+**Duration:** ~4s
+**Timestamp:** 0:05 - 0:09
 
 ## Visual Description
-The camera pulls back from the grandmother's completed sock repair to reveal her opening a dresser drawer. Inside: dozens of carefully mended garments — socks with visible darning patches, shirts with neat stitching, trousers with patched knees. Each item represents hours of careful work. The drawer is organized but overflowing, a visual metaphor for accumulated maintenance. The warm lamplight catches the textures of the mended fabrics. The grandmother's hand rests on the open drawer with quiet pride and weariness.
+The camera pulls back from the close-up of the grandmother's hands to a wider shot. She reaches over and opens a wooden dresser drawer, revealing dozens of carefully mended garments — socks with visible darning patches, shirts with repaired seams, trousers with reinforced knees. Each item has been lovingly repaired, some multiple times. The drawer is full — the accumulated evidence of years of careful mending work. The warm lamplight illuminates the drawer contents. The visual weight mirrors the code side: each individual repair was small, but together they represent an enormous investment of time and skill.
 
 ### Veo Prompt
 ```
-Slow camera pull-back from an elderly woman's hands holding a darned sock to reveal an open wooden dresser drawer filled with dozens of mended garments — socks with visible darning patches, shirts with neat repair stitches, patched trousers. 1950s bedroom, warm golden lamplight. The woman's hand rests on the edge of the overflowing drawer. Nostalgic, warm color palette, shallow depth of field. Cinematic, 4K.
+Medium shot of an elderly woman in a 1950s living room opening a wooden dresser drawer. The drawer reveals dozens of neatly folded garments — wool socks with visible darning patches, shirts, and trousers. Warm golden light from a table lamp illuminates the drawer contents. The garments show visible mending and repair work. The drawer is full, suggesting years of accumulated careful repair. Period-accurate 1950s interior. Film grain. Cinematic. 4K.
 ```
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Framing: Starts close-up on hands/sock, pulls back to medium shot of open drawer
-- Camera movement: Steady pull-back / dolly-out
+- Framing: Medium shot, pulling back to show drawer
+- Color temperature: Warm golden — 1950s incandescent lamplight
+- Depth of field: Medium, showing both grandmother and drawer contents
 
 ### Animation Sequence
-1. **0-1s:** Close on completed sock in hands
-2. **1-3s:** Grandmother sets sock down, opens dresser drawer
-3. **3-5s:** Camera reveals the full drawer of mended garments
+1. **0-2s:** Camera pulls back. Grandmother reaches for the dresser drawer and pulls it open.
+2. **2-4s:** Drawer contents visible — dozens of mended garments. Camera holds on the accumulated weight.
 
 ### Typography
-- None
+- None — cinematic B-roll. Used as embedded clip within split screen.
 
 ### Easing
 - N/A (live-action footage)
@@ -35,18 +35,25 @@ Slow camera pull-back from an elderly woman's hands holding a darned sock to rev
 ## Narration Sync
 > "But here's what your great-grandmother figured out sixty years ago."
 
+Segment: `cold_open_003` (embedded in split screen right panel)
+
+- **5.34s**: Zoom-out begins, drawer opens
+- **8.66s**: Full accumulated weight of mending visible
+
 ## Data Points JSON
 ```json
 {
   "type": "veo_clip",
   "clipId": "grandmother_drawer_zoomout",
-  "durationSeconds": 5,
+  "durationSeconds": 4,
   "characters": [
     {
       "id": "grandmother",
       "label": "Great-Grandmother",
-      "referencePrompt": "An elderly woman in her 70s with silver hair pinned up, wearing a floral housedress and reading glasses on a chain. 1950s appearance, kind face, sitting in a cushioned armchair under warm lamplight."
+      "referencePrompt": "An elderly woman in her 70s, 1950s era. Weathered but steady hands, wearing a simple cotton dress with rolled sleeves. Warm golden lamplight on her face and hands. Modest 1950s living room setting."
     }
   ]
 }
 ```
+
+---

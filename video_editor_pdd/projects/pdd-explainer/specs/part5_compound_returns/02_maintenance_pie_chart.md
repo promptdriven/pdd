@@ -1,140 +1,149 @@
 [Remotion]
 
-# Section 5.2: Maintenance Pie Chart — Where Software Cost Really Goes
+# Section 5.2: Maintenance Pie Chart — 80-90% of Software Cost
 
 **Tool:** Remotion
 **Duration:** ~16s (480 frames @ 30fps)
-**Timestamp:** 0:08 - 0:24
+**Timestamp:** 0:00 - 0:16
 
 ## Visual Description
-A bold pie chart materializes on screen showing the overwhelming proportion of software cost spent on maintenance versus initial development. The chart starts empty and fills in two dramatic sweeps:
 
-1. A small teal wedge sweeps in — "Initial Development: 10-20%" — almost modest.
-2. An enormous amber wedge sweeps to fill the remaining 80-90% — "Maintenance: 80-90%" — visually dominating the frame.
+A clean, animated pie chart materializes from the center of the screen. Two segments fill in:
 
-Below the chart, two data citations fade in: "McKinsey: +40% maintenance overhead from tech debt" and "Stripe: 33% of dev time spent on debt." These reinforce the staggering scale. The overall feeling is: the thing you think is the hard part (building) is the small part. The real cost is keeping it alive.
+1. **"Maintenance: 80-90%" (amber, `#D9944A`):** The dominant segment — fills nearly the entire circle. The number "80-90%" animates counting up.
+2. **"Initial Development: 10-20%" (blue, `#4A90D9`):** A thin sliver. The contrast is stark and intentional.
+
+The pie chart uses the 3B1B aesthetic: clean, dark background, smooth segment fills, minimal but precise labeling. The labels sit outside the chart with thin connector lines. The visual is meant to shock — most viewers assume building is the expensive part.
+
+This visual overlaps with the title card — it begins materializing behind the title text mid-segment-001, becoming the primary visual as the title fades out.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- No grid lines
+- No grid lines — clean focus on the chart
 
 ### Chart/Visual Elements
 
 #### Pie Chart
-- Center: `(960, 460)` (slightly above center to leave room for citations)
-- Outer radius: `280px`
-- Inner radius: `0` (solid pie, not donut)
-- Rotation start: `-90°` (12 o'clock position)
+- Center: (960, 540) — dead center
+- Radius: 220px
+- Stroke: `#1E293B`, 2px outline on segments
+- Rotation: starts at 12 o'clock (top), draws clockwise
 
-#### Wedge 1 — Initial Development
-- Angle: `54°` (15% of 360°, midpoint of 10-20% range)
-- Color: `#4A90D9` (steel blue)
-- Label: "Initial Development" — Inter, 16px, bold, `#4A90D9`
-- Value: "10-20%" — Inter, 28px, bold, `#E2E8F0`
-- Label position: leader line from wedge center to upper-left
+#### Segments
+- Maintenance (amber): `#D9944A`, 80-90% of circle (~288-324°)
+- Initial Development (blue): `#4A90D9`, 10-20% of circle (~36-72°)
 
-#### Wedge 2 — Maintenance
-- Angle: `306°` (85% of 360°, midpoint of 80-90% range)
-- Color: `#D9944A` (warm amber)
-- Label: "Maintenance" — Inter, 16px, bold, `#D9944A`
-- Value: "80-90%" — Inter, 36px, bold, `#E2E8F0`
-- Label position: leader line from wedge center to right side
+#### Labels
+- "Maintenance: 80-90%" — Inter, 20px, semi-bold (600), `#D9944A`, positioned right of chart at (1250, 440)
+- "Initial Development: 10-20%" — Inter, 20px, semi-bold (600), `#4A90D9`, positioned right of chart at (1250, 520)
+- Connector lines: 1px, respective colors at 0.4, from segment midpoint to label
 
-#### Data Citations
-- Citation 1: "McKinsey: +40% maintenance overhead" — Inter, 13px, `#94A3B8`, positioned at `(960, 780)`
-- Citation 2: "Stripe: 33% of dev week on debt" — Inter, 13px, `#94A3B8`, positioned at `(960, 810)`
+#### Statistic Callouts (appear below chart)
+- "McKinsey: 40% more on maintenance with high tech debt" — Inter, 14px, `#94A3B8` at 0.6
+- "Stripe: 1/3 of dev week lost to debt" — Inter, 14px, `#94A3B8` at 0.6
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Chart outline fades in — a thin `1px` circle at `#334155` opacity `0.3`.
-2. **Frame 30-90 (1-3s):** Teal wedge sweeps clockwise from 12 o'clock, covering 54°. Label and "10-20%" appear at end of sweep.
-3. **Frame 90-210 (3-7s):** Amber wedge sweeps clockwise to fill the remaining 306°. The visual weight is overwhelming. "80-90%" label appears in large text. "Maintenance" label fades in.
-4. **Frame 210-270 (7-9s):** Slight scale pulse on the amber wedge (`1.0→1.03→1.0`) to emphasize dominance.
-5. **Frame 270-360 (9-12s):** McKinsey and Stripe citations fade in sequentially, 30 frames apart.
-6. **Frame 360-480 (12-16s):** Hold. The chart sits, letting the proportion sink in.
+1. **Frame 0-30 (0-1s):** Pie chart outline circle draws from top, clockwise. Thin stroke only.
+2. **Frame 30-120 (1-4s):** Maintenance segment fills clockwise with a smooth wipe. Orange glow as it fills. Number counts up: "0%" → "80-90%".
+3. **Frame 120-150 (4-5s):** Development segment fills the remaining sliver. Blue accent. "10-20%" appears.
+4. **Frame 150-180 (5-6s):** Labels animate in with connector lines.
+5. **Frame 180-300 (6-10s):** Hold. Chart fully visible. Statistic callouts fade in one at a time below chart.
+6. **Frame 300-420 (10-14s):** Chart continues to hold. Maintenance segment pulses subtly.
+7. **Frame 420-480 (14-16s):** Pie chart begins morphing — segments flatten into the base of an exponential curve for the next visual.
 
 ### Typography
-- Percentage labels: Inter, 28-36px, bold (700), `#E2E8F0`
-- Category labels: Inter, 16px, bold (600), respective wedge colors
-- Citations: Inter, 13px, regular (400), `#94A3B8`
+- Segment labels: Inter, 20px, semi-bold (600), respective colors
+- Percentage counters: Inter, 28px, bold (700), respective colors
+- Statistic callouts: Inter, 14px, regular (400), `#94A3B8` at 0.6
 
 ### Easing
-- Wedge sweep: `easeInOutCubic`
-- Label fade-in: `easeOutQuad` over 20 frames
-- Amber pulse: `easeInOutSine` over 30 frames
-- Citation fade: `easeOutQuad` over 25 frames
+- Pie fill: `easeInOut(cubic)` — smooth radial wipe
+- Number count: `easeOut(quad)` — quick start, gentle landing
+- Label fade-in: `easeOut(quad)` over 20 frames
+- Callout fade-in: `easeOut(quad)` over 15 frames, staggered 20 frames apart
+- Morph to curve: `easeInOut(cubic)` over 60 frames
 
 ## Narration Sync
-> "Eighty to ninety percent of software cost isn't building the initial system. It's maintaining it."
-> "McKinsey found organizations with high technical debt spend forty percent more on maintenance. Stripe measured developers wasting a third of their work week on debt alone."
+> "Now, let's zoom out. Because the numbers you just saw — individual patches, individual bugs — add up to something staggering."
+> "Eighty to ninety percent of software cost isn't building the initial system. It's maintaining it. McKinsey found organizations with high technical debt spend forty percent more on maintenance. Stripe measured developers wasting a third of their work week on debt alone."
+
+Segment: `part5_compound_returns_001`
+
+- **0.00s** (seg 001): Pie chart outline begins drawing — "Now, let's zoom out"
+- **6.00s**: Maintenance segment filling — "Eighty to ninety percent..."
+- **15.00s**: Stats visible — "Stripe measured developers..."
+- **27.08s** (seg 001 ends): Pie chart begins morphing to curve
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={480}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Chart outline */}
+
+    {/* Pie chart outline */}
     <Sequence from={0}>
-      <FadeIn durationInFrames={30}>
-        <Circle cx={960} cy={460} r={280}
-          stroke="#334155" strokeWidth={1} fill="none" opacity={0.3} />
-      </FadeIn>
+      <StrokeDraw duration={30}>
+        <Circle cx={960} cy={540} r={220}
+          stroke="#1E293B" strokeWidth={2} fill="none" />
+      </StrokeDraw>
     </Sequence>
 
-    {/* Initial Development wedge (teal) */}
+    {/* Maintenance segment fill */}
     <Sequence from={30}>
-      <AnimatedWedge
-        cx={960} cy={460} r={280}
-        startAngle={-90} sweepAngle={54}
-        color="#4A90D9"
-        sweepDuration={60} easing="easeInOutCubic" />
-      <Sequence from={60}>
-        <FadeIn durationInFrames={20}>
-          <PieLabel text="Initial Development" value="10-20%"
-            labelColor="#4A90D9" valueColor="#E2E8F0"
-            valueSize={28} position="upper-left" />
-        </FadeIn>
-      </Sequence>
-    </Sequence>
-
-    {/* Maintenance wedge (amber) */}
-    <Sequence from={90}>
-      <AnimatedWedge
-        cx={960} cy={460} r={280}
-        startAngle={-36} sweepAngle={306}
+      <PieSegment
+        cx={960} cy={540} r={220}
+        startAngle={0} endAngle={306}
         color="#D9944A"
-        sweepDuration={120} easing="easeInOutCubic" />
-      <Sequence from={120}>
-        <FadeIn durationInFrames={20}>
-          <PieLabel text="Maintenance" value="80-90%"
-            labelColor="#D9944A" valueColor="#E2E8F0"
-            valueSize={36} position="right" />
-        </FadeIn>
-      </Sequence>
+        fillDuration={90} easing="easeInOutCubic"
+      />
+      <AnimatedCounter
+        from={0} to={85} suffix="%"
+        label="80-90%"
+        font="Inter" size={28} weight={700}
+        color="#D9944A"
+        duration={90} x={960} y={540}
+      />
     </Sequence>
 
-    {/* Amber pulse */}
-    <Sequence from={210}>
-      <ScalePulse target="maintenance_wedge"
-        fromScale={1.0} toScale={1.03}
-        durationInFrames={30} easing="easeInOutSine" />
+    {/* Development segment fill */}
+    <Sequence from={120}>
+      <PieSegment
+        cx={960} cy={540} r={220}
+        startAngle={306} endAngle={360}
+        color="#4A90D9"
+        fillDuration={30}
+      />
     </Sequence>
 
-    {/* Citations */}
-    <Sequence from={270}>
-      <FadeIn durationInFrames={25}>
-        <Text text="McKinsey: +40% maintenance overhead"
-          font="Inter" size={13} color="#94A3B8"
-          x={960} y={780} align="center" />
+    {/* Labels */}
+    <Sequence from={150}>
+      <FadeIn duration={20}>
+        <PieLabel text="Maintenance: 80-90%" color="#D9944A"
+          position={[1250, 440]} connectorFrom={[1180, 440]} />
+        <PieLabel text="Initial Development: 10-20%" color="#4A90D9"
+          position={[1250, 520]} connectorFrom={[1180, 480]} />
       </FadeIn>
     </Sequence>
-    <Sequence from={300}>
-      <FadeIn durationInFrames={25}>
-        <Text text="Stripe: 33% of dev week on debt"
-          font="Inter" size={13} color="#94A3B8"
-          x={960} y={810} align="center" />
+
+    {/* Statistic callouts */}
+    <Sequence from={200}>
+      <FadeIn duration={15}>
+        <Text text="McKinsey: 40% more on maintenance with high tech debt"
+          color="#94A3B8" opacity={0.6} size={14} x={960} y={720} />
       </FadeIn>
+    </Sequence>
+    <Sequence from={220}>
+      <FadeIn duration={15}>
+        <Text text="Stripe: 1/3 of dev week lost to debt"
+          color="#94A3B8" opacity={0.6} size={14} x={960} y={750} />
+      </FadeIn>
+    </Sequence>
+
+    {/* Morph transition to curve */}
+    <Sequence from={420}>
+      <PieToExponentialMorph duration={60} easing="easeInOutCubic" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -143,31 +152,31 @@ Below the chart, two data citations fade in: "McKinsey: +40% maintenance overhea
 ## Data Points JSON
 ```json
 {
-  "type": "animated_pie_chart",
-  "center": [960, 460],
-  "radius": 280,
-  "wedges": [
-    {
-      "id": "initial_development",
-      "label": "Initial Development",
-      "value": "10-20%",
-      "midpointPct": 15,
-      "color": "#4A90D9",
-      "sweepAngle": 54
-    },
+  "type": "pie_chart",
+  "chartId": "maintenance_cost_split",
+  "segments": [
     {
       "id": "maintenance",
       "label": "Maintenance",
-      "value": "80-90%",
-      "midpointPct": 85,
+      "percentage": "80-90%",
       "color": "#D9944A",
-      "sweepAngle": 306
+      "degrees": 306
+    },
+    {
+      "id": "initial_development",
+      "label": "Initial Development",
+      "percentage": "10-20%",
+      "color": "#4A90D9",
+      "degrees": 54
     }
   ],
-  "citations": [
-    "McKinsey: +40% maintenance overhead from tech debt",
-    "Stripe: 33% of dev week on debt"
+  "statistics": [
+    { "source": "McKinsey", "finding": "40% more on maintenance with high technical debt" },
+    { "source": "Stripe", "finding": "1/3 of developer work week lost to debt" },
+    { "source": "CISQ", "finding": "$1.52 trillion annually in US" }
   ],
-  "narrationSegments": ["part5_compound_returns_002"]
+  "narrationSegments": ["part5_compound_returns_001"]
 }
 ```
+
+---

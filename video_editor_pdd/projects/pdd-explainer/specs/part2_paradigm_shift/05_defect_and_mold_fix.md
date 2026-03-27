@@ -1,30 +1,32 @@
 [veo:]
 
-# Section 2.5: Defect and Mold Fix — Engineer Adjusts the Mold
+# Section 2.5: Defect Discovery and Mold Adjustment
 
 **Tool:** Veo
-**Duration:** ~7s
-**Timestamp:** 1:18 - 1:25
+**Duration:** ~9s
+**Timestamp:** 1:19 - 1:28
 
 ## Visual Description
-A close-up of an engineer's hands making a precise adjustment to an injection mold. The engineer uses a specialized tool (a fine-tipped torque wrench or precision shim) to modify the mold wall itself — not the produced part. The focus is on the subtle, deliberate nature of the fix: one small change to the specification that will cascade to every future output. The mold gleams under overhead lighting. A defective plastic part sits discarded on the workbench in soft focus background, already irrelevant.
+
+A manufacturing engineer in safety glasses examines a freshly molded plastic part, notices a defect — a small warping or flash line. Instead of attempting to fix the individual part, the engineer sets it aside and turns attention to the mold itself. The engineer adjusts a mold component — tightening a bolt, adjusting an insert, making a subtle but deliberate change to the mold wall. The key visual: the fix goes to the specification (the mold), not the output (the part).
 
 ### Veo Prompt
 ```
-Close-up of an engineer's hands making a precise adjustment to a steel injection mold on a workbench. The engineer uses a precision tool to modify the mold cavity wall. Machined steel mold gleams under bright overhead workshop lighting. A discarded plastic part sits in soft focus on the workbench behind, ignored. Deliberate, careful hand movements. Industrial workshop environment. Shallow depth of field on hands and mold. Cinematic lighting, 4K.
+Medium shot of a manufacturing engineer in safety glasses examining a small plastic part under work lighting. The engineer notices a defect, sets the part aside, and turns to adjust the steel injection mold on a workbench. Hands make a precise adjustment to the mold surface. Clean industrial workshop setting. Focused, deliberate, professional. Warm overhead lighting. Cinematic, 4K.
 ```
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Framing: Close-up on hands and mold, shallow DOF
-- Color temperature: Cool workshop overhead light, warm highlights on steel
+- Framing: Medium shot, engineer and workbench
+- Color temperature: Warm workshop lighting
+- Depth of field: Medium, engineer and mold both in focus
 
 ### Animation Sequence
-1. **0-3s:** Engineer's hands position a precision tool against the mold cavity.
-2. **3-5s:** A subtle, precise adjustment — the tool turns, the mold wall shifts imperceptibly.
-3. **5-7s:** Hands withdraw. The modified mold sits ready. Defective part blurred in background.
+1. **0-3s:** Engineer holds plastic part, examines it. Notices defect.
+2. **3-5s:** Part set aside. Engineer turns to the mold.
+3. **5-9s:** Engineer makes a precise adjustment to the mold. Deliberate, focused.
 
 ### Typography
 - None — cinematic B-roll.
@@ -33,24 +35,27 @@ Close-up of an engineer's hands making a precise adjustment to a steel injection
 - N/A (live-action footage)
 
 ## Narration Sync
-> "You don't patch individual parts. You fix the mold. And that fix applies to every part you'll ever make again."
+> "And when there's a defect? You don't patch individual parts. You fix the mold. And that fix applies to every part you'll ever make again."
 
-Segment: `part2_paradigm_shift_009`
+Segments: `part2_paradigm_shift_007`
 
-- **1:18** (78.42s): Engineer begins adjustment — "don't patch individual parts"
-- **1:25** (85.34s): Adjustment complete — "every part you'll ever make again"
+- **76.34s** (seg 007): Defect discovered — "when there's a defect"
+- **79.0s**: Engineer turns to mold — "You don't patch individual parts"
+- **82.0s**: Mold adjustment — "You fix the mold"
+- **85.0s**: Adjustment complete — "every part you'll ever make again"
+- **85.46s** (seg 007 ends)
 
 ## Data Points JSON
 ```json
 {
   "type": "veo_clip",
-  "clipId": "defect_mold_fix",
-  "durationSeconds": 7,
+  "clipId": "defect_and_mold_fix",
+  "durationSeconds": 9,
   "characters": [
     {
-      "id": "factory_engineer",
-      "label": "Factory Engineer",
-      "referencePrompt": "An engineer in a clean grey work shirt, mid-40s, steady hands, working at a well-lit industrial workbench with precision tools and machined steel molds."
+      "id": "manufacturing_engineer",
+      "label": "Manufacturing Engineer",
+      "referencePrompt": "Middle-aged manufacturing engineer in safety glasses and clean work shirt, professional workshop setting"
     }
   ]
 }

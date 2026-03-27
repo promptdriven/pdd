@@ -3,16 +3,16 @@
 # Section 4.1: The Precision Tradeoff — Section Title Card
 
 **Tool:** Title
-**Duration:** ~7s (199 frames @ 30fps)
-**Timestamp:** 0:00 - 0:07
+**Duration:** ~8s (240 frames @ 30fps)
+**Timestamp:** 0:00 - 0:08
 
 ## Visual Description
 
-A section title card introducing Part 4: The Precision Tradeoff. "THE PRECISION" appears first in large bold weight, then "TRADEOFF" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
+A section title card introducing Part 4. "THE PRECISION" appears in large bold weight, then "TRADEOFF" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
 
-Behind the text, a faint ghost silhouette of a coordinate grid with two overlaid shapes sits at very low opacity — on the left, a precise dot-matrix pattern (evoking 3D printing point-by-point placement), and on the right, a flowing filled shape hitting sharp walls (evoking injection molding). This foreshadows the core metaphor of the section.
+Behind the text, a faint ghost silhouette of an inverse curve sits at very low opacity — a descending hyperbola from upper-left to lower-right, foreshadowing the tests-vs-precision thesis. Background is deep navy-black consistent with the overall visual language.
 
-Background is deep navy-black, consistent with the project visual language.
+The title holds briefly as the narrator begins "Let's talk about precision. Because there's a subtle tradeoff..." then fades out as the split screen establishes.
 
 ## Technical Specifications
 
@@ -26,24 +26,23 @@ Background is deep navy-black, consistent with the project visual language.
 #### Title Text
 - "THE PRECISION" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
 - "TRADEOFF" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
-- Horizontal rule: 240px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+- Horizontal rule: 280px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
 #### Section Number
 - "PART 4" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
-#### Background Ghost (precision motifs)
-- Left ghost: dot-matrix grid pattern (5x5 dots), `#F59E0B` at 0.03, 3px circles
-- Right ghost: flowing shape with sharp rectangular walls, `#2DD4BF` at 0.03, 2px stroke
-- Both positioned behind title text, centered vertically
+#### Background Ghost (inverse curve)
+- Inverse hyperbola: `#D9944A` at 0.04, 1.5px stroke, from upper-left to lower-right
+- Faint grid squares along curve path: `#4A90D9` at 0.03
 
 ### Animation Sequence
 1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
-2. **Frame 15-40 (0.5-1.33s):** "PART 4" label fades in. Ghost motifs draw with stroke-dashoffset.
-3. **Frame 40-60 (1.33-2s):** "THE PRECISION" types on character-by-character (2 frames per character).
-4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
-5. **Frame 70-90 (2.33-3s):** "TRADEOFF" fades in with 10px upward slide.
-6. **Frame 90-160 (3-5.33s):** Hold. Ghost motifs pulse subtly.
-7. **Frame 160-199 (5.33-6.63s):** Title and elements fade out, transitioning to split screen.
+2. **Frame 15-35 (0.5-1.17s):** "PART 4" label fades in. Ghost inverse curve draws with stroke-dashoffset.
+3. **Frame 35-55 (1.17-1.83s):** "THE PRECISION" types on character-by-character (2 frames per character).
+4. **Frame 55-65 (1.83-2.17s):** Horizontal rule draws from center outward.
+5. **Frame 65-85 (2.17-2.83s):** "TRADEOFF" fades in with 10px upward slide.
+6. **Frame 85-180 (2.83-6s):** Hold. Ghost curve pulses subtly.
+7. **Frame 180-240 (6-8s):** Title and elements fade out, transitioning to split screen.
 
 ### Typography
 - Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
@@ -54,36 +53,32 @@ Background is deep navy-black, consistent with the project visual language.
 - Text fade-in: `easeOut(quad)` over 20 frames
 - "TRADEOFF" slide-up: `easeOut(cubic)` over 20 frames
 - Rule draw: `easeInOut(quad)` over 10 frames
-- Ghost motif draw: `easeInOut(cubic)` over 30 frames
-- Motif pulse: `easeInOut(sine)` on 60-frame cycle
-- Final fade-out: `easeIn(quad)` over 39 frames
+- Ghost curve draw: `easeInOut(cubic)` over 25 frames
+- Curve pulse: `easeInOut(sine)` on 60-frame cycle
+- Final fade-out: `easeIn(quad)` over 60 frames
 
 ## Narration Sync
-> "Let's talk about precision, because there's a pattern here that shows up across industries. Not just cheaper materials, a deeper shift in how things are made."
+> "Let's talk about precision. Because there's a subtle tradeoff that changes how you think about prompts."
 
-Segments: `part4_precision_tradeoff_001`
+Segment: `part4_precision_tradeoff_001` (partial)
 
 - **0.00s** (seg 001): Title card begins fade-in
-- **2.00s**: "THE PRECISION" typing visible
-- **3.00s**: Title fully visible, hold
-- **5.33s**: Begin fade-out
-- **6.62s** (seg 001 ends): Fade-out complete
+- **6.00s**: Title begins fade-out
+- **8.00s**: Fully faded, split screen takes over
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={199}>
+<Sequence from={0} durationInFrames={240}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
     <BlueprintGrid spacing={60} color="#1E293B" opacity={0.05} />
 
-    {/* Ghost precision motifs */}
+    {/* Ghost inverse curve */}
     <Sequence from={15}>
-      <StrokeDraw duration={30}>
-        <DotMatrixGhost color="#F59E0B" opacity={0.03} dotRadius={3}
-          grid={[5, 5]} center={[760, 500]} />
-      </StrokeDraw>
-      <StrokeDraw duration={30}>
-        <MoldFlowGhost color="#2DD4BF" opacity={0.03} strokeWidth={2}
-          center={[1160, 500]} />
+      <StrokeDraw duration={25}>
+        <InverseCurve
+          color="#D9944A" opacity={0.04}
+          strokeWidth={1.5}
+        />
       </StrokeDraw>
     </Sequence>
 
@@ -97,21 +92,21 @@ Segments: `part4_precision_tradeoff_001`
     </Sequence>
 
     {/* Title: THE PRECISION */}
-    <Sequence from={40}>
+    <Sequence from={35}>
       <TypeWriter text="THE PRECISION" font="Inter" size={72}
         weight={700} color="#E2E8F0"
         charDelay={2} x={960} y={460} align="center" />
     </Sequence>
 
     {/* Horizontal rule */}
-    <Sequence from={60}>
-      <DrawLine from={[840, 505]} to={[1080, 505]}
+    <Sequence from={55}>
+      <DrawLine from={[820, 505]} to={[1100, 505]}
         color="#334155" opacity={0.5} width={2}
         drawDuration={10} fromCenter />
     </Sequence>
 
     {/* Title: TRADEOFF */}
-    <Sequence from={70}>
+    <Sequence from={65}>
       <SlideUp distance={10} duration={20}>
         <FadeIn duration={20}>
           <Text text="TRADEOFF" font="Inter" size={72}
@@ -122,8 +117,8 @@ Segments: `part4_precision_tradeoff_001`
     </Sequence>
 
     {/* Fade out */}
-    <Sequence from={160}>
-      <FadeOut duration={39} />
+    <Sequence from={180}>
+      <FadeOut duration={60} />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -139,8 +134,7 @@ Segments: `part4_precision_tradeoff_001`
   "titleLine2": "TRADEOFF",
   "backgroundColor": "#0A0F1A",
   "ghostElements": [
-    { "shape": "dot_matrix_grid", "color": "#F59E0B", "role": "3d_printing_precision" },
-    { "shape": "mold_flow_walls", "color": "#2DD4BF", "role": "injection_molding_walls" }
+    { "shape": "inverse_curve", "color": "#D9944A", "role": "precision_tradeoff_preview" }
   ],
   "narrationSegments": ["part4_precision_tradeoff_001"]
 }

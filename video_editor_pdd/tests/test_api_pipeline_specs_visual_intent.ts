@@ -447,5 +447,12 @@ A short narration block.
         source: "stage6-inferred",
       }),
     ]);
+    expect(savedConfig.veo.frameChains).toEqual([
+      expect.objectContaining({
+        clips: ["grandmother_intro", "grandmother_callback"],
+        referenceId: "grandmother",
+        source: "stage6-inferred",
+      }),
+    ]);
   });
 });

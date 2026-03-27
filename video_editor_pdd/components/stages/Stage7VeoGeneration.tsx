@@ -32,6 +32,8 @@ interface ClipLog {
   ts: string;
 }
 
+const getClipRowKey = (clip: VeoClip): string => `${clip.sectionId}:${clip.id}`;
+
 const statusBadge = (status: VeoClipStatus) => {
   switch (status) {
     case 'done':
@@ -86,7 +88,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         setSelectedSection(fetchedClips[0].sectionId);
       }
       if (!selectedClipId && fetchedClips.length > 0) {
-        setSelectedClipId(fetchedClips[0].id);
+        setSelectedClipId(getClipRowKey(fetchedClips[0]));
       }
     } catch (err: any) {
       setError(err.message || 'Unknown error');
@@ -139,7 +141,7 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
   }, [clips]);
 
   const selectedClip = useMemo(() => {
-    return clips.find((clip) => clip.id === selectedClipId) ?? null;
+    return clips.find((clip) => getClipRowKey(clip) === selectedClipId) ?? null;
   }, [clips, selectedClipId]);
 
   useEffect(() => {
@@ -148,9 +150,9 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
       return;
     }
 
-    const hasSelectedClip = clips.some((clip) => clip.id === selectedClipId);
+    const hasSelectedClip = clips.some((clip) => getClipRowKey(clip) === selectedClipId);
     if (!hasSelectedClip) {
-      setSelectedClipId(clips[0].id);
+      setSelectedClipId(getClipRowKey(clips[0]));
     }
   }, [clips, selectedClipId]);
 
@@ -197,20 +199,21 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
   }, [selectedClip]);
 
   const handleRunClips = async (clipIds: string[]) => {
-    if (!clipIds.length) return;
+    const uniqueClipIds = Array.from(new Set(clipIds.filter(Boolean)));
+    if (!uniqueClipIds.length) return;
     setClips((prev) =>
-      prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'generating' } : c))
+      prev.map((c) => (uniqueClipIds.includes(c.id) ? { ...c, status: 'generating' } : c))
     );
     try {
       const res = await fetch('/api/pipeline/veo/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clips: clipIds, autoComposite }),
+        body: JSON.stringify({ clips: uniqueClipIds, autoComposite }),
       });
       if (!res.ok) {
         // Revert optimistic status on error
         setClips((prev) =>
-          prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'error' } : c))
+          prev.map((c) => (uniqueClipIds.includes(c.id) ? { ...c, status: 'error' } : c))
         );
         return;
       }
@@ -219,13 +222,13 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
         setJobId(extractedJobId);
       } else {
         setClips((prev) =>
-          prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'error' } : c))
+          prev.map((c) => (uniqueClipIds.includes(c.id) ? { ...c, status: 'error' } : c))
         );
       }
     } catch (err) {
       // Revert optimistic status on network/parse error
       setClips((prev) =>
-        prev.map((c) => (clipIds.includes(c.id) ? { ...c, status: 'error' } : c))
+        prev.map((c) => (uniqueClipIds.includes(c.id) ? { ...c, status: 'error' } : c))
       );
       console.error(err);
     }
@@ -476,11 +479,11 @@ export default function Stage7VeoGeneration({ onAdvance }: Stage7VeoGenerationPr
             <tbody>
               {clips.map((clip) => (
                 <tr
-                  key={clip.id}
+                  key={getClipRowKey(clip)}
                   className={`border-t cursor-pointer transition-colors hover:bg-slate-800/40 ${
-                    selectedClipId === clip.id ? 'bg-slate-800/60' : ''
+                    selectedClipId === getClipRowKey(clip) ? 'bg-slate-800/60' : ''
                   }`}
-                  onClick={() => setSelectedClipId(clip.id)}
+                  onClick={() => setSelectedClipId(getClipRowKey(clip))}
                 >
                   <td className="px-4 py-2 font-medium text-slate-200">
                     {clip.id}{' '}

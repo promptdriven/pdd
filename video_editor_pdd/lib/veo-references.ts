@@ -1,13 +1,26 @@
 import fs from "fs";
 import path from "path";
 
-import type { ProjectConfig, Section, VeoReference } from "./types";
-import { extractMarkdownJsonBlock, isVeoMarkdownSpec, normalizeSpecDir } from "./veo-spec-context";
+import type { ProjectConfig, Section, VeoFrameChain, VeoReference } from "./types";
+import {
+  extractMarkdownJsonBlock,
+  extractVeoClipFilename,
+  isVeoMarkdownSpec,
+  normalizeSpecDir,
+} from "./veo-spec-context";
 
 type MarkdownSpecEntry = {
   sectionId: string;
   path: string;
   content: string;
+};
+
+type InferredVeoCharacterUsage = {
+  sectionId: string;
+  path: string;
+  clipId: string;
+  characterId: string;
+  order: number;
 };
 
 type VeoCharacterContract = {
@@ -99,6 +112,42 @@ function extractVeoCharacters(content: string): Array<{
     .filter((character): character is { id: string; label: string; prompt: string | null } => character !== null);
 }
 
+function collectInferredVeoCharacterUsages(
+  entries: MarkdownSpecEntry[]
+): InferredVeoCharacterUsage[] {
+  let order = 0;
+
+  return entries.flatMap((entry) => {
+    if (!isVeoMarkdownSpec(entry.content)) {
+      return [];
+    }
+
+    const clipFilename = extractVeoClipFilename(entry.content, entry.path);
+    if (!clipFilename) {
+      return [];
+    }
+
+    const clipId = clipFilename.replace(/\.[^.]+$/, "");
+    const seenCharacterIds = new Set<string>();
+
+    return extractVeoCharacters(entry.content)
+      .filter((character) => {
+        if (seenCharacterIds.has(character.id)) {
+          return false;
+        }
+        seenCharacterIds.add(character.id);
+        return true;
+      })
+      .map((character) => ({
+        sectionId: entry.sectionId,
+        path: entry.path,
+        clipId,
+        characterId: character.id,
+        order: order += 1,
+      }));
+  });
+}
+
 export function collectInferredVeoReferences(
   entries: MarkdownSpecEntry[]
 ): VeoReference[] {
@@ -159,6 +208,55 @@ export function mergeInferredVeoReferences(
   return Array.from(inferredMap.values()).sort((left, right) => left.id.localeCompare(right.id));
 }
 
+export function collectInferredVeoFrameChains(
+  entries: MarkdownSpecEntry[]
+): VeoFrameChain[] {
+  const usages = collectInferredVeoCharacterUsages(entries).sort(
+    (left, right) => left.order - right.order
+  );
+  const primaryReferenceByClip = new Map<string, string>();
+  const clipIdsByReference = new Map<string, string[]>();
+
+  for (const usage of usages) {
+    if (!primaryReferenceByClip.has(usage.clipId)) {
+      primaryReferenceByClip.set(usage.clipId, usage.characterId);
+    }
+
+    if (primaryReferenceByClip.get(usage.clipId) !== usage.characterId) {
+      continue;
+    }
+
+    const clipIds = clipIdsByReference.get(usage.characterId) ?? [];
+    if (!clipIds.includes(usage.clipId)) {
+      clipIds.push(usage.clipId);
+      clipIdsByReference.set(usage.characterId, clipIds);
+    }
+  }
+
+  return Array.from(clipIdsByReference.entries())
+    .filter(([, clips]) => clips.length > 1)
+    .map(([referenceId, clips]) => ({
+      clips,
+      referenceId,
+      source: "stage6-inferred",
+    }))
+    .sort((left, right) => left.referenceId.localeCompare(right.referenceId));
+}
+
+export function mergeInferredVeoFrameChains(
+  existing: VeoFrameChain[],
+  inferred: VeoFrameChain[]
+): VeoFrameChain[] {
+  const manualChains = existing.filter((chain) => chain.source !== "stage6-inferred");
+  const manualReferenceIds = new Set(
+    manualChains.map((chain) => chain.referenceId).filter((referenceId) => typeof referenceId === "string")
+  );
+
+  return [...inferred.filter((chain) => !manualReferenceIds.has(chain.referenceId)), ...manualChains].sort(
+    (left, right) => left.referenceId.localeCompare(right.referenceId)
+  );
+}
+
 function listProjectVeoSpecEntries(
   projectDir: string,
   sections: Section[]
@@ -173,6 +271,7 @@ function listProjectVeoSpecEntries(
     return fs
       .readdirSync(specDir)
       .filter((file) => file.endsWith(".md") && !file.startsWith("AUDIT_"))
+      .sort((left, right) => left.localeCompare(right))
       .map((file) => ({
         sectionId: section.id,
         path: path.posix.join("specs", normalizedSpecDir, file),
@@ -185,12 +284,16 @@ export function syncInferredVeoReferencesFromProjectSpecs(
   projectDir: string,
   config: ProjectConfig
 ): ProjectConfig {
-  const inferredReferences = collectInferredVeoReferences(
-    listProjectVeoSpecEntries(projectDir, config.sections)
-  );
+  const specEntries = listProjectVeoSpecEntries(projectDir, config.sections);
+  const inferredReferences = collectInferredVeoReferences(specEntries);
+  const inferredFrameChains = collectInferredVeoFrameChains(specEntries);
   const mergedReferences = mergeInferredVeoReferences(
     config.veo.references ?? [],
     inferredReferences
+  );
+  const mergedFrameChains = mergeInferredVeoFrameChains(
+    config.veo.frameChains ?? [],
+    inferredFrameChains
   );
 
   return {
@@ -198,6 +301,7 @@ export function syncInferredVeoReferencesFromProjectSpecs(
     veo: {
       ...config.veo,
       references: mergedReferences,
+      frameChains: mergedFrameChains,
     },
   };
 }

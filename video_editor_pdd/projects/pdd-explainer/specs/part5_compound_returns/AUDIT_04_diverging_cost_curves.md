@@ -1,4 +1,0 @@
-## Verdict
-fail
-## Summary
-The frame renders the overall chart composition correctly — two diverging cost curves (amber exponential, blue nearly-flat), gradient fill between them, axes with year labels and 'Cumulative Cost', and annotation callouts near the curves. However, two critical text elements deviate from the spec: (1) The center-gap impact text reads 'The compounding gap' instead of the specified 'Over time, it's everything.' (2) The teal callout annotation reads 'Each test constrains all future generations' instead of the specified 'Each test constrains forever.' Additionally, the 'PATCHING' endpoint label is rendered in all caps rather than the specified mixed-case 'Patching'. The PDD curve also lacks the clearly visible sawtooth/regeneration-reset pattern described in the spec, appearing as a smooth, nearly-flat line instead.

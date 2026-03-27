@@ -1,66 +1,86 @@
 [Remotion]
 
-# Section 0.7: Cursor Blink on Patched Function
+# Section 0.7: Code Cursor Blink — The Weight of Patches
 
 **Tool:** Remotion
-**Duration:** ~2s
+**Duration:** ~2s (48 frames @ 30fps)
 **Timestamp:** 0:14 - 0:16
 
 ## Visual Description
-Return to code. A dark-themed code editor fills the screen showing a complex function (~30 lines) riddled with visible patches — inline comments like `// HACK:`, `// TODO: refactor`, `// patch for #1247`, diff-style `+` markers in the gutter, and inconsistent indentation suggesting layers of fixes over time. A blinking cursor sits at line 14, mid-function. The code is still, the cursor blinks twice. This is a beat — a moment of recognition for the viewer.
+Return to the code side. A dark-themed code editor fills the screen. A complex function is visible — roughly 40 lines — riddled with patches. Comment annotations like `// PATCH: fixed null check`, `// TODO: refactor this`, `// HOTFIX: edge case from #1247` are scattered throughout. The code has layers of fixes on top of fixes. Colors show the age of different patches: recent ones in brighter green, older ones in faded olive. A cursor blinks at line 23, inside the thicket of patched code. The screen holds for a beat — letting the viewer feel the weight of accumulated technical debt. This is the "darning" of code.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #1E1E1E (VS Code dark theme)
-- Font: JetBrains Mono or Fira Code
-- Line numbers: visible, #858585
+- Background: `#1E1E2E` (VS Code dark theme background)
+- Editor chrome: Minimal — line numbers on left, no sidebar
 
 ### Chart/Visual Elements
-- Code editor mock with syntax highlighting:
-  - Keywords (`function`, `if`, `return`): #569CD6
-  - Strings: #CE9178
-  - Comments: #6A9955
-  - HACK/TODO comments: #FF6B6B (bright red, attention-drawing)
-  - Variables: #9CDCFE
-- Gutter annotations: `+` markers in green (#4EC9B0) on ~8 lines
-- Blinking cursor: white (#FFFFFF), 500ms on/off cycle at line 14, column 4
+
+#### Code Editor
+- Line numbers: 1-40, `#6C7086` at 0.5, monospace, left gutter (60px)
+- Code text: JetBrains Mono, 14px, syntax-highlighted
+- Function signature (line 1): `def process_order(order: Dict, ctx: Context) -> Result:` in standard Python highlighting
+- Patch comments scattered at lines 5, 12, 18, 23, 31, 37:
+  - `// PATCH: fixed null check` — `#6C7086` italic
+  - `// TODO: refactor this block` — `#F9E2AF` (yellow warning)
+  - `// HOTFIX: edge case #1247` — `#F38BA8` (red)
+- Patch age visualization: Faint colored left-border on patched lines
+  - Recent patches: `#A6E3A1` at 0.15 (green)
+  - Older patches: `#A6E3A1` at 0.05 (faded green)
+  - Oldest patches: `#F9E2AF` at 0.05 (faded amber)
+
+#### Cursor
+- Position: Line 23, column 4
+- Style: Block cursor, `#CDD6F4` (white-blue)
+- Blink: 500ms on / 500ms off (15 frames on, 15 frames off)
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Code fades in from black (opacity 0 → 1)
-2. **Frame 15-60 (0.5-2.0s):** Static code, cursor blinks twice (on/off/on/off). Viewer absorbs the messy, patched code.
+1. **Frame 0-10 (0-0.33s):** Editor fades in from black. Code visible immediately — no typing animation.
+2. **Frame 10-48 (0.33-1.6s):** Hold. Cursor blinks twice. The complexity and weight of the patched function sinks in.
 
 ### Typography
-- Code font: JetBrains Mono, 16px, #D4D4D4
-- Line numbers: JetBrains Mono, 14px, #858585
-- Comment highlights: JetBrains Mono, 16px, #FF6B6B
+- Code: JetBrains Mono, 14px, standard syntax colors (Catppuccin Mocha theme)
+- Line numbers: JetBrains Mono, 12px, `#6C7086` at 0.5
+- Comments: JetBrains Mono, 14px, italic, `#6C7086`
 
 ### Easing
-- Fade in: `easeOutQuad`
-- Cursor blink: step function (no easing, binary on/off)
+- Editor fade-in: `easeOut(quad)` over 10 frames
+- Cursor blink: step function (no easing — hard on/off)
 
 ## Narration Sync
 > "Code just got that cheap."
 
+Segment: `cold_open_005`
+
+- **14.24s**: Editor appears — cursor blinking on heavily patched function
+- **15.80s**: Hold ends, transition to code regeneration
+
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={60}>
-  <FadeIn durationInFrames={15}>
-    <CodeEditor
-      code={PATCHED_FUNCTION_CODE}
-      language="typescript"
-      theme="vscode-dark"
-      highlightLines={[3, 7, 12, 18, 22, 25]}
-      gutterAnnotations={{ 3: "+", 7: "+", 12: "+", 18: "+", 22: "+", 25: "+" }}
-    />
-  </FadeIn>
-  <BlinkingCursor
-    line={14}
-    column={4}
-    blinkRate={500}
-    color="#FFFFFF"
-  />
+<Sequence from={0} durationInFrames={48}>
+  <AbsoluteFill style={{ backgroundColor: '#1E1E2E' }}>
+    <FadeIn duration={10}>
+      <CodeEditor
+        language="python"
+        theme="catppuccin-mocha"
+        fontSize={14}
+        fontFamily="JetBrains Mono"
+        code={PATCHED_FUNCTION_CODE}
+        lineHighlights={[
+          { lines: [5, 12], color: '#A6E3A1', opacity: 0.05 },
+          { lines: [18, 31], color: '#F9E2AF', opacity: 0.05 },
+          { lines: [23, 37], color: '#A6E3A1', opacity: 0.15 },
+        ]}
+      />
+      <BlinkingCursor
+        line={23} column={4}
+        color="#CDD6F4"
+        blinkFrames={15}
+      />
+    </FadeIn>
+  </AbsoluteFill>
 </Sequence>
 ```
 
@@ -68,11 +88,22 @@ Return to code. A dark-themed code editor fills the screen showing a complex fun
 ```json
 {
   "type": "code_editor",
-  "language": "typescript",
-  "lineCount": 30,
-  "patchIndicators": ["// HACK:", "// TODO: refactor", "// patch for #1247"],
-  "gutterPlusLines": [3, 7, 12, 18, 22, 25],
-  "cursorPosition": { "line": 14, "column": 4 },
-  "theme": "vscode-dark"
+  "language": "python",
+  "theme": "catppuccin-mocha",
+  "functionName": "process_order",
+  "totalLines": 40,
+  "patchComments": [
+    { "line": 5, "text": "// PATCH: fixed null check", "age": "old" },
+    { "line": 12, "text": "// TODO: refactor this block", "age": "old" },
+    { "line": 18, "text": "// HOTFIX: edge case #1247", "age": "medium" },
+    { "line": 23, "text": "// PATCH: handle empty list", "age": "recent" },
+    { "line": 31, "text": "// PATCH: timezone fix", "age": "medium" },
+    { "line": 37, "text": "// HOTFIX: race condition", "age": "recent" }
+  ],
+  "cursor": { "line": 23, "column": 4, "blinkMs": 500 },
+  "narrationSegments": ["cold_open_005"],
+  "durationSeconds": 1.6
 }
 ```
+
+---

@@ -1,124 +1,100 @@
 [Remotion]
 
-# Section 2.4: Mold Production Counter — Parts Ejecting
+# Section 2.4: Mold Production Counter
 
 **Tool:** Remotion
-**Duration:** ~11s (330 frames @ 30fps)
-**Timestamp:** 1:08 - 1:19
+**Duration:** ~10s (300 frames @ 30fps)
+**Timestamp:** 1:09 - 1:19
 
 ## Visual Description
 
-An animated sequence showing injection molded parts ejecting in rapid succession. A stylized side-view cross-section of a mold opens, and identical plastic parts (simplified geometric shapes — rounded rectangles) pop out one after another, falling into a growing pile below.
+An animated counter overlay on a cinematic background showing injection molded parts ejecting in rapid succession. The mold opens, a perfect plastic part ejects, the mold closes, repeat — each cycle faster than the last. A large counter in the lower-right counts: 1... 10... 100... 1,000... 10,000. The counter accelerates exponentially. Each ejected part is identical — the perfection of the mold reproduced endlessly.
 
-A large counter in the lower-right ticks up rapidly: 1 → 10 → 100 → 1,000 → 10,000. The counter accelerates exponentially. Each part is identical in shape but slightly randomized in rotation as it falls — emphasizing "unlimited identical parts." The mold itself stays perfectly still, glowing faintly to show it's the constant.
-
-Background is dark industrial with a subtle grid. The mold is rendered in cool steel-blue, parts in warm amber. A faint defect marker (red outline) appears on one part near the end, setting up the next beat.
+The background is a semi-stylized render of the molding cycle: mold halves open/close in a simple 2D animation while the counter dominates focus. A progress bar beneath the counter fills as the number climbs.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid: subtle 40px grid, `#1E293B` at 0.04
+- Grid lines: None
 
 ### Chart/Visual Elements
 
-#### Mold Cross-Section
-- Position: center-left, y: 300
-- Steel casing: `#64748B`, 4px stroke, rounded rectangle 300x200
-- Cavity shape: inner rounded rectangle cutout, `#334155` fill
-- Glow: `#4A90D9` at 0.1, 8px blur around mold outline
+#### Mold Animation (center)
+- Simple 2D cross-section: two mold halves (steel gray `#78909C`) open and close
+- Plastic part shape: `#D9944A`, ejects upward when mold opens
+- Cycle speed: starts at 60 frames/cycle, compresses to 6 frames/cycle
 
-#### Ejected Parts
-- Shape: rounded rectangle 60x40, fill `#D9944A`, 2px stroke `#B8732A`
-- Spawn from mold opening, fall with gravity + slight rotation
-- Each part identical in shape, randomized rotation (±15°)
-- Parts accumulate in pile below mold (y: 700+)
+#### Counter (lower-right)
+- Large number: JetBrains Mono, 96px, bold, `#E2E8F0`
+- Label beneath: "parts produced", Inter, 16px, `#94A3B8` at 0.6
+- Counter position: x: 1400, y: 700
 
-#### Counter
-- Position: lower-right (x: 1600, y: 850)
-- Font: JetBrains Mono, 64px, bold, `#E2E8F0`
-- Counts: 1 → 10 → 100 → 1,000 → 10,000
-- Label below: "identical parts" — Inter, 16px, `#94A3B8`
-
-#### Defect Marker (end of sequence)
-- One part at ~frame 300 gets a red outline: `#EF4444`, 3px, dashed
-- Small "!" icon appears next to it: `#EF4444`, 14px
+#### Progress Bar (beneath counter)
+- Width: 300px, height: 4px
+- Track: `#1E293B`
+- Fill: gradient from `#4A90D9` to `#5AAA6E`
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Mold cross-section fades in. Glow pulses once.
-2. **Frame 30-60 (1-2s):** First part ejects. Counter: 1. Part falls slowly.
-3. **Frame 60-120 (2-4s):** Parts eject faster. Counter accelerates: 10 → 100. Parts pile up.
-4. **Frame 120-210 (4-7s):** Rapid-fire ejection. Counter: 1,000 → 10,000. Parts blur into continuous stream.
-5. **Frame 210-270 (7-9s):** Ejection slows. Pile is substantial. Counter holds at 10,000.
-6. **Frame 270-300 (9-10s):** One last part ejects with red defect outline. "!" appears.
-7. **Frame 300-330 (10-11s):** Hold on defect part. Counter dims slightly. Mold still glows.
+1. **Frame 0-30 (0-1s):** Mold animation begins. First part ejects slowly. Counter: 1.
+2. **Frame 30-90 (1-3s):** Cycle accelerates. Counter climbs: 1 → 10 → 50. Parts eject faster.
+3. **Frame 90-180 (3-6s):** Rapid-fire ejection. Counter: 50 → 500 → 1,000. Mold animation is a blur.
+4. **Frame 180-240 (6-8s):** Counter: 1,000 → 5,000 → 10,000. Progress bar fills.
+5. **Frame 240-300 (8-10s):** Counter holds at 10,000+. Parts continue streaming. The scale is the message.
 
 ### Typography
-- Counter: JetBrains Mono, 64px, bold (700), `#E2E8F0`
-- Counter label: Inter, 16px, regular (400), `#94A3B8`
-- Defect marker: Inter, 14px, bold, `#EF4444`
+- Counter: JetBrains Mono, 96px, bold (700), `#E2E8F0`
+- Label: Inter, 16px, regular (400), `#94A3B8` at 0.6
 
 ### Easing
-- Part ejection: `easeOut(quad)` for each spawn
-- Part fall: `easeIn(quad)` (gravity simulation)
-- Counter increment: `easeOut(expo)` for number transitions
-- Defect marker appear: `easeOut(back)` (slight overshoot)
+- Counter increment: `easeIn(expo)` — starts slow, accelerates dramatically
+- Mold cycle speed: `easeIn(quad)` — progressive compression
+- Progress bar fill: `easeInOut(cubic)` over full duration
+- Part eject: `easeOut(quad)` per cycle
 
 ## Narration Sync
-> "Make the mold once. Produce unlimited identical parts. Refine the mold once. Every future part improves automatically."
-> "And when there's a defect?"
+> "Make the mold once, produce unlimited identical parts. Refine the mold once, every future part improves automatically."
 
-Segments: `part2_paradigm_shift_007`, `part2_paradigm_shift_008`
+Segment: `part2_paradigm_shift_006` (tail)
 
-- **1:08** (67.80s): Parts begin ejecting — "Make the mold once"
-- **1:17** (76.94s): Counter at 10,000 — "Every future part improves automatically"
-- **1:18** (78.42s): Defect part appears — "when there's a defect?"
+- **69.0s**: Counter begins — first parts eject
+- **72.0s**: Counter accelerating — "produce unlimited identical parts"
+- **76.0s**: Counter at thousands — "every future part improves automatically"
+- **76.34s** (seg 006 ends): Counter holds
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={330}>
+<Sequence from={0} durationInFrames={300}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    <SubtleGrid spacing={40} color="#1E293B" opacity={0.04} />
 
-    {/* Mold cross-section */}
-    <MoldCrossSection
-      x={600} y={300} width={300} height={200}
-      casingColor="#64748B" cavityColor="#334155"
-      glowColor="#4A90D9" glowOpacity={0.1}
+    {/* Mold cycle animation */}
+    <MoldCycleAnimation
+      startSpeed={60} endSpeed={6}
+      moldColor="#78909C" partColor="#D9944A"
+      easing="easeInQuad"
     />
 
-    {/* Part ejection system */}
-    <Sequence from={30}>
-      <PartEjector
-        spawnX={600} spawnY={500}
-        partColor="#D9944A" partStroke="#B8732A"
-        partSize={{ w: 60, h: 40 }}
-        schedule={[
-          { frame: 0, count: 1, rate: 'slow' },
-          { frame: 30, count: 10, rate: 'medium' },
-          { frame: 90, count: 100, rate: 'fast' },
-          { frame: 120, count: 1000, rate: 'rapid' },
-          { frame: 150, count: 10000, rate: 'blur' },
-        ]}
-      />
-    </Sequence>
-
     {/* Counter */}
-    <Sequence from={30}>
-      <AnimatedCounter
-        x={1600} y={850} font="JetBrains Mono" size={64}
-        color="#E2E8F0" target={10000}
-        label="identical parts" labelColor="#94A3B8"
+    <Sequence from={0}>
+      <ExponentialCounter
+        start={1} end={10000}
+        font="JetBrains Mono" size={96}
+        color="#E2E8F0" x={1400} y={700}
+        easing="easeInExpo"
       />
+      <Text text="parts produced" font="Inter" size={16}
+        color="#94A3B8" opacity={0.6}
+        x={1400} y={770} align="center" />
     </Sequence>
 
-    {/* Defect part */}
-    <Sequence from={270}>
-      <DefectPart
-        x={620} y={680}
-        outlineColor="#EF4444" dashPattern={[6, 4]}
-        iconSize={14}
+    {/* Progress bar */}
+    <Sequence from={0}>
+      <ProgressBar
+        width={300} height={4} x={1250} y={800}
+        trackColor="#1E293B"
+        fillGradient={["#4A90D9", "#5AAA6E"]}
+        easing="easeInOutCubic"
       />
     </Sequence>
   </AbsoluteFill>
@@ -128,14 +104,19 @@ Segments: `part2_paradigm_shift_007`, `part2_paradigm_shift_008`
 ## Data Points JSON
 ```json
 {
-  "type": "animated_infographic",
-  "elements": [
-    { "id": "mold", "shape": "cross_section", "color": "#64748B", "role": "constant_specification" },
-    { "id": "parts", "shape": "rounded_rect", "color": "#D9944A", "role": "generated_output" },
-    { "id": "counter", "values": [1, 10, 100, 1000, 10000], "role": "scale_indicator" },
-    { "id": "defect", "color": "#EF4444", "role": "flaw_transition" }
-  ],
-  "narrationSegments": ["part2_paradigm_shift_007", "part2_paradigm_shift_008"]
+  "type": "counter_animation",
+  "chartId": "mold_production_counter",
+  "counter": {
+    "start": 1,
+    "end": 10000,
+    "milestones": [1, 10, 100, 1000, 10000],
+    "easing": "exponential"
+  },
+  "moldCycle": {
+    "startFramesPerCycle": 60,
+    "endFramesPerCycle": 6
+  },
+  "narrationSegments": ["part2_paradigm_shift_006"]
 }
 ```
 

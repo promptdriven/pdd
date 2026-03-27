@@ -1,179 +1,142 @@
 [Remotion]
 
-# Section 6.4: Source of Truth Label — Artifact vs. Source Visual Contrast
+# Section 6.4: Source of Truth Shift — Regenerate & Compare
 
 **Tool:** Remotion
 **Duration:** ~5s (150 frames @ 30fps)
-**Timestamp:** 0:12 - 0:17
+**Timestamp:** 0:13 - 0:18
 
 ## Visual Description
 
-A focused moment that crystallizes the mental model shift. The frame simplifies to show just two elements side by side, stripped of the codebase clutter:
+A focused view of the transformation moment. The prompt file (`auth_handler.prompt.md`) sits on the right, glowing green. Below it, a compact test/regeneration loop plays:
 
-**LEFT:** The original code file (`auth_handler.py`) — rendered as a document with grayed-out text, a dashed border, and a label stamped diagonally across it: "ARTIFACT". The label is semi-transparent, like a watermark. The document looks disposable — it can be thrown away and regenerated.
+1. A small terminal shows `pdd generate auth_handler.py` — code regenerates
+2. Then `pdd test` — a checkmark appears: `✓ All tests pass`
+3. A badge stamps onto the prompt file: "SOURCE OF TRUTH"
 
-**RIGHT:** The prompt file (`auth_handler.prompt.md`) — compact, glowing with a solid blue-purple border. A label beneath reads: "SOURCE OF TRUTH". The document pulses gently, alive, authoritative.
+This is the validation beat — the moment when the viewer understands that the prompt has replaced the code as the authoritative artifact. The test passing is the proof.
 
-Between them, a simple directional indicator: `generates →` pointing from prompt to code, and `extracts ←` pointing from code to prompt. This two-way relationship is the key insight.
-
-Below both documents, a single clean line of text: "When the regenerated version passes all tests, the prompt is your new source of truth."
+The layout uses the same left/right split as the previous spec but zoomed into the prompt-file side. The gray code file is visible but receding in the background.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
+- Focus area: right two-thirds of screen
 
 ### Chart/Visual Elements
 
-#### Code Document (Artifact)
-- Rounded rectangle: 380x260px, `#1E1E2E` fill, `#475569` 2px border, dashed
-- Position: x: 340, y: 300
-- File label: `auth_handler.py` — JetBrains Mono, 12px, `#475569`
-- Body: 6 lines of grayed-out code, JetBrains Mono, 11px, `#475569` at 0.4
-- "ARTIFACT" watermark: Inter, 36px, bold, `#475569` at 0.15, rotated -15°, centered on document
+#### Prompt File (dominant)
+- Position: center at (750, 350), 400x250px
+- Border: `#5AAA6E`, 2.5px, 6px radius
+- Header: "auth_handler.prompt.md" — Inter, 14px, semi-bold, `#5AAA6E`
+- Content: 8-10 faint markdown lines, `#94A3B8` at 0.4
+- Glow: `#5AAA6E` at 0.12, 20px blur
 
-#### Prompt Document (Source of Truth)
-- Rounded rectangle: 380x260px, `#1E1E2E` fill, `#8B5CF6` 2px border, solid
-- Position: x: 1200, y: 300
-- File label: `auth_handler.prompt.md` — Inter, 12px, `#8B5CF6`
-- Body: 5 lines of spec text, Inter, 12px, `#E2E8F0` at 0.8
-- Glow: `#8B5CF6` at 0.1, 16px blur
-- Pulse: gentle brightness oscillation
+#### Regeneration Terminal (compact)
+- Position: below prompt file at (750, 650), 500x80px
+- Background: `#0D1117`, 4px radius
+- Line 1: `$ pdd generate auth_handler.py` — JetBrains Mono, 13px, `#E2E8F0`
+- Line 2: `$ pdd test` — JetBrains Mono, 13px, `#E2E8F0`
+- Line 3: `✓ All tests pass` — JetBrains Mono, 13px, `#5AAA6E`
 
-#### Directional Labels (between documents)
-- "generates →" — Inter, 13px, `#4A90D9` at 0.5, positioned at y: 410
-- "← extracts" — Inter, 13px, `#64748B` at 0.4, positioned at y: 440
-- Small horizontal arrows accompanying each label
+#### Gray Code File (background)
+- Position: far left at (200, 400), 200x150px, `#94A3B8` at 0.1
+- Label: "auth_handler.py" — Inter, 11px, `#64748B` at 0.3
+- Fully desaturated, receding
 
-#### Category Labels
-- Under code doc: "ARTIFACT" — Inter, 16px, semi-bold, `#475569` at 0.6, centered below
-- Under prompt doc: "SOURCE OF TRUTH" — Inter, 16px, semi-bold, `#8B5CF6` at 0.8, centered below
-
-#### Bottom Annotation
-- "When the regenerated version passes all tests, the prompt is your new source of truth."
-- Inter, 18px, `#E2E8F0` at 0.7, centered at y: 750
-- "source of truth" portion in `#8B5CF6` at 0.9
+#### Source of Truth Badge
+- Rounded rectangle: `#5AAA6E` fill at 0.15, `#5AAA6E` 1.5px border, 20px radius
+- Text: "SOURCE OF TRUTH" — Inter, 12px, bold (700), `#5AAA6E`, letter-spacing 2px
+- Position: overlapping top-right of prompt file at (950, 260)
 
 ### Animation Sequence
-1. **Frame 0-20 (0-0.67s):** Background establishes. Both documents fade in simultaneously from slight inward slide (code from left, prompt from right).
-2. **Frame 20-50 (0.67-1.67s):** "ARTIFACT" watermark stamps onto code document with a subtle press-down effect. Code text desaturates further.
-3. **Frame 50-80 (1.67-2.67s):** Prompt document glow intensifies. Category labels appear: "ARTIFACT" and "SOURCE OF TRUTH".
-4. **Frame 80-100 (2.67-3.33s):** Directional arrows draw between the documents: "generates →" and "← extracts".
-5. **Frame 100-120 (3.33-4s):** Bottom annotation text fades in. "source of truth" highlights in purple.
-6. **Frame 120-150 (4-5s):** Hold. Prompt pulses gently. Full contrast visible.
+1. **Frame 0-15 (0-0.5s):** Prompt file is already visible (carried from previous spec). Terminal area fades in.
+2. **Frame 15-45 (0.5-1.5s):** `pdd generate auth_handler.py` types in terminal.
+3. **Frame 45-60 (1.5-2s):** Brief loading shimmer on prompt file — code is being regenerated.
+4. **Frame 60-90 (2-3s):** `pdd test` types. Checkmark animates: `✓ All tests pass` in green.
+5. **Frame 90-120 (3-4s):** "SOURCE OF TRUTH" badge scales in with slight bounce onto prompt file.
+6. **Frame 120-150 (4-5s):** Hold. Badge and prompt glow together. Gray code recedes further.
 
 ### Typography
-- File labels: JetBrains Mono (code), Inter (prompt), 12px
-- Code body: JetBrains Mono, 11px, `#475569` at 0.4
-- Prompt body: Inter, 12px, `#E2E8F0` at 0.8
-- "ARTIFACT" watermark: Inter, 36px, bold (700), `#475569` at 0.15
-- Category labels: Inter, 16px, semi-bold (600)
-- Directional labels: Inter, 13px
-- Bottom annotation: Inter, 18px, `#E2E8F0` at 0.7
+- File header: Inter, 14px, semi-bold (600), `#5AAA6E`
+- Terminal: JetBrains Mono, 13px, `#E2E8F0`
+- Test pass: JetBrains Mono, 13px, `#5AAA6E`
+- Badge: Inter, 12px, bold (700), `#5AAA6E`, letter-spacing 2px
 
 ### Easing
-- Document slide-in: `easeOut(cubic)` over 20 frames, 30px distance
-- Watermark stamp: `easeOut(back)` over 15 frames (slight bounce)
-- Glow intensify: `easeOut(quad)` over 20 frames
-- Arrow draw: `easeInOut(quad)` over 15 frames
-- Bottom text fade-in: `easeOut(quad)` over 20 frames
-- Prompt pulse: `easeInOut(sine)` on 45-frame cycle
+- Terminal fade-in: `easeOut(quad)` over 15 frames
+- Command type: linear, 3 frames per character
+- Checkmark scale: `easeOut(back)` with overshoot, over 15 frames
+- Badge scale-in: `easeOut(back)` over 20 frames
+- Code recede: `easeInOut(cubic)` over 30 frames
 
 ## Narration Sync
 > "When the regenerated version passes all tests, the prompt is your new source of truth for that module."
 
-Segment: `where_to_start_001` (closing beats)
+Segment: `where_to_start_001` (final portion, ~13.00s - 18.20s)
 
-- **0:12** (12.00s): Documents appear side by side — "regenerated version passes all tests"
-- **0:14** (14.00s): Category labels — "the prompt is your new source of truth"
-- **0:15** (15.12s): Hold — segment ends, transition
+- **13.00s**: Terminal begins typing regenerate command
+- **15.00s**: Test passes — checkmark appears
+- **16.00s**: "SOURCE OF TRUTH" badge stamps on
+- **18.20s** (seg 001 ends): Hold, badge glowing
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={150}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
 
-    {/* Code document — artifact */}
-    <Sequence from={0}>
-      <SlideIn from="left" distance={30} duration={20}>
-        <FadeIn duration={20}>
-          <DocumentCard
-            x={340} y={300} width={380} height={260}
-            fill="#1E1E2E" borderColor="#475569" borderStyle="dashed"
-            label="auth_handler.py" labelFont="JetBrains Mono"
-            labelColor="#475569"
-          >
-            <CodeLines lines={6} font="JetBrains Mono" size={11}
-              color="#475569" opacity={0.4} />
-          </DocumentCard>
-        </FadeIn>
-      </SlideIn>
-    </Sequence>
+    {/* Gray code file (receding) */}
+    <GrayFile
+      name="auth_handler.py"
+      position={[200, 400]} size={[200, 150]}
+      opacity={0.1}
+    />
 
-    {/* ARTIFACT watermark */}
-    <Sequence from={20}>
-      <StampIn duration={15} easing="easeOut(back)">
-        <Text text="ARTIFACT" font="Inter" size={36} weight={700}
-          color="#475569" opacity={0.15} rotation={-15}
-          x={530} y={430} align="center" />
-      </StampIn>
-    </Sequence>
+    {/* Prompt file (dominant) */}
+    <PromptFile
+      name="auth_handler.prompt.md"
+      position={[750, 350]} size={[400, 250]}
+      borderColor="#5AAA6E"
+      glowRadius={20} glowOpacity={0.12}
+    />
 
-    {/* Prompt document — source of truth */}
-    <Sequence from={0}>
-      <SlideIn from="right" distance={30} duration={20}>
-        <FadeIn duration={20}>
-          <DocumentCard
-            x={1200} y={300} width={380} height={260}
-            fill="#1E1E2E" borderColor="#8B5CF6" borderStyle="solid"
-            label="auth_handler.prompt.md" labelFont="Inter"
-            labelColor="#8B5CF6"
-            glow={{ color: "#8B5CF6", opacity: 0.1, radius: 16 }}
-            pulseCycle={45}
-          >
-            <SpecLines lines={5} font="Inter" size={12}
-              color="#E2E8F0" opacity={0.8} />
-          </DocumentCard>
-        </FadeIn>
-      </SlideIn>
-    </Sequence>
-
-    {/* Category labels */}
-    <Sequence from={50}>
+    {/* Regeneration terminal */}
+    <Sequence from={15}>
       <FadeIn duration={15}>
-        <Text text="ARTIFACT" font="Inter" size={16} weight={600}
-          color="#475569" opacity={0.6} x={530} y={590} align="center" />
-        <Text text="SOURCE OF TRUTH" font="Inter" size={16} weight={600}
-          color="#8B5CF6" opacity={0.8} x={1390} y={590} align="center" />
+        <CompactTerminal position={[750, 650]} width={500}>
+          <Sequence from={0}>
+            <TypeWriter text="pdd generate auth_handler.py"
+              charDelay={3} color="#E2E8F0" />
+          </Sequence>
+          <Sequence from={30}>
+            <TypeWriter text="pdd test"
+              charDelay={3} color="#E2E8F0" />
+          </Sequence>
+          <Sequence from={45}>
+            <ScaleIn duration={15} easing="easeOutBack">
+              <Text text="✓ All tests pass"
+                color="#5AAA6E" size={13} font="JetBrains Mono" />
+            </ScaleIn>
+          </Sequence>
+        </CompactTerminal>
       </FadeIn>
     </Sequence>
 
-    {/* Directional labels */}
-    <Sequence from={80}>
-      <DrawArrow label="generates →" color="#4A90D9" opacity={0.5}
-        from={{ x: 1000, y: 410 }} to={{ x: 800, y: 410 }}
-        font="Inter" fontSize={13} drawDuration={15} />
-      <DrawArrow label="← extracts" color="#64748B" opacity={0.4}
-        from={{ x: 800, y: 440 }} to={{ x: 1000, y: 440 }}
-        font="Inter" fontSize={13} drawDuration={15} />
+    {/* Source of Truth badge */}
+    <Sequence from={90}>
+      <ScaleIn duration={20} easing="easeOutBack">
+        <Badge
+          text="SOURCE OF TRUTH"
+          bgColor="#5AAA6E" bgOpacity={0.15}
+          borderColor="#5AAA6E"
+          textColor="#5AAA6E"
+          position={[950, 260]}
+          letterSpacing={2}
+        />
+      </ScaleIn>
     </Sequence>
-
-    {/* Bottom annotation */}
-    <Sequence from={100}>
-      <FadeIn duration={20}>
-        <RichText x={960} y={750} align="center" font="Inter" size={18}>
-          <Span color="#E2E8F0" opacity={0.7}>
-            When the regenerated version passes all tests, the prompt is your new{' '}
-          </Span>
-          <Span color="#8B5CF6" opacity={0.9} weight={600}>
-            source of truth
-          </Span>
-          <Span color="#E2E8F0" opacity={0.7}>.</Span>
-        </RichText>
-      </FadeIn>
-    </Sequence>
-
   </AbsoluteFill>
 </Sequence>
 ```
@@ -181,26 +144,17 @@ Segment: `where_to_start_001` (closing beats)
 ## Data Points JSON
 ```json
 {
-  "type": "comparison_diagram",
-  "left": {
-    "label": "auth_handler.py",
-    "category": "ARTIFACT",
-    "borderStyle": "dashed",
-    "borderColor": "#475569",
-    "watermark": "ARTIFACT"
-  },
-  "right": {
-    "label": "auth_handler.prompt.md",
-    "category": "SOURCE OF TRUTH",
-    "borderStyle": "solid",
-    "borderColor": "#8B5CF6",
-    "glow": true
-  },
-  "relationships": [
-    { "direction": "right_to_left", "label": "generates →" },
-    { "direction": "left_to_right", "label": "← extracts" }
+  "type": "validation_sequence",
+  "sequenceId": "regenerate_and_verify",
+  "steps": [
+    { "command": "pdd generate auth_handler.py", "description": "Regenerate code from prompt" },
+    { "command": "pdd test", "description": "Run test suite" },
+    { "result": "✓ All tests pass", "description": "Validation complete" }
   ],
-  "annotation": "When the regenerated version passes all tests, the prompt is your new source of truth.",
+  "badge": {
+    "text": "SOURCE OF TRUTH",
+    "target": "auth_handler.prompt.md"
+  },
   "narrationSegments": ["where_to_start_001"]
 }
 ```

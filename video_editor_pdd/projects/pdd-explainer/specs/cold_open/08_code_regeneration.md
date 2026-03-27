@@ -1,105 +1,141 @@
 [Remotion]
 
-# Section 0.8: Code Deletion and Regeneration
+# Section 0.8: Code Regeneration — Delete and Rebuild
 
 **Tool:** Remotion
-**Duration:** ~2s
-**Timestamp:** 0:14 - 0:16
+**Duration:** ~2s (60 frames @ 30fps)
+**Timestamp:** 0:16 - 0:18
 
 ## Visual Description
-Continuation of the code editor from spec 07. The entire patched function — all 30 lines — rapidly deletes from bottom to top in a cascading wipe, leaving an empty editor for a split second. Then clean, well-structured code regenerates line by line from top to bottom, flowing in smoothly like water filling a glass. The new code has no HACK comments, no TODO markers, no gutter annotations — it's pristine. In the bottom-right corner, a subtle terminal overlay appears showing `$ pdd generate ✓` with a green checkmark.
+The dramatic payoff of the cold open. The same patched function from the previous shot is visible. Then — the entire function selects (highlight sweeps from top to bottom), and DELETES in one swift motion. The screen is momentarily empty (just the function signature and empty body). Then new code FLOWS in — line by line, fast, clean, no patch comments, no TODO markers. The regenerated function is shorter (30 lines vs. 40), cleaner, and clearly better structured. In the bottom-right corner, a subtle terminal overlay shows `$ pdd generate process_order` completing with a green checkmark. The message is visceral: why patch when you can regenerate?
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Background: #1E1E1E (VS Code dark theme)
-- Font: JetBrains Mono or Fira Code
+- Background: `#1E1E2E` (VS Code dark theme background)
+- Editor chrome: Same as previous shot — continuous visual flow
 
 ### Chart/Visual Elements
-- **Phase 1 (delete):** Lines disappear from bottom to top, each line fading out and sliding left slightly. Red-tinted glow on each line as it vanishes.
-- **Phase 2 (empty):** Bare editor with just line numbers and cursor — brief stillness.
-- **Phase 3 (regenerate):** Clean code types in top-to-bottom, 2-3 lines per frame, with a subtle blue glow trailing the generation front.
-- **Terminal overlay:** Small (300x60px), bottom-right corner, 70% opacity background (#0D0D0D), monospace text showing `$ pdd generate ✓`
+
+#### Code Editor (inherited state)
+- Starts showing the same patched function from 07_code_cursor_blink
+- Same line numbers, same syntax highlighting, same patch comments
+
+#### Selection Highlight
+- Full-function selection: `#89B4FA` at 0.2 (blue selection)
+- Sweeps from line 1 to line 40 in 8 frames
+
+#### Regenerated Code
+- Clean function: ~30 lines, no comments, clear variable names
+- Standard Python syntax highlighting (Catppuccin Mocha)
+- Lines appear top-to-bottom, 1 line per frame
+
+#### Terminal Overlay
+- Position: Bottom-right, 400x60px
+- Background: `#11111B` at 0.9, 8px border-radius
+- Text: `$ pdd generate process_order ✓` in `#A6E3A1` (green)
+- Font: JetBrains Mono, 12px
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** All 30 lines of patched code cascade-delete bottom-to-top. Each line fades out over 2 frames with a slight leftward slide (translateX 0 → -20px).
-2. **Frame 15-18 (0.5-0.6s):** Empty editor. Cursor blinks once. Beat.
-3. **Frame 18-48 (0.6-1.6s):** Clean code regenerates top-to-bottom. Lines appear 2-3 at a time with a blue trailing glow (#4FC1FF, 40% opacity). No HACK/TODO comments. Clean indentation.
-4. **Frame 48-60 (1.6-2.0s):** Terminal overlay fades in (bottom-right): `$ pdd generate ✓` in green (#4EC9B0). Hold.
+1. **Frame 0-8 (0-0.27s):** Selection highlight sweeps across the entire function (lines 1-40). Blue selection overlay appears line by line, 5 lines per frame.
+2. **Frame 8-12 (0.27-0.4s):** All selected code DELETES. Lines vanish simultaneously. Only the function signature remains: `def process_order(order, ctx):` with an empty body.
+3. **Frame 12-14 (0.4-0.47s):** Brief pause. Empty function body. The "void" beat.
+4. **Frame 14-44 (0.47-1.47s):** New code flows in, one line per frame. Clean, well-structured, no patch comments. 30 lines of regenerated code appear rapidly.
+5. **Frame 38-48 (1.27-1.6s):** Terminal overlay fades in at bottom-right showing `$ pdd generate process_order ✓`.
+6. **Frame 48-60 (1.6-2.0s):** Hold. Clean code visible. Terminal checkmark glows. The transformation is complete.
 
 ### Typography
-- Code font: JetBrains Mono, 16px, #D4D4D4
-- Terminal overlay: JetBrains Mono, 13px, #4EC9B0
-- Terminal background: #0D0D0D at 70% opacity, 8px border-radius
+- Code: JetBrains Mono, 14px, Catppuccin Mocha syntax colors
+- Terminal: JetBrains Mono, 12px, `#A6E3A1` on `#11111B`
 
 ### Easing
-- Line deletion: `easeInQuad` (accelerating disappearance)
-- Empty beat: static
-- Line regeneration: `easeOutCubic` (decelerating, settling in)
-- Terminal fade-in: `easeOutQuad`
+- Selection sweep: `linear` (mechanical, deliberate)
+- Code delete: `easeIn(quad)` — accelerates into deletion
+- Void pause: static (2 frames)
+- Code flow-in: `easeOut(cubic)` per line (each line decelerates as it settles)
+- Terminal fade-in: `easeOut(quad)` over 10 frames
+- Checkmark appear: `spring(stiffness: 200, damping: 15)`
 
 ## Narration Sync
-> "Code just got that cheap."
+> "So why are we still patching?"
+
+Segment: `cold_open_006`
+
+- **16.04s**: Function selects and deletes
+- **16.5s**: Regeneration begins — clean code flows in
+- **17.4s**: Terminal shows `pdd generate` completing
+- **17.90s**: Hold on clean regenerated code, transition to title card
 
 ## Code Structure (Remotion)
 ```typescript
 <Sequence from={0} durationInFrames={60}>
-  {/* Phase 1: Cascade delete */}
-  <Sequence from={0} durationInFrames={15}>
-    <CascadeDelete
-      lines={PATCHED_FUNCTION_LINES}
-      direction="bottom-to-top"
-      perLineFrames={2}
-      slideX={-20}
-      glowColor="#FF4444"
+  <AbsoluteFill style={{ backgroundColor: '#1E1E2E' }}>
+    {/* Patched code (inherited from previous shot) */}
+    <CodeEditor
+      language="python"
+      theme="catppuccin-mocha"
+      code={PATCHED_FUNCTION_CODE}
     />
-  </Sequence>
 
-  {/* Phase 2: Empty beat */}
-  <Sequence from={15} durationInFrames={3}>
-    <EmptyEditor lineNumbers={30} />
-    <BlinkingCursor line={1} column={1} color="#FFFFFF" />
-  </Sequence>
-
-  {/* Phase 3: Regenerate clean code */}
-  <Sequence from={18} durationInFrames={30}>
-    <CascadeGenerate
-      lines={CLEAN_FUNCTION_LINES}
-      direction="top-to-bottom"
-      linesPerFrame={2}
-      glowColor="#4FC1FF"
-      glowOpacity={0.4}
-    />
-  </Sequence>
-
-  {/* Terminal overlay */}
-  <Sequence from={48} durationInFrames={12}>
-    <FadeIn durationInFrames={6}>
-      <TerminalOverlay
-        text="$ pdd generate ✓"
-        position="bottom-right"
-        textColor="#4EC9B0"
-        bgColor="#0D0D0D"
-        bgOpacity={0.7}
+    {/* Selection sweep */}
+    <Sequence from={0} durationInFrames={8}>
+      <SelectionHighlight
+        startLine={1} endLine={40}
+        color="#89B4FA" opacity={0.2}
+        sweepFrames={8}
       />
-    </FadeIn>
-  </Sequence>
+    </Sequence>
+
+    {/* Delete + regenerate */}
+    <Sequence from={8}>
+      <CodeDelete duration={4} />
+    </Sequence>
+
+    <Sequence from={14}>
+      <CodeFlowIn
+        code={CLEAN_FUNCTION_CODE}
+        linesPerFrame={1}
+        easing="easeOutCubic"
+      />
+    </Sequence>
+
+    {/* Terminal overlay */}
+    <Sequence from={38}>
+      <FadeIn duration={10}>
+        <TerminalOverlay
+          command="pdd generate process_order"
+          status="success"
+          position="bottom-right"
+        />
+      </FadeIn>
+    </Sequence>
+  </AbsoluteFill>
 </Sequence>
 ```
 
 ## Data Points JSON
 ```json
 {
-  "type": "code_editor_animation",
+  "type": "code_regeneration",
+  "language": "python",
+  "theme": "catppuccin-mocha",
+  "functionName": "process_order",
+  "originalLines": 40,
+  "regeneratedLines": 30,
+  "patchCommentsRemoved": 6,
+  "terminalCommand": "pdd generate process_order",
   "phases": [
-    { "name": "cascade_delete", "direction": "bottom-to-top", "durationFrames": 15 },
-    { "name": "empty_beat", "durationFrames": 3 },
-    { "name": "cascade_generate", "direction": "top-to-bottom", "durationFrames": 30 },
-    { "name": "terminal_overlay", "text": "$ pdd generate ✓", "durationFrames": 12 }
+    { "name": "select", "startFrame": 0, "endFrame": 8 },
+    { "name": "delete", "startFrame": 8, "endFrame": 12 },
+    { "name": "void", "startFrame": 12, "endFrame": 14 },
+    { "name": "regenerate", "startFrame": 14, "endFrame": 44 },
+    { "name": "terminal", "startFrame": 38, "endFrame": 48 },
+    { "name": "hold", "startFrame": 48, "endFrame": 60 }
   ],
-  "theme": "vscode-dark",
-  "cleanCode": true,
-  "terminalCommand": "pdd generate"
+  "narrationSegments": ["cold_open_006"],
+  "durationSeconds": 2.0
 }
 ```
+
+---

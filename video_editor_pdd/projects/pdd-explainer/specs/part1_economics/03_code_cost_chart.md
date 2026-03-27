@@ -1,171 +1,154 @@
 [Remotion]
 
-# Section 1.3: Code Cost Chart — Generate vs Patch vs Total Debt
+# Section 1.3: Code Cost Chart — Generate vs. Patch vs. Total Debt
 
 **Tool:** Remotion
-**Duration:** ~42s (1260 frames @ 30fps)
-**Timestamp:** 0:43 - 1:25
+**Duration:** ~55s (1650 frames @ 30fps)
+**Timestamp:** 0:48 - 1:43
 
 ## Visual Description
 
-A complex animated chart that is the centerpiece of Part 1. Similar structure to the sock chart but for code. The Y-axis is "Cost (Developer Hours)". The X-axis spans ~2010-2025+.
+The core economic chart of the entire video. Three elements plotted from 2000 to 2026:
 
-Three elements animate onto the chart in sequence:
+1. **"Cost to generate" (blue line, `#4A90D9`):** Starts high. Barely dips at Codex (2021). Plunges steeply starting at GPT-4/Claude (2023).
+2. **"Immediate patch cost" (amber solid line, `#D9944A`):** Starts moderate-high. Begins dropping post-2020 as Copilot arrives.
+3. **"Total cost with debt" (amber dashed line, `#D9944A`):** Stays near the top, barely moving. A shaded area between the solid and dashed amber lines represents accumulated technical debt — the gap between what developers feel (solid) and what's real (dashed).
 
-1. **Blue line ("Cost to generate"):** Starts high (~20 dev-hours), stays flat through 2021 (Codex barely dips it), then plunges steeply starting 2023 (GPT-4, Claude, Gemini).
-2. **Amber solid line ("Immediate patch cost"):** Starts low (~2 hours), holds relatively flat, then starts dropping post-2020 as Copilot and AI coding tools help with individual fixes.
-3. **Amber dashed line ("Total cost with debt"):** Sits at the TOP of the chart (~18-20 hours). Barely moves despite the solid line dropping. A shaded area between the solid and dashed amber lines represents accumulated technical debt — and it EXPANDS as the solid line drops.
+Key dates appear as vertical markers on the blue line: Codex (2021), GPT-4 (2023), Claude (2023), Gemini (2024). The chart visually demonstrates the central argument: individual tasks feel faster, but total cost barely moves.
 
-Key dates appear on the blue line as it falls: Codex (2021), GPT-4 (2023), Claude (2023), Gemini (2024). The visual drama: the blue generation line is in freefall while the dashed total-cost line barely budges. The viewer's lived experience (patches getting easier) is validated by the solid line — but the bigger picture (total cost unchanged) is revealed by the dashed line.
+This spec covers the initial chart draw and the "each patch is getting faster" validation beat before pulling back to reveal the debt expansion.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: horizontal dashed at `#1E293B` at 0.1
+- Grid lines: Horizontal at 150px intervals, `#1E293B` at 0.08
 
 ### Chart/Visual Elements
 
 #### Axes
-- X-axis: 2010 to 2026, tick marks every 2 years, labels at bottom
-  - Color: `#475569` at 0.6, Inter 12px
-- Y-axis: "Cost (Developer Hours)" — 0 to 25
-  - Color: `#475569` at 0.6, Inter 12px
-- Axis lines: `#334155` at 0.3, 1px
+- X-axis: 2000 to 2026, labeled at key dates, `#94A3B8` at 0.6, Inter 14px
+- Y-axis: "Cost (Developer Hours)", `#94A3B8` at 0.6, Inter 14px
+- Axis lines: `#334155`, 1.5px
 
 #### Lines
-- **Generate (blue):** `#4A90D9`, 3px solid stroke
-  - Data: (2010, 20), (2015, 19), (2020, 18), (2021, 17), (2022, 16), (2023, 8), (2024, 3), (2025, 1.5)
-  - Label: "Cost to generate" — Inter, 13px, `#4A90D9`
+- Generate (blue): `#4A90D9`, 3px solid — high plateau 2000-2021, slight dip 2021-2022, steep plunge 2023-2026
+- Immediate patch (amber solid): `#D9944A`, 3px solid — moderate, drops post-2020
+- Total cost with debt (amber dashed): `#D9944A`, 2.5px dashed (8px dash, 6px gap) — near top, barely moves
 
-- **Immediate patch (amber solid):** `#D9944A`, 3px solid stroke
-  - Data: (2010, 3), (2015, 2.8), (2020, 2.5), (2021, 2.0), (2022, 1.5), (2023, 1.2), (2024, 0.8), (2025, 0.6)
-  - Label: "Immediate patch cost" — Inter, 13px, `#D9944A`
+#### Shaded Debt Area
+- Fill between solid and dashed amber lines: `#D9944A` at 0.12
+- Expands upward as the solid line drops — gap widens over time
 
-- **Total cost with debt (amber dashed):** `#D9944A`, 2px dashed stroke, dash pattern 8,6
-  - Data: (2010, 18), (2015, 18.5), (2020, 19), (2021, 19), (2022, 19.5), (2023, 20), (2024, 20.5), (2025, 21)
-  - Label: "Total cost (with debt)" — Inter, 13px, `#D9944A` at 0.6
-
-#### Debt Shaded Area
-- Between solid amber and dashed amber lines
-- Fill: `#D9944A` at 0.08, gradient darker toward the dashed line
-- Animates to expand as the solid line drops
-
-#### AI Milestone Labels
-- "Codex" at (2021, 17): Inter, 11px, `#4A90D9` at 0.5, with connecting dot
-- "GPT-4" at (2023, 8): Inter, 11px, `#4A90D9` at 0.7, with connecting dot
-- "Claude" at (2023.3, 7): Inter, 11px, `#4A90D9` at 0.7, offset below GPT-4
-- "Gemini" at (2024, 3): Inter, 11px, `#4A90D9` at 0.6, with connecting dot
+#### Date Markers (on blue line)
+- "Codex" (2021): vertical dashed line `#64748B`, label Inter 12px
+- "GPT-4" (2023): vertical dashed line, label
+- "Claude" (2023.5): vertical dashed line, label
+- "Gemini" (2024): vertical dashed line, label
 
 ### Animation Sequence
-1. **Frame 0-30 (0-1s):** Axes fade in. Grid lines appear. Title: "Cost (Developer Hours)".
-2. **Frame 30-120 (1-4s):** Blue "generate" line draws from 2010. Flat and high.
-3. **Frame 120-240 (4-8s):** Amber solid "immediate patch" line draws. Low and flat. Amber dashed "total cost" line draws at top.
-4. **Frame 240-360 (8-12s):** Debt shaded area fills between the two amber lines.
-5. **Frame 360-420 (12-14s):** AI milestone labels appear on blue line. Codex barely dips.
-6. **Frame 420-600 (14-20s):** Blue line PLUNGES from 2023 onward. GPT-4, Claude labels appear as line falls.
-7. **Frame 600-720 (20-24s):** Solid amber line drops post-2020. The viewer's lived experience validated.
-8. **Frame 720-900 (24-30s):** Camera pulls back. Debt area EXPANDS upward as solid line drops. Dashed line barely moves.
-9. **Frame 900-1260 (30-42s):** Hold. The gap between solid and dashed is enormous. The disconnect is visible.
+1. **Frame 0-45 (0-1.5s):** Axes draw in. Y-axis label: "Cost (Developer Hours)".
+2. **Frame 45-180 (1.5-6s):** Blue "generate" line draws from left — high plateau from 2000 to 2021. Date markers appear as the line passes each year.
+3. **Frame 180-300 (6-10s):** Blue line barely dips at Codex (2021-2022). Then GPT-4/Claude markers appear (2023) and the line plunges steeply.
+4. **Frame 300-450 (10-15s):** Amber solid line draws — moderate cost, stable through 2010s. Post-2020, it begins dropping as Copilot helps.
+5. **Frame 450-540 (15-18s):** Focus pulse on the solid amber line dropping. This validates the viewer's experience. Subtle glow on the line.
+6. **Frame 540-600 (18-20s):** Amber dashed line draws at the top. Shaded debt area fills between solid and dashed.
+7. **Frame 600-900 (20-30s):** Camera "pulls back" (chart scale adjusts). The debt area EXPANDS visibly. Dashed line barely moves while solid line drops. The gap becomes stark.
+8. **Frame 900-1650 (30-55s):** Hold with debt area visible. Chart remains on screen for research annotation overlays (next specs).
 
 ### Typography
-- Chart title: Inter, 20px, bold (700), `#E2E8F0`, top-left
-- Axis labels: Inter, 12px, `#475569` at 0.6
-- Line labels: Inter, 13px, respective colors
-- Milestone labels: Inter, 11px, `#4A90D9` at varying opacities
+- Axis labels: Inter, 14px, regular (400), `#94A3B8` at 0.6
+- Date markers: Inter, 12px, regular (400), `#94A3B8` at 0.8
+- Line legend: Inter, 14px, semi-bold (600), respective colors
 
 ### Easing
-- Line draw: `easeInOut(cubic)` for steady portions, `easeIn(quad)` for the plunge
-- Blue line plunge (2023+): accelerating `easeIn(cubic)` — feels like freefall
-- Debt area expansion: `easeOut(quad)` — ominous slow reveal
-- Milestone labels: `easeOut(quad)` over 15 frames each
-- Dashed line steadiness: `linear` — emphasizing how little it moves
+- Line draw: `easeInOut(cubic)`
+- Blue line plunge: `easeIn(quad)` — accelerating descent
+- Debt area fill: `easeOut(quad)` over 60 frames
+- Focus pulse: `easeInOut(sine)` on 30-frame cycle
+- Camera pullback: `easeInOut(cubic)` over 90 frames
 
 ## Narration Sync
 > "Now look at code."
-> "For decades, generating new code was expensive. You needed a developer — a human brain, months of context-building, domain expertise. Patching was always cheaper."
-> "something else happened. AI made each individual patch faster and faster. You can feel this. Every developer I talk to says the same thing: 'I'm shipping patches faster than ever.' They're right."
-> "Each patch is getting faster. You can feel it. Your tools are better."
-> "But watch the dashed line. The total cost — including the debt each patch leaves behind."
-> "even though each patch is cheaper, you're doing more of them, and each one deposits a thin layer of complexity that the next patch has to navigate."
+> "For decades, generating new code was expensive. Writing from scratch took hours, days, weeks. So when something broke, you patched. Of course you patched. It was rational."
+> "But something else happened. AI made patching faster too. Cursor, Claude Code, Copilot — you know these tools."
+> "Look — each patch is getting faster. That's real. That's what you feel when you use these tools."
+> "But watch the dashed line. The total cost. It's barely moving. Because even though each patch is faster, every patch still leaves residue."
 
-Segments: `part1_economics_008` through `part1_economics_013`
+Segments: `part1_economics_006`, `part1_economics_007`, `part1_economics_008`, `part1_economics_009`
 
-- **43.52s** ("Now look at code"): Chart axes appear, transition from sock chart
-- **45.74s** ("For decades, generating new code"): Blue line begins drawing, high and flat
-- **59.88s** ("AI made each individual patch faster"): Solid amber line begins dropping
-- **75.78s** ("Each patch is getting faster"): Focus on dropping solid line
-- **81.78s** ("But watch the dashed line"): Dashed line highlighted, debt area pulses
-- **86.96s** ("even though each patch is cheaper"): Debt area expanding, gap visible
+- **47.54s** (seg 006): Chart axes draw — "Now look at code"
+- **50.0s**: Blue line begins drawing — "For decades, generating new code was expensive"
+- **61.86s** (seg 006 ends): Blue line reaching Codex
+- **62.08s** (seg 007): "But something else happened" — amber solid line draws, Copilot drops it
+- **78.54s** (seg 007 ends): Focus on dropping solid amber line
+- **78.70s** (seg 008): "Look — each patch is getting faster" — validation pulse
+- **86.00s** (seg 008 ends): Transition to pullback
+- **86.24s** (seg 009): "But watch the dashed line" — camera pulls back, debt area visible
+- **101.78s** (seg 009 ends): Debt expansion fully visible
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={1260}>
+<Sequence from={0} durationInFrames={1650}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
+    <HorizontalGrid spacing={150} color="#1E293B" opacity={0.08} />
+
     {/* Axes */}
     <Sequence from={0}>
-      <FadeIn duration={30}>
-        <ChartAxes
-          xRange={[2010, 2026]} yRange={[0, 25]}
-          xLabel="Year" yLabel="Cost (Developer Hours)"
-          gridColor="#1E293B" gridOpacity={0.1}
-          axisColor="#334155" labelColor="#475569" />
-      </FadeIn>
+      <DrawAxes
+        xRange={[2000, 2026]}
+        yLabel="Cost (Developer Hours)"
+        color="#334155" labelColor="#94A3B8"
+      />
     </Sequence>
 
-    {/* Blue generate line */}
-    <Sequence from={30}>
-      <AnimatedLine
-        data={[
-          [2010, 20], [2015, 19], [2020, 18], [2021, 17],
-          [2022, 16], [2023, 8], [2024, 3], [2025, 1.5]
-        ]}
+    {/* Blue "generate" line */}
+    <Sequence from={45}>
+      <AnimatedLine data={generateCostData}
         color="#4A90D9" strokeWidth={3}
-        drawDuration={540} label="Cost to generate" />
+        drawDuration={255} easing="easeInOutCubic" />
     </Sequence>
 
-    {/* Amber solid (immediate patch) */}
-    <Sequence from={120}>
-      <AnimatedLine
-        data={[
-          [2010, 3], [2015, 2.8], [2020, 2.5], [2021, 2.0],
-          [2022, 1.5], [2023, 1.2], [2024, 0.8], [2025, 0.6]
-        ]}
-        color="#D9944A" strokeWidth={3} style="solid"
-        drawDuration={480} label="Immediate patch cost" />
+    {/* Date markers */}
+    <Sequence from={150}>
+      <DateMarker year={2021} label="Codex" />
+      <DateMarker year={2023} label="GPT-4" />
+      <DateMarker year={2023.5} label="Claude" />
+      <DateMarker year={2024} label="Gemini" />
     </Sequence>
 
-    {/* Amber dashed (total cost with debt) */}
-    <Sequence from={120}>
-      <AnimatedLine
-        data={[
-          [2010, 18], [2015, 18.5], [2020, 19], [2021, 19],
-          [2022, 19.5], [2023, 20], [2024, 20.5], [2025, 21]
-        ]}
-        color="#D9944A" strokeWidth={2} style="dashed"
-        dashPattern={[8, 6]} drawDuration={480}
-        label="Total cost (with debt)" labelOpacity={0.6} />
+    {/* Amber solid "immediate patch" line */}
+    <Sequence from={300}>
+      <AnimatedLine data={immediatePatchData}
+        color="#D9944A" strokeWidth={3}
+        drawDuration={150} />
     </Sequence>
 
-    {/* Debt shaded area */}
-    <Sequence from={240}>
-      <FillArea
-        upperLine="total_cost_debt" lowerLine="immediate_patch"
-        fillColor="#D9944A" opacity={0.08}
-        fillDuration={300} />
+    {/* Validation pulse */}
+    <Sequence from={450}>
+      <LinePulse target="immediate_patch"
+        color="#D9944A" glowRadius={8}
+        duration={90} />
     </Sequence>
 
-    {/* AI milestone labels on blue line */}
-    <Sequence from={360}>
-      <MilestoneLabel text="Codex" x={2021} y={17} color="#4A90D9" opacity={0.5} />
+    {/* Dashed "total cost" line + debt area */}
+    <Sequence from={540}>
+      <AnimatedLine data={totalCostData}
+        color="#D9944A" strokeWidth={2.5}
+        dashArray="8 6" drawDuration={60} />
+      <ShadedArea
+        upperBound={totalCostData}
+        lowerBound={immediatePatchData}
+        color="#D9944A" opacity={0.12}
+        fillDuration={60}
+      />
     </Sequence>
-    <Sequence from={420}>
-      <MilestoneLabel text="GPT-4" x={2023} y={8} color="#4A90D9" opacity={0.7} />
-      <MilestoneLabel text="Claude" x={2023} y={6} color="#4A90D9" opacity={0.7} offset={20} />
-    </Sequence>
-    <Sequence from={480}>
-      <MilestoneLabel text="Gemini" x={2024} y={3} color="#4A90D9" opacity={0.6} />
+
+    {/* Camera pullback */}
+    <Sequence from={600}>
+      <ScaleTransition from={1.0} to={0.85}
+        duration={90} easing="easeInOutCubic" />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -174,48 +157,60 @@ Segments: `part1_economics_008` through `part1_economics_013`
 ## Data Points JSON
 ```json
 {
-  "type": "animated_multi_line_chart",
-  "xAxis": { "label": "Year", "range": [2010, 2026], "ticks": "2y" },
-  "yAxis": { "label": "Cost (Developer Hours)", "range": [0, 25] },
+  "type": "multi_line_chart",
+  "chartId": "code_cost_generate_vs_patch",
+  "xAxis": { "label": "Year", "range": [2000, 2026] },
+  "yAxis": { "label": "Cost (Developer Hours)" },
   "series": [
     {
       "id": "generate_cost",
       "label": "Cost to generate",
       "color": "#4A90D9",
-      "strokeWidth": 3,
-      "style": "solid",
-      "data": [[2010, 20], [2015, 19], [2020, 18], [2021, 17], [2022, 16], [2023, 8], [2024, 3], [2025, 1.5]]
+      "strokeStyle": "solid",
+      "data": [
+        { "x": 2000, "y": 0.9 }, { "x": 2010, "y": 0.88 },
+        { "x": 2020, "y": 0.85 }, { "x": 2021, "y": 0.82 },
+        { "x": 2022, "y": 0.78 }, { "x": 2023, "y": 0.65 },
+        { "x": 2024, "y": 0.35 }, { "x": 2025, "y": 0.18 },
+        { "x": 2026, "y": 0.1 }
+      ]
     },
     {
       "id": "immediate_patch",
       "label": "Immediate patch cost",
       "color": "#D9944A",
-      "strokeWidth": 3,
-      "style": "solid",
-      "data": [[2010, 3], [2015, 2.8], [2020, 2.5], [2021, 2.0], [2022, 1.5], [2023, 1.2], [2024, 0.8], [2025, 0.6]]
+      "strokeStyle": "solid",
+      "data": [
+        { "x": 2000, "y": 0.55 }, { "x": 2010, "y": 0.52 },
+        { "x": 2020, "y": 0.48 }, { "x": 2021, "y": 0.42 },
+        { "x": 2022, "y": 0.35 }, { "x": 2023, "y": 0.28 },
+        { "x": 2024, "y": 0.22 }, { "x": 2025, "y": 0.18 },
+        { "x": 2026, "y": 0.15 }
+      ]
     },
     {
       "id": "total_cost_debt",
       "label": "Total cost (with debt)",
       "color": "#D9944A",
-      "strokeWidth": 2,
-      "style": "dashed",
-      "data": [[2010, 18], [2015, 18.5], [2020, 19], [2021, 19], [2022, 19.5], [2023, 20], [2024, 20.5], [2025, 21]]
+      "strokeStyle": "dashed",
+      "data": [
+        { "x": 2000, "y": 0.6 }, { "x": 2010, "y": 0.62 },
+        { "x": 2020, "y": 0.65 }, { "x": 2021, "y": 0.66 },
+        { "x": 2022, "y": 0.68 }, { "x": 2023, "y": 0.7 },
+        { "x": 2024, "y": 0.72 }, { "x": 2025, "y": 0.73 },
+        { "x": 2026, "y": 0.74 }
+      ]
     }
   ],
-  "milestones": [
-    { "label": "Codex", "year": 2021 },
-    { "label": "GPT-4", "year": 2023 },
-    { "label": "Claude", "year": 2023 },
-    { "label": "Gemini", "year": 2024 }
-  ],
-  "debtArea": {
+  "shadedArea": {
     "upper": "total_cost_debt",
     "lower": "immediate_patch",
     "color": "#D9944A",
-    "opacity": 0.08
+    "opacity": 0.12,
+    "label": "Technical debt"
   },
-  "narrationSegments": ["part1_economics_008", "part1_economics_009", "part1_economics_010", "part1_economics_011", "part1_economics_012", "part1_economics_013"]
+  "dateMarkers": ["Codex (2021)", "GPT-4 (2023)", "Claude (2023)", "Gemini (2024)"],
+  "narrationSegments": ["part1_economics_006", "part1_economics_007", "part1_economics_008", "part1_economics_009"]
 }
 ```
 

@@ -3,166 +3,167 @@
 # Section 5.4: Diverging Cost Curves — Patching vs. PDD Over Time
 
 **Tool:** Remotion
-**Duration:** ~20s (600 frames @ 30fps)
-**Timestamp:** 0:42 - 1:02
+**Duration:** ~22s (660 frames @ 30fps)
+**Timestamp:** 0:44 - 1:06
 
 ## Visual Description
-The core economic argument of the entire video, visualized. Two cost curves diverge dramatically over a shared time axis:
 
-- **"Patching" (amber):** An exponential curve climbing steeply upward — each year costs more than the last because patches accumulate debt that generates more debt.
-- **"PDD" (teal):** A nearly flat line with periodic small sawtooth bumps — each regeneration cycle resets cost to near-zero. Tests constrain every future generation, so investment compounds in your favor.
+Two diverging cost curves that make the central economic argument undeniable:
 
-The gap between the two curves fills with a gradient that widens dramatically, making the divergence visceral. Text callouts appear at key moments: "Each patch adds debt" near the rising amber curve, and "Each test constrains forever" near the flat teal line.
+1. **"Patching" (amber, `#D9944A`):** Grows exponentially upward. Each patch adds debt, debt generates more debt. The curve accelerates relentlessly — cost compounding against you.
 
-A final beat zooms the camera slightly into the widening gap with a label: "Over time, it's everything."
+2. **"PDD" (green, `#5AAA6E`):** Stays flat. Each regeneration cycle resets debt to zero. Small sawtooth waves along the line show individual regeneration costs, but they never accumulate — the baseline stays level.
+
+The gap between the curves widens dramatically over time. By the right edge of the chart, the amber curve is near the top while green hugs the bottom. A shaded region between them — labeled "The Gap" — pulses to emphasize the compounding difference.
+
+Below the chart, two text annotations appear sequentially: "Patching accrues compound costs" (amber) and "Tests accrue compound returns" (green). The green text is the section's thesis statement.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Background: `#0A0F1A` (deep navy-black)
-- Grid lines: horizontal dashed at `#1E293B` opacity `0.06`, 4 lines evenly spaced
+- Grid lines: Horizontal at 150px intervals, `#1E293B` at 0.08
 
 ### Chart/Visual Elements
 
 #### Axes
-- X-axis: "Years" — 0 to 10, labeled at each year
-  - Color: `#475569` opacity `0.6`, Inter 12px
-- Y-axis: "Cumulative Cost" — 0 to max, no numeric labels (conceptual scale)
-  - Color: `#475569` opacity `0.6`, Inter 12px
-- Axis lines: `#334155` opacity `0.3`, 1px
+- X-axis: "Time (years)", labeled 0-10, `#94A3B8` at 0.6, Inter 14px
+- Y-axis: "Cumulative Cost", `#94A3B8` at 0.6, Inter 14px
+- Axis lines: `#334155`, 1.5px
 
-#### Patching Curve
-- Color: `#D9944A` (warm amber), 3.5px stroke
-- Shape: exponential — starts at `(0, 2)`, grows to `(10, 90)` (fills most of Y-axis)
-- Data: `(0, 2), (1, 3), (2, 4.5), (3, 7), (4, 11), (5, 17), (6, 26), (7, 39), (8, 55), (9, 72), (10, 90)`
-- Glow: `6px`, `#D9944A` opacity `0.12`
-- Label: "Patching" — Inter, 18px, bold, `#D9944A`, positioned above curve endpoint
+#### Patching Curve (amber exponential)
+- Color: `#D9944A`, 3px solid
+- Shape: Exponential growth — starts at y:75%, accelerates to y:8% by year 10
+- Label: "Patching" — Inter, 16px, semi-bold (600), `#D9944A`, positioned at curve end
 
-#### PDD Curve
-- Color: `#4A90D9` (steel blue), 3.5px stroke
-- Shape: flat with small sawtooth — cost resets each cycle
-- Data: `(0, 2), (1, 3.5), (1.5, 2.2), (3, 3.8), (3.5, 2.3), (5, 3.9), (5.5, 2.2), (7, 3.7), (7.5, 2.1), (9, 3.6), (10, 4.0)`
-- Each sawtooth represents a regeneration: cost builds slightly, then resets
-- Label: "PDD" — Inter, 18px, bold, `#4A90D9`, positioned at line end
+#### PDD Curve (green flat with sawtooth)
+- Color: `#5AAA6E`, 3px solid
+- Shape: Flat baseline at y:78% with small sawtooth ripples (amplitude 3%, period matching regeneration cycles)
+- Label: "PDD" — Inter, 16px, semi-bold (600), `#5AAA6E`, positioned at curve end
 
-#### Divergence Fill
-- Gradient fill between the two curves
-- Upper edge: `#D9944A` opacity `0.06`
-- Lower edge: `#4A90D9` opacity `0.03`
-- Expands as curves diverge
+#### Gap Region
+- Shaded area between curves: linear gradient `#D9944A` at 0.06 (top) to `#5AAA6E` at 0.04 (bottom)
+- "The Gap" label: Inter, 14px, `#E2E8F0` at 0.5, centered in the shaded region
 
-#### Callout Annotations
-- **"Each patch adds debt"** — Inter, 13px, italic, `#D9944A` opacity `0.8`, with a small arrow pointing to the steep amber section around year 6
-- **"Each test constrains forever"** — Inter, 13px, italic, `#4A90D9` opacity `0.8`, with a small arrow pointing to the flat teal line around year 6
-- **"Over time, it's everything."** — Inter, 20px, bold, `#E2E8F0`, centered in the gap at year 9, appears last
+#### Thesis Annotations (below chart)
+- "Patching accrues compound costs." — Inter, 18px, semi-bold (600), `#D9944A`, y: 850
+- "Tests accrue compound returns." — Inter, 18px, semi-bold (600), `#5AAA6E`, y: 890
 
 ### Animation Sequence
-1. **Frame 0-45 (0-1.5s):** Axes and grid fade in. Both curves begin drawing from year 0 where they start at the same point.
-2. **Frame 45-150 (1.5-5s):** Both curves draw simultaneously, left to right. Through years 0-4, they begin to separate. The amber line starts pulling upward.
-3. **Frame 150-300 (5-10s):** Years 5-8. The divergence becomes dramatic. Amber shoots upward; teal stays flat with its periodic resets. Gradient fill animates between the curves.
-4. **Frame 300-360 (10-12s):** Curves reach year 10. Labels "Patching" and "PDD" appear at endpoints. The gap is enormous.
-5. **Frame 360-420 (12-14s):** Callout annotations fade in: "Each patch adds debt" near amber, "Each test constrains forever" near teal.
-6. **Frame 420-510 (14-17s):** Slow zoom-in (`scale 1.0→1.08`) focusing on the widening gap at years 8-10. "Over time, it's everything." fades in centered in the gap.
-7. **Frame 510-600 (17-20s):** Hold at zoomed position. The visual weight of the divergence settles.
+1. **Frame 0-30 (0-1s):** Axes from previous chart relabel. Grid stabilizes.
+2. **Frame 30-180 (1-6s):** Both curves draw simultaneously from left to right. Amber curve begins accelerating upward. Green stays flat with sawtooth ripples.
+3. **Frame 180-300 (6-10s):** Curves continue diverging. The gap widens dramatically. Shaded gap region fills between them.
+4. **Frame 300-360 (10-12s):** "The Gap" label fades in. Gap pulses subtly.
+5. **Frame 360-420 (12-14s):** "Patching accrues compound costs." fades in below chart.
+6. **Frame 420-480 (14-16s):** "Tests accrue compound returns." fades in below — the thesis statement.
+7. **Frame 480-600 (16-20s):** Hold. The contrast between the curves speaks.
+8. **Frame 600-660 (20-22s):** Chart fades slightly, preparing for investment table overlay.
 
 ### Typography
-- Curve labels: Inter, 18px, bold (700), respective curve colors
-- Annotation callouts: Inter, 13px, italic (400i), respective curve colors at `0.8`
-- Impact text: Inter, 20px, bold (700), `#E2E8F0`
-- Axis labels: Inter, 12px, regular (400), `#475569` opacity `0.6`
+- Axis labels: Inter, 14px, regular (400), `#94A3B8` at 0.6
+- Curve labels: Inter, 16px, semi-bold (600), respective colors
+- Gap label: Inter, 14px, regular (400), `#E2E8F0` at 0.5
+- Thesis statements: Inter, 18px, semi-bold (600), respective colors
 
 ### Easing
-- Curve draw: `easeInOutCubic` over draw duration
-- Divergence fill: `easeInQuad` — fills slowly at first, faster as gap widens
-- Annotations fade: `easeOutQuad` over 25 frames
-- Impact text: `easeOutCubic` over 30 frames with slight scale `0.9→1.0`
-- Zoom: `easeInOutCubic` over 90 frames
+- Amber curve draw: `easeIn(quad)` — accelerating upward
+- Green curve draw: `easeOut(quad)` — smooth, steady
+- Gap fill: `easeOut(quad)` over 60 frames
+- Gap pulse: `easeInOut(sine)` on 60-frame cycle, opacity 0.04-0.08
+- Thesis fade-in: `easeOut(quad)` over 25 frames
+- Chart fade-out: `easeIn(quad)` over 60 frames
 
 ## Narration Sync
 > "Patching accrues compound costs. Each patch adds debt. Debt generates more debt."
 > "But the mold works the other way. Each test you write constrains every future generation. Today's. Next month's. Next year's. Tests accrue compound returns."
-> "One side of this equation compounds against you. The other compounds for you. That's not a marginal difference. Over time, it's everything."
+
+Segments: `part5_compound_returns_003`
+
+- **43.84s** (seg 003): Curves begin drawing — "Patching accrues compound costs"
+- **48.00s**: Divergence accelerating — "Each patch adds debt. Debt generates more debt."
+- **52.00s**: Green line visible — "But the mold works the other way"
+- **58.00s**: Thesis annotations — "Tests accrue compound returns"
+- **65.66s** (seg 003 ends): Hold on diverging curves
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={600}>
+<Sequence from={0} durationInFrames={660}>
   <AbsoluteFill style={{ backgroundColor: '#0A0F1A' }}>
-    {/* Axes and grid */}
+    <HorizontalGrid spacing={150} color="#1E293B" opacity={0.08} />
+
+    {/* Axes */}
     <Sequence from={0}>
-      <FadeIn durationInFrames={30}>
-        <ChartAxes
-          xRange={[0, 10]} yRange={[0, 100]}
-          xLabel="Years" yLabel="Cumulative Cost"
-          gridColor="#1E293B" gridOpacity={0.06}
-          axisColor="#334155" labelColor="#475569" />
+      <DrawAxes
+        xRange={[0, 10]} xLabel="Time (years)"
+        yLabel="Cumulative Cost"
+        color="#334155" labelColor="#94A3B8"
+      />
+    </Sequence>
+
+    {/* Both curves drawing */}
+    <Sequence from={30}>
+      <AnimatedLine
+        data={patchingExponentialData}
+        color="#D9944A" strokeWidth={3}
+        drawDuration={270} easing="easeInQuad"
+      />
+      <AnimatedLine
+        data={pddFlatSawtoothData}
+        color="#5AAA6E" strokeWidth={3}
+        drawDuration={270} easing="easeOutQuad"
+      />
+    </Sequence>
+
+    {/* Gap shaded region */}
+    <Sequence from={180}>
+      <ShadedArea
+        upperBound={patchingExponentialData}
+        lowerBound={pddFlatSawtoothData}
+        gradient={{ top: "#D9944A", topOpacity: 0.06,
+                    bottom: "#5AAA6E", bottomOpacity: 0.04 }}
+        fillDuration={60}
+      />
+    </Sequence>
+
+    {/* Gap label */}
+    <Sequence from={300}>
+      <FadeIn duration={20}>
+        <Text text="The Gap" font="Inter" size={14}
+          color="#E2E8F0" opacity={0.5}
+          x={1100} y={450} align="center" />
       </FadeIn>
     </Sequence>
 
-    {/* Patching curve (amber, exponential) */}
-    <Sequence from={45}>
-      <AnimatedLine
-        data={[
-          [0, 2], [1, 3], [2, 4.5], [3, 7], [4, 11],
-          [5, 17], [6, 26], [7, 39], [8, 55], [9, 72], [10, 90]
-        ]}
-        color="#D9944A" strokeWidth={3.5}
-        glowRadius={6} glowOpacity={0.12}
-        drawDuration={255} easing="easeInOutCubic"
-        label="Patching" labelColor="#D9944A" labelSize={18} />
+    {/* Curve end labels */}
+    <Sequence from={270}>
+      <FadeIn duration={20}>
+        <Text text="Patching" font="Inter" size={16}
+          weight={600} color="#D9944A" x={1350} y={100} />
+        <Text text="PDD" font="Inter" size={16}
+          weight={600} color="#5AAA6E" x={1350} y={750} />
+      </FadeIn>
     </Sequence>
 
-    {/* PDD curve (teal, flat sawtooth) */}
-    <Sequence from={45}>
-      <AnimatedLine
-        data={[
-          [0, 2], [1, 3.5], [1.5, 2.2], [3, 3.8], [3.5, 2.3],
-          [5, 3.9], [5.5, 2.2], [7, 3.7], [7.5, 2.1], [9, 3.6], [10, 4.0]
-        ]}
-        color="#4A90D9" strokeWidth={3.5}
-        drawDuration={255} easing="easeInOutCubic"
-        label="PDD" labelColor="#4A90D9" labelSize={18} />
-    </Sequence>
-
-    {/* Divergence gradient fill */}
-    <Sequence from={150}>
-      <FillArea
-        upperLine="patching_curve" lowerLine="pdd_curve"
-        gradientTop={{ color: "#D9944A", opacity: 0.06 }}
-        gradientBottom={{ color: "#4A90D9", opacity: 0.03 }}
-        fillDuration={150} easing="easeInQuad" />
-    </Sequence>
-
-    {/* Annotation callouts */}
+    {/* Thesis annotations */}
     <Sequence from={360}>
-      <FadeIn durationInFrames={25}>
-        <Annotation text="Each patch adds debt" font="Inter"
-          size={13} style="italic" color="#D9944A" opacity={0.8}
-          anchorX={6} anchorY={26} arrowDirection="up" />
+      <FadeIn duration={25}>
+        <Text text="Patching accrues compound costs."
+          font="Inter" size={18} weight={600}
+          color="#D9944A" x={960} y={850} align="center" />
       </FadeIn>
     </Sequence>
-    <Sequence from={385}>
-      <FadeIn durationInFrames={25}>
-        <Annotation text="Each test constrains forever" font="Inter"
-          size={13} style="italic" color="#4A90D9" opacity={0.8}
-          anchorX={6} anchorY={3.8} arrowDirection="down" />
+    <Sequence from={420}>
+      <FadeIn duration={25}>
+        <Text text="Tests accrue compound returns."
+          font="Inter" size={18} weight={600}
+          color="#5AAA6E" x={960} y={890} align="center" />
       </FadeIn>
     </Sequence>
 
-    {/* Zoom and impact text */}
-    <Sequence from={420}>
-      <ZoomIn fromScale={1.0} toScale={1.08}
-        focusX={0.75} focusY={0.5}
-        durationInFrames={90} easing="easeInOutCubic">
-        <Sequence from={30}>
-          <ScaleAndFade fromScale={0.9} toScale={1.0}
-            durationInFrames={30} easing="easeOutCubic">
-            <Text text="Over time, it's everything."
-              font="Inter" size={20} weight={700} color="#E2E8F0"
-              align="center" y={0} />
-          </ScaleAndFade>
-        </Sequence>
-      </ZoomIn>
+    {/* Fade transition */}
+    <Sequence from={600}>
+      <FadeOut duration={60} targetOpacity={0.3} />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -171,30 +172,52 @@ A final beat zooms the camera slightly into the widening gap with a label: "Over
 ## Data Points JSON
 ```json
 {
-  "type": "diverging_line_chart",
-  "xAxis": { "label": "Years", "range": [0, 10] },
-  "yAxis": { "label": "Cumulative Cost", "range": [0, 100] },
+  "type": "diverging_curves",
+  "chartId": "patching_vs_pdd_compounding",
+  "xAxis": { "label": "Time (years)", "range": [0, 10] },
+  "yAxis": { "label": "Cumulative Cost" },
   "series": [
     {
-      "id": "patching_curve",
+      "id": "patching_exponential",
       "label": "Patching",
       "color": "#D9944A",
-      "style": "solid",
-      "data": [[0, 2], [1, 3], [2, 4.5], [3, 7], [4, 11], [5, 17], [6, 26], [7, 39], [8, 55], [9, 72], [10, 90]]
+      "type": "exponential",
+      "data": [
+        { "x": 0, "y": 0.10 }, { "x": 1, "y": 0.13 },
+        { "x": 2, "y": 0.17 }, { "x": 3, "y": 0.23 },
+        { "x": 4, "y": 0.31 }, { "x": 5, "y": 0.42 },
+        { "x": 6, "y": 0.55 }, { "x": 7, "y": 0.68 },
+        { "x": 8, "y": 0.80 }, { "x": 9, "y": 0.88 },
+        { "x": 10, "y": 0.95 }
+      ]
     },
     {
-      "id": "pdd_curve",
+      "id": "pdd_flat",
       "label": "PDD",
-      "color": "#4A90D9",
-      "style": "solid",
-      "data": [[0, 2], [1, 3.5], [1.5, 2.2], [3, 3.8], [3.5, 2.3], [5, 3.9], [5.5, 2.2], [7, 3.7], [7.5, 2.1], [9, 3.6], [10, 4.0]]
+      "color": "#5AAA6E",
+      "type": "flat_sawtooth",
+      "baseline": 0.10,
+      "sawtoothAmplitude": 0.03,
+      "data": [
+        { "x": 0, "y": 0.10 }, { "x": 1, "y": 0.10 },
+        { "x": 2, "y": 0.10 }, { "x": 3, "y": 0.10 },
+        { "x": 4, "y": 0.10 }, { "x": 5, "y": 0.10 },
+        { "x": 6, "y": 0.10 }, { "x": 7, "y": 0.10 },
+        { "x": 8, "y": 0.10 }, { "x": 9, "y": 0.10 },
+        { "x": 10, "y": 0.10 }
+      ]
     }
   ],
-  "annotations": [
-    { "text": "Each patch adds debt", "anchorYear": 6, "target": "patching_curve" },
-    { "text": "Each test constrains forever", "anchorYear": 6, "target": "pdd_curve" }
+  "gap": {
+    "label": "The Gap",
+    "gradient": { "top": "#D9944A", "bottom": "#5AAA6E" }
+  },
+  "thesisStatements": [
+    { "text": "Patching accrues compound costs.", "color": "#D9944A" },
+    { "text": "Tests accrue compound returns.", "color": "#5AAA6E" }
   ],
-  "impactText": "Over time, it's everything.",
-  "narrationSegments": ["part5_compound_returns_004", "part5_compound_returns_005", "part5_compound_returns_006"]
+  "narrationSegments": ["part5_compound_returns_003"]
 }
 ```
+
+---

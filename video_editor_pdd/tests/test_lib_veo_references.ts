@@ -209,6 +209,13 @@ describe("syncInferredVeoReferencesFromProjectSpecs", () => {
         source: "stage6-inferred",
       }),
     ]);
+    expect(synced.veo.frameChains).toEqual([
+      expect.objectContaining({
+        clips: ["grandmother_intro", "grandmother_callback"],
+        referenceId: "grandmother",
+        source: "stage6-inferred",
+      }),
+    ]);
   });
 
   it("accepts inferred characters from specs that use a 'Data Points JSON' heading", () => {
@@ -263,6 +270,82 @@ describe("syncInferredVeoReferencesFromProjectSpecs", () => {
         referencePrompt:
           "Modern software developer in front of a dark-themed editor.",
         source: "stage6-inferred",
+      }),
+    ]);
+    expect(synced.veo.frameChains).toEqual([
+      expect.objectContaining({
+        clips: ["developer_intro", "developer_callback"],
+        referenceId: "developer_protagonist",
+        source: "stage6-inferred",
+      }),
+    ]);
+  });
+
+  it("preserves manual frame chains while refreshing inferred recurring chains", () => {
+    const dir = createTmpDir();
+    const config = makeConfig();
+    config.veo.frameChains = [
+      {
+        clips: ["custom_clip_a", "custom_clip_b"],
+        referenceId: "manual-host",
+        source: "manual",
+      },
+      {
+        clips: ["old_intro", "old_callback"],
+        referenceId: "grandmother",
+        source: "stage6-inferred",
+      },
+    ];
+    fs.mkdirSync(path.join(dir, "specs", "cold_open"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "specs", "closing"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(dir, "specs", "cold_open", "01_grandmother_intro.md"),
+      [
+        "[veo:]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        "{",
+        '  "type": "veo_clip",',
+        '  "clipId": "grandmother_intro",',
+        '  "characters": [',
+        '    { "id": "grandmother", "label": "Grandmother", "referencePrompt": "Portrait of the same grandmother." }',
+        "  ]",
+        "}",
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(dir, "specs", "closing", "02_grandmother_callback.md"),
+      [
+        "[veo:]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        "{",
+        '  "type": "veo_clip",',
+        '  "clipId": "grandmother_callback",',
+        '  "characters": [',
+        '    { "id": "grandmother", "label": "Grandmother", "referencePrompt": "Portrait of the same grandmother." }',
+        "  ]",
+        "}",
+        "```",
+      ].join("\n")
+    );
+
+    const synced = syncInferredVeoReferencesFromProjectSpecs(dir, config);
+
+    expect(synced.veo.frameChains).toEqual([
+      expect.objectContaining({
+        clips: ["grandmother_intro", "grandmother_callback"],
+        referenceId: "grandmother",
+        source: "stage6-inferred",
+      }),
+      expect.objectContaining({
+        clips: ["custom_clip_a", "custom_clip_b"],
+        referenceId: "manual-host",
+        source: "manual",
       }),
     ]);
   });

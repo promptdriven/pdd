@@ -8,11 +8,11 @@
 
 ## Visual Description
 
-A section title card that bridges the recap of Part 1's economic argument into Part 2's paradigm shift thesis. "THE PARADIGM" appears first in large bold weight, then "SHIFT" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
+A section title card introducing Part 2. "THE PARADIGM" appears in large bold weight, then "SHIFT" fades in below with a slight offset-right. A thin horizontal rule draws between the two lines.
 
-Behind the text, a faint ghost silhouette of an injection mold cross-section sits at very low opacity — the outline of a mold cavity with liquid flowing into it, foreshadowing the manufacturing metaphor. Background is deep navy-black, consistent with the Part 1 visual language.
+Behind the text, a faint ghost silhouette of a factory mold cross-section sits at very low opacity — hinting at the injection molding metaphor to come. Background is deep navy-black consistent with the overall visual language.
 
-The title holds across four narration segments: the recap of Part 1 findings ("Let me put together what I just showed you"), the context-window insight, the "category shift" declaration, and the "try it yourself" challenge. The card fades out as the narration pivots to "There's a pattern here..."
+The title holds across five narration segments covering the opening recap ("So let me put together..."), the context window discussion, the "try it yourself" beat, and the transition into the injection molding metaphor. The card fades out as the narration pivots to "There's a pattern here."
 
 ## Technical Specifications
 
@@ -26,15 +26,14 @@ The title holds across four narration segments: the recap of Part 1 findings ("L
 #### Title Text
 - "THE PARADIGM" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 460
 - "SHIFT" — Inter, 72px, bold (700), `#E2E8F0`, centered at y: 545, offset-right 15px
-- Horizontal rule: 240px wide, 2px, `#334155` at 0.5, centered between words at y: 505
+- Horizontal rule: 280px wide, 2px, `#334155` at 0.5, centered between words at y: 505
 
 #### Section Number
 - "PART 2" — Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px, centered at y: 400
 
 #### Background Ghost (mold silhouette)
-- Mold outline: simplified cross-section path, `#8B5CF6` at 0.03, 2px stroke
-- Flow channel: bezier from top-center into cavity, `#8B5CF6` at 0.02, 1.5px stroke
-- Cavity glow: subtle radial at center (~960, 540), `#8B5CF6` at 0.02, 40px radius
+- Mold cross-section outline: `#4A90D9` at 0.04, 1.5px stroke
+- Liquid fill hint: `#D9944A` at 0.03, subtle radial gradient inside mold shape
 
 ### Animation Sequence
 1. **Frame 0-15 (0-0.5s):** Background fades in from black. Blueprint grid appears.
@@ -42,8 +41,8 @@ The title holds across four narration segments: the recap of Part 1 findings ("L
 3. **Frame 40-60 (1.33-2s):** "THE PARADIGM" types on character-by-character (2 frames per character).
 4. **Frame 60-70 (2-2.33s):** Horizontal rule draws from center outward.
 5. **Frame 70-90 (2.33-3s):** "SHIFT" fades in with 10px upward slide.
-6. **Frame 90-1410 (3-47s):** Hold. Ghost mold pulses subtly. Title stays visible throughout recap narration.
-7. **Frame 1410-1470 (47-49s):** Title and elements fade out, transitioning to factory floor.
+6. **Frame 90-1380 (3-46s):** Hold. Ghost mold pulses subtly. Title stays visible through recap narration.
+7. **Frame 1380-1470 (46-49s):** Title and elements fade out, transitioning to factory floor.
 
 ### Typography
 - Section label: Inter, 14px, semi-bold (600), `#64748B` at 0.5, letter-spacing 4px
@@ -56,23 +55,26 @@ The title holds across four narration segments: the recap of Part 1 findings ("L
 - Rule draw: `easeInOut(quad)` over 10 frames
 - Ghost mold draw: `easeInOut(cubic)` over 30 frames
 - Mold pulse: `easeInOut(sine)` on 60-frame cycle
-- Final fade-out: `easeIn(quad)` over 60 frames
+- Final fade-out: `easeIn(quad)` over 90 frames
 
 ## Narration Sync
-> "Let me put together what I just showed you."
-> "You saw that prompts are a fraction the size of the code they govern... working in prompt space gives you two things at once."
-> "A bigger window AND a smarter model. Not one or the other. Both. That's not an incremental improvement. That's a category shift."
-> "Try it yourself. Take your favorite LLM, give it a hard coding problem as code, then give it the same problem described in natural language. The natural language version will win."
+> "So let me put together..."
+> "Oh, clo-blo-blo, SniperPro..."
+> "A bigger window and a..."
+> "Just try it yourself. Take..."
+> "...a pattern here that shows..."
 
-Segments: `part2_paradigm_shift_001`, `part2_paradigm_shift_002`, `part2_paradigm_shift_003`, `part2_paradigm_shift_004`
+Segments: `part2_paradigm_shift_001`, `part2_paradigm_shift_002`, `part2_paradigm_shift_003`, `part2_paradigm_shift_004`, `part2_paradigm_shift_005`
 
 - **0.00s** (seg 001): Title card begins fade-in
-- **2.84s** (seg 001 ends): "THE PARADIGM" typing visible
-- **3.00s** (seg 002): Title fully visible, hold during recap
-- **25.88s** (seg 002 ends): Hold
-- **26.00s** (seg 003): "Category shift" — title pulses briefly
-- **37.02s** (seg 004): "Try it yourself" — still holding
-- **48.62s** (seg 004 ends): Title begins fade-out
+- **3.22s** (seg 001 ends): "THE PARADIGM" typing visible
+- **3.52s** (seg 002): Title fully visible, hold during recap
+- **26.92s** (seg 002 ends): Hold
+- **27.00s** (seg 003): Continue hold through context window discussion
+- **36.68s** (seg 003 ends): Hold
+- **36.82s** (seg 004): "Just try it yourself" — hold
+- **48.08s** (seg 004 ends → seg 005 begins): "a pattern here that shows"
+- **56.58s** (seg 005 ends): Title begins fade-out
 
 ## Code Structure (Remotion)
 ```typescript
@@ -83,7 +85,11 @@ Segments: `part2_paradigm_shift_001`, `part2_paradigm_shift_002`, `part2_paradig
     {/* Ghost mold silhouette */}
     <Sequence from={15}>
       <StrokeDraw duration={30}>
-        <MoldSilhouette color="#8B5CF6" opacity={0.03} strokeWidth={2} />
+        <MoldSilhouette
+          outlineColor="#4A90D9" outlineOpacity={0.04}
+          fillColor="#D9944A" fillOpacity={0.03}
+          strokeWidth={1.5}
+        />
       </StrokeDraw>
     </Sequence>
 
@@ -105,7 +111,7 @@ Segments: `part2_paradigm_shift_001`, `part2_paradigm_shift_002`, `part2_paradig
 
     {/* Horizontal rule */}
     <Sequence from={60}>
-      <DrawLine from={[840, 505]} to={[1080, 505]}
+      <DrawLine from={[820, 505]} to={[1100, 505]}
         color="#334155" opacity={0.5} width={2}
         drawDuration={10} fromCenter />
     </Sequence>
@@ -122,8 +128,8 @@ Segments: `part2_paradigm_shift_001`, `part2_paradigm_shift_002`, `part2_paradig
     </Sequence>
 
     {/* Fade out */}
-    <Sequence from={1410}>
-      <FadeOut duration={60} />
+    <Sequence from={1380}>
+      <FadeOut duration={90} />
     </Sequence>
   </AbsoluteFill>
 </Sequence>
@@ -139,9 +145,9 @@ Segments: `part2_paradigm_shift_001`, `part2_paradigm_shift_002`, `part2_paradig
   "titleLine2": "SHIFT",
   "backgroundColor": "#0A0F1A",
   "ghostElements": [
-    { "shape": "mold_silhouette", "color": "#8B5CF6", "role": "injection_mold_preview" }
+    { "shape": "mold_silhouette", "colors": ["#4A90D9", "#D9944A"], "role": "injection_mold_preview" }
   ],
-  "narrationSegments": ["part2_paradigm_shift_001", "part2_paradigm_shift_002", "part2_paradigm_shift_003", "part2_paradigm_shift_004"]
+  "narrationSegments": ["part2_paradigm_shift_001", "part2_paradigm_shift_002", "part2_paradigm_shift_003", "part2_paradigm_shift_004", "part2_paradigm_shift_005"]
 }
 ```
 

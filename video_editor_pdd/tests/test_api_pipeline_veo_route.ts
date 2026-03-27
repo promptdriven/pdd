@@ -933,6 +933,156 @@ describe("veo executor factory — frame chaining", () => {
     expect(mockExtractLastFrame).not.toHaveBeenCalled();
   });
 
+  it("infers recurring character frame chains from Veo specs when project frameChains are empty", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.references = [
+      {
+        id: "grandmother",
+        label: "Grandmother",
+        imagePath: "outputs/veo/references/grandmother.png",
+        sections: ["intro", "main"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.endsWith("specs/intro")) return true;
+      if (p.endsWith("specs/main")) return true;
+      if (p.includes("outputs/veo/references/grandmother.png") || p.includes("outputs\\veo\\references\\grandmother.png")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return [];
+      if (p.endsWith("specs/intro")) return ["01_grandmother_intro.md"];
+      if (p.endsWith("specs/main")) return ["02_grandmother_callback.md"];
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.endsWith("01_grandmother_intro.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "Grandmother threads a needle under a warm lamp.",
+          "```",
+          "",
+          "## Data Points JSON",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "grandmother_intro",',
+          '  "characters": [',
+          '    { "id": "grandmother", "label": "Grandmother", "referencePrompt": "Portrait of the same grandmother under a warm lamp." }',
+          "  ]",
+          "}",
+          "```",
+        ].join("\n");
+      }
+      if (p.endsWith("02_grandmother_callback.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "The same grandmother smiles and sets down the sock.",
+          "```",
+          "",
+          "## Data Points JSON",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "grandmother_callback",',
+          '  "characters": [',
+          '    { "id": "grandmother", "label": "Grandmother", "referencePrompt": "Portrait of the same grandmother under a warm lamp." }',
+          "  ]",
+          "}",
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(2);
+    expect(mockGenerateVeoClip.mock.calls[0][1]).toContain(
+      "grandmother.png"
+    );
+    expect(mockExtractLastFrame).toHaveBeenCalledTimes(1);
+    expect(mockGenerateVeoClip.mock.calls[1][1]).toContain("grandmother_intro_last_frame.png");
+  });
+
+  it("deduplicates shared clip ids reused across multiple sections before generation", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.endsWith("specs/intro")) return true;
+      if (p.endsWith("specs/main")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return [];
+      if (p.endsWith("specs/intro")) return ["01_shared_clip.md"];
+      if (p.endsWith("specs/main")) return ["02_shared_clip.md"];
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.endsWith("01_shared_clip.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "A developer zooms out from a dense codebase.",
+          "```",
+          "",
+          "## Data Points JSON",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "developer_codebase_zoomout"',
+          "}",
+          "```",
+        ].join("\n");
+      }
+      if (p.endsWith("02_shared_clip.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "Reuse the same developer codebase zoom-out clip in a later section.",
+          "```",
+          "",
+          "## Data Points JSON",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "developer_codebase_zoomout"',
+          "}",
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(1);
+  });
+
   it("extracts last frame of an explicitly chained clip for use in the next clip", async () => {
     const config = mockProjectConfig();
     config.sections = config.sections.slice(0, 2); // intro, main
@@ -966,6 +1116,87 @@ describe("veo executor factory — frame chaining", () => {
     expect(mockGenerateVeoClip.mock.calls[0][1]).toBeNull();
     const secondRef = mockGenerateVeoClip.mock.calls[1][1];
     expect(secondRef).toContain("intro_last_frame.png");
+  });
+
+  it("auto-generates a missing active reference portrait before Veo generation starts", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.references = [
+      {
+        id: "alex",
+        label: "Alex",
+        imagePath: "outputs/veo/references/alex.png",
+        sections: ["intro", "main"],
+        referencePrompt: "Portrait of Alex in a neutral studio setup.",
+      },
+    ];
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    let generatedReference = false;
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("veo.json")) return true;
+      if (
+        p.includes("outputs/veo/references/alex.png") ||
+        p.includes("outputs\\veo\\references\\alex.png")
+      ) {
+        return generatedReference;
+      }
+      return false;
+    });
+    mockGenerateReferenceImage.mockImplementation(async () => {
+      generatedReference = true;
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateReferenceImage).toHaveBeenCalledWith(
+      "Portrait of Alex in a neutral studio setup.",
+      expect.stringContaining("alex.png")
+    );
+    expect(mockGenerateVeoClip.mock.calls[0][1]).toContain("alex.png");
+  });
+
+  it("does not regenerate an active reference portrait when the image already exists", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.references = [
+      {
+        id: "alex",
+        label: "Alex",
+        imagePath: "outputs/veo/references/alex.png",
+        sections: ["intro", "main"],
+        referencePrompt: "Portrait of Alex in a neutral studio setup.",
+      },
+    ];
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.includes("veo.json")) return true;
+      if (
+        p.includes("outputs/veo/references/alex.png") ||
+        p.includes("outputs\\veo\\references\\alex.png")
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({}, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateReferenceImage).not.toHaveBeenCalled();
+    expect(mockGenerateVeoClip.mock.calls[0][1]).toContain("alex.png");
   });
 
   it("does not extract last frame for the final clip", async () => {
@@ -1529,6 +1760,122 @@ describe("GET_clips — response shape", () => {
     for (const clip of data.clips) {
       expect(clip.sectionId).toBe(clip.id);
     }
+  });
+
+  it("returns only references used by active frame chains", async () => {
+    const config = mockProjectConfig();
+    config.veo.references = [
+      {
+        id: "alex",
+        label: "Alex",
+        imagePath: "outputs/veo/references/alex.png",
+        sections: ["intro"],
+      },
+      {
+        id: "unused-character",
+        label: "Unused Character",
+        imagePath: "outputs/veo/references/unused-character.png",
+        sections: ["main"],
+      },
+    ];
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockReturnValue(false);
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.references).toEqual([
+      {
+        id: "alex",
+        label: "Alex",
+      },
+    ]);
+  });
+
+  it("returns inferred recurring references even when project frameChains are empty", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2);
+    config.veo.references = [
+      {
+        id: "grandmother",
+        label: "Grandmother",
+        imagePath: "outputs/veo/references/grandmother.png",
+        sections: ["intro", "main"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p.endsWith("specs/intro")) return true;
+      if (p.endsWith("specs/main")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return [];
+      if (p.endsWith("specs/intro")) return ["01_grandmother_intro.md"];
+      if (p.endsWith("specs/main")) return ["02_grandmother_callback.md"];
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.endsWith("01_grandmother_intro.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "Grandmother threads a needle under a warm lamp.",
+          "```",
+          "",
+          "## Data Points JSON",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "grandmother_intro",',
+          '  "characters": [',
+          '    { "id": "grandmother", "label": "Grandmother", "referencePrompt": "Portrait of the same grandmother under a warm lamp." }',
+          "  ]",
+          "}",
+          "```",
+        ].join("\n");
+      }
+      if (p.endsWith("02_grandmother_callback.md")) {
+        return [
+          "[veo:]",
+          "",
+          "### Veo Prompt",
+          "```",
+          "The same grandmother smiles and sets down the sock.",
+          "```",
+          "",
+          "## Data Points JSON",
+          "```json",
+          "{",
+          '  "type": "veo_clip",',
+          '  "clipId": "grandmother_callback",',
+          '  "characters": [',
+          '    { "id": "grandmother", "label": "Grandmother", "referencePrompt": "Portrait of the same grandmother under a warm lamp." }',
+          "  ]",
+          "}",
+          "```",
+        ].join("\n");
+      }
+      return "";
+    });
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.references).toEqual([
+      {
+        id: "grandmother",
+        label: "Grandmother",
+      },
+    ]);
   });
 });
 
@@ -2461,8 +2808,8 @@ describe("app/api/pipeline/veo/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/_last_frame\.png/);
   });
 
-  it("references are not handled in the run route (separate route file)", () => {
-    expect(sourceCode).not.toMatch(/generateReferenceImage/);
+  it("imports generateReferenceImage so Veo runs can auto-create missing active portraits", () => {
+    expect(sourceCode).toMatch(/generateReferenceImage/);
   });
 
   it("does not define VeoClip type (defined in clips route)", () => {

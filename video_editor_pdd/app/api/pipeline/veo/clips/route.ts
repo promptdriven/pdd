@@ -3,6 +3,7 @@ import path from "path";
 import { NextResponse } from "next/server";
 
 import { loadProject } from "@/lib/project";
+import { syncInferredVeoReferencesFromProjectSpecs } from "@/lib/veo-references";
 import {
   listResolvedVeoClipSpecs,
   normalizeSpecDir,
@@ -42,6 +43,33 @@ interface ReferencePortrait {
   label: string;
 }
 
+function resolveActiveReferenceIds(
+  clipIds: string[],
+  frameChains: Array<{ clips?: unknown; referenceId?: unknown }>
+): Set<string> {
+  const activeClipIds = new Set(clipIds);
+  const referenceIds = new Set<string>();
+
+  for (const chain of frameChains) {
+    if (!Array.isArray(chain?.clips) || typeof chain?.referenceId !== "string") {
+      continue;
+    }
+
+    if (!chain.clips.some((clipId) => typeof clipId === "string" && activeClipIds.has(clipId))) {
+      continue;
+    }
+
+    const referenceId = chain.referenceId.trim();
+    if (!referenceId) {
+      continue;
+    }
+
+    referenceIds.add(referenceId);
+  }
+
+  return referenceIds;
+}
+
 function mtimeMs(filePath: string): number | null {
   try {
     return fs.statSync(filePath).mtimeMs;
@@ -52,7 +80,10 @@ function mtimeMs(filePath: string): number | null {
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const config = loadProject();
+    const config = syncInferredVeoReferencesFromProjectSpecs(
+      getProjectDir(),
+      loadProject()
+    );
     const sections = config.sections;
     const aspectRatio = config.veo.defaultAspectRatio;
     const mainScriptPath = path.join(getProjectDir(), "narrative", "main_script.md");
@@ -181,13 +212,18 @@ export async function GET(): Promise<NextResponse> {
       };
     });
 
-    // Character references from project config
-    const references: ReferencePortrait[] = (config.veo.references ?? []).map(
-      (ref) => ({
+    const activeReferenceIds = resolveActiveReferenceIds(
+      resolvedClips.map((clip) => clip.id),
+      config.veo.frameChains ?? []
+    );
+
+    // Only surface references the Veo runtime can actually consume.
+    const references: ReferencePortrait[] = (config.veo.references ?? [])
+      .filter((ref) => activeReferenceIds.has(ref.id))
+      .map((ref) => ({
         id: ref.id,
         label: ref.label,
-      })
-    );
+      }));
 
     return NextResponse.json({ clips, references });
   } catch (err) {

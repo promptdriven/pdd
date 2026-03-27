@@ -596,6 +596,7 @@ describe("specs executor factory", () => {
     expect(prompt).toContain("## Data Points JSON");
     expect(prompt).toContain('"clipId": "{snake_case_clip_id}"');
     expect(prompt).toContain('"characters": [{ "id": "{snake_case_character_id}"');
+    expect(prompt).toContain("When the same person recurs across clips or sections, reuse the EXACT same character id");
     expect(prompt).toContain("Do NOT put the natural-language Veo prompt inline inside the [veo:] marker.");
   });
 
