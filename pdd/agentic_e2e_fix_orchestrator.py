@@ -1602,9 +1602,14 @@ def run_agentic_e2e_fix_orchestrator(
                     # Tier 4: LLM classification fallback — only ask about NOT_A_BUG
                     # to avoid false positives (e.g., CODE_BUG being misclassified)
                     tier4 = classify_step_output(step_output, ["NOT_A_BUG"])
-                    if tier4:
+                    if tier4 and tier4.token == "NOT_A_BUG":
                         console.print("[yellow]NOT_A_BUG detected via LLM classification (tier 4)[/yellow]")
                         _step3_token = "NOT_A_BUG"
+                    elif tier4 and tier4.token == "CLASSIFICATION_ERROR":
+                        console.print(
+                            "[yellow]Step 3 token classification unavailable (tier 4 error); "
+                            "continuing without NOT_A_BUG fallback.[/yellow]"
+                        )
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
@@ -1620,42 +1625,29 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 9:
                     _step9_token = _classify_step_output(step_output, step_num=9)
                     if not _step9_token:
-                        # Tier 4: LLM classification fallback
+                        # Tier 4: LLM classification fallback when exact/case/semantic
+                        # matching did not detect a loop-control token (Issue #695).
+                        # Distinguish classifier failure from confident NONE.
                         tier4 = classify_step_output(
                             step_output, ["ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"]
                         )
-                        if tier4:
-                            console.print("[yellow]Loop control token detected via LLM classification (tier 4)[/yellow]")
-                            _step9_token = "CONTINUE_CYCLE"  # Safe default: keep cycling
-                    if _step9_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
-                        # Independent verification: don't trust LLM output alone
-                        test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
-                        if test_files:
-                            verified, verify_output = _verify_tests_independently(test_files, cwd)
-                            if verified:
-                                console.print("[green]LOCAL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
-                                success = True
-                                final_message = "All tests passed after fixes (independently verified)."
-                                break
-                            else:
-                                console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
-                                _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
-                                step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
-                                step_outputs[str(step_num)] = f"FAILED: {step_output}"
-                                if should_retry:
-                                    verification_failure_context = verify_output
-                                    last_completed_step = 0
-                                    break
-                                last_completed_step = step_num - 1
-                                # Don't break — fall through to cycle increment
-                        else:
-                            console.print("[green]LOCAL_TESTS_PASS detected in Step 9.[/green]")
-                            success = True
-                            final_message = "All tests passed after fixes."
-                            break
-                    elif _step9_token == "MAX_CYCLES_REACHED":
-                        console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
-                        final_message = "Max cycles reached."
+                        if tier4 and tier4.token in ("ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"):
+                            console.print(
+                                "[yellow]Loop control token detected via LLM classification (tier 4)[/yellow]"
+                            )
+                            _step9_token = "LOCAL_TESTS_PASS" if tier4.token == "ALL_TESTS_PASS" else tier4.token
+                        elif tier4 and tier4.token == "CLASSIFICATION_ERROR":
+                            console.print(
+                                "[yellow]Step 9 classification unavailable (tier 4 error); "
+                                "starting next cycle.[/yellow]"
+                            )
+                            _step9_token = "CONTINUE_CYCLE"
+                    handled = _handle_step9_control_token(
+                        _step9_token,
+                        stage="initial",
+                        success_flag=step_success,
+                    )
+                    if handled is True:
                         break
                     elif _step9_token == "CONTINUE_CYCLE":
                         # Check for progress before starting next cycle (5b)
