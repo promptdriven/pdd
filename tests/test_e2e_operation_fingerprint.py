@@ -7,7 +7,8 @@ null values.  Only the LLM call is mocked; the entire fingerprint pipeline
 (log_operation decorator -> save_fingerprint -> calculate_current_hashes) runs
 for real so any fix strategy is validated end-to-end.
 
-Bug reference: https://github.com/promptdriven/pdd/issues/437
+Bug reference: https://github.com/gltanaka/pdd/issues/983
+Original: https://github.com/promptdriven/pdd/issues/437
 """
 
 import json
@@ -75,7 +76,7 @@ class TestGenerateFingerprintHashes:
         After `pdd generate`, the fingerprint file must contain real SHA-256
         hashes for at least prompt_hash (prompt file always exists).
 
-        Bug #437: The @log_operation decorator calls save_fingerprint() without
+        Bug #983: The @log_operation decorator calls save_fingerprint() without
         the paths parameter, so all hashes end up null.
         """
         project, basename, language = pdd_project
@@ -114,7 +115,7 @@ class TestGenerateFingerprintHashes:
         # With bug #437, all hash fields are null because the decorator
         # never passes paths to save_fingerprint().
         assert fp_data.get("prompt_hash") is not None, (
-            f"Bug #437: prompt_hash is null after pdd generate.\n"
+            f"Bug #983: prompt_hash is null after pdd generate.\n"
             f"The @log_operation decorator must pass paths to save_fingerprint().\n"
             f"Fingerprint: {json.dumps(fp_data, indent=2)}"
         )
@@ -128,7 +129,7 @@ class TestGenerateFingerprintHashes:
         # code_hash should also be populated since the code file exists
         code_hash = fp_data.get("code_hash")
         assert code_hash is not None, (
-            f"Bug #437: code_hash is null after pdd generate.\n"
+            f"Bug #983: code_hash is null after pdd generate.\n"
             f"Fingerprint: {json.dumps(fp_data, indent=2)}"
         )
         assert len(code_hash) == 64 and all(c in "0123456789abcdef" for c in code_hash), (

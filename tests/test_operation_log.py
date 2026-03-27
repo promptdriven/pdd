@@ -714,12 +714,12 @@ def test_basename_sanitization_deeply_nested(temp_pdd_env):
 
 
 # --------------------------------------------------------------------------------
-# REGRESSION TESTS: Issue #437 - Decorator fingerprint hash fields are null
+# REGRESSION TESTS: Issue #983 - Decorator fingerprint hash fields are null
 # --------------------------------------------------------------------------------
 
-def test_decorator_fingerprint_hashes_not_null_issue_437(temp_pdd_env, tmp_path):
+def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path):
     """
-    Regression test for Issue #437: The @log_operation decorator must produce
+    Regression test for Issue #983: The @log_operation decorator must produce
     non-null hash fields in the fingerprint metadata.
 
     Bug: The decorator at line 374 called save_fingerprint() without 'paths',
@@ -756,10 +756,10 @@ def test_decorator_fingerprint_hashes_not_null_issue_437(temp_pdd_env, tmp_path)
 
     # THE BUG: With issue #437, these were all null
     assert fp_data["prompt_hash"] is not None, (
-        "Issue #437: prompt_hash is null — decorator must pass paths to save_fingerprint()"
+        "Issue #983: prompt_hash is null — decorator must pass paths to save_fingerprint()"
     )
     assert fp_data["code_hash"] is not None, (
-        "Issue #437: code_hash is null — decorator must pass paths to save_fingerprint()"
+        "Issue #983: code_hash is null — decorator must pass paths to save_fingerprint()"
     )
 
     # Verify SHA-256 format
@@ -770,9 +770,9 @@ def test_decorator_fingerprint_hashes_not_null_issue_437(temp_pdd_env, tmp_path)
         )
 
 
-def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_437(temp_pdd_env):
+def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_983(temp_pdd_env):
     """
-    Issue #437: Verify the decorator passes 'paths' as a keyword argument
+    Issue #983: Verify the decorator passes 'paths' as a keyword argument
     to save_fingerprint(). The bug was that 'paths' was omitted entirely.
     """
     @operation_log.log_operation(operation="generate", updates_fingerprint=True)
@@ -785,16 +785,16 @@ def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_437(temp_pdd_env
         assert mock_save_fp.called, "save_fingerprint should be called"
         call_kwargs = mock_save_fp.call_args.kwargs
         assert "paths" in call_kwargs, (
-            f"Issue #437: 'paths' missing from save_fingerprint kwargs: {call_kwargs}"
+            f"Issue #983: 'paths' missing from save_fingerprint kwargs: {call_kwargs}"
         )
         assert call_kwargs["paths"] is not None, (
-            "Issue #437: paths=None passed to save_fingerprint"
+            "Issue #983: paths=None passed to save_fingerprint"
         )
 
 
-def test_decorator_fingerprint_enables_sync_change_detection_issue_437(temp_pdd_env, tmp_path):
+def test_decorator_fingerprint_enables_sync_change_detection_issue_983(temp_pdd_env, tmp_path):
     """
-    Issue #437 impact test: After the decorator saves a fingerprint, sync's
+    Issue #983 impact test: After the decorator saves a fingerprint, sync's
     read_fingerprint() must see matching hashes, enabling change detection.
 
     Without the fix, read_fingerprint() sees null hashes and sync incorrectly
@@ -834,10 +834,10 @@ def test_decorator_fingerprint_enables_sync_change_detection_issue_437(temp_pdd_
 
     # After the fix, stored and calculated hashes must match
     assert fp.prompt_hash == expected.get("prompt_hash"), (
-        f"Issue #437: prompt_hash mismatch — stored={fp.prompt_hash}, "
+        f"Issue #983: prompt_hash mismatch — stored={fp.prompt_hash}, "
         f"expected={expected.get('prompt_hash')}. Sync cannot detect changes correctly."
     )
     assert fp.code_hash == expected.get("code_hash"), (
-        f"Issue #437: code_hash mismatch — stored={fp.code_hash}, "
+        f"Issue #983: code_hash mismatch — stored={fp.code_hash}, "
         f"expected={expected.get('code_hash')}. Sync cannot detect changes correctly."
     )

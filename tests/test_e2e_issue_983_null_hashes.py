@@ -1,5 +1,5 @@
 """
-E2E tests for Issue #437: Fingerprint metadata files have null hash fields
+E2E tests for Issue #983: Fingerprint metadata files have null hash fields
 after successful generate/example commands.
 
 Bug: The @log_operation decorator at pdd/operation_log.py:374 calls
@@ -10,7 +10,8 @@ calculate_current_hashes() to return an empty dict and all hash fields
 The sync command is unaffected because it uses a separate code path
 (_save_fingerprint_atomic) that correctly passes the paths dictionary.
 
-Issue: https://github.com/promptdriven/pdd/issues/437
+Issue: https://github.com/gltanaka/pdd/issues/983
+Original: https://github.com/promptdriven/pdd/issues/437
 """
 
 import json
@@ -82,7 +83,7 @@ def project_with_files(tmp_path):
 
 def test_decorator_calls_save_fingerprint_with_paths(temp_pdd_env):
     """
-    Issue #437: The @log_operation decorator calls save_fingerprint() without
+    Issue #983: The @log_operation decorator calls save_fingerprint() without
     the 'paths' parameter, resulting in null hash fields.
 
     This test mocks save_fingerprint and verifies that when the decorator
@@ -110,19 +111,19 @@ def test_decorator_calls_save_fingerprint_with_paths(temp_pdd_env):
         call_kwargs = mock_save_fp.call_args.kwargs
 
         assert "paths" in call_kwargs, (
-            "Bug #437: save_fingerprint called without 'paths' keyword argument. "
+            "Bug #983: save_fingerprint called without 'paths' keyword argument. "
             "The decorator must pass the paths dict so content hashes can be calculated. "
             f"Actual kwargs: {call_kwargs}"
         )
         assert call_kwargs["paths"] is not None, (
-            "Bug #437: save_fingerprint called with paths=None. "
+            "Bug #983: save_fingerprint called with paths=None. "
             "The decorator must pass a valid paths dict."
         )
 
 
 def test_decorator_produces_non_null_hashes_in_fingerprint(temp_pdd_env, project_with_files):
     """
-    Issue #437: After a successful generate command via the decorator, the
+    Issue #983: After a successful generate command via the decorator, the
     fingerprint metadata file must contain actual SHA-256 hashes, not null.
 
     This test creates real files, runs a decorated function, and inspects
@@ -159,11 +160,11 @@ def test_decorator_produces_non_null_hashes_in_fingerprint(temp_pdd_env, project
     # THE BUG: All hash fields are null because paths was not passed.
     # After the fix, at least prompt_hash and code_hash should be valid SHA-256.
     assert fp_data["prompt_hash"] is not None, (
-        f"Bug #437: prompt_hash is null in fingerprint. "
+        f"Bug #983: prompt_hash is null in fingerprint. "
         f"Full data: {json.dumps(fp_data, indent=2)}"
     )
     assert fp_data["code_hash"] is not None, (
-        f"Bug #437: code_hash is null in fingerprint. "
+        f"Bug #983: code_hash is null in fingerprint. "
         f"Full data: {json.dumps(fp_data, indent=2)}"
     )
 
@@ -180,7 +181,7 @@ def test_decorator_produces_non_null_hashes_in_fingerprint(temp_pdd_env, project
 
 def test_decorator_passes_paths_to_save_fingerprint(temp_pdd_env):
     """
-    Issue #437: Verify the decorator constructs a paths dict and passes it
+    Issue #983: Verify the decorator constructs a paths dict and passes it
     to save_fingerprint().
 
     The decorator has basename and language (inferred from prompt_file).
@@ -210,7 +211,7 @@ def test_decorator_passes_paths_to_save_fingerprint(temp_pdd_env):
         call_kwargs = mock_save_fp.call_args.kwargs
         paths_value = call_kwargs.get("paths")
         assert paths_value is not None, (
-            "Bug #437: save_fingerprint was not passed a 'paths' argument. "
+            "Bug #983: save_fingerprint was not passed a 'paths' argument. "
             f"Actual kwargs: {call_kwargs}"
         )
 
@@ -222,7 +223,7 @@ def test_decorator_passes_paths_to_save_fingerprint(temp_pdd_env):
 
 def test_decorator_fingerprint_all_four_hash_fields(temp_pdd_env, project_with_files):
     """
-    Issue #437: Verify that ALL four hash fields (prompt_hash, code_hash,
+    Issue #983: Verify that ALL four hash fields (prompt_hash, code_hash,
     example_hash, test_hash) are populated when corresponding files exist.
 
     The issue reports all four fields as null. This test confirms the
@@ -255,7 +256,7 @@ def test_decorator_fingerprint_all_four_hash_fields(temp_pdd_env, project_with_f
     ]
 
     assert not null_fields, (
-        f"Bug #437: The following hash fields are null: {null_fields}. "
+        f"Bug #983: The following hash fields are null: {null_fields}. "
         f"All should contain SHA-256 hashes when files exist. "
         f"Full fingerprint: {json.dumps(fp_data, indent=2)}"
     )
