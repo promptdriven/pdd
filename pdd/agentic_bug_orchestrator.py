@@ -390,12 +390,16 @@ def _verify_fix_location_coverage(
     for fix_loc in fix_locations:
         # Convert path to module: pdd/commands/generate.py -> pdd.commands.generate
         module_path = fix_loc.replace("/", ".").removesuffix(".py")
-        # Also check for the bare filename without extension
+        # Also check for the slash-separated path without extension
+        path_no_ext = fix_loc.removesuffix(".py")
+        # Word-boundary regex for the bare filename — avoids false positives
+        # where e.g. "generate" matches "generate_report" or "generated"
         basename = Path(fix_loc).stem
+        basename_re = re.compile(r"\b" + re.escape(basename) + r"\b")
 
         found = False
         for content in test_contents:
-            if module_path in content or basename in content:
+            if module_path in content or path_no_ext in content or basename_re.search(content):
                 found = True
                 break
         if not found:
@@ -1436,6 +1440,22 @@ def run_agentic_bug_orchestrator(
                             changed_files.extend(cov_retry_extracted)
                             changed_files = list(set(changed_files))
                             context["files_to_stage"] = ", ".join(changed_files)
+
+                        # Scan coverage-retry files for structural test patterns
+                        cov_violations: List[str] = []
+                        for fpath in cov_retry_extracted:
+                            abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+                            v = detect_structural_test_patterns(str(abs_path))
+                            if v:
+                                cov_violations.extend(v)
+                        if cov_violations and not quiet:
+                            console.print(
+                                "[yellow]  → Coverage retry contains structural patterns "
+                                "(proceeding with warning):[/yellow]"
+                            )
+                            for v in cov_violations:
+                                console.print(f"[yellow]    • {v}[/yellow]")
+
                         step_output = cov_output
                         context["step9_output"] = cov_output
 

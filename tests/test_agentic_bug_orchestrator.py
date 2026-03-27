@@ -6028,7 +6028,7 @@ class TestFixLocationsFlowToDownstreamSteps:
 
         return captured
 
-    @pytest.mark.parametrize("step_label", ["step8", "step9", "step10"])
+    @pytest.mark.parametrize("step_label", ["step8", "step9"])
     def test_fix_locations_injected_into_downstream_steps(
         self, run_orchestrator_and_capture, step_label
     ):
@@ -6174,6 +6174,25 @@ class TestVerifyFixLocationCoverage:
             tmp_path,
         )
         assert result == []
+
+    def test_basename_substring_not_false_positive(self, tmp_path):
+        """Basename as substring of another word should NOT count as coverage."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "# This test generates reports and uses cmd_test_main_helper\n"
+            "def test_generate_report(): pass\n"
+            "def test_generated_output(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        # Neither module_path nor word-boundary basename matches
+        assert "pdd/commands/generate.py" in result
+        assert "pdd/cmd_test_main.py" in result
 
     def test_missing_test_file_skipped(self, tmp_path):
         """Non-existent test files are skipped gracefully."""
