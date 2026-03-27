@@ -790,5 +790,3 @@ def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_983(temp_pdd_env
         assert call_kwargs["paths"] is not None, (
             "Issue #983: paths=None passed to save_fingerprint"
         )
-
-
