@@ -2,24 +2,21 @@
 
 ### Feat
 
-- Revamp pdd-explainer project specifications, adding new content, removing audited files, and updating related code and assets.
-- harden change_LLM prompt for call-site thoroughness and retry safety (#939)
-- add transcript mismatch retry controls
+- **deterministic fix-location coverage in `pdd bug`**: Step 6 now emits a `FIX_LOCATIONS` marker listing every file that needs modification; new `_verify_fix_location_coverage()` in Step 9 scans generated test files for module references and retries test generation when any fix location is uncovered — replaces the previous LLM-based Step 10 check
+- **call-site thoroughness in `change_LLM` prompt**: Step 1 now requires explicit enumeration of every call site when a change affects function behavior (no vague "all call sites"); Step 2 requires max retry count and exhaustion fallback when introducing retry/loop-back logic
+- **call-boundary test coverage in `pdd bug` Steps 8–9**: Step 8 test plan and Step 9 test generation prompts now require tests for both sides of a multi-file fix — mock the callee to verify caller arguments AND test the callee directly; `fix_locations` context variable threaded through the orchestrator
 
 ### Fix
 
-- harden fix-location coverage check and coverage-retry validation
-- deterministic fix-location coverage check replaces LLM-based Step 10 check
-- reuse _parse_changed_files, add dedup, and test real prompts
-- structural fix for multi-file call-boundary coverage (#952)
-- force temperature=1 for Gemini 3 models to prevent Opus fallback
+- **Gemini 3 temperature floor**: force `temperature=1` for all Gemini 3+ models in `llm_invoke` to prevent infinite loops and degraded reasoning that caused Opus fallback
+- **fix-location parsing hardened**: reuse `_parse_changed_files` for `FIX_LOCATIONS` extraction with deduplication and backtick stripping via new `_parse_fix_locations()`
+- **coverage-retry validation**: `_verify_fix_location_coverage` validates retry-generated test files for structural patterns and logs remaining gaps after retry
 - use Gemini Flash for regression tests to avoid Vertex AI Opus charges
-- harden stage 5 transcript retry flow
 
 ### Refactor
 
 - use LLM-as-judge and merge retry tests into single call
-- rename test file to test_change_call_site_and_retry.py
+- rename test file to `test_change_call_site_and_retry.py`
 
 ## v0.0.188 (2026-03-25)
 

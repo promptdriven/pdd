@@ -1,45 +1,46 @@
 import React from "react";
-import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
+import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { WhereToStart02LegacyCodebaseReveal } from "../WhereToStart02LegacyCodebaseReveal";
+import { WhereToStart04SourceOfTruthShift } from "../WhereToStart04SourceOfTruthShift";
 import { WhereToStart07NoBigBangCallout } from "../WhereToStart07NoBigBangCallout";
-import { Part5CompoundReturns07EconomicsCrossingCallback } from "../Part5CompoundReturns07EconomicsCrossingCallback";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "02_legacy_codebase_reveal": WhereToStart02LegacyCodebaseReveal,
+  "04_source_of_truth_label": WhereToStart04SourceOfTruthShift,
   "06_no_big_bang_callout": WhereToStart07NoBigBangCallout,
-  "07_economics_callback": Part5CompoundReturns07EconomicsCrossingCallback,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "02_legacy_codebase_reveal": 150,
-  "06_no_big_bang_callout": 180,
-  "07_economics_callback": 300,
+  "04_source_of_truth_label": 180,
+  "06_no_big_bang_callout": 150,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "03_module_highlight_terminal": { defaultSrc: "veo/developer_prompt_shift.mp4", backgroundSrc: "veo/developer_prompt_shift.mp4", outputSrc: "veo/developer_prompt_shift.mp4", baseSrc: "veo/developer_prompt_shift.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {
-  "04_source_of_truth_label": { fadeInFrames: 20 },
+  "01_section_title_card": { fadeOutFrames: 60 },
+  "03_module_highlight_terminal": { fadeInFrames: 30 },
+  "07_gradual_migration_insight": { fadeInFrames: 30 },
 };
 
 const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 6, "sectionLabel": "PART 6", "titleLine1": "WHERE TO", "titleLine2": "START", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "module_grid", "rows": 4, "cols": 6, "highlightIndex": 13, "highlightColor": "#4A90D9"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "02_legacy_codebase_reveal": {"specBaseName": "02_legacy_codebase_reveal", "dataPoints": {"type": "code_wall", "layout": "stacked_panes", "paneCount": 3, "dangerComments": [{"pane": 1, "line": 12, "text": "// don't touch", "glowFrame": 30}, {"pane": 1, "line": 28, "text": "// here be dragons", "glowFrame": 60}, {"pane": 2, "line": 8, "text": "// TODO: refactor this someday", "glowFrame": 100}, {"pane": 2, "line": 22, "text": "// nobody knows why this works", "glowFrame": 115}, {"pane": 3, "line": 15, "text": "// legacy — do not modify", "glowFrame": 140}], "scrollRate": 0.5, "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "03_module_highlight_terminal": {"specBaseName": "03_module_highlight_terminal", "dataPoints": {"type": "interactive_demo", "command": "pdd update auth_handler.py", "targetModule": "auth_handler.py", "outputFile": "auth_handler.prompt.md", "phases": [{"id": "highlight", "frames": [0, 30], "description": "Module highlights in codebase"}, {"id": "terminal", "frames": [30, 120], "description": "Terminal command executes"}, {"id": "materialize", "frames": [120, 180], "description": "Prompt file materializes from code"}, {"id": "shift", "frames": [180, 270], "description": "Code dims, prompt glows — source of truth shifts"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {"defaultSrc": "veo/developer_prompt_shift.mp4", "backgroundSrc": "veo/developer_prompt_shift.mp4", "outputSrc": "veo/developer_prompt_shift.mp4", "baseSrc": "veo/developer_prompt_shift.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "04_source_of_truth_label": {"specBaseName": "04_source_of_truth_label", "dataPoints": {"type": "comparison_diagram", "left": {"label": "auth_handler.py", "category": "ARTIFACT", "borderStyle": "dashed", "borderColor": "#475569", "watermark": "ARTIFACT"}, "right": {"label": "auth_handler.prompt.md", "category": "SOURCE OF TRUTH", "borderStyle": "solid", "borderColor": "#8B5CF6", "glow": true}, "relationships": [{"direction": "right_to_left", "label": "generates →"}, {"direction": "left_to_right", "label": "← extracts"}], "annotation": "When the regenerated version passes all tests, the prompt is your new source of truth.", "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 20}, "renderMode": "generated-media"},
-  "05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "progressive_migration", "grid": {"cols": 5, "rows": 4, "totalModules": 20}, "conversionOrder": [{"id": "auth_handler", "label": "auth_handler.py", "col": 2, "row": 1, "frame": 0, "preConverted": true}, {"id": "user_model", "label": "user_model.py", "col": 4, "row": 0, "frame": 30}, {"id": "payment_processor", "label": "payment_processor.py", "col": 1, "row": 2, "frame": 70}, {"id": "api_routes", "label": "api_routes.py", "col": 3, "row": 3, "frame": 110}, {"id": "email_service", "label": "email_service.py", "col": 0, "row": 1, "frame": 150}, {"id": "config_loader", "label": "config_loader.py", "col": 4, "row": 3, "frame": 170}, {"id": "search_index", "label": "search_index.py", "col": 2, "row": 0, "frame": 190}, {"id": "notification_hub", "label": "notification_hub.py", "col": 0, "row": 3, "frame": 210}], "unconverted": ["db_connection.py", "cache_manager.py", "logger.py", "middleware.py", "rate_limiter.py", "session_store.py", "file_upload.py", "webhook_handler.py", "scheduler.py", "analytics.py", "admin_panel.py", "test_runner.py"], "counterSteps": [1, 2, 3, 4, 5, 6, 7, 8], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "text_manifesto", "statements": [{"text": "No big bang.", "frame": 20, "style": "bold"}, {"text": "No rewrite.", "frame": 50, "style": "bold"}, {"text": "Just a gradual migration of where value lives.", "frame": 80, "highlight": "value"}], "migrationBar": {"from": "code", "to": "specification", "startSplit": 0.2, "endSplit": 0.5, "leftColor": "#475569", "rightColor": "#8B5CF6"}, "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "07_economics_callback": {"specBaseName": "07_economics_callback", "dataPoints": {"type": "metaphor_callback", "comparison": {"left": {"label": "patch it?", "icon": "holey_sock", "color": "#D9944A", "status": "deprecated"}, "right": {"label": "replace it.", "icon": "fresh_sock", "color": "#10B981", "status": "preferred"}}, "closingStatements": ["You don't patch socks because socks got cheap.", "The economics made patching irrational."], "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 6, "sectionLabel": "WHERE TO START", "titleLine1": "WHERE TO", "titleLine2": "START", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "module_grid", "rows": 4, "cols": 6, "highlightCell": [2, 3], "role": "one_module_preview"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
+  "02_legacy_codebase_reveal": {"specBaseName": "02_legacy_codebase_reveal", "dataPoints": {"type": "code_editor_animation", "editorId": "legacy_codebase_reveal", "files": ["auth_handler.py", "payment_processor.py", "legacy_utils.py", "config_v2_final_FINAL.py"], "warningComments": [{"line": 15, "text": "# don't touch"}, {"line": 42, "text": "# here be dragons"}, {"line": 78, "text": "# TODO: fix this (2019)"}, {"line": 105, "text": "# nobody knows why this works"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "03_module_highlight_terminal": {"specBaseName": "03_module_highlight_terminal", "dataPoints": {"type": "code_transformation", "transformId": "module_to_prompt", "sourceFile": "auth_handler.py", "generatedFile": "auth_handler.prompt.md", "command": "pdd update auth_handler.py", "states": [{"id": "code_highlighted", "label": "Module selected"}, {"id": "command_typed", "label": "PDD update executed"}, {"id": "prompt_extracted", "label": "Prompt materialized"}, {"id": "code_grayed", "label": "Code becomes artifact"}, {"id": "prompt_glowing", "label": "Prompt is source of truth"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
+  "04_source_of_truth_label": {"specBaseName": "04_source_of_truth_label", "dataPoints": {"type": "validation_sequence", "sequenceId": "regenerate_and_verify", "steps": [{"command": "pdd generate auth_handler.py", "description": "Regenerate code from prompt"}, {"command": "pdd test", "description": "Run test suite"}, {"result": "✓ All tests pass", "description": "Validation complete"}], "badge": {"text": "SOURCE OF TRUTH", "target": "auth_handler.prompt.md"}, "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "module_migration_animation", "animationId": "gradual_glow_spread", "totalModules": 12, "migratedModules": [{"id": "auth_handler", "order": 1, "frameStart": 0}, {"id": "user_service", "order": 2, "frameStart": 30}, {"id": "payment_proc", "order": 3, "frameStart": 75}, {"id": "email_templates", "order": 4, "frameStart": 120}, {"id": "api_routes", "order": 5, "frameStart": 140}, {"id": "config_mgr", "order": 6, "frameStart": 165}], "unmigrated": ["db_models", "test_utils", "middleware", "validators", "cache_layer", "logging_setup"], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "key_insight_card", "insightId": "no_big_bang", "statements": [{"text": "No big bang.", "color": "#E2E8F0", "weight": 700}, {"text": "No rewrite.", "color": "#E2E8F0", "weight": 700}, {"text": "Just gradual migration.", "color": "#5AAA6E", "weight": 600}], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "07_gradual_migration_insight": {"specBaseName": "07_gradual_migration_insight", "dataPoints": {"type": "value_flow_animation", "animationId": "code_to_specification", "containers": [{"id": "code", "label": "CODE", "color": "#64748B", "fillColor": "#94A3B8", "startLevel": 0.7, "endLevel": 0.4}, {"id": "specification", "label": "SPECIFICATION", "color": "#5AAA6E", "fillColor": "#5AAA6E", "startLevel": 0.3, "endLevel": 0.6}], "thesisText": "from code to specification", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "generated-media"},
 };
 
 export const WhereToStartSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 32.08;
+  const durationSeconds = 34.88;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE
     .filter((visual) => frame >= visual.start && frame < visual.end)
@@ -71,12 +72,6 @@ export const WhereToStartSection: React.FC = () => {
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
                   <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
-            ) : visualMedia?.defaultSrc ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

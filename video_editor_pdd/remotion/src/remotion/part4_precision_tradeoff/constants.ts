@@ -1,36 +1,42 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 111.840;
+export const SECTION_DURATION_SECONDS = 108.300;
 export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
 
 export const BEATS = {
   VISUAL_00_START: s2f(0.000),
-  VISUAL_00_END: s2f(6.620),
-  VISUAL_01_START: s2f(6.840),
-  VISUAL_01_END: s2f(29.400),
-  VISUAL_02_START: s2f(30.100),
-  VISUAL_02_END: s2f(47.000),
-  VISUAL_03_START: s2f(47.420),
-  VISUAL_03_END: s2f(64.460),
-  VISUAL_04_START: s2f(58.240),
-  VISUAL_04_END: s2f(64.460),
-  VISUAL_05_START: s2f(64.580),
-  VISUAL_05_END: s2f(95.980),
-  VISUAL_06_START: s2f(96.140),
-  VISUAL_06_END: s2f(111.840),
+  VISUAL_00_END: s2f(24.460),
+  VISUAL_01_START: s2f(0.000),
+  VISUAL_01_END: s2f(24.460),
+  VISUAL_02_START: s2f(24.740),
+  VISUAL_02_END: s2f(48.180),
+  VISUAL_03_START: s2f(48.460),
+  VISUAL_03_END: s2f(64.520),
+  VISUAL_04_START: s2f(48.460),
+  VISUAL_04_END: s2f(64.520),
+  VISUAL_05_START: s2f(48.460),
+  VISUAL_05_END: s2f(64.520),
+  VISUAL_06_START: s2f(48.460),
+  VISUAL_06_END: s2f(64.520),
+  VISUAL_07_START: s2f(64.640),
+  VISUAL_07_END: s2f(92.540),
+  VISUAL_08_START: s2f(92.540),
+  VISUAL_08_END: s2f(108.300),
 };
 
 export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 1 },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_printer_vs_mold_split", desc: "02 printer vs mold split", lane: 0 },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_split_printer_vs_mold", desc: "02 split printer vs mold", lane: 1 },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_precision_tradeoff_curve", desc: "03 precision tradeoff curve", lane: 1 },
-  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_prompt_detail_comparison", desc: "04 prompt detail comparison", lane: 0 },
-  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_walls_precision_callout", desc: "05 walls precision callout", lane: 0 },
-  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_embedded_code_document", desc: "06 embedded code document", lane: 0 },
-  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_prompt_code_spectrum", desc: "07 prompt code spectrum", lane: 1 },
+  { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_detailed_prompt_file", desc: "04 detailed prompt file", lane: 0 },
+  { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_minimal_prompt_with_tests", desc: "05 minimal prompt with tests", lane: 0 },
+  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_dual_generation_comparison", desc: "06 dual generation comparison", lane: 1 },
+  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_key_insight_walls", desc: "07 key insight walls", lane: 1 },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_embedded_code_document", desc: "08 embedded code document", lane: 1 },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_prompt_code_spectrum", desc: "09 prompt code spectrum", lane: 1 },
 ];
 
 export const Part4PrecisionTradeoffSectionProps = z.object({

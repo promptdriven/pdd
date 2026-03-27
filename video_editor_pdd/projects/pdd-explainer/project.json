@@ -20,11 +20,13 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 0,
+      "durationSeconds": 18.064417,
       "offsetSeconds": 0,
       "compositions": [
-        "01_split_screen_hook",
-        "07_pdd_title_card"
+        "01_split_screen_darning",
+        "07_code_cursor_blink",
+        "08_code_regeneration",
+        "09_title_card_pdd"
       ],
       "timelineSource": "generated"
     },
@@ -35,12 +37,15 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0,
+      "durationSeconds": 484.300083,
+      "offsetSeconds": 18.064417,
       "compositions": [
         "01_section_title_card",
+        "02_sock_price_chart",
+        "03_code_cost_chart",
         "04_research_annotations",
-        "05_context_window_shrink"
+        "05_code_churn_annotations",
+        "07_context_window_shrink"
       ],
       "timelineSource": "generated"
     },
@@ -51,8 +56,8 @@
       "specDir": "part2_paradigm_shift",
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0,
+      "durationSeconds": 228.286792,
+      "offsetSeconds": 502.36449999999996,
       "compositions": [
         "01_section_title_card"
       ],
@@ -65,8 +70,8 @@
       "specDir": "part3_mold_parts",
       "remotionDir": "S03-Part3MoldParts",
       "compositionId": "Part3MoldPartsSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0
+      "durationSeconds": 346.142042,
+      "offsetSeconds": 730.651292
     },
     {
       "id": "part4_precision_tradeoff",
@@ -75,11 +80,10 @@
       "specDir": "part4_precision_tradeoff",
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0,
+      "durationSeconds": 108.426958,
+      "offsetSeconds": 1076.793334,
       "compositions": [
         "01_section_title_card",
-        "02_printer_vs_mold_split",
         "03_precision_tradeoff_curve"
       ],
       "timelineSource": "generated"
@@ -91,8 +95,8 @@
       "specDir": "part5_compound_returns",
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0,
+      "durationSeconds": 120.090167,
+      "offsetSeconds": 1185.220292,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -109,8 +113,8 @@
       "specDir": "where_to_start",
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0,
+      "durationSeconds": 35.43225,
+      "offsetSeconds": 1305.310459,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal"
@@ -124,8 +128,8 @@
       "specDir": "closing",
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
-      "durationSeconds": 0,
-      "offsetSeconds": 0,
+      "durationSeconds": 15.741458,
+      "offsetSeconds": 1340.742709,
       "compositions": [
         "04_pdd_triangle",
         "05_dissolve_regenerate_loop",
