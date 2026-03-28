@@ -744,7 +744,10 @@ def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path)
         return ("Generated", 0.10, "gpt-4")
 
     with patch(
-        "pdd.operation_log.get_pdd_file_paths", return_value=paths
+        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths
+    ), patch(
+        "pdd.sync_determine_operation.get_meta_dir",
+        return_value=Path(temp_pdd_env),
     ):
         mock_generate(prompt_file="prompts/hashmod_python.prompt")
 
@@ -779,7 +782,10 @@ def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_983(temp_pdd_env
     def mock_generate(prompt_file: str):
         return ("Generated", 0.05, "gpt-4")
 
-    with patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        return_value={"prompt": Path("prompts/mymod_python.prompt")},
+    ), patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
         mock_generate(prompt_file="prompts/mymod_python.prompt")
 
         assert mock_save_fp.called, "save_fingerprint should be called"
@@ -802,7 +808,7 @@ def test_decorator_fingerprint_failure_warns_not_silent_issue_983(temp_pdd_env):
         return ("Generated", 0.05, "gpt-4")
 
     with patch(
-        "pdd.operation_log.get_pdd_file_paths",
+        "pdd.sync_determine_operation.get_pdd_file_paths",
         side_effect=RuntimeError("simulated path resolution failure"),
     ), patch("pdd.operation_log.console") as mock_console:
 

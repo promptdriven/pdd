@@ -12,8 +12,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
-from .sync_determine_operation import get_pdd_file_paths
-
 console = Console()
 
 # We assume standard paths relative to the project root
@@ -376,6 +374,7 @@ def log_operation(
                     if success:
                         if updates_fingerprint:
                             try:
+                                from .sync_determine_operation import get_pdd_file_paths
                                 paths = get_pdd_file_paths(basename, language)
                                 save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
                             except Exception as e:
