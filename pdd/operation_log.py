@@ -377,9 +377,11 @@ def log_operation(
                             try:
                                 from .sync_determine_operation import get_pdd_file_paths
                                 prompts_dir = str(Path(prompt_file).parent) if prompt_file else "prompts"
+                                if prompts_dir == ".":
+                                    prompts_dir = "prompts"
                                 paths = get_pdd_file_paths(basename, language, prompts_dir=prompts_dir)
                                 save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
-                            except Exception as e:
+                            except (ImportError, OSError, ValueError) as e:
                                 logger.warning("Fingerprint saving failed for %s/%s: %s", basename, language, e)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)

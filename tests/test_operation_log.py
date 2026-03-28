@@ -824,23 +824,21 @@ def test_decorator_derives_prompts_dir_for_nested_paths_issue_983(temp_pdd_env):
 
 def test_decorator_fingerprint_failure_logs_warning_issue_983(temp_pdd_env):
     """
-    Issue #983: If fingerprint saving fails, the decorator must log a warning
-    via logger.warning() — not silently swallow the exception.
+    Issue #983: If fingerprint saving fails with a recoverable error,
+    the decorator must log a warning via logger.warning().
     """
-    import logging
-
     @operation_log.log_operation(operation="generate", updates_fingerprint=True)
     def mock_generate(prompt_file: str):
         return ("Generated", 0.05, "gpt-4")
 
     with patch(
         "pdd.operation_log.save_fingerprint",
-        side_effect=TypeError("unexpected type in hash calculation"),
+        side_effect=OSError("permission denied writing fingerprint"),
     ), patch(
         "pdd.sync_determine_operation.get_pdd_file_paths",
         return_value={"prompt": Path("prompts/warnmod_python.prompt")},
     ), patch("pdd.operation_log.logger") as mock_logger:
-        # Should NOT raise — the decorator catches the exception
+        # Should NOT raise — the decorator catches OSError
         mock_generate(prompt_file="prompts/warnmod_python.prompt")
 
         # Must log a warning
@@ -848,3 +846,23 @@ def test_decorator_fingerprint_failure_logs_warning_issue_983(temp_pdd_env):
         warning_args = mock_logger.warning.call_args
         assert "warnmod" in str(warning_args)
         assert "python" in str(warning_args)
+
+
+def test_decorator_bare_filename_falls_back_to_prompts_dir_issue_983(temp_pdd_env):
+    """
+    Issue #983: When prompt_file is a bare filename like 'mymod_python.prompt'
+    (no directory component), Path.parent returns '.'. The decorator must
+    fall back to 'prompts' instead of passing '.' to get_pdd_file_paths.
+    """
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def mock_generate(prompt_file: str):
+        return ("Generated", 0.05, "gpt-4")
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        return_value={"prompt": Path("prompts/mymod_python.prompt")},
+    ) as mock_get_paths, patch("pdd.operation_log.save_fingerprint"):
+        mock_generate(prompt_file="mymod_python.prompt")
+
+        # Must use "prompts" not "." as prompts_dir
+        mock_get_paths.assert_called_once_with("mymod", "python", prompts_dir="prompts")
