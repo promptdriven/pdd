@@ -48,15 +48,14 @@ function generateParticlePositions(lineCount: number): StreamParticle[] {
 export const CodeFlow: React.FC = () => {
   const frame = useCurrentFrame();
   const localFrame = frame - CODE_FLOW_START;
-
-  if (localFrame < 0) return null;
+  const clampedLocalFrame = Math.max(0, localFrame);
 
   // Determine which generation we're in and the phase within it
   const generationIndex = Math.min(
-    Math.floor(localFrame / REGEN_INTERVAL),
+    Math.floor(clampedLocalFrame / REGEN_INTERVAL),
     CODE_GENERATIONS.length - 1
   );
-  const frameInGeneration = localFrame - generationIndex * REGEN_INTERVAL;
+  const frameInGeneration = clampedLocalFrame - generationIndex * REGEN_INTERVAL;
 
   // For first generation, we have a longer fill; for subsequent, dissolve→fill cycle
   const isFirstGeneration = generationIndex === 0;
@@ -71,6 +70,8 @@ export const CodeFlow: React.FC = () => {
     () => generateParticlePositions(currentCode.length),
     [currentCode.length]
   );
+
+  if (localFrame < 0) return null;
 
   // Stream particles from prompt location
   const sourceX = PROMPT_X;

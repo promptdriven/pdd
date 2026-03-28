@@ -33,12 +33,12 @@ export const RadialFlash: React.FC<RadialFlashProps> = ({
 
   const opacity = interpolate(localFrame, [0, duration], [0.9, 0], {
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.expo),
+    easing: Easing.out(Easing.exp),
   });
 
   const currentRadius = interpolate(localFrame, [0, duration], [4, radius], {
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.expo),
+    easing: Easing.out(Easing.exp),
   });
 
   return (

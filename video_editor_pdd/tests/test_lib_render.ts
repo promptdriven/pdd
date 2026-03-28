@@ -362,6 +362,22 @@ describe("renderSection — child-process spawn integration", () => {
       expect.stringContaining(path.join("video_editor_pdd", "node_modules"))
     );
   });
+
+  it("preserves multiline child stderr so render failures include a stack trace", async () => {
+    setupSpawn(
+      [],
+      1,
+      [
+        "TypeError: easing is not a function",
+        "    at AnimatedDivider (/app/remotion/AnimatedDivider.tsx:42:13)",
+        "    at renderWithHooks (/app/node_modules/react-dom/index.js:1:1)",
+      ].join("\n")
+    );
+
+    await expect(
+      renderSection("Part1EconomicsSection", "/tmp/out.mp4", jest.fn())
+    ).rejects.toThrow(/AnimatedDivider/);
+  });
 });
 
 // ---------------------------------------------------------------------------

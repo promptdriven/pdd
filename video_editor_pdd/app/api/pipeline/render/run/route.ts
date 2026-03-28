@@ -23,6 +23,41 @@ const VEO_MEDIA_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 const RETRYABLE_PARALLEL_RENDER_ERROR_RE =
   /\b(delayRender\(\)|write EPIPE|Could not extract frame from compositor|proxy\?src=)\b/i;
 
+function formatRenderError(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.stack && error.stack.includes(error.message)) {
+      return error.stack;
+    }
+
+    return error.stack
+      ? `${error.message}\n${error.stack}`
+      : error.message;
+  }
+
+  return String(error ?? "Unknown render error");
+}
+
+function logRenderError(
+  onLog: (msg: string) => void,
+  prefix: string,
+  error: unknown
+): void {
+  const lines = formatRenderError(error)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    onLog(prefix);
+    return;
+  }
+
+  onLog(`${prefix}${lines[0]}`);
+  for (const line of lines.slice(1)) {
+    onLog(line);
+  }
+}
+
 /**
  * Update project.json with duration and recalculated offsets
  */
@@ -132,19 +167,42 @@ async function renderSections(
       continue;
     }
 
-    if (
-      batch.length > 1 &&
-      failedSections.every(({ error }) => isRetryableParallelRenderError(error))
-    ) {
+    if (batch.length > 1) {
+      const retryReason = failedSections.every(({ error }) =>
+        isRetryableParallelRenderError(error)
+      )
+        ? "Parallel render batch hit a Remotion media-proxy timeout"
+        : "Parallel render batch failed";
+
       onLog(
-        `Parallel render batch hit a Remotion media-proxy timeout; retrying ${failedSections
+        `${retryReason}; retrying failed sections serially for diagnosis: ${failedSections
           .map(({ section }) => `"${section.id}"`)
-          .join(", ")} serially.`
+          .join(", ")}.`
       );
-      for (const { section } of failedSections) {
-        await renderSingleSection(section);
+
+      for (const { section, error } of failedSections) {
+        logRenderError(
+          onLog,
+          `Parallel render failure for "${section.id}": `,
+          error
+        );
+
+        try {
+          await renderSingleSection(section);
+        } catch (serialError) {
+          logRenderError(
+            onLog,
+            `Isolated rerender for "${section.id}" failed: `,
+            serialError
+          );
+          throw serialError;
+        }
       }
       continue;
+    }
+
+    for (const { section, error } of failedSections) {
+      logRenderError(onLog, `Render failed for "${section.id}": `, error);
     }
 
     throw failedSections[0].error;

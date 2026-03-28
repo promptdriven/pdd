@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+Frame at 95.8% progress (frame 689/720) shows the title card in its fade-out phase (phase 7, frames 660-720). All critical text elements are present and correctly positioned: 'PART 1' label in muted gray centered above, 'THE ECONOMICS' in large bold white centered, horizontal rule between title lines, and 'OF DARNING' in large bold white with slight right offset below. Background is deep navy-black consistent with #0A0F1A. At frame 689 (29 frames into 60-frame easeIn(quad) fade-out), text is still substantially visible which is correct — easeIn(quad) at ~48% progress yields only ~23% opacity reduction. Ghost crossing lines at 0.04 base opacity are not distinguishable but this is expected given their extremely low opacity combined with the active fade-out. Blueprint grid at 0.05 opacity is imperceptible, which is normal. Typography, spacing, centering, and color values all match spec within tolerance.

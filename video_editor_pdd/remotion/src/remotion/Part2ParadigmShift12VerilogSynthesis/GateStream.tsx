@@ -20,10 +20,7 @@ interface GateSymbol {
  */
 export const GateStream: React.FC = () => {
   const frame = useCurrentFrame();
-
-  if (frame < GATE_STREAM_START) return null;
-
-  const localFrame = frame - GATE_STREAM_START;
+  const localFrame = Math.max(0, frame - GATE_STREAM_START);
 
   // Generate deterministic gate symbols
   const gates = useMemo<GateSymbol[]>(() => {
@@ -45,6 +42,8 @@ export const GateStream: React.FC = () => {
     }
     return items;
   }, []);
+
+  if (frame < GATE_STREAM_START) return null;
 
   // Starting x position for gate stream (right of chip output)
   const streamStartX = 1140;

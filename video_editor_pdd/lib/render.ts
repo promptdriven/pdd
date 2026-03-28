@@ -206,7 +206,7 @@ async function run() {
 }
 
 run().catch((err) => {
-  process.stderr.write(err.message || String(err));
+  process.stderr.write(err?.stack || err?.message || String(err));
   process.exit(1);
 });
 `.trim();
@@ -371,7 +371,7 @@ async function run() {
 }
 
 run().catch((err) => {
-  process.stderr.write(err.message || String(err));
+  process.stderr.write(err?.stack || err?.message || String(err));
   process.exit(1);
 });
 `.trim();

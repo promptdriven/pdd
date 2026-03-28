@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame at 75% progress (3.75s) matches the spec well. Visible: elderly woman's weathered hands working on a dark grey wool sock with a wooden darning egg clearly visible inside it. Warm golden incandescent lamplight illuminates the scene with correct color temperature. Shallow depth of field with softly blurred background showing a modest interior setting. A wicker basket with colored yarn/thread is visible in the background, consistent with a 1950s darning scene. The hands appear practiced and deliberate. Period-accurate clothing with rolled sleeves visible on the left arm. Cinematic framing with film-like quality. At 3.75s (within the 2-4s phase), the darning work is in progress with the patch building, and approaching the 3.60s mark where the patch should be nearing completion — consistent with what is shown. No typography present, as expected for cinematic B-roll. All critical spec elements are satisfied.

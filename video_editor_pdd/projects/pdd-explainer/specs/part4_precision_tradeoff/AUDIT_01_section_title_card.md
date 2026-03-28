@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The frame is sampled at 87.5% (frame 209), within the fade-out phase (frames 180-240). All critical text elements are present and correctly positioned: 'PART 4' label in muted blue-gray above the title, 'THE PRECISION' in large bold white centered text, horizontal rule between lines, and 'TRADEOFF' below. Background is correct deep navy-black. The one notable discrepancy is the background ghost element: the spec calls for an inverse hyperbola descending from upper-left to lower-right at very low opacity (#D9944A at 0.04), but the rendered frame shows what appears to be a partial circular arc in the upper-right corner rather than a spanning hyperbolic curve. The shape and placement differ from the described 'inverse hyperbola from upper-left to lower-right'. The fade-out progress appears reasonable for the easeIn(quad) timing at this frame.

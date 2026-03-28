@@ -107,6 +107,49 @@ describe("shared generated media renderer", () => {
     expect(constantsSource).toContain("export const UI_FONT =");
   });
 
+  it("uses Remotion's supported exponential easing helper in the Part 1 crossing-lines flash effect", () => {
+    const source = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part1Economics13CrossingLinesMoment/RadialFlash.tsx"
+      ),
+      "utf8"
+    );
+
+    expect(source).toContain("Easing.out(Easing.exp)");
+    expect(source).not.toContain("Easing.expo");
+  });
+
+  it("keeps frame-gated helpers hook-safe by resolving memoized values before early frame returns", () => {
+    const cases = [
+      {
+        file: "remotion/src/remotion/Part2ParadigmShift12VerilogSynthesis/GateStream.tsx",
+        returnSnippet: "if (frame < GATE_STREAM_START) return null;",
+        hookSnippet: "const gates = useMemo<GateSymbol[]>(() => {",
+      },
+      {
+        file: "remotion/src/remotion/Part2ParadigmShift18PromptMoldFinale/CodeFlow.tsx",
+        returnSnippet: "if (localFrame < 0) return null;",
+        hookSnippet: "const particles = useMemo(",
+      },
+      {
+        file: "remotion/src/remotion/09-ContextDegradationChart/TrendLine.tsx",
+        returnSnippet: "if (frame < startFrame) return null;",
+        hookSnippet: "const pathD = useMemo(() => {",
+      },
+    ];
+
+    for (const { file, returnSnippet, hookSnippet } of cases) {
+      const source = fs.readFileSync(path.join(process.cwd(), file), "utf8");
+      const returnIndex = source.indexOf(returnSnippet);
+      const hookIndex = source.indexOf(hookSnippet);
+
+      expect(returnIndex).toBeGreaterThanOrEqual(0);
+      expect(hookIndex).toBeGreaterThanOrEqual(0);
+      expect(hookIndex).toBeLessThan(returnIndex);
+    }
+  });
+
   it("keeps gate netlist animation props aligned with generated scene callers", () => {
     const source = fs.readFileSync(
       path.join(

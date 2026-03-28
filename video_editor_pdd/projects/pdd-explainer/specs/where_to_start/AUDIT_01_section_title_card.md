@@ -1,0 +1,4 @@
+## Verdict
+pass
+## Summary
+The core title card elements are all present and correctly composed: section label 'WHERE TO START' in small muted text, main 'WHERE TO' in large bold, horizontal rule, and 'START' below. Background color matches spec. The frame is sampled at 94.5% progress (frame 515), which is within the fade-out phase (frames 486-546), so reduced opacity of all elements is expected. The ghost module grid (6x4 rectangles at 0.06 opacity with one pulsing brighter at 0.08) and blueprint grid (60px spacing at 0.05 opacity) are not discernible in the frame. While these are specified at extremely low opacities and would be further reduced during fade-out, the ghost grid with the highlighted module is a thematic element meant to foreshadow the 'start with one module' thesis and should have been visible during the hold phase. At this late fade-out sample point, its absence is a minor concern rather than a critical one.

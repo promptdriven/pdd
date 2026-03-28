@@ -736,6 +736,80 @@ describe("render executor factory", () => {
     ).toBe(true);
   });
 
+  it("reruns failed sections serially for diagnosis when a parallel batch hits a generic runtime error", async () => {
+    const config = mockProjectConfig();
+    config.render.maxParallelRenders = 2;
+    config.sections = config.sections.slice(0, 2);
+    mockLoadProject.mockReturnValue(config);
+
+    const attempts = new Map<string, number>();
+    mockRenderSection.mockImplementation(async (compositionId: string) => {
+      const nextAttempt = (attempts.get(compositionId) ?? 0) + 1;
+      attempts.set(compositionId, nextAttempt);
+
+      if (compositionId === "IntroComposition" && nextAttempt === 1) {
+        throw new Error(
+          [
+            'Render process for "IntroComposition" exited with code 1: TypeError: easing is not a function',
+            "    at AnimatedDivider (/app/remotion/AnimatedDivider.tsx:42:13)",
+          ].join("\n")
+        );
+      }
+    });
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(onLog);
+
+    expect(mockRenderSection).toHaveBeenCalledTimes(3);
+    expect(attempts.get("IntroComposition")).toBe(2);
+    expect(attempts.get("MainComposition")).toBe(1);
+    expect(
+      onLog.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("retrying failed sections serially for diagnosis")
+      )
+    ).toBe(true);
+    expect(
+      onLog.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("AnimatedDivider")
+      )
+    ).toBe(true);
+  });
+
+  it("logs the isolated rerun stack and still fails when the serial rerun also errors", async () => {
+    const config = mockProjectConfig();
+    config.render.maxParallelRenders = 2;
+    config.sections = config.sections.slice(0, 2);
+    mockLoadProject.mockReturnValue(config);
+
+    mockRenderSection.mockImplementation(async (compositionId: string) => {
+      if (compositionId === "IntroComposition") {
+        throw new Error(
+          [
+            'Render process for "IntroComposition" exited with code 1: TypeError: easing is not a function',
+            "    at AnimatedDivider (/app/remotion/AnimatedDivider.tsx:42:13)",
+          ].join("\n")
+        );
+      }
+    });
+
+    const onLog = jest.fn();
+    const executor = registerCallArgs.factory({}, jest.fn());
+
+    await expect(executor(onLog)).rejects.toThrow(/easing is not a function/);
+    expect(mockRenderSection).toHaveBeenCalledTimes(3);
+    expect(
+      onLog.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes('Isolated rerender for "intro" failed')
+      )
+    ).toBe(true);
+    expect(
+      onLog.mock.calls.some((call: unknown[]) =>
+        String(call[0]).includes("AnimatedDivider")
+      )
+    ).toBe(true);
+  });
+
   it("uses onLog to report rendering progress", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro

@@ -20,8 +20,6 @@ export const TrendLine: React.FC<TrendLineProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
-  if (frame < startFrame) return null;
-
   const pathD = useMemo(() => {
     if (points.length < 2) return "";
     return points
@@ -38,6 +36,8 @@ export const TrendLine: React.FC<TrendLineProps> = ({
     }
     return len;
   }, [points]);
+
+  if (frame < startFrame) return null;
 
   const drawProgress = interpolate(frame, [startFrame, endFrame], [0, 1], {
     extrapolateLeft: "clamp",
