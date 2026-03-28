@@ -265,6 +265,13 @@ def save_fingerprint(
     # Issue #522: Pass stored include deps for prompt hash calculation
     prev_fp = read_fingerprint(basename, language)
     stored_deps = prev_fp.include_deps if prev_fp else None
+    if not paths:
+        from .sync_determine_operation import get_pdd_file_paths
+        try:
+            paths = get_pdd_file_paths(basename, language)
+        except (ImportError, OSError, ValueError) as e:
+            logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
+            paths = {}
     current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
 
     # Create Fingerprint with same format as _save_fingerprint_atomic
@@ -374,15 +381,7 @@ def log_operation(
                     append_log_entry(basename, language, entry)
                     if success:
                         if updates_fingerprint:
-                            try:
-                                from .sync_determine_operation import get_pdd_file_paths
-                                prompts_dir = str(Path(prompt_file).parent) if prompt_file else "prompts"
-                                if prompts_dir == ".":
-                                    prompts_dir = "prompts"
-                                paths = get_pdd_file_paths(basename, language, prompts_dir=prompts_dir)
-                                save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
-                            except (ImportError, OSError, ValueError) as e:
-                                logger.warning("Fingerprint saving failed for %s/%s: %s", basename, language, e)
+                            save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
         return wrapper
