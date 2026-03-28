@@ -722,11 +722,11 @@ def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path)
     Regression test for Issue #983: The @log_operation decorator must produce
     non-null hash fields in the fingerprint metadata.
 
-    Bug: The decorator at line 374 called save_fingerprint() without 'paths',
+    Bug: The decorator called save_fingerprint() without 'paths',
     causing calculate_current_hashes() to return {}, making all hash fields null.
 
-    Fix: The decorator now calls get_pdd_file_paths(basename, language) and passes
-    the result as paths= to save_fingerprint().
+    Fix: The decorator now calls get_pdd_file_paths(basename, language, prompts_dir)
+    and passes the result as paths= to save_fingerprint().
     """
     # Create real files so hashes can be computed
     prompts_dir = tmp_path / "prompts"
@@ -749,7 +749,7 @@ def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path)
         "pdd.sync_determine_operation.get_meta_dir",
         return_value=Path(temp_pdd_env),
     ):
-        mock_generate(prompt_file="prompts/hashmod_python.prompt")
+        mock_generate(prompt_file=str(prompt_file))
 
     fp_path = operation_log.get_fingerprint_path("hashmod", "python")
     assert fp_path.exists(), "Fingerprint file should be created"
@@ -757,7 +757,7 @@ def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path)
     with open(fp_path) as f:
         fp_data = json.load(f)
 
-    # THE BUG: With issue #437, these were all null
+    # THE BUG: With issue #983, these were all null
     assert fp_data["prompt_hash"] is not None, (
         "Issue #983: prompt_hash is null — decorator must pass paths to save_fingerprint()"
     )
@@ -773,35 +773,39 @@ def test_decorator_fingerprint_hashes_not_null_issue_983(temp_pdd_env, tmp_path)
         )
 
 
-def test_decorator_passes_paths_kwarg_to_save_fingerprint_issue_983(temp_pdd_env):
+def test_decorator_passes_paths_and_prompts_dir_to_get_pdd_file_paths_issue_983(temp_pdd_env):
     """
-    Issue #983: Verify the decorator passes 'paths' as a keyword argument
-    to save_fingerprint(). The bug was that 'paths' was omitted entirely.
+    Issue #983: Verify the decorator passes 'paths' to save_fingerprint() and
+    derives prompts_dir from the prompt_file path (matching sync_main.py pattern).
     """
     @operation_log.log_operation(operation="generate", updates_fingerprint=True)
     def mock_generate(prompt_file: str):
         return ("Generated", 0.05, "gpt-4")
 
+    mock_paths = {"prompt": Path("prompts/mymod_python.prompt")}
+
     with patch(
         "pdd.sync_determine_operation.get_pdd_file_paths",
-        return_value={"prompt": Path("prompts/mymod_python.prompt")},
-    ), patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        return_value=mock_paths,
+    ) as mock_get_paths, patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
         mock_generate(prompt_file="prompts/mymod_python.prompt")
 
+        # Verify get_pdd_file_paths called with correct prompts_dir derived from prompt_file
+        mock_get_paths.assert_called_once_with("mymod", "python", prompts_dir="prompts")
+
+        # Verify save_fingerprint receives paths
         assert mock_save_fp.called, "save_fingerprint should be called"
         call_kwargs = mock_save_fp.call_args.kwargs
         assert "paths" in call_kwargs, (
             f"Issue #983: 'paths' missing from save_fingerprint kwargs: {call_kwargs}"
         )
-        assert call_kwargs["paths"] is not None, (
-            "Issue #983: paths=None passed to save_fingerprint"
-        )
+        assert call_kwargs["paths"] == mock_paths
 
 
-def test_decorator_fingerprint_failure_warns_not_silent_issue_983(temp_pdd_env):
+def test_decorator_derives_prompts_dir_for_nested_paths_issue_983(temp_pdd_env):
     """
-    Issue #983: If fingerprint saving fails, the decorator must emit a visible
-    warning — not silently swallow the exception.
+    Issue #983: For nested prompt paths like 'prompts/frontend/page_tsx.prompt',
+    the decorator must derive prompts_dir='prompts/frontend' from the parent.
     """
     @operation_log.log_operation(operation="generate", updates_fingerprint=True)
     def mock_generate(prompt_file: str):
@@ -809,14 +813,38 @@ def test_decorator_fingerprint_failure_warns_not_silent_issue_983(temp_pdd_env):
 
     with patch(
         "pdd.sync_determine_operation.get_pdd_file_paths",
-        side_effect=OSError("simulated path resolution failure"),
-    ), patch("pdd.operation_log.console") as mock_console:
+        return_value={"prompt": Path("prompts/frontend/page_tsx.prompt")},
+    ) as mock_get_paths, patch("pdd.operation_log.save_fingerprint"):
+        mock_generate(prompt_file="prompts/frontend/page_tsx.prompt")
 
-        # Should NOT raise — the decorator still catches the exception
+        mock_get_paths.assert_called_once_with(
+            "frontend/page", "tsx", prompts_dir="prompts/frontend"
+        )
+
+
+def test_decorator_fingerprint_failure_logs_warning_issue_983(temp_pdd_env):
+    """
+    Issue #983: If fingerprint saving fails, the decorator must log a warning
+    via logger.warning() — not silently swallow the exception.
+    """
+    import logging
+
+    @operation_log.log_operation(operation="generate", updates_fingerprint=True)
+    def mock_generate(prompt_file: str):
+        return ("Generated", 0.05, "gpt-4")
+
+    with patch(
+        "pdd.operation_log.save_fingerprint",
+        side_effect=TypeError("unexpected type in hash calculation"),
+    ), patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        return_value={"prompt": Path("prompts/warnmod_python.prompt")},
+    ), patch("pdd.operation_log.logger") as mock_logger:
+        # Should NOT raise — the decorator catches the exception
         mock_generate(prompt_file="prompts/warnmod_python.prompt")
 
-        # But it MUST print a warning, not silently pass
-        mock_console.print.assert_called_once()
-        warning_msg = mock_console.print.call_args[0][0]
-        assert "Warning" in warning_msg
-        assert "warnmod" in warning_msg
+        # Must log a warning
+        mock_logger.warning.assert_called_once()
+        warning_args = mock_logger.warning.call_args
+        assert "warnmod" in str(warning_args)
+        assert "python" in str(warning_args)

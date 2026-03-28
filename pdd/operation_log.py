@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import re
 
@@ -12,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
-console = Console()
+logger = logging.getLogger(__name__)
 
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
@@ -375,10 +376,11 @@ def log_operation(
                         if updates_fingerprint:
                             try:
                                 from .sync_determine_operation import get_pdd_file_paths
-                                paths = get_pdd_file_paths(basename, language)
+                                prompts_dir = str(Path(prompt_file).parent) if prompt_file else "prompts"
+                                paths = get_pdd_file_paths(basename, language, prompts_dir=prompts_dir)
                                 save_fingerprint(basename, language, operation=operation, paths=paths, cost=cost, model=model)
-                            except (ImportError, OSError, ValueError) as e:
-                                console.print(f"[yellow]Warning: fingerprint saving failed for {basename}/{language}: {e}[/yellow]")
+                            except Exception as e:
+                                logger.warning("Fingerprint saving failed for %s/%s: %s", basename, language, e)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
         return wrapper
