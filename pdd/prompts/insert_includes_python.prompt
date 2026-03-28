@@ -1,4 +1,22 @@
-% You are an expert Python Programmer. Generate a Python function called 'insert_includes'. The purpose of this function is to determine needed depencencies and insert them into a prompt.
+<pdd-reason>Determines needed dependencies and inserts them into a prompt with optional deduplication.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "insert_includes", "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)", "returns": "Tuple[str, str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+
+% You are an expert Python Programmer. Generate a Python function called 'insert_includes'. The purpose of this function is to determine needed dependencies and insert them into a prompt.
 
 <include>context/python_preamble.prompt</include>
 
@@ -11,6 +29,11 @@
         - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
         - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
         - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
+        - 'prompt_filename': Optional[str] - The prompt filename being processed, passed through to auto_include. Default is None.
+        - 'progress_callback': Optional[Callable[[int, int], None]] - Callback for progress updates, passed through to auto_include. Default is None.
+        - 'include_docs': A boolean that indicates whether to include documentation files in dependency discovery. Default is False. Passed through to auto_include.
+        - 'max_workers': An integer controlling parallelism for file summarization. Default is 1. Passed through to auto_include.
+        - 'dedup': A boolean that indicates whether to remove redundant inline content after inserting includes. Default is True. When True, after the LLM inserts dependencies, perform a post-processing pass to remove inline content that duplicates included documents.
     Output:
         - 'output_prompt': A string containing the prompt with the dependencies inserted.
         - 'csv_output': A string containing the complete CSV output from the auto_include function, including full dependency information.
@@ -46,8 +69,18 @@
     1. Load the prompt template 'insert_includes_LLM.prompt'.
     2. Read the CSV file from the 'csv_filename' parameter using file.read().
     3. Preprocess the prompt template using the preprocess function from the preprocess module to double curly brackets and exclude the keys 'actual_prompt_to_update' and 'actual_dependencies_to_insert' but do not recurse.
-    4. Use auto_include to get the dependencies for the input prompt, passing the 'strength', 'temperature', and 'time' parameters.
+    4. Use auto_include to get the dependencies for the input prompt, passing the 'strength', 'temperature', 'time', 'prompt_filename', 'progress_callback', 'include_docs', and 'max_workers' parameters.
     5. Run with llm_invoke (passing the 'strength', 'temperature', and 'time' parameters) with the insert includes prompt to insert the output of #4 prompt into current prompt:
         - a. Pass the following string parameters to the prompt during invocation: 'actual_prompt_to_update' and 'actual_dependencies_to_insert'.
         - b. The Pydantic output will contain the 'output_prompt' key.
-    6. Return the 'output_prompt', the complete csv_output from auto_include, the total_cost and the model_name of the LLM model used.
+    6. If `dedup` is True, extract the list of include file paths from the `dependencies` string returned by auto_include in step 4 (parse all `<include>...</include>` tags to get the file paths), then run `_remove_redundant_content(output_prompt, extracted_include_paths)` to remove inline content that semantically duplicates what the included documents provide.
+    7. Return the 'output_prompt', the complete csv_output from auto_include, the total_cost and the model_name of the LLM model used.
+
+% Helper function for redundant content removal:
+    _remove_redundant_content(prompt: str, inserted_includes: List[str]) -> str:
+        - For each newly inserted include path, read the included file content.
+        - Find contiguous text blocks (3+ lines) in the prompt that substantially duplicate the included content.
+        - Use `difflib.SequenceMatcher` with a similarity threshold of >= 0.80 to detect redundant blocks.
+        - Remove those redundant blocks, preserving surrounding prompt structure.
+        - Only remove blocks of 3+ lines to avoid false positives on short common phrases.
+        - Return the cleaned prompt string.

@@ -1,3 +1,21 @@
+<pdd-reason>Automatically selects relevant code and doc includes for prompts using two-stage retrieval.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "auto_include", "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)", "returns": "Tuple[str, str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>summarize_directory_python.prompt</pdd-dependency>
+<pdd-dependency>embed_retrieve_python.prompt</pdd-dependency>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "auto_include", that will automatically find and generate the proper dependencies.
 
 <include>./context/python_preamble.prompt</include>
@@ -13,6 +31,9 @@
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print progress for each step with visual indicators and display final results summary. Default is False.
         'progress_callback' - Optional[Callable[[int, int], None]] - Callback for progress updates, called with (current, total) for each file processed. Default is None.
+        'include_docs' - A boolean that indicates whether to include documentation files (.md, .txt, .rst) in dependency discovery. Default is False. Passed through to summarize_directory.
+        'max_workers' - An integer that controls the number of parallel workers for file summarization. Default is 1. Passed through to summarize_directory.
+        'csv_path' - Optional[str] (default None). When provided, passed through to summarize_directory for incremental CSV persistence to disk.
     Outputs as a tuple:
         'dependencies' - A string that contains the dependencies.
         'csv_output' - A string that contains the updated csv file.
@@ -28,36 +49,47 @@
 
     % Example of running prompts with llm_invoke:
     <llm_invoke_example>
-        <include>context/llm_invoke_example.py</include>
+        <include select="def:example_structured_output,def:example_reasoning">context/llm_invoke_example.py</include>
     </llm_invoke_example>
 
     % Example of scanning and summarizing the content of the files in the directory_path using summarize_directory:
     <summarize_directory_example>
         <include>./context/summarize_directory_example.py</include>
     </summarize_directory_example>
+
+    % Example of embedding-based coarse retrieval for pre-filtering candidates:
+    <embed_retrieve_example>
+        <include query="example of using embed_and_retrieve for pre-filtering candidates by cosine similarity when exceeding 50, with fallback to all candidates if embedding fails">context/embed_retrieve_example.py</include>
+    </embed_retrieve_example>
+
+    % Example of preprocessing:
+    <preprocess>
+        <include> in text strings">context/preprocess_example.py</include>
+    </preprocess>
 </internal_modules>
 
 % This program will do the following:
     Step 1. Load the 'auto_include_LLM' and 'extract_auto_include_LLM' prompt templates.
-    Step 2. Run summarize_directory with directory_path and csv_file (if provided) to get the csv_output. Format each row from csv_output as 'File: {full_path}\nSummary: {file_summary}' to create the available_includes list.
-    Step 3. Run the auto_include_LLM prompt through llm_invoke, passing the strength, temperature, and time parameters:
-        3a. Pass the following string parameters to the prompt during invoke:
+    Step 2. Run summarize_directory with directory_path, csv_file (if provided), include_docs, and max_workers to get the csv_output. Format each row from csv_output as 'File: {full_path}\nSummary: {file_summary}' to create the available_includes list.
+    Step 3. Two-stage retrieval: If the number of candidate rows from Step 2 exceeds 50, use `_embed_and_rank(input_prompt, candidates, top_n=50)` to pre-filter candidates by cosine similarity before passing to the LLM. When candidates <= 50, skip embedding pre-filter and pass all candidates directly (preserving current behavior).
+    Step 4. Run the auto_include_LLM prompt through llm_invoke, passing the strength, temperature, and time parameters:
+        4a. Pass the following string parameters to the prompt during invoke:
             - 'input_prompt' - A string that contains the prompt that requires the includes to be selected.
             - 'available_includes' - A list of strings that contains the file paths and summaries of the available includes.
-    Step 4. Run the extract_auto_include_LLM prompt through llm_invoke with the output from Step 3, passing the strength, temperature, and time parameters:
-        4a. Pass the following string parameter to the prompt during invoke:
+    Step 5. Run the extract_auto_include_LLM prompt through llm_invoke with the output from Step 4, passing the strength, temperature, and time parameters:
+        5a. Pass the following string parameter to the prompt during invoke:
             - 'llm_output' - A string that contains the output of the auto_include_LLM prompt.
-        4b. The Pydantic output will include the key 'string_of_includes' to be accessed.
-    Step 5. Assign the value of key 'string_of_includes' to form the 'dependencies'.
-    Step 6. Post-process 'dependencies':
-        6a. If prompt_filename is provided, filter out includes that reference the module's own example file (e.g., for 'agentic_fix_python.prompt', remove any include of 'context/[subdirs/]agentic_fix_example.py').
-        6b. Fix any malformed '[File: path]' patterns to proper '<include>path</include>' format.
-        6c. Detect and filter circular dependencies through example file includes:
+        5b. The Pydantic output will include the key 'string_of_includes' to be accessed.
+    Step 6. Assign the value of key 'string_of_includes' to form the 'dependencies'.
+    Step 7. Post-process 'dependencies':
+        7a. If prompt_filename is provided, filter out includes that reference the module's own example file (e.g., for 'agentic_fix_python.prompt', remove any include of 'context/[subdirs/]agentic_fix_example.py').
+        7b. Fix any malformed '[File: path]' patterns to proper '<include>path</include>' format.
+        7c. Detect and filter circular dependencies through example file includes:
             - Use _extract_example_modules() to get module names from _example.py includes in dependencies
             - Use _detect_circular_dependencies() to find any module-level cycles (A includes B's example, B includes A's example)
             - Use _filter_circular_dependencies() to remove problematic example includes
             - Print warning for each filtered circular dependency using console.print with yellow color
-    Step 7. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
+    Step 8. Return the tuple containing 'dependencies', 'csv_output', 'total_cost', and 'model_name'.
 
 % Error Handling:
     - Validate input parameters (strength and temperature must be between 0 and 1)
@@ -84,3 +116,10 @@
         - For each problematic module, use regex to remove its example include:
           pattern r'<[^>]+><include>context/(?:[^/]+/)*{module}_example\.py</include></[^>]+>\s*'
         - Return the filtered dependencies string
+
+% Two-stage retrieval dependency:
+    For the embedding pre-filter in Step 3, use the `embed_and_retrieve` function from the `embed_retrieve` module:
+    - Interface: `embed_and_retrieve(query: str, candidates: List[str], top_n: int = 50) -> List[Tuple[str, float]]`
+    - Returns a list of (candidate_text, similarity_score) tuples sorted by descending cosine similarity.
+    - Use the returned rankings to select the top-N candidate file summaries before passing to the LLM.
+    - If the embedding call fails, fall back to passing all candidates directly (preserving current behavior).

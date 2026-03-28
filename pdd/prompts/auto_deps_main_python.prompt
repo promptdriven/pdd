@@ -1,3 +1,19 @@
+<pdd-reason>CLI entry point for auto-deps with doc discovery, dedup, and parallelization support.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1)", "returns": "Tuple[str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>insert_includes_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
 
 <include>context/python_preamble.prompt</include>
@@ -12,6 +28,9 @@
     - `output` (`Optional[str]`): File path (or directory) to save the modified prompt file with auto-dependencies.
     - `force_scan` (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the resolved CSV file if it exists (see Behavior below).
     - `progress_callback` (`Optional[Callable[[int, int], None]]`): Optional callback for progress updates (current, total) for each file processed. Defaults to None.
+    - `include_docs` (`bool`): Flag to include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Default False.
+    - `no_dedup` (`bool`): Flag to disable redundant inline content removal. Default False.
+    - `concurrency` (`int`): Number of parallel workers for file summarization. Default 1.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -40,7 +59,7 @@
         • `time_budget = ctx.obj.get('time', DEFAULT_TIME)`
       Compute verbosity as `verbose = not ctx.obj.get('quiet', False)` and pass to downstream calls.
     - Call `insert_includes` as:
-        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, prompt_filename=prompt_file, strength=strength, temperature=temperature, time=time_budget, verbose=verbose, progress_callback=progress_callback)`
+        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, prompt_filename=prompt_file, strength=strength, temperature=temperature, time=time_budget, verbose=verbose, progress_callback=progress_callback, include_docs=include_docs, dedup=(not no_dedup), max_workers=concurrency)`
       Capture `(modified_prompt, csv_output, total_cost, model_name)`.
     - Save outputs:
         • Write `modified_prompt` to `output_file_paths["output"]` (UTF-8).

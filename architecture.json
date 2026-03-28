@@ -2393,7 +2393,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the auto deps command.",
+    "reason": "CLI entry point for auto-deps with doc discovery, dedup, and parallelization support.",
     "description": "Command-line interface for auto deps. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "construct_paths_python.prompt",
@@ -2407,12 +2407,13 @@
       "python"
     ],
     "interface": {
-      "type": "cli",
-      "cli": {
-        "commands": [
+      "type": "module",
+      "module": {
+        "functions": [
           {
             "name": "auto_deps_main",
-            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1)",
+            "returns": "Tuple[str, float, str]"
           }
         ]
       }
@@ -2519,7 +2520,7 @@
     }
   },
   {
-    "reason": "Creates summaries of directory contents.",
+    "reason": "Recursively discovers and summarizes files in a directory using LLM with caching.",
     "description": "Generates overview of files in a directory. Used for context in LLM prompts.",
     "dependencies": [
       "llm_invoke_python.prompt",
@@ -2538,7 +2539,7 @@
         "functions": [
           {
             "name": "summarize_directory",
-            "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, float, str]",
+            "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
             "returns": "Tuple[str, float, str]",
             "sideEffects": [
               "None"
@@ -2732,12 +2733,13 @@
     }
   },
   {
-    "reason": "Automatically selects relevant includes for prompts.",
+    "reason": "Automatically selects relevant code and doc includes for prompts using two-stage retrieval.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "load_prompt_template_python.prompt",
-      "summarize_directory_python.prompt"
+      "summarize_directory_python.prompt",
+      "embed_retrieve_python.prompt"
     ],
     "priority": 45,
     "filename": "auto_include_python.prompt",
@@ -2752,24 +2754,8 @@
         "functions": [
           {
             "name": "auto_include",
-            "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, str, float, str]",
+            "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
             "returns": "Tuple[str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replacer",
-            "signature": "(match: re.Match) -> str",
-            "returns": "str",
             "sideEffects": [
               "None"
             ]
@@ -3379,7 +3365,7 @@
     }
   },
   {
-    "reason": "Injects include directives into prompts.",
+    "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
     "dependencies": [
       "auto_include_python.prompt",
@@ -3400,7 +3386,7 @@
         "functions": [
           {
             "name": "insert_includes",
-            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None) -> Tuple[str, str, float, str]",
+            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
             "returns": "Tuple[str, str, float, str]",
             "sideEffects": [
               "None"
@@ -4439,7 +4425,7 @@
     }
   },
   {
-    "reason": "Automatically selects relevant includes for prompts.",
+    "reason": "LLM prompt template for selecting relevant code and documentation includes for a prompt.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
     "dependencies": [],
     "priority": 83,
@@ -4726,7 +4712,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for extract auto include operations.",
+    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
     "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 95,
@@ -5143,7 +5129,7 @@
     }
   },
   {
-    "reason": "Injects include directives into prompts.",
+    "reason": "LLM prompt template for inserting dependency includes into a prompt with doc placement.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
     "dependencies": [],
     "priority": 112,
@@ -5675,7 +5661,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for summarize file operations.",
+    "reason": "LLM prompt template for summarizing code and documentation files in ~200 words.",
     "description": "Defines the prompt structure for summarize file. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 131,
@@ -8574,6 +8560,105 @@
           "ci_system"
         ]
       }
+    }
+  },
+  {
+    "reason": "Provides embedding-based coarse retrieval for ranking text candidates by semantic similarity.",
+    "description": "Computes embeddings via litellm.embedding() and cosine similarity to pre-filter large candidate sets before LLM reranking.",
+    "dependencies": [],
+    "priority": 38,
+    "filename": "embed_retrieve_python.prompt",
+    "filepath": "pdd/embed_retrieve.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "embed_and_retrieve",
+            "signature": "(query: str, candidates: List[str], top_n: int = 50)",
+            "returns": "List[Tuple[str, float]]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11680,
+      "y": 1020
+    }
+  },
+  {
+    "reason": "Registers maintenance CLI commands: sync, auto-deps, and setup with all options.",
+    "description": "Contains maintenance and setup commands for the PDD CLI.",
+    "dependencies": [
+      "auto_deps_main_python.prompt"
+    ],
+    "priority": 70,
+    "filename": "commands/maintenance_python.prompt",
+    "filepath": "pdd/commands/maintenance.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "command",
+      "command": {
+        "commands": [
+          {
+            "name": "sync",
+            "description": "Synchronize a prompt with its code, tests, and examples"
+          },
+          {
+            "name": "auto-deps",
+            "description": "Analyze and insert dependencies into a prompt file"
+          },
+          {
+            "name": "setup",
+            "description": "Install shell completion and run setup utility"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13200,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Defines frontend command configs, global options, and constants for the PDD UI.",
+    "description": "Frontend constants module containing command configurations, global options, and helper functions.",
+    "dependencies": [],
+    "priority": 150,
+    "filename": "frontend/constants_typescript.prompt",
+    "filepath": "pdd/frontend/constants.ts",
+    "tags": [
+      "module",
+      "typescript",
+      "frontend"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "getCommandByBackendName",
+            "signature": "(backendName: string)",
+            "returns": "CommandConfig | undefined"
+          },
+          {
+            "name": "getPromptTemplate",
+            "signature": "(name: string, language: string, description?: string)",
+            "returns": "string"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 14000,
+      "y": 2000
     }
   }
 ]

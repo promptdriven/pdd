@@ -1,3 +1,19 @@
+<pdd-reason>Recursively discovers and summarizes files in a directory using LLM with caching.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "summarize_directory", "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)", "returns": "Tuple[str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+
 % Role and Responsibility:
 You are an expert Python Programmer. Your goal is to generate a robust utility function called `summarize_directory` that performs automated file summarization for a codebase. This module acts as a documentation and indexing layer, using an LLM to generate concise summaries of source files while implementing an efficient caching mechanism to minimize API costs.
 
@@ -17,6 +33,9 @@ You are an expert Python Programmer. Your goal is to generate a robust utility f
         - `verbose`: bool.
         - `csv_file`: Optional[str] (existing CSV content).
         - `progress_callback`: Optional[Callable[[int, int], None]].
+        - `include_docs`: bool (default False). When True, also discover and summarize documentation files (`.md`, `.txt`, `.rst`) in addition to code files. Doc files follow the same caching, hashing, and summarization pipeline as code files.
+        - `max_workers`: int (default 1). When > 1, use `concurrent.futures.ThreadPoolExecutor(max_workers)` to parallelize LLM summarization calls across files. Cache lookups remain sequential; only LLM invocations are parallelized. Thread-safe accumulation of `total_cost`.
+        - `csv_path`: Optional[str] (default None). When provided, flush the accumulated CSV results to this file path after each file is summarized (incremental persistence). Use a helper function `_flush_csv_to_disk(results_data, csv_path)` that writes the CSV atomically.
     - Outputs: Tuple[`csv_output` (str), `total_cost` (float), `model_name` (str)].
 3. Validation:
     - Raise `ValueError("Invalid 'directory_path'.")` if empty or not a string.
@@ -47,7 +66,8 @@ You are an expert Python Programmer. Your goal is to generate a robust utility f
     - Define a Pydantic model `FileSummary` with a single field `file_summary: str`.
     - Create a helper `_get_files_from_git(directory_path)` that uses `subprocess` to run `git ls-files`.
     - Create a helper `_get_files_from_glob(directory_path)` as a fallback that filters out `node_modules`, `.next`, `__pycache__`, `.git`, `dist`, `build`, and `coverage`.
-    - Define a `BINARY_EXTENSIONS` set to skip non-text files (e.g., .png, .zip, .pyc).
+    - Define a `BINARY_EXTENSIONS` set to skip non-text files (e.g., .png, .zip, .pyc). Documentation extensions (`.md`, `.txt`, `.rst`) must NOT be in `BINARY_EXTENSIONS`.
+    - When `include_docs` is True, include `.md`, `.txt`, and `.rst` files in the discovered file set alongside code files.
 2. Processing Logic:
     - Load the prompt template `summarize_file_LLM.prompt`.
     - Parse the `csv_file` input into a dictionary keyed by `os.path.normpath(full_path)`.
@@ -57,6 +77,7 @@ You are an expert Python Programmer. Your goal is to generate a robust utility f
         - If path and hash exist in cache, reuse the summary.
         - Else, call `llm_invoke` with the template and `input_json={"file_contents": content}`.
     - Track `total_cost` and the `model_name` from the last successful LLM call (default to "cached" if no calls made).
+    - When `max_workers > 1`, use `concurrent.futures.ThreadPoolExecutor(max_workers)` to submit LLM summarization calls in parallel. Use a threading lock for thread-safe accumulation of `total_cost`. The `rich.progress` bar updates as futures complete. The `progress_callback` is called per-file completion regardless of parallelism.
 3. Output Generation:
     - Use `io.StringIO` and `csv.DictWriter` to generate the final CSV string.
     - Ensure the CSV contains columns: `full_path`, `file_summary`, and `content_hash`.

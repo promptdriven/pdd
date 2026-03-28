@@ -1,3 +1,20 @@
+<pdd-reason>Registers maintenance CLI commands: sync, auto-deps, and setup with all options.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "sync", "description": "Synchronize a prompt with its code, tests, and examples"},
+      {"name": "auto-deps", "description": "Analyze and insert dependencies into a prompt file"},
+      {"name": "setup", "description": "Install shell completion and run setup utility"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
 
 % Role & Scope
@@ -22,6 +39,10 @@
   2. **auto-deps**:
      - Interface: Match the `auto-deps` command specification in `README.md`.
      - Logic: Call `auto_deps_main` with `@track_cost` decorator.
+     - Additional options:
+       - `--include-docs` (bool flag, default False): Include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Pass as `include_docs` to `auto_deps_main`.
+       - `--no-dedup` (bool flag, default False): Disable redundant inline content removal after inserting includes. Pass as `no_dedup` to `auto_deps_main`.
+       - `--concurrency` (int, default 1): Number of parallel workers for file summarization LLM calls. Pass as `concurrency` to `auto_deps_main`.
   3. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
      - Logic: Install shell completion, then run setup utility.

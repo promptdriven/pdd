@@ -1,3 +1,17 @@
+<pdd-reason>Defines frontend command configs, global options, and constants for the PDD UI.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "getCommandByBackendName", "signature": "(backendName: string)", "returns": "CommandConfig | undefined"},
+      {"name": "getPromptTemplate", "signature": "(name: string, language: string, description?: string)", "returns": "string"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript engineer. Generate `pdd/frontend/constants.ts` as the frontend command/constants module.
 
 % Dependencies
@@ -37,7 +51,7 @@
    - `SPLIT => split | Split a large prompt file into smaller, manageable sub-prompts for better organization and modularity. | Split Prompt | › | requiresPrompt,requiresCode,isAdvanced | example-code:file:examples/interface.py:Example code as interface to sub-module:required; output-sub:file:prompts/sub_module.prompt:Output path for the sub-prompt file; output-modified:file:prompts/modified.prompt:Output path for the modified prompt file`
    - `CHANGE => change | Modify a prompt based on change instructions from a change prompt file. | Change Prompt | › | requiresPrompt,requiresCode,isAdvanced | change-prompt:file:changes.prompt:File containing change instructions:required; budget:number:'5':Maximum cost in dollars::'5'; output:file:prompts/modified.prompt:Output path for modified prompt`
    - `DETECT => detect | Analyze prompts to determine which ones need changes based on a change description file. | Detect Changes | › | requiresPrompt=false,isAdvanced | prompt-files:text:file1.prompt, file2.prompt:Comma-separated list of prompt files to analyze:required; change-file:file:changes.prompt:File describing the changes to detect:required; output:file:detect_results.csv:Output CSV file for analysis results`
-   - `AUTO_DEPS => auto-deps | Analyze project dependencies and update the prompt file with discovered dependencies. | Auto Dependencies | › | requiresPrompt,isAdvanced | directory-path:text:src/:Directory to scan for dependencies:required; output:file:prompts/updated.prompt:Where to save modified prompt; csv:file:deps.csv:CSV file for dependency info; force-scan:checkbox::Force rescan all files`
+   - `AUTO_DEPS => auto-deps | Analyze project dependencies and update the prompt file with discovered dependencies. | Auto Dependencies | › | requiresPrompt,isAdvanced | directory-path:text:src/:Directory to scan for dependencies:required; output:file:prompts/updated.prompt:Where to save modified prompt; csv:file:deps.csv:CSV file for dependency info; force-scan:checkbox::Force rescan all files; include-docs:checkbox::Include documentation files (.md, .txt, .rst) in dependency discovery; no-dedup:checkbox::Skip redundant inline content removal; concurrency:number:'1':Number of parallel workers for file summarization::'1'`
    - `CONFLICTS => conflicts | Check for conflicts between two prompt files. | Check Conflicts | › | requiresPrompt,isAdvanced | prompt2:file:prompts/other.prompt:Second prompt file to compare:required; output:file:conflicts.csv:Where to save conflict analysis`
    - `PREPROCESS => preprocess | Preprocess a prompt file to prepare it for LLM use. | Preprocess | › | requiresPrompt,isAdvanced | output:file:prompts/preprocessed.prompt:Where to save preprocessed prompt; xml:checkbox::Insert XML delimiters for structure; recursive:checkbox::Recursively preprocess includes; double:checkbox::Double curly brackets`
 
