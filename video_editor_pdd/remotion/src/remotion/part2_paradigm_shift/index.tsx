@@ -3,14 +3,38 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part2ParadigmShift07VerilogSynthesisTriple } from "../Part2ParadigmShift07VerilogSynthesisTriple";
+import { Part2ParadigmShift04MoldProductionCounter } from "../Part2ParadigmShift04MoldProductionCounter";
+import { Part2ParadigmShift11SchematicDensityZoom } from "../Part2ParadigmShift11SchematicDensityZoom";
+import { Part2ParadigmShift12VerilogSynthesis } from "../Part2ParadigmShift12VerilogSynthesis";
+import { Part2ParadigmShift13TripleSynthesisEquivalence } from "../Part2ParadigmShift13TripleSynthesisEquivalence";
+import { Part2ParadigmShift14SynopsysPddEquivalence } from "../Part2ParadigmShift14SynopsysPddEquivalence";
+import { Part2ParadigmShift15AbstractionStaircase } from "../Part2ParadigmShift15AbstractionStaircase";
+import { Part2ParadigmShift16BillionGateUnreviewable } from "../Part2ParadigmShift16BillionGateUnreviewable";
+import { Part2ParadigmShift17ReviewSpecVerifyOutput } from "../Part2ParadigmShift17ReviewSpecVerifyOutput";
+import { Part2ParadigmShift18PromptMoldFinale } from "../Part2ParadigmShift18PromptMoldFinale";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "12_verilog_synthesis": Part2ParadigmShift07VerilogSynthesisTriple,
+  "04_mold_production_counter": Part2ParadigmShift04MoldProductionCounter,
+  "11_schematic_density_zoom": Part2ParadigmShift11SchematicDensityZoom,
+  "12_verilog_synthesis": Part2ParadigmShift12VerilogSynthesis,
+  "13_triple_synthesis_equivalence": Part2ParadigmShift13TripleSynthesisEquivalence,
+  "14_synopsys_pdd_equivalence": Part2ParadigmShift14SynopsysPddEquivalence,
+  "15_abstraction_staircase": Part2ParadigmShift15AbstractionStaircase,
+  "16_billion_gate_unreviewable": Part2ParadigmShift16BillionGateUnreviewable,
+  "17_review_spec_verify_output": Part2ParadigmShift17ReviewSpecVerifyOutput,
+  "18_prompt_mold_finale": Part2ParadigmShift18PromptMoldFinale,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "12_verilog_synthesis": 540,
+  "04_mold_production_counter": 300,
+  "11_schematic_density_zoom": 420,
+  "12_verilog_synthesis": 360,
+  "13_triple_synthesis_equivalence": 750,
+  "14_synopsys_pdd_equivalence": 390,
+  "15_abstraction_staircase": 690,
+  "16_billion_gate_unreviewable": 360,
+  "17_review_spec_verify_output": 360,
+  "18_prompt_mold_finale": 360,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -45,12 +69,12 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "10_veo_1980s_chip_lab": {"specBaseName": "10_veo_1980s_chip_lab", "dataPoints": {"type": "veo_clip", "clipId": "1980s_chip_lab", "durationSeconds": 8, "characters": [{"id": "chip_engineer", "label": "1980s Chip Engineer", "referencePrompt": "Male electronics engineer in button-down shirt, 1980s style, drafting desk with schematics, fluorescent-lit lab"}]}, "mediaAliases": {"defaultSrc": "veo/1980s_chip_lab.mp4", "backgroundSrc": "veo/1980s_chip_lab.mp4", "outputSrc": "veo/1980s_chip_lab.mp4", "baseSrc": "veo/1980s_chip_lab.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "11_schematic_density_zoom": {"specBaseName": "11_schematic_density_zoom", "dataPoints": {"type": "schematic_zoom", "chartId": "schematic_density_zoom", "counter": {"start": 20, "end": 50000, "milestones": [100, 500, 5000, 25000, 50000]}, "zoom": {"startScale": 8, "endScale": 0.1, "easing": "easeInOutCubic"}, "narrationSegments": ["part2_paradigm_shift_011"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "12_verilog_synthesis": {"specBaseName": "12_verilog_synthesis", "dataPoints": {"type": "synthesis_animation", "chartId": "verilog_synthesis", "codeLanguage": "verilog", "codeSample": "module counter(\\n  input clk, rst,\\n  output reg [7:0] count\\n);\\n  always @(posedge clk)\\n    if (rst) count <= 0;\\n    else count <= count + 1;\\nendmodule", "synthesisStages": ["code_input", "synthesis_process", "gate_output"], "narrationSegments": ["part2_paradigm_shift_011"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "13_triple_synthesis_equivalence": {"specBaseName": "13_triple_synthesis_equivalence", "dataPoints": {"type": "equivalence_demo", "chartId": "triple_synthesis_equivalence", "runs": [{"id": "run_1", "topology": "dense-left", "label": "Run 1"}, {"id": "run_2", "topology": "tree-branch", "label": "Run 2"}, {"id": "run_3", "topology": "linear-chain", "label": "Run 3"}], "equivalenceLabel": "Functionally equivalent", "equivalenceColor": "#5AAA6E", "narrationSegments": ["part2_paradigm_shift_012", "part2_paradigm_shift_013"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 120}, "renderMode": "generated-media"},
-  "14_synopsys_pdd_equivalence": {"specBaseName": "14_synopsys_pdd_equivalence", "dataPoints": {"type": "text_overlay", "chartId": "synopsys_pdd_equivalence", "lines": [{"accent": {"text": "Synopsys:", "color": "#4A90D9"}, "body": "specification in → verified hardware out."}, {"accent": {"text": "PDD:", "color": "#D9944A"}, "body": "prompt in → verified software out."}], "subtitle": "Same architecture.", "equivalenceMappings": [{"from": "specification", "to": "prompt"}, {"from": "hardware", "to": "software"}], "narrationSegments": ["part2_paradigm_shift_014"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "generated-media"},
-  "15_abstraction_staircase": {"specBaseName": "15_abstraction_staircase", "dataPoints": {"type": "staircase_timeline", "chartId": "abstraction_staircase", "steps": [{"label": "Transistors", "decade": "1970s", "color": "#D9944A", "level": 1}, {"label": "Schematics", "decade": "1980s", "color": "#D9944A", "level": 2}, {"label": "RTL / Verilog", "decade": "1990s", "color": "#4A90D9", "level": 3}, {"label": "Behavioral / HLS", "decade": "2010s", "color": "#4A90D9", "level": 4}, {"label": "Natural language → Code", "decade": "2020s", "color": "#5AAA6E", "level": 5, "emphasis": true}], "transitionLabel": "Couldn't scale", "transitionColor": "#EF4444", "narrationSegments": ["part2_paradigm_shift_015"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "generated-media"},
+  "13_triple_synthesis_equivalence": {"specBaseName": "13_triple_synthesis_equivalence", "dataPoints": {"type": "equivalence_demo", "chartId": "triple_synthesis_equivalence", "runs": [{"id": "run_1", "topology": "dense-left", "label": "Run 1"}, {"id": "run_2", "topology": "tree-branch", "label": "Run 2"}, {"id": "run_3", "topology": "linear-chain", "label": "Run 3"}], "equivalenceLabel": "Functionally equivalent", "equivalenceColor": "#5AAA6E", "narrationSegments": ["part2_paradigm_shift_012", "part2_paradigm_shift_013"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 120}, "renderMode": "component"},
+  "14_synopsys_pdd_equivalence": {"specBaseName": "14_synopsys_pdd_equivalence", "dataPoints": {"type": "text_overlay", "chartId": "synopsys_pdd_equivalence", "lines": [{"accent": {"text": "Synopsys:", "color": "#4A90D9"}, "body": "specification in → verified hardware out."}, {"accent": {"text": "PDD:", "color": "#D9944A"}, "body": "prompt in → verified software out."}], "subtitle": "Same architecture.", "equivalenceMappings": [{"from": "specification", "to": "prompt"}, {"from": "hardware", "to": "software"}], "narrationSegments": ["part2_paradigm_shift_014"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
+  "15_abstraction_staircase": {"specBaseName": "15_abstraction_staircase", "dataPoints": {"type": "staircase_timeline", "chartId": "abstraction_staircase", "steps": [{"label": "Transistors", "decade": "1970s", "color": "#D9944A", "level": 1}, {"label": "Schematics", "decade": "1980s", "color": "#D9944A", "level": 2}, {"label": "RTL / Verilog", "decade": "1990s", "color": "#4A90D9", "level": 3}, {"label": "Behavioral / HLS", "decade": "2010s", "color": "#4A90D9", "level": 4}, {"label": "Natural language → Code", "decade": "2020s", "color": "#5AAA6E", "level": 5, "emphasis": true}], "transitionLabel": "Couldn't scale", "transitionColor": "#EF4444", "narrationSegments": ["part2_paradigm_shift_015"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
   "16_billion_gate_unreviewable": {"specBaseName": "16_billion_gate_unreviewable", "dataPoints": {"type": "density_comparison", "chartId": "billion_gate_unreviewable", "chipView": {"gateCount": "2.1 billion", "zoomLevels": 3}, "diffView": {"linesChanged": 47382, "scrollSpeed": "fast"}, "narrationSegments": ["part2_paradigm_shift_016"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "17_review_spec_verify_output": {"specBaseName": "17_review_spec_verify_output", "dataPoints": {"type": "comparison_layout", "chartId": "review_spec_verify_output", "panels": {"left": {"type": "prompt_document", "header": "PROMPT", "accentColor": "#D9944A", "lineCount": 20}, "right": {"type": "test_suite", "header": "TEST SUITE", "accentColor": "#5AAA6E", "tests": [{"name": "test_counter_increments", "status": "pass"}, {"name": "test_reset_clears_state", "status": "pass"}, {"name": "test_overflow_wraps", "status": "pass"}, {"name": "test_edge_case_zero", "status": "pass"}, {"name": "test_concurrent_access", "status": "pass"}]}}, "label": "Review the spec. Verify the output.", "narrationSegments": ["part2_paradigm_shift_016"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "18_prompt_mold_finale": {"specBaseName": "18_prompt_mold_finale", "dataPoints": {"type": "metaphor_animation", "chartId": "prompt_mold_finale", "elements": {"prompt": {"label": "PROMPT", "color": "#D9944A", "role": "mold_specification"}, "code": {"color": "#E2E8F0", "role": "plastic_output", "regenerates": true}, "tests": {"color": "#5AAA6E", "role": "mold_walls", "labels": ["assert", "expect", "verify", "test"]}}, "regenerationCycles": 3, "thesis": "The prompt is your mold. The code is just plastic.", "narrationSegments": ["part2_paradigm_shift_016"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "generated-media"},
+  "18_prompt_mold_finale": {"specBaseName": "18_prompt_mold_finale", "dataPoints": {"type": "metaphor_animation", "chartId": "prompt_mold_finale", "elements": {"prompt": {"label": "PROMPT", "color": "#D9944A", "role": "mold_specification"}, "code": {"color": "#E2E8F0", "role": "plastic_output", "regenerates": true}, "tests": {"color": "#5AAA6E", "role": "mold_walls", "labels": ["assert", "expect", "verify", "test"]}}, "regenerationCycles": 3, "thesis": "The prompt is your mold. The code is just plastic.", "narrationSegments": ["part2_paradigm_shift_016"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
 };
 
 export const Part2ParadigmShiftSection: React.FC = () => {

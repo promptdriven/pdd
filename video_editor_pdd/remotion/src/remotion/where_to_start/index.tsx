@@ -4,19 +4,25 @@ import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { WhereToStart02LegacyCodebaseReveal } from "../WhereToStart02LegacyCodebaseReveal";
-import { WhereToStart04SourceOfTruthShift } from "../WhereToStart04SourceOfTruthShift";
-import { WhereToStart07NoBigBangCallout } from "../WhereToStart07NoBigBangCallout";
+import { WhereToStart04SourceOfTruthLabel } from "../WhereToStart04SourceOfTruthLabel";
+import { WhereToStart05ModuleGlowSpread } from "../WhereToStart05ModuleGlowSpread";
+import { WhereToStart06NoBigBangCallout } from "../WhereToStart06NoBigBangCallout";
+import { WhereToStart07GradualMigrationInsight } from "../WhereToStart07GradualMigrationInsight";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "02_legacy_codebase_reveal": WhereToStart02LegacyCodebaseReveal,
-  "04_source_of_truth_label": WhereToStart04SourceOfTruthShift,
-  "06_no_big_bang_callout": WhereToStart07NoBigBangCallout,
+  "04_source_of_truth_label": WhereToStart04SourceOfTruthLabel,
+  "05_module_glow_spread": WhereToStart05ModuleGlowSpread,
+  "06_no_big_bang_callout": WhereToStart06NoBigBangCallout,
+  "07_gradual_migration_insight": WhereToStart07GradualMigrationInsight,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "02_legacy_codebase_reveal": 150,
-  "04_source_of_truth_label": 180,
+  "04_source_of_truth_label": 150,
+  "05_module_glow_spread": 330,
   "06_no_big_bang_callout": 150,
+  "07_gradual_migration_insight": 150,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -35,7 +41,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "04_source_of_truth_label": {"specBaseName": "04_source_of_truth_label", "dataPoints": {"type": "validation_sequence", "sequenceId": "regenerate_and_verify", "steps": [{"command": "pdd generate auth_handler.py", "description": "Regenerate code from prompt"}, {"command": "pdd test", "description": "Run test suite"}, {"result": "✓ All tests pass", "description": "Validation complete"}], "badge": {"text": "SOURCE OF TRUTH", "target": "auth_handler.prompt.md"}, "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "module_migration_animation", "animationId": "gradual_glow_spread", "totalModules": 12, "migratedModules": [{"id": "auth_handler", "order": 1, "frameStart": 0}, {"id": "user_service", "order": 2, "frameStart": 30}, {"id": "payment_proc", "order": 3, "frameStart": 75}, {"id": "email_templates", "order": 4, "frameStart": 120}, {"id": "api_routes", "order": 5, "frameStart": 140}, {"id": "config_mgr", "order": 6, "frameStart": 165}], "unmigrated": ["db_models", "test_utils", "middleware", "validators", "cache_layer", "logging_setup"], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "key_insight_card", "insightId": "no_big_bang", "statements": [{"text": "No big bang.", "color": "#E2E8F0", "weight": 700}, {"text": "No rewrite.", "color": "#E2E8F0", "weight": 700}, {"text": "Just gradual migration.", "color": "#5AAA6E", "weight": 600}], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "07_gradual_migration_insight": {"specBaseName": "07_gradual_migration_insight", "dataPoints": {"type": "value_flow_animation", "animationId": "code_to_specification", "containers": [{"id": "code", "label": "CODE", "color": "#64748B", "fillColor": "#94A3B8", "startLevel": 0.7, "endLevel": 0.4}, {"id": "specification", "label": "SPECIFICATION", "color": "#5AAA6E", "fillColor": "#5AAA6E", "startLevel": 0.3, "endLevel": 0.6}], "thesisText": "from code to specification", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "generated-media"},
+  "07_gradual_migration_insight": {"specBaseName": "07_gradual_migration_insight", "dataPoints": {"type": "value_flow_animation", "animationId": "code_to_specification", "containers": [{"id": "code", "label": "CODE", "color": "#64748B", "fillColor": "#94A3B8", "startLevel": 0.7, "endLevel": 0.4}, {"id": "specification", "label": "SPECIFICATION", "color": "#5AAA6E", "fillColor": "#5AAA6E", "startLevel": 0.3, "endLevel": 0.6}], "thesisText": "from code to specification", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
 };
 
 export const WhereToStartSection: React.FC = () => {

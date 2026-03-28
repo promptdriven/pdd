@@ -2,34 +2,23 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
-import { Closing04PddTriangle } from "../Closing04PddTriangle";
-import { Closing05DissolveRegenerateLoop } from "../Closing05DissolveRegenerateLoop";
-import { Closing07TheBeat } from "../Closing07TheBeat";
-import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";
-import { Closing04PddTriangle } from "../Closing04PddTriangle";
-import { Closing05DissolveRegenerateLoop } from "../Closing05DissolveRegenerateLoop";
-import { Closing06MoldGlowFinale } from "../Closing06MoldGlowFinale";
-import { Closing07TheBeat } from "../Closing07TheBeat";
+import { Closing03PddTriangle } from "../Closing03PddTriangle";
+import { Closing04DissolveRegenerateLoop } from "../Closing04DissolveRegenerateLoop";
+import { Closing06TheBeat } from "../Closing06TheBeat";
+import { Closing07FinalTitleCard } from "../Closing07FinalTitleCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "03_pdd_triangle": Closing04PddTriangle,
-  "04_dissolve_regenerate_loop": Closing05DissolveRegenerateLoop,
-  "06_the_beat": Closing07TheBeat,
-  "07_final_title_card": Closing09FinalTitleCard,
-  "04_pdd_triangle": Closing04PddTriangle,
-  "05_dissolve_regenerate_loop": Closing05DissolveRegenerateLoop,
-  "06_mold_glow_finale": Closing06MoldGlowFinale,
-  "07_the_beat": Closing07TheBeat,
+  "03_pdd_triangle": Closing03PddTriangle,
+  "04_dissolve_regenerate_loop": Closing04DissolveRegenerateLoop,
+  "06_the_beat": Closing06TheBeat,
+  "07_final_title_card": Closing07FinalTitleCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "03_pdd_triangle": 180,
-  "04_dissolve_regenerate_loop": 240,
-  "06_the_beat": 120,
-  "07_final_title_card": 240,
-  "05_dissolve_regenerate_loop": 240,
-  "06_mold_glow_finale": 240,
-  "07_the_beat": 120,
+  "04_dissolve_regenerate_loop": 150,
+  "06_the_beat": 60,
+  "07_final_title_card": 180,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -49,10 +38,6 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "05_veo_mold_glow_finale": {"specBaseName": "05_veo_mold_glow_finale", "dataPoints": {"type": "veo_clip", "clipId": "mold_glow_finale", "durationSeconds": 4, "narrationSegments": ["closing_004", "closing_005"], "characters": []}, "mediaAliases": {"defaultSrc": "veo/mold_glow_finale.mp4", "backgroundSrc": "veo/mold_glow_finale.mp4", "outputSrc": "veo/mold_glow_finale.mp4", "baseSrc": "veo/mold_glow_finale.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "06_the_beat": {"specBaseName": "06_the_beat", "dataPoints": {"type": "remotion_animation", "componentId": "the_beat", "durationFrames": 60, "fps": 30, "narrationSegments": [], "note": "Silent pause between final narration and title card"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "07_final_title_card": {"specBaseName": "07_final_title_card", "dataPoints": {"type": "title_card", "componentId": "final_title_card", "durationFrames": 180, "fps": 30, "narrationSegments": [], "title": "Prompt-Driven Development", "commands": ["uv tool install pdd-cli", "pdd update your_module.py"], "url": "promptdrivendevelopment.com"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "04_pdd_triangle": {"specBaseName": "04_pdd_triangle", "dataPoints": null, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "05_dissolve_regenerate_loop": {"specBaseName": "05_dissolve_regenerate_loop", "dataPoints": null, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "06_mold_glow_finale": {"specBaseName": "06_mold_glow_finale", "dataPoints": null, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "07_the_beat": {"specBaseName": "07_the_beat", "dataPoints": null, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
 };
 
 export const ClosingSection: React.FC = () => {

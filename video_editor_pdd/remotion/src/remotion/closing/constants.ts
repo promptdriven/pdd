@@ -21,14 +21,6 @@ export const BEATS = {
   VISUAL_05_END: s2f(15.420),
   VISUAL_06_START: s2f(13.606),
   VISUAL_06_END: s2f(15.420),
-  VISUAL_07_START: s2f(15.420),
-  VISUAL_07_END: s2f(15.420),
-  VISUAL_08_START: s2f(15.420),
-  VISUAL_08_END: s2f(15.420),
-  VISUAL_09_START: s2f(15.420),
-  VISUAL_09_END: s2f(15.420),
-  VISUAL_10_START: s2f(15.420),
-  VISUAL_10_END: s2f(15.420),
 };
 
 export const VISUAL_SEQUENCE = [
@@ -39,10 +31,6 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_veo_mold_glow_finale", desc: "05 veo mold glow finale", lane: 0 },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "07_final_title_card", desc: "07 final title card", lane: 0 },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "06_the_beat", desc: "06 the beat", lane: 0 },
-  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "04_pdd_triangle", desc: "04 pdd triangle", lane: 0 },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "05_dissolve_regenerate_loop", desc: "05 dissolve regenerate loop", lane: 0 },
-  { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "06_mold_glow_finale", desc: "06 mold glow finale", lane: 0 },
-  { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "07_the_beat", desc: "07 the beat", lane: 0 },
 ];
 
 export const ClosingSectionProps = z.object({
