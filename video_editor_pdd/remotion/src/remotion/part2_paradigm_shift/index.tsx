@@ -4,8 +4,6 @@ import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part2ParadigmShift12VerilogSynthesis } from "../Part2ParadigmShift12VerilogSynthesis";
-import { Part2ParadigmShift13TripleSynthesisEquivalence } from "../Part2ParadigmShift13TripleSynthesisEquivalence";
 import { Part2ParadigmShift14SynopsysPddEquivalence } from "../Part2ParadigmShift14SynopsysPddEquivalence";
 import { Part2ParadigmShift15AbstractionStaircase } from "../Part2ParadigmShift15AbstractionStaircase";
 import { Part2ParadigmShift16BillionGateUnreviewable } from "../Part2ParadigmShift16BillionGateUnreviewable";
@@ -13,8 +11,6 @@ import { Part2ParadigmShift17ReviewSpecVerifyOutput } from "../Part2ParadigmShif
 import { Part2ParadigmShift18PromptMoldFinale } from "../Part2ParadigmShift18PromptMoldFinale";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "12_verilog_synthesis": Part2ParadigmShift12VerilogSynthesis,
-  "13_triple_synthesis_equivalence": Part2ParadigmShift13TripleSynthesisEquivalence,
   "14_synopsys_pdd_equivalence": Part2ParadigmShift14SynopsysPddEquivalence,
   "15_abstraction_staircase": Part2ParadigmShift15AbstractionStaircase,
   "16_billion_gate_unreviewable": Part2ParadigmShift16BillionGateUnreviewable,
@@ -23,8 +19,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "12_verilog_synthesis": 360,
-  "13_triple_synthesis_equivalence": 750,
   "14_synopsys_pdd_equivalence": 390,
   "15_abstraction_staircase": 690,
   "16_billion_gate_unreviewable": 360,

@@ -25,8 +25,6 @@ import { Part1Economics13CrossingLinesMoment } from "./Part1Economics13CrossingL
 import { Part1Economics18KeyInsightStillness } from "./Part1Economics18KeyInsightStillness";
 import { Part1Economics19DoubleMeterInsight } from "./Part1Economics19DoubleMeterInsight";
 import { Part1Economics20TryItYourself } from "./Part1Economics20TryItYourself";
-import { Part2ParadigmShift12VerilogSynthesis } from "./Part2ParadigmShift12VerilogSynthesis";
-import { Part2ParadigmShift13TripleSynthesisEquivalence } from "./Part2ParadigmShift13TripleSynthesisEquivalence";
 import { Part2ParadigmShift14SynopsysPddEquivalence } from "./Part2ParadigmShift14SynopsysPddEquivalence";
 import { Part2ParadigmShift15AbstractionStaircase } from "./Part2ParadigmShift15AbstractionStaircase";
 import { Part2ParadigmShift16BillionGateUnreviewable } from "./Part2ParadigmShift16BillionGateUnreviewable";
@@ -39,12 +37,9 @@ import { Part3MoldParts05BugAddsWall } from "./Part3MoldParts05BugAddsWall";
 import { Part3MoldParts06RatchetTimelapse } from "./Part3MoldParts06RatchetTimelapse";
 import { Part3MoldParts08BugForkRoad } from "./Part3MoldParts08BugForkRoad";
 import { Part3MoldParts09FiveGenerations } from "./Part3MoldParts09FiveGenerations";
-import { Part3MoldParts10Z3FormalProof } from "./Part3MoldParts10Z3FormalProof";
 import { Part3MoldParts11ModuleBoundary } from "./Part3MoldParts11ModuleBoundary";
 import { Part3MoldParts12PromptNozzle } from "./Part3MoldParts12PromptNozzle";
-import { Part3MoldParts13PromptRatio } from "./Part3MoldParts13PromptRatio";
 import { Part3MoldParts15GroundingStyles } from "./Part3MoldParts15GroundingStyles";
-import { Part3MoldParts16ThreeComponentsPullback } from "./Part3MoldParts16ThreeComponentsPullback";
 import { Part3MoldParts17ComponentTable } from "./Part3MoldParts17ComponentTable";
 import { Part3MoldParts18CodeOutputFinale } from "./Part3MoldParts18CodeOutputFinale";
 import { Part4PrecisionTradeoff04DetailedPromptFile } from "./Part4PrecisionTradeoff04DetailedPromptFile";
@@ -53,17 +48,9 @@ import { Part4PrecisionTradeoff06DualGenerationComparison } from "./Part4Precisi
 import { Part4PrecisionTradeoff07KeyInsightWalls } from "./Part4PrecisionTradeoff07KeyInsightWalls";
 import { Part4PrecisionTradeoff08EmbeddedCodeDocument } from "./Part4PrecisionTradeoff08EmbeddedCodeDocument";
 import { Part4PrecisionTradeoff09PromptCodeSpectrum } from "./Part4PrecisionTradeoff09PromptCodeSpectrum";
-import { Part5CompoundReturns02MaintenancePieChart } from "./Part5CompoundReturns02MaintenancePieChart";
-import { Part5CompoundReturns03CompoundDebtCurve } from "./Part5CompoundReturns03CompoundDebtCurve";
 import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
 import { WhereToStart04SourceOfTruthLabel } from "./WhereToStart04SourceOfTruthLabel";
-import { WhereToStart05ModuleGlowSpread } from "./WhereToStart05ModuleGlowSpread";
-import { WhereToStart06NoBigBangCallout } from "./WhereToStart06NoBigBangCallout";
-import { WhereToStart07GradualMigrationInsight } from "./WhereToStart07GradualMigrationInsight";
-import { Closing03PddTriangle } from "./Closing03PddTriangle";
-import { Closing04DissolveRegenerateLoop } from "./Closing04DissolveRegenerateLoop";
-import { Closing06TheBeat } from "./Closing06TheBeat";
 import { Closing07FinalTitleCard } from "./Closing07FinalTitleCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -689,7 +676,7 @@ const Part2ParadigmShift12VerilogSynthesisPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:12_verilog_synthesis"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:12_verilog_synthesis"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:12_verilog_synthesis"] ?? 150}>
-        <Part2ParadigmShift12VerilogSynthesis />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -698,7 +685,7 @@ const Part2ParadigmShift13TripleSynthesisEquivalencePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? 150}>
-        <Part2ParadigmShift13TripleSynthesisEquivalence />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -833,7 +820,7 @@ const Part3MoldParts10Z3FormalProofPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:10_z3_formal_proof"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:10_z3_formal_proof"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:10_z3_formal_proof"] ?? 150}>
-        <Part3MoldParts10Z3FormalProof />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -860,7 +847,7 @@ const Part3MoldParts13PromptRatioPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:13_prompt_ratio"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:13_prompt_ratio"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:13_prompt_ratio"] ?? 150}>
-        <Part3MoldParts13PromptRatio />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -887,7 +874,7 @@ const Part3MoldParts16ThreeComponentsPullbackPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:16_three_components_pullback"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:16_three_components_pullback"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:16_three_components_pullback"] ?? 150}>
-        <Part3MoldParts16ThreeComponentsPullback />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1004,7 +991,7 @@ const Part5CompoundReturns02MaintenancePieChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:02_maintenance_pie_chart"] ?? 150}>
-        <Part5CompoundReturns02MaintenancePieChart />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1013,7 +1000,7 @@ const Part5CompoundReturns03CompoundDebtCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:03_compound_debt_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:03_compound_debt_curve"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:03_compound_debt_curve"] ?? 150}>
-        <Part5CompoundReturns03CompoundDebtCurve />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1112,7 +1099,7 @@ const WhereToStart05ModuleGlowSpreadPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:05_module_glow_spread"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:05_module_glow_spread"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:05_module_glow_spread"] ?? 150}>
-        <WhereToStart05ModuleGlowSpread />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1121,7 +1108,7 @@ const WhereToStart06NoBigBangCalloutPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:06_no_big_bang_callout"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:06_no_big_bang_callout"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:06_no_big_bang_callout"] ?? 150}>
-        <WhereToStart06NoBigBangCallout />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1130,7 +1117,7 @@ const WhereToStart07GradualMigrationInsightPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:07_gradual_migration_insight"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:07_gradual_migration_insight"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:07_gradual_migration_insight"] ?? 150}>
-        <WhereToStart07GradualMigrationInsight />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1157,7 +1144,7 @@ const Closing03PddTrianglePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:03_pdd_triangle"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:03_pdd_triangle"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:03_pdd_triangle"] ?? 150}>
-        <Closing03PddTriangle />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1166,7 +1153,7 @@ const Closing04DissolveRegenerateLoopPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:04_dissolve_regenerate_loop"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:04_dissolve_regenerate_loop"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:04_dissolve_regenerate_loop"] ?? 150}>
-        <Closing04DissolveRegenerateLoop />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1184,7 +1171,7 @@ const Closing06TheBeatPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:06_the_beat"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:06_the_beat"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:06_the_beat"] ?? 150}>
-        <Closing06TheBeat />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>

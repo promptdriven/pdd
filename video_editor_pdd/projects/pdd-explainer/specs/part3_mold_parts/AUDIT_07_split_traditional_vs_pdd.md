@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (patch, code), so the frame does not support a hard missing-text failure.
+The rendered frame has multiple critical failures: (1) Missing steps — LEFT shows only 3 of 6 required steps, RIGHT shows only 3 of 4 required steps. At frame 219 (phase 200-240 'Hold'), all steps should be fully visible. The crucial 'Bug impossible forever ✓' terminal step with glow is absent from the right panel, which is the entire visual payoff of this comparison. (2) Layout is completely wrong — steps are rendered as plain left-aligned text crammed at the bottom of each panel instead of as centered flowchart step boxes with rounded borders, fill, and vertical spacing starting near y:200. (3) No arrows between steps. (4) No band-aid icons next to 'Patch' steps on the left. (5) No trailing ellipsis animation on the left. (6) No glow effect on the right panel's final step. The visual intent — a clear flowchart comparison showing infinite patching vs. terminal resolution — is not achieved.

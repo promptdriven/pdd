@@ -1,3 +1,31 @@
+## v0.0.190 (2026-03-27)
+
+### Feat
+
+- Implement serial retry for failed parallel renders, refactor Remotion components for hook-safe memoization and correct easing, and update video section timings.
+- Add new Remotion scenes and components for "Where to Start", "Mold Parts", "Precision Tradeoff", "Compound Returns", and "Closing" segments.
+- Add numerous new Remotion scenes and components across various parts of the video project.
+
+### Fix
+
+- narrow exception handling, handle bare filename edge case
+- pass prompts_dir to get_pdd_file_paths, widen except, use logger
+- narrow exception handling in fingerprint decorator to specific types
+- lazy-import get_pdd_file_paths and make tests hermetic
+- log warning instead of silently swallowing fingerprint errors
+- wrap fingerprint saving in try-except in @log_operation decorator
+- pass paths to save_fingerprint in @log_operation decorator (#437)
+- harden contract timeline rendering and audit outputs
+- use ADC-compatible credentials in .pdd/llm_model.csv
+- harden audit section completion and results
+
+### Refactor
+
+- update audit summary descriptions across all specification files to improve clarity and precision of visual requirement failures and passes.
+- update audit specifications and timing logic to support automated pipeline generation
+- move path resolution into save_fingerprint, not the decorator
+- move get_pdd_file_paths import to module level, reuse module-level console
+
 ## v0.0.189 (2026-03-26)
 
 ### Feat

@@ -1,4 +1,4 @@
 ## Verdict
-pass
+warn
 ## Summary
-The frame at 94.4% progress shows the zoomed-out multi-file view with 4 cascading code editor panels. Key warning comments (# here be dragons, # TODO: fix this (2019), # don't touch) are visible and highlighted, though in a more reddish tone rather than the specified warm amber (#D9944A). Two issues: (1) The codebase panels don't fill the screen as densely as spec intends — significant dark empty space remains in the bottom-right, whereas spec says 'the codebase fills the screen as a dense block'; (2) No visible transition glow on any module, which spec calls for at frames 240-270. The comment color being more red than amber is a subtle style difference. The cascading panel arrangement effectively conveys the 'overwhelming legacy codebase' intent despite not being strictly side-by-side.
+OCR confirmed visible text tokens in the rendered frame (here, dragons, todo, 2019, legacy), so the frame does not support a hard missing-text failure.

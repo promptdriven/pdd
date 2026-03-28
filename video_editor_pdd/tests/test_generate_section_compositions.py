@@ -5918,6 +5918,47 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_prefers_generated_contract_for_current_chart_aliases_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "pie_chart",
+                    "chartId": "maintenance_cost_split",
+                }
+            },
+            has_exact_component=True,
+        )
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "dual_curve_chart",
+                    "chartId": "compound_debt_vs_regeneration",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_remaining_shared_visual_families_even_with_exact_component(self):
+        for data_points in [
+            {"type": "synthesis_animation", "chartId": "verilog_synthesis"},
+            {"type": "equivalence_demo", "chartId": "triple_synthesis_equivalence"},
+            {"type": "key_insight", "chartId": "key_insight_walls"},
+            {"type": "sidebar_annotation", "topic": "Z3 formal verification"},
+            {"type": "system_diagram", "label": "PDD operates at the module level."},
+            {"type": "compression_ratio", "ratio": "1:5 to 1:10"},
+            {"type": "pipeline_pullback", "stages": []},
+            {"type": "module_migration_animation", "animationId": "gradual_glow_spread"},
+            {"type": "key_insight_card", "insightId": "no_big_bang"},
+            {"type": "value_flow_animation", "animationId": "code_to_specification"},
+            {"type": "remotion_animation", "componentId": "pdd_triangle"},
+            {"type": "remotion_animation", "componentId": "dissolve_regenerate_loop"},
+            {"type": "title_card", "componentId": "final_title_card", "commands": ["pdd update module.py"]},
+        ]:
+            assert _should_prefer_generated_contract_renderer(
+                {"dataPoints": data_points},
+                has_exact_component=True,
+            )
+
     def test_prefers_generated_contract_for_supported_diagram_ids_even_with_exact_component(self):
         assert _should_prefer_generated_contract_renderer(
             {

@@ -1353,15 +1353,26 @@ CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
     'annotation_overlay',
     'chart_callback',
     'chart_event',
+    'compression_ratio',
     'counter_animation',
     'code_editor_animation',
     'code_regeneration',
     'code_transformation',
     'code_visualization',
+    'equivalence_demo',
+    'key_insight_card',
+    'key_insight',
     'line_chart',
+    'module_migration_animation',
+    'pipeline_pullback',
     'quote_card',
+    'remotion_animation',
     'schematic_zoom',
+    'sidebar_annotation',
+    'synthesis_animation',
+    'system_diagram',
     'text_overlay_with_morph',
+    'value_flow_animation',
 }
 
 CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
@@ -1375,8 +1386,18 @@ CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS = {
 
 CONTRACT_FIRST_EXACT_OVERRIDE_CHART_IDS = {
     'compound_debt_curve',
+    'compound_debt_vs_regeneration',
+    'dissolve_regenerate_loop',
     'maintenance_cost_pie',
+    'maintenance_cost_split',
     'precision_tradeoff_curve',
+    'triple_synthesis_equivalence',
+    'verilog_synthesis',
+}
+
+CONTRACT_FIRST_EXACT_OVERRIDE_COMPONENT_IDS = {
+    'dissolve_regenerate_loop',
+    'pdd_triangle',
 }
 
 
@@ -1395,17 +1416,6 @@ def _is_structured_title_card(data_points: Dict[str, Any]) -> bool:
 
 
 def _should_keep_exact_title_card_component(data_points: Dict[str, Any]) -> bool:
-    commands = data_points.get('commands')
-    if isinstance(commands, list) and any(
-        isinstance(command, str) and command.strip()
-        for command in commands
-    ):
-        return True
-
-    chart_id = data_points.get('chartId')
-    if isinstance(chart_id, str) and chart_id.strip().lower() == 'final_title_card':
-        return True
-
     return False
 
 
@@ -1437,6 +1447,12 @@ def _should_prefer_generated_contract_renderer(
         if isinstance(chart_id, str) and chart_id.strip()
         else None
     )
+    component_id = data_points.get('componentId')
+    normalized_component_id = (
+        component_id.strip().lower()
+        if isinstance(component_id, str) and component_id.strip()
+        else None
+    )
 
     if normalized_type == 'split_screen':
         return True
@@ -1446,6 +1462,7 @@ def _should_prefer_generated_contract_renderer(
             normalized_type in CONTRACT_FIRST_EXACT_OVERRIDE_TYPES
             or normalized_diagram_id in CONTRACT_FIRST_EXACT_OVERRIDE_DIAGRAM_IDS
             or normalized_chart_id in CONTRACT_FIRST_EXACT_OVERRIDE_CHART_IDS
+            or normalized_component_id in CONTRACT_FIRST_EXACT_OVERRIDE_COMPONENT_IDS
         )
 
     if normalized_type in CONTRACT_FIRST_VISUAL_TYPES:

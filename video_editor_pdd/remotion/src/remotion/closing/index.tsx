@@ -2,22 +2,14 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
-import { Closing03PddTriangle } from "../Closing03PddTriangle";
-import { Closing04DissolveRegenerateLoop } from "../Closing04DissolveRegenerateLoop";
-import { Closing06TheBeat } from "../Closing06TheBeat";
+import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Closing07FinalTitleCard } from "../Closing07FinalTitleCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "03_pdd_triangle": Closing03PddTriangle,
-  "04_dissolve_regenerate_loop": Closing04DissolveRegenerateLoop,
-  "06_the_beat": Closing06TheBeat,
   "07_final_title_card": Closing07FinalTitleCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "03_pdd_triangle": 180,
-  "04_dissolve_regenerate_loop": 150,
-  "06_the_beat": 60,
   "07_final_title_card": 180,
 };
 

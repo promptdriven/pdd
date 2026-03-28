@@ -1891,6 +1891,298 @@ const ChartVisual: React.FC<{
     );
   }
 
+  if (chartId === "verilog_synthesis") {
+    const codeSample = asString(data.codeSample) ?? [
+      "module counter(",
+      "  input clk, rst,",
+      "  output reg [7:0] count",
+      ");",
+      "  always @(posedge clk)",
+      "    if (rst) count <= 0;",
+      "    else count <= count + 1;",
+      "endmodule",
+    ].join("\n");
+    const codeLines = codeSample.split("\n");
+
+    return (
+      <AbsoluteFill style={{ padding: "84px 86px 78px" }}>
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            borderRadius: 30,
+            overflow: "hidden",
+            background:
+              "radial-gradient(circle at 24% 18%, rgba(96, 165, 250, 0.10), transparent 24%), radial-gradient(circle at 78% 62%, rgba(74, 222, 128, 0.08), transparent 28%), rgba(10, 15, 26, 0.96)",
+            border: subtleBorder,
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 96,
+              top: 86,
+              width: 620,
+              borderRadius: 28,
+              backgroundColor: "rgba(15, 23, 42, 0.9)",
+              border: "1px solid rgba(96, 165, 250, 0.28)",
+              boxShadow: "0 20px 60px rgba(2, 6, 23, 0.32)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: 48,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0 18px",
+                backgroundColor: "rgba(2, 6, 23, 0.7)",
+                color: "#C792EA",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 14,
+              }}
+            >
+              <div>counter.v</div>
+              <div>Verilog HDL</div>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "48px 1fr",
+                rowGap: 8,
+                padding: "18px 22px 22px",
+              }}
+            >
+              {codeLines.map((line, index) => (
+                <React.Fragment key={`verilog-line-${index}`}>
+                  <div
+                    style={{
+                      color: "rgba(148, 163, 184, 0.45)",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 13,
+                    }}
+                  >
+                    {index + 1}
+                  </div>
+                  <div
+                    style={{
+                      color:
+                        line.startsWith("module") || line.startsWith("endmodule")
+                          ? "#C792EA"
+                          : line.includes("input") || line.includes("output")
+                            ? "#93C5FD"
+                            : line.includes("always")
+                              ? "#FCD34D"
+                              : "#E2E8F0",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 15,
+                      whiteSpace: "pre",
+                    }}
+                  >
+                    {line}
+                  </div>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: 776,
+              top: 252,
+              width: 170,
+              height: 170,
+              borderRadius: 32,
+              backgroundColor: "rgba(30, 41, 59, 0.92)",
+              border: "1px solid rgba(74, 144, 217, 0.38)",
+              boxShadow: "0 0 36px rgba(74, 144, 217, 0.24)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <div
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 20,
+                border: "2px solid rgba(74, 144, 217, 0.65)",
+                backgroundColor: "rgba(74, 144, 217, 0.14)",
+              }}
+            />
+            <div style={{ color: "#E2E8F0", fontSize: 16, fontWeight: 700, letterSpacing: 1.2 }}>
+              SYNTHESIS
+            </div>
+          </div>
+          <svg
+            width="100%"
+            height="100%"
+            viewBox={`0 0 ${width} ${height}`}
+            style={{ position: "absolute", inset: 0 }}
+          >
+            <path
+              d="M 708 336 C 756 336, 780 336, 808 336"
+              stroke="rgba(74, 144, 217, 0.52)"
+              strokeWidth={4}
+              fill="none"
+            />
+            {Array.from({ length: 18 }).map((_, index) => {
+              const x = 970 + (index % 6) * 132;
+              const y = 190 + Math.floor(index / 6) * 116 + (index % 2) * 10;
+              return (
+                <g key={`gate-cell-${index}`}>
+                  <line x1={x - 42} y1={y} x2={x - 14} y2={y} stroke="#4A5568" strokeWidth={2} />
+                  <line x1={x + 14} y1={y} x2={x + 42} y2={y} stroke="#4A5568" strokeWidth={2} />
+                  <line x1={x} y1={y - 26} x2={x} y2={y + 26} stroke="#4A5568" strokeWidth={2} />
+                  <path
+                    d={`M ${x - 14} ${y - 22} L ${x + 14} ${y} L ${x - 14} ${y + 22}`}
+                    fill="none"
+                    stroke="#5AAA6E"
+                    strokeWidth={2.5}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </g>
+              );
+            })}
+          </svg>
+          <div
+            style={{
+              position: "absolute",
+              right: 136,
+              bottom: 96,
+              color: "#5AAA6E",
+              fontSize: 20,
+              fontWeight: 700,
+              letterSpacing: 0.4,
+            }}
+          >
+            Gate-Level Netlist
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  if (chartId === "triple_synthesis_equivalence") {
+    const runs = asRecordArray(data.runs);
+    const resolvedRuns =
+      runs.length > 0
+        ? runs
+        : [
+            { label: "Run 1", topology: "dense-left" },
+            { label: "Run 2", topology: "tree-branch" },
+            { label: "Run 3", topology: "linear-chain" },
+          ];
+
+    return (
+      <AbsoluteFill style={{ padding: "76px 88px 82px" }}>
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            borderRadius: 30,
+            backgroundColor: "rgba(10, 15, 26, 0.94)",
+            border: subtleBorder,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 120,
+              right: 120,
+              top: 70,
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 24,
+            }}
+          >
+            {resolvedRuns.slice(0, 3).map((run, index) => {
+              const color = index === 0 ? "#60A5FA" : index === 1 ? "#A78BFA" : "#4ADE80";
+              return (
+                <div
+                  key={`equiv-run-${index}`}
+                  style={{
+                    borderRadius: 24,
+                    backgroundColor: "rgba(15, 23, 42, 0.82)",
+                    border: `1px solid ${color}44`,
+                    padding: "22px 20px 18px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 14,
+                    minHeight: 420,
+                  }}
+                >
+                  <div style={{ color, fontSize: 18, fontWeight: 700 }}>
+                    {asString(run.label) ?? `Run ${index + 1}`}
+                  </div>
+                  <div
+                    style={{
+                      color: "#CBD5E1",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {`module chip_${index + 1}(...)\n  assign y = a & b;\nendmodule`}
+                  </div>
+                  <div
+                    style={{
+                      position: "relative",
+                      flex: 1,
+                      borderRadius: 20,
+                      background: `linear-gradient(135deg, ${color}18, rgba(15, 23, 42, 0.94))`,
+                      border: `1px solid ${color}33`,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {Array.from({ length: 9 }).map((_, nodeIndex) => (
+                      <div
+                        key={`equiv-node-${index}-${nodeIndex}`}
+                        style={{
+                          position: "absolute",
+                          left: `${18 + (nodeIndex % 3) * 26}%`,
+                          top:
+                            index === 0
+                              ? `${18 + nodeIndex * 7}%`
+                              : index === 1
+                                ? `${18 + Math.floor(nodeIndex / 3) * 18 + (nodeIndex % 2) * 4}%`
+                                : `${24 + nodeIndex * 6}%`,
+                          width: 18,
+                          height: 18,
+                          borderRadius: 999,
+                          backgroundColor: `${color}AA`,
+                          boxShadow: `0 0 12px ${color}44`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      color: "#5AAA6E",
+                      fontSize: 18,
+                      fontWeight: 700,
+                    }}
+                  >
+                    <span style={{ fontSize: 22 }}>✓</span>
+                    <span>{asString(data.equivalenceLabel) ?? "Functionally equivalent"}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
   if (chartId === "precision_tradeoff_curve") {
     const axes = asRecord(data.axes);
     const xAxis = asRecord(data.xAxis) ?? asRecord(axes?.x);
@@ -3585,6 +3877,7 @@ const SplitVisual: React.FC<{
     const scope = asString(panel.scope);
     const codeComments = asStringArray(panel.codeComments);
     const aura = asRecord(panel.aura);
+    const auraTarget = asString(aura?.target)?.toLowerCase() ?? null;
     const revealHint = asString(panel.zoomOutReveals);
     const panelScale = revealHint
       ? interpolate(frame, [0, 180], [1.14, 0.88], {
@@ -3689,15 +3982,26 @@ const SplitVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              left: "50%",
-              top: "50%",
-              width: 260,
-              height: 260,
+              left:
+                auraTarget === "object" || auraTarget === "chair"
+                  ? "42%"
+                  : auraTarget === "mold"
+                    ? "58%"
+                    : "50%",
+              top:
+                auraTarget === "object" || auraTarget === "chair"
+                  ? "60%"
+                  : auraTarget === "mold"
+                    ? "48%"
+                    : "50%",
+              width: auraTarget ? 320 : 260,
+              height: auraTarget ? 320 : 260,
               borderRadius: 999,
               transform: "translate(-50%, -50%)",
-              boxShadow: `0 0 120px ${asString(aura.color) ?? panelAccent}66`,
-              border: `2px solid ${asString(aura.color) ?? panelAccent}55`,
-              opacity: 0.42,
+              background: `radial-gradient(circle, ${asString(aura.color) ?? panelAccent}36 0%, rgba(2, 6, 23, 0) 72%)`,
+              boxShadow: `0 0 160px ${asString(aura.color) ?? panelAccent}88`,
+              border: `2px solid ${asString(aura.color) ?? panelAccent}66`,
+              opacity: auraTarget ? 0.72 : 0.42,
               pointerEvents: "none",
             }}
           />
@@ -5547,11 +5851,11 @@ const TextMorphVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
       { from: "gate_netlist", to: "software_code" },
     ];
 
-    return (
-      <AbsoluteFill>
-        <div
-          style={{
-            position: "absolute",
+  return (
+    <AbsoluteFill>
+      <div
+        style={{
+          position: "absolute",
             left: 0,
             right: 0,
             top: 164,
@@ -7463,6 +7767,879 @@ const AnimatedDiagramVisual: React.FC<{
   );
 };
 
+const ModuleMigrationVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const migratedModules = asRecordArray(data.migratedModules);
+  const unmigrated = asStringArray(data.unmigrated);
+  const totalModules =
+    asNumber(data.totalModules) ??
+    Math.max(1, migratedModules.length + unmigrated.length);
+  const migratedIds = new Set(
+    migratedModules
+      .map((entry) => asString(entry.id))
+      .filter((entry): entry is string => Boolean(entry))
+  );
+  const orderedModuleIds = [
+    ...migratedModules
+      .map((entry) => asString(entry.id))
+      .filter((entry): entry is string => Boolean(entry)),
+    ...unmigrated,
+  ].slice(0, totalModules);
+  const fallbackModuleIds = [
+    "auth_handler",
+    "user_service",
+    "payment_proc",
+    "email_templates",
+    "api_routes",
+    "config_mgr",
+    "db_models",
+    "test_utils",
+    "middleware",
+    "validators",
+    "cache_layer",
+    "logging_setup",
+  ];
+  const moduleIds =
+    orderedModuleIds.length > 0
+      ? orderedModuleIds
+      : fallbackModuleIds.slice(0, totalModules);
+  const migratedCount = Math.min(
+    totalModules,
+    Math.max(migratedIds.size, Math.min(6, migratedModules.length || 6))
+  );
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent="#5AAA6E" title={resolveTitle(data)} />
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: height * 0.26,
+          width: 980,
+          maxWidth: "calc(100% - 180px)",
+          transform: "translateX(-50%)",
+        }}
+      >
+        <div
+          style={{
+            position: "relative",
+            borderRadius: 28,
+            backgroundColor: "rgba(15, 23, 42, 0.82)",
+            border: subtleBorder,
+            padding: "26px 28px",
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 18,
+            width: "100%",
+          }}
+        >
+          {moduleIds.map((moduleId, index) => {
+            const migrated = index < migratedCount || migratedIds.has(moduleId);
+            return (
+              <div
+                key={moduleId}
+                style={{
+                  minHeight: 118,
+                  borderRadius: 18,
+                  backgroundColor: migrated
+                    ? "rgba(90, 170, 110, 0.18)"
+                    : "rgba(30, 41, 59, 0.76)",
+                  border: `1px solid ${migrated ? "rgba(90, 170, 110, 0.55)" : "rgba(71, 85, 105, 0.4)"}`,
+                  boxShadow: migrated ? "0 0 28px rgba(90, 170, 110, 0.18)" : undefined,
+                  padding: "16px 14px 14px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div
+                  style={{
+                    color: migrated ? "#DCFCE7" : "#CBD5E1",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 13,
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {moduleId}
+                </div>
+                <div
+                  style={{
+                    alignSelf: "flex-start",
+                    padding: "4px 8px",
+                    borderRadius: 999,
+                    backgroundColor: migrated ? "rgba(74, 222, 128, 0.18)" : "rgba(30, 41, 59, 0.72)",
+                    color: migrated ? "#86EFAC" : "#64748B",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  {migrated ? "PROMPT" : "CODE"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          right: 126,
+          bottom: 96,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 4,
+        }}
+      >
+        <div
+          style={{
+            color: "#5AAA6E",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 52,
+            fontWeight: 700,
+          }}
+        >
+          {`${migratedCount} / ${totalModules}`}
+        </div>
+        <div style={{ color: "#E2E8F0", fontSize: 18, fontWeight: 600 }}>
+          modules migrated
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const KeyInsightCardVisual: React.FC<{
+  data: Record<string, unknown>;
+  height: number;
+}> = ({ data, height }) => {
+  const statements = asRecordArray(data.statements);
+  const primaryText = asString(data.primaryText);
+  const secondaryText = asString(data.secondaryText);
+  const resolvedStatements =
+    statements.length > 0
+      ? statements
+      : primaryText || secondaryText
+        ? [
+            { text: primaryText ?? "More tests, less prompt.", color: "#E2E8F0", weight: 700 },
+            { text: secondaryText ?? "The walls do the precision work.", color: "#D9944A", weight: 600 },
+          ]
+      : [
+          { text: "No big bang.", color: "#E2E8F0", weight: 700 },
+          { text: "No rewrite.", color: "#E2E8F0", weight: 700 },
+          { text: "Just gradual migration.", color: "#5AAA6E", weight: 600 },
+        ];
+
+  return (
+    <AbsoluteFill>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(circle at 50% 50%, rgba(74, 144, 217, 0.06), transparent 32%)",
+        }}
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          top: height * 0.28,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 24,
+        }}
+      >
+        {resolvedStatements.slice(0, 3).map((statement, index) => (
+          <div
+            key={`insight-${index}`}
+            style={{
+              width: 640,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                color:
+                  asString(statement.color) ??
+                  (secondaryText && index === 1 ? "#D9944A" : index === 2 ? "#5AAA6E" : "#E2E8F0"),
+                fontSize: 40 - index * 2,
+                fontWeight: asNumber(statement.weight) ?? (secondaryText && index === 1 ? 600 : index === 2 ? 600 : 700),
+                textAlign: "center",
+              }}
+            >
+              {asString(statement.text) ?? ""}
+            </div>
+            <div
+              style={{
+                width: secondaryText && index === 1 ? 320 : index === 2 ? 360 : 280,
+                height: secondaryText && index === 1 ? 2 : index === 2 ? 2 : 1.5,
+                backgroundColor:
+                  secondaryText && index === 1
+                    ? "rgba(217, 148, 74, 0.55)"
+                    : index === 2
+                      ? "rgba(90, 170, 110, 0.55)"
+                      : "rgba(71, 85, 105, 0.48)",
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const ValueFlowVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const containers = asRecordArray(data.containers);
+  const resolvedContainers =
+    containers.length > 0
+      ? containers
+      : [
+          { id: "code", label: "CODE", color: "#64748B", fillColor: "#94A3B8", endLevel: 0.4 },
+          { id: "specification", label: "SPECIFICATION", color: "#5AAA6E", fillColor: "#5AAA6E", endLevel: 0.6 },
+        ];
+  const thesisText = asString(data.thesisText) ?? "from code to specification";
+
+  return (
+    <AbsoluteFill>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage:
+            "linear-gradient(rgba(30,41,59,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(30,41,59,0.18) 1px, transparent 1px)",
+          backgroundSize: "42px 42px",
+          opacity: 0.34,
+        }}
+      />
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <path
+          d={`M ${width * 0.38} ${height * 0.46} C ${width * 0.46} ${height * 0.24}, ${width * 0.54} ${height * 0.24}, ${width * 0.62} ${height * 0.46}`}
+          fill="none"
+          stroke="rgba(90, 170, 110, 0.42)"
+          strokeWidth={4}
+          strokeLinecap="round"
+        />
+        {Array.from({ length: 18 }).map((_, index) => {
+          const t = index / 17;
+          const x =
+            width * 0.38 * Math.pow(1 - t, 3) +
+            3 * width * 0.46 * Math.pow(1 - t, 2) * t +
+            3 * width * 0.54 * (1 - t) * t * t +
+            width * 0.62 * t * t * t;
+          const y =
+            height * 0.46 * Math.pow(1 - t, 3) +
+            3 * height * 0.24 * Math.pow(1 - t, 2) * t +
+            3 * height * 0.24 * (1 - t) * t * t +
+            height * 0.46 * t * t * t;
+          return (
+            <circle
+              key={`flow-particle-${index}`}
+              cx={x}
+              cy={y}
+              r={6}
+              fill={index < 9 ? "#94A3B8" : "#5AAA6E"}
+              opacity={0.9}
+            />
+          );
+        })}
+      </svg>
+      <div
+        style={{
+          position: "absolute",
+          left: width * 0.16,
+          right: width * 0.16,
+          top: height * 0.22,
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 120,
+        }}
+      >
+        {resolvedContainers.slice(0, 2).map((container, index) => {
+          const fillLevel = asNumber(container.endLevel) ?? (index === 0 ? 0.4 : 0.6);
+          const fillColor = asString(container.fillColor) ?? asString(container.color) ?? "#94A3B8";
+          const borderColor = asString(container.color) ?? fillColor;
+          const label = asString(container.label) ?? (index === 0 ? "CODE" : "SPECIFICATION");
+          return (
+            <div
+              key={`container-${index}`}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 14,
+              }}
+            >
+              <div
+                style={{
+                  textAlign: "center",
+                  color: borderColor,
+                  fontSize: 18,
+                  fontWeight: 600,
+                  letterSpacing: 0.6,
+                }}
+              >
+                {label}
+              </div>
+              <div
+                style={{
+                  height: 360,
+                  borderRadius: 28,
+                  border: `2px solid ${borderColor}`,
+                  position: "relative",
+                  overflow: "hidden",
+                  backgroundColor: "rgba(15, 23, 42, 0.62)",
+                }}
+              >
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: `${Math.max(0, Math.min(100, fillLevel * 100))}%`,
+                    backgroundColor: `${fillColor}CC`,
+                  }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 132,
+          textAlign: "center",
+          color: "#94A3B8",
+          fontSize: 30,
+          fontWeight: 600,
+        }}
+      >
+        <span>from code to </span>
+        <span style={{ color: "#5AAA6E" }}>specification</span>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const SidebarAnnotationVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const topic = asString(data.topic) ?? "Z3 formal verification";
+  const keyTerms = asStringArray(data.keyTerms);
+  const provenWalls = Array.isArray(data.provenWalls)
+    ? data.provenWalls.map((value) => asNumber(value)).filter((value): value is number => value !== null)
+    : [];
+  const logos = asRecordArray(data.logos);
+  const emphasisLine = asString(data.emphasisLine) ?? "Not sampling. Mathematical proof.";
+  const provenColor = asString(data.provenColor) ?? "#A78BFA";
+
+  return (
+    <AbsoluteFill>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(circle at 24% 54%, rgba(167, 139, 250, 0.10), transparent 28%)",
+        }}
+      />
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <rect x={210} y={250} width={420} height={250} rx={34} fill="none" stroke="rgba(148, 163, 184, 0.7)" strokeWidth={10} />
+        <rect x={262} y={294} width={316} height={164} rx={24} fill="rgba(2, 6, 23, 0.28)" stroke="rgba(217, 148, 74, 0.72)" strokeWidth={6} />
+        {[0, 1, 2, 3].map((wallIndex) => (
+          <line
+            key={`formal-wall-${wallIndex}`}
+            x1={wallIndex < 2 ? 276 : 565}
+            y1={wallIndex === 0 ? 324 : wallIndex === 1 ? 432 : wallIndex === 2 ? 324 : 432}
+            x2={wallIndex < 2 ? 414 : 427}
+            y2={wallIndex === 0 ? 324 : wallIndex === 1 ? 432 : wallIndex === 2 ? 324 : 432}
+            stroke={provenWalls.includes(wallIndex + 1) ? provenColor : "rgba(148, 163, 184, 0.28)"}
+            strokeWidth={provenWalls.includes(wallIndex + 1) ? 8 : 5}
+            strokeLinecap="round"
+          />
+        ))}
+        <line x1={620} y1={328} x2={834} y2={278} stroke={`${provenColor}88`} strokeWidth={2} strokeDasharray="8 8" />
+        <line x1={620} y1={424} x2={834} y2={388} stroke={`${provenColor}88`} strokeWidth={2} strokeDasharray="8 8" />
+      </svg>
+      <div
+        style={{
+          position: "absolute",
+          right: 144,
+          top: 196,
+          width: 700,
+          minHeight: 516,
+          borderRadius: 26,
+          backgroundColor: "rgba(15, 23, 42, 0.92)",
+          border: `1px solid ${provenColor}44`,
+          boxShadow: "0 24px 64px rgba(2, 6, 23, 0.32)",
+          padding: "28px 30px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 18,
+        }}
+      >
+        <div style={{ color: "#E9D5FF", fontSize: 24, fontWeight: 700 }}>{titleCase(topic)}</div>
+        <div style={{ color: "#E2E8F0", fontSize: 18, lineHeight: 1.45 }}>
+          Same math as billion-dollar tapeouts.
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {(keyTerms.length > 0 ? keyTerms : ["Z3", "SMT solver", "formal equivalence checking", "mathematical proof"]).slice(0, 4).map((term) => (
+            <div
+              key={term}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                backgroundColor: "rgba(167, 139, 250, 0.14)",
+                border: `1px solid ${provenColor}44`,
+                color: "#E9D5FF",
+                fontSize: 14,
+                fontWeight: 600,
+              }}
+            >
+              {term}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 12, marginTop: 6 }}>
+          {(logos.length > 0 ? logos : [{ text: "Z3", color: provenColor }, { text: "SF", color: "#7C3AED" }]).slice(0, 2).map((logo, index) => (
+            <div
+              key={`formal-logo-${index}`}
+              style={{
+                padding: "12px 18px",
+                borderRadius: 14,
+                backgroundColor: "rgba(2, 6, 23, 0.7)",
+                border: `1px solid ${(asString(logo.color) ?? provenColor)}55`,
+                color: asString(logo.text) ?? `L${index + 1}`,
+                fontSize: 22,
+                fontWeight: 700,
+              }}
+            >
+              {asString(logo.text) ?? `L${index + 1}`}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            marginTop: "auto",
+            padding: "14px 18px",
+            borderRadius: 18,
+            backgroundColor: "rgba(167, 139, 250, 0.12)",
+            border: `1px solid ${provenColor}44`,
+            color: "#F5D0FE",
+            fontSize: 20,
+            fontStyle: "italic",
+            fontWeight: 600,
+          }}
+        >
+          {emphasisLine}
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const CompressionRatioVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const ratio = asString(data.ratio) ?? "1:5 to 1:10";
+  const promptLines = asNumber(data.promptLines) ?? 15;
+  const codeLines = asNumber(data.codeLines) ?? 200;
+  const contextComparison = asRecord(data.contextComparison);
+  const leftContext = asRecord(contextComparison?.left);
+  const rightContext = asRecord(contextComparison?.right);
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent="#2DD4BF" title={resolveTitle(data)} />
+      <div
+        style={{
+          position: "absolute",
+          left: 110,
+          right: 110,
+          top: height * 0.24,
+          bottom: 88,
+          display: "grid",
+          gridTemplateRows: "auto 1fr",
+          gap: 28,
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 180px 1fr",
+            gap: 24,
+            alignItems: "center",
+          }}
+        >
+          <div style={{ padding: "24px 26px", borderRadius: 24, backgroundColor: subtleSurface, border: subtleBorder }}>
+            <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 700 }}>PROMPT</div>
+            <div style={{ color: "#E2E8F0", fontSize: 40, fontWeight: 700, marginTop: 10 }}>{`${promptLines} lines`}</div>
+          </div>
+          <div style={{ color: "#2DD4BF", fontSize: 62, fontWeight: 700, textAlign: "center" }}>{ratio}</div>
+          <div style={{ padding: "24px 26px", borderRadius: 24, backgroundColor: subtleSurface, border: subtleBorder }}>
+            <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 700 }}>GENERATED CODE</div>
+            <div style={{ color: "#E2E8F0", fontSize: 40, fontWeight: 700, marginTop: 10 }}>{`${codeLines} lines`}</div>
+          </div>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 28,
+          }}
+        >
+          {[
+            {
+              label: "15,000 tokens of raw code",
+              sublabel: "Dense code context",
+              accent: "#EF4444",
+              fill: "code",
+              tokenCount: asNumber(leftContext?.tokens) ?? 15000,
+            },
+            {
+              label: "Prompts for 10 modules",
+              sublabel: "10× more system knowledge",
+              accent: "#4ADE80",
+              fill: "prompts",
+              tokenCount: asNumber(rightContext?.tokens) ?? 15000,
+            },
+          ].map((panel) => (
+            <div
+              key={panel.label}
+              style={{
+                borderRadius: 28,
+                backgroundColor: "rgba(15, 23, 42, 0.86)",
+                border: `2px solid ${panel.accent}33`,
+                boxShadow: `0 0 0 1px ${panel.accent}22 inset`,
+                padding: "24px 24px 20px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 18,
+              }}
+            >
+              <div style={{ color: panel.accent, fontSize: 20, fontWeight: 700 }}>{panel.label}</div>
+              <div
+                style={{
+                  flex: 1,
+                  borderRadius: 20,
+                  backgroundColor: "rgba(2, 6, 23, 0.72)",
+                  border: `1px solid ${panel.accent}22`,
+                  padding: "18px 18px 14px",
+                  overflow: "hidden",
+                }}
+              >
+                {panel.fill === "code" ? (
+                  <div
+                    style={{
+                      color: "rgba(248, 113, 113, 0.86)",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 12,
+                      lineHeight: 1.45,
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {Array.from({ length: 18 }).map((_, index) => `if (legacy_case_${index}) return fallback_${index};`).join("\n")}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      color: "rgba(187, 247, 208, 0.92)",
+                      fontSize: 18,
+                      lineHeight: 1.5,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 8,
+                    }}
+                  >
+                    <div>Module contracts and intent.</div>
+                    <div>Grounding examples for edge cases.</div>
+                    <div>Tests define correctness walls.</div>
+                    <div>Every token stays problem-specific.</div>
+                  </div>
+                )}
+              </div>
+              <div style={{ color: "#E2E8F0", fontSize: 16 }}>{`~${panel.tokenCount.toLocaleString()} tokens`}</div>
+              <div style={{ color: panel.accent, fontSize: 14, fontWeight: 600 }}>{panel.sublabel}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const PipelinePullbackVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const stages = asRecordArray(data.stages);
+  const stageByComponent = new Map(
+    stages
+      .map((stage) => [asString(stage.component)?.toLowerCase() ?? "", stage] as const)
+      .filter(([key]) => key)
+  );
+  const promptStage = stageByComponent.get("prompt");
+  const groundingStage = stageByComponent.get("grounding");
+  const testsStage = stageByComponent.get("tests");
+  const codeStage = stageByComponent.get("code");
+
+  return (
+    <AbsoluteFill>
+      <HeaderBlock data={data} accent="#4A90D9" title={resolveTitle(data)} />
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <rect x={460} y={250} width={520} height={280} rx={44} fill="none" stroke="rgba(148, 163, 184, 0.76)" strokeWidth={12} />
+        <rect x={518} y={304} width={404} height={168} rx={28} fill="rgba(2, 6, 23, 0.26)" stroke="rgba(217, 148, 74, 0.72)" strokeWidth={6} />
+        <path d="M 720 148 L 720 250" stroke={asString(promptStage?.color) ?? "#D9944A"} strokeWidth={10} strokeLinecap="round" />
+        <path d="M 720 304 C 690 350, 676 382, 676 416 C 676 452, 700 476, 736 476 C 774 476, 798 448, 798 412 C 798 378, 784 348, 756 316 Z" fill="rgba(74, 217, 160, 0.16)" stroke="rgba(74, 217, 160, 0.38)" strokeWidth={2} />
+        <line x1={538} y1={330} x2={640} y2={330} stroke={asString(testsStage?.color) ?? "#4A90D9"} strokeWidth={8} strokeLinecap="round" />
+        <line x1={802} y1={330} x2={902} y2={330} stroke={asString(testsStage?.color) ?? "#4A90D9"} strokeWidth={8} strokeLinecap="round" />
+        <path d="M 736 476 C 770 520, 804 560, 868 604" stroke={asString(codeStage?.color) ?? "#38BDF8"} strokeWidth={8} strokeLinecap="round" fill="none" />
+      </svg>
+      {[
+        {
+          title: asString(promptStage?.encodes) ?? "Intent",
+          subtitle: asString(promptStage?.component) ?? "Prompt",
+          color: asString(promptStage?.color) ?? "#D9944A",
+          left: "50%",
+          top: 116,
+          transform: "translateX(-50%)",
+        },
+        {
+          title: asString(groundingStage?.encodes) ?? "Style",
+          subtitle: asString(groundingStage?.component) ?? "Grounding",
+          color: asString(groundingStage?.color) ?? "#4AD9A0",
+          left: 668,
+          top: 406,
+        },
+        {
+          title: asString(testsStage?.encodes) ?? "Correctness",
+          subtitle: asString(testsStage?.component) ?? "Walls",
+          color: asString(testsStage?.color) ?? "#4A90D9",
+          left: 332,
+          top: 332,
+        },
+        {
+          title: asString(codeStage?.encodes) ?? "Output",
+          subtitle: asString(codeStage?.component) ?? "Code",
+          color: asString(codeStage?.color) ?? "#38BDF8",
+          left: 930,
+          top: 612,
+        },
+      ].map((label) => (
+        <div
+          key={label.title}
+          style={{
+            position: "absolute",
+            padding: "12px 16px",
+            borderRadius: 16,
+            backgroundColor: "rgba(2, 6, 23, 0.86)",
+            border: `1px solid ${label.color}44`,
+            color: label.color,
+            ...label,
+          }}
+        >
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{label.title}</div>
+          <div style={{ fontSize: 12, color: "#CBD5E1", marginTop: 4 }}>{label.subtitle}</div>
+        </div>
+      ))}
+    </AbsoluteFill>
+  );
+};
+
+const RemotionAnimationVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const componentId = asString(data.componentId) ?? "";
+  const codeLines = asStringArray(data.codeLines);
+  const codeVariants = asRecordArray(data.codeVariants);
+  const terminalCommands = asRecordArray(data.terminalCommands);
+
+  if (componentId === "pdd_triangle") {
+    return (
+      <AbsoluteFill>
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          style={{ position: "absolute", inset: 0 }}
+        >
+          <path d={`M ${width / 2} 210 L 690 760 L 1230 760 Z`} fill="none" stroke="rgba(51, 65, 85, 0.8)" strokeWidth={4} />
+        </svg>
+        {[
+          { label: "PROMPT", color: "#D9944A", left: "50%", top: 150, transform: "translateX(-50%)" },
+          { label: "TESTS", color: "#4AD9A0", left: 610, top: 760 },
+          { label: "GROUNDING", color: "#4A90D9", left: 1140, top: 760 },
+        ].map((vertex) => (
+          <div
+            key={vertex.label}
+            style={{
+              position: "absolute",
+              padding: "14px 18px",
+              borderRadius: 999,
+              backgroundColor: "rgba(2, 6, 23, 0.88)",
+              border: `1px solid ${vertex.color}55`,
+              color: vertex.color,
+              fontSize: 20,
+              fontWeight: 700,
+              ...vertex,
+            }}
+          >
+            {vertex.label}
+          </div>
+        ))}
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 420,
+            transform: "translateX(-50%)",
+            width: 380,
+            borderRadius: 24,
+            backgroundColor: "rgba(15, 23, 42, 0.92)",
+            border: subtleBorder,
+            padding: "20px 24px",
+          }}
+        >
+          {(codeLines.length > 0 ? codeLines : [
+            "def calculate_total(items):",
+            "    return sum(i.price for i in items)",
+            "",
+            "def apply_discount(total, pct):",
+            "    return total * (1 - pct)",
+          ]).map((line, index) => (
+            <div
+              key={`triangle-code-${index}`}
+              style={{
+                color: line.startsWith("def") ? "#93C5FD" : "#E2E8F0",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 15,
+                lineHeight: 1.45,
+                whiteSpace: "pre",
+              }}
+            >
+              {line}
+            </div>
+          ))}
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  if (componentId === "dissolve_regenerate_loop") {
+    const finalCode = asStringArray(codeVariants[2]?.lines).length > 0
+      ? asStringArray(codeVariants[2]?.lines)
+      : [
+          "def compute_sum(products):",
+          "    prices = [p.price for p in products]",
+          "    return functools.reduce(",
+          "        operator.add, prices, 0",
+          "    )",
+        ];
+    const terminalCommand = asString(terminalCommands[0]?.command) ?? "pdd test";
+    const terminalResult = asString(terminalCommands[0]?.result) ?? "✓ All tests passed";
+
+    return (
+      <AbsoluteFill>
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          style={{ position: "absolute", inset: 0, opacity: 0.36 }}
+        >
+          <path d={`M ${width / 2} 210 L 690 760 L 1230 760 Z`} fill="none" stroke="rgba(51, 65, 85, 0.8)" strokeWidth={4} />
+        </svg>
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 340,
+            transform: "translateX(-50%)",
+            width: 440,
+            borderRadius: 24,
+            backgroundColor: "rgba(15, 23, 42, 0.92)",
+            border: subtleBorder,
+            padding: "22px 24px",
+          }}
+        >
+          {finalCode.map((line, index) => (
+            <div
+              key={`regen-final-${index}`}
+              style={{
+                color: line.startsWith("def") ? "#93C5FD" : "#E2E8F0",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 15,
+                lineHeight: 1.45,
+                whiteSpace: "pre",
+              }}
+            >
+              {line}
+            </div>
+          ))}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: 120,
+            transform: "translateX(-50%)",
+            minWidth: 360,
+            padding: "14px 18px",
+            borderRadius: 14,
+            backgroundColor: "rgba(17, 17, 27, 0.9)",
+            border: "1px solid rgba(74, 222, 128, 0.18)",
+            color: "#A6E3A1",
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 14,
+          }}
+        >
+          {`${terminalCommand.startsWith("$") ? terminalCommand : `$ ${terminalCommand}`} ${terminalResult}`}
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  return null;
+};
+
 export const GeneratedContractVisual: React.FC = () => {
   const data = useVisualContractData<Record<string, unknown>>() ?? {};
   const frame = useCurrentFrame();
@@ -7474,13 +8651,16 @@ export const GeneratedContractVisual: React.FC = () => {
   if (
     visualType === "animated_chart" ||
     visualType === "line_chart" ||
+    visualType === "dual_curve_chart" ||
     visualType === "counter_animation" ||
     visualType === "schematic_zoom" ||
     visualType === "inset_chart" ||
     visualType === "pie_chart" ||
     visualType === "forking_chart" ||
     visualType === "chart_event" ||
-    visualType === "chart_callback"
+    visualType === "chart_callback" ||
+    visualType === "synthesis_animation" ||
+    visualType === "equivalence_demo"
   ) {
     body = <ChartVisual data={data} width={width} height={height} frame={frame} />;
   } else if (visualType === "split_screen") {
@@ -7511,8 +8691,24 @@ export const GeneratedContractVisual: React.FC = () => {
     body = <DualMeterVisual data={data} width={width} height={height} frame={frame} />;
   } else if (visualType === "annotation_overlay") {
     body = <AnnotationVisual data={data} width={width} height={height} />;
+  } else if (visualType === "sidebar_annotation") {
+    body = <SidebarAnnotationVisual data={data} width={width} height={height} />;
   } else if (visualType === "text_overlay_with_morph") {
     body = <TextMorphVisual data={data} />;
+  } else if (visualType === "module_migration_animation") {
+    body = <ModuleMigrationVisual data={data} width={width} height={height} />;
+  } else if (visualType === "key_insight_card" || visualType === "key_insight") {
+    body = <KeyInsightCardVisual data={data} height={height} />;
+  } else if (visualType === "value_flow_animation") {
+    body = <ValueFlowVisual data={data} width={width} height={height} />;
+  } else if (visualType === "compression_ratio") {
+    body = <CompressionRatioVisual data={data} width={width} height={height} />;
+  } else if (visualType === "pipeline_pullback") {
+    body = <PipelinePullbackVisual data={data} width={width} height={height} />;
+  } else if (visualType === "system_diagram") {
+    body = <SystemDiagramVisual data={data} width={width} height={height} />;
+  } else if (visualType === "remotion_animation") {
+    body = <RemotionAnimationVisual data={data} width={width} height={height} />;
   } else if (visualType === "animated_diagram") {
     body = <AnimatedDiagramVisual data={data} width={width} height={height} />;
   } else {

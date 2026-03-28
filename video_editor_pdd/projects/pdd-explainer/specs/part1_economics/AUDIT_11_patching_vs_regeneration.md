@@ -1,4 +1,4 @@
 ## Verdict
 warn
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (agentic, patching, regeneration, context, window), so the frame does not support a hard missing-text failure.
+OCR confirmed visible text tokens in the rendered frame (agentic, patching, regeneration, comparison), so the frame does not support a hard missing-text failure.

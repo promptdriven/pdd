@@ -10,12 +10,9 @@ import { Part3MoldParts05BugAddsWall } from "../Part3MoldParts05BugAddsWall";
 import { Part3MoldParts06RatchetTimelapse } from "../Part3MoldParts06RatchetTimelapse";
 import { Part3MoldParts08BugForkRoad } from "../Part3MoldParts08BugForkRoad";
 import { Part3MoldParts09FiveGenerations } from "../Part3MoldParts09FiveGenerations";
-import { Part3MoldParts10Z3FormalProof } from "../Part3MoldParts10Z3FormalProof";
 import { Part3MoldParts11ModuleBoundary } from "../Part3MoldParts11ModuleBoundary";
 import { Part3MoldParts12PromptNozzle } from "../Part3MoldParts12PromptNozzle";
-import { Part3MoldParts13PromptRatio } from "../Part3MoldParts13PromptRatio";
 import { Part3MoldParts15GroundingStyles } from "../Part3MoldParts15GroundingStyles";
-import { Part3MoldParts16ThreeComponentsPullback } from "../Part3MoldParts16ThreeComponentsPullback";
 import { Part3MoldParts17ComponentTable } from "../Part3MoldParts17ComponentTable";
 import { Part3MoldParts18CodeOutputFinale } from "../Part3MoldParts18CodeOutputFinale";
 
@@ -27,12 +24,9 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "06_ratchet_timelapse": Part3MoldParts06RatchetTimelapse,
   "08_bug_fork_road": Part3MoldParts08BugForkRoad,
   "09_five_generations": Part3MoldParts09FiveGenerations,
-  "10_z3_formal_proof": Part3MoldParts10Z3FormalProof,
   "11_module_boundary": Part3MoldParts11ModuleBoundary,
   "12_prompt_nozzle": Part3MoldParts12PromptNozzle,
-  "13_prompt_ratio": Part3MoldParts13PromptRatio,
   "15_grounding_styles": Part3MoldParts15GroundingStyles,
-  "16_three_components_pullback": Part3MoldParts16ThreeComponentsPullback,
   "17_component_table": Part3MoldParts17ComponentTable,
   "18_code_output_finale": Part3MoldParts18CodeOutputFinale,
 };
@@ -45,12 +39,9 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "06_ratchet_timelapse": 270,
   "08_bug_fork_road": 540,
   "09_five_generations": 540,
-  "10_z3_formal_proof": 780,
   "11_module_boundary": 660,
   "12_prompt_nozzle": 720,
-  "13_prompt_ratio": 540,
   "15_grounding_styles": 780,
-  "16_three_components_pullback": 270,
   "17_component_table": 300,
   "18_code_output_finale": 90,
 };

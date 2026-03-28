@@ -236,6 +236,27 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/visualType === "annotation_overlay"/);
     expect(source).toMatch(/visualType === "text_overlay_with_morph"/);
     expect(source).toMatch(/visualType === "animated_diagram"/);
+    expect(source).toMatch(/visualType === "dual_curve_chart"/);
+    expect(source).toMatch(/visualType === "key_insight"/);
+    expect(source).toMatch(/visualType === "system_diagram"/);
+  });
+
+  it("dispatches the remaining contract-first chart and high-level visual families through the shared renderer", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/visualType === "synthesis_animation"/);
+    expect(source).toMatch(/visualType === "equivalence_demo"/);
+    expect(source).toMatch(/visualType === "sidebar_annotation"/);
+    expect(source).toMatch(/visualType === "module_migration_animation"/);
+    expect(source).toMatch(/visualType === "key_insight_card"/);
+    expect(source).toMatch(/visualType === "value_flow_animation"/);
+    expect(source).toMatch(/visualType === "compression_ratio"/);
+    expect(source).toMatch(/visualType === "pipeline_pullback"/);
+    expect(source).toMatch(/visualType === "remotion_animation"/);
+    expect(source).toMatch(/body = <SidebarAnnotationVisual data=\{data\} width=\{width\} height=\{height\} \/>/);
+    expect(source).toMatch(/body = <ModuleMigrationVisual data=\{data\} width=\{width\} height=\{height\} \/>/);
+    expect(source).toMatch(/body = <CompressionRatioVisual data=\{data\} width=\{width\} height=\{height\} \/>/);
+    expect(source).toMatch(/body = <RemotionAnimationVisual data=\{data\} width=\{width\} height=\{height\} \/>/);
   });
 
   it("can read split-panel media aliases from the visual contract runtime for contract-backed component fallbacks", () => {
@@ -410,6 +431,45 @@ describe("shared generated contract renderer", () => {
     expect(chartBlock).toMatch(/Array\.isArray\(data\.series\)/);
     expect(chartBlock).toMatch(/dashed|strokeDasharray/);
     expect(chartBlock).toMatch(/stats/);
+  });
+
+  it("supports centered module-migration grids, key insight text cards, and system diagrams in the shared renderer", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/const ModuleMigrationVisual/);
+    expect(source).toMatch(/gridTemplateColumns:\s*"repeat\(4, minmax\(0, 1fr\)\)"/);
+    expect(source).toMatch(/justifySelf:\s*"center"|justifyContent:\s*"center"/);
+    expect(source).toMatch(/modules migrated/);
+    expect(source).toMatch(/const KeyInsightCardVisual/);
+    expect(source).toMatch(/primaryText|secondaryText|statement/);
+    expect(source).toMatch(/const SystemDiagramVisual/);
+    expect(source).toMatch(/centralModule/);
+    expect(source).toMatch(/surroundingModules/);
+    expect(source).toMatch(/PDD operates at the module level/);
+  });
+
+  it("renders split-process comparisons as full step cards instead of truncating them into a footer list", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const splitBlock = extractBlock(source, "const SplitVisual", "const TableVisual");
+
+    expect(splitBlock).toMatch(/steps\.length > 0/);
+    expect(splitBlock).toMatch(/slice\(0, 6\)|slice\(0, 4\)|slice\(0, 5\)/);
+    expect(splitBlock).toMatch(/Bug impossible forever/);
+    expect(splitBlock).toMatch(/backgroundColor:\s*`?rgba\(2, 6, 23/);
+  });
+
+  it("shows visible content and labels in value-flow and compression-ratio visuals instead of summary-only placeholders", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/const ValueFlowVisual/);
+    expect(source).toMatch(/CODE/);
+    expect(source).toMatch(/SPECIFICATION/);
+    expect(source).toMatch(/from code to /);
+    expect(source).toMatch(/specification/);
+    expect(source).toMatch(/const CompressionRatioVisual/);
+    expect(source).toMatch(/15,000 tokens of raw code/);
+    expect(source).toMatch(/Module contracts and intent/);
+    expect(source).toMatch(/Prompts for 10 modules/);
   });
 
   it("supports contract-first callback charts with the current label set instead of stale exact-component copy", () => {
