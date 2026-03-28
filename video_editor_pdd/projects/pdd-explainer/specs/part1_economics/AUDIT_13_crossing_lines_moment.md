@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (generate, cost, total, debt, immediate), so the frame does not support a hard missing-text failure.
+The frame at 83.3% progress (hold phase, frame 299/360) correctly depicts the climactic crossing moment. The blue 'Cost to generate' line has descended and crossed below both the dashed amber 'Total cost (with tech debt)' line and the solid amber 'Immediate patch cost' line. The 'We are here.' label is visible just below and right of the second crossing point with a thin connecting line to the crossing. The chart background is deep navy-black, all three lines are clearly distinguishable, and the composition is in the deliberate stillness hold phase as specified. The label font size appears slightly larger than the specified 24px but preserves the intended visual weight and readability. The overall composition faithfully delivers the spec's intended 'threshold moment' narrative.
