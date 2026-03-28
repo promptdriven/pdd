@@ -1,24 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame at 85% progress (frame 254/300) is within the hold phase (frames 210-300) where all four wall segments should be glowing and all labels visible. This matches what is rendered:
-
-1. **Mold structure**: The outer shell is visible with a dark navy-black background. The nozzle (top) and cavity are dimmed as specified. The mold appears slightly zoomed/scaled as expected from the 1.0→1.15 zoom.
-
-2. **Four wall segments**: All four wall segments are visible as bright blue vertical lines along the interior walls (two on the left side, two on the right side), glowing in the #4A90D9 blue tone.
-
-3. **Labels**: All four labels are present and correctly positioned:
-   - `null → None` — left side, upper area, with dashed connector line ✓
-   - `empty string → ''` — right side, upper-middle area, with dashed connector line ✓
-   - `handles unicode` — left side, lower-middle area, with dashed connector line ✓
-   - `latency < 100ms` — right side, lower area, with dashed connector line ✓
-
-4. **Label styling**: Labels appear in monospace font with semi-transparent blue pill backgrounds and dashed connector lines to their wall segments, matching the spec's JetBrains Mono / pill / connector requirements.
-
-5. **Alternating layout**: Labels alternate left-right as specified.
-
-6. **Background and grid**: Deep navy-black background is present. The subtle blueprint grid is faintly visible.
-
-7. **Top and bottom horizontal lines**: Represent the mold wall top/bottom segments, glowing blue.
-
-All critical elements are present and correctly rendered for the hold phase.
+The frame at 85% progress (frame 254/300) falls within the final hold phase (frames 210-300), and all required elements are correctly visible: (1) The mold outer shell is present with a dimmed appearance and the nozzle/cavity regions are appropriately dimmed. (2) All four wall segments are illuminated in blue (#4A90D9 glow), positioned along the left and right interior walls of the mold. (3) All four labels are visible in monospace font with background pills: 'null → None' on the left, 'empty string → ''' on the right, 'handles unicode' on the left, 'latency < 100ms' on the right — matching the specified alternating left/right pattern. (4) Dashed connector lines are drawn from each wall segment to its corresponding label. (5) The background is deep navy-black consistent with #0A0F1A. (6) A subtle blueprint grid is faintly visible. (7) The mold appears slightly zoomed (consistent with the 1.0→1.15 scale spec). The composition reads clearly as the intended 'hold' state with all constraints displayed.

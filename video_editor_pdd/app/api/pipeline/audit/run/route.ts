@@ -699,8 +699,9 @@ async function auditSection(
       continue;
     }
 
-    // Claude analysis prompt
-    const prompt = `
+    try {
+      // Claude analysis prompt
+      const prompt = `
 You are auditing a rendered video frame against a normalized spec snapshot.
 
 Rules:
@@ -737,82 +738,91 @@ Use severity="minor" only when a discrepancy would likely be noticeable during n
 Reserve severity="major" or "critical" for clearly missing, wrong, or materially broken visuals.
 `;
 
-    const traceEnabled = shouldSaveAuditTraces();
-    const traceResult = traceEnabled
-      ? await runClaudeAuditWithTrace(prompt, path.dirname(outputStill), onLog)
-      : null;
-    const analysis = traceEnabled
-      ? traceResult!.analysis
-      : ((await runClaudeAudit(
-          prompt,
-          path.dirname(outputStill),
-          onLog
-        )) as AnnotationAnalysis);
-    let verdict = classifyAuditVerdict(analysis, { auditHints });
-    let summary =
-      analysis.technicalAssessment ??
-      (verdict === "skip"
-        ? "Audit model returned no parseable assessment for this frame."
-        : "Audit completed without a detailed technical assessment.");
-    let deterministicGeometry: ReturnType<typeof evaluateDeterministicGeometryAudit> =
-      null;
-    let deterministicText = null;
-
-    if (verdict !== "pass" && shouldTrustDeterministicGeometry(analysis)) {
-      deterministicGeometry = evaluateDeterministicGeometryAudit(
-        specContent,
-        outputStill
-      );
-      if (deterministicGeometry?.verdict === "pass") {
-        verdict = "pass";
-        summary = deterministicGeometry.summary;
-      }
-    }
-
-    if (verdict !== "pass") {
-      const imageEvidence = await collectAuditImageEvidence(outputStill);
-      deterministicText = evaluateDeterministicTextAudit(
-        analysis,
-        auditHints,
-        imageEvidence
-      );
-      if (deterministicText) {
-        verdict = deterministicText.verdict;
-        summary = deterministicText.summary;
-      }
-    }
-
-    if (!summary || !summary.trim()) {
-      summary =
-        verdict === "skip"
+      const traceEnabled = shouldSaveAuditTraces();
+      const traceResult = traceEnabled
+        ? await runClaudeAuditWithTrace(prompt, path.dirname(outputStill), onLog)
+        : null;
+      const analysis = traceEnabled
+        ? traceResult!.analysis
+        : ((await runClaudeAudit(
+            prompt,
+            path.dirname(outputStill),
+            onLog
+          )) as AnnotationAnalysis);
+      let verdict = classifyAuditVerdict(analysis, { auditHints });
+      let summary =
+        analysis.technicalAssessment ??
+        (verdict === "skip"
           ? "Audit model returned no parseable assessment for this frame."
-          : "Audit completed without a detailed technical assessment.";
-    }
+          : "Audit completed without a detailed technical assessment.");
+      let deterministicGeometry: ReturnType<typeof evaluateDeterministicGeometryAudit> =
+        null;
+      let deterministicText = null;
 
-    if (verdict === "pass") passCount++;
-    else if (verdict === "warn") warnCount++;
-    else if (verdict === "fail") failCount++;
-    writeAuditReport(auditPath, verdict, summary);
-    if (traceEnabled && traceResult) {
-      writeAuditTrace(tracePath, {
-        sectionId: section.id,
-        specName,
-        specPath,
-        auditPath,
-        framePath: outputStill,
-        renderSource,
-        sampleWindow,
-        normalizedSpecSnapshot: normalizedSpecContent,
-        claudeSpecSnapshot,
-        auditHints,
-        analysis,
-        verdict,
-        summary,
-        deterministicGeometry,
-        deterministicText,
-        trace: traceResult.trace,
-        prompt,
-      });
+      if (verdict !== "pass" && shouldTrustDeterministicGeometry(analysis)) {
+        deterministicGeometry = evaluateDeterministicGeometryAudit(
+          specContent,
+          outputStill
+        );
+        if (deterministicGeometry?.verdict === "pass") {
+          verdict = "pass";
+          summary = deterministicGeometry.summary;
+        }
+      }
+
+      if (verdict !== "pass") {
+        const imageEvidence = await collectAuditImageEvidence(outputStill);
+        deterministicText = evaluateDeterministicTextAudit(
+          analysis,
+          auditHints,
+          imageEvidence
+        );
+        if (deterministicText) {
+          verdict = deterministicText.verdict;
+          summary = deterministicText.summary;
+        }
+      }
+
+      if (!summary || !summary.trim()) {
+        summary =
+          verdict === "skip"
+            ? "Audit model returned no parseable assessment for this frame."
+            : "Audit completed without a detailed technical assessment.";
+      }
+
+      if (verdict === "pass") passCount++;
+      else if (verdict === "warn") warnCount++;
+      else if (verdict === "fail") failCount++;
+      writeAuditReport(auditPath, verdict, summary);
+      if (traceEnabled && traceResult) {
+        writeAuditTrace(tracePath, {
+          sectionId: section.id,
+          specName,
+          specPath,
+          auditPath,
+          framePath: outputStill,
+          renderSource,
+          sampleWindow,
+          normalizedSpecSnapshot: normalizedSpecContent,
+          claudeSpecSnapshot,
+          auditHints,
+          analysis,
+          verdict,
+          summary,
+          deterministicGeometry,
+          deterministicText,
+          trace: traceResult.trace,
+          prompt,
+        });
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Unknown audit analysis failure";
+      const summary = `Infrastructure error: Failed to analyze audit frame for ${specName}. ${message}`;
+      onLog(`[audit] ${summary}`);
+      failCount++;
+      writeAuditReport(auditPath, "fail", summary);
+      continue;
     }
   }
 

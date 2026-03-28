@@ -1371,6 +1371,45 @@ describe("audit executor factory", () => {
     expect(String(mockWriteFileSync.mock.calls[1][0])).toContain("AUDIT_overlay.md");
   });
 
+  it("writes a fail report and continues when Claude analysis fails after frame extraction", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md", "overlay.md"]);
+    mockRunClaudeAudit
+      .mockRejectedValueOnce(new Error("Claude audit timeout"))
+      .mockResolvedValueOnce({
+        severity: "pass",
+        fixType: "none",
+        technicalAssessment: "Frame matches spec",
+        suggestedFixes: [],
+        confidence: 0.95,
+      });
+
+    const sendFn = jest.fn();
+    const executor = registerCallArgs.factory({ sections: ["intro"] }, sendFn);
+    await executor(jest.fn());
+
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(2);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+    expect(String(mockWriteFileSync.mock.calls[0][0])).toContain("AUDIT_visual.md");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain("## Verdict\nfail");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain(
+      "Infrastructure error: Failed to analyze audit frame for visual."
+    );
+    expect(String(mockWriteFileSync.mock.calls[1][0])).toContain("AUDIT_overlay.md");
+
+    const doneEvent = sendFn.mock.calls.find(
+      (call: any[]) =>
+        call[0]?.type === "audit-section" &&
+        call[0]?.status === "done" &&
+        call[0]?.sectionId === "intro"
+    );
+    expect(doneEvent).toBeDefined();
+    expect(doneEvent![0].passCount).toBe(1);
+    expect(doneEvent![0].failCount).toBe(1);
+  });
+
   it("calls runClaudeAnalysis for each spec file", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro
@@ -2576,6 +2615,67 @@ describe("GET — audit markdown parsing", () => {
         }),
       ])
     );
+  });
+
+  it("returns error status and fail placeholders when some active audit reports are missing", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "intro",
+        label: "Introduction",
+        specDir: "specs/intro",
+        compositions: ["visual", "overlay"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "intro");
+    const visualSpecPath = pathMod.join(specDir, "visual.md");
+    const overlaySpecPath = pathMod.join(specDir, "overlay.md");
+    const visualAuditPath = pathMod.join(specDir, "AUDIT_visual.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === visualSpecPath ||
+      candidate === overlaySpecPath ||
+      candidate === visualAuditPath
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return ["visual.md", "overlay.md", "AUDIT_visual.md"];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (candidate === visualAuditPath) {
+        return "## Verdict\npass\n## Summary\nFrame matches spec\n";
+      }
+      if (candidate === visualSpecPath || candidate === overlaySpecPath) {
+        return "**Timestamp:** 0:00 - 0:03\n";
+      }
+      return "";
+    });
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    expect(body.sections[0].status).toBe("error");
+    expect(body.sections[0].passCount).toBe(1);
+    expect(body.sections[0].failCount).toBe(1);
+    expect(body.sections[0].specs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          specName: "overlay",
+          verdict: "FAIL",
+        }),
+      ])
+    );
+    const missingSpec = body.sections[0].specs.find(
+      (spec: { specName: string }) => spec.specName === "overlay"
+    );
+    expect(missingSpec.summary).toMatch(/missing audit report/i);
   });
 
   it("omits embedded child specs from standalone Review rows", async () => {

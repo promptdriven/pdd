@@ -106,8 +106,9 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
         (f) => f.endsWith(".md") && f.startsWith("AUDIT_")
       );
       const configuredCompositionIds = resolveSectionCompositionIds(section);
+      const usesCompositionManifest = configuredCompositionIds.length > 0;
       const renderableVisuals =
-        configuredCompositionIds.length > 0
+        usesCompositionManifest
           ? resolveSectionVisuals(
               getProjectDir(),
               section,
@@ -144,6 +145,11 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
       let warnCount = 0;
       let failCount = 0;
       let missingAuditCount = 0;
+      let existingRenderableAuditCount = 0;
+      const missingRenderableVisuals: Array<{
+        specName: string;
+        specPath: string;
+      }> = [];
 
       for (const visual of visualsToRead) {
         const specName = visual.specName;
@@ -152,8 +158,15 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
           `AUDIT_${specName}.md`
         );
         if (!fs.existsSync(auditPath)) {
-          missingAuditCount++;
+          if (usesCompositionManifest && renderableSpecNames.has(specName)) {
+            missingRenderableVisuals.push(visual);
+          } else {
+            missingAuditCount++;
+          }
           continue;
+        }
+        if (usesCompositionManifest && renderableSpecNames.has(specName)) {
+          existingRenderableAuditCount++;
         }
         try {
           const content = fs.readFileSync(auditPath, "utf-8");
@@ -198,10 +211,50 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
         }
       }
 
+      const hasPartialManifestAuditCoverage =
+        usesCompositionManifest &&
+        existingRenderableAuditCount > 0 &&
+        missingRenderableVisuals.length > 0;
+
+      if (hasPartialManifestAuditCoverage) {
+        for (const visual of missingRenderableVisuals) {
+          const specSourcePath = visual.specPath;
+          const safeSpecPath = toSectionSpecPath(section.specDir, `${visual.specName}.md`);
+          const specExists = fs.existsSync(specSourcePath);
+          const playbackWindow = specExists
+            ? resolveRenderedAuditSampleWindow(
+                fs.readFileSync(specSourcePath, "utf-8"),
+                {
+                  projectDir: getProjectDir(),
+                  specPath: specSourcePath,
+                  section,
+                  sectionDurationSeconds: section.durationSeconds,
+                  fps,
+                }
+              )
+            : undefined;
+
+          specResultsByName.set(visual.specName, {
+            specName: visual.specName,
+            verdict: "FAIL",
+            summary:
+              "Missing audit report for active visual. Re-run audit for this section.",
+            finding:
+              "Missing audit report for active visual. Re-run audit for this section.",
+            specPath: specExists ? safeSpecPath : undefined,
+            playbackWindow,
+          });
+          failCount++;
+        }
+      }
+
       const knownSpecNames = new Set(specResultsByName.keys());
       for (const specFile of rawSpecFiles) {
         const specName = path.basename(specFile, ".md");
         if (knownSpecNames.has(specName)) {
+          continue;
+        }
+        if (usesCompositionManifest && renderableSpecNames.has(specName)) {
           continue;
         }
 
@@ -240,7 +293,12 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
         .filter((spec): spec is SpecAuditResult => Boolean(spec));
 
       const status: AuditSectionResult["status"] =
-        missingAuditCount > 0
+        hasPartialManifestAuditCoverage
+          ? "error"
+          : missingAuditCount > 0 ||
+              (usesCompositionManifest &&
+                existingRenderableAuditCount === 0 &&
+                missingRenderableVisuals.length > 0)
           ? "pending"
           : "done";
 

@@ -1,0 +1,4 @@
+## Verdict
+fail
+## Summary
+The rendered frame shows a 'CONTEXT WINDOW' diagram — a list of module names (auth, parser, router, validator, etc.) inside a bordered box with token-count annotations and the caption 'Same system. 5-10× more fits.' This is clearly a different visual entirely from the spec, which calls for a Veo-generated live-action/cinematic dolly-back shot of a developer in an open-plan office with multiple monitors showing code. At 75% progress (phase 3: 6-8s), the spec expects a wide shot where the developer is a small figure among many workstations with cool blue-white fluorescent lighting. Instead, the frame displays a static infographic/chart that belongs to a different spec (likely AUDIT_07_context_window_shrink or similar). No part of the expected Veo footage — developer, office, monitors, camera pull-back — is visible.
